@@ -688,10 +688,28 @@ fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 
 fn read_prompt(prompt: Option<String>) -> Result<String> {
     if let Some(p) = prompt {
+        if p.trim().is_empty() {
+            anyhow::bail!(
+                "Empty prompt provided. Usage:\n  csa run --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --tool <tool>"
+            );
+        }
         Ok(p)
     } else {
+        // No prompt argument: read from stdin
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "No prompt provided and stdin is a terminal.\n\n\
+                 Usage:\n  \
+                 csa run --tool <tool> \"your prompt here\"\n  \
+                 echo \"prompt\" | csa run --tool <tool>"
+            );
+        }
         let mut buffer = String::new();
         std::io::stdin().read_to_string(&mut buffer)?;
+        if buffer.trim().is_empty() {
+            anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
+        }
         Ok(buffer)
     }
 }
