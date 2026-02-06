@@ -108,7 +108,7 @@ async fn main() -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_run(
-    tool: ToolName,
+    tool: Option<ToolName>,
     prompt: Option<String>,
     session_arg: Option<String>,
     description: Option<String>,
@@ -141,20 +141,28 @@ async fn handle_run(
     // 4. Read prompt
     let prompt_text = read_prompt(prompt)?;
 
-    // 5. Build executor
-    let executor = build_executor(
-        &tool,
+    // 5. Resolve tool and model_spec
+    let (resolved_tool, resolved_model_spec, resolved_model) = resolve_tool_and_model(
+        tool,
         model_spec.as_deref(),
         model.as_deref(),
+        config.as_ref(),
+    )?;
+
+    // 6. Build executor
+    let executor = build_executor(
+        &resolved_tool,
+        resolved_model_spec.as_deref(),
+        resolved_model.as_deref(),
         thinking.as_deref(),
     )?;
 
-    // 6. Check tool is installed
+    // 7. Check tool is installed
     check_tool_installed(executor.executable_name())
         .await
         .with_context(|| format!("Tool '{}' is not installed", executor.executable_name()))?;
 
-    // 7. Check tool is enabled in config
+    // 8. Check tool is enabled in config
     if let Some(ref cfg) = config {
         if !cfg.is_tool_enabled(executor.tool_name()) {
             error!(
@@ -165,7 +173,7 @@ async fn handle_run(
         }
     }
 
-    // 8. Execute
+    // 9. Execute
     let result = if ephemeral {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
@@ -175,7 +183,7 @@ async fn handle_run(
         // Persistent session
         execute_with_session(
             &executor,
-            &tool,
+            &resolved_tool,
             &prompt_text,
             session_arg,
             description,
@@ -186,7 +194,7 @@ async fn handle_run(
         .await?
     };
 
-    // 9. Print result
+    // 10. Print result
     match output_format {
         OutputFormat::Text => {
             print!("{}", result.output);
@@ -729,6 +737,63 @@ fn construct_review_prompt(args: &ReviewArgs, diff: &str) -> String {
     };
 
     format!("{}\n\n```diff\n{}\n```", instruction, diff)
+}
+
+/// Resolve tool and model from CLI args and config.
+///
+/// Returns (tool, model_spec, model) where:
+/// - tool: the selected tool (from CLI or tier-based selection)
+/// - model_spec: optional model spec string (from CLI or tier)
+/// - model: optional model string (from CLI, with alias resolution applied)
+fn resolve_tool_and_model(
+    tool: Option<ToolName>,
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    config: Option<&ProjectConfig>,
+) -> Result<(ToolName, Option<String>, Option<String>)> {
+    // Case 1: model_spec provided → parse it to get tool
+    if let Some(spec) = model_spec {
+        let parsed = ModelSpec::parse(spec)?;
+        let tool_name = match parsed.tool.as_str() {
+            "gemini-cli" => ToolName::GeminiCli,
+            "opencode" => ToolName::Opencode,
+            "codex" => ToolName::Codex,
+            "claude-code" => ToolName::ClaudeCode,
+            _ => anyhow::bail!("Unknown tool in model spec: {}", parsed.tool),
+        };
+        return Ok((tool_name, Some(spec.to_string()), None));
+    }
+
+    // Case 2: tool provided → use it with optional model (apply alias resolution)
+    if let Some(tool_name) = tool {
+        let resolved_model = model.map(|m| {
+            config
+                .map(|cfg| cfg.resolve_alias(m))
+                .unwrap_or_else(|| m.to_string())
+        });
+        return Ok((tool_name, None, resolved_model));
+    }
+
+    // Case 3: neither tool nor model_spec → use tier-based auto-selection
+    if let Some(cfg) = config {
+        if let Some((tool_name_str, tier_model_spec)) = cfg.resolve_tier_tool("default") {
+            let tool_name = match tool_name_str.as_str() {
+                "gemini-cli" => ToolName::GeminiCli,
+                "opencode" => ToolName::Opencode,
+                "codex" => ToolName::Codex,
+                "claude-code" => ToolName::ClaudeCode,
+                _ => anyhow::bail!("Unknown tool from tier: {}", tool_name_str),
+            };
+            // Use tier's model_spec
+            return Ok((tool_name, Some(tier_model_spec), None));
+        }
+    }
+
+    // Case 4: no config or no tier mapping → error
+    anyhow::bail!(
+        "No tool specified and no tier-based selection available. \
+         Use --tool or run 'csa init' to configure tiers."
+    )
 }
 
 fn build_executor(

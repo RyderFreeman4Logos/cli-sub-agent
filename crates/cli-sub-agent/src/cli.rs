@@ -17,9 +17,9 @@ pub struct Cli {
 pub enum Commands {
     /// Execute a task using a specific AI tool
     Run {
-        /// Tool to use (gemini-cli, opencode, codex, claude-code)
+        /// Tool to use (gemini-cli, opencode, codex, claude-code). If omitted, uses tier-based auto-selection.
         #[arg(long, value_enum)]
-        tool: ToolName,
+        tool: Option<ToolName>,
 
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,

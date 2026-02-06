@@ -126,6 +126,62 @@ impl ProjectConfig {
     pub fn config_path(project_root: &Path) -> std::path::PathBuf {
         project_root.join(".csa").join("config.toml")
     }
+
+    /// Resolve tier-based tool selection for a given task type.
+    ///
+    /// Returns (tool_name, model_spec_string) for the first enabled tool in the tier.
+    /// Falls back to tier3 if task_type not found in tier_mapping.
+    /// Returns None if no enabled tools found.
+    pub fn resolve_tier_tool(&self, task_type: &str) -> Option<(String, String)> {
+        // 1. Look up task_type in tier_mapping to get tier name
+        let tier_name = self
+            .tier_mapping
+            .get(task_type)
+            .map(String::as_str)
+            .or_else(|| {
+                // Fallback: try to find tier3 or tier-3-*
+                if self.tiers.contains_key("tier3") {
+                    Some("tier3")
+                } else {
+                    self.tiers
+                        .keys()
+                        .find(|k| k.starts_with("tier-3-") || k.starts_with("tier3"))
+                        .map(String::as_str)
+                }
+            })?;
+
+        // 2. Find that tier in tiers map
+        let tier = self.tiers.get(tier_name)?;
+
+        // 3. Iterate through tier's models (format: tool/provider/model/thinking_budget)
+        for model_spec_str in &tier.models {
+            // Parse model spec to extract tool name
+            let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
+            if parts.len() != 4 {
+                continue; // Invalid format, skip
+            }
+
+            let tool_name = parts[0];
+
+            // 4. Check if this tool is enabled
+            if self.is_tool_enabled(tool_name) {
+                return Some((tool_name.to_string(), model_spec_str.clone()));
+            }
+        }
+
+        None
+    }
+
+    /// Resolve alias to model spec string.
+    ///
+    /// If input is an alias key, returns the resolved value.
+    /// Otherwise, returns the input unchanged.
+    pub fn resolve_alias(&self, input: &str) -> String {
+        self.aliases
+            .get(input)
+            .cloned()
+            .unwrap_or_else(|| input.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -326,6 +382,195 @@ mod tests {
         };
 
         assert!(config.can_tool_edit_existing("codex"));
+    }
+
+    #[test]
+    fn test_resolve_tier_default_selection() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "gemini-cli".to_string(),
+            ToolConfig {
+                enabled: true,
+                restrictions: None,
+            },
+        );
+        tools.insert(
+            "codex".to_string(),
+            ToolConfig {
+                enabled: true,
+                restrictions: None,
+            },
+        );
+
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier1".to_string(),
+            TierConfig {
+                description: "Quick tier".to_string(),
+                models: vec![
+                    "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
+                    "codex/anthropic/claude-opus/high".to_string(),
+                ],
+            },
+        );
+
+        let mut tier_mapping = HashMap::new();
+        tier_mapping.insert("default".to_string(), "tier1".to_string());
+
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools,
+            tiers,
+            tier_mapping,
+            aliases: HashMap::new(),
+        };
+
+        let result = config.resolve_tier_tool("default");
+        assert!(result.is_some());
+        let (tool_name, model_spec) = result.unwrap();
+        assert_eq!(tool_name, "gemini-cli");
+        assert_eq!(model_spec, "gemini-cli/google/gemini-3-flash-preview/xhigh");
+    }
+
+    #[test]
+    fn test_resolve_tier_fallback_to_tier3() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "codex".to_string(),
+            ToolConfig {
+                enabled: true,
+                restrictions: None,
+            },
+        );
+
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier3".to_string(),
+            TierConfig {
+                description: "Fallback tier".to_string(),
+                models: vec!["codex/anthropic/claude-opus/medium".to_string()],
+            },
+        );
+
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools,
+            tiers,
+            tier_mapping: HashMap::new(), // No mapping for "unknown_task"
+            aliases: HashMap::new(),
+        };
+
+        // Should fallback to tier3
+        let result = config.resolve_tier_tool("unknown_task");
+        assert!(result.is_some());
+        let (tool_name, model_spec) = result.unwrap();
+        assert_eq!(tool_name, "codex");
+        assert_eq!(model_spec, "codex/anthropic/claude-opus/medium");
+    }
+
+    #[test]
+    fn test_resolve_tier_skips_disabled_tools() {
+        let mut tools = HashMap::new();
+        tools.insert(
+            "gemini-cli".to_string(),
+            ToolConfig {
+                enabled: false, // Disabled
+                restrictions: None,
+            },
+        );
+        tools.insert(
+            "codex".to_string(),
+            ToolConfig {
+                enabled: true,
+                restrictions: None,
+            },
+        );
+
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier1".to_string(),
+            TierConfig {
+                description: "Test tier".to_string(),
+                models: vec![
+                    "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
+                    "codex/anthropic/claude-opus/high".to_string(),
+                ],
+            },
+        );
+
+        let mut tier_mapping = HashMap::new();
+        tier_mapping.insert("default".to_string(), "tier1".to_string());
+
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools,
+            tiers,
+            tier_mapping,
+            aliases: HashMap::new(),
+        };
+
+        // Should skip disabled gemini-cli and select codex
+        let result = config.resolve_tier_tool("default");
+        assert!(result.is_some());
+        let (tool_name, _) = result.unwrap();
+        assert_eq!(tool_name, "codex");
+    }
+
+    #[test]
+    fn test_resolve_alias() {
+        let mut aliases = HashMap::new();
+        aliases.insert(
+            "fast".to_string(),
+            "gemini-cli/google/gemini-3-flash-preview/low".to_string(),
+        );
+        aliases.insert(
+            "smart".to_string(),
+            "codex/anthropic/claude-opus/xhigh".to_string(),
+        );
+
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools: HashMap::new(),
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases,
+        };
+
+        // Resolve alias
+        assert_eq!(
+            config.resolve_alias("fast"),
+            "gemini-cli/google/gemini-3-flash-preview/low"
+        );
+        assert_eq!(
+            config.resolve_alias("smart"),
+            "codex/anthropic/claude-opus/xhigh"
+        );
+
+        // Non-alias should be returned unchanged
+        assert_eq!(
+            config.resolve_alias("codex/anthropic/claude-opus/high"),
+            "codex/anthropic/claude-opus/high"
+        );
     }
 
     #[test]
