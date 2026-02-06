@@ -96,6 +96,20 @@ pub enum Commands {
 
     /// Check environment and tool availability
     Doctor,
+
+    /// Execute tasks from a batch file
+    Batch {
+        /// Path to batch TOML file
+        file: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+
+        /// Show what would be executed without running
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(clap::Args)]

@@ -6,6 +6,7 @@ use tempfile::TempDir;
 use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info, warn};
 
+mod batch;
 mod cli;
 mod config_cmds;
 mod doctor;
@@ -123,6 +124,9 @@ async fn main() -> Result<()> {
         }
         Commands::Doctor => {
             doctor::run_doctor().await?;
+        }
+        Commands::Batch { file, cd, dry_run } => {
+            batch::handle_batch(file, cd, dry_run, current_depth).await?;
         }
     }
 
@@ -487,7 +491,7 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     Ok(path.canonicalize()?)
 }
 
-fn read_prompt(prompt: Option<String>) -> Result<String> {
+pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
     if let Some(p) = prompt {
         if p.trim().is_empty() {
             anyhow::bail!(

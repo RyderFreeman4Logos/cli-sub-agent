@@ -186,6 +186,7 @@ dependencies = [
  "csa-session",
  "directories",
  "libc",
+ "serde",
  "serde_json",
  "sysinfo",
  "tempfile",
