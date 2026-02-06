@@ -1,0 +1,13 @@
+[package]
+name = "csa-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+chrono.workspace = true
+ulid.workspace = true
+clap.workspace = true

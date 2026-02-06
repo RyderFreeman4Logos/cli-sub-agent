@@ -1,0 +1,12 @@
+[package]
+name = "csa-lock"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+fd-lock.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+chrono.workspace = true

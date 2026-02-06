@@ -1,0 +1,16 @@
+[package]
+name = "csa-session"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+csa-core.workspace = true
+csa-lock.workspace = true
+toml.workspace = true
+serde.workspace = true
+chrono.workspace = true
+ulid.workspace = true
+directories.workspace = true
+anyhow.workspace = true

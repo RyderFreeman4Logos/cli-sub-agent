@@ -1,0 +1,45 @@
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Apache-2.0"
+
+[workspace.dependencies]
+# Internal crates
+csa-core = { path = "crates/csa-core" }
+csa-session = { path = "crates/csa-session" }
+csa-lock = { path = "crates/csa-lock" }
+csa-executor = { path = "crates/csa-executor" }
+csa-process = { path = "crates/csa-process" }
+csa-config = { path = "crates/csa-config" }
+csa-resource = { path = "crates/csa-resource" }
+
+# CLI & Async
+clap = { version = "4.5", features = ["derive"] }
+tokio = { version = "1.36", features = ["full", "process"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+chrono = { version = "0.4", features = ["serde"] }
+ulid = { version = "1.1", features = ["serde"] }
+
+# Error handling & logging
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
+
+# System
+directories = "5.0"
+fd-lock = "4.0"
+sysinfo = "0.32"
+which = "7.0"
+libc = "0.2"
+tempfile = "3.10"
