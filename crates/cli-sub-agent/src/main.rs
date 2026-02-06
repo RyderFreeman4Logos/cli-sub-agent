@@ -439,7 +439,7 @@ fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
     let project_root = determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
-    let mut session_state = load_session(&project_root, &resolved_id)?;
+    let session_state = load_session(&project_root, &resolved_id)?;
 
     // Find the most recently used tool in this session
     let (tool_name, _tool_state) = session_state
@@ -461,11 +461,12 @@ fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
         "  csa run --tool {} --session {} \"{}\"",
         tool_name, resolved_id, compress_cmd
     );
+    println!();
+    println!("Note: context status will be updated after the tool confirms compression.");
 
-    // Update context status to mark as compacted
-    session_state.context_status.is_compacted = true;
-    session_state.context_status.last_compacted_at = Some(chrono::Utc::now());
-    save_session(&session_state)?;
+    // Do NOT mark is_compacted = true here. The actual compression must be
+    // performed by the tool. Status should only be updated after `csa run`
+    // executes the compress command and succeeds.
 
     Ok(())
 }
