@@ -7,7 +7,9 @@ use std::path::Path;
 
 /// Find all child sessions of a given session
 pub fn find_children(project_path: &Path, session_id: &str) -> Result<Vec<String>> {
-    find_children_in(project_path, session_id)
+    use crate::manager::get_session_root;
+    let base_dir = get_session_root(project_path)?;
+    find_children_in(&base_dir, session_id)
 }
 
 /// Internal implementation: find children in explicit base directory
@@ -33,7 +35,9 @@ fn find_children_in(base_dir: &Path, session_id: &str) -> Result<Vec<String>> {
 /// Format: `{prefix}{short_id}  {tools}  {description}`
 /// where short_id is the first 11 characters of the ULID
 pub fn list_sessions_tree(project_path: &Path, tool_filter: Option<&[&str]>) -> Result<String> {
-    list_sessions_tree_in(project_path, tool_filter)
+    use crate::manager::get_session_root;
+    let base_dir = get_session_root(project_path)?;
+    list_sessions_tree_in(&base_dir, tool_filter)
 }
 
 /// Internal implementation: build tree from explicit base directory
@@ -245,5 +249,31 @@ mod tests {
 
         assert!(root.genealogy.parent_session_id.is_none());
         assert_eq!(root.genealogy.depth, 0);
+    }
+
+    #[test]
+    fn test_list_sessions_tree_public_api_with_project_path() {
+        use crate::manager::{create_session, get_session_root};
+
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+
+        // Create session using public API (stores in proper location)
+        let root = create_session(project_path, Some("Root session"), None)
+            .expect("Failed to create root");
+
+        // Use public API which should convert project_path to session root
+        let tree = list_sessions_tree(project_path, None).expect("Failed to build tree");
+
+        // Verify session appears in tree output
+        assert!(tree.contains(&root.meta_session_id[..11]));
+        assert!(tree.contains("Root session"));
+
+        // Verify session is stored in correct location
+        let session_root = get_session_root(project_path).expect("Failed to get session root");
+        assert!(session_root
+            .join("sessions")
+            .join(&root.meta_session_id)
+            .exists());
     }
 }

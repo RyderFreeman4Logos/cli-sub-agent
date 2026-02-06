@@ -634,6 +634,22 @@ fn get_review_diff(args: &ReviewArgs) -> Result<String> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+
+        // Check for specific error patterns and provide friendly messages
+        if stderr.contains("unknown revision") || stderr.contains("ambiguous argument") {
+            if let Some(ref commit) = args.commit {
+                anyhow::bail!(
+                    "Commit '{}' not found. Ensure the commit SHA exists.",
+                    commit
+                );
+            } else if !args.diff {
+                anyhow::bail!(
+                    "Branch '{}' not found. Ensure the branch exists locally.",
+                    args.branch
+                );
+            }
+        }
+
         anyhow::bail!("Git command failed: {}", stderr);
     }
 

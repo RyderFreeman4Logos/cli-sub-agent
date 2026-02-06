@@ -37,7 +37,7 @@ pub enum Commands {
         parent: Option<String>,
 
         /// Ephemeral session (no project files, no context injection, auto-cleanup)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "session")]
         ephemeral: bool,
 
         /// Working directory (defaults to CWD)
