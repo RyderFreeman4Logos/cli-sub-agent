@@ -33,6 +33,10 @@ pub struct MetaSessionState {
     /// Context compaction status
     #[serde(default)]
     pub context_status: ContextStatus,
+
+    /// Cumulative token usage across all tools in this session
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_token_usage: Option<TokenUsage>,
 }
 
 /// Genealogy tracking for session parent-child relationships
@@ -61,6 +65,30 @@ pub struct ToolState {
 
     /// When this tool state was last updated
     pub updated_at: DateTime<Utc>,
+
+    /// Token usage for this tool in this session
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
+}
+
+/// Token usage tracking for AI tool execution
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TokenUsage {
+    /// Input tokens consumed
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_tokens: Option<u64>,
+
+    /// Output tokens generated
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_tokens: Option<u64>,
+
+    /// Total tokens (input + output)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total_tokens: Option<u64>,
+
+    /// Estimated cost in USD
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub estimated_cost_usd: Option<f64>,
 }
 
 /// Context compaction status tracking

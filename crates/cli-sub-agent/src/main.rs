@@ -21,7 +21,8 @@ use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
-    create_session, get_session_dir, load_session, resolve_session_prefix, save_session, ToolState,
+    create_session, get_session_dir, load_session, resolve_session_prefix, save_session,
+    TokenUsage, ToolState,
 };
 
 #[tokio::main]
@@ -412,6 +413,9 @@ pub(crate) async fn execute_with_session(
     // Extract provider session ID from output
     let provider_session_id = csa_executor::extract_session_id(tool, &result.output);
 
+    // Parse token usage from output (best-effort)
+    let token_usage = parse_token_usage(&result.output);
+
     // Update session state
     session
         .tools
@@ -424,14 +428,37 @@ pub(crate) async fn execute_with_session(
             t.last_action_summary = result.summary.clone();
             t.last_exit_code = result.exit_code;
             t.updated_at = chrono::Utc::now();
+
+            // Update token usage if parsed successfully
+            if let Some(ref usage) = token_usage {
+                t.token_usage = Some(usage.clone());
+            }
         })
         .or_insert_with(|| ToolState {
             provider_session_id,
             last_action_summary: result.summary.clone(),
             last_exit_code: result.exit_code,
             updated_at: chrono::Utc::now(),
+            token_usage: token_usage.clone(),
         });
     session.last_accessed = chrono::Utc::now();
+
+    // Update cumulative token usage if we got new tokens
+    if let Some(new_usage) = token_usage {
+        let cumulative = session
+            .total_token_usage
+            .get_or_insert(TokenUsage::default());
+        cumulative.input_tokens =
+            Some(cumulative.input_tokens.unwrap_or(0) + new_usage.input_tokens.unwrap_or(0));
+        cumulative.output_tokens =
+            Some(cumulative.output_tokens.unwrap_or(0) + new_usage.output_tokens.unwrap_or(0));
+        cumulative.total_tokens =
+            Some(cumulative.total_tokens.unwrap_or(0) + new_usage.total_tokens.unwrap_or(0));
+        cumulative.estimated_cost_usd = Some(
+            cumulative.estimated_cost_usd.unwrap_or(0.0)
+                + new_usage.estimated_cost_usd.unwrap_or(0.0),
+        );
+    }
 
     // Save session
     save_session(&session)?;
@@ -597,4 +624,101 @@ fn truncate_prompt(s: &str, max_len: usize) -> String {
 
         format!("{}...", substring)
     }
+}
+
+/// Parse token usage from tool output (best-effort, returns None on failure)
+///
+/// Looks for common patterns in stdout/stderr:
+/// - "tokens: N" or "Tokens: N" or "total_tokens: N"
+/// - "input_tokens: N" / "output_tokens: N"
+/// - "cost: $N.NN" or "estimated_cost: $N.NN"
+fn parse_token_usage(output: &str) -> Option<TokenUsage> {
+    let mut usage = TokenUsage::default();
+    let mut found_any = false;
+
+    // Simple pattern matching without regex
+    for line in output.lines() {
+        let line_lower = line.to_lowercase();
+
+        // Parse input_tokens
+        if let Some(pos) = line_lower.find("input_tokens") {
+            if let Some(val) = extract_number(&line[pos..]) {
+                usage.input_tokens = Some(val);
+                found_any = true;
+            }
+        }
+
+        // Parse output_tokens
+        if let Some(pos) = line_lower.find("output_tokens") {
+            if let Some(val) = extract_number(&line[pos..]) {
+                usage.output_tokens = Some(val);
+                found_any = true;
+            }
+        }
+
+        // Parse total_tokens
+        if let Some(pos) = line_lower.find("total_tokens") {
+            if let Some(val) = extract_number(&line[pos..]) {
+                usage.total_tokens = Some(val);
+                found_any = true;
+            }
+        } else if let Some(pos) = line_lower.find("tokens:") {
+            if let Some(val) = extract_number(&line[pos..]) {
+                usage.total_tokens = Some(val);
+                found_any = true;
+            }
+        }
+
+        // Parse cost (look for "$N.NN" pattern)
+        if line_lower.contains("cost") {
+            if let Some(val) = extract_cost(line) {
+                usage.estimated_cost_usd = Some(val);
+                found_any = true;
+            }
+        }
+    }
+
+    // Calculate total_tokens if not found but input/output are available
+    if usage.total_tokens.is_none() {
+        if let (Some(input), Some(output)) = (usage.input_tokens, usage.output_tokens) {
+            usage.total_tokens = Some(input + output);
+            found_any = true;
+        }
+    }
+
+    if found_any {
+        Some(usage)
+    } else {
+        None
+    }
+}
+
+/// Extract a number after colon or equals sign
+fn extract_number(text: &str) -> Option<u64> {
+    // Find colon or equals
+    let start = text.find(':')?;
+    let after_colon = &text[start + 1..];
+
+    // Take first word after colon
+    let num_str: String = after_colon
+        .chars()
+        .skip_while(|c| c.is_whitespace())
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+
+    num_str.parse().ok()
+}
+
+/// Extract cost value after $ sign
+fn extract_cost(text: &str) -> Option<f64> {
+    let start = text.find('$')?;
+    let after_dollar = &text[start + 1..];
+
+    // Take digits and decimal point
+    let num_str: String = after_dollar
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+
+    num_str.parse().ok()
 }

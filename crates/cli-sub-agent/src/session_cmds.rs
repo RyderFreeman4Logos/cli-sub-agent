@@ -26,10 +26,10 @@ pub(crate) fn handle_session_list(
         }
         // Print table header
         println!(
-            "{:<11}  {:<19}  {:<30}  TOOLS",
-            "SESSION", "LAST ACCESSED", "DESCRIPTION"
+            "{:<11}  {:<19}  {:<30}  {:<20}  TOKENS",
+            "SESSION", "LAST ACCESSED", "DESCRIPTION", "TOOLS"
         );
-        println!("{}", "-".repeat(80));
+        println!("{}", "-".repeat(100));
         for session in sessions {
             // Truncate ULID to 11 chars for readability
             let short_id = &session.meta_session_id[..11.min(session.meta_session_id.len())];
@@ -54,12 +54,38 @@ pub(crate) fn handle_session_list(
                     .collect::<Vec<_>>()
                     .join(", ")
             };
+
+            // Format token usage
+            let tokens_str = if let Some(ref usage) = session.total_token_usage {
+                if let Some(total) = usage.total_tokens {
+                    if let Some(cost) = usage.estimated_cost_usd {
+                        format!("{}tok ${:.4}", total, cost)
+                    } else {
+                        format!("{}tok", total)
+                    }
+                } else if let (Some(input), Some(output)) =
+                    (usage.input_tokens, usage.output_tokens)
+                {
+                    let total = input + output;
+                    if let Some(cost) = usage.estimated_cost_usd {
+                        format!("{}tok ${:.4}", total, cost)
+                    } else {
+                        format!("{}tok", total)
+                    }
+                } else {
+                    "-".to_string()
+                }
+            } else {
+                "-".to_string()
+            };
+
             println!(
-                "{:<11}  {:<19}  {:<30}  {}",
+                "{:<11}  {:<19}  {:<30}  {:<20}  {}",
                 short_id,
                 session.last_accessed.format("%Y-%m-%d %H:%M"),
                 desc_display,
                 tools_str,
+                tokens_str,
             );
         }
     }

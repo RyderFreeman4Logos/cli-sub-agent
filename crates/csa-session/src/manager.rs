@@ -96,6 +96,7 @@ pub(crate) fn create_session_in(
         },
         tools: HashMap::new(),
         context_status: Default::default(),
+        total_token_usage: None,
     };
 
     // Write state file
@@ -249,6 +250,7 @@ pub(crate) fn list_all_sessions_in(base_dir: &Path) -> Result<Vec<MetaSessionSta
                         },
                         tools: std::collections::HashMap::new(),
                         context_status: Default::default(),
+                        total_token_usage: None,
                     };
 
                     // Save minimal state
@@ -394,6 +396,7 @@ mod tests {
                 last_action_summary: "Test".to_string(),
                 last_exit_code: 0,
                 updated_at: Utc::now(),
+                token_usage: None,
             },
         );
         save_session_in(temp_dir.path(), &state1).expect("Failed to save state1");
