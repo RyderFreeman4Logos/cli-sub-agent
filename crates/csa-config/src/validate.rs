@@ -47,25 +47,45 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
 }
 
 fn validate_tiers(config: &ProjectConfig) -> Result<()> {
-    let valid_tier_names = ["tier1", "tier2", "tier3", "tier4", "tier5"];
+    // Validate tier names are non-empty
     for tier_name in config.tiers.keys() {
-        if !valid_tier_names.contains(&tier_name.as_str()) {
+        if tier_name.is_empty() {
+            bail!("Tier name cannot be empty");
+        }
+    }
+
+    // Validate each TierConfig
+    for (tier_name, tier_config) in &config.tiers {
+        if tier_config.models.is_empty() {
+            bail!("Tier '{}' must have at least one model", tier_name);
+        }
+        for model_spec in &tier_config.models {
+            validate_model_spec(tier_name, model_spec)?;
+        }
+    }
+
+    // Validate tier_mapping values reference tiers that exist in the tiers map
+    for (task_type, tier_ref) in &config.tier_mapping {
+        if !config.tiers.contains_key(tier_ref) {
             bail!(
-                "Unknown tier '{}'. Valid tiers: {:?}",
-                tier_name,
-                valid_tier_names
+                "tier_mapping.{} references unknown tier '{}'. Available tiers: {:?}",
+                task_type,
+                tier_ref,
+                config.tiers.keys().collect::<Vec<_>>()
             );
         }
     }
-    // Validate tier_mapping values reference valid tiers
-    for (task_type, tier_ref) in &config.tier_mapping {
-        if !valid_tier_names.contains(&tier_ref.as_str()) {
-            bail!(
-                "tier_mapping.{} references unknown tier '{}'",
-                task_type,
-                tier_ref
-            );
-        }
+    Ok(())
+}
+
+fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
+    let parts: Vec<&str> = model_spec.split('/').collect();
+    if parts.len() != 4 {
+        bail!(
+            "Tier '{}' has invalid model spec '{}'. Expected format: 'tool/provider/model/budget'",
+            tier_name,
+            model_spec
+        );
     }
     Ok(())
 }
@@ -73,7 +93,7 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig};
+    use crate::config::{ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig};
     use chrono::Utc;
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -91,8 +111,17 @@ mod tests {
             },
         );
 
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier-1-quick".to_string(),
+            TierConfig {
+                description: "Quick tasks".to_string(),
+                models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            },
+        );
+
         let mut tier_mapping = HashMap::new();
-        tier_mapping.insert("security_audit".to_string(), "tier1".to_string());
+        tier_mapping.insert("security_audit".to_string(), "tier-1-quick".to_string());
 
         let config = ProjectConfig {
             project: ProjectMeta {
@@ -102,7 +131,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools,
-            tiers: HashMap::new(),
+            tiers,
             tier_mapping,
             aliases: HashMap::new(),
         };
@@ -171,11 +200,17 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_config_fails_on_invalid_tier_name() {
+    fn test_validate_config_fails_on_invalid_model_spec() {
         let dir = tempdir().unwrap();
 
         let mut tiers = HashMap::new();
-        tiers.insert("invalid-tier".to_string(), vec!["codex".to_string()]);
+        tiers.insert(
+            "test-tier".to_string(),
+            TierConfig {
+                description: "Test tier".to_string(),
+                models: vec!["invalid-model-spec".to_string()],
+            },
+        );
 
         let config = ProjectConfig {
             project: ProjectMeta {
@@ -194,15 +229,27 @@ mod tests {
 
         let result = validate_config(dir.path());
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Unknown tier"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid model spec"));
     }
 
     #[test]
     fn test_validate_config_fails_on_invalid_tier_mapping() {
         let dir = tempdir().unwrap();
 
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier-1-quick".to_string(),
+            TierConfig {
+                description: "Quick tasks".to_string(),
+                models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            },
+        );
+
         let mut tier_mapping = HashMap::new();
-        tier_mapping.insert("security_audit".to_string(), "invalid-tier".to_string());
+        tier_mapping.insert("security_audit".to_string(), "nonexistent-tier".to_string());
 
         let config = ProjectConfig {
             project: ProjectMeta {
@@ -212,7 +259,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
-            tiers: HashMap::new(),
+            tiers,
             tier_mapping,
             aliases: HashMap::new(),
         };
@@ -222,7 +269,7 @@ mod tests {
         let result = validate_config(dir.path());
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("tier_mapping") || err_msg.contains("unknown tier"));
+        assert!(err_msg.contains("tier_mapping") && err_msg.contains("unknown tier"));
     }
 
     #[test]
@@ -236,5 +283,76 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("No configuration found"));
+    }
+
+    #[test]
+    fn test_validate_config_fails_on_empty_models() {
+        let dir = tempdir().unwrap();
+
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "empty-tier".to_string(),
+            TierConfig {
+                description: "Empty tier".to_string(),
+                models: vec![],
+            },
+        );
+
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools: HashMap::new(),
+            tiers,
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+
+        config.save(dir.path()).unwrap();
+
+        let result = validate_config(dir.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("must have at least one model"));
+    }
+
+    #[test]
+    fn test_validate_config_accepts_custom_tier_names() {
+        let dir = tempdir().unwrap();
+
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "my-custom-tier".to_string(),
+            TierConfig {
+                description: "Custom tier name".to_string(),
+                models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            },
+        );
+
+        let mut tier_mapping = HashMap::new();
+        tier_mapping.insert("analysis".to_string(), "my-custom-tier".to_string());
+
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools: HashMap::new(),
+            tiers,
+            tier_mapping,
+            aliases: HashMap::new(),
+        };
+
+        config.save(dir.path()).unwrap();
+
+        let result = validate_config(dir.path());
+        assert!(result.is_ok());
     }
 }

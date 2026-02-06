@@ -3,7 +3,9 @@ use chrono::Utc;
 use std::collections::HashMap;
 use std::path::Path;
 
-use crate::config::{ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig, ToolRestrictions};
+use crate::config::{
+    ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, ToolRestrictions,
+};
 
 /// Detect which tools are installed on the system
 pub fn detect_installed_tools() -> Vec<&'static str> {
@@ -72,15 +74,45 @@ pub fn init_project(project_root: &Path, non_interactive: bool) -> Result<Projec
     initial_estimates.insert("codex".to_string(), 800);
     initial_estimates.insert("claude-code".to_string(), 1200);
 
+    // Default tiers with TierConfig
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-1-quick".to_string(),
+        TierConfig {
+            description: "Quick tasks, low cost".to_string(),
+            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+        },
+    );
+    tiers.insert(
+        "tier-2-standard".to_string(),
+        TierConfig {
+            description: "Standard development tasks".to_string(),
+            models: vec!["gemini-cli/google/gemini-3-pro-preview/xhigh".to_string()],
+        },
+    );
+    tiers.insert(
+        "tier-3-complex".to_string(),
+        TierConfig {
+            description: "Complex reasoning, architecture, deep analysis, code review".to_string(),
+            models: vec!["gemini-cli/google/gemini-3-pro-preview/xhigh".to_string()],
+        },
+    );
+
     // Default tier mapping
     let mut tier_mapping = HashMap::new();
-    tier_mapping.insert("security_audit".to_string(), "tier1".to_string());
-    tier_mapping.insert("architecture_design".to_string(), "tier1".to_string());
-    tier_mapping.insert("code_review".to_string(), "tier2".to_string());
-    tier_mapping.insert("feature_implementation".to_string(), "tier2".to_string());
-    tier_mapping.insert("bug_fix".to_string(), "tier3".to_string());
-    tier_mapping.insert("documentation".to_string(), "tier4".to_string());
-    tier_mapping.insert("quick_question".to_string(), "tier5".to_string());
+    tier_mapping.insert("security_audit".to_string(), "tier-3-complex".to_string());
+    tier_mapping.insert(
+        "architecture_design".to_string(),
+        "tier-3-complex".to_string(),
+    );
+    tier_mapping.insert("code_review".to_string(), "tier-2-standard".to_string());
+    tier_mapping.insert(
+        "feature_implementation".to_string(),
+        "tier-2-standard".to_string(),
+    );
+    tier_mapping.insert("bug_fix".to_string(), "tier-2-standard".to_string());
+    tier_mapping.insert("documentation".to_string(), "tier-1-quick".to_string());
+    tier_mapping.insert("quick_question".to_string(), "tier-1-quick".to_string());
 
     let config = ProjectConfig {
         project: ProjectMeta {
@@ -94,7 +126,7 @@ pub fn init_project(project_root: &Path, non_interactive: bool) -> Result<Projec
             initial_estimates,
         },
         tools,
-        tiers: HashMap::new(), // Empty tiers for user to fill in
+        tiers,
         tier_mapping,
         aliases: HashMap::new(),
     };

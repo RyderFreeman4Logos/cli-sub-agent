@@ -5,6 +5,12 @@ use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TierConfig {
+    pub description: String,
+    pub models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
     pub project: ProjectMeta,
     #[serde(default)]
@@ -12,7 +18,7 @@ pub struct ProjectConfig {
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
     #[serde(default)]
-    pub tiers: HashMap<String, Vec<String>>,
+    pub tiers: HashMap<String, TierConfig>,
     #[serde(default)]
     pub tier_mapping: HashMap<String, String>,
     #[serde(default)]
@@ -320,5 +326,78 @@ mod tests {
         };
 
         assert!(config.can_tool_edit_existing("codex"));
+    }
+
+    #[test]
+    #[ignore] // Only run manually to test actual project config
+    fn test_load_actual_project_config() {
+        // Try to find project root
+        let current_dir = std::env::current_dir().unwrap();
+        let mut project_root = current_dir.as_path();
+
+        // Walk up until we find .csa/config.toml
+        loop {
+            let config_path = project_root.join(".csa/config.toml");
+            if config_path.exists() {
+                println!("Found config at: {}", config_path.display());
+                break;
+            }
+            project_root = match project_root.parent() {
+                Some(p) => p,
+                None => {
+                    println!("Could not find .csa/config.toml in parent directories");
+                    return;
+                }
+            };
+        }
+
+        let result = ProjectConfig::load(project_root);
+        assert!(result.is_ok(), "Failed to load config: {:?}", result.err());
+
+        let config = result.unwrap();
+        assert!(config.is_some(), "Config should exist");
+
+        let config = config.unwrap();
+        println!(
+            "✓ Successfully loaded project config: {}",
+            config.project.name
+        );
+        println!("✓ Tiers defined: {}", config.tiers.len());
+
+        for (name, tier_config) in &config.tiers {
+            println!(
+                "  - {}: {} (models: {})",
+                name,
+                tier_config.description,
+                tier_config.models.len()
+            );
+            assert!(
+                !tier_config.models.is_empty(),
+                "Tier {} should have models",
+                name
+            );
+            for model in &tier_config.models {
+                let parts: Vec<&str> = model.split('/').collect();
+                assert_eq!(
+                    parts.len(),
+                    4,
+                    "Model spec '{}' should have format 'tool/provider/model/budget'",
+                    model
+                );
+            }
+        }
+
+        println!("✓ Tier mappings defined: {}", config.tier_mapping.len());
+        for (task, tier) in &config.tier_mapping {
+            println!("  - {} -> {}", task, tier);
+            assert!(
+                config.tiers.contains_key(tier),
+                "Tier mapping {} references undefined tier {}",
+                task,
+                tier
+            );
+        }
+
+        println!("✓ All validation checks passed!");
     }
 }
