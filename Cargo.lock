@@ -283,6 +283,8 @@ dependencies = [
  "chrono",
  "fd-lock",
  "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -318,6 +320,7 @@ dependencies = [
  "csa-lock",
  "directories",
  "serde",
+ "tempfile",
  "toml",
  "ulid",
 ]
