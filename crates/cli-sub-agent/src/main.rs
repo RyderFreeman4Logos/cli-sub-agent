@@ -87,8 +87,11 @@ async fn main() -> Result<()> {
         Commands::Init { non_interactive } => {
             handle_init(non_interactive)?;
         }
-        Commands::Gc => {
-            handle_gc()?;
+        Commands::Gc {
+            dry_run,
+            max_age_days,
+        } => {
+            handle_gc(dry_run, max_age_days)?;
         }
         Commands::Config { cmd } => match cmd {
             ConfigCommands::Show => {
@@ -535,13 +538,19 @@ fn handle_init(non_interactive: bool) -> Result<()> {
     Ok(())
 }
 
-fn handle_gc() -> Result<()> {
+fn handle_gc(dry_run: bool, max_age_days: Option<u64>) -> Result<()> {
     let project_root = determine_project_root(None)?;
     let sessions = list_sessions(&project_root, None)?;
+    let now = chrono::Utc::now();
 
     let mut stale_locks_removed = 0;
     let mut empty_sessions_removed = 0;
     let mut orphan_dirs_removed = 0;
+    let mut expired_sessions_removed = 0;
+
+    if dry_run {
+        eprintln!("[dry-run] No changes will be made.");
+    }
 
     for session in &sessions {
         let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
@@ -553,21 +562,23 @@ fn handle_gc() -> Result<()> {
                 for entry in entries.flatten() {
                     let path = entry.path();
                     if path.extension().is_some_and(|ext| ext == "lock") {
-                        // Try to read the lock file JSON
                         if let Ok(content) = fs::read_to_string(&path) {
-                            // Simple JSON parsing to extract PID
                             if let Some(pid) = extract_pid_from_lock(&content) {
-                                // Check if process is alive (Linux-specific)
                                 if !is_process_alive(pid) {
-                                    // Process is dead, remove stale lock
-                                    if fs::remove_file(&path).is_ok() {
-                                        stale_locks_removed += 1;
+                                    if dry_run {
+                                        eprintln!(
+                                            "[dry-run] Would remove stale lock for dead PID {}: {:?}",
+                                            pid,
+                                            path.file_name()
+                                        );
+                                    } else if fs::remove_file(&path).is_ok() {
                                         info!(
                                             "Removed stale lock for dead PID {}: {:?}",
                                             pid,
                                             path.file_name()
                                         );
                                     }
+                                    stale_locks_removed += 1;
                                 }
                             }
                         }
@@ -577,16 +588,37 @@ fn handle_gc() -> Result<()> {
         }
 
         // 2. Check for empty sessions (no tools used)
-        if session.tools.is_empty()
-            && delete_session(&project_root, &session.meta_session_id).is_ok()
-        {
+        if session.tools.is_empty() {
+            if dry_run {
+                eprintln!(
+                    "[dry-run] Would remove empty session: {}",
+                    session.meta_session_id
+                );
+            } else {
+                let _ = delete_session(&project_root, &session.meta_session_id);
+            }
             empty_sessions_removed += 1;
-            info!("Removed empty session: {}", session.meta_session_id);
+        }
+
+        // 3. Check for expired sessions (--max-age-days)
+        if let Some(days) = max_age_days {
+            let age = now.signed_duration_since(session.last_accessed);
+            if age.num_days() > days as i64 {
+                if dry_run {
+                    eprintln!(
+                        "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
+                        session.meta_session_id,
+                        age.num_days()
+                    );
+                } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
+                    info!("Removed expired session: {}", session.meta_session_id);
+                }
+                expired_sessions_removed += 1;
+            }
         }
     }
 
-    // BUG-12: Clean orphan directories (no state.toml)
-    // list_sessions() only returns loadable sessions, so orphans aren't included
+    // Clean orphan directories (no state.toml)
     let session_root = csa_session::get_session_root(&project_root)?;
     let sessions_dir = session_root.join("sessions");
 
@@ -597,23 +629,47 @@ fn handle_gc() -> Result<()> {
                     let session_dir = entry.path();
                     let state_path = session_dir.join("state.toml");
 
-                    // If no state.toml exists, it's an orphan
-                    if !state_path.exists() && fs::remove_dir_all(&session_dir).is_ok() {
+                    if !state_path.exists() {
+                        if dry_run {
+                            eprintln!(
+                                "[dry-run] Would remove orphan directory: {}",
+                                session_dir.display()
+                            );
+                        } else {
+                            let _ = fs::remove_dir_all(&session_dir);
+                            info!(
+                                "Removed orphan directory without state.toml: {}",
+                                session_dir.display()
+                            );
+                        }
                         orphan_dirs_removed += 1;
-                        info!(
-                            "Removed orphan directory without state.toml: {}",
-                            session_dir.display()
-                        );
                     }
                 }
             }
         }
     }
 
-    eprintln!("Garbage collection complete:");
-    eprintln!("  Stale locks removed: {}", stale_locks_removed);
-    eprintln!("  Empty sessions removed: {}", empty_sessions_removed);
-    eprintln!("  Orphan directories removed: {}", orphan_dirs_removed);
+    let prefix = if dry_run { "[dry-run] " } else { "" };
+    eprintln!(
+        "{}Garbage collection {}:",
+        prefix,
+        if dry_run { "preview" } else { "complete" }
+    );
+    eprintln!("{}  Stale locks removed: {}", prefix, stale_locks_removed);
+    eprintln!(
+        "{}  Empty sessions removed: {}",
+        prefix, empty_sessions_removed
+    );
+    if max_age_days.is_some() {
+        eprintln!(
+            "{}  Expired sessions removed: {}",
+            prefix, expired_sessions_removed
+        );
+    }
+    eprintln!(
+        "{}  Orphan directories removed: {}",
+        prefix, orphan_dirs_removed
+    );
 
     Ok(())
 }

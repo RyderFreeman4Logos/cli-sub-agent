@@ -71,7 +71,15 @@ pub enum Commands {
     },
 
     /// Garbage collect expired locks and empty sessions
-    Gc,
+    Gc {
+        /// Show what would be removed without actually removing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Remove sessions not accessed within N days
+        #[arg(long)]
+        max_age_days: Option<u64>,
+    },
 
     /// Show/manage configuration
     Config {
