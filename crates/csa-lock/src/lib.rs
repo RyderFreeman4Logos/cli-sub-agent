@@ -15,6 +15,7 @@ struct LockDiagnostic {
     pid: u32,
     tool_name: String,
     acquired_at: DateTime<Utc>,
+    reason: String,
 }
 
 /// Session lock guard that holds an fd-lock write guard.
@@ -46,13 +47,13 @@ impl SessionLock {
 ///
 /// On success:
 /// - Acquires exclusive write lock
-/// - Writes diagnostic JSON (pid, tool_name, acquired_at) to lock file
+/// - Writes diagnostic JSON (pid, tool_name, acquired_at, reason) to lock file
 /// - Returns SessionLock guard
 ///
 /// On failure:
 /// - Attempts to read existing lock file to report which PID holds it
 /// - Returns error with diagnostic information
-pub fn acquire_lock(session_dir: &Path, tool_name: &str) -> Result<SessionLock> {
+pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result<SessionLock> {
     let locks_dir = session_dir.join("locks");
     fs::create_dir_all(&locks_dir)
         .with_context(|| format!("Failed to create locks directory: {}", locks_dir.display()))?;
@@ -80,6 +81,7 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str) -> Result<SessionLock> 
                 pid: std::process::id(),
                 tool_name: tool_name.to_string(),
                 acquired_at: Utc::now(),
+                reason: reason.to_string(),
             };
 
             let json = serde_json::to_string(&diagnostic)
@@ -107,15 +109,16 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str) -> Result<SessionLock> 
             file.read_to_string(&mut contents)
                 .context("Failed to read lock file")?;
 
-            let error_msg =
-                if let Ok(diagnostic) = serde_json::from_str::<LockDiagnostic>(&contents) {
-                    format!(
-                        "Session locked by PID {} (tool: {}, acquired: {})",
-                        diagnostic.pid, diagnostic.tool_name, diagnostic.acquired_at
-                    )
-                } else {
-                    "Session is locked (unable to read diagnostic info)".to_string()
-                };
+            let error_msg = if let Ok(diagnostic) =
+                serde_json::from_str::<LockDiagnostic>(&contents)
+            {
+                format!(
+                    "Session locked by PID {} (tool: {}, reason: {}, acquired: {})",
+                    diagnostic.pid, diagnostic.tool_name, diagnostic.reason, diagnostic.acquired_at
+                )
+            } else {
+                "Session is locked (unable to read diagnostic info)".to_string()
+            };
 
             Err(anyhow::anyhow!(error_msg))
         }
@@ -133,7 +136,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let session_dir = temp_dir.path();
 
-        let lock = acquire_lock(session_dir, "test-tool");
+        let lock = acquire_lock(session_dir, "test-tool", "test reason");
         assert!(lock.is_ok(), "Lock acquisition should succeed");
 
         let lock = lock.unwrap();
@@ -145,7 +148,8 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let session_dir = temp_dir.path();
 
-        let lock = acquire_lock(session_dir, "test-tool").expect("Failed to acquire lock");
+        let lock =
+            acquire_lock(session_dir, "test-tool", "test reason").expect("Failed to acquire lock");
 
         let expected_path = session_dir.join("locks/test-tool.lock");
         assert_eq!(lock.lock_path(), expected_path);
@@ -160,7 +164,8 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let session_dir = temp_dir.path();
 
-        let _lock = acquire_lock(session_dir, "test-tool").expect("Failed to acquire lock");
+        let _lock =
+            acquire_lock(session_dir, "test-tool", "test reason").expect("Failed to acquire lock");
 
         let lock_path = session_dir.join("locks/test-tool.lock");
         let contents = fs::read_to_string(&lock_path).expect("Failed to read lock file");
@@ -170,6 +175,7 @@ mod tests {
 
         assert_eq!(diagnostic.pid, std::process::id());
         assert_eq!(diagnostic.tool_name, "test-tool");
+        assert_eq!(diagnostic.reason, "test reason");
     }
 
     #[test]
@@ -177,15 +183,20 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let session_dir = temp_dir.path();
 
-        let _lock1 = acquire_lock(session_dir, "test-tool").expect("First lock should succeed");
+        let _lock1 = acquire_lock(session_dir, "test-tool", "first reason")
+            .expect("First lock should succeed");
 
-        let result = acquire_lock(session_dir, "test-tool");
+        let result = acquire_lock(session_dir, "test-tool", "second reason");
         assert!(result.is_err(), "Second lock should fail");
 
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("Session locked by PID"),
             "Error message should contain PID info"
+        );
+        assert!(
+            err_msg.contains("reason: first reason"),
+            "Error message should contain reason info"
         );
     }
 
@@ -195,7 +206,8 @@ mod tests {
         let session_dir = temp_dir.path();
 
         {
-            let _lock = acquire_lock(session_dir, "test-tool").expect("First lock should succeed");
+            let _lock = acquire_lock(session_dir, "test-tool", "test reason")
+                .expect("First lock should succeed");
             // Lock is held here
         } // Lock is dropped here
 
@@ -210,8 +222,10 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let session_dir = temp_dir.path();
 
-        let lock1 = acquire_lock(session_dir, "tool-a").expect("Tool A lock should succeed");
-        let lock2 = acquire_lock(session_dir, "tool-b").expect("Tool B lock should succeed");
+        let lock1 =
+            acquire_lock(session_dir, "tool-a", "reason a").expect("Tool A lock should succeed");
+        let lock2 =
+            acquire_lock(session_dir, "tool-b", "reason b").expect("Tool B lock should succeed");
 
         assert_ne!(
             lock1.lock_path(),

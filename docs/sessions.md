@@ -404,8 +404,8 @@ Error: Session locked by PID 12345 (tool: gemini-cli, acquired: 2024-02-06T10:00
 ### Lock Lifecycle
 
 ```rust
-// Acquire lock
-let lock = acquire_lock(session_dir, "gemini-cli")?;
+// Acquire lock with reason
+let lock = acquire_lock(session_dir, "gemini-cli", "Analyzing code for security issues")?;
 
 // Lock held during tool execution
 execute_tool();

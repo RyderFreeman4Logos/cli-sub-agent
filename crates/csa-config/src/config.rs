@@ -574,6 +574,57 @@ mod tests {
     }
 
     #[test]
+    fn test_max_recursion_depth_override() {
+        let dir = tempdir().unwrap();
+
+        // Config with custom max_recursion_depth
+        let config = ProjectConfig {
+            project: ProjectMeta {
+                name: "test-project".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 10,
+            },
+            resources: ResourcesConfig::default(),
+            tools: HashMap::new(),
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+
+        config.save(dir.path()).unwrap();
+
+        let loaded = ProjectConfig::load(dir.path()).unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+
+        assert_eq!(loaded.project.max_recursion_depth, 10);
+    }
+
+    #[test]
+    fn test_max_recursion_depth_default() {
+        let dir = tempdir().unwrap();
+
+        // Config without explicitly setting max_recursion_depth (should use default)
+        let config_toml = r#"
+[project]
+name = "test-project"
+created_at = "2024-01-01T00:00:00Z"
+
+[resources]
+"#;
+
+        let config_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
+
+        let loaded = ProjectConfig::load(dir.path()).unwrap();
+        assert!(loaded.is_some());
+        let loaded = loaded.unwrap();
+
+        assert_eq!(loaded.project.max_recursion_depth, 5);
+    }
+
+    #[test]
     #[ignore] // Only run manually to test actual project config
     fn test_load_actual_project_config() {
         // Try to find project root

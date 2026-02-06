@@ -56,6 +56,16 @@ impl Executor {
         }
     }
 
+    /// Get installation instructions for the tool.
+    pub fn install_hint(&self) -> &'static str {
+        match self {
+            Self::GeminiCli { .. } => "Install: npm install -g @anthropic-ai/gemini-cli",
+            Self::Opencode { .. } => "Install: go install github.com/anthropics/opencode@latest",
+            Self::Codex { .. } => "Install: npm install -g @openai/codex",
+            Self::ClaudeCode { .. } => "Install: npm install -g @anthropic-ai/claude-code",
+        }
+    }
+
     /// Get "yolo" args for the tool (bypass approval prompts).
     pub fn yolo_args(&self) -> &[&str] {
         match self {
@@ -384,6 +394,43 @@ mod tests {
             }
             .executable_name(),
             "claude"
+        );
+    }
+
+    #[test]
+    fn test_install_hint() {
+        assert_eq!(
+            Executor::GeminiCli {
+                model_override: None,
+                thinking_budget: None,
+            }
+            .install_hint(),
+            "Install: npm install -g @anthropic-ai/gemini-cli"
+        );
+        assert_eq!(
+            Executor::Opencode {
+                model_override: None,
+                agent: None,
+                thinking_budget: None,
+            }
+            .install_hint(),
+            "Install: go install github.com/anthropics/opencode@latest"
+        );
+        assert_eq!(
+            Executor::Codex {
+                model_override: None,
+                thinking_budget: None,
+            }
+            .install_hint(),
+            "Install: npm install -g @openai/codex"
+        );
+        assert_eq!(
+            Executor::ClaudeCode {
+                model_override: None,
+                thinking_budget: None,
+            }
+            .install_hint(),
+            "Install: npm install -g @anthropic-ai/claude-code"
         );
     }
 

@@ -127,8 +127,11 @@ async fn handle_run(
     // 2. Load config (optional)
     let config = ProjectConfig::load(&project_root)?;
 
-    // 3. Check recursion depth (hardcoded for now, config doesn't have this field)
-    let max_depth = 5u32;
+    // 3. Check recursion depth (from config or default)
+    let max_depth = config
+        .as_ref()
+        .map(|c| c.project.max_recursion_depth)
+        .unwrap_or(5u32);
 
     if current_depth > max_depth {
         error!(
@@ -158,9 +161,15 @@ async fn handle_run(
     )?;
 
     // 7. Check tool is installed
-    check_tool_installed(executor.executable_name())
-        .await
-        .with_context(|| format!("Tool '{}' is not installed", executor.executable_name()))?;
+    if let Err(e) = check_tool_installed(executor.executable_name()).await {
+        error!(
+            "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
+            executor.tool_name(),
+            executor.install_hint(),
+            executor.tool_name()
+        );
+        anyhow::bail!("{}", e);
+    }
 
     // 8. Check tool is enabled in config
     if let Some(ref cfg) = config {
@@ -265,13 +274,15 @@ async fn execute_with_session(
     let (_log_writer, _log_guard) =
         create_session_log_writer(&session_dir).context("Failed to create session log writer")?;
 
-    // Acquire lock
-    let _lock = acquire_lock(&session_dir, executor.tool_name()).with_context(|| {
-        format!(
-            "Failed to acquire lock for session {}",
-            session.meta_session_id
-        )
-    })?;
+    // Acquire lock with truncated prompt as reason
+    let lock_reason = truncate_prompt(prompt, 80);
+    let _lock =
+        acquire_lock(&session_dir, executor.tool_name(), &lock_reason).with_context(|| {
+            format!(
+                "Failed to acquire lock for session {}",
+                session.meta_session_id
+            )
+        })?;
 
     // Resource guard
     let mut resource_guard = if let Some(cfg) = config {
@@ -637,8 +648,11 @@ async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 2. Load config (optional)
     let config = ProjectConfig::load(&project_root)?;
 
-    // 3. Check recursion depth
-    let max_depth = 5u32;
+    // 3. Check recursion depth (from config or default)
+    let max_depth = config
+        .as_ref()
+        .map(|c| c.project.max_recursion_depth)
+        .unwrap_or(5u32);
     if current_depth > max_depth {
         error!(
             "Max recursion depth ({}) exceeded. Current: {}. Do it yourself.",
@@ -683,9 +697,15 @@ async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     let executor = build_executor(&tool, None, args.model.as_deref(), None)?;
 
     // 8. Check tool is installed
-    check_tool_installed(executor.executable_name())
-        .await
-        .with_context(|| format!("Tool '{}' is not installed", executor.executable_name()))?;
+    if let Err(e) = check_tool_installed(executor.executable_name()).await {
+        error!(
+            "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
+            executor.tool_name(),
+            executor.install_hint(),
+            executor.tool_name()
+        );
+        anyhow::bail!("{}", e);
+    }
 
     // 9. Check tool is enabled in config
     if let Some(ref cfg) = config {
@@ -877,5 +897,25 @@ fn build_executor(
         }
 
         Ok(Executor::from_tool_name(tool, final_model))
+    }
+}
+
+/// Truncate a string to max_len characters, adding "..." if truncated
+fn truncate_prompt(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        // Find a good break point (preferably a space)
+        let truncate_at = max_len.saturating_sub(3);
+        let substring = &s[..truncate_at.min(s.len())];
+
+        // Try to break at last space if possible
+        if let Some(last_space) = substring.rfind(' ') {
+            if last_space > truncate_at / 2 {
+                return format!("{}...", &substring[..last_space]);
+            }
+        }
+
+        format!("{}...", substring)
     }
 }
