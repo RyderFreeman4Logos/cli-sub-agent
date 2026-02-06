@@ -170,6 +170,7 @@ async fn handle_run(
         // Persistent session
         execute_with_session(
             &executor,
+            &tool,
             &prompt_text,
             session_arg,
             description,
@@ -186,8 +187,10 @@ async fn handle_run(
     Ok(result.exit_code)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_with_session(
     executor: &Executor,
+    tool: &ToolName,
     prompt: &str,
     session_arg: Option<String>,
     description: Option<String>,
@@ -235,15 +238,32 @@ async fn execute_with_session(
 
     info!("Executing in session: {}", session.meta_session_id);
 
-    // Start memory monitor
-    let monitor = MemoryMonitor::start(std::process::id());
+    // Apply restrictions if configured
+    let can_edit = config.map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+    let effective_prompt = if !can_edit {
+        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
+        executor.apply_restrictions(prompt, false)
+    } else {
+        prompt.to_string()
+    };
 
-    // Execute
+    // Build command
     let tool_state = session.tools.get(executor.tool_name()).cloned();
+    let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session);
 
-    let result = executor
-        .execute(prompt, tool_state.as_ref(), &session)
-        .await?;
+    // Spawn child process
+    let child = csa_process::spawn_tool(cmd)
+        .await
+        .context("Failed to spawn tool process")?;
+
+    // Get child PID and start memory monitor
+    let child_pid = child.id().context("Failed to get child process PID")?;
+    let monitor = MemoryMonitor::start(child_pid);
+
+    // Wait for child to complete
+    let result = csa_process::wait_and_capture(child)
+        .await
+        .context("Failed to wait for tool process")?;
 
     // Stop memory monitor and record usage
     let peak_memory_mb = monitor.stop().await;
@@ -251,17 +271,24 @@ async fn execute_with_session(
         guard.record_usage(executor.tool_name(), peak_memory_mb);
     }
 
+    // Extract provider session ID from output
+    let provider_session_id = csa_executor::extract_session_id(tool, &result.output);
+
     // Update session state
     session
         .tools
         .entry(executor.tool_name().to_string())
         .and_modify(|t| {
+            // Only update provider_session_id if extraction succeeded
+            if let Some(ref session_id) = provider_session_id {
+                t.provider_session_id = Some(session_id.clone());
+            }
             t.last_action_summary = result.summary.clone();
             t.last_exit_code = result.exit_code;
             t.updated_at = chrono::Utc::now();
         })
         .or_insert_with(|| ToolState {
-            provider_session_id: None,
+            provider_session_id,
             last_action_summary: result.summary.clone(),
             last_exit_code: result.exit_code,
             updated_at: chrono::Utc::now(),
@@ -454,10 +481,22 @@ async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
         }
     }
 
-    // 10. Execute with session
+    // 10. Apply restrictions if configured
+    let can_edit = config
+        .as_ref()
+        .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+    let effective_prompt = if !can_edit {
+        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
+        executor.apply_restrictions(&prompt, false)
+    } else {
+        prompt.clone()
+    };
+
+    // 11. Execute with session
     let result = execute_with_session(
         &executor,
-        &prompt,
+        &tool,
+        &effective_prompt,
         args.session,
         Some("Code review session".to_string()),
         None,
@@ -466,7 +505,7 @@ async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     )
     .await?;
 
-    // 11. Print result
+    // 12. Print result
     print!("{}", result.output);
 
     Ok(result.exit_code)

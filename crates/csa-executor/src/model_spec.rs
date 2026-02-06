@@ -65,6 +65,30 @@ impl ThinkingBudget {
             }
         }
     }
+
+    /// Returns the token count for this thinking budget level.
+    pub fn token_count(&self) -> u32 {
+        match self {
+            Self::Low => 1024,
+            Self::Medium => 8192,
+            Self::High => 32768,
+            Self::Xhigh => 65536,
+            Self::Custom(n) => *n,
+        }
+    }
+
+    /// Returns the reasoning effort level for codex-style tools.
+    ///
+    /// Maps thinking budget levels to codex's --reasoning-effort values.
+    pub fn codex_effort(&self) -> &'static str {
+        match self {
+            Self::Low => "low",
+            Self::Medium => "medium",
+            Self::High => "high",
+            Self::Xhigh => "high", // codex doesn't support xhigh, fallback to high
+            Self::Custom(_) => "high", // custom values map to high
+        }
+    }
 }
 
 #[cfg(test)]
@@ -165,5 +189,23 @@ mod tests {
             ThinkingBudget::parse("XHIGH").unwrap(),
             ThinkingBudget::Xhigh
         ));
+    }
+
+    #[test]
+    fn test_thinking_budget_token_count() {
+        assert_eq!(ThinkingBudget::Low.token_count(), 1024);
+        assert_eq!(ThinkingBudget::Medium.token_count(), 8192);
+        assert_eq!(ThinkingBudget::High.token_count(), 32768);
+        assert_eq!(ThinkingBudget::Xhigh.token_count(), 65536);
+        assert_eq!(ThinkingBudget::Custom(5000).token_count(), 5000);
+    }
+
+    #[test]
+    fn test_thinking_budget_codex_effort() {
+        assert_eq!(ThinkingBudget::Low.codex_effort(), "low");
+        assert_eq!(ThinkingBudget::Medium.codex_effort(), "medium");
+        assert_eq!(ThinkingBudget::High.codex_effort(), "high");
+        assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "high"); // fallback to high
+        assert_eq!(ThinkingBudget::Custom(10000).codex_effort(), "high"); // fallback to high
     }
 }

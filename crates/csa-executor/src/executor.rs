@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::process::Command;
 
-use crate::model_spec::ModelSpec;
+use crate::model_spec::{ModelSpec, ThinkingBudget};
 
 /// Executor: Closed enum for 4 AI tools.
 ///
@@ -18,16 +18,20 @@ use crate::model_spec::ModelSpec;
 pub enum Executor {
     GeminiCli {
         model_override: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
     },
     Opencode {
         model_override: Option<String>,
         agent: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
     },
     Codex {
         model_override: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
     },
     ClaudeCode {
         model_override: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
     },
 }
 
@@ -65,19 +69,24 @@ impl Executor {
     /// Construct executor from model spec.
     pub fn from_spec(spec: &ModelSpec) -> Result<Self> {
         let model = Some(spec.model.clone());
+        let budget = Some(spec.thinking_budget.clone());
         match spec.tool.as_str() {
             "gemini-cli" => Ok(Self::GeminiCli {
                 model_override: model,
+                thinking_budget: budget,
             }),
             "opencode" => Ok(Self::Opencode {
                 model_override: model,
                 agent: None,
+                thinking_budget: budget,
             }),
             "codex" => Ok(Self::Codex {
                 model_override: model,
+                thinking_budget: budget,
             }),
             "claude-code" => Ok(Self::ClaudeCode {
                 model_override: model,
+                thinking_budget: budget,
             }),
             other => bail!("Unknown tool '{}' in model spec", other),
         }
@@ -88,18 +97,58 @@ impl Executor {
         match tool {
             ToolName::GeminiCli => Self::GeminiCli {
                 model_override: model,
+                thinking_budget: None,
             },
             ToolName::Opencode => Self::Opencode {
                 model_override: model,
                 agent: None,
+                thinking_budget: None,
             },
             ToolName::Codex => Self::Codex {
                 model_override: model,
+                thinking_budget: None,
             },
             ToolName::ClaudeCode => Self::ClaudeCode {
                 model_override: model,
+                thinking_budget: None,
             },
         }
+    }
+
+    /// Apply restrictions by modifying the prompt to include restriction instructions.
+    /// Returns the modified prompt.
+    ///
+    /// When `allow_edit` is false, injects a restriction message that prevents
+    /// the tool from modifying existing files.
+    pub fn apply_restrictions(&self, prompt: &str, allow_edit: bool) -> String {
+        if !allow_edit {
+            format!(
+                "IMPORTANT RESTRICTION: You MUST NOT edit or modify any existing files. \
+                 You may only create new files or perform read-only analysis.\n\n{}",
+                prompt
+            )
+        } else {
+            prompt.to_string()
+        }
+    }
+
+    /// Build a configured Command ready for execution.
+    ///
+    /// Returns the Command object without executing it, allowing caller to:
+    /// - Spawn the process and get its PID
+    /// - Start resource monitoring
+    /// - Wait for completion separately
+    ///
+    /// This is useful when you need to monitor the child process (e.g., memory usage).
+    pub fn build_command(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        session: &MetaSessionState,
+    ) -> Command {
+        let mut cmd = self.build_base_command(session);
+        self.append_tool_args(&mut cmd, prompt, tool_state);
+        cmd
     }
 
     /// Execute a task with full session context.
@@ -109,8 +158,7 @@ impl Executor {
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
     ) -> Result<ExecutionResult> {
-        let mut cmd = self.build_base_command(session);
-        self.append_tool_args(&mut cmd, prompt, tool_state);
+        let cmd = self.build_command(prompt, tool_state, session);
         csa_process::run_and_capture(cmd).await
     }
 
@@ -143,10 +191,17 @@ impl Executor {
     /// Append tool-specific arguments for full execution.
     fn append_tool_args(&self, cmd: &mut Command, prompt: &str, tool_state: Option<&ToolState>) {
         match self {
-            Self::GeminiCli { model_override } => {
+            Self::GeminiCli {
+                model_override,
+                thinking_budget,
+            } => {
                 cmd.arg("-p").arg(prompt);
                 if let Some(model) = model_override {
                     cmd.arg("-m").arg(model);
+                }
+                if let Some(budget) = thinking_budget {
+                    cmd.arg("--thinking_budget")
+                        .arg(budget.token_count().to_string());
                 }
                 cmd.arg("-y");
                 if let Some(state) = tool_state {
@@ -158,6 +213,7 @@ impl Executor {
             Self::Opencode {
                 model_override,
                 agent,
+                thinking_budget,
             } => {
                 cmd.arg("run").arg("--format").arg("json");
                 cmd.arg("--yolo");
@@ -167,6 +223,10 @@ impl Executor {
                 if let Some(agent_name) = agent {
                     cmd.arg("--agent").arg(agent_name);
                 }
+                // Note: opencode may not support thinking budget, logging for future reference
+                if thinking_budget.is_some() {
+                    tracing::debug!("Thinking budget specified for opencode, but opencode may not support this feature yet");
+                }
                 if let Some(state) = tool_state {
                     if let Some(ref session_id) = state.provider_session_id {
                         cmd.arg("-s").arg(session_id);
@@ -174,11 +234,17 @@ impl Executor {
                 }
                 cmd.arg(prompt);
             }
-            Self::Codex { model_override } => {
+            Self::Codex {
+                model_override,
+                thinking_budget,
+            } => {
                 cmd.arg("exec");
                 cmd.arg("--dangerously-bypass-approvals-and-sandbox");
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);
+                }
+                if let Some(budget) = thinking_budget {
+                    cmd.arg("--reasoning-effort").arg(budget.codex_effort());
                 }
                 if let Some(state) = tool_state {
                     if let Some(ref session_id) = state.provider_session_id {
@@ -187,11 +253,18 @@ impl Executor {
                 }
                 cmd.arg(prompt);
             }
-            Self::ClaudeCode { model_override } => {
+            Self::ClaudeCode {
+                model_override,
+                thinking_budget,
+            } => {
                 cmd.arg("--dangerously-skip-permissions");
                 cmd.arg("--output-format").arg("json");
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);
+                }
+                if let Some(budget) = thinking_budget {
+                    cmd.arg("--thinking-budget")
+                        .arg(budget.token_count().to_string());
                 }
                 if let Some(state) = tool_state {
                     if let Some(ref session_id) = state.provider_session_id {
@@ -237,7 +310,8 @@ mod tests {
     fn test_tool_name() {
         assert_eq!(
             Executor::GeminiCli {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .tool_name(),
             "gemini-cli"
@@ -245,21 +319,24 @@ mod tests {
         assert_eq!(
             Executor::Opencode {
                 model_override: None,
-                agent: None
+                agent: None,
+                thinking_budget: None,
             }
             .tool_name(),
             "opencode"
         );
         assert_eq!(
             Executor::Codex {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .tool_name(),
             "codex"
         );
         assert_eq!(
             Executor::ClaudeCode {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .tool_name(),
             "claude-code"
@@ -270,7 +347,8 @@ mod tests {
     fn test_executable_name() {
         assert_eq!(
             Executor::GeminiCli {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .executable_name(),
             "gemini"
@@ -278,21 +356,24 @@ mod tests {
         assert_eq!(
             Executor::Opencode {
                 model_override: None,
-                agent: None
+                agent: None,
+                thinking_budget: None,
             }
             .executable_name(),
             "opencode"
         );
         assert_eq!(
             Executor::Codex {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .executable_name(),
             "codex"
         );
         assert_eq!(
             Executor::ClaudeCode {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .executable_name(),
             "claude"
@@ -303,7 +384,8 @@ mod tests {
     fn test_yolo_args() {
         assert_eq!(
             Executor::GeminiCli {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .yolo_args(),
             &["-y"]
@@ -311,21 +393,24 @@ mod tests {
         assert_eq!(
             Executor::Opencode {
                 model_override: None,
-                agent: None
+                agent: None,
+                thinking_budget: None,
             }
             .yolo_args(),
             &["--yolo"]
         );
         assert_eq!(
             Executor::Codex {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .yolo_args(),
             &["--dangerously-bypass-approvals-and-sandbox"]
         );
         assert_eq!(
             Executor::ClaudeCode {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
             .yolo_args(),
             &["--dangerously-skip-permissions"]
@@ -339,7 +424,8 @@ mod tests {
         assert!(matches!(
             exec,
             Executor::GeminiCli {
-                model_override: Some(_)
+                model_override: Some(_),
+                thinking_budget: None,
             }
         ));
 
@@ -349,7 +435,8 @@ mod tests {
             exec,
             Executor::Opencode {
                 model_override: None,
-                agent: None
+                agent: None,
+                thinking_budget: None,
             }
         ));
 
@@ -358,7 +445,8 @@ mod tests {
         assert!(matches!(
             exec,
             Executor::Codex {
-                model_override: Some(_)
+                model_override: Some(_),
+                thinking_budget: None,
             }
         ));
 
@@ -367,7 +455,8 @@ mod tests {
         assert!(matches!(
             exec,
             Executor::ClaudeCode {
-                model_override: None
+                model_override: None,
+                thinking_budget: None,
             }
         ));
     }
@@ -381,7 +470,8 @@ mod tests {
             exec,
             Executor::Opencode {
                 model_override: Some(_),
-                agent: None
+                agent: None,
+                thinking_budget: Some(_),
             }
         ));
 
@@ -391,7 +481,8 @@ mod tests {
         assert!(matches!(
             exec,
             Executor::Codex {
-                model_override: Some(_)
+                model_override: Some(_),
+                thinking_budget: Some(_),
             }
         ));
     }
@@ -402,5 +493,147 @@ mod tests {
         let result = Executor::from_spec(&spec);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unknown tool"));
+    }
+
+    #[test]
+    fn test_thinking_budget_in_gemini_cli_args() {
+        use crate::model_spec::ThinkingBudget;
+        let exec = Executor::GeminiCli {
+            model_override: Some("gemini-3-pro".to_string()),
+            thinking_budget: Some(ThinkingBudget::High),
+        };
+
+        let mut cmd = Command::new(exec.executable_name());
+        exec.append_tool_args(&mut cmd, "test prompt", None);
+
+        // Check that the command contains --thinking_budget 32768
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("--thinking_budget"));
+        assert!(debug_str.contains("32768"));
+    }
+
+    #[test]
+    fn test_thinking_budget_in_codex_args() {
+        use crate::model_spec::ThinkingBudget;
+        let exec = Executor::Codex {
+            model_override: Some("gpt-5".to_string()),
+            thinking_budget: Some(ThinkingBudget::Low),
+        };
+
+        let mut cmd = Command::new(exec.executable_name());
+        exec.append_tool_args(&mut cmd, "test prompt", None);
+
+        // Check that the command contains --reasoning-effort low
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("--reasoning-effort"));
+        assert!(debug_str.contains("\"low\""));
+    }
+
+    #[test]
+    fn test_thinking_budget_from_spec_gemini() {
+        let spec = ModelSpec::parse("gemini-cli/google/gemini-3-pro/high").unwrap();
+        let exec = Executor::from_spec(&spec).unwrap();
+
+        let mut cmd = Command::new(exec.executable_name());
+        exec.append_tool_args(&mut cmd, "test prompt", None);
+
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("--thinking_budget"));
+        assert!(debug_str.contains("32768"));
+    }
+
+    #[test]
+    fn test_thinking_budget_from_spec_codex() {
+        let spec = ModelSpec::parse("codex/openai/gpt-5/low").unwrap();
+        let exec = Executor::from_spec(&spec).unwrap();
+
+        let mut cmd = Command::new(exec.executable_name());
+        exec.append_tool_args(&mut cmd, "test prompt", None);
+
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("--reasoning-effort"));
+        assert!(debug_str.contains("\"low\""));
+    }
+
+    #[test]
+    fn test_thinking_budget_custom_value() {
+        use crate::model_spec::ThinkingBudget;
+        let exec = Executor::ClaudeCode {
+            model_override: Some("claude-opus".to_string()),
+            thinking_budget: Some(ThinkingBudget::Custom(10000)),
+        };
+
+        let mut cmd = Command::new(exec.executable_name());
+        exec.append_tool_args(&mut cmd, "test prompt", None);
+
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("--thinking-budget"));
+        assert!(debug_str.contains("10000"));
+    }
+
+    #[test]
+    fn test_apply_restrictions_allow_edit() {
+        let exec = Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        };
+
+        let original_prompt = "Refactor the authentication module";
+        let result = exec.apply_restrictions(original_prompt, true);
+
+        // When edit is allowed, prompt should be unchanged
+        assert_eq!(result, original_prompt);
+    }
+
+    #[test]
+    fn test_apply_restrictions_deny_edit() {
+        let exec = Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        };
+
+        let original_prompt = "Analyze the authentication module";
+        let result = exec.apply_restrictions(original_prompt, false);
+
+        // When edit is denied, prompt should contain restriction message
+        assert!(result.contains("IMPORTANT RESTRICTION"));
+        assert!(result.contains("MUST NOT edit or modify any existing files"));
+        assert!(result.contains("may only create new files"));
+        assert!(result.contains(original_prompt));
+    }
+
+    #[test]
+    fn test_apply_restrictions_preserves_all_tools() {
+        let tools = vec![
+            Executor::GeminiCli {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::Opencode {
+                model_override: None,
+                agent: None,
+                thinking_budget: None,
+            },
+            Executor::Codex {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::ClaudeCode {
+                model_override: None,
+                thinking_budget: None,
+            },
+        ];
+
+        let original_prompt = "Analyze code";
+        for tool in tools {
+            // Test that restriction works for all tool types
+            let restricted = tool.apply_restrictions(original_prompt, false);
+            assert!(restricted.contains("IMPORTANT RESTRICTION"));
+            assert!(restricted.contains(original_prompt));
+
+            // Test that allowing edit returns original prompt
+            let allowed = tool.apply_restrictions(original_prompt, true);
+            assert_eq!(allowed, original_prompt);
+        }
     }
 }

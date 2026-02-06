@@ -43,3 +43,6 @@ sysinfo = "0.32"
 which = "7.0"
 libc = "0.2"
 tempfile = "3.10"
+
+# Utilities
+regex = "1.11"

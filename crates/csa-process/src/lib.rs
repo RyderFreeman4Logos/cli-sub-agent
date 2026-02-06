@@ -16,19 +16,31 @@ pub struct ExecutionResult {
     pub exit_code: i32,
 }
 
-/// Execute a command and capture output.
+/// Spawn a tool process without waiting for it to complete.
 ///
 /// - Spawns the command
 /// - Captures stdout (piped)
 /// - Stderr passes through to parent (inherit)
-/// - Waits for completion
-/// - Returns ExecutionResult with output, summary, and exit code
-pub async fn run_and_capture(mut cmd: Command) -> Result<ExecutionResult> {
+/// - Returns the child process handle for PID access and later waiting
+///
+/// Use this when you need the PID before waiting (e.g., for resource monitoring).
+/// Call `wait_and_capture()` after starting monitoring to complete execution.
+pub async fn spawn_tool(mut cmd: Command) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::inherit());
 
-    let mut child = cmd.spawn().context("Failed to spawn command")?;
+    cmd.spawn().context("Failed to spawn command")
+}
 
+/// Wait for a spawned child process and capture its output.
+///
+/// - Reads stdout until EOF
+/// - Waits for the process to exit
+/// - Returns ExecutionResult with output, summary, and exit code
+///
+/// IMPORTANT: The child's stdout must be piped. This function will take ownership
+/// of the stdout handle.
+pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
 
     let mut reader = BufReader::new(stdout);
@@ -57,6 +69,21 @@ pub async fn run_and_capture(mut cmd: Command) -> Result<ExecutionResult> {
         summary,
         exit_code,
     })
+}
+
+/// Execute a command and capture output.
+///
+/// - Spawns the command
+/// - Captures stdout (piped)
+/// - Stderr passes through to parent (inherit)
+/// - Waits for completion
+/// - Returns ExecutionResult with output, summary, and exit code
+///
+/// This is a convenience function that combines `spawn_tool()` and `wait_and_capture()`.
+/// Use `spawn_tool()` directly if you need the PID before waiting (e.g., for monitoring).
+pub async fn run_and_capture(cmd: Command) -> Result<ExecutionResult> {
+    let child = spawn_tool(cmd).await?;
+    wait_and_capture(child).await
 }
 
 /// Check if a tool is installed by attempting to locate it.
@@ -144,5 +171,37 @@ mod tests {
         assert_eq!(result.output, "test output");
         assert_eq!(result.summary, "test summary");
         assert_eq!(result.exit_code, 0);
+    }
+
+    #[tokio::test]
+    async fn test_spawn_tool_returns_valid_child() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("test");
+
+        let child = spawn_tool(cmd).await.expect("Failed to spawn tool");
+        let pid = child.id().expect("Child process has no PID");
+
+        // PID should be a positive number
+        assert!(pid > 0);
+
+        // Clean up by waiting for the child
+        let result = wait_and_capture(child)
+            .await
+            .expect("Failed to wait for child");
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.contains("test"));
+    }
+
+    #[tokio::test]
+    async fn test_run_and_capture_still_works() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("backward_compatible");
+
+        let result = run_and_capture(cmd)
+            .await
+            .expect("run_and_capture should work");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.contains("backward_compatible"));
     }
 }
