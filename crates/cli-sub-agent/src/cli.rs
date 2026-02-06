@@ -25,8 +25,12 @@ pub enum Commands {
         prompt: Option<String>,
 
         /// Resume existing session (ULID or prefix match)
-        #[arg(short, long)]
+        #[arg(short, long, conflicts_with = "last")]
         session: Option<String>,
+
+        /// Resume the most recent session for this project
+        #[arg(long, conflicts_with_all = ["session", "ephemeral"])]
+        last: bool,
 
         /// Human-readable description for a new session
         #[arg(short, long)]

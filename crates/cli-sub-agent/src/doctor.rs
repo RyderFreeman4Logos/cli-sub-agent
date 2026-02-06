@@ -14,6 +14,17 @@ struct ToolStatus {
     version: Option<String>,
 }
 
+/// Get installation hint for a tool.
+fn install_hint(tool_name: &str) -> &'static str {
+    match tool_name {
+        "gemini-cli" => "npm install -g @google/gemini-cli",
+        "opencode" => "go install github.com/sst/opencode@latest",
+        "codex" => "npm install -g @openai/codex",
+        "claude-code" => "npm install -g @anthropic-ai/claude-code",
+        _ => "unknown tool",
+    }
+}
+
 /// Run full environment diagnostics.
 pub async fn run_doctor() -> Result<()> {
     println!("=== CSA Environment Check ===");
@@ -67,10 +78,20 @@ async fn print_tool_availability() {
         ("claude-code", "claude"),
     ];
 
+    let mut installed_count = 0;
+    let total_count = tools.len();
+
     for (tool_name, exe_name) in &tools {
         let status = check_tool_status(tool_name, exe_name);
+        if status.installed {
+            installed_count += 1;
+        }
         print_tool_status(&status);
     }
+
+    // Print summary
+    println!();
+    println!("{}/{} tools ready", installed_count, total_count);
 }
 
 /// Check if a tool is installed and get its version.
@@ -132,6 +153,12 @@ fn print_tool_status(status: &ToolStatus) {
         checkmark,
         status_msg
     );
+
+    // Print install hint if not found
+    if !status.installed {
+        let hint = install_hint(status.name);
+        println!("             Install: {}", hint);
+    }
 }
 
 /// Print project config status.

@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
             tool,
             prompt,
             session,
+            last,
             description,
             parent,
             ephemeral,
@@ -59,6 +60,7 @@ async fn main() -> Result<()> {
                 tool,
                 prompt,
                 session,
+                last,
                 description,
                 parent,
                 ephemeral,
@@ -131,6 +133,7 @@ async fn handle_run(
     tool: Option<ToolName>,
     prompt: Option<String>,
     session_arg: Option<String>,
+    last: bool,
     description: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
@@ -144,10 +147,24 @@ async fn handle_run(
     // 1. Determine project root
     let project_root = determine_project_root(cd.as_deref())?;
 
-    // 2. Load config (optional)
+    // 2. Resolve --last flag to session ID
+    let session_arg = if last {
+        let sessions = csa_session::list_sessions(&project_root, None)?;
+        if sessions.is_empty() {
+            anyhow::bail!("No sessions found. Run a task first to create one.");
+        }
+        // Sessions should be sorted by last_accessed (most recent first)
+        let mut sorted_sessions = sessions;
+        sorted_sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+        Some(sorted_sessions[0].meta_session_id.clone())
+    } else {
+        session_arg
+    };
+
+    // 3. Load config (optional)
     let config = ProjectConfig::load(&project_root)?;
 
-    // 3. Check recursion depth (from config or default)
+    // 4. Check recursion depth (from config or default)
     let max_depth = config
         .as_ref()
         .map(|c| c.project.max_recursion_depth)
@@ -161,10 +178,10 @@ async fn handle_run(
         return Ok(1);
     }
 
-    // 4. Read prompt
+    // 5. Read prompt
     let prompt_text = read_prompt(prompt)?;
 
-    // 5. Resolve tool and model_spec
+    // 6. Resolve tool and model_spec
     let (resolved_tool, resolved_model_spec, resolved_model) = resolve_tool_and_model(
         tool,
         model_spec.as_deref(),
@@ -172,7 +189,7 @@ async fn handle_run(
         config.as_ref(),
     )?;
 
-    // 6. Build executor
+    // 7. Build executor
     let executor = build_executor(
         &resolved_tool,
         resolved_model_spec.as_deref(),
@@ -180,7 +197,7 @@ async fn handle_run(
         thinking.as_deref(),
     )?;
 
-    // 7. Check tool is installed
+    // 8. Check tool is installed
     if let Err(e) = check_tool_installed(executor.executable_name()).await {
         error!(
             "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
@@ -191,7 +208,7 @@ async fn handle_run(
         anyhow::bail!("{}", e);
     }
 
-    // 8. Check tool is enabled in config
+    // 9. Check tool is enabled in config
     if let Some(ref cfg) = config {
         if !cfg.is_tool_enabled(executor.tool_name()) {
             error!(
@@ -202,7 +219,7 @@ async fn handle_run(
         }
     }
 
-    // 9. Execute
+    // 10. Execute
     let result = if ephemeral {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
@@ -244,7 +261,7 @@ async fn handle_run(
         }
     };
 
-    // 10. Print result
+    // 11. Print result
     match output_format {
         OutputFormat::Text => {
             print!("{}", result.output);
