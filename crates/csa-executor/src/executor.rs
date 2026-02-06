@@ -60,7 +60,7 @@ impl Executor {
     pub fn yolo_args(&self) -> &[&str] {
         match self {
             Self::GeminiCli { .. } => &["-y"],
-            Self::Opencode { .. } => &["--yolo"],
+            Self::Opencode { .. } => &[] as &[&str], // opencode does not have a yolo mode
             Self::Codex { .. } => &["--dangerously-bypass-approvals-and-sandbox"],
             Self::ClaudeCode { .. } => &["--dangerously-skip-permissions"],
         }
@@ -215,17 +215,24 @@ impl Executor {
                 agent,
                 thinking_budget,
             } => {
-                cmd.arg("run").arg("--format").arg("json");
-                cmd.arg("--yolo");
+                cmd.arg("run");
+                cmd.arg("--format").arg("json");
                 if let Some(model) = model_override {
                     cmd.arg("-m").arg(model);
                 }
                 if let Some(agent_name) = agent {
                     cmd.arg("--agent").arg(agent_name);
                 }
-                // Note: opencode may not support thinking budget, logging for future reference
-                if thinking_budget.is_some() {
-                    tracing::debug!("Thinking budget specified for opencode, but opencode may not support this feature yet");
+                // Map thinking budget to --variant (opencode's reasoning effort parameter)
+                if let Some(budget) = thinking_budget {
+                    let variant = match budget {
+                        ThinkingBudget::Low => "minimal",
+                        ThinkingBudget::Medium => "medium",
+                        ThinkingBudget::High => "high",
+                        ThinkingBudget::Xhigh => "max",
+                        ThinkingBudget::Custom(_) => "max",
+                    };
+                    cmd.arg("--variant").arg(variant);
                 }
                 if let Some(state) = tool_state {
                     if let Some(ref session_id) = state.provider_session_id {
@@ -397,7 +404,7 @@ mod tests {
                 thinking_budget: None,
             }
             .yolo_args(),
-            &["--yolo"]
+            &[] as &[&str] // opencode does not have a yolo mode
         );
         assert_eq!(
             Executor::Codex {
@@ -634,6 +641,64 @@ mod tests {
             // Test that allowing edit returns original prompt
             let allowed = tool.apply_restrictions(original_prompt, true);
             assert_eq!(allowed, original_prompt);
+        }
+    }
+
+    #[test]
+    fn test_opencode_command_construction() {
+        use crate::model_spec::ThinkingBudget;
+        let exec = Executor::Opencode {
+            model_override: Some("google/gemini-2.5-pro".to_string()),
+            agent: Some("test-agent".to_string()),
+            thinking_budget: Some(ThinkingBudget::High),
+        };
+
+        let mut cmd = Command::new(exec.executable_name());
+        exec.append_tool_args(&mut cmd, "test prompt", None);
+
+        // Verify command structure matches opencode run syntax
+        let debug_str = format!("{:?}", cmd);
+        assert!(debug_str.contains("\"run\""));
+        assert!(debug_str.contains("\"--format\""));
+        assert!(debug_str.contains("\"json\""));
+        assert!(debug_str.contains("\"-m\""));
+        assert!(debug_str.contains("\"google/gemini-2.5-pro\""));
+        assert!(debug_str.contains("\"--agent\""));
+        assert!(debug_str.contains("\"test-agent\""));
+        assert!(debug_str.contains("\"--variant\""));
+        assert!(debug_str.contains("\"high\""));
+        assert!(debug_str.contains("\"test prompt\""));
+        // Verify --yolo is NOT present
+        assert!(!debug_str.contains("--yolo"));
+    }
+
+    #[test]
+    fn test_opencode_variant_mapping() {
+        use crate::model_spec::ThinkingBudget;
+        let test_cases = vec![
+            (ThinkingBudget::Low, "minimal"),
+            (ThinkingBudget::Medium, "medium"),
+            (ThinkingBudget::High, "high"),
+            (ThinkingBudget::Custom(50000), "max"),
+        ];
+
+        for (budget, expected_variant) in test_cases {
+            let exec = Executor::Opencode {
+                model_override: None,
+                agent: None,
+                thinking_budget: Some(budget),
+            };
+
+            let mut cmd = Command::new(exec.executable_name());
+            exec.append_tool_args(&mut cmd, "test", None);
+
+            let debug_str = format!("{:?}", cmd);
+            assert!(
+                debug_str.contains(expected_variant),
+                "Expected variant '{}' not found in command: {}",
+                expected_variant,
+                debug_str
+            );
         }
     }
 }

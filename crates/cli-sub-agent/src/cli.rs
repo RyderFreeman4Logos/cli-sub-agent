@@ -137,12 +137,20 @@ pub enum SessionCommands {
     Compress {
         #[arg(short, long)]
         session: String,
+
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
     },
 
     /// Delete a session
     Delete {
         #[arg(short, long)]
         session: String,
+
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
     },
 }
 

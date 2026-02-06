@@ -70,11 +70,11 @@ async fn main() -> Result<()> {
             SessionCommands::List { cd, tool, tree } => {
                 handle_session_list(cd, tool, tree)?;
             }
-            SessionCommands::Compress { session } => {
-                handle_session_compress(session)?;
+            SessionCommands::Compress { session, cd } => {
+                handle_session_compress(session, cd)?;
             }
-            SessionCommands::Delete { session } => {
-                handle_session_delete(session)?;
+            SessionCommands::Delete { session, cd } => {
+                handle_session_delete(session, cd)?;
             }
         },
         Commands::Init { non_interactive } => {
@@ -325,8 +325,8 @@ fn handle_session_list(cd: Option<String>, tool: Option<String>, tree: bool) -> 
     Ok(())
 }
 
-fn handle_session_compress(session: String) -> Result<()> {
-    let project_root = determine_project_root(None)?;
+fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?;
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     let session_state = load_session(&project_root, &resolved_id)?;
@@ -355,8 +355,8 @@ fn handle_session_compress(session: String) -> Result<()> {
     Ok(())
 }
 
-fn handle_session_delete(session: String) -> Result<()> {
-    let project_root = determine_project_root(None)?;
+fn handle_session_delete(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?;
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     delete_session(&project_root, &resolved_id)?;
