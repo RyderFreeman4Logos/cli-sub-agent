@@ -164,6 +164,25 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
+    /// Remove sessions older than N days
+    Clean {
+        /// Remove sessions not accessed within N days
+        #[arg(long)]
+        days: u64,
+
+        /// Show what would be removed without actually removing
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Filter by tool (comma-separated)
+        #[arg(long)]
+        tool: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
     /// View session logs
     Logs {
         /// Session ULID or prefix
@@ -183,9 +202,21 @@ pub enum SessionCommands {
 #[derive(Subcommand)]
 pub enum ConfigCommands {
     /// Show current configuration
-    Show,
+    Show {
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
+    },
     /// Edit configuration with $EDITOR
-    Edit,
+    Edit {
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
+    },
     /// Validate configuration file
-    Validate,
+    Validate {
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }

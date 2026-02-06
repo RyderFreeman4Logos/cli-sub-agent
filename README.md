@@ -4,6 +4,33 @@
 
 CSA provides a unified CLI interface for executing coding tasks across multiple AI tools with persistent sessions, recursive agent spawning, and resource-aware scheduling.
 
+## When to Use CSA
+
+CSA is most valuable when you need capabilities **beyond** what a single AI CLI tool provides:
+
+| Scenario | Without CSA | With CSA |
+|----------|-------------|----------|
+| **Multi-tool workflows** | Manually switch between gemini-cli, codex, claude-code | `csa run --tool X` with unified interface |
+| **Recursive agents** | No safe way for an agent to spawn sub-agents | Depth-limited spawning with `CSA_DEPTH` |
+| **Session continuity** | Each tool manages sessions differently | Unified ULID sessions with genealogy trees |
+| **Resource safety** | No OOM prevention when running parallel agents | P95 memory estimation blocks unsafe launches |
+| **Audit trail** | Scattered logs across tools | Session tree with logs, locks, and state |
+
+**Example: Multi-step code review pipeline**
+
+```bash
+# Step 1: Analyze with gemini-cli (2M context, read-only)
+csa run --tool gemini-cli "Analyze the auth module for security issues"
+
+# Step 2: Fix issues with codex (in the same session tree)
+csa run --tool codex --parent $CSA_SESSION_ID "Fix the XSS vulnerability found"
+
+# Step 3: Review the fix
+csa review --diff
+```
+
+If you only use a single AI tool for simple tasks, the tool's native CLI may suffice. CSA shines when orchestrating multiple tools or managing complex agent hierarchies.
+
 ## Features
 
 - **Multi-tool support** — Seamlessly switch between gemini-cli, opencode, codex, and claude-code
@@ -150,6 +177,18 @@ models = ["opencode/anthropic/claude-sonnet-4-5/medium"]
 [resources]
 min_free_memory_mb = 512
 ```
+
+### Tier-Based Auto-Selection
+
+When `--tool` is omitted, CSA uses the `tier_mapping.default` entry from config to select a tool automatically:
+
+```toml
+[tier_mapping]
+default = "tier-2-standard"       # Used when --tool is omitted
+analysis = "tier-1-quick"         # For future keyword-based selection
+```
+
+The `default` tier resolves to the first model in the tier's `models` list, which determines both the tool and the model. To override, use `--tool` explicitly or `--model-spec tool/provider/model/thinking`.
 
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 

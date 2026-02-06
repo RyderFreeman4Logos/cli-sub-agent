@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -8,18 +7,21 @@ use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info, warn};
 
 mod cli;
+mod config_cmds;
 mod doctor;
+mod gc;
+mod review_cmd;
+mod session_cmds;
 
-use cli::{Cli, Commands, ConfigCommands, ReviewArgs, SessionCommands};
-use csa_config::{init_project, validate_config, ProjectConfig};
+use cli::{Cli, Commands, ConfigCommands, SessionCommands};
+use csa_config::{init_project, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{create_session_log_writer, Executor, ModelSpec};
 use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
-    create_session, delete_session, get_session_dir, list_sessions, list_sessions_tree,
-    load_session, resolve_session_prefix, save_session, ToolState,
+    create_session, get_session_dir, load_session, resolve_session_prefix, save_session, ToolState,
 };
 
 #[tokio::main]
@@ -72,16 +74,24 @@ async fn main() -> Result<()> {
         }
         Commands::Session { cmd } => match cmd {
             SessionCommands::List { cd, tool, tree } => {
-                handle_session_list(cd, tool, tree)?;
+                session_cmds::handle_session_list(cd, tool, tree)?;
             }
             SessionCommands::Compress { session, cd } => {
-                handle_session_compress(session, cd)?;
+                session_cmds::handle_session_compress(session, cd)?;
             }
             SessionCommands::Delete { session, cd } => {
-                handle_session_delete(session, cd)?;
+                session_cmds::handle_session_delete(session, cd)?;
+            }
+            SessionCommands::Clean {
+                days,
+                dry_run,
+                tool,
+                cd,
+            } => {
+                session_cmds::handle_session_clean(days, dry_run, tool, cd)?;
             }
             SessionCommands::Logs { session, tail, cd } => {
-                handle_session_logs(session, tail, cd)?;
+                session_cmds::handle_session_logs(session, tail, cd)?;
             }
         },
         Commands::Init { non_interactive } => {
@@ -91,21 +101,21 @@ async fn main() -> Result<()> {
             dry_run,
             max_age_days,
         } => {
-            handle_gc(dry_run, max_age_days)?;
+            gc::handle_gc(dry_run, max_age_days)?;
         }
         Commands::Config { cmd } => match cmd {
-            ConfigCommands::Show => {
-                handle_config_show()?;
+            ConfigCommands::Show { cd } => {
+                config_cmds::handle_config_show(cd)?;
             }
-            ConfigCommands::Edit => {
-                handle_config_edit()?;
+            ConfigCommands::Edit { cd } => {
+                config_cmds::handle_config_edit(cd)?;
             }
-            ConfigCommands::Validate => {
-                handle_config_validate()?;
+            ConfigCommands::Validate { cd } => {
+                config_cmds::handle_config_validate(cd)?;
             }
         },
         Commands::Review(args) => {
-            let exit_code = handle_review(args, current_depth).await?;
+            let exit_code = review_cmd::handle_review(args, current_depth).await?;
             std::process::exit(exit_code);
         }
         Commands::Doctor => {
@@ -249,7 +259,7 @@ async fn handle_run(
 }
 
 #[allow(clippy::too_many_arguments)]
-async fn execute_with_session(
+pub(crate) async fn execute_with_session(
     executor: &Executor,
     tool: &ToolName,
     prompt: &str,
@@ -412,122 +422,6 @@ async fn execute_with_session(
     Ok(result)
 }
 
-fn handle_session_list(cd: Option<String>, tool: Option<String>, tree: bool) -> Result<()> {
-    let project_root = determine_project_root(cd.as_deref())?;
-    let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
-
-    if tree {
-        let tree_output = list_sessions_tree(&project_root, tool_filter.as_deref())?;
-        print!("{}", tree_output);
-    } else {
-        let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
-        for session in sessions {
-            println!(
-                "{} | {} | {} | {:?}",
-                session.meta_session_id,
-                session.created_at.format("%Y-%m-%d %H:%M:%S"),
-                session.description.as_deref().unwrap_or("(no description)"),
-                session.tools.keys().collect::<Vec<_>>()
-            );
-        }
-    }
-
-    Ok(())
-}
-
-fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
-    let project_root = determine_project_root(cd.as_deref())?;
-    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
-    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
-    let session_state = load_session(&project_root, &resolved_id)?;
-
-    // Find the most recently used tool in this session
-    let (tool_name, _tool_state) = session_state
-        .tools
-        .iter()
-        .max_by_key(|(_, state)| &state.updated_at)
-        .ok_or_else(|| anyhow::anyhow!("Session '{}' has no tool history", resolved_id))?;
-
-    let compress_cmd = match tool_name.as_str() {
-        "gemini-cli" => "/compress",
-        _ => "/compact",
-    };
-
-    println!("Session {} uses tool: {}", resolved_id, tool_name);
-    println!("Compress command: {}", compress_cmd);
-    println!();
-    println!("To compress, resume the session and send the command:");
-    println!(
-        "  csa run --tool {} --session {} \"{}\"",
-        tool_name, resolved_id, compress_cmd
-    );
-    println!();
-    println!("Note: context status will be updated after the tool confirms compression.");
-
-    // Do NOT mark is_compacted = true here. The actual compression must be
-    // performed by the tool. Status should only be updated after `csa run`
-    // executes the compress command and succeeds.
-
-    Ok(())
-}
-
-fn handle_session_delete(session: String, cd: Option<String>) -> Result<()> {
-    let project_root = determine_project_root(cd.as_deref())?;
-    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
-    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
-    delete_session(&project_root, &resolved_id)?;
-    eprintln!("Deleted session: {}", resolved_id);
-    Ok(())
-}
-
-fn handle_session_logs(session: String, tail: Option<usize>, cd: Option<String>) -> Result<()> {
-    let project_root = determine_project_root(cd.as_deref())?;
-    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
-    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
-    let session_dir = get_session_dir(&project_root, &resolved_id)?;
-    let logs_dir = session_dir.join("logs");
-
-    if !logs_dir.exists() {
-        eprintln!("No logs found for session {}", resolved_id);
-        return Ok(());
-    }
-
-    // Find all log files, sorted by name (timestamp order)
-    let mut log_files: Vec<_> = fs::read_dir(&logs_dir)?
-        .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
-        .collect();
-    log_files.sort_by_key(|e| e.file_name());
-
-    if log_files.is_empty() {
-        eprintln!("No log files found for session {}", resolved_id);
-        return Ok(());
-    }
-
-    // Display each log file
-    for entry in &log_files {
-        let path = entry.path();
-        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-        eprintln!("=== {} ===", file_name);
-
-        let content = fs::read_to_string(&path)?;
-
-        if let Some(n) = tail {
-            // Show last N lines
-            let lines: Vec<&str> = content.lines().collect();
-            let start = lines.len().saturating_sub(n);
-            for line in &lines[start..] {
-                println!("{}", line);
-            }
-        } else {
-            print!("{}", content);
-        }
-        println!();
-    }
-
-    Ok(())
-}
-
 fn handle_init(non_interactive: bool) -> Result<()> {
     let project_root = determine_project_root(None)?;
     let config = init_project(&project_root, non_interactive)?;
@@ -539,201 +433,7 @@ fn handle_init(non_interactive: bool) -> Result<()> {
     Ok(())
 }
 
-fn handle_gc(dry_run: bool, max_age_days: Option<u64>) -> Result<()> {
-    let project_root = determine_project_root(None)?;
-    let sessions = list_sessions(&project_root, None)?;
-    let now = chrono::Utc::now();
-
-    let mut stale_locks_removed = 0;
-    let mut empty_sessions_removed = 0;
-    let mut orphan_dirs_removed = 0;
-    let mut expired_sessions_removed = 0;
-
-    if dry_run {
-        eprintln!("[dry-run] No changes will be made.");
-    }
-
-    for session in &sessions {
-        let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
-        let locks_dir = session_dir.join("locks");
-
-        // 1. Check for stale locks
-        if locks_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&locks_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|ext| ext == "lock") {
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if let Some(pid) = extract_pid_from_lock(&content) {
-                                if !is_process_alive(pid) {
-                                    if dry_run {
-                                        eprintln!(
-                                            "[dry-run] Would remove stale lock for dead PID {}: {:?}",
-                                            pid,
-                                            path.file_name()
-                                        );
-                                    } else if fs::remove_file(&path).is_ok() {
-                                        info!(
-                                            "Removed stale lock for dead PID {}: {:?}",
-                                            pid,
-                                            path.file_name()
-                                        );
-                                    }
-                                    stale_locks_removed += 1;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Check for empty sessions (no tools used)
-        if session.tools.is_empty() {
-            if dry_run {
-                eprintln!(
-                    "[dry-run] Would remove empty session: {}",
-                    session.meta_session_id
-                );
-            } else {
-                let _ = delete_session(&project_root, &session.meta_session_id);
-            }
-            empty_sessions_removed += 1;
-        }
-
-        // 3. Check for expired sessions (--max-age-days)
-        if let Some(days) = max_age_days {
-            let age = now.signed_duration_since(session.last_accessed);
-            if age.num_days() > days as i64 {
-                if dry_run {
-                    eprintln!(
-                        "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
-                        session.meta_session_id,
-                        age.num_days()
-                    );
-                } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
-                    info!("Removed expired session: {}", session.meta_session_id);
-                }
-                expired_sessions_removed += 1;
-            }
-        }
-    }
-
-    // Clean orphan directories (no state.toml)
-    let session_root = csa_session::get_session_root(&project_root)?;
-    let sessions_dir = session_root.join("sessions");
-
-    if sessions_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&sessions_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                    let session_dir = entry.path();
-                    let state_path = session_dir.join("state.toml");
-
-                    if !state_path.exists() {
-                        if dry_run {
-                            eprintln!(
-                                "[dry-run] Would remove orphan directory: {}",
-                                session_dir.display()
-                            );
-                        } else {
-                            let _ = fs::remove_dir_all(&session_dir);
-                            info!(
-                                "Removed orphan directory without state.toml: {}",
-                                session_dir.display()
-                            );
-                        }
-                        orphan_dirs_removed += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    let prefix = if dry_run { "[dry-run] " } else { "" };
-    eprintln!(
-        "{}Garbage collection {}:",
-        prefix,
-        if dry_run { "preview" } else { "complete" }
-    );
-    eprintln!("{}  Stale locks removed: {}", prefix, stale_locks_removed);
-    eprintln!(
-        "{}  Empty sessions removed: {}",
-        prefix, empty_sessions_removed
-    );
-    if max_age_days.is_some() {
-        eprintln!(
-            "{}  Expired sessions removed: {}",
-            prefix, expired_sessions_removed
-        );
-    }
-    eprintln!(
-        "{}  Orphan directories removed: {}",
-        prefix, orphan_dirs_removed
-    );
-
-    Ok(())
-}
-
-/// Extract PID from lock file JSON content
-fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
-    // Simple parsing: look for "pid": followed by a number
-    json_content
-        .split("\"pid\":")
-        .nth(1)?
-        .trim()
-        .split(',')
-        .next()?
-        .trim()
-        .parse::<u32>()
-        .ok()
-}
-
-/// Check if a process is alive (Linux-specific)
-fn is_process_alive(pid: u32) -> bool {
-    // On Linux, check if /proc/{pid} exists
-    std::path::Path::new(&format!("/proc/{}", pid)).exists()
-}
-
-fn handle_config_show() -> Result<()> {
-    let project_root = determine_project_root(None)?;
-    let config = ProjectConfig::load(&project_root)?
-        .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
-
-    let toml_str = toml::to_string_pretty(&config)?;
-    print!("{}", toml_str);
-    Ok(())
-}
-
-fn handle_config_edit() -> Result<()> {
-    let project_root = determine_project_root(None)?;
-    let config_path = ProjectConfig::config_path(&project_root);
-
-    if !config_path.exists() {
-        error!("Configuration file does not exist. Run 'csa init' first.");
-        return Ok(());
-    }
-
-    let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-    let status = std::process::Command::new(editor)
-        .arg(&config_path)
-        .status()?;
-
-    if !status.success() {
-        warn!("Editor exited with non-zero status");
-    }
-
-    Ok(())
-}
-
-fn handle_config_validate() -> Result<()> {
-    let project_root = determine_project_root(None)?;
-    validate_config(&project_root)?;
-    eprintln!("Configuration is valid");
-    Ok(())
-}
-
-fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     let path = if let Some(cd_path) = cd {
         PathBuf::from(cd_path)
     } else {
@@ -769,174 +469,6 @@ fn read_prompt(prompt: Option<String>) -> Result<String> {
         }
         Ok(buffer)
     }
-}
-
-async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
-    // 1. Determine project root
-    let project_root = determine_project_root(args.cd.as_deref())?;
-
-    // 2. Load config (optional)
-    let config = ProjectConfig::load(&project_root)?;
-
-    // 3. Check recursion depth (from config or default)
-    let max_depth = config
-        .as_ref()
-        .map(|c| c.project.max_recursion_depth)
-        .unwrap_or(5u32);
-    if current_depth > max_depth {
-        error!(
-            "Max recursion depth ({}) exceeded. Current: {}. Do it yourself.",
-            max_depth, current_depth
-        );
-        return Ok(1);
-    }
-
-    // 4. Get git diff based on scope
-    let diff_output = get_review_diff(&args)?;
-
-    if diff_output.trim().is_empty() {
-        eprintln!("No changes to review");
-        return Ok(0);
-    }
-
-    // 5. Construct review prompt
-    let prompt = construct_review_prompt(&args, &diff_output);
-
-    // 6. Determine tool
-    let tool = if let Some(t) = args.tool {
-        t
-    } else if let Some(ref cfg) = config {
-        // Use first enabled tool from config
-        cfg.tools
-            .iter()
-            .find(|(_, tool_cfg)| tool_cfg.enabled)
-            .and_then(|(name, _)| match name.as_str() {
-                "gemini-cli" => Some(ToolName::GeminiCli),
-                "opencode" => Some(ToolName::Opencode),
-                "codex" => Some(ToolName::Codex),
-                "claude-code" => Some(ToolName::ClaudeCode),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow::anyhow!("No enabled tools in project config"))?
-    } else {
-        // Default to gemini-cli
-        ToolName::GeminiCli
-    };
-
-    // 7. Build executor
-    let executor = build_executor(&tool, None, args.model.as_deref(), None)?;
-
-    // 8. Check tool is installed
-    if let Err(e) = check_tool_installed(executor.executable_name()).await {
-        error!(
-            "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
-            executor.tool_name(),
-            executor.install_hint(),
-            executor.tool_name()
-        );
-        anyhow::bail!("{}", e);
-    }
-
-    // 9. Check tool is enabled in config
-    if let Some(ref cfg) = config {
-        if !cfg.is_tool_enabled(executor.tool_name()) {
-            error!(
-                "Tool '{}' is disabled in project config",
-                executor.tool_name()
-            );
-            return Ok(1);
-        }
-    }
-
-    // 10. Apply restrictions if configured
-    let can_edit = config
-        .as_ref()
-        .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let effective_prompt = if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        executor.apply_restrictions(&prompt, false)
-    } else {
-        prompt.clone()
-    };
-
-    // 11. Execute with session
-    let result = execute_with_session(
-        &executor,
-        &tool,
-        &effective_prompt,
-        args.session,
-        Some("Code review session".to_string()),
-        None,
-        &project_root,
-        config.as_ref(),
-    )
-    .await?;
-
-    // 12. Print result
-    print!("{}", result.output);
-
-    Ok(result.exit_code)
-}
-
-fn get_review_diff(args: &ReviewArgs) -> Result<String> {
-    let output = if let Some(ref commit) = args.commit {
-        // Review specific commit
-        std::process::Command::new("git")
-            .arg("show")
-            .arg(commit)
-            .output()
-            .with_context(|| format!("Failed to run git show for commit: {}", commit))?
-    } else if args.diff {
-        // Review uncommitted changes
-        std::process::Command::new("git")
-            .arg("diff")
-            .arg("HEAD")
-            .output()
-            .context("Failed to run git diff")?
-    } else {
-        // Compare against branch (default: main)
-        let branch = &args.branch;
-        std::process::Command::new("git")
-            .arg("diff")
-            .arg(format!("{}...HEAD", branch))
-            .output()
-            .with_context(|| format!("Failed to run git diff against branch: {}", branch))?
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        // Check for specific error patterns and provide friendly messages
-        if stderr.contains("unknown revision") || stderr.contains("ambiguous argument") {
-            if let Some(ref commit) = args.commit {
-                anyhow::bail!(
-                    "Commit '{}' not found. Ensure the commit SHA exists.",
-                    commit
-                );
-            } else if !args.diff {
-                anyhow::bail!(
-                    "Branch '{}' not found. Ensure the branch exists locally.",
-                    args.branch
-                );
-            }
-        }
-
-        anyhow::bail!("Git command failed: {}", stderr);
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-fn construct_review_prompt(args: &ReviewArgs, diff: &str) -> String {
-    let default_instruction = "Review the following code changes for bugs, security issues, and code quality. Provide specific, actionable feedback.";
-
-    let instruction = if let Some(ref custom_prompt) = args.prompt {
-        format!("{}\n\n{}", default_instruction, custom_prompt)
-    } else {
-        default_instruction.to_string()
-    };
-
-    format!("{}\n\n```diff\n{}\n```", instruction, diff)
 }
 
 /// Resolve tool and model from CLI args and config.
@@ -996,7 +528,7 @@ fn resolve_tool_and_model(
     )
 }
 
-fn build_executor(
+pub(crate) fn build_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
     model: Option<&str>,

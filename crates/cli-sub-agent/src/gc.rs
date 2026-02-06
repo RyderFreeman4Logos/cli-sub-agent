@@ -1,0 +1,161 @@
+use anyhow::Result;
+use std::fs;
+use tracing::info;
+
+use csa_session::{delete_session, get_session_dir, list_sessions};
+
+pub(crate) fn handle_gc(dry_run: bool, max_age_days: Option<u64>) -> Result<()> {
+    let project_root = crate::determine_project_root(None)?;
+    let sessions = list_sessions(&project_root, None)?;
+    let now = chrono::Utc::now();
+
+    let mut stale_locks_removed = 0;
+    let mut empty_sessions_removed = 0;
+    let mut orphan_dirs_removed = 0;
+    let mut expired_sessions_removed = 0;
+
+    if dry_run {
+        eprintln!("[dry-run] No changes will be made.");
+    }
+
+    for session in &sessions {
+        let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
+        let locks_dir = session_dir.join("locks");
+
+        // 1. Check for stale locks
+        if locks_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&locks_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|ext| ext == "lock") {
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            if let Some(pid) = extract_pid_from_lock(&content) {
+                                if !is_process_alive(pid) {
+                                    if dry_run {
+                                        eprintln!(
+                                            "[dry-run] Would remove stale lock for dead PID {}: {:?}",
+                                            pid,
+                                            path.file_name()
+                                        );
+                                    } else if fs::remove_file(&path).is_ok() {
+                                        info!(
+                                            "Removed stale lock for dead PID {}: {:?}",
+                                            pid,
+                                            path.file_name()
+                                        );
+                                    }
+                                    stale_locks_removed += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check for empty sessions (no tools used)
+        if session.tools.is_empty() {
+            if dry_run {
+                eprintln!(
+                    "[dry-run] Would remove empty session: {}",
+                    session.meta_session_id
+                );
+            } else {
+                let _ = delete_session(&project_root, &session.meta_session_id);
+            }
+            empty_sessions_removed += 1;
+        }
+
+        // 3. Check for expired sessions (--max-age-days)
+        if let Some(days) = max_age_days {
+            let age = now.signed_duration_since(session.last_accessed);
+            if age.num_days() > days as i64 {
+                if dry_run {
+                    eprintln!(
+                        "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
+                        session.meta_session_id,
+                        age.num_days()
+                    );
+                } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
+                    info!("Removed expired session: {}", session.meta_session_id);
+                }
+                expired_sessions_removed += 1;
+            }
+        }
+    }
+
+    // Clean orphan directories (no state.toml)
+    let session_root = csa_session::get_session_root(&project_root)?;
+    let sessions_dir = session_root.join("sessions");
+
+    if sessions_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&sessions_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    let session_dir = entry.path();
+                    let state_path = session_dir.join("state.toml");
+
+                    if !state_path.exists() {
+                        if dry_run {
+                            eprintln!(
+                                "[dry-run] Would remove orphan directory: {}",
+                                session_dir.display()
+                            );
+                        } else {
+                            let _ = fs::remove_dir_all(&session_dir);
+                            info!(
+                                "Removed orphan directory without state.toml: {}",
+                                session_dir.display()
+                            );
+                        }
+                        orphan_dirs_removed += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    let prefix = if dry_run { "[dry-run] " } else { "" };
+    eprintln!(
+        "{}Garbage collection {}:",
+        prefix,
+        if dry_run { "preview" } else { "complete" }
+    );
+    eprintln!("{}  Stale locks removed: {}", prefix, stale_locks_removed);
+    eprintln!(
+        "{}  Empty sessions removed: {}",
+        prefix, empty_sessions_removed
+    );
+    if max_age_days.is_some() {
+        eprintln!(
+            "{}  Expired sessions removed: {}",
+            prefix, expired_sessions_removed
+        );
+    }
+    eprintln!(
+        "{}  Orphan directories removed: {}",
+        prefix, orphan_dirs_removed
+    );
+
+    Ok(())
+}
+
+/// Extract PID from lock file JSON content
+fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
+    // Simple parsing: look for "pid": followed by a number
+    json_content
+        .split("\"pid\":")
+        .nth(1)?
+        .trim()
+        .split(',')
+        .next()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Check if a process is alive (Linux-specific)
+fn is_process_alive(pid: u32) -> bool {
+    // On Linux, check if /proc/{pid} exists
+    std::path::Path::new(&format!("/proc/{}", pid)).exists()
+}
