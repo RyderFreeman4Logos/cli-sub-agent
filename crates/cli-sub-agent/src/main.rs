@@ -8,6 +8,7 @@ use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info, warn};
 
 mod cli;
+mod doctor;
 
 use cli::{Cli, Commands, ConfigCommands, ReviewArgs, SessionCommands};
 use csa_config::{init_project, validate_config, ProjectConfig};
@@ -100,6 +101,9 @@ async fn main() -> Result<()> {
         Commands::Review(args) => {
             let exit_code = handle_review(args, current_depth).await?;
             std::process::exit(exit_code);
+        }
+        Commands::Doctor => {
+            doctor::run_doctor().await?;
         }
     }
 

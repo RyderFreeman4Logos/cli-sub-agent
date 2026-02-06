@@ -81,6 +81,9 @@ pub enum Commands {
 
     /// Review code changes using an AI tool
     Review(ReviewArgs),
+
+    /// Check environment and tool availability
+    Doctor,
 }
 
 #[derive(clap::Args)]
