@@ -139,4 +139,4 @@ git-push-all:
 install:
     CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/cli-sub-agent
     @echo "Verifying installation..."
-    @cli-sub-agent --version
+    @csa --version
