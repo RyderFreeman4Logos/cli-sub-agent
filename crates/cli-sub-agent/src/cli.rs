@@ -110,6 +110,9 @@ pub enum Commands {
         #[arg(long)]
         dry_run: bool,
     },
+
+    /// Run as MCP server (JSON-RPC over stdio)
+    McpServer,
 }
 
 #[derive(clap::Args)]

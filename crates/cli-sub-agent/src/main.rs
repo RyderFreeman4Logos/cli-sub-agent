@@ -11,6 +11,7 @@ mod cli;
 mod config_cmds;
 mod doctor;
 mod gc;
+mod mcp_server;
 mod review_cmd;
 mod session_cmds;
 
@@ -127,6 +128,9 @@ async fn main() -> Result<()> {
         }
         Commands::Batch { file, cd, dry_run } => {
             batch::handle_batch(file, cd, dry_run, current_depth).await?;
+        }
+        Commands::McpServer => {
+            mcp_server::run_mcp_server().await?;
         }
     }
 
