@@ -200,6 +200,15 @@ async fn execute_with_session(
     project_root: &Path,
     config: Option<&ProjectConfig>,
 ) -> Result<csa_process::ExecutionResult> {
+    // Check for parent session violation: a child process must not operate on its own session
+    if let Some(ref session_id) = session_arg {
+        if let Ok(env_session) = std::env::var("CSA_SESSION_ID") {
+            if env_session == *session_id {
+                return Err(csa_core::error::AppError::ParentSessionViolation.into());
+            }
+        }
+    }
+
     // Resolve or create session
     let mut session = if let Some(ref session_id) = session_arg {
         let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");

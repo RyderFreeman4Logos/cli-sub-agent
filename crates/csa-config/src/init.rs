@@ -155,8 +155,9 @@ fn update_gitignore(project_root: &Path) -> Result<()> {
             new_content.push_str(".csa/\n");
             std::fs::write(&gitignore_path, new_content)?;
         }
+    } else {
+        std::fs::write(&gitignore_path, ".csa/\n")?;
     }
-    // If no .gitignore exists, don't create one
     Ok(())
 }
 
@@ -225,7 +226,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_gitignore_no_file_does_nothing() {
+    fn test_update_gitignore_creates_if_missing() {
         let dir = tempdir().unwrap();
         let gitignore_path = dir.path().join(".gitignore");
 
@@ -234,8 +235,10 @@ mod tests {
 
         update_gitignore(dir.path()).unwrap();
 
-        // Still should not exist
-        assert!(!gitignore_path.exists());
+        // Should now exist with .csa/ entry
+        assert!(gitignore_path.exists());
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains(".csa/"));
     }
 
     #[test]
