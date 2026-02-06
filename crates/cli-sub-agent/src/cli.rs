@@ -2,7 +2,7 @@ use clap::{Parser, Subcommand};
 use csa_core::types::{OutputFormat, ToolName};
 
 #[derive(Parser)]
-#[command(name = "csa")]
+#[command(name = "csa", version)]
 #[command(about = "CLI Sub-Agent: Recursive Agent Container")]
 pub struct Cli {
     #[command(subcommand)]
@@ -78,6 +78,43 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: ConfigCommands,
     },
+
+    /// Review code changes using an AI tool
+    Review(ReviewArgs),
+}
+
+#[derive(clap::Args)]
+pub struct ReviewArgs {
+    /// Tool to use for review (defaults to first enabled tool in config)
+    #[arg(long)]
+    pub tool: Option<ToolName>,
+
+    /// Resume existing review session
+    #[arg(short, long)]
+    pub session: Option<String>,
+
+    /// Override model
+    #[arg(short, long)]
+    pub model: Option<String>,
+
+    /// Review uncommitted changes (git diff)
+    #[arg(long)]
+    pub diff: bool,
+
+    /// Compare against branch (default: main)
+    #[arg(long, default_value = "main")]
+    pub branch: String,
+
+    /// Review specific commit
+    #[arg(long)]
+    pub commit: Option<String>,
+
+    /// Custom review instructions
+    pub prompt: Option<String>,
+
+    /// Working directory
+    #[arg(long)]
+    pub cd: Option<String>,
 }
 
 #[derive(Subcommand)]

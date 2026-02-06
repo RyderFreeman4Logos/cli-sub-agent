@@ -32,3 +32,21 @@ fn run_help_shows_tool_options() {
     assert!(stdout.contains("--ephemeral"));
     assert!(stdout.contains("--model"));
 }
+
+#[test]
+fn review_help_shows_options() {
+    let output = std::process::Command::new(env!("CARGO_BIN_EXE_csa"))
+        .args(["review", "--help"])
+        .output()
+        .expect("failed to run csa review --help");
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Review code changes using an AI tool"));
+    assert!(stdout.contains("--tool"));
+    assert!(stdout.contains("--session"));
+    assert!(stdout.contains("--diff"));
+    assert!(stdout.contains("--branch"));
+    assert!(stdout.contains("--commit"));
+    assert!(stdout.contains("--model"));
+}

@@ -7,7 +7,7 @@ use tracing::{error, info, warn};
 
 mod cli;
 
-use cli::{Cli, Commands, ConfigCommands, SessionCommands};
+use cli::{Cli, Commands, ConfigCommands, ReviewArgs, SessionCommands};
 use csa_config::{init_project, validate_config, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{Executor, ModelSpec};
@@ -93,6 +93,10 @@ async fn main() -> Result<()> {
                 handle_config_validate()?;
             }
         },
+        Commands::Review(args) => {
+            let exit_code = handle_review(args, current_depth).await?;
+            std::process::exit(exit_code);
+        }
     }
 
     Ok(())
@@ -380,6 +384,137 @@ fn read_prompt(prompt: Option<String>) -> Result<String> {
         std::io::stdin().read_to_string(&mut buffer)?;
         Ok(buffer)
     }
+}
+
+async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
+    // 1. Determine project root
+    let project_root = determine_project_root(args.cd.as_deref())?;
+
+    // 2. Load config (optional)
+    let config = ProjectConfig::load(&project_root)?;
+
+    // 3. Check recursion depth
+    let max_depth = 5u32;
+    if current_depth > max_depth {
+        error!(
+            "Max recursion depth ({}) exceeded. Current: {}. Do it yourself.",
+            max_depth, current_depth
+        );
+        return Ok(1);
+    }
+
+    // 4. Get git diff based on scope
+    let diff_output = get_review_diff(&args)?;
+
+    if diff_output.trim().is_empty() {
+        eprintln!("No changes to review");
+        return Ok(0);
+    }
+
+    // 5. Construct review prompt
+    let prompt = construct_review_prompt(&args, &diff_output);
+
+    // 6. Determine tool
+    let tool = if let Some(t) = args.tool {
+        t
+    } else if let Some(ref cfg) = config {
+        // Use first enabled tool from config
+        cfg.tools
+            .iter()
+            .find(|(_, tool_cfg)| tool_cfg.enabled)
+            .and_then(|(name, _)| match name.as_str() {
+                "gemini-cli" => Some(ToolName::GeminiCli),
+                "opencode" => Some(ToolName::Opencode),
+                "codex" => Some(ToolName::Codex),
+                "claude-code" => Some(ToolName::ClaudeCode),
+                _ => None,
+            })
+            .ok_or_else(|| anyhow::anyhow!("No enabled tools in project config"))?
+    } else {
+        // Default to gemini-cli
+        ToolName::GeminiCli
+    };
+
+    // 7. Build executor
+    let executor = build_executor(&tool, None, args.model.as_deref(), None)?;
+
+    // 8. Check tool is installed
+    check_tool_installed(executor.executable_name())
+        .await
+        .with_context(|| format!("Tool '{}' is not installed", executor.executable_name()))?;
+
+    // 9. Check tool is enabled in config
+    if let Some(ref cfg) = config {
+        if !cfg.is_tool_enabled(executor.tool_name()) {
+            error!(
+                "Tool '{}' is disabled in project config",
+                executor.tool_name()
+            );
+            return Ok(1);
+        }
+    }
+
+    // 10. Execute with session
+    let result = execute_with_session(
+        &executor,
+        &prompt,
+        args.session,
+        Some("Code review session".to_string()),
+        None,
+        &project_root,
+        config.as_ref(),
+    )
+    .await?;
+
+    // 11. Print result
+    print!("{}", result.output);
+
+    Ok(result.exit_code)
+}
+
+fn get_review_diff(args: &ReviewArgs) -> Result<String> {
+    let output = if let Some(ref commit) = args.commit {
+        // Review specific commit
+        std::process::Command::new("git")
+            .arg("show")
+            .arg(commit)
+            .output()
+            .with_context(|| format!("Failed to run git show for commit: {}", commit))?
+    } else if args.diff {
+        // Review uncommitted changes
+        std::process::Command::new("git")
+            .arg("diff")
+            .arg("HEAD")
+            .output()
+            .context("Failed to run git diff")?
+    } else {
+        // Compare against branch (default: main)
+        let branch = &args.branch;
+        std::process::Command::new("git")
+            .arg("diff")
+            .arg(format!("{}...HEAD", branch))
+            .output()
+            .with_context(|| format!("Failed to run git diff against branch: {}", branch))?
+    };
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Git command failed: {}", stderr);
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn construct_review_prompt(args: &ReviewArgs, diff: &str) -> String {
+    let default_instruction = "Review the following code changes for bugs, security issues, and code quality. Provide specific, actionable feedback.";
+
+    let instruction = if let Some(ref custom_prompt) = args.prompt {
+        format!("{}\n\n{}", default_instruction, custom_prompt)
+    } else {
+        default_instruction.to_string()
+    };
+
+    format!("{}\n\n```diff\n{}\n```", instruction, diff)
 }
 
 fn build_executor(
