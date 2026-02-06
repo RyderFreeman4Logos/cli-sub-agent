@@ -307,6 +307,7 @@ dependencies = [
  "csa-core",
  "serde",
  "sysinfo",
+ "tempfile",
  "tokio",
  "toml",
 ]

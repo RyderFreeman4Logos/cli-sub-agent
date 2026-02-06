@@ -12,3 +12,6 @@ toml.workspace = true
 serde.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
