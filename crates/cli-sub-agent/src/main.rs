@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
@@ -324,9 +325,33 @@ fn handle_session_list(cd: Option<String>, tool: Option<String>, tree: bool) -> 
     Ok(())
 }
 
-fn handle_session_compress(_session: String) -> Result<()> {
-    eprintln!("Session compression not yet implemented");
-    eprintln!("(requires stdin injection into running tool)");
+fn handle_session_compress(session: String) -> Result<()> {
+    let project_root = determine_project_root(None)?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?;
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    let session_state = load_session(&project_root, &resolved_id)?;
+
+    // Find the most recently used tool in this session
+    let (tool_name, _tool_state) = session_state
+        .tools
+        .iter()
+        .max_by_key(|(_, state)| &state.updated_at)
+        .ok_or_else(|| anyhow::anyhow!("Session '{}' has no tool history", resolved_id))?;
+
+    let compress_cmd = match tool_name.as_str() {
+        "gemini-cli" => "/compress",
+        _ => "/compact",
+    };
+
+    println!("Session {} uses tool: {}", resolved_id, tool_name);
+    println!("Compress command: {}", compress_cmd);
+    println!();
+    println!("To compress, resume the session and send the command:");
+    println!(
+        "  csa run --tool {} --session {} \"{}\"",
+        tool_name, resolved_id, compress_cmd
+    );
+
     Ok(())
 }
 
@@ -351,8 +376,79 @@ fn handle_init(non_interactive: bool) -> Result<()> {
 }
 
 fn handle_gc() -> Result<()> {
-    eprintln!("Garbage collection not yet implemented");
+    let project_root = determine_project_root(None)?;
+    let sessions = list_sessions(&project_root, None)?;
+
+    let mut stale_locks_removed = 0;
+    let mut empty_sessions_removed = 0;
+
+    for session in &sessions {
+        let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
+        let locks_dir = session_dir.join("locks");
+
+        // 1. Check for stale locks
+        if locks_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&locks_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|ext| ext == "lock") {
+                        // Try to read the lock file JSON
+                        if let Ok(content) = fs::read_to_string(&path) {
+                            // Simple JSON parsing to extract PID
+                            if let Some(pid) = extract_pid_from_lock(&content) {
+                                // Check if process is alive (Linux-specific)
+                                if !is_process_alive(pid) {
+                                    // Process is dead, remove stale lock
+                                    if fs::remove_file(&path).is_ok() {
+                                        stale_locks_removed += 1;
+                                        info!(
+                                            "Removed stale lock for dead PID {}: {:?}",
+                                            pid,
+                                            path.file_name()
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. Check for empty sessions (no tools used)
+        if session.tools.is_empty()
+            && delete_session(&project_root, &session.meta_session_id).is_ok()
+        {
+            empty_sessions_removed += 1;
+            info!("Removed empty session: {}", session.meta_session_id);
+        }
+    }
+
+    eprintln!("Garbage collection complete:");
+    eprintln!("  Stale locks removed: {}", stale_locks_removed);
+    eprintln!("  Empty sessions removed: {}", empty_sessions_removed);
+
     Ok(())
+}
+
+/// Extract PID from lock file JSON content
+fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
+    // Simple parsing: look for "pid": followed by a number
+    json_content
+        .split("\"pid\":")
+        .nth(1)?
+        .trim()
+        .split(',')
+        .next()?
+        .trim()
+        .parse::<u32>()
+        .ok()
+}
+
+/// Check if a process is alive (Linux-specific)
+fn is_process_alive(pid: u32) -> bool {
+    // On Linux, check if /proc/{pid} exists
+    std::path::Path::new(&format!("/proc/{}", pid)).exists()
 }
 
 fn handle_config_show() -> Result<()> {
