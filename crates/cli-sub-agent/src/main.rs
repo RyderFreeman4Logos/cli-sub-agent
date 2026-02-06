@@ -4,6 +4,7 @@ use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
+use tokio::signal::unix::{signal, SignalKind};
 use tracing::{error, info, warn};
 
 mod cli;
@@ -261,10 +262,43 @@ async fn execute_with_session(
     let child_pid = child.id().context("Failed to get child process PID")?;
     let monitor = MemoryMonitor::start(child_pid);
 
-    // Wait for child to complete
-    let result = csa_process::wait_and_capture(child)
-        .await
-        .context("Failed to wait for tool process")?;
+    // Set up signal handlers for SIGTERM and SIGINT
+    let mut sigterm =
+        signal(SignalKind::terminate()).context("Failed to install SIGTERM handler")?;
+    let mut sigint = signal(SignalKind::interrupt()).context("Failed to install SIGINT handler")?;
+
+    // Wait for either child completion or signal
+    let wait_future = csa_process::wait_and_capture(child);
+    tokio::pin!(wait_future);
+
+    let result = tokio::select! {
+        result = &mut wait_future => {
+            result.context("Failed to wait for tool process")?
+        }
+        _ = sigterm.recv() => {
+            info!("Received SIGTERM, forwarding to child process group");
+            // Forward SIGTERM to the child's process group (negative PID)
+            // SAFETY: kill() is async-signal-safe. We use the negative of child_pid
+            // to target the entire process group created by setsid().
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(child_pid as i32), libc::SIGTERM);
+            }
+            // Wait for child to exit after signal
+            wait_future.await.context("Failed to wait for tool process after SIGTERM")?
+        }
+        _ = sigint.recv() => {
+            info!("Received SIGINT, forwarding to child process group");
+            // Forward SIGINT to the child's process group
+            // SAFETY: Same as SIGTERM handler above
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(child_pid as i32), libc::SIGINT);
+            }
+            // Wait for child to exit after signal
+            wait_future.await.context("Failed to wait for tool process after SIGINT")?
+        }
+    };
 
     // Stop memory monitor and record usage
     let peak_memory_mb = monitor.stop().await;

@@ -21,6 +21,8 @@ pub struct ExecutionResult {
 /// - Spawns the command
 /// - Captures stdout (piped)
 /// - Stderr passes through to parent (inherit)
+/// - Isolates child in its own process group (via setsid)
+/// - Enables kill_on_drop as safety net
 /// - Returns the child process handle for PID access and later waiting
 ///
 /// Use this when you need the PID before waiting (e.g., for resource monitoring).
@@ -28,6 +30,19 @@ pub struct ExecutionResult {
 pub async fn spawn_tool(mut cmd: Command) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::inherit());
+    cmd.kill_on_drop(true);
+
+    // Isolate child in its own process group to prevent signal inheritance
+    // and enable clean termination of the entire subprocess tree.
+    // SAFETY: setsid() is async-signal-safe and we call it before exec,
+    // so no Rust runtime state exists in the child yet.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
 
     cmd.spawn().context("Failed to spawn command")
 }
