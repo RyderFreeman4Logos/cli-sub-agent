@@ -299,6 +299,7 @@ dependencies = [
  "anyhow",
  "csa-core",
  "libc",
+ "serde",
  "tokio",
  "tracing",
 ]

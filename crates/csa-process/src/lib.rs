@@ -1,12 +1,13 @@
 //! Process management: spawning, signal handling, and output capture.
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
 /// Result of executing a command.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ExecutionResult {
     /// Combined stdout output.
     pub output: String,

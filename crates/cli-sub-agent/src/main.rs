@@ -11,8 +11,8 @@ mod cli;
 
 use cli::{Cli, Commands, ConfigCommands, ReviewArgs, SessionCommands};
 use csa_config::{init_project, validate_config, ProjectConfig};
-use csa_core::types::ToolName;
-use csa_executor::{Executor, ModelSpec};
+use csa_core::types::{OutputFormat, ToolName};
+use csa_executor::{create_session_log_writer, Executor, ModelSpec};
 use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
@@ -37,6 +37,7 @@ async fn main() -> Result<()> {
         .ok();
 
     let cli = Cli::parse();
+    let output_format = cli.format.clone();
 
     match cli.command {
         Commands::Run {
@@ -63,6 +64,7 @@ async fn main() -> Result<()> {
                 model,
                 thinking,
                 current_depth,
+                output_format,
             )
             .await?;
             std::process::exit(exit_code);
@@ -117,6 +119,7 @@ async fn handle_run(
     model: Option<String>,
     thinking: Option<String>,
     current_depth: u32,
+    output_format: OutputFormat,
 ) -> Result<i32> {
     // 1. Determine project root
     let project_root = determine_project_root(cd.as_deref())?;
@@ -184,7 +187,15 @@ async fn handle_run(
     };
 
     // 9. Print result
-    print!("{}", result.output);
+    match output_format {
+        OutputFormat::Text => {
+            print!("{}", result.output);
+        }
+        OutputFormat::Json => {
+            let json = serde_json::to_string_pretty(&result)?;
+            println!("{}", json);
+        }
+    }
 
     Ok(result.exit_code)
 }
@@ -220,6 +231,10 @@ async fn execute_with_session(
     };
 
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
+
+    // Create session log writer
+    let (_log_writer, _log_guard) =
+        create_session_log_writer(&session_dir).context("Failed to create session log writer")?;
 
     // Acquire lock
     let _lock = acquire_lock(&session_dir, executor.tool_name()).with_context(|| {
@@ -372,7 +387,7 @@ fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
     let project_root = determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
-    let session_state = load_session(&project_root, &resolved_id)?;
+    let mut session_state = load_session(&project_root, &resolved_id)?;
 
     // Find the most recently used tool in this session
     let (tool_name, _tool_state) = session_state
@@ -394,6 +409,11 @@ fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
         "  csa run --tool {} --session {} \"{}\"",
         tool_name, resolved_id, compress_cmd
     );
+
+    // Update context status to mark as compacted
+    session_state.context_status.is_compacted = true;
+    session_state.context_status.last_compacted_at = Some(chrono::Utc::now());
+    save_session(&session_state)?;
 
     Ok(())
 }
