@@ -181,17 +181,38 @@ async fn handle_run(
         executor.execute_in(&prompt_text, temp_dir.path()).await?
     } else {
         // Persistent session
-        execute_with_session(
+        match execute_with_session(
             &executor,
             &resolved_tool,
             &prompt_text,
-            session_arg,
+            session_arg.clone(),
             description,
             parent,
             &project_root,
             config.as_ref(),
         )
-        .await?
+        .await
+        {
+            Ok(result) => result,
+            Err(e) => {
+                // BUG-13: Check if this is a lock error and format as JSON if needed
+                let error_msg = e.to_string();
+                if error_msg.contains("Session locked by PID")
+                    && matches!(output_format, OutputFormat::Json)
+                {
+                    let json_error = serde_json::json!({
+                        "error": "session_locked",
+                        "session_id": session_arg.unwrap_or_else(|| "(new)".to_string()),
+                        "tool": resolved_tool.as_str(),
+                        "message": error_msg
+                    });
+                    println!("{}", serde_json::to_string_pretty(&json_error)?);
+                    return Ok(1);
+                }
+                // Not a lock error or text format - propagate normally
+                return Err(e);
+            }
+        }
     };
 
     // 10. Print result
@@ -454,6 +475,7 @@ fn handle_gc() -> Result<()> {
 
     let mut stale_locks_removed = 0;
     let mut empty_sessions_removed = 0;
+    let mut orphan_dirs_removed = 0;
 
     for session in &sessions {
         let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
@@ -497,9 +519,35 @@ fn handle_gc() -> Result<()> {
         }
     }
 
+    // BUG-12: Clean orphan directories (no state.toml)
+    // list_sessions() only returns loadable sessions, so orphans aren't included
+    let session_root = csa_session::get_session_root(&project_root)?;
+    let sessions_dir = session_root.join("sessions");
+
+    if sessions_dir.exists() {
+        if let Ok(entries) = fs::read_dir(&sessions_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    let session_dir = entry.path();
+                    let state_path = session_dir.join("state.toml");
+
+                    // If no state.toml exists, it's an orphan
+                    if !state_path.exists() && fs::remove_dir_all(&session_dir).is_ok() {
+                        orphan_dirs_removed += 1;
+                        info!(
+                            "Removed orphan directory without state.toml: {}",
+                            session_dir.display()
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     eprintln!("Garbage collection complete:");
     eprintln!("  Stale locks removed: {}", stale_locks_removed);
     eprintln!("  Empty sessions removed: {}", empty_sessions_removed);
+    eprintln!("  Orphan directories removed: {}", orphan_dirs_removed);
 
     Ok(())
 }

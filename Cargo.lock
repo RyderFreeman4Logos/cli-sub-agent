@@ -329,6 +329,7 @@ dependencies = [
  "serde",
  "tempfile",
  "toml",
+ "tracing",
  "ulid",
 ]
 
