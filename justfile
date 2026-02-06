@@ -1,5 +1,6 @@
 # Justfile for Rust Workspace
 # Generic helpers for Rust monorepo management.
+# ⚠️ AI AGENT: Do NOT modify this file or use `git commit -n`/`--no-verify` to bypass pre-commit. Fix the actual code.
 
 set shell := ["bash", "-c"]
 # Automatically load .env file if present
