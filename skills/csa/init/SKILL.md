@@ -63,12 +63,37 @@ For each **enabled** tool, discover models by running CLI commands with LLM assi
 
 | Tool | Provider | Models |
 |------|----------|--------|
-| gemini-cli | google | gemini-2.5-pro, gemini-2.5-flash, gemini-2.0-flash |
+| gemini-cli | google | gemini-3-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash |
 | opencode | anthropic | claude-opus-4-6, claude-sonnet-4-5 |
-| opencode | openai | o4-mini, o3 |
+| opencode | google | antigravity-gemini-3-pro, antigravity-gemini-3-flash |
+| opencode | openai | gpt-5.2-codex, gpt-5.1-codex |
 | codex | anthropic | claude-opus-4-6, claude-sonnet-4-5 |
-| codex | openai | o4-mini, o3 |
+| codex | openai | gpt-5.2-codex, gpt-5.1-codex |
 | claude-code | anthropic | claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4-5 |
+
+### Phase 3.5: Filter Providers and Models
+
+Tools like `opencode` return 80+ models across many providers. **The agent MUST NOT guess** which providers/models the user wants. Instead:
+
+1. **Group discovered models by provider** (e.g., anthropic, google, openai, groq, xai, opencode-native)
+2. **Ask user which providers to include** using `AskUserQuestion` (multiSelect=true):
+
+> **Which providers do you want to use with {tool}?**
+>
+> Context for the user:
+> - If you already have `claude-code` enabled, you may not need anthropic models via opencode
+> - Free/groq models are fast but less capable
+> - Google antigravity models are Google-hosted variants of other providers' models
+
+3. **Within selected providers**, the agent filters to the **latest generation** models only:
+   - Prefer latest version (e.g., gemini-3 over gemini-2.5, opus-4-6 over opus-4-1)
+   - Exclude deprecated/preview-old models
+   - Exclude embedding/TTS/vision-only models
+   - Keep at most 2-3 models per provider (strongest + fastest)
+
+4. **Show final selection** to user for confirmation before proceeding to expansion.
+
+**Why this step is critical**: Without provider filtering, the agent picks models based on guesswork. Users have strong preferences about which providers to route through which tools (cost, latency, API key management, trust level).
 
 ### Phase 4: Expand Model Specs
 
@@ -105,14 +130,14 @@ Group all expanded model specs into tiers. The agent **must decide grouping inte
 | gemini-cli (read-only preferred) | Analysis / lower tiers |
 | claude-code / codex (full sandbox) | Implementation / higher tiers |
 
-**Minimum 4 tiers** (can be more if the model set warrants it):
+**Minimum 3 tiers** (can be more if the model set warrants it):
 
 | Tier | Purpose | Typical Contents |
 |------|---------|-----------------|
 | `tier-1-quick` | Quick lookups, formatting, simple questions | flash/low, haiku/low |
-| `tier-2-standard` | Standard development, routine implementation | sonnet/medium, pro/medium |
-| `tier-3-complex` | Architecture design, deep reasoning, refactoring | opus/high, sonnet/high, pro/high |
-| `tier-4-critical` | Security audit, critical decisions, production code | opus/xhigh |
+| `tier-2-standard` | Standard development, routine implementation | pro/medium, sonnet/medium |
+| `tier-3-complex` | Architecture design, deep reasoning, security audit | opus/high, pro/high |
+| `tier-4-critical` | (Optional) Security audit, critical decisions | opus/xhigh |
 
 Users **can rename tiers, add more tiers, or move model specs between tiers** by editing the TOML in any text editor. The format is designed for easy cut-and-paste.
 
@@ -212,7 +237,7 @@ models = [
 analysis = "tier-1-quick"
 implementation = "tier-2-standard"
 architecture = "tier-3-complex"
-security = "tier-4-critical"
+security = "tier-3-complex"  # or "tier-4-critical" if defined
 
 # ─── Aliases ─────────────────────────────────────────────────
 # Shorthand names for frequently used model specs
@@ -262,15 +287,14 @@ The same base model with different thinking budgets behaves very differently:
 
 These **must** be treated as separate entries for tier assignment. A `sonnet/high` belongs in a higher tier than `sonnet/low`, even though the base model is the same.
 
-### Why >= 4 Tiers
+### Why >= 3 Tiers
 
-Three tiers (fast/standard/heavy) are too coarse:
+Two tiers (fast/heavy) are too coarse. Three tiers (quick/standard/complex) cover most projects well. Four tiers add a `critical` level for security-sensitive codebases.
 
-| Problem | Solution |
-|---------|----------|
-| Security audit lumped with "complex" | Separate `critical` tier with opus/xhigh |
-| Quick lookup uses same model as routine dev | Separate `quick` tier with flash/low |
-| No room for "complex but not critical" | More tiers = better cost/quality granularity |
+| Tiers | Best For |
+|-------|----------|
+| 3 tiers | Most projects — quick/standard/complex covers daily workflow |
+| 4+ tiers | Security-critical projects needing a dedicated audit tier |
 
 Users can always add more tiers. The TOML format makes this trivial — just add a new `[tiers.tier-N-name]` section.
 

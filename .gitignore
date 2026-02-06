@@ -63,6 +63,7 @@ CLAUDE.md
 system_prompt.rs.md
 
 # Other
+.csa
 strix_runs
 .playwright-mcp/
 .claude
@@ -76,3 +77,4 @@ strix_runs
 **/repomix-output.*
 **/*.repomix.lock
 .repomix/
+.csa/
