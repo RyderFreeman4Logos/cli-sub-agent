@@ -201,7 +201,7 @@ async fn execute_with_session(
 ) -> Result<csa_process::ExecutionResult> {
     // Resolve or create session
     let mut session = if let Some(ref session_id) = session_arg {
-        let sessions_dir = csa_session::get_session_root(project_root)?;
+        let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
         let resolved_id = resolve_session_prefix(&sessions_dir, session_id)?;
         load_session(project_root, &resolved_id)?
     } else {
@@ -327,7 +327,7 @@ fn handle_session_list(cd: Option<String>, tool: Option<String>, tree: bool) -> 
 
 fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
     let project_root = determine_project_root(cd.as_deref())?;
-    let sessions_dir = csa_session::get_session_root(&project_root)?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     let session_state = load_session(&project_root, &resolved_id)?;
 
@@ -357,7 +357,7 @@ fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
 
 fn handle_session_delete(session: String, cd: Option<String>) -> Result<()> {
     let project_root = determine_project_root(cd.as_deref())?;
-    let sessions_dir = csa_session::get_session_root(&project_root)?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     delete_session(&project_root, &resolved_id)?;
     eprintln!("Deleted session: {}", resolved_id);
