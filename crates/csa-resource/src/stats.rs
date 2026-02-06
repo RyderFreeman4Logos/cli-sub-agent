@@ -46,13 +46,18 @@ impl UsageStats {
         Ok(toml::from_str(&content)?)
     }
 
-    /// Save to file. Creates parent directories if needed.
+    /// Save to file atomically. Creates parent directories if needed.
     pub fn save(&self, stats_path: &Path) -> Result<()> {
         if let Some(parent) = stats_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let content = toml::to_string_pretty(self)?;
-        std::fs::write(stats_path, content)?;
+
+        // Atomic write: write to .tmp file then rename
+        let tmp_path = stats_path.with_extension("tmp");
+        std::fs::write(&tmp_path, content)?;
+        std::fs::rename(&tmp_path, stats_path)?;
+
         Ok(())
     }
 }

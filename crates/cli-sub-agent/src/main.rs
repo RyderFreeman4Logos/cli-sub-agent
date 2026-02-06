@@ -259,7 +259,9 @@ async fn execute_with_session(
             min_free_swap_mb: cfg.resources.min_free_swap_mb,
             initial_estimates: cfg.resources.initial_estimates.clone(),
         };
-        let stats_path = session_dir.join("resource_stats.json");
+        // Stats stored at project state level, not per-session
+        let project_state_dir = csa_session::get_session_root(project_root)?;
+        let stats_path = project_state_dir.join("usage_stats.toml");
         Some(ResourceGuard::new(limits, &stats_path))
     } else {
         None
