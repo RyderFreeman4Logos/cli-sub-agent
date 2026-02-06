@@ -20,37 +20,71 @@ default: pre-commit
 # 🚀 Core Workflow
 # ==============================================================================
 
-# Detect monolith files by token count using tokuin + parallel
+# Detect monolith files by token/line count using tokuin + parallel
 # Fails fast on first file exceeding threshold; blocks commit
-# Env: MONOLITH_TOKEN_THRESHOLD (default 8000), TOKUIN_MODEL (default gpt-4)
+# Env: MONOLITH_TOKEN_THRESHOLD (default 8000), MONOLITH_LINE_THRESHOLD (default 800), TOKUIN_MODEL (default gpt-4)
 find-monolith-files:
     #!/usr/bin/env bash
     set -euo pipefail
-    export MONOLITH_THRESHOLD="${MONOLITH_TOKEN_THRESHOLD:-8000}"
+    export MONOLITH_THRESHOLD_TOKENS="${MONOLITH_TOKEN_THRESHOLD:-8000}"
+    export MONOLITH_THRESHOLD_LINES="${MONOLITH_LINE_THRESHOLD:-800}"
     export MONOLITH_MODEL="${TOKUIN_MODEL:-gpt-4}"
 
-    git ls-files | parallel --halt now,fail=1 -j+0 \
-        'case {} in *.lock|*/AGENTS.md|*/FACTORY.md) exit 0 ;; esac; \
-         [ -f {} ] || exit 0; \
-         grep -Iq "" {} 2>/dev/null || exit 0; \
-         tokens=$(tokuin estimate --model "$MONOLITH_MODEL" --format json {} 2>/dev/null | jq -r ".tokens // 0"); \
-         [ -z "$tokens" ] && exit 0; \
-         [ "$tokens" -gt "$MONOLITH_THRESHOLD" ] && { \
-           echo ""; \
-           echo "=========================================="; \
-           echo "ERROR: Monolith file detected! ($tokens tokens, limit: $MONOLITH_THRESHOLD)"; \
-           echo "  File: {}"; \
-           echo "=========================================="; \
-           echo ""; \
-           echo "REQUIRED ACTION:"; \
-           echo "1. Stage your current work first:  git add -A"; \
-           echo "2. Split this file:                /split-monolith-files"; \
-           echo "3. After splitting, retry your commit."; \
-           echo ""; \
-           echo "WHY: Large files cause context window bloat and degrade LLM performance."; \
-           echo "=========================================="; \
-           exit 1; \
-         }; exit 0'
+    # Write check script to temp file (avoids export -f which fails under zsh $SHELL)
+    CHECKER=$(mktemp)
+    trap 'rm -f "$CHECKER"' EXIT
+    cat > "$CHECKER" << 'SCRIPT'
+    #!/usr/bin/env bash
+    file="$1"
+    threshold_tokens="$MONOLITH_THRESHOLD_TOKENS"
+    threshold_lines="$MONOLITH_THRESHOLD_LINES"
+    model="$MONOLITH_MODEL"
+
+    # --- Explicit excludes (customize per project) ---
+    case "$file" in
+        *.lock|*lock.json|*lock.yaml) exit 0 ;;  # package manager locks
+        */AGENTS.md|*/FACTORY.md) exit 0 ;;        # auto-generated rule aggregation
+    esac
+    [ -f "$file" ] || exit 0
+    grep -Iq '' "$file" 2>/dev/null || exit 0  # skip binary files
+
+    monolith_error() {
+        echo ""
+        echo "=========================================="
+        echo "ERROR: Monolith file detected! ($1, limit: $2)"
+        echo "  File: $file"
+        echo "=========================================="
+        echo ""
+        echo "REQUIRED ACTION:"
+        echo "1. Stash your current work first:  git stash push -m 'pre-split'"
+        echo "2. Split this file:                /split-monolith-files"
+        echo "3. After splitting, retry your commit."
+        echo ""
+        echo "WHY: Large files cause context window bloat and degrade LLM performance."
+        echo "IMPORTANT: Stash before splitting so you can recover via 'git stash pop' if splitting fails."
+        echo "=========================================="
+    }
+
+    # Fast pre-filter: line count (zero-cost, no external tools)
+    lines=$(wc -l < "$file" 2>/dev/null || echo 0)
+    if [ "$lines" -gt "$threshold_lines" ]; then
+        monolith_error "$lines lines" "$threshold_lines lines"
+        exit 1
+    fi
+
+    # Accurate check: token count (requires tokuin; tolerates tokuin failures)
+    tokens=$(tokuin estimate --model "$model" --format json "$file" 2>/dev/null \
+        | jq -r '.tokens // 0' 2>/dev/null || echo 0)
+    [ -z "$tokens" ] && tokens=0
+    if [ "$tokens" -gt "$threshold_tokens" ]; then
+        monolith_error "$tokens tokens" "$threshold_tokens tokens"
+        exit 1
+    fi
+    SCRIPT
+    chmod +x "$CHECKER"
+
+    git ls-files --recurse-submodules \
+        | parallel --halt now,fail=1 "$CHECKER" {}
 
 # Run all checks: monolith guard, Chinese character detection, formatting, linting, and tests.
 pre-commit:
