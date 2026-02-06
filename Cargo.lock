@@ -244,6 +244,7 @@ dependencies = [
  "chrono",
  "csa-core",
  "serde",
+ "tempfile",
  "toml",
  "which",
 ]

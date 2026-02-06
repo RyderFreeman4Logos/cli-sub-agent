@@ -12,3 +12,6 @@ serde.workspace = true
 chrono.workspace = true
 which.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
