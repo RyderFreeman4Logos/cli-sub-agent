@@ -96,21 +96,21 @@ deny:
 
 # Run all tests in the workspace.
 test:
-    cargo test --workspace --all-features
+    cargo nextest run --workspace --all-features
 
 # Run e2e tests only.
 test-e2e:
-    cargo test --package cli-sub-agent --test e2e --all-features
+    cargo nextest run --package cli-sub-agent --test e2e --all-features
 
 # Run tests for a specific package.
 # Usage: just test-p my-crate
 test-p package:
-    cargo test -p {{package}} --all-features
+    cargo nextest run -p {{package}} --all-features
 
 # Run tests matching a specific pattern/name.
 # Usage: just test-f login_validation
 test-f pattern:
-    cargo test --workspace --all-features -- {{pattern}}
+    cargo nextest run --workspace --all-features -E 'test({{pattern}})'
 
 # ==============================================================================
 # 🛠 Git Helpers
