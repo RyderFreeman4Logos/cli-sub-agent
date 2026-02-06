@@ -80,6 +80,9 @@ async fn main() -> Result<()> {
             SessionCommands::Delete { session, cd } => {
                 handle_session_delete(session, cd)?;
             }
+            SessionCommands::Logs { session, tail, cd } => {
+                handle_session_logs(session, tail, cd)?;
+            }
         },
         Commands::Init { non_interactive } => {
             handle_init(non_interactive)?;
@@ -470,6 +473,54 @@ fn handle_session_delete(session: String, cd: Option<String>) -> Result<()> {
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     delete_session(&project_root, &resolved_id)?;
     eprintln!("Deleted session: {}", resolved_id);
+    Ok(())
+}
+
+fn handle_session_logs(session: String, tail: Option<usize>, cd: Option<String>) -> Result<()> {
+    let project_root = determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    let logs_dir = session_dir.join("logs");
+
+    if !logs_dir.exists() {
+        eprintln!("No logs found for session {}", resolved_id);
+        return Ok(());
+    }
+
+    // Find all log files, sorted by name (timestamp order)
+    let mut log_files: Vec<_> = fs::read_dir(&logs_dir)?
+        .filter_map(|e| e.ok())
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
+        .collect();
+    log_files.sort_by_key(|e| e.file_name());
+
+    if log_files.is_empty() {
+        eprintln!("No log files found for session {}", resolved_id);
+        return Ok(());
+    }
+
+    // Display each log file
+    for entry in &log_files {
+        let path = entry.path();
+        let file_name = path.file_name().unwrap_or_default().to_string_lossy();
+        eprintln!("=== {} ===", file_name);
+
+        let content = fs::read_to_string(&path)?;
+
+        if let Some(n) = tail {
+            // Show last N lines
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(n);
+            for line in &lines[start..] {
+                println!("{}", line);
+            }
+        } else {
+            print!("{}", content);
+        }
+        println!();
+    }
+
     Ok(())
 }
 

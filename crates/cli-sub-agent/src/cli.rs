@@ -155,6 +155,21 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// View session logs
+    Logs {
+        /// Session ULID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Show only last N lines
+        #[arg(long)]
+        tail: Option<usize>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
