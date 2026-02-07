@@ -72,6 +72,10 @@ pub enum Commands {
         /// Non-interactive mode
         #[arg(long)]
         non_interactive: bool,
+
+        /// Generate minimal config (only [project] + detected [tools], no tiers/resources)
+        #[arg(long)]
+        minimal: bool,
     },
 
     /// Garbage collect expired locks and empty sessions

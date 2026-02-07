@@ -101,8 +101,11 @@ async fn main() -> Result<()> {
                 session_cmds::handle_session_logs(session, tail, cd)?;
             }
         },
-        Commands::Init { non_interactive } => {
-            handle_init(non_interactive)?;
+        Commands::Init {
+            non_interactive,
+            minimal,
+        } => {
+            handle_init(non_interactive, minimal)?;
         }
         Commands::Gc {
             dry_run,
@@ -495,9 +498,9 @@ pub(crate) async fn execute_with_session(
     Ok(result)
 }
 
-fn handle_init(non_interactive: bool) -> Result<()> {
+fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
     let project_root = determine_project_root(None)?;
-    let config = init_project(&project_root, non_interactive)?;
+    let config = init_project(&project_root, non_interactive, minimal)?;
     eprintln!(
         "Initialized project configuration at: {}",
         ProjectConfig::config_path(&project_root).display()

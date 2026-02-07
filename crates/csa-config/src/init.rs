@@ -104,8 +104,13 @@ fn build_smart_tiers(installed: &[&str]) -> HashMap<String, TierConfig> {
 
 /// Initialize project configuration.
 /// If non_interactive is true, generate default config with detected tools.
+/// If minimal is true, generate only [project] + [tools] with no tiers/resources.
 /// Returns the generated config.
-pub fn init_project(project_root: &Path, non_interactive: bool) -> Result<ProjectConfig> {
+pub fn init_project(
+    project_root: &Path,
+    non_interactive: bool,
+    minimal: bool,
+) -> Result<ProjectConfig> {
     let config_path = ProjectConfig::config_path(project_root);
     if config_path.exists() {
         bail!("Configuration already exists at {}", config_path.display());
@@ -151,16 +156,55 @@ pub fn init_project(project_root: &Path, non_interactive: bool) -> Result<Projec
         );
     }
 
-    let mut initial_estimates = HashMap::new();
-    initial_estimates.insert("gemini-cli".to_string(), 150);
-    initial_estimates.insert("opencode".to_string(), 500);
-    initial_estimates.insert("codex".to_string(), 800);
-    initial_estimates.insert("claude-code".to_string(), 1200);
+    let config = if minimal {
+        // Minimal config: only project + tools, use built-in defaults for everything else
+        ProjectConfig {
+            project: ProjectMeta {
+                name: project_name,
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools,
+            tiers: build_smart_tiers(&installed),
+            tier_mapping: default_tier_mapping(),
+            aliases: HashMap::new(),
+        }
+    } else {
+        let mut initial_estimates = HashMap::new();
+        initial_estimates.insert("gemini-cli".to_string(), 150);
+        initial_estimates.insert("opencode".to_string(), 500);
+        initial_estimates.insert("codex".to_string(), 800);
+        initial_estimates.insert("claude-code".to_string(), 1200);
 
-    // Build smart tiers based on detected tools
-    let tiers = build_smart_tiers(&installed);
+        ProjectConfig {
+            project: ProjectMeta {
+                name: project_name,
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig {
+                min_free_memory_mb: 2048,
+                min_free_swap_mb: 1024,
+                initial_estimates,
+            },
+            tools,
+            tiers: build_smart_tiers(&installed),
+            tier_mapping: default_tier_mapping(),
+            aliases: HashMap::new(),
+        }
+    };
 
-    // Default tier mapping
+    config.save(project_root)?;
+
+    // Update .gitignore if it exists
+    update_gitignore(project_root)?;
+
+    Ok(config)
+}
+
+/// Build default tier mapping for common task types.
+fn default_tier_mapping() -> HashMap<String, String> {
     let mut tier_mapping = HashMap::new();
     tier_mapping.insert("default".to_string(), "tier-2-standard".to_string());
     tier_mapping.insert("security_audit".to_string(), "tier-3-complex".to_string());
@@ -176,30 +220,7 @@ pub fn init_project(project_root: &Path, non_interactive: bool) -> Result<Projec
     tier_mapping.insert("bug_fix".to_string(), "tier-2-standard".to_string());
     tier_mapping.insert("documentation".to_string(), "tier-1-quick".to_string());
     tier_mapping.insert("quick_question".to_string(), "tier-1-quick".to_string());
-
-    let config = ProjectConfig {
-        project: ProjectMeta {
-            name: project_name,
-            created_at: Utc::now(),
-            max_recursion_depth: 5,
-        },
-        resources: ResourcesConfig {
-            min_free_memory_mb: 2048,
-            min_free_swap_mb: 1024,
-            initial_estimates,
-        },
-        tools,
-        tiers,
-        tier_mapping,
-        aliases: HashMap::new(),
-    };
-
-    config.save(project_root)?;
-
-    // Update .gitignore if it exists
-    update_gitignore(project_root)?;
-
-    Ok(config)
+    tier_mapping
 }
 
 /// Add .csa/ to .gitignore if not already present
@@ -232,7 +253,7 @@ mod tests {
     #[test]
     fn test_init_project_creates_config() {
         let dir = tempdir().unwrap();
-        let config = init_project(dir.path(), true).unwrap();
+        let config = init_project(dir.path(), true, false).unwrap();
 
         assert!(!config.project.name.is_empty());
         assert_eq!(config.project.max_recursion_depth, 5);
@@ -246,10 +267,10 @@ mod tests {
     #[test]
     fn test_init_project_fails_if_already_exists() {
         let dir = tempdir().unwrap();
-        init_project(dir.path(), true).unwrap();
+        init_project(dir.path(), true, false).unwrap();
 
         // Second init should fail
-        let result = init_project(dir.path(), true);
+        let result = init_project(dir.path(), true, false);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("already exists"));
     }
@@ -416,7 +437,7 @@ mod tests {
     #[test]
     fn test_init_project_creates_default_tier_mapping() {
         let dir = tempdir().unwrap();
-        let config = init_project(dir.path(), true).unwrap();
+        let config = init_project(dir.path(), true, false).unwrap();
 
         // Verify 'default' mapping exists
         assert!(
