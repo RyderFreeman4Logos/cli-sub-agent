@@ -54,16 +54,17 @@ jobs:
         shell: bash
         run: |
           bin="csa"
-          tag="${GITHUB_REF#refs/tags/}"
-          staging="csa-${tag}-${{ matrix.target }}"
+          archive_name="csa-${{ matrix.target }}"
+          staging="_staging"
 
+          # Stage files flat (no subdirectory) so Homebrew bin.install works
           mkdir -p "$staging"
           cp "target/${{ matrix.target }}/release/${bin}" "$staging/"
           cp README.md LICENSE-MIT LICENSE-APACHE "$staging/" 2>/dev/null || true
 
           if [ "${{ matrix.archive }}" = "tar.gz" ]; then
-            tar czf "${staging}.tar.gz" "$staging"
-            echo "ASSET=${staging}.tar.gz" >> "$GITHUB_ENV"
+            tar czf "${archive_name}.tar.gz" -C "$staging" .
+            echo "ASSET=${archive_name}.tar.gz" >> "$GITHUB_ENV"
           fi
 
       - name: Upload artifact

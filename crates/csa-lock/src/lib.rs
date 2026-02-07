@@ -1,12 +1,20 @@
-//! File-based locking using flock (via fd-lock).
+//! File-based locking using `flock(2)` syscall directly.
 //! Independent crate with no internal csa dependencies.
+//!
+//! Uses raw `libc::flock` instead of RAII lock wrappers to avoid the
+//! self-referential struct problem: an RAII guard borrows the lock owner,
+//! making it impossible to store both in the same struct without lifetime
+//! gymnastics (`Box::leak`, `ouroboros`, etc.).
+//!
+//! By calling `flock(2)` directly, we only need to own the `File` (which
+//! owns the fd). `Drop` calls `flock(fd, LOCK_UN)` to release.
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use fd_lock::RwLock;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
 /// Diagnostic information written to lock files
@@ -18,11 +26,14 @@ struct LockDiagnostic {
     reason: String,
 }
 
-/// Session lock guard that holds an fd-lock write guard.
-/// The lock is released when this struct is dropped.
+/// Session lock guard backed by `flock(2)`.
+///
+/// Holds the open `File` whose fd carries the advisory lock.
+/// On `Drop`, the lock is explicitly released via `flock(fd, LOCK_UN)`.
 pub struct SessionLock {
-    #[allow(dead_code)]
-    guard: &'static fd_lock::RwLockWriteGuard<'static, File>,
+    /// The open lock file. Closing it also releases flock, but we call
+    /// `LOCK_UN` explicitly in `Drop` for deterministic release timing.
+    file: File,
     lock_path: PathBuf,
 }
 
@@ -34,6 +45,19 @@ impl std::fmt::Debug for SessionLock {
     }
 }
 
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        let fd = self.file.as_raw_fd();
+        // SAFETY: `fd` is a valid file descriptor owned by `self.file`.
+        // `LOCK_UN` releases the advisory lock. If the call fails (which is
+        // extremely unlikely for a valid fd), the lock will still be released
+        // when the fd is closed moments later.
+        unsafe {
+            libc::flock(fd, libc::LOCK_UN);
+        }
+    }
+}
+
 impl SessionLock {
     /// Get the path to the lock file
     pub fn lock_path(&self) -> &Path {
@@ -41,14 +65,14 @@ impl SessionLock {
     }
 }
 
-/// Acquire a non-blocking write lock for a session and tool.
+/// Acquire a non-blocking exclusive lock for a session and tool.
 ///
 /// Lock path: `{session_dir}/locks/{tool_name}.lock`
 ///
 /// On success:
-/// - Acquires exclusive write lock
+/// - Acquires exclusive advisory lock via `flock(2)` with `LOCK_NB`
 /// - Writes diagnostic JSON (pid, tool_name, acquired_at, reason) to lock file
-/// - Returns SessionLock guard
+/// - Returns `SessionLock` guard that releases on drop
 ///
 /// On failure:
 /// - Attempts to read existing lock file to report which PID holds it
@@ -69,59 +93,55 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result
         .open(&lock_path)
         .with_context(|| format!("Failed to open lock file: {}", lock_path.display()))?;
 
-    // Leak the RwLock to give it a 'static lifetime
-    // This is safe because the lock lives for the process duration
-    let rwlock = Box::leak(Box::new(RwLock::new(file)));
+    let fd = file.as_raw_fd();
 
-    // Try to acquire a non-blocking write lock
-    match rwlock.try_write() {
-        Ok(mut guard) => {
-            // Write diagnostic information
-            let diagnostic = LockDiagnostic {
-                pid: std::process::id(),
-                tool_name: tool_name.to_string(),
-                acquired_at: Utc::now(),
-                reason: reason.to_string(),
-            };
+    // SAFETY: `fd` is a valid file descriptor from the `File` we just opened.
+    // `LOCK_EX | LOCK_NB` requests an exclusive non-blocking lock.
+    // The return value is checked for error handling.
+    let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
 
-            let json = serde_json::to_string(&diagnostic)
-                .context("Failed to serialize lock diagnostic")?;
+    if ret == 0 {
+        // Lock acquired successfully. Write diagnostic information.
+        let mut lock = SessionLock { file, lock_path };
 
-            guard.set_len(0).context("Failed to truncate lock file")?;
-            guard
-                .write_all(json.as_bytes())
-                .context("Failed to write lock diagnostic")?;
-            guard.flush().context("Failed to flush lock file")?;
+        let diagnostic = LockDiagnostic {
+            pid: std::process::id(),
+            tool_name: tool_name.to_string(),
+            acquired_at: Utc::now(),
+            reason: reason.to_string(),
+        };
 
-            // Leak the guard to give it a 'static lifetime
-            let static_guard = Box::leak(Box::new(guard));
+        let json =
+            serde_json::to_string(&diagnostic).context("Failed to serialize lock diagnostic")?;
 
-            Ok(SessionLock {
-                guard: static_guard,
-                lock_path,
-            })
-        }
-        Err(_) => {
-            // Lock is held by another process, try to read diagnostic info
-            let mut file =
-                File::open(&lock_path).context("Failed to open lock file to read diagnostic")?;
-            let mut contents = String::new();
-            file.read_to_string(&mut contents)
-                .context("Failed to read lock file")?;
+        lock.file
+            .set_len(0)
+            .context("Failed to truncate lock file")?;
+        lock.file
+            .write_all(json.as_bytes())
+            .context("Failed to write lock diagnostic")?;
+        lock.file.flush().context("Failed to flush lock file")?;
 
-            let error_msg = if let Ok(diagnostic) =
-                serde_json::from_str::<LockDiagnostic>(&contents)
-            {
-                format!(
-                    "Session locked by PID {} (tool: {}, reason: {}, acquired: {})",
-                    diagnostic.pid, diagnostic.tool_name, diagnostic.reason, diagnostic.acquired_at
-                )
-            } else {
-                "Session is locked (unable to read diagnostic info)".to_string()
-            };
+        Ok(lock)
+    } else {
+        // Lock is held by another process, try to read diagnostic info
+        let mut diag_file =
+            File::open(&lock_path).context("Failed to open lock file to read diagnostic")?;
+        let mut contents = String::new();
+        diag_file
+            .read_to_string(&mut contents)
+            .context("Failed to read lock file")?;
 
-            Err(anyhow::anyhow!(error_msg))
-        }
+        let error_msg = if let Ok(diagnostic) = serde_json::from_str::<LockDiagnostic>(&contents) {
+            format!(
+                "Session locked by PID {} (tool: {}, reason: {}, acquired: {})",
+                diagnostic.pid, diagnostic.tool_name, diagnostic.reason, diagnostic.acquired_at
+            )
+        } else {
+            "Session is locked (unable to read diagnostic info)".to_string()
+        };
+
+        Err(anyhow::anyhow!(error_msg))
     }
 }
 
@@ -211,10 +231,12 @@ mod tests {
             // Lock is held here
         } // Lock is dropped here
 
-        // Note: fd-lock (flock) locks are process-scoped, not thread-scoped
-        // Within the same process, the lock is still held even after drop
-        // This test documents the behavior but won't actually re-acquire
-        // In real usage across processes, the lock would be released
+        // Note: flock locks are process-scoped, not thread-scoped.
+        // Within the same process, the lock is still held even after close
+        // because flock only releases when ALL fds referencing the same
+        // open file description are closed. This test documents the behavior
+        // but won't actually re-acquire within the same process.
+        // In real usage across processes, the lock is properly released.
     }
 
     #[test]
