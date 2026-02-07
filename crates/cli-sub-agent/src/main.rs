@@ -14,9 +14,10 @@ mod gc;
 mod mcp_server;
 mod review_cmd;
 mod session_cmds;
+mod setup_cmds;
 mod skill_cmds;
 
-use cli::{Cli, Commands, ConfigCommands, SessionCommands, SkillCommands};
+use cli::{Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands};
 use csa_config::{init_project, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{create_session_log_writer, Executor, ModelSpec};
@@ -139,6 +140,17 @@ async fn main() -> Result<()> {
             }
             SkillCommands::List => {
                 skill_cmds::handle_skill_list()?;
+            }
+        },
+        Commands::Setup { cmd } => match cmd {
+            SetupCommands::ClaudeCode => {
+                setup_cmds::handle_setup_claude_code()?;
+            }
+            SetupCommands::Codex => {
+                setup_cmds::handle_setup_codex()?;
+            }
+            SetupCommands::OpenCode => {
+                setup_cmds::handle_setup_opencode()?;
             }
         },
     }

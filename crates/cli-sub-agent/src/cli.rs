@@ -119,6 +119,12 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: SkillCommands,
     },
+
+    /// Setup MCP integration for AI tools
+    Setup {
+        #[command(subcommand)]
+        cmd: SetupCommands,
+    },
 }
 
 #[derive(clap::Args)]
@@ -262,4 +268,16 @@ pub enum SkillCommands {
 
     /// List installed skills
     List,
+}
+
+#[derive(Subcommand)]
+pub enum SetupCommands {
+    /// Setup MCP integration for Claude Code
+    ClaudeCode,
+
+    /// Setup MCP integration for OpenAI Codex CLI
+    Codex,
+
+    /// Setup MCP integration for OpenCode
+    OpenCode,
 }

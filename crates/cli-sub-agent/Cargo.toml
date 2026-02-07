@@ -30,3 +30,4 @@ toml.workspace = true
 chrono.workspace = true
 sysinfo.workspace = true
 directories.workspace = true
+which.workspace = true
