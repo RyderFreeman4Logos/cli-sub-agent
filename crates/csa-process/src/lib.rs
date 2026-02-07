@@ -11,6 +11,9 @@ use tracing::warn;
 pub struct ExecutionResult {
     /// Combined stdout output.
     pub output: String,
+    /// Captured stderr output (tee'd to parent stderr in real-time).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub stderr_output: String,
     /// Last non-empty line or truncated output (max 200 chars).
     pub summary: String,
     /// Exit code (1 if signal-killed).
@@ -21,7 +24,7 @@ pub struct ExecutionResult {
 ///
 /// - Spawns the command
 /// - Captures stdout (piped)
-/// - Stderr passes through to parent (inherit)
+/// - Captures stderr (piped, tee'd to parent stderr in `wait_and_capture`)
 /// - Isolates child in its own process group (via setsid)
 /// - Enables kill_on_drop as safety net
 /// - Returns the child process handle for PID access and later waiting
@@ -30,7 +33,7 @@ pub struct ExecutionResult {
 /// Call `wait_and_capture()` after starting monitoring to complete execution.
 pub async fn spawn_tool(mut cmd: Command) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
-    cmd.stderr(std::process::Stdio::inherit());
+    cmd.stderr(std::process::Stdio::piped());
     cmd.kill_on_drop(true);
 
     // Isolate child in its own process group to prevent signal inheritance
@@ -51,24 +54,65 @@ pub async fn spawn_tool(mut cmd: Command) -> Result<tokio::process::Child> {
 /// Wait for a spawned child process and capture its output.
 ///
 /// - Reads stdout until EOF
+/// - Reads stderr in tee mode (forwards each line to parent stderr + accumulates)
 /// - Waits for the process to exit
-/// - Returns ExecutionResult with output, summary, and exit code
+/// - Returns ExecutionResult with output, stderr_output, summary, and exit code
 ///
-/// IMPORTANT: The child's stdout must be piped. This function will take ownership
-/// of the stdout handle.
+/// IMPORTANT: The child's stdout and stderr must be piped. This function will take
+/// ownership of both handles.
 pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
+    let stderr = child.stderr.take();
 
-    let mut reader = BufReader::new(stdout);
+    let mut stdout_reader = BufReader::new(stdout);
     let mut output = String::new();
-    let mut line = String::new();
+    let mut stdout_line = String::new();
 
-    while let Ok(n) = reader.read_line(&mut line).await {
-        if n == 0 {
-            break;
+    let mut stderr_output = String::new();
+
+    if let Some(stderr_handle) = stderr {
+        // Tee mode: read stdout and stderr concurrently
+        let mut stderr_reader = BufReader::new(stderr_handle);
+        let mut stderr_line = String::new();
+
+        let mut stdout_done = false;
+        let mut stderr_done = false;
+
+        while !stdout_done || !stderr_done {
+            tokio::select! {
+                result = stdout_reader.read_line(&mut stdout_line), if !stdout_done => {
+                    match result {
+                        Ok(0) => stdout_done = true,
+                        Ok(_) => {
+                            output.push_str(&stdout_line);
+                            stdout_line.clear();
+                        }
+                        Err(_) => stdout_done = true,
+                    }
+                }
+                result = stderr_reader.read_line(&mut stderr_line), if !stderr_done => {
+                    match result {
+                        Ok(0) => stderr_done = true,
+                        Ok(_) => {
+                            // Tee: forward to parent stderr in real-time
+                            eprint!("{}", stderr_line);
+                            stderr_output.push_str(&stderr_line);
+                            stderr_line.clear();
+                        }
+                        Err(_) => stderr_done = true,
+                    }
+                }
+            }
         }
-        output.push_str(&line);
-        line.clear();
+    } else {
+        // No stderr handle (shouldn't happen with spawn_tool, but handle gracefully)
+        while let Ok(n) = stdout_reader.read_line(&mut stdout_line).await {
+            if n == 0 {
+                break;
+            }
+            output.push_str(&stdout_line);
+            stdout_line.clear();
+        }
     }
 
     let status = child.wait().await.context("Failed to wait for command")?;
@@ -82,6 +126,7 @@ pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<Execut
 
     Ok(ExecutionResult {
         output,
+        stderr_output,
         summary,
         exit_code,
     })
@@ -181,12 +226,14 @@ mod tests {
     fn test_execution_result_construction() {
         let result = ExecutionResult {
             output: "test output".to_string(),
+            stderr_output: String::new(),
             summary: "test summary".to_string(),
             exit_code: 0,
         };
         assert_eq!(result.output, "test output");
         assert_eq!(result.summary, "test summary");
         assert_eq!(result.exit_code, 0);
+        assert!(result.stderr_output.is_empty());
     }
 
     #[tokio::test]
@@ -219,5 +266,19 @@ mod tests {
 
         assert_eq!(result.exit_code, 0);
         assert!(result.output.contains("backward_compatible"));
+    }
+
+    #[tokio::test]
+    async fn test_stderr_capture() {
+        // Use bash -c to write to both stdout and stderr
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "echo stdout_line && echo stderr_line >&2"]);
+
+        let child = spawn_tool(cmd).await.expect("Failed to spawn");
+        let result = wait_and_capture(child).await.expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.contains("stdout_line"));
+        assert!(result.stderr_output.contains("stderr_line"));
     }
 }

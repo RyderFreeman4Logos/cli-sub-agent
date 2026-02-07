@@ -480,6 +480,17 @@ pub(crate) async fn execute_with_session(
         });
     session.last_accessed = chrono::Utc::now();
 
+    // Detect compress/compact commands: mark session as Available for reuse
+    if result.exit_code == 0 && is_compress_command(prompt) {
+        session.context_status.is_compacted = true;
+        session.context_status.last_compacted_at = Some(chrono::Utc::now());
+        session.phase = csa_session::SessionPhase::Available;
+        info!(
+            session = %session.meta_session_id,
+            "Session compacted and marked Available for reuse"
+        );
+    }
+
     // Update cumulative token usage if we got new tokens
     if let Some(new_usage) = token_usage {
         let cumulative = session
@@ -643,6 +654,12 @@ pub(crate) fn build_executor(
 
         Ok(Executor::from_tool_name(tool, final_model))
     }
+}
+
+/// Check if a prompt is a context compress/compact command.
+fn is_compress_command(prompt: &str) -> bool {
+    let trimmed = prompt.trim();
+    trimmed == "/compress" || trimmed == "/compact" || trimmed.starts_with("/compact ")
 }
 
 /// Parse a tool name string to ToolName enum.
