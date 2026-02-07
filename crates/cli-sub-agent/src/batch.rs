@@ -14,7 +14,8 @@ use csa_process::check_tool_installed;
 use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::get_session_root;
 
-use crate::{build_executor, determine_project_root, execute_with_session};
+use crate::run_helpers::build_executor;
+use crate::{determine_project_root, execute_with_session};
 
 /// Batch configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]

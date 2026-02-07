@@ -59,7 +59,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     };
 
     // 7. Build executor
-    let executor = crate::build_executor(&tool, None, args.model.as_deref(), None)?;
+    let executor = crate::run_helpers::build_executor(&tool, None, args.model.as_deref(), None)?;
 
     // 8. Check tool is installed
     if let Err(e) = check_tool_installed(executor.executable_name()).await {

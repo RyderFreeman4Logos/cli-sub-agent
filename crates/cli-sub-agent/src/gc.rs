@@ -89,8 +89,22 @@ pub(crate) fn handle_gc(
         }
     }
 
-    // Clean orphan directories (no state.toml)
+    // Clean rotation.toml if all sessions are gone
     let session_root = csa_session::get_session_root(&project_root)?;
+    let rotation_path = session_root.join("rotation.toml");
+    if rotation_path.exists() {
+        // If no sessions remain (all removed above), clean rotation state
+        let remaining = list_sessions(&project_root, None)?;
+        if remaining.is_empty() {
+            if dry_run {
+                eprintln!("[dry-run] Would remove rotation state: {:?}", rotation_path);
+            } else if fs::remove_file(&rotation_path).is_ok() {
+                info!("Removed rotation state (no sessions remain)");
+            }
+        }
+    }
+
+    // Clean orphan directories (no state.toml)
     let sessions_dir = session_root.join("sessions");
 
     if sessions_dir.exists() {

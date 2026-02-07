@@ -59,6 +59,10 @@ pub enum Commands {
         /// Thinking budget (low, medium, high, xhigh)
         #[arg(long)]
         thinking: Option<String>,
+
+        /// Disable automatic 429 failover to alternative tools
+        #[arg(long)]
+        no_failover: bool,
     },
 
     /// Manage sessions

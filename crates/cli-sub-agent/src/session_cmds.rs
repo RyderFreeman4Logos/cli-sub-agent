@@ -45,6 +45,7 @@ pub(crate) fn handle_session_list(
                             "last_accessed": s.last_accessed,
                             "description": s.description.as_deref().unwrap_or(""),
                             "tools": s.tools.keys().collect::<Vec<_>>(),
+                            "phase": format!("{:?}", s.phase),
                             "total_token_usage": s.total_token_usage,
                         })
                     })
@@ -54,22 +55,23 @@ pub(crate) fn handle_session_list(
             OutputFormat::Text => {
                 // Print table header
                 println!(
-                    "{:<11}  {:<19}  {:<30}  {:<20}  TOKENS",
-                    "SESSION", "LAST ACCESSED", "DESCRIPTION", "TOOLS"
+                    "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  TOKENS",
+                    "SESSION", "LAST ACCESSED", "PHASE", "DESCRIPTION", "TOOLS"
                 );
-                println!("{}", "-".repeat(100));
+                println!("{}", "-".repeat(110));
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
                     let short_id =
                         &session.meta_session_id[..11.min(session.meta_session_id.len())];
+                    let phase_str = format!("{:?}", session.phase);
                     let desc = session
                         .description
                         .as_deref()
                         .filter(|d| !d.is_empty())
                         .unwrap_or("-");
-                    // Truncate description to 30 chars
-                    let desc_display = if desc.len() > 30 {
-                        format!("{}...", &desc[..27])
+                    // Truncate description to 25 chars
+                    let desc_display = if desc.len() > 25 {
+                        format!("{}...", &desc[..22])
                     } else {
                         desc.to_string()
                     };
@@ -109,9 +111,10 @@ pub(crate) fn handle_session_list(
                     };
 
                     println!(
-                        "{:<11}  {:<19}  {:<30}  {:<20}  {}",
+                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {}",
                         short_id,
                         session.last_accessed.format("%Y-%m-%d %H:%M"),
+                        phase_str,
                         desc_display,
                         tools_str,
                         tokens_str,

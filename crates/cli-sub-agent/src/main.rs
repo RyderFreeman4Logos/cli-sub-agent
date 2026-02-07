@@ -13,6 +13,7 @@ mod doctor;
 mod gc;
 mod mcp_server;
 mod review_cmd;
+mod run_helpers;
 mod self_update;
 mod session_cmds;
 mod setup_cmds;
@@ -21,13 +22,17 @@ mod skill_cmds;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands};
 use csa_config::{init_project, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::{create_session_log_writer, Executor, ModelSpec};
+use csa_executor::{create_session_log_writer, Executor};
 use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
     create_session, get_session_dir, load_session, resolve_session_prefix, save_session,
     TokenUsage, ToolState,
+};
+use run_helpers::{
+    build_executor, is_compress_command, parse_token_usage, parse_tool_name,
+    resolve_tool_and_model, truncate_prompt,
 };
 
 #[tokio::main]
@@ -61,6 +66,7 @@ async fn main() -> Result<()> {
             model_spec,
             model,
             thinking,
+            no_failover,
         } => {
             let exit_code = handle_run(
                 tool,
@@ -74,6 +80,7 @@ async fn main() -> Result<()> {
                 model_spec,
                 model,
                 thinking,
+                no_failover,
                 current_depth,
                 output_format,
             )
@@ -178,6 +185,7 @@ async fn handle_run(
     model_spec: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
+    no_failover: bool,
     current_depth: u32,
     output_format: OutputFormat,
 ) -> Result<i32> {
@@ -220,86 +228,204 @@ async fn handle_run(
 
     // 6. Resolve tool and model_spec
     let (resolved_tool, resolved_model_spec, resolved_model) = resolve_tool_and_model(
-        tool,
+        tool.clone(),
         model_spec.as_deref(),
         model.as_deref(),
         config.as_ref(),
         &project_root,
     )?;
 
-    // 7. Build executor
-    let executor = build_executor(
-        &resolved_tool,
-        resolved_model_spec.as_deref(),
-        resolved_model.as_deref(),
-        thinking.as_deref(),
-    )?;
+    // Determine max failover attempts from tier config
+    let max_failover_attempts = if no_failover {
+        1 // Single attempt, no failover
+    } else {
+        config
+            .as_ref()
+            .and_then(|cfg| {
+                let tier_name = cfg
+                    .tier_mapping
+                    .get("default")
+                    .cloned()
+                    .unwrap_or_else(|| "tier3".to_string());
+                cfg.tiers.get(&tier_name).map(|t| t.models.len())
+            })
+            .unwrap_or(1)
+    };
 
-    // 8. Check tool is installed
-    if let Err(e) = check_tool_installed(executor.executable_name()).await {
-        error!(
-            "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
-            executor.tool_name(),
-            executor.install_hint(),
-            executor.tool_name()
-        );
-        anyhow::bail!("{}", e);
-    }
+    // Failover state
+    let mut current_tool = resolved_tool;
+    let mut current_model_spec = resolved_model_spec;
+    let mut current_model = resolved_model;
+    let mut tried_tools: Vec<String> = Vec::new();
+    let mut attempts = 0;
 
-    // 9. Check tool is enabled in config
-    if let Some(ref cfg) = config {
-        if !cfg.is_tool_enabled(executor.tool_name()) {
+    let result = loop {
+        attempts += 1;
+
+        // 7. Build executor
+        let executor = build_executor(
+            &current_tool,
+            current_model_spec.as_deref(),
+            current_model.as_deref(),
+            thinking.as_deref(),
+        )?;
+
+        // 8. Check tool is installed
+        if let Err(e) = check_tool_installed(executor.executable_name()).await {
             error!(
-                "Tool '{}' is disabled in project config",
+                "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
+                executor.tool_name(),
+                executor.install_hint(),
                 executor.tool_name()
             );
-            return Ok(1);
+            anyhow::bail!("{}", e);
         }
-    }
 
-    // 10. Execute
-    let result = if ephemeral {
-        // Ephemeral: use temp directory
-        let temp_dir = TempDir::new()?;
-        info!("Ephemeral session in: {:?}", temp_dir.path());
-        executor.execute_in(&prompt_text, temp_dir.path()).await?
-    } else {
-        // Persistent session
-        match execute_with_session(
-            &executor,
-            &resolved_tool,
-            &prompt_text,
-            session_arg.clone(),
-            description,
-            parent,
-            &project_root,
-            config.as_ref(),
-        )
-        .await
-        {
-            Ok(result) => result,
-            Err(e) => {
-                // BUG-13: Check if this is a lock error and format as JSON if needed
-                let error_msg = e.to_string();
-                if error_msg.contains("Session locked by PID")
-                    && matches!(output_format, OutputFormat::Json)
-                {
-                    let json_error = serde_json::json!({
-                        "error": "session_locked",
-                        "session_id": session_arg.unwrap_or_else(|| "(new)".to_string()),
-                        "tool": resolved_tool.as_str(),
-                        "message": error_msg
-                    });
-                    println!("{}", serde_json::to_string_pretty(&json_error)?);
-                    return Ok(1);
-                }
-                // Not a lock error or text format - propagate normally
-                return Err(e);
+        // 9. Check tool is enabled in config
+        if let Some(ref cfg) = config {
+            if !cfg.is_tool_enabled(executor.tool_name()) {
+                error!(
+                    "Tool '{}' is disabled in project config",
+                    executor.tool_name()
+                );
+                return Ok(1);
             }
+        }
+
+        // 10. Execute
+        let exec_result = if ephemeral {
+            // Ephemeral: use temp directory
+            let temp_dir = TempDir::new()?;
+            info!("Ephemeral session in: {:?}", temp_dir.path());
+            executor.execute_in(&prompt_text, temp_dir.path()).await?
+        } else {
+            // Persistent session
+            match execute_with_session(
+                &executor,
+                &current_tool,
+                &prompt_text,
+                session_arg.clone(),
+                description.clone(),
+                parent.clone(),
+                &project_root,
+                config.as_ref(),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(e) => {
+                    // BUG-13: Check if this is a lock error and format as JSON if needed
+                    let error_msg = e.to_string();
+                    if error_msg.contains("Session locked by PID")
+                        && matches!(output_format, OutputFormat::Json)
+                    {
+                        let json_error = serde_json::json!({
+                            "error": "session_locked",
+                            "session_id": session_arg.unwrap_or_else(|| "(new)".to_string()),
+                            "tool": current_tool.as_str(),
+                            "message": error_msg
+                        });
+                        println!("{}", serde_json::to_string_pretty(&json_error)?);
+                        return Ok(1);
+                    }
+                    // Not a lock error or text format - propagate normally
+                    return Err(e);
+                }
+            }
+        };
+
+        // 11. Check for 429 rate limit and attempt failover
+        let tool_name_str = executor.tool_name();
+        if let Some(rate_limit) = csa_scheduler::detect_rate_limit(
+            tool_name_str,
+            &exec_result.stderr_output,
+            &exec_result.output,
+            exec_result.exit_code,
+        ) {
+            info!(
+                tool = %tool_name_str,
+                pattern = %rate_limit.matched_pattern,
+                attempt = attempts,
+                max = max_failover_attempts,
+                "Rate limit detected, attempting failover"
+            );
+
+            // Don't exceed max attempts
+            if attempts >= max_failover_attempts {
+                warn!(
+                    "Max failover attempts ({}) reached, returning error",
+                    max_failover_attempts
+                );
+                break exec_result;
+            }
+
+            tried_tools.push(tool_name_str.to_string());
+
+            // Load current session state for failover decision
+            let session_state = if !ephemeral {
+                session_arg.as_ref().and_then(|sid| {
+                    let sessions_dir = csa_session::get_session_root(&project_root)
+                        .ok()?
+                        .join("sessions");
+                    let resolved_id = resolve_session_prefix(&sessions_dir, sid).ok()?;
+                    load_session(&project_root, &resolved_id).ok()
+                })
+            } else {
+                None
+            };
+
+            // Determine if task needs edit capability
+            let needs_edit = config
+                .as_ref()
+                .is_some_and(|cfg| cfg.can_tool_edit_existing(tool_name_str));
+
+            if let Some(ref cfg) = config {
+                let action = csa_scheduler::decide_failover(
+                    tool_name_str,
+                    "default",
+                    needs_edit,
+                    session_state.as_ref(),
+                    &tried_tools,
+                    cfg,
+                    &rate_limit.matched_pattern,
+                );
+
+                match action {
+                    csa_scheduler::FailoverAction::RetryInSession {
+                        new_tool,
+                        new_model_spec,
+                        session_id: _,
+                    }
+                    | csa_scheduler::FailoverAction::RetrySiblingSession {
+                        new_tool,
+                        new_model_spec,
+                    } => {
+                        info!(
+                            from = %tool_name_str,
+                            to = %new_tool,
+                            "Failing over to alternative tool"
+                        );
+                        current_tool = parse_tool_name(&new_tool)?;
+                        current_model_spec = Some(new_model_spec);
+                        current_model = None;
+                        continue;
+                    }
+                    csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+                        warn!(reason = %reason, "Failover not possible, returning original result");
+                        break exec_result;
+                    }
+                }
+            } else {
+                // No config → can't failover
+                break exec_result;
+            }
+        } else {
+            // No rate limit → return result
+            break exec_result;
         }
     };
 
-    // 11. Print result
+    // 12. Print result
     match output_format {
         OutputFormat::Text => {
             print!("{}", result.output);
@@ -561,231 +687,4 @@ pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
         }
         Ok(buffer)
     }
-}
-
-/// Resolve tool and model from CLI args and config.
-///
-/// Returns (tool, model_spec, model) where:
-/// - tool: the selected tool (from CLI or tier-based selection)
-/// - model_spec: optional model spec string (from CLI or tier)
-/// - model: optional model string (from CLI, with alias resolution applied)
-fn resolve_tool_and_model(
-    tool: Option<ToolName>,
-    model_spec: Option<&str>,
-    model: Option<&str>,
-    config: Option<&ProjectConfig>,
-    project_root: &Path,
-) -> Result<(ToolName, Option<String>, Option<String>)> {
-    // Case 1: model_spec provided → parse it to get tool
-    if let Some(spec) = model_spec {
-        let parsed = ModelSpec::parse(spec)?;
-        let tool_name = match parsed.tool.as_str() {
-            "gemini-cli" => ToolName::GeminiCli,
-            "opencode" => ToolName::Opencode,
-            "codex" => ToolName::Codex,
-            "claude-code" => ToolName::ClaudeCode,
-            _ => anyhow::bail!("Unknown tool in model spec: {}", parsed.tool),
-        };
-        return Ok((tool_name, Some(spec.to_string()), None));
-    }
-
-    // Case 2: tool provided → use it with optional model (apply alias resolution)
-    if let Some(tool_name) = tool {
-        let resolved_model = model.map(|m| {
-            config
-                .map(|cfg| cfg.resolve_alias(m))
-                .unwrap_or_else(|| m.to_string())
-        });
-        return Ok((tool_name, None, resolved_model));
-    }
-
-    // Case 3: neither tool nor model_spec → use round-robin tier-based selection
-    if let Some(cfg) = config {
-        // Try round-robin rotation first (needs project root to persist state)
-        if let Ok(Some((tool_name_str, tier_model_spec))) =
-            csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, false)
-        {
-            let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), None));
-        }
-        // Fallback: original non-rotating selection
-        if let Some((tool_name_str, tier_model_spec)) = cfg.resolve_tier_tool("default") {
-            let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), None));
-        }
-    }
-
-    // Case 4: no config or no tier mapping → error
-    anyhow::bail!(
-        "No tool specified and no tier-based selection available. \
-         Use --tool or run 'csa init' to configure tiers."
-    )
-}
-
-pub(crate) fn build_executor(
-    tool: &ToolName,
-    model_spec: Option<&str>,
-    model: Option<&str>,
-    thinking: Option<&str>,
-) -> Result<Executor> {
-    if let Some(spec) = model_spec {
-        let parsed = ModelSpec::parse(spec)?;
-        // ModelSpec.tool is String, need to parse to ToolName
-        let tool_name = match parsed.tool.as_str() {
-            "gemini-cli" => ToolName::GeminiCli,
-            "opencode" => ToolName::Opencode,
-            "codex" => ToolName::Codex,
-            "claude-code" => ToolName::ClaudeCode,
-            _ => anyhow::bail!("Unknown tool in model spec: {}", parsed.tool),
-        };
-        Ok(Executor::from_tool_name(&tool_name, Some(parsed.model)))
-    } else {
-        let mut final_model = model.map(|s| s.to_string());
-
-        // Apply thinking budget if specified (tool-specific logic)
-        if let Some(thinking_level) = thinking {
-            if final_model.is_none() {
-                // Generate model string with thinking budget
-                final_model = Some(format!("thinking:{}", thinking_level));
-            } else {
-                warn!("Both --model and --thinking specified; --thinking ignored");
-            }
-        }
-
-        Ok(Executor::from_tool_name(tool, final_model))
-    }
-}
-
-/// Check if a prompt is a context compress/compact command.
-fn is_compress_command(prompt: &str) -> bool {
-    let trimmed = prompt.trim();
-    trimmed == "/compress" || trimmed == "/compact" || trimmed.starts_with("/compact ")
-}
-
-/// Parse a tool name string to ToolName enum.
-fn parse_tool_name(name: &str) -> Result<ToolName> {
-    match name {
-        "gemini-cli" => Ok(ToolName::GeminiCli),
-        "opencode" => Ok(ToolName::Opencode),
-        "codex" => Ok(ToolName::Codex),
-        "claude-code" => Ok(ToolName::ClaudeCode),
-        _ => anyhow::bail!("Unknown tool: {}", name),
-    }
-}
-
-/// Truncate a string to max_len characters, adding "..." if truncated
-fn truncate_prompt(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
-        s.to_string()
-    } else {
-        // Find a good break point (preferably a space)
-        let truncate_at = max_len.saturating_sub(3);
-        let substring = &s[..truncate_at.min(s.len())];
-
-        // Try to break at last space if possible
-        if let Some(last_space) = substring.rfind(' ') {
-            if last_space > truncate_at / 2 {
-                return format!("{}...", &substring[..last_space]);
-            }
-        }
-
-        format!("{}...", substring)
-    }
-}
-
-/// Parse token usage from tool output (best-effort, returns None on failure)
-///
-/// Looks for common patterns in stdout/stderr:
-/// - "tokens: N" or "Tokens: N" or "total_tokens: N"
-/// - "input_tokens: N" / "output_tokens: N"
-/// - "cost: $N.NN" or "estimated_cost: $N.NN"
-fn parse_token_usage(output: &str) -> Option<TokenUsage> {
-    let mut usage = TokenUsage::default();
-    let mut found_any = false;
-
-    // Simple pattern matching without regex
-    for line in output.lines() {
-        let line_lower = line.to_lowercase();
-
-        // Parse input_tokens
-        if let Some(pos) = line_lower.find("input_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.input_tokens = Some(val);
-                found_any = true;
-            }
-        }
-
-        // Parse output_tokens
-        if let Some(pos) = line_lower.find("output_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.output_tokens = Some(val);
-                found_any = true;
-            }
-        }
-
-        // Parse total_tokens
-        if let Some(pos) = line_lower.find("total_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.total_tokens = Some(val);
-                found_any = true;
-            }
-        } else if let Some(pos) = line_lower.find("tokens:") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.total_tokens = Some(val);
-                found_any = true;
-            }
-        }
-
-        // Parse cost (look for "$N.NN" pattern)
-        if line_lower.contains("cost") {
-            if let Some(val) = extract_cost(line) {
-                usage.estimated_cost_usd = Some(val);
-                found_any = true;
-            }
-        }
-    }
-
-    // Calculate total_tokens if not found but input/output are available
-    if usage.total_tokens.is_none() {
-        if let (Some(input), Some(output)) = (usage.input_tokens, usage.output_tokens) {
-            usage.total_tokens = Some(input + output);
-            found_any = true;
-        }
-    }
-
-    if found_any {
-        Some(usage)
-    } else {
-        None
-    }
-}
-
-/// Extract a number after colon or equals sign
-fn extract_number(text: &str) -> Option<u64> {
-    // Find colon or equals
-    let start = text.find(':')?;
-    let after_colon = &text[start + 1..];
-
-    // Take first word after colon
-    let num_str: String = after_colon
-        .chars()
-        .skip_while(|c| c.is_whitespace())
-        .take_while(|c| c.is_ascii_digit())
-        .collect();
-
-    num_str.parse().ok()
-}
-
-/// Extract cost value after $ sign
-fn extract_cost(text: &str) -> Option<f64> {
-    let start = text.find('$')?;
-    let after_dollar = &text[start + 1..];
-
-    // Take digits and decimal point
-    let num_str: String = after_dollar
-        .chars()
-        .take_while(|c| c.is_ascii_digit() || *c == '.')
-        .collect();
-
-    num_str.parse().ok()
 }
