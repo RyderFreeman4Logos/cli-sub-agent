@@ -174,3 +174,8 @@ install:
     CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/cli-sub-agent
     @echo "Verifying installation..."
     @csa --version
+
+# Generate CHANGELOG.md from Conventional Commits (requires git-cliff).
+changelog:
+    git cliff --output CHANGELOG.md
+    @echo "CHANGELOG.md updated"
