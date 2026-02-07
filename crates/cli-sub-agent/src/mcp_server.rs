@@ -2,8 +2,11 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::io::{BufRead, Write};
+use tempfile::TempDir;
 use tracing::{debug, error, info};
 
+use csa_config::ProjectConfig;
+use csa_core::types::ToolName;
 use csa_session::{delete_session, list_sessions};
 
 /// MCP server implementation
@@ -145,7 +148,7 @@ fn get_tools() -> Vec<McpToolDef> {
         },
         McpToolDef {
             name: "csa_run".to_string(),
-            description: "Execute a task using CSA (currently requires CLI usage)".to_string(),
+            description: "Execute a task using CSA".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -156,6 +159,18 @@ fn get_tools() -> Vec<McpToolDef> {
                     "prompt": {
                         "type": "string",
                         "description": "Task prompt"
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": "Session ID to resume (optional)"
+                    },
+                    "model_spec": {
+                        "type": "string",
+                        "description": "Model specification in format tool:model (optional)"
+                    },
+                    "ephemeral": {
+                        "type": "boolean",
+                        "description": "Run without persistent session (optional)"
                     }
                 },
                 "required": ["prompt"]
@@ -409,17 +424,164 @@ async fn handle_gc_tool(args: Value) -> Result<Value> {
 }
 
 /// Handle csa_run tool
-async fn handle_run_tool(_args: Value) -> Result<Value> {
+async fn handle_run_tool(args: Value) -> Result<Value> {
+    // Extract arguments
+    let tool_str = args.get("tool").and_then(|v| v.as_str());
+    let prompt = args
+        .get("prompt")
+        .and_then(|v| v.as_str())
+        .context("Missing prompt argument")?;
+    let session_arg = args
+        .get("session")
+        .and_then(|v| v.as_str())
+        .map(String::from);
+    let model_spec = args.get("model_spec").and_then(|v| v.as_str());
+    let ephemeral = args
+        .get("ephemeral")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Parse tool if provided
+    let tool = if let Some(tool_str) = tool_str {
+        Some(parse_tool_name(tool_str)?)
+    } else {
+        None
+    };
+
+    // Determine project root
+    let project_root = crate::determine_project_root(None)?;
+
+    // Load config
+    let config = ProjectConfig::load(&project_root)?;
+
+    // Check recursion depth
+    let current_depth: u32 = std::env::var("CSA_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let max_depth = config
+        .as_ref()
+        .map(|c| c.project.max_recursion_depth)
+        .unwrap_or(5u32);
+
+    if current_depth > max_depth {
+        return Ok(serde_json::json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": format!(
+                        "Error: Max recursion depth ({}) exceeded. Current: {}",
+                        max_depth, current_depth
+                    )
+                }
+            ]
+        }));
+    }
+
+    // Resolve tool and model
+    let (resolved_tool, resolved_model_spec, resolved_model) =
+        crate::resolve_tool_and_model(tool, model_spec, None, config.as_ref())?;
+
+    // Build executor
+    let executor = crate::build_executor(
+        &resolved_tool,
+        resolved_model_spec.as_deref(),
+        resolved_model.as_deref(),
+        None,
+    )?;
+
+    // Check tool is installed
+    if csa_process::check_tool_installed(executor.executable_name())
+        .await
+        .is_err()
+    {
+        return Ok(serde_json::json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": format!(
+                        "Error: Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml",
+                        executor.tool_name(),
+                        executor.install_hint()
+                    )
+                }
+            ]
+        }));
+    }
+
+    // Check tool is enabled in config
+    if let Some(ref cfg) = config {
+        if !cfg.is_tool_enabled(executor.tool_name()) {
+            return Ok(serde_json::json!({
+                "content": [
+                    {
+                        "type": "text",
+                        "text": format!(
+                            "Error: Tool '{}' is disabled in project config",
+                            executor.tool_name()
+                        )
+                    }
+                ]
+            }));
+        }
+    }
+
+    // Execute
+    let result = if ephemeral {
+        // Ephemeral: use temp directory
+        let temp_dir = TempDir::new()?;
+        executor.execute_in(prompt, temp_dir.path()).await?
+    } else {
+        // Persistent session
+        crate::execute_with_session(
+            &executor,
+            &resolved_tool,
+            prompt,
+            session_arg.clone(),
+            None, // description
+            None, // parent
+            &project_root,
+            config.as_ref(),
+        )
+        .await?
+    };
+
+    // Format response
+    let mut response_text = result.output.clone();
+
+    // Add metadata section
+    response_text.push_str("\n\n--- Execution Metadata ---\n");
+    if !ephemeral {
+        if let Some(ref sid) = session_arg {
+            response_text.push_str(&format!("Session ID: {}\n", sid));
+        } else {
+            // For new sessions, we don't have the session ID here
+            // since execute_with_session doesn't return it
+            response_text.push_str("Session ID: (new session created)\n");
+        }
+    }
+    response_text.push_str(&format!("Tool: {}\n", executor.tool_name()));
+    response_text.push_str(&format!("Exit Code: {}\n", result.exit_code));
+
     Ok(serde_json::json!({
         "content": [
             {
                 "type": "text",
-                "text": "csa_run is not yet implemented in MCP mode.\n\
-                        For task execution, please use the CLI directly:\n\
-                        csa run --tool <tool> \"your prompt here\""
+                "text": response_text
             }
         ]
     }))
+}
+
+/// Parse tool name from string
+fn parse_tool_name(tool_str: &str) -> Result<ToolName> {
+    match tool_str {
+        "gemini-cli" => Ok(ToolName::GeminiCli),
+        "opencode" => Ok(ToolName::Opencode),
+        "codex" => Ok(ToolName::Codex),
+        "claude-code" => Ok(ToolName::ClaudeCode),
+        _ => anyhow::bail!("Unknown tool: {}", tool_str),
+    }
 }
 
 /// Write JSON-RPC response to stdout
