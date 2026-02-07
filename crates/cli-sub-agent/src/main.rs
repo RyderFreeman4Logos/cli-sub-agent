@@ -14,8 +14,9 @@ mod gc;
 mod mcp_server;
 mod review_cmd;
 mod session_cmds;
+mod skill_cmds;
 
-use cli::{Cli, Commands, ConfigCommands, SessionCommands};
+use cli::{Cli, Commands, ConfigCommands, SessionCommands, SkillCommands};
 use csa_config::{init_project, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{create_session_log_writer, Executor, ModelSpec};
@@ -132,6 +133,14 @@ async fn main() -> Result<()> {
         Commands::McpServer => {
             mcp_server::run_mcp_server().await?;
         }
+        Commands::Skill { cmd } => match cmd {
+            SkillCommands::Install { source, target } => {
+                skill_cmds::handle_skill_install(source, target)?;
+            }
+            SkillCommands::List => {
+                skill_cmds::handle_skill_list()?;
+            }
+        },
     }
 
     Ok(())

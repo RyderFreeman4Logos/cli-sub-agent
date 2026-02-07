@@ -113,6 +113,12 @@ pub enum Commands {
 
     /// Run as MCP server (JSON-RPC over stdio)
     McpServer,
+
+    /// Manage skills (install, list)
+    Skill {
+        #[command(subcommand)]
+        cmd: SkillCommands,
+    },
 }
 
 #[derive(clap::Args)]
@@ -240,4 +246,20 @@ pub enum ConfigCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum SkillCommands {
+    /// Install skills from a GitHub repository
+    Install {
+        /// GitHub repo URL or user/repo format (e.g., "user/repo" or "https://github.com/user/repo")
+        source: String,
+
+        /// Target tool to install skills for (claude-code, codex, opencode). Defaults to claude-code.
+        #[arg(long)]
+        target: Option<String>,
+    },
+
+    /// List installed skills
+    List,
 }
