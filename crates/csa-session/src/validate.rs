@@ -48,7 +48,7 @@ pub fn resolve_session_prefix(sessions_dir: &Path, prefix: &str) -> Result<Strin
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
 
-        if name.starts_with(prefix) {
+        if name.to_uppercase().starts_with(&prefix.to_uppercase()) {
             matches.push(name.to_string());
         }
     }
@@ -149,5 +149,31 @@ mod tests {
 
         let result = resolve_session_prefix(&sessions_dir, "01HY7");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_prefix_case_insensitive() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = temp_dir.path();
+
+        std::fs::create_dir_all(sessions_dir.join("01HY7ABCDEFGHIJKLMNOPQRSTU")).unwrap();
+
+        // Lowercase prefix should match uppercase directory
+        let result = resolve_session_prefix(sessions_dir, "01hy7");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "01HY7ABCDEFGHIJKLMNOPQRSTU");
+    }
+
+    #[test]
+    fn test_resolve_prefix_mixed_case() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = temp_dir.path();
+
+        std::fs::create_dir_all(sessions_dir.join("01HY7ABCDEFGHIJKLMNOPQRSTU")).unwrap();
+
+        // Mixed case should also work
+        let result = resolve_session_prefix(sessions_dir, "01Hy7a");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), "01HY7ABCDEFGHIJKLMNOPQRSTU");
     }
 }

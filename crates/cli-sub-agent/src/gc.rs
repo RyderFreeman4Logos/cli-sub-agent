@@ -2,9 +2,14 @@ use anyhow::Result;
 use std::fs;
 use tracing::info;
 
+use csa_core::types::OutputFormat;
 use csa_session::{delete_session, get_session_dir, list_sessions};
 
-pub(crate) fn handle_gc(dry_run: bool, max_age_days: Option<u64>) -> Result<()> {
+pub(crate) fn handle_gc(
+    dry_run: bool,
+    max_age_days: Option<u64>,
+    format: OutputFormat,
+) -> Result<()> {
     let project_root = crate::determine_project_root(None)?;
     let sessions = list_sessions(&project_root, None)?;
     let now = chrono::Utc::now();
@@ -115,27 +120,43 @@ pub(crate) fn handle_gc(dry_run: bool, max_age_days: Option<u64>) -> Result<()> 
         }
     }
 
-    let prefix = if dry_run { "[dry-run] " } else { "" };
-    eprintln!(
-        "{}Garbage collection {}:",
-        prefix,
-        if dry_run { "preview" } else { "complete" }
-    );
-    eprintln!("{}  Stale locks removed: {}", prefix, stale_locks_removed);
-    eprintln!(
-        "{}  Empty sessions removed: {}",
-        prefix, empty_sessions_removed
-    );
-    if max_age_days.is_some() {
-        eprintln!(
-            "{}  Expired sessions removed: {}",
-            prefix, expired_sessions_removed
-        );
+    match format {
+        OutputFormat::Json => {
+            let mut summary = serde_json::json!({
+                "dry_run": dry_run,
+                "stale_locks_removed": stale_locks_removed,
+                "empty_sessions_removed": empty_sessions_removed,
+                "orphan_dirs_removed": orphan_dirs_removed,
+            });
+            if max_age_days.is_some() {
+                summary["expired_sessions_removed"] = serde_json::json!(expired_sessions_removed);
+            }
+            println!("{}", serde_json::to_string_pretty(&summary)?);
+        }
+        OutputFormat::Text => {
+            let prefix = if dry_run { "[dry-run] " } else { "" };
+            eprintln!(
+                "{}Garbage collection {}:",
+                prefix,
+                if dry_run { "preview" } else { "complete" }
+            );
+            eprintln!("{}  Stale locks removed: {}", prefix, stale_locks_removed);
+            eprintln!(
+                "{}  Empty sessions removed: {}",
+                prefix, empty_sessions_removed
+            );
+            if max_age_days.is_some() {
+                eprintln!(
+                    "{}  Expired sessions removed: {}",
+                    prefix, expired_sessions_removed
+                );
+            }
+            eprintln!(
+                "{}  Orphan directories removed: {}",
+                prefix, orphan_dirs_removed
+            );
+        }
     }
-    eprintln!(
-        "{}  Orphan directories removed: {}",
-        prefix, orphan_dirs_removed
-    );
 
     Ok(())
 }

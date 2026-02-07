@@ -2,14 +2,23 @@ use anyhow::Result;
 use tracing::{error, warn};
 
 use csa_config::{validate_config, ProjectConfig};
+use csa_core::types::OutputFormat;
 
-pub(crate) fn handle_config_show(cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {
     let project_root = crate::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
         .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
 
-    let toml_str = toml::to_string_pretty(&config)?;
-    print!("{}", toml_str);
+    match format {
+        OutputFormat::Json => {
+            let json_str = serde_json::to_string_pretty(&config)?;
+            println!("{}", json_str);
+        }
+        OutputFormat::Text => {
+            let toml_str = toml::to_string_pretty(&config)?;
+            print!("{}", toml_str);
+        }
+    }
     Ok(())
 }
 

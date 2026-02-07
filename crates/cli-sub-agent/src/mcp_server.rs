@@ -404,8 +404,8 @@ async fn handle_gc_tool(args: Value) -> Result<Value> {
         .unwrap_or(false);
     let max_age_days = args.get("max_age_days").and_then(|v| v.as_u64());
 
-    // Call gc logic
-    crate::gc::handle_gc(dry_run, max_age_days)?;
+    // Call gc logic (MCP server always uses Text format, response is wrapped in JSON-RPC)
+    crate::gc::handle_gc(dry_run, max_age_days, crate::OutputFormat::Text)?;
 
     let msg = if dry_run {
         "Garbage collection dry-run completed (see logs for details)"

@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::fs;
 use tracing::info;
 
+use csa_core::types::OutputFormat;
 use csa_session::{
     delete_session, get_session_dir, list_sessions, list_sessions_tree, load_session,
     resolve_session_prefix,
@@ -11,6 +12,7 @@ pub(crate) fn handle_session_list(
     cd: Option<String>,
     tool: Option<String>,
     tree: bool,
+    format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::determine_project_root(cd.as_deref())?;
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
@@ -21,72 +23,101 @@ pub(crate) fn handle_session_list(
     } else {
         let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
         if sessions.is_empty() {
-            eprintln!("No sessions found.");
+            match format {
+                OutputFormat::Json => {
+                    println!("[]");
+                }
+                OutputFormat::Text => {
+                    eprintln!("No sessions found.");
+                }
+            }
             return Ok(());
         }
-        // Print table header
-        println!(
-            "{:<11}  {:<19}  {:<30}  {:<20}  TOKENS",
-            "SESSION", "LAST ACCESSED", "DESCRIPTION", "TOOLS"
-        );
-        println!("{}", "-".repeat(100));
-        for session in sessions {
-            // Truncate ULID to 11 chars for readability
-            let short_id = &session.meta_session_id[..11.min(session.meta_session_id.len())];
-            let desc = session
-                .description
-                .as_deref()
-                .filter(|d| !d.is_empty())
-                .unwrap_or("-");
-            // Truncate description to 30 chars
-            let desc_display = if desc.len() > 30 {
-                format!("{}...", &desc[..27])
-            } else {
-                desc.to_string()
-            };
-            let tools: Vec<&String> = session.tools.keys().collect();
-            let tools_str = if tools.is_empty() {
-                "-".to_string()
-            } else {
-                tools
+
+        match format {
+            OutputFormat::Json => {
+                // Serialize sessions as JSON array
+                let json_sessions: Vec<_> = sessions
                     .iter()
-                    .map(|t| t.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            };
+                    .map(|s| {
+                        serde_json::json!({
+                            "session_id": s.meta_session_id,
+                            "last_accessed": s.last_accessed,
+                            "description": s.description.as_deref().unwrap_or(""),
+                            "tools": s.tools.keys().collect::<Vec<_>>(),
+                            "total_token_usage": s.total_token_usage,
+                        })
+                    })
+                    .collect();
+                println!("{}", serde_json::to_string_pretty(&json_sessions)?);
+            }
+            OutputFormat::Text => {
+                // Print table header
+                println!(
+                    "{:<11}  {:<19}  {:<30}  {:<20}  TOKENS",
+                    "SESSION", "LAST ACCESSED", "DESCRIPTION", "TOOLS"
+                );
+                println!("{}", "-".repeat(100));
+                for session in sessions {
+                    // Truncate ULID to 11 chars for readability
+                    let short_id =
+                        &session.meta_session_id[..11.min(session.meta_session_id.len())];
+                    let desc = session
+                        .description
+                        .as_deref()
+                        .filter(|d| !d.is_empty())
+                        .unwrap_or("-");
+                    // Truncate description to 30 chars
+                    let desc_display = if desc.len() > 30 {
+                        format!("{}...", &desc[..27])
+                    } else {
+                        desc.to_string()
+                    };
+                    let tools: Vec<&String> = session.tools.keys().collect();
+                    let tools_str = if tools.is_empty() {
+                        "-".to_string()
+                    } else {
+                        tools
+                            .iter()
+                            .map(|t| t.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    };
 
-            // Format token usage
-            let tokens_str = if let Some(ref usage) = session.total_token_usage {
-                if let Some(total) = usage.total_tokens {
-                    if let Some(cost) = usage.estimated_cost_usd {
-                        format!("{}tok ${:.4}", total, cost)
+                    // Format token usage
+                    let tokens_str = if let Some(ref usage) = session.total_token_usage {
+                        if let Some(total) = usage.total_tokens {
+                            if let Some(cost) = usage.estimated_cost_usd {
+                                format!("{}tok ${:.4}", total, cost)
+                            } else {
+                                format!("{}tok", total)
+                            }
+                        } else if let (Some(input), Some(output)) =
+                            (usage.input_tokens, usage.output_tokens)
+                        {
+                            let total = input + output;
+                            if let Some(cost) = usage.estimated_cost_usd {
+                                format!("{}tok ${:.4}", total, cost)
+                            } else {
+                                format!("{}tok", total)
+                            }
+                        } else {
+                            "-".to_string()
+                        }
                     } else {
-                        format!("{}tok", total)
-                    }
-                } else if let (Some(input), Some(output)) =
-                    (usage.input_tokens, usage.output_tokens)
-                {
-                    let total = input + output;
-                    if let Some(cost) = usage.estimated_cost_usd {
-                        format!("{}tok ${:.4}", total, cost)
-                    } else {
-                        format!("{}tok", total)
-                    }
-                } else {
-                    "-".to_string()
+                        "-".to_string()
+                    };
+
+                    println!(
+                        "{:<11}  {:<19}  {:<30}  {:<20}  {}",
+                        short_id,
+                        session.last_accessed.format("%Y-%m-%d %H:%M"),
+                        desc_display,
+                        tools_str,
+                        tokens_str,
+                    );
                 }
-            } else {
-                "-".to_string()
-            };
-
-            println!(
-                "{:<11}  {:<19}  {:<30}  {:<20}  {}",
-                short_id,
-                session.last_accessed.format("%Y-%m-%d %H:%M"),
-                desc_display,
-                tools_str,
-                tokens_str,
-            );
+            }
         }
     }
 

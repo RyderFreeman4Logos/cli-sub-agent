@@ -82,7 +82,7 @@ async fn main() -> Result<()> {
         }
         Commands::Session { cmd } => match cmd {
             SessionCommands::List { cd, tool, tree } => {
-                session_cmds::handle_session_list(cd, tool, tree)?;
+                session_cmds::handle_session_list(cd, tool, tree, output_format)?;
             }
             SessionCommands::Compress { session, cd } => {
                 session_cmds::handle_session_compress(session, cd)?;
@@ -112,11 +112,11 @@ async fn main() -> Result<()> {
             dry_run,
             max_age_days,
         } => {
-            gc::handle_gc(dry_run, max_age_days)?;
+            gc::handle_gc(dry_run, max_age_days, output_format)?;
         }
         Commands::Config { cmd } => match cmd {
             ConfigCommands::Show { cd } => {
-                config_cmds::handle_config_show(cd)?;
+                config_cmds::handle_config_show(cd, output_format)?;
             }
             ConfigCommands::Edit { cd } => {
                 config_cmds::handle_config_edit(cd)?;
