@@ -17,6 +17,7 @@ csa-executor = { path = "crates/csa-executor" }
 csa-process = { path = "crates/csa-process" }
 csa-config = { path = "crates/csa-config" }
 csa-resource = { path = "crates/csa-resource" }
+csa-scheduler = { path = "crates/csa-scheduler" }
 
 # CLI & Async
 clap = { version = "4.5", features = ["derive"] }

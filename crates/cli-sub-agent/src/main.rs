@@ -224,6 +224,7 @@ async fn handle_run(
         model_spec.as_deref(),
         model.as_deref(),
         config.as_ref(),
+        &project_root,
     )?;
 
     // 7. Build executor
@@ -562,6 +563,7 @@ fn resolve_tool_and_model(
     model_spec: Option<&str>,
     model: Option<&str>,
     config: Option<&ProjectConfig>,
+    project_root: &Path,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
@@ -586,17 +588,18 @@ fn resolve_tool_and_model(
         return Ok((tool_name, None, resolved_model));
     }
 
-    // Case 3: neither tool nor model_spec → use tier-based auto-selection
+    // Case 3: neither tool nor model_spec → use round-robin tier-based selection
     if let Some(cfg) = config {
+        // Try round-robin rotation first (needs project root to persist state)
+        if let Ok(Some((tool_name_str, tier_model_spec))) =
+            csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, false)
+        {
+            let tool_name = parse_tool_name(&tool_name_str)?;
+            return Ok((tool_name, Some(tier_model_spec), None));
+        }
+        // Fallback: original non-rotating selection
         if let Some((tool_name_str, tier_model_spec)) = cfg.resolve_tier_tool("default") {
-            let tool_name = match tool_name_str.as_str() {
-                "gemini-cli" => ToolName::GeminiCli,
-                "opencode" => ToolName::Opencode,
-                "codex" => ToolName::Codex,
-                "claude-code" => ToolName::ClaudeCode,
-                _ => anyhow::bail!("Unknown tool from tier: {}", tool_name_str),
-            };
-            // Use tier's model_spec
+            let tool_name = parse_tool_name(&tool_name_str)?;
             return Ok((tool_name, Some(tier_model_spec), None));
         }
     }
@@ -639,6 +642,17 @@ pub(crate) fn build_executor(
         }
 
         Ok(Executor::from_tool_name(tool, final_model))
+    }
+}
+
+/// Parse a tool name string to ToolName enum.
+fn parse_tool_name(name: &str) -> Result<ToolName> {
+    match name {
+        "gemini-cli" => Ok(ToolName::GeminiCli),
+        "opencode" => Ok(ToolName::Opencode),
+        "codex" => Ok(ToolName::Codex),
+        "claude-code" => Ok(ToolName::ClaudeCode),
+        _ => anyhow::bail!("Unknown tool: {}", name),
     }
 }
 

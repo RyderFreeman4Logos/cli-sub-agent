@@ -97,6 +97,8 @@ pub(crate) fn create_session_in(
         tools: HashMap::new(),
         context_status: Default::default(),
         total_token_usage: None,
+        phase: Default::default(),
+        task_context: Default::default(),
     };
 
     // Write state file
@@ -251,6 +253,8 @@ pub(crate) fn list_all_sessions_in(base_dir: &Path) -> Result<Vec<MetaSessionSta
                         tools: std::collections::HashMap::new(),
                         context_status: Default::default(),
                         total_token_usage: None,
+                        phase: Default::default(),
+                        task_context: Default::default(),
                     };
 
                     // Save minimal state

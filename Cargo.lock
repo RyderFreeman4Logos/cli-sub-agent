@@ -183,6 +183,7 @@ dependencies = [
  "csa-lock",
  "csa-process",
  "csa-resource",
+ "csa-scheduler",
  "csa-session",
  "directories",
  "libc",
@@ -319,6 +320,24 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+]
+
+[[package]]
+name = "csa-scheduler"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "csa-config",
+ "csa-core",
+ "csa-lock",
+ "csa-session",
+ "libc",
+ "regex",
+ "serde",
+ "tempfile",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

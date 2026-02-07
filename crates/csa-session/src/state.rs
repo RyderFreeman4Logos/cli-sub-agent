@@ -37,6 +37,14 @@ pub struct MetaSessionState {
     /// Cumulative token usage across all tools in this session
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub total_token_usage: Option<TokenUsage>,
+
+    /// Lifecycle phase of this session.
+    #[serde(default)]
+    pub phase: SessionPhase,
+
+    /// Context about the task this session is working on.
+    #[serde(default)]
+    pub task_context: TaskContext,
 }
 
 /// Genealogy tracking for session parent-child relationships
@@ -99,4 +107,28 @@ pub struct ContextStatus {
 
     /// When the context was last compacted (if ever)
     pub last_compacted_at: Option<DateTime<Utc>>,
+}
+
+/// Session lifecycle phase.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionPhase {
+    /// Currently executing or holding active context.
+    #[default]
+    Active,
+    /// Compacted and ready to accept a new task.
+    Available,
+    /// Lifecycle complete — no longer eligible for reuse.
+    Retired,
+}
+
+/// Lightweight context about what the session was doing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TaskContext {
+    /// Kind of task (e.g. "review", "implement", "fix", "default").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task_type: Option<String>,
+    /// Which tier this session was allocated from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier_name: Option<String>,
 }

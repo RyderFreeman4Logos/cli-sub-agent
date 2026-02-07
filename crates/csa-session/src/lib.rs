@@ -6,7 +6,9 @@ pub mod state;
 pub mod validate;
 
 // Re-export key types
-pub use state::{ContextStatus, Genealogy, MetaSessionState, TokenUsage, ToolState};
+pub use state::{
+    ContextStatus, Genealogy, MetaSessionState, SessionPhase, TaskContext, TokenUsage, ToolState,
+};
 
 // Re-export manager functions
 pub use manager::{

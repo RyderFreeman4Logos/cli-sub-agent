@@ -32,4 +32,10 @@ pub enum AppError {
 
     #[error("Insufficient memory: available {available_mb} MB, need {required_mb} MB")]
     InsufficientMemory { available_mb: u64, required_mb: u64 },
+
+    #[error("Rate limited by tool '{tool}': {message}")]
+    RateLimited { tool: String, message: String },
+
+    #[error("All tools in tier '{tier}' exhausted")]
+    TierExhausted { tier: String },
 }

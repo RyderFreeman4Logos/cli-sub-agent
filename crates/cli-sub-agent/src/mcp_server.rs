@@ -480,7 +480,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
 
     // Resolve tool and model
     let (resolved_tool, resolved_model_spec, resolved_model) =
-        crate::resolve_tool_and_model(tool, model_spec, None, config.as_ref())?;
+        crate::resolve_tool_and_model(tool, model_spec, None, config.as_ref(), &project_root)?;
 
     // Build executor
     let executor = crate::build_executor(

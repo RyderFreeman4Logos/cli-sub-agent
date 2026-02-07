@@ -17,6 +17,7 @@ csa-executor.workspace = true
 csa-process.workspace = true
 csa-config.workspace = true
 csa-resource.workspace = true
+csa-scheduler.workspace = true
 clap.workspace = true
 tokio.workspace = true
 libc.workspace = true
