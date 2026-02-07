@@ -13,6 +13,7 @@ mod doctor;
 mod gc;
 mod mcp_server;
 mod review_cmd;
+mod self_update;
 mod session_cmds;
 mod setup_cmds;
 mod skill_cmds;
@@ -156,6 +157,9 @@ async fn main() -> Result<()> {
                 setup_cmds::handle_setup_opencode()?;
             }
         },
+        Commands::SelfUpdate { check } => {
+            self_update::handle_self_update(check)?;
+        }
     }
 
     Ok(())

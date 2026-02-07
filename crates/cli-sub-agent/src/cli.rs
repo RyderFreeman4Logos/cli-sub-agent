@@ -129,6 +129,13 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: SetupCommands,
     },
+
+    /// Update CSA to the latest release
+    SelfUpdate {
+        /// Check for updates without installing
+        #[arg(long)]
+        check: bool,
+    },
 }
 
 #[derive(clap::Args)]
