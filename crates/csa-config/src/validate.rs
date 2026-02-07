@@ -93,7 +93,9 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig};
+    use crate::config::{
+        ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, CURRENT_SCHEMA_VERSION,
+    };
     use chrono::Utc;
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -124,6 +126,7 @@ mod tests {
         tier_mapping.insert("security_audit".to_string(), "tier-1-quick".to_string());
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "test-project".to_string(),
                 created_at: Utc::now(),
@@ -147,6 +150,7 @@ mod tests {
         let dir = tempdir().unwrap();
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "".to_string(),
                 created_at: Utc::now(),
@@ -180,6 +184,7 @@ mod tests {
         );
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "test".to_string(),
                 created_at: Utc::now(),
@@ -213,6 +218,7 @@ mod tests {
         );
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "test".to_string(),
                 created_at: Utc::now(),
@@ -252,6 +258,7 @@ mod tests {
         tier_mapping.insert("security_audit".to_string(), "nonexistent-tier".to_string());
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "test".to_string(),
                 created_at: Utc::now(),
@@ -299,6 +306,7 @@ mod tests {
         );
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "test".to_string(),
                 created_at: Utc::now(),
@@ -338,6 +346,7 @@ mod tests {
         tier_mapping.insert("analysis".to_string(), "my-custom-tier".to_string());
 
         let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: "test".to_string(),
                 created_at: Utc::now(),

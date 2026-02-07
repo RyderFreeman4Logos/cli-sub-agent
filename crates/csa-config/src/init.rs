@@ -5,6 +5,7 @@ use std::path::Path;
 
 use crate::config::{
     ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, ToolRestrictions,
+    CURRENT_SCHEMA_VERSION,
 };
 
 /// Detect which tools are installed on the system
@@ -153,6 +154,7 @@ pub fn init_project(
     let config = if minimal {
         // Minimal config: only project + tools, use built-in defaults for everything else
         ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: project_name,
                 created_at: Utc::now(),
@@ -172,6 +174,7 @@ pub fn init_project(
         initial_estimates.insert("claude-code".to_string(), 1200);
 
         ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
                 name: project_name,
                 created_at: Utc::now(),
