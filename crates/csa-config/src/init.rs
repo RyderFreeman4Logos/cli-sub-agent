@@ -19,6 +19,89 @@ pub fn detect_installed_tools() -> Vec<&'static str> {
         .collect()
 }
 
+/// Build smart tier configuration based on installed tools.
+///
+/// Assigns tools to tiers based on their characteristics:
+/// - tier-1-quick: Fast, cheap (gemini-cli flash > codex sonnet > opencode sonnet > claude-code sonnet)
+/// - tier-2-standard: Balanced (codex sonnet > claude-code sonnet > opencode sonnet > gemini-cli pro)
+/// - tier-3-complex: Deep reasoning (claude-code opus > codex opus > opencode opus > gemini-cli pro)
+///
+/// If no tools are installed, falls back to gemini-cli with all tiers disabled.
+fn build_smart_tiers(installed: &[&str]) -> HashMap<String, TierConfig> {
+    let mut tiers = HashMap::new();
+
+    // Helper to check if a tool is installed
+    let has_tool = |name: &str| installed.contains(&name);
+
+    // tier-1-quick: Fast, cheap
+    let tier1_model = if has_tool("gemini-cli") {
+        "gemini-cli/google/gemini-3-flash-preview/xhigh"
+    } else if has_tool("codex") {
+        "codex/anthropic/claude-sonnet-4-5-20250929/default"
+    } else if has_tool("opencode") {
+        "opencode/anthropic/claude-sonnet-4-5-20250929/default"
+    } else if has_tool("claude-code") {
+        "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
+    } else {
+        // Fallback: gemini-cli (will be disabled)
+        "gemini-cli/google/gemini-3-flash-preview/xhigh"
+    };
+
+    tiers.insert(
+        "tier-1-quick".to_string(),
+        TierConfig {
+            description: "Quick tasks, low cost".to_string(),
+            models: vec![tier1_model.to_string()],
+        },
+    );
+
+    // tier-2-standard: Balanced
+    let tier2_model = if has_tool("codex") {
+        "codex/anthropic/claude-sonnet-4-5-20250929/default"
+    } else if has_tool("claude-code") {
+        "claude-code/anthropic/claude-sonnet-4-5-20250929/default"
+    } else if has_tool("opencode") {
+        "opencode/anthropic/claude-sonnet-4-5-20250929/default"
+    } else if has_tool("gemini-cli") {
+        "gemini-cli/google/gemini-3-pro-preview/xhigh"
+    } else {
+        // Fallback: gemini-cli (will be disabled)
+        "gemini-cli/google/gemini-3-pro-preview/xhigh"
+    };
+
+    tiers.insert(
+        "tier-2-standard".to_string(),
+        TierConfig {
+            description: "Standard development tasks".to_string(),
+            models: vec![tier2_model.to_string()],
+        },
+    );
+
+    // tier-3-complex: Deep reasoning
+    let tier3_model = if has_tool("claude-code") {
+        "claude-code/anthropic/claude-opus-4-6/default"
+    } else if has_tool("codex") {
+        "codex/anthropic/claude-opus-4-6/default"
+    } else if has_tool("opencode") {
+        "opencode/anthropic/claude-opus-4-6/default"
+    } else if has_tool("gemini-cli") {
+        "gemini-cli/google/gemini-3-pro-preview/xhigh"
+    } else {
+        // Fallback: gemini-cli (will be disabled)
+        "gemini-cli/google/gemini-3-pro-preview/xhigh"
+    };
+
+    tiers.insert(
+        "tier-3-complex".to_string(),
+        TierConfig {
+            description: "Complex reasoning, architecture, deep analysis, code review".to_string(),
+            models: vec![tier3_model.to_string()],
+        },
+    );
+
+    tiers
+}
+
 /// Initialize project configuration.
 /// If non_interactive is true, generate default config with detected tools.
 /// Returns the generated config.
@@ -74,32 +157,12 @@ pub fn init_project(project_root: &Path, non_interactive: bool) -> Result<Projec
     initial_estimates.insert("codex".to_string(), 800);
     initial_estimates.insert("claude-code".to_string(), 1200);
 
-    // Default tiers with TierConfig
-    let mut tiers = HashMap::new();
-    tiers.insert(
-        "tier-1-quick".to_string(),
-        TierConfig {
-            description: "Quick tasks, low cost".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
-        },
-    );
-    tiers.insert(
-        "tier-2-standard".to_string(),
-        TierConfig {
-            description: "Standard development tasks".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-pro-preview/xhigh".to_string()],
-        },
-    );
-    tiers.insert(
-        "tier-3-complex".to_string(),
-        TierConfig {
-            description: "Complex reasoning, architecture, deep analysis, code review".to_string(),
-            models: vec!["gemini-cli/google/gemini-3-pro-preview/xhigh".to_string()],
-        },
-    );
+    // Build smart tiers based on detected tools
+    let tiers = build_smart_tiers(&installed);
 
     // Default tier mapping
     let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier-2-standard".to_string());
     tier_mapping.insert("security_audit".to_string(), "tier-3-complex".to_string());
     tier_mapping.insert(
         "architecture_design".to_string(),
@@ -250,5 +313,120 @@ mod tests {
         for tool in &tools {
             assert!(["gemini-cli", "opencode", "codex", "claude-code"].contains(tool));
         }
+    }
+
+    #[test]
+    fn test_smart_tiers_with_multiple_tools() {
+        // Simulate a system with codex, gemini-cli, and claude-code installed
+        let installed = vec!["codex", "gemini-cli", "claude-code"];
+        let tiers = build_smart_tiers(&installed);
+
+        // Verify all tiers are created
+        assert_eq!(tiers.len(), 3);
+        assert!(tiers.contains_key("tier-1-quick"));
+        assert!(tiers.contains_key("tier-2-standard"));
+        assert!(tiers.contains_key("tier-3-complex"));
+
+        // tier-1-quick should prefer gemini-cli flash (fast, cheap)
+        let tier1 = tiers.get("tier-1-quick").unwrap();
+        assert_eq!(tier1.models.len(), 1);
+        assert_eq!(
+            tier1.models[0],
+            "gemini-cli/google/gemini-3-flash-preview/xhigh"
+        );
+
+        // tier-2-standard should prefer codex sonnet (balanced)
+        let tier2 = tiers.get("tier-2-standard").unwrap();
+        assert_eq!(tier2.models.len(), 1);
+        assert_eq!(
+            tier2.models[0],
+            "codex/anthropic/claude-sonnet-4-5-20250929/default"
+        );
+
+        // tier-3-complex should prefer claude-code opus (deep reasoning)
+        let tier3 = tiers.get("tier-3-complex").unwrap();
+        assert_eq!(tier3.models.len(), 1);
+        assert_eq!(
+            tier3.models[0],
+            "claude-code/anthropic/claude-opus-4-6/default"
+        );
+
+        // Verify tier diversity: different tiers use different tools
+        let tier1_tool = tier1.models[0].split('/').next().unwrap();
+        let tier2_tool = tier2.models[0].split('/').next().unwrap();
+        let tier3_tool = tier3.models[0].split('/').next().unwrap();
+
+        assert_ne!(
+            tier1_tool, tier2_tool,
+            "tier-1 and tier-2 should use different tools"
+        );
+        assert_ne!(
+            tier2_tool, tier3_tool,
+            "tier-2 and tier-3 should use different tools"
+        );
+    }
+
+    #[test]
+    fn test_smart_tiers_with_only_gemini() {
+        // Simulate a system with only gemini-cli installed
+        let installed = vec!["gemini-cli"];
+        let tiers = build_smart_tiers(&installed);
+
+        // Verify all tiers are created
+        assert_eq!(tiers.len(), 3);
+
+        // All tiers should use gemini-cli
+        let tier1 = tiers.get("tier-1-quick").unwrap();
+        assert!(tier1.models[0].starts_with("gemini-cli/"));
+
+        let tier2 = tiers.get("tier-2-standard").unwrap();
+        assert!(tier2.models[0].starts_with("gemini-cli/"));
+
+        let tier3 = tiers.get("tier-3-complex").unwrap();
+        assert!(tier3.models[0].starts_with("gemini-cli/"));
+
+        // tier-1 should use flash variant
+        assert!(tier1.models[0].contains("flash"));
+
+        // tier-2 and tier-3 should use pro variant
+        assert!(tier2.models[0].contains("pro"));
+        assert!(tier3.models[0].contains("pro"));
+    }
+
+    #[test]
+    fn test_smart_tiers_with_no_tools() {
+        // Simulate a system with no tools installed
+        let installed: Vec<&str> = vec![];
+        let tiers = build_smart_tiers(&installed);
+
+        // Should still create all tiers with gemini-cli fallback
+        assert_eq!(tiers.len(), 3);
+
+        // All should fallback to gemini-cli
+        for tier_name in &["tier-1-quick", "tier-2-standard", "tier-3-complex"] {
+            let tier = tiers.get(*tier_name).unwrap();
+            assert!(
+                tier.models[0].starts_with("gemini-cli/"),
+                "Tier {} should fallback to gemini-cli",
+                tier_name
+            );
+        }
+    }
+
+    #[test]
+    fn test_init_project_creates_default_tier_mapping() {
+        let dir = tempdir().unwrap();
+        let config = init_project(dir.path(), true).unwrap();
+
+        // Verify 'default' mapping exists
+        assert!(
+            config.tier_mapping.contains_key("default"),
+            "'default' tier mapping should exist"
+        );
+        assert_eq!(
+            config.tier_mapping.get("default").unwrap(),
+            "tier-2-standard",
+            "'default' should map to 'tier-2-standard'"
+        );
     }
 }
