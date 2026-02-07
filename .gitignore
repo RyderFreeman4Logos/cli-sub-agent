@@ -66,7 +66,11 @@ system_prompt.rs.md
 .csa
 strix_runs
 .playwright-mcp/
-.claude
+# Claude Code config (ignore all except project skills)
+.claude/*
+!.claude/skills/
+.claude/skills/*
+!.claude/skills/csa/
 .factory
 .docker-*
 
