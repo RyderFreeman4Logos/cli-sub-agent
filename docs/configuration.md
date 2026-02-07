@@ -31,7 +31,6 @@ enabled = true
 
 [tools.gemini-cli.restrictions]
 allow_edit_existing_files = false
-allowed_operations = ["read", "analyze", "create"]
 
 [tools.codex]
 enabled = true
@@ -138,7 +137,6 @@ enabled = true
 
 [tools.gemini-cli.restrictions]
 allow_edit_existing_files = false
-allowed_operations = ["read", "analyze", "create"]
 ```
 
 **Fields:**
@@ -147,7 +145,6 @@ allowed_operations = ["read", "analyze", "create"]
 |-------|------|----------|---------|-------------|
 | `enabled` | Boolean | No | `true` | Whether this tool is available |
 | `restrictions.allow_edit_existing_files` | Boolean | No | `true` | Allow modifying existing files |
-| `restrictions.allowed_operations` | Array[String] | No | All | List of permitted operations |
 
 **Behavior:**
 - **Unconfigured tools:** Default to enabled with no restrictions
@@ -293,7 +290,6 @@ enabled = true
 
 [tools.gemini-cli.restrictions]
 allow_edit_existing_files = false
-allowed_operations = ["read", "analyze"]
 
 [tools.codex]
 enabled = false

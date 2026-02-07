@@ -131,12 +131,6 @@ pub fn init_project(
             enabled: installed.contains(&"gemini-cli"),
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
-                allowed_operations: vec![
-                    "web_search".to_string(),
-                    "read".to_string(),
-                    "analyze".to_string(),
-                    "create_new_file".to_string(),
-                ],
             }),
         };
         if !installed.contains(&"gemini-cli") {

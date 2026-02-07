@@ -53,8 +53,6 @@ fn default_true() -> bool {
 pub struct ToolRestrictions {
     #[serde(default)]
     pub allow_edit_existing_files: bool,
-    #[serde(default)]
-    pub allowed_operations: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -207,7 +205,6 @@ mod tests {
                 enabled: true,
                 restrictions: Some(ToolRestrictions {
                     allow_edit_existing_files: false,
-                    allowed_operations: vec!["read".to_string(), "analyze".to_string()],
                 }),
             },
         );
@@ -318,7 +315,6 @@ mod tests {
                 enabled: true,
                 restrictions: Some(ToolRestrictions {
                     allow_edit_existing_files: false,
-                    allowed_operations: vec![],
                 }),
             },
         );
