@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::fs;
 use tracing::info;
 
+use csa_config::GlobalConfig;
 use csa_core::types::OutputFormat;
 use csa_session::{delete_session, get_session_dir, list_sessions};
 
@@ -134,6 +135,51 @@ pub(crate) fn handle_gc(
         }
     }
 
+    // Clean stale slot files (global, not per-project)
+    let mut stale_slots_cleaned = 0;
+    if let Ok(slots_dir) = GlobalConfig::slots_dir() {
+        if slots_dir.exists() {
+            if let Ok(entries) = fs::read_dir(&slots_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                        let tool_dir = entry.path();
+                        // Check each slot file for stale PIDs
+                        if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
+                            for slot_entry in slot_entries.flatten() {
+                                let path = slot_entry.path();
+                                if path.extension().is_some_and(|ext| ext == "lock") {
+                                    if let Ok(content) = fs::read_to_string(&path) {
+                                        if let Some(pid) = extract_pid_from_lock(&content) {
+                                            if !is_process_alive(pid) {
+                                                if dry_run {
+                                                    eprintln!(
+                                                        "[dry-run] Would clean stale slot: {:?} (dead PID {})",
+                                                        path.file_name(), pid
+                                                    );
+                                                } else if fs::remove_file(&path).is_ok() {
+                                                    info!(
+                                                        "Cleaned stale slot: {:?} (dead PID {})",
+                                                        path.file_name(),
+                                                        pid
+                                                    );
+                                                }
+                                                stale_slots_cleaned += 1;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Remove empty tool directories
+                        if !dry_run {
+                            let _ = fs::remove_dir(&tool_dir); // only succeeds if empty
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     match format {
         OutputFormat::Json => {
             let mut summary = serde_json::json!({
@@ -141,6 +187,7 @@ pub(crate) fn handle_gc(
                 "stale_locks_removed": stale_locks_removed,
                 "empty_sessions_removed": empty_sessions_removed,
                 "orphan_dirs_removed": orphan_dirs_removed,
+                "stale_slots_cleaned": stale_slots_cleaned,
             });
             if max_age_days.is_some() {
                 summary["expired_sessions_removed"] = serde_json::json!(expired_sessions_removed);
@@ -169,6 +216,7 @@ pub(crate) fn handle_gc(
                 "{}  Orphan directories removed: {}",
                 prefix, orphan_dirs_removed
             );
+            eprintln!("{}  Stale slots cleaned: {}", prefix, stale_slots_cleaned);
         }
     }
 

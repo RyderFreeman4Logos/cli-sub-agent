@@ -520,6 +520,7 @@ async fn execute_task(
         std::env::var("CSA_SESSION_ID").ok(),  // parent
         project_root,
         config,
+        None, // extra_env (batch uses default env)
     )
     .await;
 

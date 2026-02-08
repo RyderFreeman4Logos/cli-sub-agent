@@ -251,6 +251,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "csa-core",
+ "directories",
  "serde",
  "tempfile",
  "toml",

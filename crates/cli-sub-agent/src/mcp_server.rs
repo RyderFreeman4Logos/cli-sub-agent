@@ -536,7 +536,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     let result = if ephemeral {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
-        executor.execute_in(prompt, temp_dir.path()).await?
+        executor.execute_in(prompt, temp_dir.path(), None).await?
     } else {
         // Persistent session
         crate::execute_with_session(
@@ -548,6 +548,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None, // parent
             &project_root,
             config.as_ref(),
+            None, // extra_env
         )
         .await?
     };

@@ -104,6 +104,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         None,
         &project_root,
         config.as_ref(),
+        None, // extra_env
     )
     .await?;
 
