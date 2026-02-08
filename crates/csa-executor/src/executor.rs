@@ -5,6 +5,7 @@ use csa_core::types::ToolName;
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::Path;
 use tokio::process::Command;
 
@@ -142,6 +143,13 @@ impl Executor {
         }
     }
 
+    /// Inject environment variables from global config into a Command.
+    pub fn inject_env(cmd: &mut Command, env_vars: &HashMap<String, String>) {
+        for (key, value) in env_vars {
+            cmd.env(key, value);
+        }
+    }
+
     /// Build a configured Command ready for execution.
     ///
     /// Returns the Command object without executing it, allowing caller to:
@@ -149,14 +157,18 @@ impl Executor {
     /// - Start resource monitoring
     /// - Wait for completion separately
     ///
-    /// This is useful when you need to monitor the child process (e.g., memory usage).
+    /// `extra_env`: optional environment variables to inject (e.g., API keys from GlobalConfig).
     pub fn build_command(
         &self,
         prompt: &str,
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
     ) -> Command {
         let mut cmd = self.build_base_command(session);
+        if let Some(env) = extra_env {
+            Self::inject_env(&mut cmd, env);
+        }
         self.append_tool_args(&mut cmd, prompt, tool_state);
         cmd
     }
@@ -167,15 +179,26 @@ impl Executor {
         prompt: &str,
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
     ) -> Result<ExecutionResult> {
-        let cmd = self.build_command(prompt, tool_state, session);
+        let cmd = self.build_command(prompt, tool_state, session, extra_env);
         csa_process::run_and_capture(cmd).await
     }
 
     /// Execute in a specific directory (for ephemeral sessions).
-    pub async fn execute_in(&self, prompt: &str, work_dir: &Path) -> Result<ExecutionResult> {
+    ///
+    /// `extra_env`: optional environment variables to inject (e.g., API keys from GlobalConfig).
+    pub async fn execute_in(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+    ) -> Result<ExecutionResult> {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
+        if let Some(env) = extra_env {
+            Self::inject_env(&mut cmd, env);
+        }
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
         self.append_prompt_args(&mut cmd, prompt);

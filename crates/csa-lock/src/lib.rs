@@ -9,6 +9,8 @@
 //! By calling `flock(2)` directly, we only need to own the `File` (which
 //! owns the fd). `Drop` calls `flock(fd, LOCK_UN)` to release.
 
+pub mod slot;
+
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

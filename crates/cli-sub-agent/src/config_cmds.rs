@@ -1,7 +1,8 @@
 use anyhow::Result;
 use tracing::{error, warn};
 
-use csa_config::{validate_config, ProjectConfig};
+use csa_config::init::init_project;
+use csa_config::{validate_config, GlobalConfig, ProjectConfig};
 use csa_core::types::OutputFormat;
 
 pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {
@@ -38,6 +39,33 @@ pub(crate) fn handle_config_edit(cd: Option<String>) -> Result<()> {
 
     if !status.success() {
         warn!("Editor exited with non-zero status");
+    }
+
+    Ok(())
+}
+
+pub(crate) fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
+    let project_root = crate::determine_project_root(None)?;
+    let config = init_project(&project_root, non_interactive, minimal)?;
+    eprintln!(
+        "Initialized project configuration at: {}",
+        ProjectConfig::config_path(&project_root).display()
+    );
+    eprintln!("Project: {}", config.project.name);
+
+    // Generate global config if it doesn't exist
+    if let Ok(global_path) = GlobalConfig::config_path() {
+        if !global_path.exists() {
+            match GlobalConfig::save_default_template() {
+                Ok(path) => {
+                    eprintln!("Generated global config template at: {}", path.display());
+                    eprintln!("  Edit to configure API keys and concurrency limits.");
+                }
+                Err(e) => {
+                    warn!("Failed to generate global config: {}", e);
+                }
+            }
+        }
     }
 
     Ok(())

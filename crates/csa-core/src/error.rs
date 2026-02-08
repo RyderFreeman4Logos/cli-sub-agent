@@ -38,4 +38,12 @@ pub enum AppError {
 
     #[error("All tools in tier '{tier}' exhausted")]
     TierExhausted { tier: String },
+
+    #[error("All {max} slots for '{tool}' are occupied")]
+    SlotExhausted {
+        tool: String,
+        max: u32,
+        /// (tool_name, free_slots, max_slots) for alternative tools.
+        alternatives: Vec<(String, u32, u32)>,
+    },
 }

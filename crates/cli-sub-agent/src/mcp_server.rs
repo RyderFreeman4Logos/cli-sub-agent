@@ -532,11 +532,55 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
         }
     }
 
+    // Load global config for env injection and slot control
+    let global_config = csa_config::GlobalConfig::load().ok();
+    let extra_env = global_config
+        .as_ref()
+        .and_then(|gc| gc.env_vars(executor.tool_name()).cloned());
+    let extra_env_ref = extra_env.as_ref();
+
+    // Acquire global slot to enforce concurrency limit
+    let max_concurrent = global_config
+        .as_ref()
+        .map(|gc| gc.max_concurrent(executor.tool_name()))
+        .unwrap_or(3);
+    let slots_dir = csa_config::GlobalConfig::slots_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/csa-slots"));
+    let _slot_guard = match csa_lock::slot::try_acquire_slot(
+        &slots_dir,
+        executor.tool_name(),
+        max_concurrent,
+        None,
+    ) {
+        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => Some(slot),
+        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
+            return Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!(
+                        "Error: All {} slots for '{}' are occupied ({}/{}). Try again later.",
+                        status.max_slots, executor.tool_name(), status.occupied, status.max_slots
+                    )
+                }]
+            }));
+        }
+        Err(e) => {
+            return Ok(serde_json::json!({
+                "content": [{
+                    "type": "text",
+                    "text": format!("Error: Slot acquisition failed: {}", e)
+                }]
+            }));
+        }
+    };
+
     // Execute
     let result = if ephemeral {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
-        executor.execute_in(prompt, temp_dir.path()).await?
+        executor
+            .execute_in(prompt, temp_dir.path(), extra_env_ref)
+            .await?
     } else {
         // Persistent session
         crate::execute_with_session(
@@ -548,6 +592,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None, // parent
             &project_root,
             config.as_ref(),
+            extra_env_ref,
         )
         .await?
     };
