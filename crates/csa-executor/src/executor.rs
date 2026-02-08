@@ -214,6 +214,7 @@ impl Executor {
         cmd.env("CSA_SESSION_ID", &session.meta_session_id);
         cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
         cmd.env("CSA_PROJECT_ROOT", &session.project_path);
+        cmd.env("CSA_PARENT_TOOL", self.tool_name());
 
         if let Some(ref parent) = session.genealogy.parent_session_id {
             cmd.env("CSA_PARENT_SESSION", parent);

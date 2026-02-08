@@ -1,0 +1,211 @@
+---
+name: debate
+description: Adversarial multi-tool AI debate for strategy formulation with tier-based model escalation
+allowed-tools: Bash, Read, Grep, Glob
+triggers:
+  - "debate"
+  - "adversarial debate"
+  - "multi-tool debate"
+  - "AI debate"
+  - "strategy debate"
+---
+
+# Debate: Adversarial Multi-Tool Strategy Formulation
+
+## Purpose
+
+Orchestrate an adversarial debate between multiple AI tools to produce well-reasoned strategies. Models within the same tier alternate (round-robin) as proposer and critic. When arguments stagnate, escalation moves the debate to the next higher tier with stronger models.
+
+## Required Inputs
+
+- `question`: The strategy question or problem to debate (positional argument or from user context)
+- `tier` (optional): Starting tier name (default: uses `default` tier mapping from config)
+- `max_rounds` (optional): Maximum debate rounds per tier (default: 3)
+- `max_escalations` (optional): Maximum tier escalations (default: 2)
+
+## Execution Protocol
+
+### Step 0: Discover Available Models
+
+```bash
+csa tiers list --format json
+```
+
+Parse the JSON output to get:
+- `tiers[].name`: tier name (sorted by name, lower = simpler)
+- `tiers[].models[]`: model specs in `tool/provider/model/thinking_budget` format
+- `tiers[].description`: human-readable tier description
+- `tier_mapping.default`: default tier for general tasks
+
+If no tiers are configured, stop and instruct the user to run `csa init`.
+
+### Step 1: Select Starting Tier
+
+- If `tier` is specified, use that tier.
+- Otherwise, use the tier mapped to `default` in `tier_mapping`.
+- Record the ordered list of all tier names for potential escalation.
+
+### Step 2: Debate Loop
+
+Within the selected tier, models alternate via round-robin:
+- `models[0]` = Proposer (Round 1), Responder (Round 2), ...
+- `models[1]` = Critic (Round 1), Proposer (Round 2), ...
+- `models[2]` = next in rotation if available
+
+**Round N (Proposal)**:
+```bash
+csa run --model-spec "{models[proposer_index]}" --ephemeral \
+  "Question: {question}
+
+You are the PROPOSER in an adversarial debate. {context_from_previous_rounds}
+
+Provide a concrete, actionable strategy. Structure your response as:
+1. Core Strategy (2-3 sentences)
+2. Key Arguments (numbered, with evidence/reasoning)
+3. Implementation Steps (concrete actions)
+4. Anticipated Weaknesses (acknowledge limitations honestly)"
+```
+
+**Round N (Critique)**:
+```bash
+csa run --model-spec "{models[critic_index]}" --ephemeral \
+  "Question: {question}
+
+You are the CRITIC in an adversarial debate.
+
+PROPOSAL:
+{proposal_text}
+
+Rigorously critique this proposal:
+1. Logical Flaws (identify reasoning errors)
+2. Missing Considerations (what was overlooked)
+3. Better Alternatives (if any exist, be specific)
+4. Strongest Counter-Arguments (the best case AGAINST this proposal)
+
+Be intellectually honest: acknowledge strengths before attacking weaknesses."
+```
+
+**Round N (Response)**:
+```bash
+csa run --model-spec "{models[responder_index]}" --ephemeral \
+  "Question: {question}
+
+You are the PROPOSER responding to criticism.
+
+ORIGINAL PROPOSAL:
+{proposal_text}
+
+CRITIQUE:
+{critique_text}
+
+Respond to each criticism:
+1. Concede valid points and revise your strategy
+2. Refute invalid criticisms with evidence
+3. Present your REVISED STRATEGY incorporating lessons learned
+
+If the critique fundamentally undermines your approach, propose a new strategy."
+```
+
+### Step 3: Convergence Evaluation
+
+After each critique-response pair, YOU (Claude Code, the orchestrator) evaluate:
+
+**Convergence criteria** (debate should end):
+- Both sides agree on core strategy with minor differences
+- New rounds repeat previous arguments without novel insights
+- Revised strategy addresses all major criticisms
+
+**Escalation criteria** (move to next tier):
+- Proposer cannot effectively counter the critique
+- Arguments are circular without resolution
+- The question's complexity exceeds the current tier's reasoning capability
+- Both sides acknowledge the need for deeper analysis
+
+### Step 4: Escalation (if needed)
+
+When escalation is triggered:
+1. Find the next higher tier (by sorted tier name order).
+2. If no higher tier exists, end the debate with current best result.
+3. Summarize the debate so far as context for the new tier.
+4. Restart the debate loop with the higher tier's models.
+
+```bash
+# Example: escalating from tier-1-quick to tier-2-standard
+csa run --model-spec "{higher_tier_models[0]}" --ephemeral \
+  "Question: {question}
+
+PREVIOUS DEBATE SUMMARY (lower-tier models could not resolve):
+{debate_summary}
+
+You have been escalated to provide deeper analysis. Build on the previous debate:
+1. Identify what the previous debaters missed
+2. Propose a superior strategy with stronger reasoning
+3. Address all unresolved criticisms"
+```
+
+### Step 5: Final Synthesis
+
+After the debate concludes (convergence or max rounds/escalations reached), YOU synthesize:
+
+```markdown
+# Debate Result: {question}
+
+## Final Strategy
+{synthesized_strategy}
+
+## Key Insights from Debate
+- {insight_1}
+- {insight_2}
+
+## Resolved Tensions
+- {tension_1}: resolved by {resolution}
+
+## Remaining Uncertainties
+- {uncertainty_1}
+
+## Debate Trajectory
+- Tier: {starting_tier} -> {final_tier} ({n} escalations)
+- Rounds: {total_rounds}
+- Models used: {model_list}
+```
+
+## Constraints
+
+- **No hardcoded models**: All models come from `csa tiers list`.
+- **Ephemeral sessions**: Debate rounds use `--ephemeral` (no persistent sessions needed).
+- **Round limit**: max 3 rounds per tier (configurable).
+- **Escalation limit**: max 2 escalations (configurable).
+- **Total budget**: max 4 rounds * 3 tiers = 12 CSA invocations worst case.
+- **Orchestrator role**: Claude Code evaluates convergence/escalation; CSA tools only debate.
+
+## Example Usage
+
+```
+User: /debate "Should we use gRPC or REST for our new microservice API?"
+```
+
+Debate flow:
+1. Tier-2 model A proposes gRPC strategy
+2. Tier-2 model B critiques (latency, tooling, learning curve)
+3. Tier-2 model A responds with revised hybrid approach
+4. Orchestrator: converging on hybrid approach -> synthesize result
+
+```
+User: /debate "How should we handle distributed transactions across 5 microservices?"
+```
+
+Debate flow:
+1. Tier-2 model A proposes saga pattern
+2. Tier-2 model B critiques (compensation complexity, partial failures)
+3. Tier-2 model A responds but cannot address all concerns
+4. Orchestrator: arguments weak -> escalate to Tier-3
+5. Tier-3 model A proposes event sourcing + saga hybrid
+6. Tier-3 model B refines with specific failure scenarios
+7. Orchestrator: converging -> synthesize result
+
+## Done Criteria
+
+1. At least 1 full debate round (proposal + critique + response) completed.
+2. Final synthesis document produced with clear strategy.
+3. All CSA invocations used `--ephemeral` (no session pollution).
+4. No hardcoded model names in any invocation.
