@@ -21,6 +21,33 @@ pub struct GlobalConfig {
     pub defaults: GlobalDefaults,
     #[serde(default)]
     pub tools: HashMap<String, GlobalToolConfig>,
+    #[serde(default)]
+    pub review: ReviewConfig,
+}
+
+/// Configuration for the code review workflow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewConfig {
+    /// Review tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
+    ///
+    /// In `auto` mode, the review tool is the heterogeneous counterpart of the parent:
+    /// - Parent is `claude-code` → review with `codex`
+    /// - Parent is `codex` → review with `claude-code`
+    /// - Otherwise → error (user must configure explicitly)
+    #[serde(default = "default_review_tool")]
+    pub tool: String,
+}
+
+fn default_review_tool() -> String {
+    "auto".to_string()
+}
+
+impl Default for ReviewConfig {
+    fn default() -> Self {
+        Self {
+            tool: default_review_tool(),
+        }
+    }
 }
 
 /// Global defaults section.
@@ -151,6 +178,13 @@ max_concurrent = 3  # Default max parallel instances per tool
 # max_concurrent = 2
 # [tools.opencode.env]
 # ANTHROPIC_API_KEY = "sk-ant-..."
+
+# Review workflow: which tool to use for code review.
+# "auto" selects the heterogeneous counterpart of the parent tool:
+#   claude-code parent -> codex, codex parent -> claude-code.
+# Set explicitly if auto-detection fails (e.g., parent is opencode).
+[review]
+tool = "auto"
 "#
         .to_string()
     }
@@ -167,6 +201,31 @@ max_concurrent = 3  # Default max parallel instances per tool
         std::fs::write(&path, Self::default_template())
             .with_context(|| format!("Failed to write global config: {}", path.display()))?;
         Ok(path)
+    }
+
+    /// Resolve the review tool based on config and parent tool context.
+    ///
+    /// In `auto` mode:
+    /// - Parent is `claude-code` → `codex` (model heterogeneity)
+    /// - Parent is `codex` → `claude-code`
+    /// - Otherwise → error with guidance to configure manually
+    pub fn resolve_review_tool(&self, parent_tool: Option<&str>) -> Result<String> {
+        if self.review.tool != "auto" {
+            return Ok(self.review.tool.clone());
+        }
+        match parent_tool {
+            Some("claude-code") => Ok("codex".to_string()),
+            Some("codex") => Ok("claude-code".to_string()),
+            Some(other) => Err(anyhow::anyhow!(
+                "Cannot auto-detect review tool: parent is '{}'. \
+                 Set [review] tool = \"codex\" in ~/.config/cli-sub-agent/config.toml",
+                other
+            )),
+            None => Err(anyhow::anyhow!(
+                "Cannot auto-detect review tool: no parent tool context. \
+                 Set [review] tool = \"codex\" in ~/.config/cli-sub-agent/config.toml"
+            )),
+        }
     }
 
     /// List all known tool names (from config + static list).
@@ -314,6 +373,59 @@ max_concurrent = 1
         // The template should contain helpful comments
         assert!(template.contains("[defaults]"));
         assert!(template.contains("max_concurrent"));
+    }
+
+    #[test]
+    fn test_review_config_default() {
+        let config = GlobalConfig::default();
+        assert_eq!(config.review.tool, "auto");
+    }
+
+    #[test]
+    fn test_resolve_review_tool_auto_claude_code_parent() {
+        let config = GlobalConfig::default();
+        let tool = config.resolve_review_tool(Some("claude-code")).unwrap();
+        assert_eq!(tool, "codex");
+    }
+
+    #[test]
+    fn test_resolve_review_tool_auto_codex_parent() {
+        let config = GlobalConfig::default();
+        let tool = config.resolve_review_tool(Some("codex")).unwrap();
+        assert_eq!(tool, "claude-code");
+    }
+
+    #[test]
+    fn test_resolve_review_tool_auto_unknown_parent() {
+        let config = GlobalConfig::default();
+        let result = config.resolve_review_tool(Some("opencode"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("opencode"));
+    }
+
+    #[test]
+    fn test_resolve_review_tool_auto_no_parent() {
+        let config = GlobalConfig::default();
+        let result = config.resolve_review_tool(None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_resolve_review_tool_explicit() {
+        let mut config = GlobalConfig::default();
+        config.review.tool = "opencode".to_string();
+        let tool = config.resolve_review_tool(Some("anything")).unwrap();
+        assert_eq!(tool, "opencode");
+    }
+
+    #[test]
+    fn test_parse_review_config() {
+        let toml_str = r#"
+[review]
+tool = "codex"
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.review.tool, "codex");
     }
 
     #[test]

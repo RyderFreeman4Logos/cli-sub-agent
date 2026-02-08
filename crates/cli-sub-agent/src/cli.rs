@@ -132,6 +132,12 @@ pub enum Commands {
         cmd: SkillCommands,
     },
 
+    /// List and inspect model tiers
+    Tiers {
+        #[command(subcommand)]
+        cmd: TiersCommands,
+    },
+
     /// Setup MCP integration for AI tools
     Setup {
         #[command(subcommand)]
@@ -287,6 +293,16 @@ pub enum SkillCommands {
 
     /// List installed skills
     List,
+}
+
+#[derive(Subcommand)]
+pub enum TiersCommands {
+    /// List all configured tiers with model specs and descriptions
+    List {
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
