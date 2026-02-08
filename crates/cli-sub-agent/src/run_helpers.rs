@@ -64,16 +64,20 @@ pub(crate) fn resolve_tool_and_model(
 }
 
 /// Build an executor from tool, model_spec, model, and thinking parameters.
+///
+/// If `config` is provided, automatically injects config-driven settings
+/// (e.g., `suppress_notify` for Codex) so all call sites benefit consistently.
 pub(crate) fn build_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
     model: Option<&str>,
     thinking: Option<&str>,
+    config: Option<&ProjectConfig>,
 ) -> Result<Executor> {
-    if let Some(spec) = model_spec {
+    let mut executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
-        Ok(Executor::from_tool_name(&tool_name, Some(parsed.model)))
+        Executor::from_tool_name(&tool_name, Some(parsed.model))
     } else {
         let mut final_model = model.map(|s| s.to_string());
 
@@ -87,8 +91,15 @@ pub(crate) fn build_executor(
             }
         }
 
-        Ok(Executor::from_tool_name(tool, final_model))
+        Executor::from_tool_name(tool, final_model)
+    };
+
+    // Inject config-driven settings
+    if let Some(cfg) = config {
+        executor.set_suppress_notify(cfg.should_suppress_codex_notify());
     }
+
+    Ok(executor)
 }
 
 /// Check if a prompt is a context compress/compact command.
