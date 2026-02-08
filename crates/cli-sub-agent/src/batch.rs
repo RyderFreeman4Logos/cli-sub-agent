@@ -527,8 +527,17 @@ async fn execute_task(
 
     // Acquire global slot to enforce concurrency limit (fail-fast)
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
-    let slots_dir =
-        csa_config::GlobalConfig::slots_dir().unwrap_or_else(|_| PathBuf::from("/tmp/csa-slots"));
+    let slots_dir = match csa_config::GlobalConfig::slots_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("Failed to resolve slots directory: {}", e)),
+            };
+        }
+    };
     let _slot_guard = match csa_lock::slot::try_acquire_slot(
         &slots_dir,
         executor.tool_name(),

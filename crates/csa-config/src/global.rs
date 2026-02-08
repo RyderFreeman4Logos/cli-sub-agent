@@ -101,17 +101,19 @@ impl GlobalConfig {
 
     /// Path to the global slots directory.
     ///
-    /// Prefers `~/.local/state/csa/slots/` (XDG state dir) but falls back
-    /// to `/tmp/csa-slots` on platforms where `state_dir()` is unavailable
-    /// (e.g., macOS).
+    /// Resolution order:
+    /// 1. `~/.local/state/csa/slots/` (XDG state dir on Linux)
+    /// 2. Platform-equivalent state dir (macOS/Windows)
+    /// 3. `$TMPDIR/csa-state/slots/` (fallback when state_dir unavailable)
+    /// 4. `$TMPDIR/csa-state/slots/` (fallback when HOME/XDG unset, e.g. containers)
+    ///
+    /// This function never fails — it always returns a usable path.
     pub fn slots_dir() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("", "", "csa")
-            .context("Failed to determine project directories")?;
-        let base = dirs
-            .state_dir()
-            .map(|d| d.to_path_buf())
+        let base = directories::ProjectDirs::from("", "", "csa")
+            .and_then(|dirs| dirs.state_dir().map(|d| d.to_path_buf()))
             .unwrap_or_else(|| {
-                // Fallback for platforms without state_dir (macOS, etc.)
+                // Fallback for containers/CI without HOME, or platforms
+                // without state_dir (macOS)
                 std::env::temp_dir().join("csa-state")
             });
         Ok(base.join("slots"))

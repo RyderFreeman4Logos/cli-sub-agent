@@ -539,8 +539,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
 
     // Acquire global slot to enforce concurrency limit
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
-    let slots_dir = csa_config::GlobalConfig::slots_dir()
-        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/csa-slots"));
+    let slots_dir = csa_config::GlobalConfig::slots_dir()?;
     let _slot_guard = match csa_lock::slot::try_acquire_slot(
         &slots_dir,
         executor.tool_name(),
