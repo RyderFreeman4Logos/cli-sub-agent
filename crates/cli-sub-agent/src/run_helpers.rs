@@ -1,6 +1,7 @@
 //! Helper functions for `csa run`: tool resolution, executor building, token parsing.
 
 use anyhow::Result;
+use std::io::Read;
 use std::path::Path;
 use tracing::warn;
 
@@ -222,4 +223,51 @@ fn extract_cost(text: &str) -> Option<f64> {
         .collect();
 
     num_str.parse().ok()
+}
+
+/// Read prompt from CLI argument or stdin.
+pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
+    if let Some(p) = prompt {
+        if p.trim().is_empty() {
+            anyhow::bail!(
+                "Empty prompt provided. Usage:\n  csa run --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --tool <tool>"
+            );
+        }
+        Ok(p)
+    } else {
+        // No prompt argument: read from stdin
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "No prompt provided and stdin is a terminal.\n\n\
+                 Usage:\n  \
+                 csa run --tool <tool> \"your prompt here\"\n  \
+                 echo \"prompt\" | csa run --tool <tool>"
+            );
+        }
+        let mut buffer = String::new();
+        std::io::stdin().read_to_string(&mut buffer)?;
+        if buffer.trim().is_empty() {
+            anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
+        }
+        Ok(buffer)
+    }
+}
+
+/// Check if a tool's binary is available on PATH (synchronous).
+pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
+    let binary = match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "codex" => "codex",
+        "claude-code" => "claude",
+        _ => return false,
+    };
+    std::process::Command::new("which")
+        .arg(binary)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }

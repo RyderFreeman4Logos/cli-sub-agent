@@ -215,6 +215,14 @@ impl Executor {
         cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
         cmd.env("CSA_PROJECT_ROOT", &session.project_path);
 
+        // CSA_TOOL: tells the child process which tool it is running as
+        cmd.env("CSA_TOOL", self.tool_name());
+        // CSA_PARENT_TOOL: tells the child process which tool its parent is
+        // (read from current process's CSA_TOOL, set by the parent CSA instance)
+        if let Ok(current_tool) = std::env::var("CSA_TOOL") {
+            cmd.env("CSA_PARENT_TOOL", current_tool);
+        }
+
         if let Some(ref parent) = session.genealogy.parent_session_id {
             cmd.env("CSA_PARENT_SESSION", parent);
         }
