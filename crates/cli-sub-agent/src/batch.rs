@@ -517,7 +517,7 @@ async fn execute_task(
         .and_then(|gc| gc.env_vars(executor.tool_name()).cloned());
     let extra_env_ref = extra_env.as_ref();
 
-    // Acquire global slot to enforce concurrency limit (blocking wait)
+    // Acquire global slot to enforce concurrency limit (fail-fast)
     let max_concurrent = global_config
         .as_ref()
         .map(|gc| gc.max_concurrent(executor.tool_name()))
@@ -530,39 +530,32 @@ async fn execute_task(
         max_concurrent,
         None,
     ) {
-        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => Some(slot),
-        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(_)) => {
-            info!(
-                "{} - All {} slots for '{}' occupied, waiting for a free slot...",
-                task_label,
-                max_concurrent,
-                executor.tool_name()
-            );
-            match csa_lock::slot::acquire_slot_blocking(
-                &slots_dir,
-                executor.tool_name(),
-                max_concurrent,
-                std::time::Duration::from_secs(300),
-                None,
-            ) {
-                Ok(slot) => Some(slot),
-                Err(e) => {
-                    return TaskResult {
-                        name: task.name.clone(),
-                        exit_code: 1,
-                        duration_secs: start.elapsed().as_secs_f64(),
-                        error: Some(format!(
-                            "Slot wait timeout for '{}': {}",
-                            executor.tool_name(),
-                            e
-                        )),
-                    };
-                }
-            }
+        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => slot,
+        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!(
+                    "All {} slots for '{}' occupied ({}/{})",
+                    max_concurrent,
+                    executor.tool_name(),
+                    status.occupied,
+                    status.max_slots,
+                )),
+            };
         }
         Err(e) => {
-            warn!("{} - Slot acquisition failed: {}", task_label, e);
-            None
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!(
+                    "Slot acquisition failed for '{}': {}",
+                    executor.tool_name(),
+                    e
+                )),
+            };
         }
     };
 
