@@ -28,17 +28,20 @@ pub enum FailoverAction {
 
 /// Decide what to do after a 429 rate-limit is detected.
 ///
-/// `failed_tool`: the tool that was rate-limited.
-/// `task_type`: used to find the correct tier.
-/// `needs_edit`: whether the task requires file editing.
-/// `session`: the current session (if any).
-/// `tried_tools`: tools already attempted in this failover chain.
-/// `config`: project configuration.
-/// `original_error`: the error message from the rate-limited tool.
+/// - `failed_tool`: the tool that was rate-limited.
+/// - `task_type`: used to find the correct tier.
+/// - `task_needs_edit`: whether the task requires file editing.
+///   - `Some(true)`: task must be routed to tools that can edit existing files.
+///   - `Some(false)`: task does not require edits.
+///   - `None`: unknown; do not filter alternatives by edit capability.
+/// - `session`: the current session (if any).
+/// - `tried_tools`: tools already attempted in this failover chain.
+/// - `config`: project configuration.
+/// - `original_error`: the error message from the rate-limited tool.
 pub fn decide_failover(
     failed_tool: &str,
     task_type: &str,
-    needs_edit: bool,
+    task_needs_edit: Option<bool>,
     session: Option<&MetaSessionState>,
     tried_tools: &[String],
     config: &ProjectConfig,
@@ -75,8 +78,8 @@ pub fn decide_failover(
             if !config.is_tool_enabled(tool) {
                 return None;
             }
-            // Skip tools that can't edit when needed
-            if needs_edit && !config.can_tool_edit_existing(tool) {
+            // Only enforce edit-capable tools when task requirement is known.
+            if matches!(task_needs_edit, Some(true)) && !config.can_tool_edit_existing(tool) {
                 return None;
             }
             Some((tool.to_string(), spec.clone()))
@@ -261,7 +264,7 @@ mod tests {
         let action = decide_failover(
             "gemini-cli",
             "default",
-            false,
+            Some(false),
             None,
             &[],
             &config,
@@ -281,7 +284,7 @@ mod tests {
         let action = decide_failover(
             "gemini-cli",
             "default",
-            false,
+            Some(false),
             None,
             &["codex".to_string()],
             &config,
@@ -303,7 +306,7 @@ mod tests {
         let action = decide_failover(
             "gemini-cli",
             "default",
-            false,
+            Some(false),
             Some(&session),
             &[],
             &config,
