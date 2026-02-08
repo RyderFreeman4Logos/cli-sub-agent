@@ -10,7 +10,14 @@ pub(crate) fn handle_tiers_list(cd: Option<String>, format: OutputFormat) -> Res
         .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
 
     if config.tiers.is_empty() {
-        eprintln!("No tiers configured. Run 'csa init' to generate default tiers.");
+        match format {
+            OutputFormat::Json => {
+                println!(r#"{{"tiers":[],"tier_mapping":{{}}}}"#);
+            }
+            OutputFormat::Text => {
+                eprintln!("No tiers configured. Run 'csa init' to generate default tiers.");
+            }
+        }
         return Ok(());
     }
 
