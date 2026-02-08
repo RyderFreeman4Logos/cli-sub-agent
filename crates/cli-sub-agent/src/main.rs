@@ -20,7 +20,7 @@ mod setup_cmds;
 mod skill_cmds;
 
 use cli::{Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands};
-use csa_config::{init_project, GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{create_session_log_writer, Executor};
 use csa_lock::acquire_lock;
@@ -118,7 +118,7 @@ async fn main() -> Result<()> {
             non_interactive,
             minimal,
         } => {
-            handle_init(non_interactive, minimal)?;
+            config_cmds::handle_init(non_interactive, minimal)?;
         }
         Commands::Gc {
             dry_run,
@@ -336,6 +336,10 @@ async fn handle_run(
                         s.tool_name != tool_name_str
                             && s.free() > 0
                             && !tried_tools.contains(&s.tool_name)
+                            && config
+                                .as_ref()
+                                .map(|c| c.is_tool_enabled(&s.tool_name))
+                                .unwrap_or(true)
                     });
 
                     if let Some(alt) = free_alt {
@@ -732,33 +736,6 @@ pub(crate) async fn execute_with_session(
     save_session(&session)?;
 
     Ok(result)
-}
-
-fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
-    let project_root = determine_project_root(None)?;
-    let config = init_project(&project_root, non_interactive, minimal)?;
-    eprintln!(
-        "Initialized project configuration at: {}",
-        ProjectConfig::config_path(&project_root).display()
-    );
-    eprintln!("Project: {}", config.project.name);
-
-    // Generate global config if it doesn't exist
-    if let Ok(global_path) = GlobalConfig::config_path() {
-        if !global_path.exists() {
-            match GlobalConfig::save_default_template() {
-                Ok(path) => {
-                    eprintln!("Generated global config template at: {}", path.display());
-                    eprintln!("  Edit to configure API keys and concurrency limits.");
-                }
-                Err(e) => {
-                    warn!("Failed to generate global config: {}", e);
-                }
-            }
-        }
-    }
-
-    Ok(())
 }
 
 pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {

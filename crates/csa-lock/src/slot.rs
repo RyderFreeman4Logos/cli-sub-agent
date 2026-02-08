@@ -176,49 +176,15 @@ pub fn acquire_slot_blocking(
         SlotAcquireResult::Exhausted(_) => {}
     }
 
-    // Block on slot-00 (the most likely to be released first in sequential usage).
-    let tool_dir = slots_dir.join(tool_name);
-    let slot_path = tool_dir.join("slot-00.lock");
-
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&slot_path)
-        .with_context(|| format!("Failed to open slot file: {}", slot_path.display()))?;
-
-    let fd = file.as_raw_fd();
+    // Poll all slots in round-robin until one becomes free.
     let start = Instant::now();
-
-    // Poll with increasing sleep intervals to avoid busy-waiting.
     let mut sleep_ms = 100;
+
     loop {
-        // SAFETY: `fd` is a valid file descriptor. LOCK_EX | LOCK_NB for polling.
-        let ret = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-        if ret == 0 {
-            let mut slot = ToolSlot {
-                file,
-                slot_path,
-                tool_name: tool_name.to_string(),
-                slot_index: 0,
-            };
-
-            let diagnostic = SlotDiagnostic {
-                pid: std::process::id(),
-                tool_name: tool_name.to_string(),
-                slot_index: 0,
-                acquired_at: Utc::now(),
-                session_id: session_id.map(|s| s.to_string()),
-            };
-
-            if let Ok(json) = serde_json::to_string(&diagnostic) {
-                let _ = slot.file.set_len(0);
-                let _ = slot.file.write_all(json.as_bytes());
-                let _ = slot.file.flush();
-            }
-
-            return Ok(slot);
+        // Try every slot before sleeping.
+        match try_acquire_slot(slots_dir, tool_name, max_concurrent, session_id)? {
+            SlotAcquireResult::Acquired(slot) => return Ok(slot),
+            SlotAcquireResult::Exhausted(_) => {}
         }
 
         if start.elapsed() >= timeout {
