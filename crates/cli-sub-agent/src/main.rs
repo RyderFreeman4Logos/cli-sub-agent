@@ -36,8 +36,8 @@ use csa_session::{
     TokenUsage, ToolState,
 };
 use run_helpers::{
-    build_executor, is_compress_command, is_tool_binary_available, parse_token_usage,
-    parse_tool_name, read_prompt, resolve_tool_and_model, truncate_prompt,
+    build_executor, infer_task_edit_requirement, is_compress_command, is_tool_binary_available,
+    parse_token_usage, parse_tool_name, read_prompt, resolve_tool_and_model, truncate_prompt,
 };
 
 #[tokio::main]
@@ -480,16 +480,20 @@ async fn handle_run(
                 None
             };
 
-            // Determine if task needs edit capability
-            let needs_edit = config
-                .as_ref()
-                .is_some_and(|cfg| cfg.can_tool_edit_existing(tool_name_str));
+            // Infer task edit requirement from prompt when explicit.
+            // If ambiguous, keep conservative behavior by falling back to the failed tool's
+            // configured edit capability.
+            let task_needs_edit = infer_task_edit_requirement(&prompt_text).or_else(|| {
+                config
+                    .as_ref()
+                    .map(|cfg| cfg.can_tool_edit_existing(tool_name_str))
+            });
 
             if let Some(ref cfg) = config {
                 let action = csa_scheduler::decide_failover(
                     tool_name_str,
                     "default",
-                    needs_edit,
+                    task_needs_edit,
                     session_state.as_ref(),
                     &tried_tools,
                     cfg,
