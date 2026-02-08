@@ -154,7 +154,7 @@ pub enum Commands {
 
 #[derive(clap::Args)]
 pub struct ReviewArgs {
-    /// Tool to use for review (defaults to first enabled tool in config)
+    /// Tool to use for review (defaults to global [review] config or project fallback)
     #[arg(long)]
     pub tool: Option<ToolName>,
 
