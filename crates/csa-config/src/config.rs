@@ -180,6 +180,10 @@ impl ProjectConfig {
     }
 
     /// Deep-merge user config (base) with project config (overlay).
+    ///
+    /// Uses `max(schema_version)` from both configs so that
+    /// `check_schema_version()` catches incompatibility even when the
+    /// project config has an older schema than the user config.
     fn load_merged(base_path: &Path, overlay_path: &Path) -> Result<Option<Self>> {
         let base_str = std::fs::read_to_string(base_path)
             .with_context(|| format!("Failed to read user config: {}", base_path.display()))?;
@@ -193,7 +197,26 @@ impl ProjectConfig {
             format!("Failed to parse project config: {}", overlay_path.display())
         })?;
 
-        let merged = merge_toml_values(base_val, overlay_val);
+        // Preserve the higher schema_version before merging so that
+        // check_schema_version() catches incompatibility from either source.
+        let base_schema = base_val
+            .get("schema_version")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0) as u32;
+        let overlay_schema = overlay_val
+            .get("schema_version")
+            .and_then(|v| v.as_integer())
+            .unwrap_or(0) as u32;
+
+        let mut merged = merge_toml_values(base_val, overlay_val);
+        // Set schema_version to max of both sources
+        if let toml::Value::Table(ref mut table) = merged {
+            table.insert(
+                "schema_version".to_string(),
+                toml::Value::Integer(i64::from(base_schema.max(overlay_schema))),
+            );
+        }
+
         // Roundtrip through string for reliable deserialization
         let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;
         let config: Self =
