@@ -214,7 +214,7 @@ async fn handle_run(
 
     // 3. Load configs (project config + global config)
     let config = ProjectConfig::load(&project_root)?;
-    let global_config = GlobalConfig::load().unwrap_or_default();
+    let global_config = GlobalConfig::load()?;
 
     // 4. Check recursion depth (from config or default)
     let max_depth = config

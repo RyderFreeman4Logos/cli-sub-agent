@@ -511,17 +511,22 @@ async fn execute_task(
     }
 
     // Load global config for env injection and slot control
-    let global_config = csa_config::GlobalConfig::load().ok();
-    let extra_env = global_config
-        .as_ref()
-        .and_then(|gc| gc.env_vars(executor.tool_name()).cloned());
+    let global_config = match csa_config::GlobalConfig::load() {
+        Ok(gc) => gc,
+        Err(e) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("Failed to load global config: {}", e)),
+            };
+        }
+    };
+    let extra_env = global_config.env_vars(executor.tool_name()).cloned();
     let extra_env_ref = extra_env.as_ref();
 
     // Acquire global slot to enforce concurrency limit (fail-fast)
-    let max_concurrent = global_config
-        .as_ref()
-        .map(|gc| gc.max_concurrent(executor.tool_name()))
-        .unwrap_or(3);
+    let max_concurrent = global_config.max_concurrent(executor.tool_name());
     let slots_dir =
         csa_config::GlobalConfig::slots_dir().unwrap_or_else(|_| PathBuf::from("/tmp/csa-slots"));
     let _slot_guard = match csa_lock::slot::try_acquire_slot(
