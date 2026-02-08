@@ -26,7 +26,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         return Ok(1);
     }
 
-    // 4. Get git diff based on scope
+    // 4. Load global config for review tool selection + env injection + slot control.
+    let global_config = GlobalConfig::load()?;
+
+    // 5. Get git diff based on scope
     let diff_output = get_review_diff(&args)?;
 
     if diff_output.trim().is_empty() {
@@ -34,31 +37,21 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         return Ok(0);
     }
 
-    // 5. Construct review prompt
+    // 6. Construct review prompt
     let prompt = construct_review_prompt(&args, &diff_output);
 
-    // 6. Determine tool
-    let tool = if let Some(t) = args.tool {
-        t
-    } else if let Some(ref cfg) = config {
-        // Use first enabled tool from config
-        cfg.tools
-            .iter()
-            .find(|(_, tool_cfg)| tool_cfg.enabled)
-            .and_then(|(name, _)| match name.as_str() {
-                "gemini-cli" => Some(ToolName::GeminiCli),
-                "opencode" => Some(ToolName::Opencode),
-                "codex" => Some(ToolName::Codex),
-                "claude-code" => Some(ToolName::ClaudeCode),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow::anyhow!("No enabled tools in project config"))?
-    } else {
-        // Default to gemini-cli
-        ToolName::GeminiCli
-    };
+    // 7. Determine tool
+    let parent_tool = std::env::var("CSA_TOOL")
+        .ok()
+        .or_else(|| std::env::var("CSA_PARENT_TOOL").ok());
+    let tool = resolve_review_tool(
+        args.tool,
+        config.as_ref(),
+        &global_config,
+        parent_tool.as_deref(),
+    )?;
 
-    // 7. Build executor
+    // 8. Build executor
     let executor = crate::run_helpers::build_executor(
         &tool,
         None,
@@ -67,7 +60,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         config.as_ref(),
     )?;
 
-    // 8. Check tool is installed
+    // 9. Check tool is installed
     if let Err(e) = check_tool_installed(executor.executable_name()).await {
         error!(
             "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
@@ -78,7 +71,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         anyhow::bail!("{}", e);
     }
 
-    // 9. Check tool is enabled in config
+    // 10. Check tool is enabled in config
     if let Some(ref cfg) = config {
         if !cfg.is_tool_enabled(executor.tool_name()) {
             error!(
@@ -89,7 +82,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
     }
 
-    // 10. Apply restrictions if configured
+    // 11. Apply restrictions if configured
     let can_edit = config
         .as_ref()
         .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
@@ -100,11 +93,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         prompt.clone()
     };
 
-    // 11. Load global config for env injection and slot control
-    let global_config = GlobalConfig::load()?;
+    // 12. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
 
-    // 11b. Acquire global slot to enforce concurrency limit
+    // 12b. Acquire global slot to enforce concurrency limit
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
     let slots_dir = GlobalConfig::slots_dir()?;
     let _slot_guard = match csa_lock::slot::try_acquire_slot(
@@ -132,7 +124,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
     };
 
-    // 12. Execute with session
+    // 13. Execute with session
     let result = crate::execute_with_session(
         &executor,
         &tool,
@@ -146,10 +138,61 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     )
     .await?;
 
-    // 12. Print result
+    // 14. Print result
     print!("{}", result.output);
 
     Ok(result.exit_code)
+}
+
+fn resolve_review_tool(
+    arg_tool: Option<ToolName>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    parent_tool: Option<&str>,
+) -> Result<ToolName> {
+    if let Some(tool) = arg_tool {
+        return Ok(tool);
+    }
+
+    match global_config.resolve_review_tool(parent_tool) {
+        Ok(tool_name) => parse_tool_name(&tool_name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
+                tool_name
+            )
+        }),
+        Err(err) => {
+            // Keep `csa review` usable in top-level/manual flows where no parent tool context exists.
+            // In these cases we preserve the historical fallback behavior.
+            info!(
+                reason = %err,
+                "Review tool auto-detection unavailable, falling back to project/default tool selection"
+            );
+            fallback_review_tool(project_config)
+        }
+    }
+}
+
+fn fallback_review_tool(project_config: Option<&ProjectConfig>) -> Result<ToolName> {
+    if let Some(cfg) = project_config {
+        cfg.tools
+            .iter()
+            .find(|(_, tool_cfg)| tool_cfg.enabled)
+            .and_then(|(name, _)| parse_tool_name(name))
+            .ok_or_else(|| anyhow::anyhow!("No enabled tools in project config"))
+    } else {
+        Ok(ToolName::GeminiCli)
+    }
+}
+
+fn parse_tool_name(name: &str) -> Option<ToolName> {
+    match name {
+        "gemini-cli" => Some(ToolName::GeminiCli),
+        "opencode" => Some(ToolName::Opencode),
+        "codex" => Some(ToolName::Codex),
+        "claude-code" => Some(ToolName::ClaudeCode),
+        _ => None,
+    }
 }
 
 pub(crate) fn get_review_diff(args: &ReviewArgs) -> Result<String> {
@@ -211,4 +254,76 @@ pub(crate) fn construct_review_prompt(args: &ReviewArgs, diff: &str) -> String {
     };
 
     format!("{}\n\n```diff\n{}\n```", instruction, diff)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+    use std::collections::HashMap;
+
+    fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
+        let mut tool_map = HashMap::new();
+        for tool in tools {
+            tool_map.insert(
+                (*tool).to_string(),
+                ToolConfig {
+                    enabled: true,
+                    restrictions: None,
+                    suppress_notify: false,
+                },
+            );
+        }
+
+        ProjectConfig {
+            schema_version: 1,
+            project: ProjectMeta::default(),
+            resources: ResourcesConfig::default(),
+            tools: tool_map,
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn resolve_review_tool_prefers_cli_override() {
+        let global = GlobalConfig::default();
+        let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+        let tool = resolve_review_tool(
+            Some(ToolName::Codex),
+            Some(&cfg),
+            &global,
+            Some("claude-code"),
+        )
+        .unwrap();
+        assert!(matches!(tool, ToolName::Codex));
+    }
+
+    #[test]
+    fn resolve_review_tool_uses_global_review_config_with_parent_tool() {
+        let global = GlobalConfig::default();
+        let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+        let tool = resolve_review_tool(None, Some(&cfg), &global, Some("claude-code")).unwrap();
+        assert!(matches!(tool, ToolName::Codex));
+    }
+
+    #[test]
+    fn resolve_review_tool_falls_back_without_parent_tool_context() {
+        let global = GlobalConfig::default();
+        let cfg = project_config_with_enabled_tools(&["opencode"]);
+        let tool = resolve_review_tool(None, Some(&cfg), &global, None).unwrap();
+        assert!(matches!(tool, ToolName::Opencode));
+    }
+
+    #[test]
+    fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
+        let mut global = GlobalConfig::default();
+        global.review.tool = "invalid-tool".to_string();
+        let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+        let err = resolve_review_tool(None, Some(&cfg), &global, Some("codex")).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("Invalid [review].tool value 'invalid-tool'"));
+    }
 }

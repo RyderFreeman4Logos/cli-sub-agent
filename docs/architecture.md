@@ -62,7 +62,7 @@ Sessions are stored physically at the same level (flat directory structure) but 
 
 ## Crate Structure
 
-CSA is organized into 8 crates following domain separation:
+CSA is organized into 9 crates following domain separation:
 
 ```
 crates/
@@ -73,6 +73,7 @@ crates/
 ├── csa-lock/           # File-based locking (flock)
 ├── csa-process/        # Process spawning and signal handling
 ├── csa-resource/       # Memory monitoring and scheduling
+├── csa-scheduler/      # Tier rotation and 429 failover decisions
 └── csa-session/        # Session CRUD and genealogy tracking
 ```
 
@@ -90,6 +91,9 @@ cli-sub-agent
     ├─> csa-process
     ├─> csa-resource
     │     └─> csa-core (optional)
+    ├─> csa-scheduler
+    │     ├─> csa-config
+    │     └─> csa-session
     └─> csa-session
           └─> csa-core (optional)
 ```
