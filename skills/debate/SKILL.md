@@ -28,7 +28,7 @@ Orchestrate an adversarial debate between multiple AI tools to produce well-reas
 ### Step 0: Discover Available Models
 
 ```bash
-csa tiers list --format json
+csa --format json tiers list
 ```
 
 Parse the JSON output to get:
