@@ -510,6 +510,12 @@ async fn execute_task(
         }
     }
 
+    // Load global config for env injection
+    let extra_env = csa_config::GlobalConfig::load()
+        .ok()
+        .and_then(|gc| gc.env_vars(executor.tool_name()).cloned());
+    let extra_env_ref = extra_env.as_ref();
+
     // Execute with ephemeral session (no persistent state)
     let result = execute_with_session(
         &executor,
@@ -520,7 +526,7 @@ async fn execute_task(
         std::env::var("CSA_SESSION_ID").ok(),  // parent
         project_root,
         config,
-        None, // extra_env (batch uses default env)
+        extra_env_ref,
     )
     .await;
 

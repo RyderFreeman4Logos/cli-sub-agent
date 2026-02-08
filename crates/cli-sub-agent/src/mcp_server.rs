@@ -532,11 +532,20 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
         }
     }
 
+    // Load global config for env injection
+    let global_config = csa_config::GlobalConfig::load().ok();
+    let extra_env = global_config
+        .as_ref()
+        .and_then(|gc| gc.env_vars(executor.tool_name()).cloned());
+    let extra_env_ref = extra_env.as_ref();
+
     // Execute
     let result = if ephemeral {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
-        executor.execute_in(prompt, temp_dir.path(), None).await?
+        executor
+            .execute_in(prompt, temp_dir.path(), extra_env_ref)
+            .await?
     } else {
         // Persistent session
         crate::execute_with_session(
@@ -548,7 +557,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None, // parent
             &project_root,
             config.as_ref(),
-            None, // extra_env
+            extra_env_ref,
         )
         .await?
     };

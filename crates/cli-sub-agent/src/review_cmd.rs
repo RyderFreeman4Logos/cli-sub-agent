@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use tracing::{error, info};
 
 use crate::cli::ReviewArgs;
-use csa_config::ProjectConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
 
@@ -94,7 +94,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         prompt.clone()
     };
 
-    // 11. Execute with session
+    // 11. Load global config for env injection
+    let global_config = GlobalConfig::load()?;
+    let extra_env = global_config.env_vars(executor.tool_name());
+
+    // 12. Execute with session
     let result = crate::execute_with_session(
         &executor,
         &tool,
@@ -104,7 +108,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         None,
         &project_root,
         config.as_ref(),
-        None, // extra_env
+        extra_env,
     )
     .await?;
 
