@@ -153,7 +153,10 @@ impl ProjectConfig {
     ///
     /// `user_path`: path to user-level config (None if unavailable).
     /// `project_path`: path to project-level config.
-    fn load_with_paths(user_path: Option<&Path>, project_path: &Path) -> Result<Option<Self>> {
+    pub(crate) fn load_with_paths(
+        user_path: Option<&Path>,
+        project_path: &Path,
+    ) -> Result<Option<Self>> {
         let project_exists = project_path.exists();
         let user_exists = user_path.is_some_and(|p| p.exists());
 
