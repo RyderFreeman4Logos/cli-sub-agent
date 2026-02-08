@@ -340,6 +340,7 @@ async fn handle_run(
                                 .as_ref()
                                 .map(|c| c.is_tool_enabled(&s.tool_name))
                                 .unwrap_or(true)
+                            && is_tool_binary_available(&s.tool_name)
                     });
 
                     if let Some(alt) = free_alt {
@@ -746,6 +747,24 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     };
 
     Ok(path.canonicalize()?)
+}
+
+/// Check if a tool's binary is available on PATH (synchronous).
+fn is_tool_binary_available(tool_name: &str) -> bool {
+    let binary = match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "codex" => "codex",
+        "claude-code" => "claude",
+        _ => return false,
+    };
+    std::process::Command::new("which")
+        .arg(binary)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
