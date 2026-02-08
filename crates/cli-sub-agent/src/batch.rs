@@ -510,11 +510,41 @@ async fn execute_task(
         }
     }
 
-    // Load global config for env injection
-    let extra_env = csa_config::GlobalConfig::load()
-        .ok()
+    // Load global config for env injection and slot control
+    let global_config = csa_config::GlobalConfig::load().ok();
+    let extra_env = global_config
+        .as_ref()
         .and_then(|gc| gc.env_vars(executor.tool_name()).cloned());
     let extra_env_ref = extra_env.as_ref();
+
+    // Acquire global slot to enforce concurrency limit
+    let max_concurrent = global_config
+        .as_ref()
+        .map(|gc| gc.max_concurrent(executor.tool_name()))
+        .unwrap_or(3);
+    let slots_dir =
+        csa_config::GlobalConfig::slots_dir().unwrap_or_else(|_| PathBuf::from("/tmp/csa-slots"));
+    let _slot_guard = match csa_lock::slot::try_acquire_slot(
+        &slots_dir,
+        executor.tool_name(),
+        max_concurrent,
+        None,
+    ) {
+        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => Some(slot),
+        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(_)) => {
+            warn!(
+                "{} - All {} slots for '{}' occupied, proceeding anyway for batch",
+                task_label,
+                max_concurrent,
+                executor.tool_name()
+            );
+            None
+        }
+        Err(e) => {
+            warn!("{} - Slot acquisition failed: {}", task_label, e);
+            None
+        }
+    };
 
     // Execute with ephemeral session (no persistent state)
     let result = execute_with_session(
