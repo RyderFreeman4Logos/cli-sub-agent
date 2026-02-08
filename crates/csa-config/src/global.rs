@@ -57,9 +57,13 @@ fn default_max_concurrent() -> u32 {
 impl GlobalConfig {
     /// Load global config from `~/.config/cli-sub-agent/config.toml`.
     ///
-    /// Returns `Default` if the file does not exist.
+    /// Returns `Default` if the file does not exist or if the config
+    /// directory cannot be determined (e.g., no HOME in containers).
     pub fn load() -> Result<Self> {
-        let path = Self::config_path()?;
+        let path = match Self::config_path() {
+            Ok(p) => p,
+            Err(_) => return Ok(Self::default()),
+        };
         if !path.exists() {
             return Ok(Self::default());
         }
