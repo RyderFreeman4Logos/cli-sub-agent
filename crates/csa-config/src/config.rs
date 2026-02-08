@@ -146,20 +146,27 @@ impl ProjectConfig {
     pub fn load(project_root: &Path) -> Result<Option<Self>> {
         let project_path = project_root.join(".csa").join("config.toml");
         let user_path = Self::user_config_path();
+        Self::load_with_paths(user_path.as_deref(), &project_path)
+    }
 
+    /// Load config from explicit paths. Testable without global filesystem state.
+    ///
+    /// `user_path`: path to user-level config (None if unavailable).
+    /// `project_path`: path to project-level config.
+    fn load_with_paths(user_path: Option<&Path>, project_path: &Path) -> Result<Option<Self>> {
         let project_exists = project_path.exists();
-        let user_exists = user_path.as_ref().is_some_and(|p| p.exists());
+        let user_exists = user_path.is_some_and(|p| p.exists());
 
         match (user_exists, project_exists) {
             (false, false) => Ok(None),
             (true, false) => {
                 // Safety: user_exists guarantees user_path is Some
-                Self::load_from_path(&user_path.unwrap())
+                Self::load_from_path(user_path.unwrap())
             }
-            (false, true) => Self::load_from_path(&project_path),
+            (false, true) => Self::load_from_path(project_path),
             (true, true) => {
                 // Safety: user_exists guarantees user_path is Some
-                Self::load_merged(&user_path.unwrap(), &project_path)
+                Self::load_merged(user_path.unwrap(), project_path)
             }
         }
     }

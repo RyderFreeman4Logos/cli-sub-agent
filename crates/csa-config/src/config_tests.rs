@@ -4,7 +4,9 @@ use tempfile::tempdir;
 #[test]
 fn test_load_nonexistent_returns_none() {
     let dir = tempdir().unwrap();
-    let result = ProjectConfig::load(dir.path()).unwrap();
+    // Use load_with_paths to isolate from real ~/.config/csa/config.toml on host.
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let result = ProjectConfig::load_with_paths(None, &project_path).unwrap();
     assert!(result.is_none());
 }
 
