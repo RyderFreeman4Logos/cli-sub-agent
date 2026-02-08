@@ -95,14 +95,22 @@ impl GlobalConfig {
         Ok(dirs.config_dir().join("config.toml"))
     }
 
-    /// Path to the global slots directory: `~/.local/state/csa/slots/`.
+    /// Path to the global slots directory.
+    ///
+    /// Prefers `~/.local/state/csa/slots/` (XDG state dir) but falls back
+    /// to `/tmp/csa-slots` on platforms where `state_dir()` is unavailable
+    /// (e.g., macOS).
     pub fn slots_dir() -> Result<PathBuf> {
         let dirs = directories::ProjectDirs::from("", "", "csa")
-            .context("Failed to determine state directory")?;
-        Ok(dirs
+            .context("Failed to determine project directories")?;
+        let base = dirs
             .state_dir()
-            .context("No state directory available on this platform")?
-            .join("slots"))
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| {
+                // Fallback for platforms without state_dir (macOS, etc.)
+                std::env::temp_dir().join("csa-state")
+            });
+        Ok(base.join("slots"))
     }
 
     /// Generate default config TOML with comments as a template.
