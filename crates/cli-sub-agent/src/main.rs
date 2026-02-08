@@ -280,12 +280,17 @@ async fn handle_run(
         attempts += 1;
 
         // 7. Build executor
-        let executor = build_executor(
+        let mut executor = build_executor(
             &current_tool,
             current_model_spec.as_deref(),
             current_model.as_deref(),
             thinking.as_deref(),
         )?;
+
+        // 7b. Inject suppress_notify from config (codex only)
+        if let Some(ref cfg) = config {
+            executor.set_suppress_notify(cfg.should_suppress_codex_notify());
+        }
 
         // 8. Check tool is installed
         if let Err(e) = check_tool_installed(executor.executable_name()).await {
