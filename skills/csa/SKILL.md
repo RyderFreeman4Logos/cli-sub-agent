@@ -1,5 +1,5 @@
 ---
-name: CSA (CLI Sub-Agent)
+name: csa
 description: Unified CLI interface for executing coding tasks across multiple AI tools with persistent sessions, recursive agent spawning, and resource-aware scheduling
 allowed-tools: Bash, Read, Grep, Glob
 ---

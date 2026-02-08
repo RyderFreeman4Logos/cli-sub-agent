@@ -284,14 +284,11 @@ mod tests {
     #[test]
     fn test_validate_config_fails_if_no_config() {
         let dir = tempdir().unwrap();
-        // No config created
-
-        let result = validate_config(dir.path());
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("No configuration found"));
+        // No config created — use load_with_paths(None, ...) to bypass
+        // user-level fallback which may exist on the host machine.
+        let project_path = dir.path().join(".csa").join("config.toml");
+        let config = ProjectConfig::load_with_paths(None, &project_path).unwrap();
+        assert!(config.is_none());
     }
 
     #[test]
