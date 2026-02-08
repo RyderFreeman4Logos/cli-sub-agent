@@ -510,6 +510,69 @@ async fn execute_task(
         }
     }
 
+    // Load global config for env injection and slot control
+    let global_config = match csa_config::GlobalConfig::load() {
+        Ok(gc) => gc,
+        Err(e) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("Failed to load global config: {}", e)),
+            };
+        }
+    };
+    let extra_env = global_config.env_vars(executor.tool_name()).cloned();
+    let extra_env_ref = extra_env.as_ref();
+
+    // Acquire global slot to enforce concurrency limit (fail-fast)
+    let max_concurrent = global_config.max_concurrent(executor.tool_name());
+    let slots_dir = match csa_config::GlobalConfig::slots_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("Failed to resolve slots directory: {}", e)),
+            };
+        }
+    };
+    let _slot_guard = match csa_lock::slot::try_acquire_slot(
+        &slots_dir,
+        executor.tool_name(),
+        max_concurrent,
+        None,
+    ) {
+        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => slot,
+        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!(
+                    "All {} slots for '{}' occupied ({}/{})",
+                    max_concurrent,
+                    executor.tool_name(),
+                    status.occupied,
+                    status.max_slots,
+                )),
+            };
+        }
+        Err(e) => {
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!(
+                    "Slot acquisition failed for '{}': {}",
+                    executor.tool_name(),
+                    e
+                )),
+            };
+        }
+    };
+
     // Execute with ephemeral session (no persistent state)
     let result = execute_with_session(
         &executor,
@@ -520,6 +583,7 @@ async fn execute_task(
         std::env::var("CSA_SESSION_ID").ok(),  // parent
         project_root,
         config,
+        extra_env_ref,
     )
     .await;
 

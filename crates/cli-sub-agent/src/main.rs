@@ -20,10 +20,13 @@ mod setup_cmds;
 mod skill_cmds;
 
 use cli::{Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands};
-use csa_config::{init_project, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{create_session_log_writer, Executor};
 use csa_lock::acquire_lock;
+use csa_lock::slot::{
+    format_slot_diagnostic, slot_usage, try_acquire_slot, SlotAcquireResult, ToolSlot,
+};
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
@@ -67,6 +70,7 @@ async fn main() -> Result<()> {
             model,
             thinking,
             no_failover,
+            wait,
         } => {
             let exit_code = handle_run(
                 tool,
@@ -81,6 +85,7 @@ async fn main() -> Result<()> {
                 model,
                 thinking,
                 no_failover,
+                wait,
                 current_depth,
                 output_format,
             )
@@ -113,7 +118,7 @@ async fn main() -> Result<()> {
             non_interactive,
             minimal,
         } => {
-            handle_init(non_interactive, minimal)?;
+            config_cmds::handle_init(non_interactive, minimal)?;
         }
         Commands::Gc {
             dry_run,
@@ -186,6 +191,7 @@ async fn handle_run(
     model: Option<String>,
     thinking: Option<String>,
     no_failover: bool,
+    wait: bool,
     current_depth: u32,
     output_format: OutputFormat,
 ) -> Result<i32> {
@@ -206,8 +212,9 @@ async fn handle_run(
         session_arg
     };
 
-    // 3. Load config (optional)
+    // 3. Load configs (project config + global config)
     let config = ProjectConfig::load(&project_root)?;
+    let global_config = GlobalConfig::load()?;
 
     // 4. Check recursion depth (from config or default)
     let max_depth = config
@@ -252,6 +259,9 @@ async fn handle_run(
             .unwrap_or(1)
     };
 
+    // Resolve slots directory
+    let slots_dir = GlobalConfig::slots_dir()?;
+
     // Failover state
     let mut current_tool = resolved_tool;
     let mut current_model_spec = resolved_model_spec;
@@ -292,12 +302,100 @@ async fn handle_run(
             }
         }
 
-        // 10. Execute
+        // 10. Acquire global slot
+        let tool_name_str = executor.tool_name();
+        let max_concurrent = global_config.max_concurrent(tool_name_str);
+        let _slot_guard: Option<ToolSlot>;
+
+        match try_acquire_slot(
+            &slots_dir,
+            tool_name_str,
+            max_concurrent,
+            session_arg.as_deref(),
+        )? {
+            SlotAcquireResult::Acquired(slot) => {
+                info!(
+                    tool = %tool_name_str,
+                    slot = slot.slot_index(),
+                    max = max_concurrent,
+                    "Acquired global slot"
+                );
+                _slot_guard = Some(slot);
+            }
+            SlotAcquireResult::Exhausted(status) => {
+                // All slots occupied. Try failover to another tool or wait.
+                let all_tools = global_config.all_tool_slots();
+                let all_tools_ref: Vec<(&str, u32)> =
+                    all_tools.iter().map(|(n, m)| (*n, *m)).collect();
+                let all_usage = slot_usage(&slots_dir, &all_tools_ref);
+                let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
+
+                // Check if we can failover to another tool with free slots
+                if !no_failover && attempts < max_failover_attempts {
+                    let free_alt = all_usage.iter().find(|s| {
+                        s.tool_name != tool_name_str
+                            && s.free() > 0
+                            && !tried_tools.contains(&s.tool_name)
+                            && config
+                                .as_ref()
+                                .map(|c| c.is_tool_enabled(&s.tool_name))
+                                .unwrap_or(true)
+                            && is_tool_binary_available(&s.tool_name)
+                    });
+
+                    if let Some(alt) = free_alt {
+                        info!(
+                            from = %tool_name_str,
+                            to = %alt.tool_name,
+                            reason = "slot_exhausted",
+                            "Failing over to tool with free slots"
+                        );
+                        tried_tools.push(tool_name_str.to_string());
+                        current_tool = parse_tool_name(&alt.tool_name)?;
+                        current_model_spec = None;
+                        current_model = None;
+                        continue;
+                    }
+                }
+
+                // No failover possible. Wait or abort.
+                if wait {
+                    info!(
+                        tool = %tool_name_str,
+                        "All slots occupied, waiting for a free slot"
+                    );
+                    let timeout = std::time::Duration::from_secs(300);
+                    let slot = csa_lock::slot::acquire_slot_blocking(
+                        &slots_dir,
+                        tool_name_str,
+                        max_concurrent,
+                        timeout,
+                        session_arg.as_deref(),
+                    )?;
+                    info!(
+                        tool = %tool_name_str,
+                        slot = slot.slot_index(),
+                        "Acquired slot after waiting"
+                    );
+                    _slot_guard = Some(slot);
+                } else {
+                    eprintln!("{}", diag_msg);
+                    return Ok(1);
+                }
+            }
+        }
+
+        // Get env vars for this tool from global config
+        let extra_env = global_config.env_vars(tool_name_str).cloned();
+
+        // 11. Execute
         let exec_result = if ephemeral {
             // Ephemeral: use temp directory
             let temp_dir = TempDir::new()?;
             info!("Ephemeral session in: {:?}", temp_dir.path());
-            executor.execute_in(&prompt_text, temp_dir.path()).await?
+            executor
+                .execute_in(&prompt_text, temp_dir.path(), extra_env.as_ref())
+                .await?
         } else {
             // Persistent session
             match execute_with_session(
@@ -309,6 +407,7 @@ async fn handle_run(
                 parent.clone(),
                 &project_root,
                 config.as_ref(),
+                extra_env.as_ref(),
             )
             .await
             {
@@ -334,8 +433,7 @@ async fn handle_run(
             }
         };
 
-        // 11. Check for 429 rate limit and attempt failover
-        let tool_name_str = executor.tool_name();
+        // 12. Check for 429 rate limit and attempt failover
         if let Some(rate_limit) = csa_scheduler::detect_rate_limit(
             tool_name_str,
             &exec_result.stderr_output,
@@ -425,7 +523,7 @@ async fn handle_run(
         }
     };
 
-    // 12. Print result
+    // 13. Print result
     match output_format {
         OutputFormat::Text => {
             print!("{}", result.output);
@@ -449,6 +547,7 @@ pub(crate) async fn execute_with_session(
     parent: Option<String>,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    extra_env: Option<&std::collections::HashMap<String, String>>,
 ) -> Result<csa_process::ExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg {
@@ -518,7 +617,7 @@ pub(crate) async fn execute_with_session(
 
     // Build command
     let tool_state = session.tools.get(executor.tool_name()).cloned();
-    let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session);
+    let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
 
     // Spawn child process
     let child = csa_process::spawn_tool(cmd)
@@ -640,17 +739,6 @@ pub(crate) async fn execute_with_session(
     Ok(result)
 }
 
-fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
-    let project_root = determine_project_root(None)?;
-    let config = init_project(&project_root, non_interactive, minimal)?;
-    eprintln!(
-        "Initialized project configuration at: {}",
-        ProjectConfig::config_path(&project_root).display()
-    );
-    eprintln!("Project: {}", config.project.name);
-    Ok(())
-}
-
 pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     let path = if let Some(cd_path) = cd {
         PathBuf::from(cd_path)
@@ -659,6 +747,24 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     };
 
     Ok(path.canonicalize()?)
+}
+
+/// Check if a tool's binary is available on PATH (synchronous).
+fn is_tool_binary_available(tool_name: &str) -> bool {
+    let binary = match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "codex" => "codex",
+        "claude-code" => "claude",
+        _ => return false,
+    };
+    std::process::Command::new("which")
+        .arg(binary)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {

@@ -63,6 +63,10 @@ pub enum Commands {
         /// Disable automatic 429 failover to alternative tools
         #[arg(long)]
         no_failover: bool,
+
+        /// Block-wait for a free slot instead of failing when all slots are occupied
+        #[arg(long)]
+        wait: bool,
     },
 
     /// Manage sessions
