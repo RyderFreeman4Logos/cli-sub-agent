@@ -29,6 +29,9 @@ pub enum Executor {
     Codex {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
+        /// When true, pass `-c 'notify=[]'` to suppress desktop notifications.
+        #[serde(default)]
+        suppress_notify: bool,
     },
     ClaudeCode {
         model_override: Option<String>,
@@ -94,6 +97,7 @@ impl Executor {
             "codex" => Ok(Self::Codex {
                 model_override: model,
                 thinking_budget: budget,
+                suppress_notify: false,
             }),
             "claude-code" => Ok(Self::ClaudeCode {
                 model_override: model,
@@ -118,11 +122,23 @@ impl Executor {
             ToolName::Codex => Self::Codex {
                 model_override: model,
                 thinking_budget: None,
+                suppress_notify: false,
             },
             ToolName::ClaudeCode => Self::ClaudeCode {
                 model_override: model,
                 thinking_budget: None,
             },
+        }
+    }
+
+    /// Set suppress_notify on the Codex variant from project config.
+    /// No-op for non-Codex executors.
+    pub fn set_suppress_notify(&mut self, value: bool) {
+        if let Self::Codex {
+            suppress_notify, ..
+        } = self
+        {
+            *suppress_notify = value;
         }
     }
 
@@ -201,6 +217,14 @@ impl Executor {
         }
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
+        // suppress_notify for codex in ephemeral path
+        if let Self::Codex {
+            suppress_notify: true,
+            ..
+        } = self
+        {
+            cmd.arg("-c").arg("notify=[]");
+        }
         self.append_prompt_args(&mut cmd, prompt);
         csa_process::run_and_capture(cmd).await
     }
@@ -244,9 +268,14 @@ impl Executor {
                 cmd.arg("run");
                 cmd.arg("--format").arg("json");
             }
-            Self::Codex { .. } => {
+            Self::Codex {
+                suppress_notify, ..
+            } => {
                 cmd.arg("exec");
                 cmd.arg("--dangerously-bypass-approvals-and-sandbox");
+                if *suppress_notify {
+                    cmd.arg("-c").arg("notify=[]");
+                }
             }
             Self::ClaudeCode { .. } => {
                 cmd.arg("--dangerously-skip-permissions");
@@ -333,6 +362,7 @@ impl Executor {
             Self::Codex {
                 model_override,
                 thinking_budget,
+                ..
             } => {
                 if let Some(model) = model_override {
                     cmd.arg("--model").arg(model);

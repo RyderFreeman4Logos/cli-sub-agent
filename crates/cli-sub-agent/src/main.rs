@@ -279,12 +279,13 @@ async fn handle_run(
     let result = loop {
         attempts += 1;
 
-        // 7. Build executor
+        // 7. Build executor (config auto-injects suppress_notify for codex)
         let executor = build_executor(
             &current_tool,
             current_model_spec.as_deref(),
             current_model.as_deref(),
             thinking.as_deref(),
+            config.as_ref(),
         )?;
 
         // 8. Check tool is installed

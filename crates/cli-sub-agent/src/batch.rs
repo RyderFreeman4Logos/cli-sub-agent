@@ -484,7 +484,7 @@ async fn execute_task(
     }
 
     // Build executor
-    let executor = match build_executor(&tool_name, None, task.model.as_deref(), None) {
+    let executor = match build_executor(&tool_name, None, task.model.as_deref(), None, config) {
         Ok(e) => e,
         Err(e) => {
             error!("{} - Failed to build executor: {}", task_label, e);
