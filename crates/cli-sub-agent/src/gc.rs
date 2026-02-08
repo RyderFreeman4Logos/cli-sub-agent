@@ -237,8 +237,17 @@ fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
         .ok()
 }
 
-/// Check if a process is alive (Linux-specific)
+/// Check if a process is alive (cross-platform Unix).
 fn is_process_alive(pid: u32) -> bool {
-    // On Linux, check if /proc/{pid} exists
-    std::path::Path::new(&format!("/proc/{}", pid)).exists()
+    // kill(pid, 0) checks existence without sending a signal.
+    // Returns 0 if the process exists (and we have permission),
+    // or -1 with EPERM if it exists but we lack permission.
+    // SAFETY: signal 0 is a null signal that performs error checking
+    // but does not actually send a signal.
+    let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    if ret == 0 {
+        return true;
+    }
+    // EPERM means the process exists but we can't signal it.
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
