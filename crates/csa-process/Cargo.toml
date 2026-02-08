@@ -1,0 +1,14 @@
+[package]
+name = "csa-process"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+csa-core.workspace = true
+tokio.workspace = true
+libc.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+serde.workspace = true

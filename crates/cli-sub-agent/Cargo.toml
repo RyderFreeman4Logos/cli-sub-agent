@@ -1,0 +1,34 @@
+[package]
+name = "cli-sub-agent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "csa"
+path = "src/main.rs"
+
+[dependencies]
+csa-core.workspace = true
+csa-session.workspace = true
+csa-lock.workspace = true
+csa-executor.workspace = true
+csa-process.workspace = true
+csa-config.workspace = true
+csa-resource.workspace = true
+csa-scheduler.workspace = true
+clap.workspace = true
+tokio.workspace = true
+libc.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+tempfile.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+chrono.workspace = true
+sysinfo.workspace = true
+directories.workspace = true
+which.workspace = true

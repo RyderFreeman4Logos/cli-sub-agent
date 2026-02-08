@@ -1,0 +1,22 @@
+[package]
+name = "csa-scheduler"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+csa-core.workspace = true
+csa-config.workspace = true
+csa-session.workspace = true
+csa-lock.workspace = true
+toml.workspace = true
+serde.workspace = true
+chrono.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+regex.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
