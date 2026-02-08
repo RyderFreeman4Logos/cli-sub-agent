@@ -199,22 +199,23 @@ impl ProjectConfig {
 
         // Preserve the higher schema_version before merging so that
         // check_schema_version() catches incompatibility from either source.
-        let base_schema = base_val
-            .get("schema_version")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(0) as u32;
+        // Only override when at least one file explicitly sets it; otherwise
+        // let serde's `default_schema_version()` apply during deserialization.
+        let base_schema = base_val.get("schema_version").and_then(|v| v.as_integer());
         let overlay_schema = overlay_val
             .get("schema_version")
-            .and_then(|v| v.as_integer())
-            .unwrap_or(0) as u32;
+            .and_then(|v| v.as_integer());
 
         let mut merged = merge_toml_values(base_val, overlay_val);
-        // Set schema_version to max of both sources
-        if let toml::Value::Table(ref mut table) = merged {
-            table.insert(
-                "schema_version".to_string(),
-                toml::Value::Integer(i64::from(base_schema.max(overlay_schema))),
-            );
+        // Set schema_version to max of both sources (only when at least one is explicit)
+        if let Some(max_ver) = match (base_schema, overlay_schema) {
+            (Some(b), Some(o)) => Some(b.max(o)),
+            (Some(v), None) | (None, Some(v)) => Some(v),
+            (None, None) => None,
+        } {
+            if let toml::Value::Table(ref mut table) = merged {
+                table.insert("schema_version".to_string(), toml::Value::Integer(max_ver));
+            }
         }
 
         // Roundtrip through string for reliable deserialization
@@ -425,3 +426,7 @@ min_free_swap_mb = 1024
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_merge_tests.rs"]
+mod merge_tests;
