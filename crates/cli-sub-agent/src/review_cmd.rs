@@ -94,9 +94,37 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         prompt.clone()
     };
 
-    // 11. Load global config for env injection
+    // 11. Load global config for env injection and slot control
     let global_config = GlobalConfig::load()?;
     let extra_env = global_config.env_vars(executor.tool_name());
+
+    // 11b. Acquire global slot to enforce concurrency limit
+    let max_concurrent = global_config.max_concurrent(executor.tool_name());
+    let slots_dir = GlobalConfig::slots_dir()?;
+    let _slot_guard = match csa_lock::slot::try_acquire_slot(
+        &slots_dir,
+        executor.tool_name(),
+        max_concurrent,
+        None,
+    ) {
+        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => slot,
+        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
+            anyhow::bail!(
+                "All {} slots for '{}' occupied ({}/{}). Try again later or use --tool to switch.",
+                max_concurrent,
+                executor.tool_name(),
+                status.occupied,
+                status.max_slots,
+            );
+        }
+        Err(e) => {
+            anyhow::bail!(
+                "Slot acquisition failed for '{}': {}",
+                executor.tool_name(),
+                e
+            );
+        }
+    };
 
     // 12. Execute with session
     let result = crate::execute_with_session(
