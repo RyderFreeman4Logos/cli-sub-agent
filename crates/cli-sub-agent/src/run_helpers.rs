@@ -1,6 +1,7 @@
 //! Helper functions for `csa run`: tool resolution, executor building, token parsing.
 
 use anyhow::Result;
+use std::io::Read;
 use std::path::Path;
 use tracing::warn;
 
@@ -63,16 +64,20 @@ pub(crate) fn resolve_tool_and_model(
 }
 
 /// Build an executor from tool, model_spec, model, and thinking parameters.
+///
+/// If `config` is provided, automatically injects config-driven settings
+/// (e.g., `suppress_notify` for Codex) so all call sites benefit consistently.
 pub(crate) fn build_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
     model: Option<&str>,
     thinking: Option<&str>,
+    config: Option<&ProjectConfig>,
 ) -> Result<Executor> {
-    if let Some(spec) = model_spec {
+    let mut executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
-        Ok(Executor::from_tool_name(&tool_name, Some(parsed.model)))
+        Executor::from_tool_name(&tool_name, Some(parsed.model))
     } else {
         let mut final_model = model.map(|s| s.to_string());
 
@@ -86,8 +91,15 @@ pub(crate) fn build_executor(
             }
         }
 
-        Ok(Executor::from_tool_name(tool, final_model))
+        Executor::from_tool_name(tool, final_model)
+    };
+
+    // Inject config-driven settings
+    if let Some(cfg) = config {
+        executor.set_suppress_notify(cfg.should_suppress_codex_notify());
     }
+
+    Ok(executor)
 }
 
 /// Check if a prompt is a context compress/compact command.
@@ -222,4 +234,142 @@ fn extract_cost(text: &str) -> Option<f64> {
         .collect();
 
     num_str.parse().ok()
+}
+
+/// Read prompt from CLI argument or stdin.
+pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
+    if let Some(p) = prompt {
+        if p.trim().is_empty() {
+            anyhow::bail!(
+                "Empty prompt provided. Usage:\n  csa run --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --tool <tool>"
+            );
+        }
+        Ok(p)
+    } else {
+        // No prompt argument: read from stdin
+        use std::io::IsTerminal;
+        if std::io::stdin().is_terminal() {
+            anyhow::bail!(
+                "No prompt provided and stdin is a terminal.\n\n\
+                 Usage:\n  \
+                 csa run --tool <tool> \"your prompt here\"\n  \
+                 echo \"prompt\" | csa run --tool <tool>"
+            );
+        }
+        let mut buffer = String::new();
+        std::io::stdin().read_to_string(&mut buffer)?;
+        if buffer.trim().is_empty() {
+            anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
+        }
+        Ok(buffer)
+    }
+}
+
+/// Check if a tool's binary is available on PATH (synchronous).
+pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
+    let binary = match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "codex" => "codex",
+        "claude-code" => "claude",
+        _ => return false,
+    };
+    std::process::Command::new("which")
+        .arg(binary)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// Infer whether a prompt requires editing existing files.
+///
+/// Returns:
+/// - `Some(true)` when the prompt clearly asks for implementation/editing.
+/// - `Some(false)` when the prompt clearly requests read-only analysis.
+/// - `None` when intent is ambiguous.
+pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
+    let prompt_lower = prompt.to_lowercase();
+
+    let explicit_read_only = [
+        "read-only",
+        "readonly",
+        "do not edit",
+        "don't edit",
+        "must not edit",
+        "without editing",
+    ];
+    if explicit_read_only
+        .iter()
+        .any(|marker| prompt_lower.contains(marker))
+    {
+        return Some(false);
+    }
+
+    let edit_markers = [
+        "fix ",
+        "implement",
+        "refactor",
+        "edit ",
+        "modify",
+        "update",
+        "patch",
+        "write code",
+        "create file",
+        "rename",
+    ];
+    if edit_markers
+        .iter()
+        .any(|marker| prompt_lower.contains(marker))
+    {
+        return Some(true);
+    }
+
+    let analysis_markers = [
+        "analy",
+        "review",
+        "audit",
+        "explain",
+        "summarize",
+        "investigate",
+        "research",
+    ];
+    if analysis_markers
+        .iter()
+        .any(|marker| prompt_lower.contains(marker))
+    {
+        return Some(false);
+    }
+
+    None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::infer_task_edit_requirement;
+
+    #[test]
+    fn infer_edit_requirement_detects_explicit_read_only() {
+        let result = infer_task_edit_requirement("Analyze auth flow in read-only mode");
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn infer_edit_requirement_detects_implementation_intent() {
+        let result = infer_task_edit_requirement("Fix the login bug and update tests");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_requirement_read_only_overrides_edit_words() {
+        let result = infer_task_edit_requirement("Do not edit files, only review this patch");
+        assert_eq!(result, Some(false));
+    }
+
+    #[test]
+    fn infer_edit_requirement_returns_none_for_ambiguous_prompt() {
+        let result = infer_task_edit_requirement("Continue work from previous session");
+        assert_eq!(result, None);
+    }
 }

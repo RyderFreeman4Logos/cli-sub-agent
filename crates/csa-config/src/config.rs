@@ -1,8 +1,8 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierConfig {
@@ -17,6 +17,7 @@ pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 pub struct ProjectConfig {
     #[serde(default = "default_schema_version")]
     pub schema_version: u32,
+    #[serde(default)]
     pub project: ProjectMeta,
     #[serde(default)]
     pub resources: ResourcesConfig,
@@ -36,10 +37,30 @@ fn default_schema_version() -> u32 {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectMeta {
+    #[serde(default = "default_project_name")]
     pub name: String,
+    #[serde(default = "default_created_at")]
     pub created_at: DateTime<Utc>,
     #[serde(default = "default_recursion_depth")]
     pub max_recursion_depth: u32,
+}
+
+impl Default for ProjectMeta {
+    fn default() -> Self {
+        Self {
+            name: default_project_name(),
+            created_at: default_created_at(),
+            max_recursion_depth: default_recursion_depth(),
+        }
+    }
+}
+
+fn default_project_name() -> String {
+    "default".to_string()
+}
+
+fn default_created_at() -> DateTime<Utc> {
+    Utc::now()
 }
 
 fn default_recursion_depth() -> u32 {
@@ -52,6 +73,10 @@ pub struct ToolConfig {
     pub enabled: bool,
     #[serde(default)]
     pub restrictions: Option<ToolRestrictions>,
+    /// Suppress codex desktop notifications by overriding `notify=[]` at launch.
+    /// Only effective for the codex tool. Default: false (respect codex's own config).
+    #[serde(default)]
+    pub suppress_notify: bool,
 }
 
 fn default_true() -> bool {
@@ -92,17 +117,124 @@ impl Default for ResourcesConfig {
     }
 }
 
-impl ProjectConfig {
-    /// Load config from .csa/config.toml relative to project root.
-    /// Returns None if config file doesn't exist (project not initialized).
-    pub fn load(project_root: &Path) -> Result<Option<Self>> {
-        let config_path = project_root.join(".csa").join("config.toml");
-        if !config_path.exists() {
-            return Ok(None);
+/// Deep merge two TOML values. Overlay wins for non-table values.
+/// Tables are merged recursively (project-level keys override user-level keys).
+fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml::Value {
+    match (base, overlay) {
+        (toml::Value::Table(mut base_map), toml::Value::Table(overlay_map)) => {
+            for (key, overlay_val) in overlay_map {
+                let merged_val = match base_map.remove(&key) {
+                    Some(base_val) => merge_toml_values(base_val, overlay_val),
+                    None => overlay_val,
+                };
+                base_map.insert(key, merged_val);
+            }
+            toml::Value::Table(base_map)
         }
-        let content = std::fs::read_to_string(&config_path)?;
-        let config: ProjectConfig = toml::from_str(&content)?;
+        (_, overlay) => overlay,
+    }
+}
+
+impl ProjectConfig {
+    /// Load config with fallback chain:
+    ///
+    /// 1. If both `.csa/config.toml` (project) and `~/.config/csa/config.toml` (user) exist,
+    ///    deep-merge them with project settings overriding user settings.
+    /// 2. If only project config exists, use it directly.
+    /// 3. If only user config exists, use it as fallback.
+    /// 4. If neither exists, return None.
+    pub fn load(project_root: &Path) -> Result<Option<Self>> {
+        let project_path = project_root.join(".csa").join("config.toml");
+        let user_path = Self::user_config_path();
+        Self::load_with_paths(user_path.as_deref(), &project_path)
+    }
+
+    /// Load config from explicit paths. Testable without global filesystem state.
+    ///
+    /// `user_path`: path to user-level config (None if unavailable).
+    /// `project_path`: path to project-level config.
+    pub(crate) fn load_with_paths(
+        user_path: Option<&Path>,
+        project_path: &Path,
+    ) -> Result<Option<Self>> {
+        let project_exists = project_path.exists();
+        let user_exists = user_path.is_some_and(|p| p.exists());
+
+        match (user_exists, project_exists) {
+            (false, false) => Ok(None),
+            (true, false) => {
+                // Safety: user_exists guarantees user_path is Some
+                Self::load_from_path(user_path.unwrap())
+            }
+            (false, true) => Self::load_from_path(project_path),
+            (true, true) => {
+                // Safety: user_exists guarantees user_path is Some
+                Self::load_merged(user_path.unwrap(), project_path)
+            }
+        }
+    }
+
+    fn load_from_path(path: &Path) -> Result<Option<Self>> {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read config: {}", path.display()))?;
+        let config: Self = toml::from_str(&content)
+            .with_context(|| format!("Failed to parse config: {}", path.display()))?;
         Ok(Some(config))
+    }
+
+    /// Deep-merge user config (base) with project config (overlay).
+    ///
+    /// Uses `max(schema_version)` from both configs so that
+    /// `check_schema_version()` catches incompatibility even when the
+    /// project config has an older schema than the user config.
+    fn load_merged(base_path: &Path, overlay_path: &Path) -> Result<Option<Self>> {
+        let base_str = std::fs::read_to_string(base_path)
+            .with_context(|| format!("Failed to read user config: {}", base_path.display()))?;
+        let overlay_str = std::fs::read_to_string(overlay_path).with_context(|| {
+            format!("Failed to read project config: {}", overlay_path.display())
+        })?;
+
+        let base_val: toml::Value = toml::from_str(&base_str)
+            .with_context(|| format!("Failed to parse user config: {}", base_path.display()))?;
+        let overlay_val: toml::Value = toml::from_str(&overlay_str).with_context(|| {
+            format!("Failed to parse project config: {}", overlay_path.display())
+        })?;
+
+        // Preserve the higher schema_version before merging so that
+        // check_schema_version() catches incompatibility from either source.
+        // Only override when at least one file explicitly sets it; otherwise
+        // let serde's `default_schema_version()` apply during deserialization.
+        let base_schema = base_val.get("schema_version").and_then(|v| v.as_integer());
+        let overlay_schema = overlay_val
+            .get("schema_version")
+            .and_then(|v| v.as_integer());
+
+        let mut merged = merge_toml_values(base_val, overlay_val);
+        // Set schema_version to max of both sources (only when at least one is explicit)
+        if let Some(max_ver) = match (base_schema, overlay_schema) {
+            (Some(b), Some(o)) => Some(b.max(o)),
+            (Some(v), None) | (None, Some(v)) => Some(v),
+            (None, None) => None,
+        } {
+            if let toml::Value::Table(ref mut table) = merged {
+                table.insert("schema_version".to_string(), toml::Value::Integer(max_ver));
+            }
+        }
+
+        // Roundtrip through string for reliable deserialization
+        let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;
+        let config: Self =
+            toml::from_str(&merged_str).context("Failed to deserialize merged config")?;
+        Ok(Some(config))
+    }
+
+    /// Path to user-level config: `~/.config/csa/config.toml`.
+    ///
+    /// Returns None if the config directory cannot be determined
+    /// (e.g., no HOME in containers).
+    pub fn user_config_path() -> Option<PathBuf> {
+        directories::ProjectDirs::from("", "", "csa")
+            .map(|dirs| dirs.config_dir().join("config.toml"))
     }
 
     /// Check if the config schema version is compatible with the current binary.
@@ -195,6 +327,93 @@ impl ProjectConfig {
         None
     }
 
+    /// Check if codex notifications should be suppressed for this config.
+    pub fn should_suppress_codex_notify(&self) -> bool {
+        self.tools
+            .get("codex")
+            .map(|t| t.suppress_notify)
+            .unwrap_or(false)
+    }
+
+    /// Save a user-level config template to `~/.config/csa/config.toml`.
+    ///
+    /// Creates the directory if needed. Returns the path written, or None
+    /// if the config directory cannot be determined.
+    pub fn save_user_config_template() -> Result<Option<PathBuf>> {
+        let path = match Self::user_config_path() {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!("Failed to create config directory: {}", parent.display())
+            })?;
+        }
+        std::fs::write(&path, Self::user_config_template())
+            .with_context(|| format!("Failed to write user config template: {}", path.display()))?;
+        Ok(Some(path))
+    }
+
+    /// Generate a commented template for user-level config.
+    pub fn user_config_template() -> String {
+        r#"# CSA User-Level Configuration
+# Location: ~/.config/csa/config.toml
+#
+# This file provides default tiers, tool settings, and aliases
+# that apply across all CSA projects unless overridden by
+# project-level .csa/config.toml.
+
+schema_version = 1
+
+[resources]
+min_free_memory_mb = 2048
+min_free_swap_mb = 1024
+
+# Tool configuration defaults.
+# [tools.codex]
+# enabled = true
+# suppress_notify = true  # Suppress codex desktop notifications
+
+# [tools.gemini-cli]
+# enabled = true
+
+# Tier definitions.
+# Uncomment and customize for your environment.
+#
+# [tiers.tier-1-quick]
+# description = "Quick tasks: fast models"
+# models = [
+#     "gemini-cli/google/gemini-2.5-flash/low",
+# ]
+#
+# [tiers.tier-2-standard]
+# description = "Standard tasks: balanced models"
+# models = [
+#     "codex/openai/o3/medium",
+#     "gemini-cli/google/gemini-2.5-pro/medium",
+# ]
+#
+# [tiers.tier-3-heavy]
+# description = "Complex tasks: strongest models"
+# models = [
+#     "claude-code/anthropic/claude-sonnet-4-5-20250929/high",
+#     "codex/openai/o3/high",
+# ]
+
+# Tier mapping: task_type -> tier_name
+# [tier_mapping]
+# default = "tier-2-standard"
+# quick = "tier-1-quick"
+# complex = "tier-3-heavy"
+
+# Aliases: shorthand -> full model spec
+# [aliases]
+# fast = "gemini-cli/google/gemini-2.5-flash/low"
+# smart = "codex/openai/o3/high"
+"#
+        .to_string()
+    }
+
     /// Resolve alias to model spec string.
     ///
     /// If input is an alias key, returns the resolved value.
@@ -210,3 +429,7 @@ impl ProjectConfig {
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_merge_tests.rs"]
+mod merge_tests;

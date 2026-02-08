@@ -235,11 +235,11 @@ complex-reasoning = "tier3"
 **Usage:**
 
 ```bash
-# Uses tier_mapping["code-review"] -> tier2
-csa run --tier code-review "Review authentication changes"
-
-# Uses tier_mapping["default"] -> tier3 (fallback)
+# Uses tier_mapping["default"] (fallback when --tool and --model-spec are omitted)
 csa run "Implement new feature"
+
+# Inspect available tier configuration
+csa tiers list
 ```
 
 **Fallback Behavior:**
@@ -430,11 +430,11 @@ quality = "opencode/google/gemini-2.5-pro/high"
 # Auto-select tool from default tier
 csa run "Implement user authentication"
 
-# Use specific tier mapping
-csa run --tier code-review "Review PR #123"
+# Inspect configured tiers and model order
+csa tiers list
 
-# Use explicit tier name
-csa run --tier tier1 "Quick syntax check"
+# Force a specific model spec from a tier
+csa run --model-spec "codex/openai/gpt-5.3-codex/xhigh" "Review PR #123"
 ```
 
 ### Using Aliases

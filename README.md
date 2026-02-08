@@ -125,7 +125,7 @@ csa config validate   # Validate config file
 
 ## Architecture
 
-CSA is a **Recursive Agent Container** built as a Rust workspace with 6 crates:
+CSA is a **Recursive Agent Container** built as a Rust workspace with 9 crates:
 
 ```
 crates/
@@ -133,7 +133,10 @@ crates/
   csa-config/      # Project configuration (.csa/config.toml)
   csa-core/        # Shared types, errors, validation
   csa-executor/    # Tool execution and model spec parsing
+  csa-lock/        # File locking and global slot coordination
+  csa-process/     # Process execution and output capture
   csa-resource/    # Memory monitoring, usage stats, resource guard
+  csa-scheduler/   # Tier rotation and 429 failover decisions
   csa-session/     # Session CRUD, genealogy, locking
 ```
 
@@ -223,7 +226,7 @@ csa run --tool opencode --session impl "Implement based on research"
 - Parallel writes to isolated directories: Proceed with caution
 - Parallel writes to shared files: **Forbidden**
 
-See [docs/recursion.md](docs/recursion.md) for patterns.
+See [docs/architecture.md](docs/architecture.md) and [docs/sessions.md](docs/sessions.md) for recursion and genealogy patterns.
 
 ### Environment Variables
 

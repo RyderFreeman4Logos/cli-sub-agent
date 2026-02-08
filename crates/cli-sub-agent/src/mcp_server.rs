@@ -494,6 +494,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
         resolved_model_spec.as_deref(),
         resolved_model.as_deref(),
         None,
+        config.as_ref(),
     )?;
 
     // Check tool is installed

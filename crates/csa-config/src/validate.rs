@@ -7,6 +7,21 @@ use crate::config::ProjectConfig;
 /// Returns Ok(()) if valid, or Err with descriptive messages.
 pub fn validate_config(project_root: &Path) -> Result<()> {
     let config = ProjectConfig::load(project_root)?;
+    validate_loaded_config(config)
+}
+
+/// Validate config loaded with explicit paths (bypasses user-level fallback).
+/// Useful for testing without filesystem side effects.
+#[cfg(test)]
+pub(crate) fn validate_config_with_paths(
+    user_path: Option<&Path>,
+    project_path: &Path,
+) -> Result<()> {
+    let config = ProjectConfig::load_with_paths(user_path, project_path)?;
+    validate_loaded_config(config)
+}
+
+fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     let config = match config {
         Some(c) => c,
         None => bail!("No configuration found. Run `csa init` first."),
@@ -110,6 +125,7 @@ mod tests {
             ToolConfig {
                 enabled: true,
                 restrictions: None,
+                suppress_notify: false,
             },
         );
 
@@ -180,6 +196,7 @@ mod tests {
             ToolConfig {
                 enabled: true,
                 restrictions: None,
+                suppress_notify: false,
             },
         );
 
@@ -282,9 +299,10 @@ mod tests {
     #[test]
     fn test_validate_config_fails_if_no_config() {
         let dir = tempdir().unwrap();
-        // No config created
-
-        let result = validate_config(dir.path());
+        // Use validate_config_with_paths(None, ...) to bypass user-level
+        // fallback AND exercise the full validation path (None → bail!).
+        let project_path = dir.path().join(".csa").join("config.toml");
+        let result = validate_config_with_paths(None, &project_path);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()

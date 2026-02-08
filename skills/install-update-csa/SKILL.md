@@ -1,29 +1,133 @@
 ---
-name: CSA Init (Project Configuration)
-description: Interactive project configuration wizard for CSA — tool selection, model discovery via CLI commands, intelligent tier grouping, and edit restrictions
+name: install-update-csa
+description: Install, update, and configure CSA — binary check, global config setup, project-level tool selection, model discovery, intelligent tier grouping, and edit restrictions
 allowed-tools: Bash, Read, Write, Edit, AskUserQuestion
+triggers:
+  - "install csa"
+  - "update csa"
+  - "setup csa"
+  - "csa init"
+  - "configure csa"
+  - "init project"
 ---
 
-# CSA Init: Project Configuration Wizard
+# Install & Update CSA
 
-Interactively initialize `.csa/config.toml` for a project.
+Install, verify, and configure CSA at both global and project levels.
 Discovers installed tools, queries available models, groups them into
 capability tiers, and sets tool-specific restrictions (e.g., gemini-cli edit ban).
 
 ## When to Use
 
-- First time setting up CSA in a project
+- First time installing or setting up CSA
+- Updating CSA binary to a new version
+- Checking or creating global user config (`~/.config/csa/config.toml`)
+- First time setting up CSA in a project (project-level config)
 - Reconfiguring tool/model selection for changed requirements
 - Adding newly installed tools or models
 
 ## Output
 
+- CSA binary verified in PATH
+- `~/.config/csa/config.toml` — global user configuration (TOML)
 - `.csa/config.toml` — project configuration (TOML)
 - `.csa/` added to `.gitignore`
 
 ---
 
 ## Workflow
+
+### Phase 0: Verify CSA Installation
+
+**Step 1**: Check if `csa` binary is in PATH:
+
+```bash
+which csa 2>/dev/null && csa --version
+```
+
+- If **found**: Display version, proceed to Phase 0.5.
+- If **not found**: Provide installation instructions:
+  ```
+  CSA is not installed. Install options:
+  1. From source: `cargo install --path .` (if in the csa repo)
+  2. From crates.io: `cargo install cli-sub-agent` (when published)
+  3. Manual build: `cargo build --release && cp target/release/csa ~/.cargo/bin/`
+  ```
+  Ask user if they want to proceed with installation or skip.
+
+**Step 2**: Check if version is current (if a known latest version exists):
+```bash
+csa --version
+```
+Report the version. If it looks outdated, suggest updating.
+
+### Phase 0.5: Check Global Config
+
+Check if the global user config exists at `~/.config/csa/config.toml`:
+
+```bash
+ls ~/.config/csa/config.toml 2>/dev/null
+```
+
+- If **not found**:
+  - Inform the user that a global config provides user-level defaults (tiers, tool settings) shared across all projects.
+  - Ask if they want to create one now using `AskUserQuestion`.
+  - If yes: CSA can generate a default template via `ProjectConfig::save_user_config_template()`, or write a sensible default with common tiers and tool settings.
+  - The global config does NOT need a `[project]` section (it applies to all projects).
+
+- If **found**:
+  - Display a summary of the current global config (enabled tools, tier count, key settings).
+  - Ask if the user wants to update it.
+
+**Key settings to include in global config**:
+```toml
+# ~/.config/csa/config.toml
+# Global defaults — project configs override these values.
+
+[tools.gemini-cli]
+enabled = true
+
+[tools.gemini-cli.restrictions]
+allow_edit_existing_files = false
+
+[tools.codex]
+enabled = true
+suppress_notify = true  # Suppress codex desktop notifications when run via CSA
+
+[tools.opencode]
+enabled = true
+
+[tools.claude-code]
+enabled = true
+
+[tiers.tier-1-quick]
+description = "Quick tasks, low cost"
+models = [
+    "claude-code/anthropic/claude-haiku-4-5/low",
+    "codex/openai/gpt-5.1-codex/low",
+]
+
+[tiers.tier-2-standard]
+description = "Standard development tasks"
+models = [
+    "claude-code/anthropic/claude-sonnet-4-5/medium",
+    "codex/openai/gpt-5.2-codex/medium",
+]
+
+[tiers.tier-3-complex]
+description = "Complex reasoning, architecture, deep analysis"
+models = [
+    "claude-code/anthropic/claude-sonnet-4-5/high",
+    "codex/openai/gpt-5.3-codex/high",
+]
+
+[tiers.tier-4-critical]
+description = "Security-critical, deep analysis, final decisions"
+models = [
+    "claude-code/anthropic/claude-opus-4-6/high",
+    "claude-code/anthropic/claude-opus-4-6/xhigh",
+]
+```
 
 ### Phase 1: Detect Installed Tools
 
@@ -50,12 +154,14 @@ Only show tools that are actually installed.
 
 For each **enabled** tool, discover models by running CLI commands with LLM assistance:
 
-| Tool | Discovery Command | Provider |
-|------|-------------------|----------|
+| Tool | Discovery Method | Provider |
+|------|-----------------|----------|
 | gemini-cli | `gemini models list` | google |
 | opencode | `opencode models` | (parse from output) |
-| codex | `codex --list-models` | (parse from output) |
-| claude-code | Known: opus-4-6, sonnet-4-5, haiku-4-5 | anthropic |
+| codex | Read `~/.codex/config.toml` (`model` field) + well-known list | openai |
+| claude-code | Known models (no discovery command) | anthropic |
+
+**Note on codex**: Codex CLI has no `--list-models` command. Discover the user's current model from `~/.codex/config.toml`, then supplement with the well-known model list.
 
 **Fallback**: If a discovery command fails or doesn't exist, run `{tool} --help` to find the correct subcommand. If that also fails, use the well-known model list for that tool.
 
@@ -66,9 +172,8 @@ For each **enabled** tool, discover models by running CLI commands with LLM assi
 | gemini-cli | google | gemini-3-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash |
 | opencode | anthropic | claude-opus-4-6, claude-sonnet-4-5 |
 | opencode | google | antigravity-gemini-3-pro, antigravity-gemini-3-flash |
-| opencode | openai | gpt-5.2-codex, gpt-5.1-codex |
-| codex | anthropic | claude-opus-4-6, claude-sonnet-4-5 |
-| codex | openai | gpt-5.2-codex, gpt-5.1-codex |
+| opencode | openai | gpt-5.3-codex, gpt-5.2-codex, gpt-5.1-codex |
+| codex | openai | gpt-5.3-codex, gpt-5.2-codex, gpt-5.1-codex |
 | claude-code | anthropic | claude-opus-4-6, claude-sonnet-4-5, claude-haiku-4-5 |
 
 ### Phase 3.5: Filter Providers and Models
@@ -141,7 +246,28 @@ Group all expanded model specs into tiers. The agent **must decide grouping inte
 
 Users **can rename tiers, add more tiers, or move model specs between tiers** by editing the TOML in any text editor. The format is designed for easy cut-and-paste.
 
-### Phase 6: Set Tool Restrictions
+### Phase 6: Set Tool-Specific Settings
+
+Use `AskUserQuestion` to configure tool-specific settings. Only ask about tools that are **enabled** for this project.
+
+#### 6A: Codex `suppress_notify`
+
+If codex is enabled, ask the user:
+
+> **Suppress codex desktop notifications when running via CSA?**
+>
+> Context: When CSA spawns codex as a sub-agent, codex's default desktop notifications
+> (configured in `~/.codex/config.toml`) can produce excessive noise. Enabling this
+> passes `-c 'notify=[]'` to codex at launch, overriding its notification settings.
+
+| Option | Effect |
+|--------|--------|
+| `suppress_notify = true` (Recommended) | CSA passes `-c 'notify=[]'` to codex, silencing desktop notifications |
+| `suppress_notify = false` | Codex uses its own `~/.codex/config.toml` notification settings |
+
+Default: **`true`** (recommended for most users since CSA is non-interactive).
+
+#### 6B: gemini-cli Edit Restrictions
 
 | Restriction | Default | Rationale |
 |-------------|---------|-----------|
@@ -170,19 +296,19 @@ max_recursion_depth = 5
 # ─── Tool Selection ───────────────────────────────────────────
 # enabled = true/false to toggle tools for this project
 
-[tools.gemini-cli]
-enabled = true
+# [tools.gemini-cli]
+# enabled = true
+# NOTE: Uncomment when gemini-cli account is available.
 
-[tools.gemini-cli.restrictions]
-# gemini-cli has significantly higher probability of deleting
-# comments and code when editing existing files. Default: false.
-allow_edit_existing_files = false
+# [tools.gemini-cli.restrictions]
+# allow_edit_existing_files = false
 
 [tools.opencode]
-enabled = true
+enabled = false
 
 [tools.codex]
-enabled = false
+enabled = true
+suppress_notify = true  # Suppress codex desktop notifications when run via CSA
 
 [tools.claude-code]
 enabled = true
@@ -191,7 +317,7 @@ enabled = true
 
 [resources]
 min_free_memory_mb = 512
-min_free_swap_mb = 256
+min_free_swap_mb = 4096
 
 # ─── Model Tiers ─────────────────────────────────────────────
 # Format: "tool/provider/model/thinking_budget"
@@ -203,28 +329,26 @@ min_free_swap_mb = 256
 [tiers.tier-1-quick]
 description = "Quick tasks, low cost"
 models = [
-    "gemini-cli/google/gemini-2.0-flash/low",
-    "gemini-cli/google/gemini-2.5-flash/low",
-    "opencode/anthropic/claude-haiku-4-5/low",
+    "claude-code/anthropic/claude-haiku-4-5/low",
+    "codex/openai/gpt-5.1-codex/low",
 ]
 
 [tiers.tier-2-standard]
 description = "Standard development tasks"
 models = [
-    "opencode/anthropic/claude-sonnet-4-5/medium",
-    "gemini-cli/google/gemini-2.5-pro/medium",
+    "claude-code/anthropic/claude-sonnet-4-5/medium",
+    "codex/openai/gpt-5.2-codex/medium",
 ]
 
 [tiers.tier-3-complex]
-description = "Complex reasoning, architecture"
+description = "Complex reasoning, architecture, deep analysis"
 models = [
     "claude-code/anthropic/claude-sonnet-4-5/high",
-    "opencode/anthropic/claude-sonnet-4-5/high",
-    "gemini-cli/google/gemini-2.5-pro/high",
+    "codex/openai/gpt-5.3-codex/high",
 ]
 
 [tiers.tier-4-critical]
-description = "Security-critical, deep analysis"
+description = "Security-critical, deep analysis, final decisions"
 models = [
     "claude-code/anthropic/claude-opus-4-6/high",
     "claude-code/anthropic/claude-opus-4-6/xhigh",
@@ -237,14 +361,14 @@ models = [
 analysis = "tier-1-quick"
 implementation = "tier-2-standard"
 architecture = "tier-3-complex"
-security = "tier-3-complex"  # or "tier-4-critical" if defined
+security = "tier-4-critical"
 
 # ─── Aliases ─────────────────────────────────────────────────
 # Shorthand names for frequently used model specs
 
 [aliases]
-fast = "gemini-cli/google/gemini-2.0-flash/low"
-default = "opencode/anthropic/claude-sonnet-4-5/medium"
+fast = "codex/openai/gpt-5.1-codex/low"
+default = "claude-code/anthropic/claude-sonnet-4-5/medium"
 heavy = "claude-code/anthropic/claude-opus-4-6/high"
 ```
 

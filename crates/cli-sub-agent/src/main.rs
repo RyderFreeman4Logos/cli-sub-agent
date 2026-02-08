@@ -1,6 +1,5 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::signal::unix::{signal, SignalKind};
@@ -18,8 +17,11 @@ mod self_update;
 mod session_cmds;
 mod setup_cmds;
 mod skill_cmds;
+mod tiers_cmd;
 
-use cli::{Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands};
+use cli::{
+    Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands, TiersCommands,
+};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{create_session_log_writer, Executor};
@@ -34,8 +36,8 @@ use csa_session::{
     TokenUsage, ToolState,
 };
 use run_helpers::{
-    build_executor, is_compress_command, parse_token_usage, parse_tool_name,
-    resolve_tool_and_model, truncate_prompt,
+    build_executor, infer_task_edit_requirement, is_compress_command, is_tool_binary_available,
+    parse_token_usage, parse_tool_name, read_prompt, resolve_tool_and_model, truncate_prompt,
 };
 
 #[tokio::main]
@@ -169,6 +171,11 @@ async fn main() -> Result<()> {
                 setup_cmds::handle_setup_opencode()?;
             }
         },
+        Commands::Tiers { cmd } => match cmd {
+            TiersCommands::List { cd } => {
+                tiers_cmd::handle_tiers_list(cd, output_format)?;
+            }
+        },
         Commands::SelfUpdate { check } => {
             self_update::handle_self_update(check)?;
         }
@@ -272,12 +279,13 @@ async fn handle_run(
     let result = loop {
         attempts += 1;
 
-        // 7. Build executor
+        // 7. Build executor (config auto-injects suppress_notify for codex)
         let executor = build_executor(
             &current_tool,
             current_model_spec.as_deref(),
             current_model.as_deref(),
             thinking.as_deref(),
+            config.as_ref(),
         )?;
 
         // 8. Check tool is installed
@@ -472,16 +480,20 @@ async fn handle_run(
                 None
             };
 
-            // Determine if task needs edit capability
-            let needs_edit = config
-                .as_ref()
-                .is_some_and(|cfg| cfg.can_tool_edit_existing(tool_name_str));
+            // Infer task edit requirement from prompt when explicit.
+            // If ambiguous, keep conservative behavior by falling back to the failed tool's
+            // configured edit capability.
+            let task_needs_edit = infer_task_edit_requirement(&prompt_text).or_else(|| {
+                config
+                    .as_ref()
+                    .map(|cfg| cfg.can_tool_edit_existing(tool_name_str))
+            });
 
             if let Some(ref cfg) = config {
                 let action = csa_scheduler::decide_failover(
                     tool_name_str,
                     "default",
-                    needs_edit,
+                    task_needs_edit,
                     session_state.as_ref(),
                     &tried_tools,
                     cfg,
@@ -747,50 +759,4 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     };
 
     Ok(path.canonicalize()?)
-}
-
-/// Check if a tool's binary is available on PATH (synchronous).
-fn is_tool_binary_available(tool_name: &str) -> bool {
-    let binary = match tool_name {
-        "gemini-cli" => "gemini",
-        "opencode" => "opencode",
-        "codex" => "codex",
-        "claude-code" => "claude",
-        _ => return false,
-    };
-    std::process::Command::new("which")
-        .arg(binary)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
-    if let Some(p) = prompt {
-        if p.trim().is_empty() {
-            anyhow::bail!(
-                "Empty prompt provided. Usage:\n  csa run --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --tool <tool>"
-            );
-        }
-        Ok(p)
-    } else {
-        // No prompt argument: read from stdin
-        use std::io::IsTerminal;
-        if std::io::stdin().is_terminal() {
-            anyhow::bail!(
-                "No prompt provided and stdin is a terminal.\n\n\
-                 Usage:\n  \
-                 csa run --tool <tool> \"your prompt here\"\n  \
-                 echo \"prompt\" | csa run --tool <tool>"
-            );
-        }
-        let mut buffer = String::new();
-        std::io::stdin().read_to_string(&mut buffer)?;
-        if buffer.trim().is_empty() {
-            anyhow::bail!("Empty prompt from stdin. Provide a non-empty prompt.");
-        }
-        Ok(buffer)
-    }
 }
