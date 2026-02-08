@@ -23,21 +23,51 @@ Orchestrate an adversarial debate between multiple AI tools to produce well-reas
 - `max_rounds` (optional): Maximum debate rounds per tier (default: 3)
 - `max_escalations` (optional): Maximum tier escalations (default: 2)
 
+## Prerequisites (MANDATORY — verify before ANY debate action)
+
+1. `csa` binary MUST be in PATH. Verify: `which csa`
+2. Project MUST have tiers configured. Verify: `csa --format json tiers list`
+3. At least ONE tier MUST have >= 2 models (debate requires proposer + critic)
+
+If ANY prerequisite fails:
+- **STOP IMMEDIATELY**
+- Report the specific failure to the user
+- Suggest remediation (e.g., "Run `csa init` to configure tiers")
+- **DO NOT attempt to execute tools directly**
+
+## FORBIDDEN Actions
+
+- **NEVER** execute `gemini`, `opencode`, `codex`, or `claude` commands directly
+- **NEVER** bypass CSA by constructing tool commands manually
+- **NEVER** fall back to direct tool execution if CSA fails
+- **NEVER** hardcode model names — ALL models come from `csa tiers list`
+- **NEVER** guess model specs — if `csa tiers list` returns no usable models, ERROR
+
+If CSA invocation fails (non-zero exit, timeout, parsing error):
+- Report the exact error to the user
+- Suggest `csa doctor` or manual investigation
+- **STOP the debate** — do NOT retry with direct tool calls
+
 ## Execution Protocol
 
-### Step 0: Discover Available Models
+### Step 0: Discover Available Models (with validation)
 
 ```bash
 csa --format json tiers list
 ```
+
+**Validation (MANDATORY)**:
+1. Command exits 0 → parse JSON. Continue.
+2. Command exits non-zero → **STOP. Report error. Do NOT proceed.**
+3. JSON `tiers` array is empty → **STOP. "No tiers configured. Run `csa init`."**
+4. Selected tier has < 2 models → **STOP. "Tier needs >= 2 models for debate."**
+5. JSON parsing fails → **STOP. Report parsing error.**
 
 Parse the JSON output to get:
 - `tiers[].name`: tier name (sorted by name, lower = simpler)
 - `tiers[].models[]`: model specs in `tool/provider/model/thinking_budget` format
 - `tiers[].description`: human-readable tier description
 - `tier_mapping.default`: default tier for general tasks
-
-If no tiers are configured, stop and instruct the user to run `csa init`.
 
 ### Step 1: Select Starting Tier
 
@@ -209,3 +239,5 @@ Debate flow:
 2. Final synthesis document produced with clear strategy.
 3. All CSA invocations used `--ephemeral` (no session pollution).
 4. No hardcoded model names in any invocation.
+5. Zero direct tool invocations (all through `csa run`).
+6. If any CSA command failed, debate was stopped and error reported.
