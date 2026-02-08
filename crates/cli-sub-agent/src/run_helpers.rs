@@ -287,7 +287,7 @@ pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
 ///
 /// Returns:
 /// - `Some(true)` when the prompt clearly asks for implementation/editing.
-/// - `Some(false)` when the prompt clearly requests read-only analysis.
+/// - `Some(false)` when the prompt explicitly requests read-only execution.
 /// - `None` when intent is ambiguous.
 pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
     let prompt_lower = prompt.to_lowercase();
@@ -326,22 +326,6 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
         return Some(true);
     }
 
-    let analysis_markers = [
-        "analy",
-        "review",
-        "audit",
-        "explain",
-        "summarize",
-        "investigate",
-        "research",
-    ];
-    if analysis_markers
-        .iter()
-        .any(|marker| prompt_lower.contains(marker))
-    {
-        return Some(false);
-    }
-
     None
 }
 
@@ -370,6 +354,12 @@ mod tests {
     #[test]
     fn infer_edit_requirement_returns_none_for_ambiguous_prompt() {
         let result = infer_task_edit_requirement("Continue work from previous session");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn infer_edit_requirement_keeps_analysis_only_prompt_ambiguous() {
+        let result = infer_task_edit_requirement("Review auth flow and report issues");
         assert_eq!(result, None);
     }
 }
