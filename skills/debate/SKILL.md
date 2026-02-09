@@ -14,22 +14,22 @@ triggers:
 
 ## Purpose
 
-Orchestrate an adversarial debate between heterogeneous AI tools to produce well-reasoned strategies. The `csa debate` command enforces model heterogeneity: when the caller is claude-code, debate runs codex (and vice versa), ensuring different model families stress-test each other's reasoning.
+Orchestrate an adversarial debate using CSA's independent model routing to produce well-reasoned strategies. The `csa debate` command automatically selects an appropriate debate model: when the caller is claude-code, CSA routes to an independent backend (ensuring different reasoning systems stress-test each other).
 
 Two usage modes:
-1. **Default Workflow** (single-call + session continuation): The caller proposes, `csa debate` critiques via heterogeneous model, caller rebuts, repeat until consensus.
+1. **Default Workflow** (single-call + session continuation): The caller proposes, `csa debate` critiques via independent model, caller rebuts, repeat until consensus.
 2. **Deep Orchestrated Debate** (multi-round + tier escalation): The skill orchestrates multiple rounds with tier-based model selection for complex strategy questions.
 
 ## CLI Reference
 
 ```bash
-# New debate — heterogeneous model analyzes the question
+# New debate — independent model analyzes the question
 csa debate "Should we use gRPC or REST for our new microservice API?"
 
 # Continue debate — pass counterargument in existing session
 csa debate --session <SESSION_ID> "I disagree because gRPC adds complexity for our small team"
 
-# Override tool selection (bypass auto-heterogeneous)
+# Override tool selection (bypass auto routing)
 csa debate --tool codex "How should we handle distributed transactions?"
 
 # Override model within selected tool
@@ -48,7 +48,7 @@ This is the pattern for embedding `csa debate` as the standard decision-making s
 ```
 1. You (the caller) have a question or proposal
 2. Run: csa debate "your question/proposal"
-3. Read the heterogeneous model's response
+3. Read the independent model's response
 4. If you agree → adopt the strategy, note the consensus
 5. If you disagree → counter-argue:
    csa debate --session <ID> "I disagree because X. My alternative is Y."
@@ -64,7 +64,7 @@ This is the pattern for embedding `csa debate` as the standard decision-making s
 Before any non-trivial design decision (architecture, API design, data model, error handling strategy):
 
 1. Run `csa debate "describe the decision and your initial leaning"`
-2. Read the heterogeneous model's analysis
+2. Read the independent model's analysis
 3. If the model raises valid concerns you hadn't considered, revise your approach
 4. If you disagree, counter-argue: `csa debate --session <ID> "your counterpoint"`
 5. Continue until consensus or 3 rounds (whichever comes first)
@@ -289,7 +289,7 @@ Every debate result MUST include:
 
 **Why**: Debate results are used as evidence in code review arbitration (pr-codex-bot),
 security audits, and design decisions. Without model specs, future reviewers cannot
-assess the quality or heterogeneity of the arbitration.
+assess the quality or independence of the arbitration.
 
 ## PR Integration (when used for code review arbitration)
 
