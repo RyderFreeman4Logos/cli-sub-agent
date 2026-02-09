@@ -220,6 +220,7 @@ mod tests {
             },
             resources: Default::default(),
             tools,
+            review: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),

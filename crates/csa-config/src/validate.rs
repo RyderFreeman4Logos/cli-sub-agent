@@ -29,6 +29,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
 
     validate_project_meta(&config)?;
     validate_tools(&config)?;
+    validate_review(&config)?;
     validate_tiers(&config)?;
 
     Ok(())
@@ -57,6 +58,21 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
                 known_tools
             );
         }
+    }
+    Ok(())
+}
+
+fn validate_review(config: &ProjectConfig) -> Result<()> {
+    let Some(review) = &config.review else {
+        return Ok(());
+    };
+
+    let supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
+    if !supported.contains(&review.tool.as_str()) {
+        bail!(
+            "Invalid [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
+            review.tool
+        );
     }
     Ok(())
 }
@@ -111,6 +127,7 @@ mod tests {
     use crate::config::{
         ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, CURRENT_SCHEMA_VERSION,
     };
+    use crate::global::ReviewConfig;
     use chrono::Utc;
     use std::collections::HashMap;
     use tempfile::tempdir;
@@ -150,6 +167,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools,
+            review: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
@@ -174,6 +192,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
+            review: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -209,6 +228,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools,
+            review: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -219,6 +239,37 @@ mod tests {
         let result = validate_config(dir.path());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Unknown tool"));
+    }
+
+    #[test]
+    fn test_validate_config_fails_on_invalid_review_tool() {
+        let dir = tempdir().unwrap();
+
+        let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools: HashMap::new(),
+            review: Some(ReviewConfig {
+                tool: "invalid-tool".to_string(),
+            }),
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+
+        config.save(dir.path()).unwrap();
+
+        let result = validate_config(dir.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid [review].tool value"));
     }
 
     #[test]
@@ -243,6 +294,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
+            review: None,
             tiers,
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -283,6 +335,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
+            review: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
@@ -332,6 +385,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
+            review: None,
             tiers,
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -372,6 +426,7 @@ mod tests {
             },
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
+            review: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),

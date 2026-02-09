@@ -19,6 +19,7 @@ Orchestrate an adversarial debate between multiple AI tools to produce well-reas
 ## Required Inputs
 
 - `question`: The strategy question or problem to debate (positional argument or from user context)
+- `tool` (optional): Debate tool selection override (default: `auto`)
 - `tier` (optional): Starting tier name (default: uses `default` tier mapping from config)
 - `max_rounds` (optional): Maximum debate rounds per tier (default: 3)
 - `max_escalations` (optional): Maximum tier escalations (default: 2)
@@ -28,6 +29,7 @@ Orchestrate an adversarial debate between multiple AI tools to produce well-reas
 1. `csa` binary MUST be in PATH. Verify: `which csa`
 2. Project MUST have tiers configured. Verify: `csa --format json tiers list`
 3. At least ONE tier MUST have >= 2 models (debate requires proposer + critic)
+4. If debate tool selection is enforced (explicit tool, or `auto` with codex/claude-code parent), at least ONE tier MUST have >= 2 models for that tool
 
 If ANY prerequisite fails:
 - **STOP IMMEDIATELY**
@@ -60,7 +62,7 @@ csa --format json tiers list
 1. Command exits 0 → parse JSON. Continue.
 2. Command exits non-zero → **STOP. Report error. Do NOT proceed.**
 3. JSON `tiers` array is empty → **STOP. "No tiers configured. Run `csa init`."**
-4. Selected tier has < 2 models → **STOP. "Tier needs >= 2 models for debate."**
+4. No tier has >= 2 models → **STOP. "At least one tier needs >= 2 models for debate."**
 5. JSON parsing fails → **STOP. Report parsing error.**
 
 Parse the JSON output to get:
@@ -69,13 +71,41 @@ Parse the JSON output to get:
 - `tiers[].description`: human-readable tier description
 - `tier_mapping.default`: default tier for general tasks
 
-### Step 1: Select Starting Tier
+### Step 1: Resolve Debate Tool (Heterogeneous Auto)
+
+Debate tool selection is configured globally in `~/.config/cli-sub-agent/config.toml`:
+
+```toml
+[debate]
+tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
+```
+
+Resolution rules:
+
+1. If the user provides an explicit `tool` input, use it.
+2. Otherwise, use the global `[debate].tool` value (default: `auto` when absent).
+3. If `tool == "auto"`:
+   - Read parent tool context from `$CSA_TOOL` (fallback: `$CSA_PARENT_TOOL`)
+   - If parent is `claude-code` → debate tool = `codex`
+   - If parent is `codex` → debate tool = `claude-code`
+   - Otherwise → **STOP** with guidance to set `[debate].tool` explicitly (or pass `tool`)
+
+**Rationale:** In `auto` mode, debate must be heterogeneous relative to the caller. CSA must not silently fall back.
+
+### Step 2: Select Starting Tier (and Filter Models)
 
 - If `tier` is specified, use that tier.
 - Otherwise, use the tier mapped to `default` in `tier_mapping`.
 - Record the ordered list of all tier names for potential escalation.
 
-### Step 2: Debate Loop
+For the selected tier, build the `models[]` list:
+
+- Start with `tiers[chosen_tier].models`
+- If a debate tool is resolved (Step 1), **filter** to only model specs whose tool prefix matches the debate tool
+- Validate the filtered `models[]` has >= 2 entries (proposal + critique)
+- If it has < 2 entries, try the next higher tier; if no tier works, **STOP** and instruct the user to add >=2 models for the debate tool to a tier
+
+### Step 3: Debate Loop
 
 Within the selected tier, models alternate via round-robin:
 - `models[0]` = Proposer (Round 1), Responder (Round 2), ...
@@ -136,7 +166,7 @@ Respond to each criticism:
 If the critique fundamentally undermines your approach, propose a new strategy."
 ```
 
-### Step 3: Convergence Evaluation
+### Step 4: Convergence Evaluation
 
 After each critique-response pair, YOU (Claude Code, the orchestrator) evaluate:
 
@@ -151,7 +181,7 @@ After each critique-response pair, YOU (Claude Code, the orchestrator) evaluate:
 - The question's complexity exceeds the current tier's reasoning capability
 - Both sides acknowledge the need for deeper analysis
 
-### Step 4: Escalation (if needed)
+### Step 5: Escalation (if needed)
 
 When escalation is triggered:
 1. Find the next higher tier (by sorted tier name order).
@@ -173,7 +203,7 @@ You have been escalated to provide deeper analysis. Build on the previous debate
 3. Address all unresolved criticisms"
 ```
 
-### Step 5: Final Synthesis
+### Step 6: Final Synthesis
 
 After the debate concludes (convergence or max rounds/escalations reached), YOU synthesize:
 

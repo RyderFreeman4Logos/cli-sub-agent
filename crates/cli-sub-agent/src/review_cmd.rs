@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
+use std::path::Path;
 use tracing::{error, info};
 
 use crate::cli::ReviewArgs;
+use csa_config::global::heterogeneous_counterpart;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
@@ -49,6 +51,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         config.as_ref(),
         &global_config,
         parent_tool.as_deref(),
+        &project_root,
     )?;
 
     // 8. Build executor
@@ -149,9 +152,20 @@ fn resolve_review_tool(
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     parent_tool: Option<&str>,
+    project_root: &Path,
 ) -> Result<ToolName> {
     if let Some(tool) = arg_tool {
         return Ok(tool);
+    }
+
+    if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
+        return resolve_review_tool_from_value(&project_review.tool, parent_tool, project_root)
+            .with_context(|| {
+                format!(
+                    "Failed to resolve review tool from project config: {}",
+                    ProjectConfig::config_path(project_root).display()
+                )
+            });
     }
 
     match global_config.resolve_review_tool(parent_tool) {
@@ -161,28 +175,60 @@ fn resolve_review_tool(
                 tool_name
             )
         }),
-        Err(err) => {
-            // Keep `csa review` usable in top-level/manual flows where no parent tool context exists.
-            // In these cases we preserve the historical fallback behavior.
-            info!(
-                reason = %err,
-                "Review tool auto-detection unavailable, falling back to project/default tool selection"
-            );
-            fallback_review_tool(project_config)
-        }
+        Err(_) => Err(review_auto_resolution_error(parent_tool, project_root)),
     }
 }
 
-fn fallback_review_tool(project_config: Option<&ProjectConfig>) -> Result<ToolName> {
-    if let Some(cfg) = project_config {
-        cfg.tools
-            .iter()
-            .find(|(_, tool_cfg)| tool_cfg.enabled)
-            .and_then(|(name, _)| parse_tool_name(name))
-            .ok_or_else(|| anyhow::anyhow!("No enabled tools in project config"))
-    } else {
-        Ok(ToolName::GeminiCli)
+fn resolve_review_tool_from_value(
+    tool_value: &str,
+    parent_tool: Option<&str>,
+    project_root: &Path,
+) -> Result<ToolName> {
+    if tool_value == "auto" {
+        let resolved = parent_tool
+            .and_then(heterogeneous_counterpart)
+            .ok_or_else(|| review_auto_resolution_error(parent_tool, project_root))?;
+        return parse_tool_name(resolved).ok_or_else(|| {
+            anyhow::anyhow!(
+                "BUG: auto review tool resolution returned invalid tool '{}'",
+                resolved
+            )
+        });
     }
+
+    parse_tool_name(tool_value).ok_or_else(|| {
+        anyhow::anyhow!(
+            "Invalid project [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
+            tool_value
+        )
+    })
+}
+
+fn review_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) -> anyhow::Error {
+    let parent = parent_tool.unwrap_or("<none>").escape_default().to_string();
+    let global_path = GlobalConfig::config_path()
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "~/.config/cli-sub-agent/config.toml".to_string());
+    let project_path = ProjectConfig::config_path(project_root)
+        .display()
+        .to_string();
+
+    anyhow::anyhow!(
+        "AUTO review tool selection failed (tool = \"auto\").\n\n\
+STOP: Do not proceed. Ask the user to configure the review tool explicitly.\n\n\
+Parent tool context: {parent}\n\
+Supported auto mapping: claude-code <-> codex\n\n\
+Choose one:\n\
+1) Global config (user-level): {global_path}\n\
+   [review]\n\
+   tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
+2) Project config override: {project_path}\n\
+   [review]\n\
+   tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
+3) CLI override: csa review --tool codex\n\n\
+Reason: CSA enforces heterogeneity in auto mode and will not fall back."
+    )
 }
 
 fn parse_tool_name(name: &str) -> Option<ToolName> {
@@ -280,6 +326,7 @@ mod tests {
             project: ProjectMeta::default(),
             resources: ResourcesConfig::default(),
             tools: tool_map,
+            review: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -295,6 +342,7 @@ mod tests {
             Some(&cfg),
             &global,
             Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
         )
         .unwrap();
         assert!(matches!(tool, ToolName::Codex));
@@ -304,16 +352,32 @@ mod tests {
     fn resolve_review_tool_uses_global_review_config_with_parent_tool() {
         let global = GlobalConfig::default();
         let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-        let tool = resolve_review_tool(None, Some(&cfg), &global, Some("claude-code")).unwrap();
+        let tool = resolve_review_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap();
         assert!(matches!(tool, ToolName::Codex));
     }
 
     #[test]
-    fn resolve_review_tool_falls_back_without_parent_tool_context() {
+    fn resolve_review_tool_errors_without_parent_tool_context() {
         let global = GlobalConfig::default();
         let cfg = project_config_with_enabled_tools(&["opencode"]);
-        let tool = resolve_review_tool(None, Some(&cfg), &global, None).unwrap();
-        assert!(matches!(tool, ToolName::Opencode));
+        let err = resolve_review_tool(
+            None,
+            Some(&cfg),
+            &global,
+            None,
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("AUTO review tool selection failed"));
     }
 
     #[test]
@@ -321,9 +385,54 @@ mod tests {
         let mut global = GlobalConfig::default();
         global.review.tool = "invalid-tool".to_string();
         let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-        let err = resolve_review_tool(None, Some(&cfg), &global, Some("codex")).unwrap_err();
+        let err = resolve_review_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("codex"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap_err();
         assert!(err
             .to_string()
             .contains("Invalid [review].tool value 'invalid-tool'"));
+    }
+
+    #[test]
+    fn resolve_review_tool_prefers_project_override() {
+        let global = GlobalConfig::default();
+        let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
+        cfg.review = Some(csa_config::global::ReviewConfig {
+            tool: "opencode".to_string(),
+        });
+
+        let tool = resolve_review_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap();
+        assert!(matches!(tool, ToolName::Opencode));
+    }
+
+    #[test]
+    fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
+        let global = GlobalConfig::default();
+        let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
+        cfg.review = Some(csa_config::global::ReviewConfig {
+            tool: "auto".to_string(),
+        });
+
+        let tool = resolve_review_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("claude-code"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap();
+        assert!(matches!(tool, ToolName::Codex));
     }
 }

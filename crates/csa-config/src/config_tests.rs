@@ -35,6 +35,7 @@ fn test_save_and_load_roundtrip() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -50,6 +51,37 @@ fn test_save_and_load_roundtrip() {
     assert_eq!(loaded.project.max_recursion_depth, 5);
     assert!(loaded.tools.contains_key("gemini-cli"));
     assert!(loaded.tools.get("gemini-cli").unwrap().enabled);
+}
+
+#[test]
+fn test_save_and_load_roundtrip_with_review_override() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test-project".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools: HashMap::new(),
+        review: Some(crate::global::ReviewConfig {
+            tool: "codex".to_string(),
+        }),
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+    };
+
+    config.save(dir.path()).unwrap();
+
+    // Use load_with_paths to avoid accidental merge with host user config.
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let loaded = ProjectConfig::load_with_paths(None, &project_path).unwrap();
+    let loaded = loaded.unwrap();
+
+    assert_eq!(loaded.review.unwrap().tool, "codex");
 }
 
 #[test]
@@ -73,6 +105,7 @@ fn test_is_tool_enabled_configured_enabled() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -102,6 +135,7 @@ fn test_is_tool_enabled_configured_disabled() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -121,6 +155,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -152,6 +187,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -181,6 +217,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -200,6 +237,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -252,6 +290,7 @@ fn test_resolve_tier_default_selection() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
@@ -294,6 +333,7 @@ fn test_resolve_tier_fallback_to_tier3() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers,
         tier_mapping: HashMap::new(), // No mapping for "unknown_task"
         aliases: HashMap::new(),
@@ -351,6 +391,7 @@ fn test_resolve_tier_skips_disabled_tools() {
         },
         resources: ResourcesConfig::default(),
         tools,
+        review: None,
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
@@ -384,6 +425,7 @@ fn test_resolve_alias() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases,
@@ -420,6 +462,7 @@ fn test_max_recursion_depth_override() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -542,6 +585,7 @@ fn test_schema_version_current_is_ok() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -562,6 +606,7 @@ fn test_schema_version_older_is_ok() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
@@ -581,6 +626,7 @@ fn test_schema_version_newer_fails() {
         },
         resources: ResourcesConfig::default(),
         tools: HashMap::new(),
+        review: None,
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
