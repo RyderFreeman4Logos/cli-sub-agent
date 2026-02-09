@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::global::ReviewConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierConfig {
     pub description: String,
@@ -23,6 +25,15 @@ pub struct ProjectConfig {
     pub resources: ResourcesConfig,
     #[serde(default)]
     pub tools: HashMap<String, ToolConfig>,
+    /// Optional per-project override for `csa review` tool selection.
+    ///
+    /// Example:
+    /// ```toml
+    /// [review]
+    /// tool = "codex"  # or "claude-code"
+    /// ```
+    #[serde(default)]
+    pub review: Option<ReviewConfig>,
     #[serde(default)]
     pub tiers: HashMap<String, TierConfig>,
     #[serde(default)]

@@ -41,6 +41,10 @@ enabled = true
 [tools.claude-code]
 enabled = true
 
+# Optional: per-project override for `csa review` tool selection.
+[review]
+tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
+
 [tiers.tier1]
 description = "Quick tasks (low thinking budget)"
 models = [
@@ -171,6 +175,20 @@ Modified Prompt:
 - `codex`
 - `opencode`
 - `claude-code`
+
+### `[review]` - Review Tool Selection (Optional)
+
+Configure which tool `csa review` uses for the current project.
+
+```toml
+[review]
+tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
+```
+
+**Notes:**
+- This section overrides the user-level global review tool selection (`~/.config/cli-sub-agent/config.toml`) for this project.
+- In `auto` mode, CSA enforces heterogeneity and refuses to fall back when parent tool context is missing or unsupported.
+- Auto mode mapping: `claude-code` parent -> `codex`, `codex` parent -> `claude-code`.
 
 ### `[tiers.{tier_name}]` - Model Tiers
 

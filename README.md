@@ -169,6 +169,9 @@ allow_edit_existing_files = false   # Safe default
 [tools.opencode]
 enabled = true
 
+[review]
+tool = "auto"  # Requires parent tool context; otherwise set an explicit tool or use --tool
+
 [tiers.tier-1-quick]
 description = "Quick lookups"
 models = ["gemini-cli/google/gemini-2.5-flash/low"]

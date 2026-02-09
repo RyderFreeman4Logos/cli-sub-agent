@@ -23,6 +23,8 @@ pub struct GlobalConfig {
     pub tools: HashMap<String, GlobalToolConfig>,
     #[serde(default)]
     pub review: ReviewConfig,
+    #[serde(default)]
+    pub debate: DebateConfig,
 }
 
 /// Configuration for the code review workflow.
@@ -46,6 +48,31 @@ impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
             tool: default_review_tool(),
+        }
+    }
+}
+
+/// Configuration for the debate workflow.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DebateConfig {
+    /// Debate tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
+    ///
+    /// In `auto` mode, the debate tool is the heterogeneous counterpart of the parent:
+    /// - Parent is `claude-code` → debate with `codex`
+    /// - Parent is `codex` → debate with `claude-code`
+    /// - Otherwise → error (user must configure explicitly)
+    #[serde(default = "default_debate_tool")]
+    pub tool: String,
+}
+
+fn default_debate_tool() -> String {
+    "auto".to_string()
+}
+
+impl Default for DebateConfig {
+    fn default() -> Self {
+        Self {
+            tool: default_debate_tool(),
         }
     }
 }
@@ -185,6 +212,13 @@ max_concurrent = 3  # Default max parallel instances per tool
 # Set explicitly if auto-detection fails (e.g., parent is opencode).
 [review]
 tool = "auto"
+
+# Debate workflow: which tool to use for adversarial debate / arbitration.
+# "auto" selects the heterogeneous counterpart of the parent tool:
+#   claude-code parent -> codex, codex parent -> claude-code.
+# Set explicitly if auto-detection fails (e.g., parent is opencode).
+[debate]
+tool = "auto"
 "#
         .to_string()
     }
@@ -218,12 +252,37 @@ tool = "auto"
             Some("codex") => Ok("claude-code".to_string()),
             Some(other) => Err(anyhow::anyhow!(
                 "Cannot auto-detect review tool: parent is '{}'. \
-                 Set [review] tool = \"codex\" in ~/.config/cli-sub-agent/config.toml",
+                 Set [review] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml",
                 other
             )),
             None => Err(anyhow::anyhow!(
                 "Cannot auto-detect review tool: no parent tool context. \
-                 Set [review] tool = \"codex\" in ~/.config/cli-sub-agent/config.toml"
+                 Set [review] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml"
+            )),
+        }
+    }
+
+    /// Resolve the debate tool based on config and parent tool context.
+    ///
+    /// In `auto` mode:
+    /// - Parent is `claude-code` → `codex` (model heterogeneity)
+    /// - Parent is `codex` → `claude-code`
+    /// - Otherwise → error with guidance to configure manually
+    pub fn resolve_debate_tool(&self, parent_tool: Option<&str>) -> Result<String> {
+        if self.debate.tool != "auto" {
+            return Ok(self.debate.tool.clone());
+        }
+        match parent_tool {
+            Some("claude-code") => Ok("codex".to_string()),
+            Some("codex") => Ok("claude-code".to_string()),
+            Some(other) => Err(anyhow::anyhow!(
+                "Cannot auto-detect debate tool: parent is '{}'. \
+                 Set [debate] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml",
+                other
+            )),
+            None => Err(anyhow::anyhow!(
+                "Cannot auto-detect debate tool: no parent tool context. \
+                 Set [debate] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml"
             )),
         }
     }
@@ -382,6 +441,12 @@ max_concurrent = 1
     }
 
     #[test]
+    fn test_debate_config_default() {
+        let config = GlobalConfig::default();
+        assert_eq!(config.debate.tool, "auto");
+    }
+
+    #[test]
     fn test_resolve_review_tool_auto_claude_code_parent() {
         let config = GlobalConfig::default();
         let tool = config.resolve_review_tool(Some("claude-code")).unwrap();
@@ -426,6 +491,45 @@ tool = "codex"
 "#;
         let config: GlobalConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.review.tool, "codex");
+    }
+
+    #[test]
+    fn test_resolve_debate_tool_auto_claude_code_parent() {
+        let config = GlobalConfig::default();
+        let tool = config.resolve_debate_tool(Some("claude-code")).unwrap();
+        assert_eq!(tool, "codex");
+    }
+
+    #[test]
+    fn test_resolve_debate_tool_auto_codex_parent() {
+        let config = GlobalConfig::default();
+        let tool = config.resolve_debate_tool(Some("codex")).unwrap();
+        assert_eq!(tool, "claude-code");
+    }
+
+    #[test]
+    fn test_resolve_debate_tool_auto_unknown_parent() {
+        let config = GlobalConfig::default();
+        let result = config.resolve_debate_tool(Some("opencode"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("opencode"));
+    }
+
+    #[test]
+    fn test_resolve_debate_tool_auto_no_parent() {
+        let config = GlobalConfig::default();
+        let result = config.resolve_debate_tool(None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_debate_config() {
+        let toml_str = r#"
+[debate]
+tool = "codex"
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.debate.tool, "codex");
     }
 
     #[test]
