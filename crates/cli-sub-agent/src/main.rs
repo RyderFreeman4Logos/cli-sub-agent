@@ -225,9 +225,9 @@ async fn handle_run(
     };
 
     // 3. Load configs and validate recursion depth
-    let (config, global_config) = match pipeline::load_and_validate(&project_root, current_depth) {
-        Ok(configs) => configs,
-        Err(_) => return Ok(1),
+    let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
+    else {
+        return Ok(1);
     };
 
     // 5. Read prompt

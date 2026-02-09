@@ -16,14 +16,14 @@ use csa_process::check_tool_installed;
 
 /// Load ProjectConfig and GlobalConfig, validate recursion depth.
 ///
-/// Returns (project_config, global_config) on success.
-/// Returns Ok(exit_code=1) if depth exceeded.
+/// Returns `Some((project_config, global_config))` on success.
+/// Returns `Ok(None)` if recursion depth exceeded (caller should exit with code 1).
+/// Returns `Err` for config loading/parsing failures (caller should propagate).
 pub(crate) fn load_and_validate(
     project_root: &Path,
     current_depth: u32,
-) -> Result<(Option<ProjectConfig>, GlobalConfig)> {
+) -> Result<Option<(Option<ProjectConfig>, GlobalConfig)>> {
     let config = ProjectConfig::load(project_root)?;
-    let global_config = GlobalConfig::load()?;
 
     let max_depth = config
         .as_ref()
@@ -35,10 +35,11 @@ pub(crate) fn load_and_validate(
             "Max recursion depth ({}) exceeded. Current: {}. Do it yourself.",
             max_depth, current_depth
         );
-        anyhow::bail!("Recursion depth exceeded");
+        return Ok(None);
     }
 
-    Ok((config, global_config))
+    let global_config = GlobalConfig::load()?;
+    Ok(Some((config, global_config)))
 }
 
 /// Build executor and validate tool is installed and enabled.
@@ -55,6 +56,17 @@ pub(crate) async fn build_and_validate_executor(
     let executor =
         crate::run_helpers::build_executor(tool, model_spec, model, thinking_budget, config)?;
 
+    // Check tool is enabled in config (before checking installation)
+    if let Some(cfg) = config {
+        if !cfg.is_tool_enabled(executor.tool_name()) {
+            error!(
+                "Tool '{}' is disabled in project config",
+                executor.tool_name()
+            );
+            anyhow::bail!("Tool disabled in config");
+        }
+    }
+
     // Check tool is installed
     if let Err(e) = check_tool_installed(executor.executable_name()).await {
         error!(
@@ -64,17 +76,6 @@ pub(crate) async fn build_and_validate_executor(
             executor.tool_name()
         );
         anyhow::bail!("{}", e);
-    }
-
-    // Check tool is enabled in config
-    if let Some(cfg) = config {
-        if !cfg.is_tool_enabled(executor.tool_name()) {
-            error!(
-                "Tool '{}' is disabled in project config",
-                executor.tool_name()
-            );
-            anyhow::bail!("Tool disabled in config");
-        }
     }
 
     Ok(executor)

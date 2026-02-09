@@ -12,11 +12,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let project_root = crate::determine_project_root(args.cd.as_deref())?;
 
     // 2. Load config and validate recursion depth
-    let (config, global_config) =
-        match crate::pipeline::load_and_validate(&project_root, current_depth) {
-            Ok(configs) => configs,
-            Err(_) => return Ok(1),
-        };
+    let Some((config, global_config)) =
+        crate::pipeline::load_and_validate(&project_root, current_depth)?
+    else {
+        return Ok(1);
+    };
 
     // 3. Get git diff based on scope
     let diff_output = get_review_diff(&args)?;
