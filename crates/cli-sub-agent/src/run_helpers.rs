@@ -292,6 +292,7 @@ pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
 pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
     let prompt_lower = prompt.to_lowercase();
 
+    // Phase 0: Check explicit read-only markers (substring-safe phrases).
     let explicit_read_only = [
         "read-only",
         "readonly",
@@ -307,23 +308,46 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
         return Some(false);
     }
 
-    let edit_markers = [
-        "fix ",
-        "implement",
-        "refactor",
-        "edit ",
-        "modify",
-        "update",
-        "patch",
-        "write code",
-        "create file",
-        "rename",
-    ];
-    if edit_markers
-        .iter()
-        .any(|marker| prompt_lower.contains(marker))
-    {
+    // Tokenize once: lowercase words with trailing/leading punctuation stripped.
+    let tokens: Vec<&str> = prompt_lower
+        .split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .collect();
+
+    // Phase 1: Unambiguous multi-word token sequences.
+    let seq_pairs: &[(&str, &str)] = &[("write", "code"), ("create", "file")];
+    for window in tokens.windows(2) {
+        for (a, b) in seq_pairs {
+            if window[0] == *a && window[1] == *b {
+                return Some(true);
+            }
+        }
+    }
+
+    // Phase 2: "fix" as an independent word followed by a determiner.
+    // Prevents "prefix the" from matching by requiring "fix" as a whole token.
+    let fix_determiners = ["the", "a", "this", "that", "my", "our"];
+    for window in tokens.windows(2) {
+        if window[0] == "fix" && fix_determiners.contains(&window[1]) {
+            return Some(true);
+        }
+    }
+
+    // Phase 3: Single-word markers that are unambiguous as standalone words.
+    let word_markers = ["refactor", "rename", "modify", "patch"];
+    if tokens.iter().any(|t| word_markers.contains(t)) {
         return Some(true);
+    }
+
+    // Phase 4: Ambiguous verbs — only match as the first meaningful word.
+    // Skips polite prefixes like "please", "can you", "could you".
+    let skip_prefixes: &[&str] = &["please", "can", "could", "would", "you"];
+    let first_verb = tokens.iter().find(|t| !skip_prefixes.contains(t)).copied();
+    let verb_markers = ["edit", "update", "implement", "fix"];
+    if let Some(verb) = first_verb {
+        if verb_markers.contains(&verb) {
+            return Some(true);
+        }
     }
 
     None
@@ -361,5 +385,80 @@ mod tests {
     fn infer_edit_requirement_keeps_analysis_only_prompt_ambiguous() {
         let result = infer_task_edit_requirement("Review auth flow and report issues");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn infer_edit_no_false_positive_on_explain_implementation() {
+        let result = infer_task_edit_requirement("Explain the implementation details");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn infer_edit_no_false_positive_on_check_updates() {
+        let result = infer_task_edit_requirement("Check for updates in the dependency list");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn infer_edit_detects_leading_verb_implement() {
+        let result = infer_task_edit_requirement("Implement JWT validation in auth module");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_detects_refactor_as_word() {
+        let result = infer_task_edit_requirement("Please refactor the auth module");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_fix_this_triggers() {
+        let result = infer_task_edit_requirement("Fix this compilation error");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_review_and_fix_is_ambiguous() {
+        // "review and fix" — "fix" is not the first verb, so stays ambiguous.
+        let result = infer_task_edit_requirement("Review and fix issues");
+        assert_eq!(result, None);
+    }
+
+    // Regression tests from codex review: substring boundary issues
+    #[test]
+    fn infer_edit_no_false_positive_on_prefix_the() {
+        let result = infer_task_edit_requirement("Prefix the string with 0x");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn infer_edit_no_false_positive_on_suffix_a() {
+        let result = infer_task_edit_requirement("Suffix a newline to the output");
+        assert_eq!(result, None);
+    }
+
+    // Polite prefixes should be skipped
+    #[test]
+    fn infer_edit_please_implement_triggers() {
+        let result = infer_task_edit_requirement("Please implement the auth module");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_could_you_update_triggers() {
+        let result = infer_task_edit_requirement("Could you update the config parser?");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_fix_as_first_verb_triggers() {
+        let result = infer_task_edit_requirement("Fix the broken CI pipeline");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_bare_fix_as_first_verb() {
+        let result = infer_task_edit_requirement("Fix issues in the parser");
+        assert_eq!(result, Some(true));
     }
 }
