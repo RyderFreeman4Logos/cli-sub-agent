@@ -1,8 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use std::path::{Path, PathBuf};
 use tempfile::TempDir;
-use tokio::signal::unix::{signal, SignalKind};
 use tracing::{info, warn};
 
 mod batch;
@@ -24,21 +22,15 @@ mod tiers_cmd;
 use cli::{
     Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands, TiersCommands,
 };
-use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::{OutputFormat, ToolName};
-use csa_executor::{create_session_log_writer, Executor};
-use csa_lock::acquire_lock;
+use csa_config::GlobalConfig;
+use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::slot::{
     format_slot_diagnostic, slot_usage, try_acquire_slot, SlotAcquireResult, ToolSlot,
 };
-use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
-use csa_session::{
-    create_session, get_session_dir, load_session, resolve_session_prefix, save_session,
-    TokenUsage, ToolState,
-};
+use csa_session::{load_session, resolve_session_prefix};
 use run_helpers::{
-    infer_task_edit_requirement, is_compress_command, is_tool_binary_available, parse_token_usage,
-    parse_tool_name, read_prompt, resolve_tool_and_model, truncate_prompt,
+    infer_task_edit_requirement, is_tool_binary_available, parse_tool_name, read_prompt,
+    resolve_tool_and_model,
 };
 
 #[tokio::main]
@@ -191,7 +183,7 @@ async fn main() -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_run(
-    tool: Option<ToolName>,
+    tool: Option<ToolArg>,
     prompt: Option<String>,
     session_arg: Option<String>,
     last: bool,
@@ -208,7 +200,7 @@ async fn handle_run(
     output_format: OutputFormat,
 ) -> Result<i32> {
     // 1. Determine project root
-    let project_root = determine_project_root(cd.as_deref())?;
+    let project_root = pipeline::determine_project_root(cd.as_deref())?;
 
     // 2. Resolve --last flag to session ID
     let session_arg = if last {
@@ -233,14 +225,86 @@ async fn handle_run(
     // 5. Read prompt
     let prompt_text = read_prompt(prompt)?;
 
-    // 6. Resolve tool and model_spec
-    let (resolved_tool, resolved_model_spec, resolved_model) = resolve_tool_and_model(
-        tool.clone(),
-        model_spec.as_deref(),
-        model.as_deref(),
-        config.as_ref(),
-        &project_root,
-    )?;
+    // 6. Convert ToolArg to ToolSelectionStrategy
+    let strategy = tool.unwrap_or(ToolArg::Auto).into_strategy();
+
+    // 7. Resolve initial tool based on strategy
+    let (initial_tool, resolved_model_spec, resolved_model) = match &strategy {
+        ToolSelectionStrategy::Explicit(t) => {
+            // Explicit tool from CLI — still apply alias resolution
+            resolve_tool_and_model(
+                Some(*t),
+                model_spec.as_deref(),
+                model.as_deref(),
+                config.as_ref(),
+                &project_root,
+            )?
+        }
+        ToolSelectionStrategy::AnyAvailable => {
+            // Use tier-based selection (current behavior)
+            resolve_tool_and_model(
+                None,
+                model_spec.as_deref(),
+                model.as_deref(),
+                config.as_ref(),
+                &project_root,
+            )?
+        }
+        ToolSelectionStrategy::HeterogeneousStrict => {
+            // Get parent tool from environment
+            let parent_tool_name = std::env::var("CSA_TOOL")
+                .or_else(|_| std::env::var("CSA_PARENT_TOOL"))
+                .ok();
+
+            if let Some(parent_str) = parent_tool_name.as_deref() {
+                // Have parent context, resolve heterogeneous tool
+                let parent_tool = parse_tool_name(parent_str)?;
+                let enabled_tools = if let Some(ref cfg) = config {
+                    csa_config::global::all_known_tools()
+                        .iter()
+                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .copied()
+                        .collect::<Vec<_>>()
+                } else {
+                    csa_config::global::all_known_tools().to_vec()
+                };
+
+                match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
+                    Some(tool) => {
+                        // Resolve model/model-spec for the selected tool (preserves --model/--model-spec flags)
+                        resolve_tool_and_model(
+                            Some(tool),
+                            model_spec.as_deref(),
+                            model.as_deref(),
+                            config.as_ref(),
+                            &project_root,
+                        )?
+                    }
+                    None => {
+                        anyhow::bail!(
+                            "No heterogeneous tool available (parent: {}, family: {}).\n\n\
+                             If this is a low-risk task (exploration, documentation, code reading),\n\
+                             consider using `--tool any-available` instead.",
+                            parent_tool.as_str(),
+                            parent_tool.model_family()
+                        );
+                    }
+                }
+            } else {
+                // No parent context, fall back to AnyAvailable with warning
+                warn!("HeterogeneousStrict requested but no parent tool context found. Falling back to AnyAvailable.");
+                resolve_tool_and_model(
+                    None,
+                    model_spec.as_deref(),
+                    model.as_deref(),
+                    config.as_ref(),
+                    &project_root,
+                )?
+            }
+        }
+    };
+
+    let resolved_tool = initial_tool;
 
     // Determine max failover attempts from tier config
     let max_failover_attempts = if no_failover {
@@ -378,7 +442,7 @@ async fn handle_run(
                 .await?
         } else {
             // Persistent session
-            match execute_with_session(
+            match pipeline::execute_with_session(
                 &executor,
                 &current_tool,
                 &prompt_text,
@@ -519,216 +583,4 @@ async fn handle_run(
     }
 
     Ok(result.exit_code)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn execute_with_session(
-    executor: &Executor,
-    tool: &ToolName,
-    prompt: &str,
-    session_arg: Option<String>,
-    description: Option<String>,
-    parent: Option<String>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    extra_env: Option<&std::collections::HashMap<String, String>>,
-) -> Result<csa_process::ExecutionResult> {
-    // Check for parent session violation: a child process must not operate on its own session
-    if let Some(ref session_id) = session_arg {
-        if let Ok(env_session) = std::env::var("CSA_SESSION_ID") {
-            if env_session == *session_id {
-                return Err(csa_core::error::AppError::ParentSessionViolation.into());
-            }
-        }
-    }
-
-    // Resolve or create session
-    let mut session = if let Some(ref session_id) = session_arg {
-        let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
-        let resolved_id = resolve_session_prefix(&sessions_dir, session_id)?;
-        load_session(project_root, &resolved_id)?
-    } else {
-        let parent_id = parent.or_else(|| std::env::var("CSA_SESSION_ID").ok());
-        create_session(project_root, description.as_deref(), parent_id.as_deref())?
-    };
-
-    let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-
-    // Create session log writer
-    let (_log_writer, _log_guard) =
-        create_session_log_writer(&session_dir).context("Failed to create session log writer")?;
-
-    // Acquire lock with truncated prompt as reason
-    let lock_reason = truncate_prompt(prompt, 80);
-    let _lock =
-        acquire_lock(&session_dir, executor.tool_name(), &lock_reason).with_context(|| {
-            format!(
-                "Failed to acquire lock for session {}",
-                session.meta_session_id
-            )
-        })?;
-
-    // Resource guard
-    let mut resource_guard = if let Some(cfg) = config {
-        let limits = ResourceLimits {
-            min_free_memory_mb: cfg.resources.min_free_memory_mb,
-            min_free_swap_mb: cfg.resources.min_free_swap_mb,
-            initial_estimates: cfg.resources.initial_estimates.clone(),
-        };
-        // Stats stored at project state level, not per-session
-        let project_state_dir = csa_session::get_session_root(project_root)?;
-        let stats_path = project_state_dir.join("usage_stats.toml");
-        Some(ResourceGuard::new(limits, &stats_path))
-    } else {
-        None
-    };
-
-    // Check resource availability
-    if let Some(ref mut guard) = resource_guard {
-        guard.check_availability(executor.tool_name())?;
-    }
-
-    info!("Executing in session: {}", session.meta_session_id);
-
-    // Apply restrictions if configured
-    let can_edit = config.map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let effective_prompt = if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        executor.apply_restrictions(prompt, false)
-    } else {
-        prompt.to_string()
-    };
-
-    // Build command
-    let tool_state = session.tools.get(executor.tool_name()).cloned();
-    let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
-
-    // Spawn child process
-    let child = csa_process::spawn_tool(cmd)
-        .await
-        .context("Failed to spawn tool process")?;
-
-    // Get child PID and start memory monitor
-    let child_pid = child.id().context("Failed to get child process PID")?;
-    let monitor = MemoryMonitor::start(child_pid);
-
-    // Set up signal handlers for SIGTERM and SIGINT
-    let mut sigterm =
-        signal(SignalKind::terminate()).context("Failed to install SIGTERM handler")?;
-    let mut sigint = signal(SignalKind::interrupt()).context("Failed to install SIGINT handler")?;
-
-    // Wait for either child completion or signal
-    let wait_future = csa_process::wait_and_capture(child);
-    tokio::pin!(wait_future);
-
-    let result = tokio::select! {
-        result = &mut wait_future => {
-            result.context("Failed to wait for tool process")?
-        }
-        _ = sigterm.recv() => {
-            info!("Received SIGTERM, forwarding to child process group");
-            // Forward SIGTERM to the child's process group (negative PID)
-            // SAFETY: kill() is async-signal-safe. We use the negative of child_pid
-            // to target the entire process group created by setsid().
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(child_pid as i32), libc::SIGTERM);
-            }
-            // Wait for child to exit after signal
-            wait_future.await.context("Failed to wait for tool process after SIGTERM")?
-        }
-        _ = sigint.recv() => {
-            info!("Received SIGINT, forwarding to child process group");
-            // Forward SIGINT to the child's process group
-            // SAFETY: Same as SIGTERM handler above
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(child_pid as i32), libc::SIGINT);
-            }
-            // Wait for child to exit after signal
-            wait_future.await.context("Failed to wait for tool process after SIGINT")?
-        }
-    };
-
-    // Stop memory monitor and record usage
-    let peak_memory_mb = monitor.stop().await;
-    if let Some(ref mut guard) = resource_guard {
-        guard.record_usage(executor.tool_name(), peak_memory_mb);
-    }
-
-    // Extract provider session ID from output
-    let provider_session_id = csa_executor::extract_session_id(tool, &result.output);
-
-    // Parse token usage from output (best-effort)
-    let token_usage = parse_token_usage(&result.output);
-
-    // Update session state
-    session
-        .tools
-        .entry(executor.tool_name().to_string())
-        .and_modify(|t| {
-            // Only update provider_session_id if extraction succeeded
-            if let Some(ref session_id) = provider_session_id {
-                t.provider_session_id = Some(session_id.clone());
-            }
-            t.last_action_summary = result.summary.clone();
-            t.last_exit_code = result.exit_code;
-            t.updated_at = chrono::Utc::now();
-
-            // Update token usage if parsed successfully
-            if let Some(ref usage) = token_usage {
-                t.token_usage = Some(usage.clone());
-            }
-        })
-        .or_insert_with(|| ToolState {
-            provider_session_id,
-            last_action_summary: result.summary.clone(),
-            last_exit_code: result.exit_code,
-            updated_at: chrono::Utc::now(),
-            token_usage: token_usage.clone(),
-        });
-    session.last_accessed = chrono::Utc::now();
-
-    // Detect compress/compact commands: mark session as Available for reuse
-    if result.exit_code == 0 && is_compress_command(prompt) {
-        session.context_status.is_compacted = true;
-        session.context_status.last_compacted_at = Some(chrono::Utc::now());
-        session.phase = csa_session::SessionPhase::Available;
-        info!(
-            session = %session.meta_session_id,
-            "Session compacted and marked Available for reuse"
-        );
-    }
-
-    // Update cumulative token usage if we got new tokens
-    if let Some(new_usage) = token_usage {
-        let cumulative = session
-            .total_token_usage
-            .get_or_insert(TokenUsage::default());
-        cumulative.input_tokens =
-            Some(cumulative.input_tokens.unwrap_or(0) + new_usage.input_tokens.unwrap_or(0));
-        cumulative.output_tokens =
-            Some(cumulative.output_tokens.unwrap_or(0) + new_usage.output_tokens.unwrap_or(0));
-        cumulative.total_tokens =
-            Some(cumulative.total_tokens.unwrap_or(0) + new_usage.total_tokens.unwrap_or(0));
-        cumulative.estimated_cost_usd = Some(
-            cumulative.estimated_cost_usd.unwrap_or(0.0)
-                + new_usage.estimated_cost_usd.unwrap_or(0.0),
-        );
-    }
-
-    // Save session
-    save_session(&session)?;
-
-    Ok(result)
-}
-
-pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
-    let path = if let Some(cd_path) = cd {
-        PathBuf::from(cd_path)
-    } else {
-        std::env::current_dir()?
-    };
-
-    Ok(path.canonicalize()?)
 }

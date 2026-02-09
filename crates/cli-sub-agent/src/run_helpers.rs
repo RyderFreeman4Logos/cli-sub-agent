@@ -16,6 +16,8 @@ use csa_session::TokenUsage;
 /// - tool: the selected tool (from CLI or tier-based selection)
 /// - model_spec: optional model spec string (from CLI or tier)
 /// - model: optional model string (from CLI, with alias resolution applied)
+///
+/// When tool is None, uses tier-based round-robin selection.
 pub(crate) fn resolve_tool_and_model(
     tool: Option<ToolName>,
     model_spec: Option<&str>,

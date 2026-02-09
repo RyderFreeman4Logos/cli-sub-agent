@@ -5,7 +5,7 @@ use csa_core::types::OutputFormat;
 
 /// Handle `csa tiers list`.
 pub(crate) fn handle_tiers_list(cd: Option<String>, format: OutputFormat) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
         .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
 

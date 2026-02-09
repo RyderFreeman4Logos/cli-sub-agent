@@ -3,13 +3,13 @@ use std::path::Path;
 
 use crate::cli::DebateArgs;
 use crate::run_helpers::read_prompt;
-use csa_config::global::heterogeneous_counterpart;
+use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 
 pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
-    let project_root = crate::determine_project_root(args.cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
     // 2. Load config and validate recursion depth
     let Some((config, global_config)) =
@@ -53,7 +53,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
     // 9. Execute with session
-    let result = crate::execute_with_session(
+    let result = crate::pipeline::execute_with_session(
         &executor,
         &tool,
         &prompt,
@@ -86,13 +86,18 @@ fn resolve_debate_tool(
 
     // Project-level [debate] config override
     if let Some(project_debate) = project_config.and_then(|cfg| cfg.debate.as_ref()) {
-        return resolve_debate_tool_from_value(&project_debate.tool, parent_tool, project_root)
-            .with_context(|| {
-                format!(
-                    "Failed to resolve debate tool from project config: {}",
-                    ProjectConfig::config_path(project_root).display()
-                )
-            });
+        return resolve_debate_tool_from_value(
+            &project_debate.tool,
+            parent_tool,
+            project_config,
+            project_root,
+        )
+        .with_context(|| {
+            format!(
+                "Failed to resolve debate tool from project config: {}",
+                ProjectConfig::config_path(project_root).display()
+            )
+        });
     }
 
     // Global config [debate] section
@@ -110,18 +115,40 @@ fn resolve_debate_tool(
 fn resolve_debate_tool_from_value(
     tool_value: &str,
     parent_tool: Option<&str>,
+    project_config: Option<&ProjectConfig>,
     project_root: &Path,
 ) -> Result<ToolName> {
     if tool_value == "auto" {
-        let resolved = parent_tool
-            .and_then(heterogeneous_counterpart)
-            .ok_or_else(|| debate_auto_resolution_error(parent_tool, project_root))?;
-        return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
-            anyhow::anyhow!(
-                "BUG: auto debate tool resolution returned invalid tool '{}'",
-                resolved
-            )
-        });
+        // Try old heterogeneous_counterpart first for backward compatibility
+        if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
+            return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
+                anyhow::anyhow!(
+                    "BUG: auto debate tool resolution returned invalid tool '{}'",
+                    resolved
+                )
+            });
+        }
+
+        // Fallback to new ModelFamily-based selection (filtered by enabled tools)
+        if let Some(parent_str) = parent_tool {
+            if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent_str) {
+                let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
+                    csa_config::global::all_known_tools()
+                        .iter()
+                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .copied()
+                        .collect()
+                } else {
+                    csa_config::global::all_known_tools().to_vec()
+                };
+                if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
+                    return Ok(tool);
+                }
+            }
+        }
+
+        // Both methods failed
+        return Err(debate_auto_resolution_error(parent_tool, project_root));
     }
 
     crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {

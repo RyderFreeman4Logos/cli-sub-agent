@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use csa_core::types::{OutputFormat, ToolName};
+use csa_core::types::{OutputFormat, ToolArg, ToolName};
 
 #[derive(Parser)]
 #[command(name = "csa", version)]
@@ -17,9 +17,9 @@ pub struct Cli {
 pub enum Commands {
     /// Execute a task using a specific AI tool
     Run {
-        /// Tool to use (gemini-cli, opencode, codex, claude-code). If omitted, uses tier-based auto-selection.
-        #[arg(long, value_enum)]
-        tool: Option<ToolName>,
+        /// Tool selection: auto (default), any-available, or specific tool name
+        #[arg(long)]
+        tool: Option<ToolArg>,
 
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,

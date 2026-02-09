@@ -14,7 +14,7 @@ pub(crate) fn handle_session_list(
     tree: bool,
     format: OutputFormat,
 ) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
 
     if tree {
@@ -128,7 +128,7 @@ pub(crate) fn handle_session_list(
 }
 
 pub(crate) fn handle_session_compress(session: String, cd: Option<String>) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     let session_state = load_session(&project_root, &resolved_id)?;
@@ -164,7 +164,7 @@ pub(crate) fn handle_session_compress(session: String, cd: Option<String>) -> Re
 }
 
 pub(crate) fn handle_session_delete(session: String, cd: Option<String>) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     delete_session(&project_root, &resolved_id)?;
@@ -177,7 +177,7 @@ pub(crate) fn handle_session_logs(
     tail: Option<usize>,
     cd: Option<String>,
 ) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     let session_dir = get_session_dir(&project_root, &resolved_id)?;
@@ -230,7 +230,7 @@ pub(crate) fn handle_session_clean(
     tool: Option<String>,
     cd: Option<String>,
 ) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
     let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
     let now = chrono::Utc::now();
