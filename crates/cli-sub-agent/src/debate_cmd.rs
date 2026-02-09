@@ -1,21 +1,22 @@
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{error, info};
+use tracing::error;
 
-use crate::cli::ReviewArgs;
+use crate::cli::DebateArgs;
+use crate::run_helpers::read_prompt;
 use csa_config::global::heterogeneous_counterpart;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
 
-pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
+pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::determine_project_root(args.cd.as_deref())?;
 
     // 2. Load config (optional)
     let config = ProjectConfig::load(&project_root)?;
 
-    // 3. Check recursion depth (from config or default)
+    // 3. Check recursion depth
     let max_depth = config
         .as_ref()
         .map(|c| c.project.max_recursion_depth)
@@ -28,25 +29,20 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         return Ok(1);
     }
 
-    // 4. Load global config for review tool selection + env injection + slot control.
+    // 4. Load global config for debate tool selection + env injection + slot control.
     let global_config = GlobalConfig::load()?;
 
-    // 5. Get git diff based on scope
-    let diff_output = get_review_diff(&args)?;
+    // 5. Read question (from arg or stdin)
+    let question = read_prompt(args.question)?;
 
-    if diff_output.trim().is_empty() {
-        eprintln!("No changes to review");
-        return Ok(0);
-    }
+    // 6. Construct debate prompt
+    let prompt = construct_debate_prompt(&question, args.session.is_some());
 
-    // 6. Construct review prompt
-    let prompt = construct_review_prompt(&args, &diff_output);
-
-    // 7. Determine tool
+    // 7. Determine tool (heterogeneous enforcement)
     let parent_tool = std::env::var("CSA_TOOL")
         .ok()
         .or_else(|| std::env::var("CSA_PARENT_TOOL").ok());
-    let tool = resolve_review_tool(
+    let tool = resolve_debate_tool(
         args.tool,
         config.as_ref(),
         &global_config,
@@ -85,21 +81,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
     }
 
-    // 11. Apply restrictions if configured
-    let can_edit = config
-        .as_ref()
-        .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let effective_prompt = if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        executor.apply_restrictions(&prompt, false)
-    } else {
-        prompt.clone()
-    };
-
-    // 12. Get env injection from global config
+    // 11. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
 
-    // 12b. Acquire global slot to enforce concurrency limit
+    // 12. Acquire global slot to enforce concurrency limit
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
     let slots_dir = GlobalConfig::slots_dir()?;
     let _slot_guard = match csa_lock::slot::try_acquire_slot(
@@ -131,9 +116,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let result = crate::execute_with_session(
         &executor,
         &tool,
-        &effective_prompt,
+        &prompt,
         args.session,
-        Some("Code review session".to_string()),
+        Some("Debate session".to_string()),
         None,
         &project_root,
         config.as_ref(),
@@ -147,39 +132,42 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     Ok(result.exit_code)
 }
 
-fn resolve_review_tool(
+fn resolve_debate_tool(
     arg_tool: Option<ToolName>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     parent_tool: Option<&str>,
     project_root: &Path,
 ) -> Result<ToolName> {
+    // CLI --tool override always wins
     if let Some(tool) = arg_tool {
         return Ok(tool);
     }
 
-    if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
-        return resolve_review_tool_from_value(&project_review.tool, parent_tool, project_root)
+    // Project-level [debate] config override
+    if let Some(project_debate) = project_config.and_then(|cfg| cfg.debate.as_ref()) {
+        return resolve_debate_tool_from_value(&project_debate.tool, parent_tool, project_root)
             .with_context(|| {
                 format!(
-                    "Failed to resolve review tool from project config: {}",
+                    "Failed to resolve debate tool from project config: {}",
                     ProjectConfig::config_path(project_root).display()
                 )
             });
     }
 
-    match global_config.resolve_review_tool(parent_tool) {
+    // Global config [debate] section
+    match global_config.resolve_debate_tool(parent_tool) {
         Ok(tool_name) => parse_tool_name(&tool_name).ok_or_else(|| {
             anyhow::anyhow!(
-                "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
+                "Invalid [debate].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
                 tool_name
             )
         }),
-        Err(_) => Err(review_auto_resolution_error(parent_tool, project_root)),
+        Err(_) => Err(debate_auto_resolution_error(parent_tool, project_root)),
     }
 }
 
-fn resolve_review_tool_from_value(
+fn resolve_debate_tool_from_value(
     tool_value: &str,
     parent_tool: Option<&str>,
     project_root: &Path,
@@ -187,10 +175,10 @@ fn resolve_review_tool_from_value(
     if tool_value == "auto" {
         let resolved = parent_tool
             .and_then(heterogeneous_counterpart)
-            .ok_or_else(|| review_auto_resolution_error(parent_tool, project_root))?;
+            .ok_or_else(|| debate_auto_resolution_error(parent_tool, project_root))?;
         return parse_tool_name(resolved).ok_or_else(|| {
             anyhow::anyhow!(
-                "BUG: auto review tool resolution returned invalid tool '{}'",
+                "BUG: auto debate tool resolution returned invalid tool '{}'",
                 resolved
             )
         });
@@ -198,13 +186,13 @@ fn resolve_review_tool_from_value(
 
     parse_tool_name(tool_value).ok_or_else(|| {
         anyhow::anyhow!(
-            "Invalid project [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
+            "Invalid project [debate].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
             tool_value
         )
     })
 }
 
-fn review_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) -> anyhow::Error {
+fn debate_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) -> anyhow::Error {
     let parent = parent_tool.unwrap_or("<none>").escape_default().to_string();
     let global_path = GlobalConfig::config_path()
         .ok()
@@ -215,18 +203,18 @@ fn review_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) 
         .to_string();
 
     anyhow::anyhow!(
-        "AUTO review tool selection failed (tool = \"auto\").\n\n\
-STOP: Do not proceed. Ask the user to configure the review tool explicitly.\n\n\
+        "AUTO debate tool selection failed (tool = \"auto\").\n\n\
+STOP: Do not proceed. Ask the user to configure the debate tool explicitly.\n\n\
 Parent tool context: {parent}\n\
 Supported auto mapping: claude-code <-> codex\n\n\
 Choose one:\n\
 1) Global config (user-level): {global_path}\n\
-   [review]\n\
+   [debate]\n\
    tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
 2) Project config override: {project_path}\n\
-   [review]\n\
+   [debate]\n\
    tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
-3) CLI override: csa review --tool codex\n\n\
+3) CLI override: csa debate --tool codex\n\n\
 Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
 }
@@ -241,70 +229,42 @@ fn parse_tool_name(name: &str) -> Option<ToolName> {
     }
 }
 
-pub(crate) fn get_review_diff(args: &ReviewArgs) -> Result<String> {
-    let output = if let Some(ref commit) = args.commit {
-        // Review specific commit
-        std::process::Command::new("git")
-            .arg("show")
-            .arg(commit)
-            .output()
-            .with_context(|| format!("Failed to run git show for commit: {}", commit))?
-    } else if args.diff {
-        // Review uncommitted changes
-        std::process::Command::new("git")
-            .arg("diff")
-            .arg("HEAD")
-            .output()
-            .context("Failed to run git diff")?
+/// Construct a debate prompt that frames the model as a debate participant.
+///
+/// When `is_continuation` is true (resuming a session), the prompt is lighter —
+/// the model already has the debate context from previous turns.
+fn construct_debate_prompt(question: &str, is_continuation: bool) -> String {
+    if is_continuation {
+        // Continuing an existing debate — the session already has context.
+        // The question here is the caller's counterpoint or follow-up.
+        format!(
+            "The following is a counterpoint or follow-up in our ongoing debate. \
+Respond directly to the arguments presented. Be specific, cite evidence, \
+and concede valid points while defending your position where warranted.\n\n\
+{question}"
+        )
     } else {
-        // Compare against branch (default: main)
-        let branch = &args.branch;
-        std::process::Command::new("git")
-            .arg("diff")
-            .arg(format!("{}...HEAD", branch))
-            .output()
-            .with_context(|| format!("Failed to run git diff against branch: {}", branch))?
-    };
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        // Check for specific error patterns and provide friendly messages
-        if stderr.contains("unknown revision") || stderr.contains("ambiguous argument") {
-            if let Some(ref commit) = args.commit {
-                anyhow::bail!(
-                    "Commit '{}' not found. Ensure the commit SHA exists.",
-                    commit
-                );
-            } else if !args.diff {
-                anyhow::bail!(
-                    "Branch '{}' not found. Ensure the branch exists locally.",
-                    args.branch
-                );
-            }
-        }
-
-        anyhow::bail!("Git command failed: {}", stderr);
+        // New debate — frame the model's role clearly.
+        format!(
+            "You are participating in an adversarial debate to stress-test ideas \
+through model heterogeneity. A different AI model (the caller) will evaluate \
+your response and may counter-argue in subsequent rounds.\n\n\
+Analyze the following question or proposal thoroughly:\n\n\
+{question}\n\n\
+Structure your response as:\n\
+1. **Position**: Your concrete stance or proposed solution (2-3 sentences)\n\
+2. **Key Arguments**: Numbered, with evidence and reasoning\n\
+3. **Implementation**: Concrete actionable steps (if applicable)\n\
+4. **Anticipated Counterarguments**: Honestly acknowledge weaknesses and preemptively address them\n\n\
+Be intellectually rigorous. Take a clear position — do not hedge or give a \"it depends\" non-answer."
+        )
     }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
-pub(crate) fn construct_review_prompt(args: &ReviewArgs, diff: &str) -> String {
-    let default_instruction = "Review the following code changes for bugs, security issues, and code quality. Provide specific, actionable feedback.";
-
-    let instruction = if let Some(ref custom_prompt) = args.prompt {
-        format!("{}\n\n{}", default_instruction, custom_prompt)
-    } else {
-        default_instruction.to_string()
-    };
-
-    format!("{}\n\n```diff\n{}\n```", instruction, diff)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use csa_config::global::ReviewConfig;
     use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
     use std::collections::HashMap;
 
@@ -335,10 +295,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_review_tool_prefers_cli_override() {
+    fn resolve_debate_tool_prefers_cli_override() {
         let global = GlobalConfig::default();
         let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-        let tool = resolve_review_tool(
+        let tool = resolve_debate_tool(
             Some(ToolName::Codex),
             Some(&cfg),
             &global,
@@ -350,10 +310,10 @@ mod tests {
     }
 
     #[test]
-    fn resolve_review_tool_uses_global_review_config_with_parent_tool() {
+    fn resolve_debate_tool_auto_maps_heterogeneous() {
         let global = GlobalConfig::default();
-        let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-        let tool = resolve_review_tool(
+        let cfg = project_config_with_enabled_tools(&["codex"]);
+        let tool = resolve_debate_tool(
             None,
             Some(&cfg),
             &global,
@@ -365,50 +325,63 @@ mod tests {
     }
 
     #[test]
-    fn resolve_review_tool_errors_without_parent_tool_context() {
+    fn resolve_debate_tool_auto_maps_reverse() {
         let global = GlobalConfig::default();
-        let cfg = project_config_with_enabled_tools(&["opencode"]);
-        let err = resolve_review_tool(
-            None,
-            Some(&cfg),
-            &global,
-            None,
-            std::path::Path::new("/tmp/test-project"),
-        )
-        .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("AUTO review tool selection failed"));
-    }
-
-    #[test]
-    fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
-        let mut global = GlobalConfig::default();
-        global.review.tool = "invalid-tool".to_string();
-        let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-        let err = resolve_review_tool(
+        let cfg = project_config_with_enabled_tools(&["claude-code"]);
+        let tool = resolve_debate_tool(
             None,
             Some(&cfg),
             &global,
             Some("codex"),
             std::path::Path::new("/tmp/test-project"),
         )
-        .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Invalid [review].tool value 'invalid-tool'"));
+        .unwrap();
+        assert!(matches!(tool, ToolName::ClaudeCode));
     }
 
     #[test]
-    fn resolve_review_tool_prefers_project_override() {
+    fn resolve_debate_tool_errors_without_parent_context() {
+        let global = GlobalConfig::default();
+        let cfg = project_config_with_enabled_tools(&["opencode"]);
+        let err = resolve_debate_tool(
+            None,
+            Some(&cfg),
+            &global,
+            None,
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("AUTO debate tool selection failed"));
+    }
+
+    #[test]
+    fn resolve_debate_tool_errors_on_unknown_parent() {
+        let global = GlobalConfig::default();
+        let cfg = project_config_with_enabled_tools(&["opencode"]);
+        let err = resolve_debate_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("opencode"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("AUTO debate tool selection failed"));
+    }
+
+    #[test]
+    fn resolve_debate_tool_prefers_project_override() {
         let global = GlobalConfig::default();
         let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
-        cfg.review = Some(csa_config::global::ReviewConfig {
+        cfg.debate = Some(ReviewConfig {
             tool: "opencode".to_string(),
         });
-        cfg.debate = None;
 
-        let tool = resolve_review_tool(
+        let tool = resolve_debate_tool(
             None,
             Some(&cfg),
             &global,
@@ -420,15 +393,14 @@ mod tests {
     }
 
     #[test]
-    fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
+    fn resolve_debate_tool_project_auto_maps_heterogeneous() {
         let global = GlobalConfig::default();
         let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
-        cfg.review = Some(csa_config::global::ReviewConfig {
+        cfg.debate = Some(ReviewConfig {
             tool: "auto".to_string(),
         });
-        cfg.debate = None;
 
-        let tool = resolve_review_tool(
+        let tool = resolve_debate_tool(
             None,
             Some(&cfg),
             &global,
@@ -437,5 +409,22 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool, ToolName::Codex));
+    }
+
+    #[test]
+    fn construct_debate_prompt_new_debate() {
+        let prompt = construct_debate_prompt("Should we use gRPC or REST?", false);
+        assert!(prompt.contains("adversarial debate"));
+        assert!(prompt.contains("Should we use gRPC or REST?"));
+        assert!(prompt.contains("Position"));
+        assert!(prompt.contains("Anticipated Counterarguments"));
+    }
+
+    #[test]
+    fn construct_debate_prompt_continuation() {
+        let prompt = construct_debate_prompt("I disagree because X", true);
+        assert!(prompt.contains("counterpoint"));
+        assert!(prompt.contains("I disagree because X"));
+        assert!(!prompt.contains("Structure your response as"));
     }
 }

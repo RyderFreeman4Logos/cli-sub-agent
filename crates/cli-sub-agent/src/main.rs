@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 mod batch;
 mod cli;
 mod config_cmds;
+mod debate_cmd;
 mod doctor;
 mod gc;
 mod mcp_server;
@@ -141,6 +142,10 @@ async fn main() -> Result<()> {
         },
         Commands::Review(args) => {
             let exit_code = review_cmd::handle_review(args, current_depth).await?;
+            std::process::exit(exit_code);
+        }
+        Commands::Debate(args) => {
+            let exit_code = debate_cmd::handle_debate(args, current_depth).await?;
             std::process::exit(exit_code);
         }
         Commands::Doctor => {

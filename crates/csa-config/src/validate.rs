@@ -30,6 +30,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     validate_project_meta(&config)?;
     validate_tools(&config)?;
     validate_review(&config)?;
+    validate_debate(&config)?;
     validate_tiers(&config)?;
 
     Ok(())
@@ -72,6 +73,21 @@ fn validate_review(config: &ProjectConfig) -> Result<()> {
         bail!(
             "Invalid [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
             review.tool
+        );
+    }
+    Ok(())
+}
+
+fn validate_debate(config: &ProjectConfig) -> Result<()> {
+    let Some(debate) = &config.debate else {
+        return Ok(());
+    };
+
+    let supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
+    if !supported.contains(&debate.tool.as_str()) {
+        bail!(
+            "Invalid [debate].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
+            debate.tool
         );
     }
     Ok(())
@@ -168,6 +184,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools,
             review: None,
+            debate: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
@@ -193,6 +210,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
             review: None,
+            debate: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -229,6 +247,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools,
             review: None,
+            debate: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -257,6 +276,7 @@ mod tests {
             review: Some(ReviewConfig {
                 tool: "invalid-tool".to_string(),
             }),
+            debate: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -295,6 +315,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
             review: None,
+            debate: None,
             tiers,
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -336,6 +357,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
             review: None,
+            debate: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
@@ -386,6 +408,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
             review: None,
+            debate: None,
             tiers,
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -427,6 +450,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools: HashMap::new(),
             review: None,
+            debate: None,
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
@@ -436,5 +460,37 @@ mod tests {
 
         let result = validate_config(dir.path());
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_config_fails_on_invalid_debate_tool() {
+        let dir = tempdir().unwrap();
+
+        let config = ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            tools: HashMap::new(),
+            review: None,
+            debate: Some(ReviewConfig {
+                tool: "invalid-tool".to_string(),
+            }),
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+
+        config.save(dir.path()).unwrap();
+
+        let result = validate_config(dir.path());
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid [debate].tool value"));
     }
 }
