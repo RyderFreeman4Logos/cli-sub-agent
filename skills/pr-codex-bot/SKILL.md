@@ -266,23 +266,21 @@ miss. Using the same model family as the reviewer defeats the purpose.
 
 | You (main agent) | Cloud Bot | Local Arbiter (MUST differ) |
 |-------------------|-----------|---------------------------|
-| Claude Opus 4.6 | GPT-5.3-Codex | `csa run` with a **codex** model spec |
-| GPT-based agent | GPT-5.3-Codex | `csa run` with a **claude-code** model spec |
-| Gemini-based agent | GPT-5.3-Codex | `csa run` with a **claude-code** or **codex** model spec |
+| Claude Opus 4.6 | GPT-5.3-Codex | `csa debate` → auto-selects **codex** |
+| GPT-based agent | GPT-5.3-Codex | `csa debate` → auto-selects **claude-code** |
+| Gemini-based agent | GPT-5.3-Codex | `csa debate --tool codex` or `--tool claude-code` |
 
-**Preferred arbiter**: Use `csa run` with a codex model from a different tier
-when you are Claude (most common case). This gives you Claude (author) vs
-GPT (arbiter) — maximum heterogeneity. Select model via `csa --format json tiers list`.
+**Preferred arbiter**: Use `csa debate` which auto-selects a heterogeneous
+counterpart (if you are Claude, it picks codex; if you are codex, it picks
+claude-code). No manual model-spec selection needed.
 
 ### Step 8.1: Get Independent Local Opinion
 
-Spawn a local arbiter via CSA with an unbiased prompt. Select a model from a
-**different tool/provider** than you (the main agent) to ensure heterogeneity:
+Use `csa debate` to spawn a heterogeneous arbiter. The command automatically
+selects a different model family from you (the caller):
 
 ```bash
-# Pick a heterogeneous model spec from tiers (e.g., codex if you are Claude)
-csa run --model-spec "codex/openai/gpt-5.3-codex/high" --ephemeral \
-  "A code reviewer flagged the following issue in [file:line]:
+csa debate "A code reviewer flagged the following issue in [file:line]:
 
 [paste bot's comment verbatim]
 
@@ -292,8 +290,9 @@ Do NOT assume the reviewer is right or wrong — form your own
 independent assessment based on the actual code."
 ```
 
-**NOTE**: Do NOT hardcode model specs — pick one from `csa --format json tiers list`
-that uses a different provider than you. The example above is illustrative only.
+**NOTE**: `csa debate` reads `[debate]` config for tool selection. If `tool = "auto"`
+(default), it auto-detects your tool from `CSA_PARENT_TOOL` and picks the
+heterogeneous counterpart. No manual model-spec needed.
 
 **CRITICAL**: Do NOT tell the arbiter your own opinion. Let it form
 an independent judgment.
@@ -339,7 +338,7 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
 Do NOT just accept the arbiter's verdict. You wrote the code — defend your
 design decisions. The heterogeneous debate IS the value of this step.
 
-**Resume the same arbiter session** (via `csa run --session <id>`) and engage in
+**Resume the same debate session** (via `csa debate --session <id>`) and engage in
 adversarial debate:
 
 1. **YOU present counter-arguments** — why your design choice was intentional,
@@ -348,20 +347,22 @@ adversarial debate:
 3. **YOU rebut** with code references, cross-module context, or design rationale
 4. **Iterate** until consensus or deadlock (max 3 rounds)
 
-**The debate is between two DIFFERENT model families (via CSA):**
+```bash
+# Continue the debate with your counter-argument
+csa debate --session <SESSION_ID> "I disagree because [your reasoning].
+The code is intentionally designed this way because [rationale]."
+```
+
+**The debate is between two DIFFERENT model families (via `csa debate`):**
 ```
 YOU (Claude Opus 4.6, code author)
-    ↕  adversarial debate  ↕
-Arbiter (csa run --model-spec "codex/openai/...", independent evaluator)
+    ↕  adversarial debate via csa debate  ↕
+Arbiter (auto-selected heterogeneous model, independent evaluator)
 ```
 
 This is where model heterogeneity creates real value — if both a Claude
 and a GPT independently conclude the same thing after debate, the
 confidence is much higher than a single model's judgment.
-
-**Alternative**: For complex false positives with multiple contested points,
-invoke the CSA `debate` skill instead, which provides structured
-multi-round adversarial debate with automatic tier escalation.
 
 **After debate concludes**:
 
