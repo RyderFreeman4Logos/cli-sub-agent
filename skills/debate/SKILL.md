@@ -199,6 +199,62 @@ After the debate concludes (convergence or max rounds/escalations reached), YOU 
 - Models used: {model_list}
 ```
 
+## Audit Trail Requirements (MANDATORY)
+
+Every debate result MUST include:
+1. **Full model specs** for ALL participants in `tool/provider/model/thinking_budget` format
+2. **Round-by-round transcript** (at minimum: position summaries per round)
+3. **Final verdict** with which side prevailed and rationale
+4. **Escalation history** if tier escalation occurred
+
+**Why**: Debate results are used as evidence in code review arbitration (pr-codex-bot),
+security audits, and design decisions. Without model specs, future reviewers cannot
+assess the quality or heterogeneity of the arbitration.
+
+## PR Integration (when used for code review arbitration)
+
+When the debate skill is invoked from `pr-codex-bot` Step 8 (false positive arbitration)
+or any code review context where results will be posted to a PR:
+
+### MANDATORY: Post Results to PR
+
+The debate result MUST be posted as a PR comment for audit trail. The caller
+(typically pr-codex-bot) is responsible for posting, but the debate output MUST
+include all information needed:
+
+1. **Participants section** with full model specs (both sides)
+2. **Bot's original concern** (what was being debated)
+3. **Round-by-round summary** (not full transcript — keep PR comments readable)
+4. **Conclusion** with verdict (DISMISSED / CONFIRMED / ESCALATED)
+5. **CSA session ID** (if applicable, for full transcript retrieval)
+
+### Template for PR Comment
+
+```markdown
+**Local arbitration result: [DISMISSED|CONFIRMED|ESCALATED].**
+
+## Participants
+- **Author**: `{tool}/{provider}/{model}/{thinking_budget}`
+- **Arbiter**: `{tool}/{provider}/{model}/{thinking_budget}`
+
+## Debate Summary
+### Round 1
+- **Proposer** (`{model}`): [position summary]
+- **Critic** (`{model}`): [counter-argument summary]
+### Round N...
+
+## Conclusion
+[verdict, rationale, which side prevailed]
+
+## Audit
+- Rounds: {N}, Escalations: {N}
+- CSA session: `{session_id}`
+```
+
+**FORBIDDEN**: Posting a debate result without model specs. If model specs cannot be
+determined (e.g., CSA returned no metadata), report this explicitly in the comment
+rather than omitting the section.
+
 ## Constraints
 
 - **No hardcoded models**: All models come from `csa tiers list`.
@@ -241,3 +297,5 @@ Debate flow:
 4. No hardcoded model names in any invocation.
 5. Zero direct tool invocations (all through `csa run`).
 6. If any CSA command failed, debate was stopped and error reported.
+7. **All participant model specs listed in `tool/provider/model/thinking_budget` format** (audit trail).
+8. **If used for PR arbitration**: debate result posted to PR comment with full model specs and round summaries (see PR Integration section above).
