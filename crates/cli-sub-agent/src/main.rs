@@ -11,6 +11,7 @@ mod doctor;
 mod gc;
 mod mcp_server;
 mod pipeline;
+mod process_tree;
 mod review_cmd;
 mod run_helpers;
 mod self_update;
@@ -251,10 +252,8 @@ async fn handle_run(
             )?
         }
         ToolSelectionStrategy::HeterogeneousStrict => {
-            // Get parent tool from environment
-            let parent_tool_name = std::env::var("CSA_TOOL")
-                .or_else(|_| std::env::var("CSA_PARENT_TOOL"))
-                .ok();
+            // Detect parent tool (env vars → process tree fallback)
+            let parent_tool_name = run_helpers::detect_parent_tool();
 
             if let Some(parent_str) = parent_tool_name.as_deref() {
                 // Have parent context, resolve heterogeneous tool

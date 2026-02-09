@@ -30,9 +30,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let prompt = construct_review_prompt(&args, &diff_output);
 
     // 5. Determine tool
-    let parent_tool = std::env::var("CSA_TOOL")
-        .ok()
-        .or_else(|| std::env::var("CSA_PARENT_TOOL").ok());
+    let parent_tool = crate::run_helpers::detect_parent_tool();
     let tool = resolve_review_tool(
         args.tool,
         config.as_ref(),
