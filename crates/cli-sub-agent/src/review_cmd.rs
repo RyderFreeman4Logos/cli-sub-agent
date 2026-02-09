@@ -9,7 +9,7 @@ use csa_core::types::ToolName;
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
-    let project_root = crate::determine_project_root(args.cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
     // 2. Load config and validate recursion depth
     let Some((config, global_config)) =
@@ -69,7 +69,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
     // 10. Execute with session
-    let result = crate::execute_with_session(
+    let result = crate::pipeline::execute_with_session(
         &executor,
         &tool,
         &effective_prompt,

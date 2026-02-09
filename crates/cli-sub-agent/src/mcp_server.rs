@@ -292,7 +292,7 @@ async fn handle_session_list_tool(args: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .map(|s| s.split(',').collect::<Vec<&str>>());
 
-    let project_root = crate::determine_project_root(None)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
     let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
 
     // Format as MCP content
@@ -380,7 +380,7 @@ async fn handle_session_delete_tool(args: Value) -> Result<Value> {
         .and_then(|v| v.as_str())
         .context("Missing session_id argument")?;
 
-    let project_root = crate::determine_project_root(None)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = csa_session::resolve_session_prefix(&sessions_dir, session_id)?;
 
@@ -449,7 +449,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     };
 
     // Determine project root
-    let project_root = crate::determine_project_root(None)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
 
     // Load config
     let config = ProjectConfig::load(&project_root)?;
@@ -578,7 +578,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             .await?
     } else {
         // Persistent session
-        crate::execute_with_session(
+        crate::pipeline::execute_with_session(
             &executor,
             &resolved_tool,
             prompt,

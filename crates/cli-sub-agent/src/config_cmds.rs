@@ -6,7 +6,7 @@ use csa_config::{validate_config, GlobalConfig, ProjectConfig};
 use csa_core::types::OutputFormat;
 
 pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
         .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
 
@@ -24,7 +24,7 @@ pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Re
 }
 
 pub(crate) fn handle_config_edit(cd: Option<String>) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config_path = ProjectConfig::config_path(&project_root);
 
     if !config_path.exists() {
@@ -45,7 +45,7 @@ pub(crate) fn handle_config_edit(cd: Option<String>) -> Result<()> {
 }
 
 pub(crate) fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
-    let project_root = crate::determine_project_root(None)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
     let config = init_project(&project_root, non_interactive, minimal)?;
     eprintln!(
         "Initialized project configuration at: {}",
@@ -72,7 +72,7 @@ pub(crate) fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
 }
 
 pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
-    let project_root = crate::determine_project_root(cd.as_deref())?;
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
         .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
 

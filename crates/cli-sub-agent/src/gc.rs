@@ -11,7 +11,7 @@ pub(crate) fn handle_gc(
     max_age_days: Option<u64>,
     format: OutputFormat,
 ) -> Result<()> {
-    let project_root = crate::determine_project_root(None)?;
+    let project_root = crate::pipeline::determine_project_root(None)?;
     let sessions = list_sessions(&project_root, None)?;
     let now = chrono::Utc::now();
 
