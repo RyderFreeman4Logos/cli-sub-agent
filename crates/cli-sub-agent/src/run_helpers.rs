@@ -285,6 +285,24 @@ pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Detect the parent tool context.
+///
+/// Resolution order:
+/// 1. `CSA_TOOL` environment variable (set by CSA when spawning children)
+/// 2. `CSA_PARENT_TOOL` environment variable (set for grandchild processes)
+/// 3. Process tree walking via `/proc` (Linux-only fallback)
+pub(crate) fn detect_parent_tool() -> Option<String> {
+    std::env::var("CSA_TOOL")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("CSA_PARENT_TOOL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .or_else(crate::process_tree::detect_ancestor_tool)
+}
+
 /// Infer whether a prompt requires editing existing files.
 ///
 /// Returns:
