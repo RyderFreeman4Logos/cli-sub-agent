@@ -208,19 +208,19 @@ fn print_project_config() -> Result<()> {
     Ok(())
 }
 
-/// Print resource status (free memory and swap).
+/// Print resource status (combined available physical + free swap memory).
 fn print_resource_status() {
-    let mut sys = System::new_all();
+    let mut sys = System::new();
     sys.refresh_memory();
 
-    let free_memory_bytes = sys.available_memory();
+    let available_memory_bytes = sys.available_memory();
     let free_swap_bytes = sys.free_swap();
-    let total_free = free_memory_bytes + free_swap_bytes;
+    let total_free = available_memory_bytes.saturating_add(free_swap_bytes);
 
     println!(
-        "Free Memory: {} (physical {} + swap {})",
+        "Available Memory: {} (physical {} + swap {})",
         format_bytes(total_free),
-        format_bytes(free_memory_bytes),
+        format_bytes(available_memory_bytes),
         format_bytes(free_swap_bytes),
     );
 }

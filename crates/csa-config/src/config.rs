@@ -129,6 +129,19 @@ impl Default for ResourcesConfig {
     }
 }
 
+/// Warn about deprecated config keys that serde silently ignores.
+fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
+    if let Some(resources) = raw.get("resources") {
+        if resources.get("min_free_swap_mb").is_some() {
+            eprintln!(
+                "warning: config '{}': 'resources.min_free_swap_mb' is deprecated and ignored. \
+                 Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead.",
+                source
+            );
+        }
+    }
+}
+
 /// Deep merge two TOML values. Overlay wins for non-table values.
 /// Tables are merged recursively (project-level keys override user-level keys).
 fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml::Value {
@@ -189,6 +202,10 @@ impl ProjectConfig {
     fn load_from_path(path: &Path) -> Result<Option<Self>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
+        // Check for deprecated keys before deserializing (serde silently ignores them)
+        if let Ok(raw) = content.parse::<toml::Value>() {
+            warn_deprecated_keys(&raw, &path.display().to_string());
+        }
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
         Ok(Some(config))
@@ -211,6 +228,10 @@ impl ProjectConfig {
         let overlay_val: toml::Value = toml::from_str(&overlay_str).with_context(|| {
             format!("Failed to parse project config: {}", overlay_path.display())
         })?;
+
+        // Check for deprecated keys in both configs
+        warn_deprecated_keys(&base_val, &base_path.display().to_string());
+        warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
 
         // Preserve the higher schema_version before merging so that
         // check_schema_version() catches incompatibility from either source.

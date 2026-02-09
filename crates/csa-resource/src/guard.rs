@@ -49,14 +49,19 @@ impl ResourceGuard {
 
     /// Check if enough resources are available to launch the given tool.
     ///
-    /// Available memory = physical free + swap free (combined).
+    /// Available memory = physical available + swap free (combined).
     /// Required = min_free_memory_mb (safety buffer) + estimated tool usage.
     pub fn check_availability(&mut self, tool_name: &str) -> Result<()> {
         self.sys.refresh_memory();
 
-        let available_phys = self.sys.available_memory() / 1024 / 1024; // bytes -> MB
-        let available_swap = self.sys.free_swap() / 1024 / 1024;
-        let available_total = available_phys + available_swap;
+        // Add in bytes first, then convert to MB to avoid truncation error
+        let available_phys_bytes = self.sys.available_memory();
+        let available_swap_bytes = self.sys.free_swap();
+        let available_total_bytes = available_phys_bytes.saturating_add(available_swap_bytes);
+
+        let available_phys = available_phys_bytes / 1024 / 1024;
+        let available_swap = available_swap_bytes / 1024 / 1024;
+        let available_total = available_total_bytes / 1024 / 1024;
 
         // Prefer P95 historical estimate, fallback to initial config
         let estimated_usage = self
@@ -64,7 +69,10 @@ impl ResourceGuard {
             .get_p95_estimate(tool_name)
             .unwrap_or_else(|| *self.limits.initial_estimates.get(tool_name).unwrap_or(&500));
 
-        let required = self.limits.min_free_memory_mb + estimated_usage;
+        let required = self
+            .limits
+            .min_free_memory_mb
+            .saturating_add(estimated_usage);
 
         if available_total < required {
             bail!(
