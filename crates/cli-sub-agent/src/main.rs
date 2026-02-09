@@ -239,8 +239,14 @@ async fn handle_run(
     // 7. Resolve initial tool based on strategy
     let (initial_tool, resolved_model_spec, resolved_model) = match &strategy {
         ToolSelectionStrategy::Explicit(t) => {
-            // Explicit tool from CLI
-            (*t, model_spec.clone(), model.map(|s| s.to_string()))
+            // Explicit tool from CLI — still apply alias resolution
+            resolve_tool_and_model(
+                Some(*t),
+                model_spec.as_deref(),
+                model.as_deref(),
+                config.as_ref(),
+                &project_root,
+            )?
         }
         ToolSelectionStrategy::AnyAvailable => {
             // Use tier-based selection (current behavior)
