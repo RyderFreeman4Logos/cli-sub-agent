@@ -106,6 +106,9 @@ pub enum Commands {
     /// Review code changes using an AI tool
     Review(ReviewArgs),
 
+    /// Run an adversarial debate between heterogeneous AI tools
+    Debate(DebateArgs),
+
     /// Check environment and tool availability
     Doctor,
 
@@ -180,6 +183,40 @@ pub struct ReviewArgs {
 
     /// Custom review instructions
     pub prompt: Option<String>,
+
+    /// Working directory
+    #[arg(long)]
+    pub cd: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub struct DebateArgs {
+    /// The question or problem to debate; reads from stdin if omitted
+    pub question: Option<String>,
+
+    /// Tool to use for debate (overrides auto heterogeneous selection)
+    #[arg(long)]
+    pub tool: Option<ToolName>,
+
+    /// Resume existing debate session (ULID or prefix match)
+    #[arg(short, long)]
+    pub session: Option<String>,
+
+    /// Override model
+    #[arg(short, long)]
+    pub model: Option<String>,
+
+    /// Starting tier name (defaults to tier_mapping.default)
+    #[arg(long)]
+    pub tier: Option<String>,
+
+    /// Maximum debate rounds per tier
+    #[arg(long, default_value = "3")]
+    pub max_rounds: u32,
+
+    /// Maximum tier escalations
+    #[arg(long, default_value = "2")]
+    pub max_escalations: u32,
 
     /// Working directory
     #[arg(long)]
