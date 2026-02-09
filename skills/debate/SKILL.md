@@ -32,8 +32,8 @@ csa debate --session <SESSION_ID> "I disagree because gRPC adds complexity for o
 # Override tool selection (bypass auto routing)
 csa debate --tool codex "How should we handle distributed transactions?"
 
-# Override model within selected tool
-csa debate --model o3 "What caching strategy should we use?"
+# Override model within selected tool (use models from `csa tiers list`)
+csa debate --model <MODEL> "What caching strategy should we use?"
 
 # Pipe long prompts via stdin
 echo "Given this architecture: ... Should we refactor?" | csa debate

@@ -215,9 +215,14 @@ fn print_resource_status() {
 
     let free_memory_bytes = sys.available_memory();
     let free_swap_bytes = sys.free_swap();
+    let total_free = free_memory_bytes + free_swap_bytes;
 
-    println!("Free Memory: {}", format_bytes(free_memory_bytes));
-    println!("Free Swap:   {}", format_bytes(free_swap_bytes));
+    println!(
+        "Free Memory: {} (physical {} + swap {})",
+        format_bytes(total_free),
+        format_bytes(free_memory_bytes),
+        format_bytes(free_swap_bytes),
+    );
 }
 
 /// Format bytes as human-readable string (GB).

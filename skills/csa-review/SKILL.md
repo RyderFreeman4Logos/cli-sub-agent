@@ -300,9 +300,9 @@ or trigger another review round to verify fixes.
 | Session management | None | `csa session list`, `csa gc` |
 | Project understanding | Caller pre-reads CLAUDE.md | Review agent reads it autonomously |
 | Tool selection | Hardcoded codex | Auto independent + configurable |
-| Prompt | Bash heredoc | Reuses claude-md-scope-review's tested prompt |
+| Prompt | Bash heredoc | Embedded review prompt (see Step 2 below) |
 | Concurrency control | None | CSA global slots |
-| Session resume | Manual thread_id tracking | `csa run --session {id}` |
+| Session resume | Manual thread_id tracking | `csa review --session {id}` |
 | Fix workflow | Separate script invocation | Same session resume |
 
 ## Example Usage

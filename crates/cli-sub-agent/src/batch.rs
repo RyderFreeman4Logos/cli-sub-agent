@@ -304,7 +304,6 @@ async fn execute_batch(
     let mut resource_guard = if let Some(cfg) = config {
         let limits = ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
-            min_free_swap_mb: cfg.resources.min_free_swap_mb,
             initial_estimates: cfg.resources.initial_estimates.clone(),
         };
         let project_state_dir = get_session_root(project_root)?;

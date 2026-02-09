@@ -107,27 +107,23 @@ pub struct ToolRestrictions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesConfig {
+    /// Minimum combined free memory (physical + swap) in MB.
+    /// CSA refuses to launch a tool when combined free memory
+    /// would drop below this after accounting for tool usage.
     #[serde(default = "default_min_mem")]
     pub min_free_memory_mb: u64,
-    #[serde(default = "default_min_swap")]
-    pub min_free_swap_mb: u64,
     #[serde(default)]
     pub initial_estimates: HashMap<String, u64>,
 }
 
 fn default_min_mem() -> u64 {
-    2048
-}
-
-fn default_min_swap() -> u64 {
-    1024
+    4096
 }
 
 impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
             min_free_memory_mb: default_min_mem(),
-            min_free_swap_mb: default_min_swap(),
             initial_estimates: HashMap::new(),
         }
     }
@@ -382,8 +378,8 @@ impl ProjectConfig {
 schema_version = 1
 
 [resources]
-min_free_memory_mb = 2048
-min_free_swap_mb = 1024
+# Minimum combined free memory (physical + swap) in MB.
+min_free_memory_mb = 4096
 
 # Tool configuration defaults.
 # [tools.codex]
