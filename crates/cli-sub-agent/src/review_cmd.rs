@@ -100,13 +100,18 @@ fn resolve_review_tool(
     }
 
     if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
-        return resolve_review_tool_from_value(&project_review.tool, parent_tool, project_root)
-            .with_context(|| {
-                format!(
-                    "Failed to resolve review tool from project config: {}",
-                    ProjectConfig::config_path(project_root).display()
-                )
-            });
+        return resolve_review_tool_from_value(
+            &project_review.tool,
+            parent_tool,
+            project_config,
+            project_root,
+        )
+        .with_context(|| {
+            format!(
+                "Failed to resolve review tool from project config: {}",
+                ProjectConfig::config_path(project_root).display()
+            )
+        });
     }
 
     match global_config.resolve_review_tool(parent_tool) {
@@ -123,6 +128,7 @@ fn resolve_review_tool(
 fn resolve_review_tool_from_value(
     tool_value: &str,
     parent_tool: Option<&str>,
+    project_config: Option<&ProjectConfig>,
     project_root: &Path,
 ) -> Result<ToolName> {
     if tool_value == "auto" {
@@ -136,10 +142,18 @@ fn resolve_review_tool_from_value(
             });
         }
 
-        // Fallback to new ModelFamily-based selection
+        // Fallback to new ModelFamily-based selection (filtered by enabled tools)
         if let Some(parent_str) = parent_tool {
             if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent_str) {
-                let enabled_tools = csa_config::global::all_known_tools().to_vec();
+                let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
+                    csa_config::global::all_known_tools()
+                        .iter()
+                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .copied()
+                        .collect()
+                } else {
+                    csa_config::global::all_known_tools().to_vec()
+                };
                 if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
                     return Ok(tool);
                 }
