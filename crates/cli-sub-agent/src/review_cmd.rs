@@ -3,6 +3,7 @@ use std::path::Path;
 use tracing::{error, info};
 
 use crate::cli::ReviewArgs;
+use csa_config::global::heterogeneous_counterpart;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
@@ -184,7 +185,8 @@ fn resolve_review_tool_from_value(
     project_root: &Path,
 ) -> Result<ToolName> {
     if tool_value == "auto" {
-        let resolved = resolve_heterogeneous_review_counterpart(parent_tool)
+        let resolved = parent_tool
+            .and_then(heterogeneous_counterpart)
             .ok_or_else(|| review_auto_resolution_error(parent_tool, project_root))?;
         return parse_tool_name(resolved).ok_or_else(|| {
             anyhow::anyhow!(
@@ -200,14 +202,6 @@ fn resolve_review_tool_from_value(
             tool_value
         )
     })
-}
-
-fn resolve_heterogeneous_review_counterpart(parent_tool: Option<&str>) -> Option<&'static str> {
-    match parent_tool {
-        Some("claude-code") => Some("codex"),
-        Some("codex") => Some("claude-code"),
-        _ => None,
-    }
 }
 
 fn review_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) -> anyhow::Error {

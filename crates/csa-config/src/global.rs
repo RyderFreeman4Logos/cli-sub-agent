@@ -77,6 +77,19 @@ impl Default for DebateConfig {
     }
 }
 
+/// Returns the heterogeneous counterpart tool for model-diversity enforcement.
+///
+/// - `claude-code` → `codex`
+/// - `codex` → `claude-code`
+/// - Anything else → `None`
+pub fn heterogeneous_counterpart(tool: &str) -> Option<&'static str> {
+    match tool {
+        "claude-code" => Some("codex"),
+        "codex" => Some("claude-code"),
+        _ => None,
+    }
+}
+
 /// Global defaults section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GlobalDefaults {
@@ -247,19 +260,7 @@ tool = "auto"
         if self.review.tool != "auto" {
             return Ok(self.review.tool.clone());
         }
-        match parent_tool {
-            Some("claude-code") => Ok("codex".to_string()),
-            Some("codex") => Ok("claude-code".to_string()),
-            Some(other) => Err(anyhow::anyhow!(
-                "Cannot auto-detect review tool: parent is '{}'. \
-                 Set [review] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml",
-                other
-            )),
-            None => Err(anyhow::anyhow!(
-                "Cannot auto-detect review tool: no parent tool context. \
-                 Set [review] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml"
-            )),
-        }
+        resolve_auto_tool("review", parent_tool)
     }
 
     /// Resolve the debate tool based on config and parent tool context.
@@ -272,19 +273,7 @@ tool = "auto"
         if self.debate.tool != "auto" {
             return Ok(self.debate.tool.clone());
         }
-        match parent_tool {
-            Some("claude-code") => Ok("codex".to_string()),
-            Some("codex") => Ok("claude-code".to_string()),
-            Some(other) => Err(anyhow::anyhow!(
-                "Cannot auto-detect debate tool: parent is '{}'. \
-                 Set [debate] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml",
-                other
-            )),
-            None => Err(anyhow::anyhow!(
-                "Cannot auto-detect debate tool: no parent tool context. \
-                 Set [debate] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") in ~/.config/cli-sub-agent/config.toml"
-            )),
-        }
+        resolve_auto_tool("debate", parent_tool)
     }
 
     /// List all known tool names (from config + static list).
@@ -303,6 +292,24 @@ tool = "auto"
         }
 
         result
+    }
+}
+
+/// Resolve "auto" tool selection using the heterogeneous counterpart mapping.
+fn resolve_auto_tool(section: &str, parent_tool: Option<&str>) -> Result<String> {
+    match parent_tool.and_then(heterogeneous_counterpart) {
+        Some(counterpart) => Ok(counterpart.to_string()),
+        None => {
+            let context = match parent_tool {
+                Some(p) => format!("parent is '{}'", p),
+                None => "no parent tool context".to_string(),
+            };
+            Err(anyhow::anyhow!(
+                "Cannot auto-detect {section} tool: {context}. \
+                 Set [{section}] tool to an explicit tool (e.g., \"codex\" or \"claude-code\") \
+                 in ~/.config/cli-sub-agent/config.toml"
+            ))
+        }
     }
 }
 
