@@ -17,8 +17,7 @@ created_at = 2024-02-06T10:00:00Z
 max_recursion_depth = 5  # Default: 5
 
 [resources]
-min_free_memory_mb = 2048      # Default: 2048
-min_free_swap_mb = 1024        # Default: 1024
+min_free_memory_mb = 4096      # Default: 4096 (combined physical + swap)
 
 [resources.initial_estimates]
 gemini-cli = 1024    # Initial memory estimate in MB
@@ -106,8 +105,7 @@ max_recursion_depth = 3
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `min_free_memory_mb` | Integer | No | 2048 | Minimum free RAM in MB before launching tools |
-| `min_free_swap_mb` | Integer | No | 1024 | Minimum free swap in MB |
+| `min_free_memory_mb` | Integer | No | 4096 | Minimum combined (physical + swap) free memory in MB before launching tools |
 
 **Initial Estimates:**
 
@@ -127,6 +125,7 @@ claude-code = 2048
 **Resource Check Formula:**
 ```
 required_memory = min_free_memory_mb + P95_estimate(tool)
+available_memory = (physical_free + swap_free) / 1024 / 1024  # bytes → MB
 if available_memory < required_memory:
     abort with OOM risk warning
 ```
@@ -300,8 +299,7 @@ name = "research-analysis"
 max_recursion_depth = 3
 
 [resources]
-min_free_memory_mb = 1024
-min_free_swap_mb = 512
+min_free_memory_mb = 1536  # combined physical + swap
 
 [tools.gemini-cli]
 enabled = true
@@ -337,8 +335,7 @@ name = "webapp-backend"
 max_recursion_depth = 5
 
 [resources]
-min_free_memory_mb = 3072
-min_free_swap_mb = 2048
+min_free_memory_mb = 5120  # combined physical + swap
 
 [resources.initial_estimates]
 gemini-cli = 1536
@@ -402,8 +399,7 @@ name = "budget-project"
 max_recursion_depth = 4
 
 [resources]
-min_free_memory_mb = 1536
-min_free_swap_mb = 1024
+min_free_memory_mb = 2560  # combined physical + swap
 
 [tools.gemini-cli]
 enabled = true

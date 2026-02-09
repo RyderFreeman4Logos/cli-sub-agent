@@ -314,10 +314,10 @@ suppress_notify = true  # Suppress codex desktop notifications when run via CSA
 enabled = true
 
 # ─── Resource Limits ─────────────────────────────────────────
+# min_free_memory_mb: combined (physical + swap) free memory threshold
 
 [resources]
-min_free_memory_mb = 512
-min_free_swap_mb = 4096
+min_free_memory_mb = 4096
 
 # ─── Model Tiers ─────────────────────────────────────────────
 # Format: "tool/provider/model/thinking_budget"
