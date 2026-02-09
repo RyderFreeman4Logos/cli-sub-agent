@@ -292,7 +292,9 @@ independent assessment based on the actual code."
 
 **NOTE**: `csa debate` reads `[debate]` config for tool selection. If `tool = "auto"`
 (default), it auto-detects your tool from `CSA_PARENT_TOOL` and picks the
-heterogeneous counterpart. No manual model-spec needed.
+heterogeneous counterpart. Auto mode only maps `claude-code <-> codex`. If you
+are a **gemini-cli** or **opencode** caller, auto will error — you must pass
+`--tool codex` or `--tool claude-code` explicitly (or set `[debate].tool` in config).
 
 **CRITICAL**: Do NOT tell the arbiter your own opinion. Let it form
 an independent judgment.
