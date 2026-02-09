@@ -118,6 +118,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_read_ppid_self() {
         // Current process should have a valid parent PID > 0.
         let ppid = read_ppid(std::process::id());
@@ -132,6 +133,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_read_comm_self() {
         let comm = read_comm(std::process::id());
         assert!(comm.is_some(), "read_comm(self) should succeed on Linux");
@@ -145,6 +147,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_detect_ancestor_tool_does_not_panic() {
         // Just verify it doesn't panic. Result depends on runtime context.
         let _result = detect_ancestor_tool();
