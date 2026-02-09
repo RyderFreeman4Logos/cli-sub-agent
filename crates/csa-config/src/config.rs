@@ -107,28 +107,37 @@ pub struct ToolRestrictions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesConfig {
+    /// Minimum combined free memory (physical + swap) in MB.
+    /// CSA refuses to launch a tool when combined free memory
+    /// would drop below this after accounting for tool usage.
     #[serde(default = "default_min_mem")]
     pub min_free_memory_mb: u64,
-    #[serde(default = "default_min_swap")]
-    pub min_free_swap_mb: u64,
     #[serde(default)]
     pub initial_estimates: HashMap<String, u64>,
 }
 
 fn default_min_mem() -> u64 {
-    2048
-}
-
-fn default_min_swap() -> u64 {
-    1024
+    4096
 }
 
 impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
             min_free_memory_mb: default_min_mem(),
-            min_free_swap_mb: default_min_swap(),
             initial_estimates: HashMap::new(),
+        }
+    }
+}
+
+/// Warn about deprecated config keys that serde silently ignores.
+fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
+    if let Some(resources) = raw.get("resources") {
+        if resources.get("min_free_swap_mb").is_some() {
+            eprintln!(
+                "warning: config '{}': 'resources.min_free_swap_mb' is deprecated and ignored. \
+                 Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead.",
+                source
+            );
         }
     }
 }
@@ -193,6 +202,10 @@ impl ProjectConfig {
     fn load_from_path(path: &Path) -> Result<Option<Self>> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
+        // Check for deprecated keys before deserializing (serde silently ignores them)
+        if let Ok(raw) = content.parse::<toml::Value>() {
+            warn_deprecated_keys(&raw, &path.display().to_string());
+        }
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config: {}", path.display()))?;
         Ok(Some(config))
@@ -215,6 +228,10 @@ impl ProjectConfig {
         let overlay_val: toml::Value = toml::from_str(&overlay_str).with_context(|| {
             format!("Failed to parse project config: {}", overlay_path.display())
         })?;
+
+        // Check for deprecated keys in both configs
+        warn_deprecated_keys(&base_val, &base_path.display().to_string());
+        warn_deprecated_keys(&overlay_val, &overlay_path.display().to_string());
 
         // Preserve the higher schema_version before merging so that
         // check_schema_version() catches incompatibility from either source.
@@ -382,8 +399,8 @@ impl ProjectConfig {
 schema_version = 1
 
 [resources]
-min_free_memory_mb = 2048
-min_free_swap_mb = 1024
+# Minimum combined free memory (physical + swap) in MB.
+min_free_memory_mb = 4096
 
 # Tool configuration defaults.
 # [tools.codex]

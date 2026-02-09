@@ -127,7 +127,7 @@ pub fn get_p95_estimate(&self, tool: &str) -> Option<u64> {
 
 ```
 required_memory = min_free_memory_mb + P95_estimate(tool)
-available_memory = system.available_memory() / 1024 / 1024  # bytes → MB
+available_memory = (physical_free + swap_free) / 1024 / 1024  # bytes → MB
 
 if available_memory < required_memory:
     abort with OOM risk message
@@ -135,16 +135,16 @@ if available_memory < required_memory:
 
 **Components:**
 
-1. **`min_free_memory_mb`:** Safety buffer to keep system stable (default: 2048 MB)
+1. **`min_free_memory_mb`:** Safety buffer to keep system stable (default: 4096 MB, combined physical + swap)
 2. **`P95_estimate(tool)`:** Historical memory usage or initial estimate
-3. **`available_memory`:** Current free RAM reported by OS
+3. **`available_memory`:** Current combined free memory (physical RAM + swap) reported by OS
 
 ### Example Calculation
 
 **Configuration:**
 ```toml
 [resources]
-min_free_memory_mb = 2048
+min_free_memory_mb = 4096
 
 [resources.initial_estimates]
 codex = 2048
@@ -153,42 +153,36 @@ codex = 2048
 **Scenario:**
 - Tool: `codex`
 - Historical P95: 2560 MB (from 20 runs)
-- Available RAM: 6144 MB
+- Available memory: 8192 MB (physical: 6144 MB + swap: 2048 MB)
 
 **Check:**
 ```
-required = 2048 + 2560 = 4608 MB
-available = 6144 MB
-4608 < 6144 → PASS ✓
+required = 4096 + 2560 = 6656 MB
+available = 6144 + 2048 = 8192 MB
+6656 < 8192 → PASS ✓
 ```
 
 **Scenario 2 (Low Memory):**
-- Available RAM: 4000 MB
+- Available memory: 5000 MB (physical: 3500 MB + swap: 1500 MB)
 
 **Check:**
 ```
-required = 2048 + 2560 = 4608 MB
-available = 4000 MB
-4608 > 4000 → FAIL ✗
+required = 4096 + 2560 = 6656 MB
+available = 3500 + 1500 = 5000 MB
+6656 > 5000 → FAIL ✗
 
 Error: OOM Risk Prevention: Not enough memory to launch 'codex'.
-Available: 4000 MB, Min Buffer: 2048 MB, Est. Tool Usage: 2560 MB (P95)
+Available: 5000 MB (physical 3500 + swap 1500), Min Buffer: 4096 MB, Est. Tool Usage: 2560 MB (P95)
 (Try closing other apps or wait for running agents to finish)
 ```
 
-### Swap Space Check
+### Combined Memory Check
 
-**Additional Check:**
+**Single Check:**
 
-```rust
-if available_swap < min_free_swap_mb {
-    bail!("OOM Risk Prevention: Low swap space ({} MB available).", available_swap);
-}
-```
+The memory check now uses combined physical + swap free memory as a single threshold, providing a more accurate representation of available system resources.
 
-**Purpose:** Prevent system thrashing when RAM is exhausted
-
-**Default:** `min_free_swap_mb = 1024`
+**Rationale:** Checking physical and swap separately can be misleading. The system uses both resources fluidly, so a combined check better reflects actual memory availability.
 
 ## Memory Monitoring
 
@@ -359,8 +353,7 @@ let estimated_usage = self
 use csa_resource::{ResourceGuard, ResourceLimits};
 
 let limits = ResourceLimits {
-    min_free_memory_mb: 2048,
-    min_free_swap_mb: 1024,
+    min_free_memory_mb: 4096, // combined physical + swap threshold
     initial_estimates: [
         ("gemini-cli".to_string(), 1024),
         ("codex".to_string(), 2048),
@@ -402,8 +395,7 @@ guard.record_usage("codex", peak_memory_mb);
 
 ```toml
 [resources]
-min_free_memory_mb = 2048      # Default: 2048
-min_free_swap_mb = 1024        # Default: 1024
+min_free_memory_mb = 4096      # Default: 4096 (combined physical + swap)
 
 [resources.initial_estimates]
 gemini-cli = 1024    # MB
@@ -417,15 +409,13 @@ claude-code = 2048
 **Conservative (Low-Memory Systems):**
 ```toml
 [resources]
-min_free_memory_mb = 3072      # Keep more buffer
-min_free_swap_mb = 2048
+min_free_memory_mb = 6144      # Keep more buffer (combined physical + swap)
 ```
 
 **Aggressive (High-Memory Systems):**
 ```toml
 [resources]
-min_free_memory_mb = 1024      # Allow tighter margins
-min_free_swap_mb = 512
+min_free_memory_mb = 2048      # Allow tighter margins (combined physical + swap)
 ```
 
 **Initial Estimates:**

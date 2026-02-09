@@ -9,16 +9,18 @@ use crate::stats::UsageStats;
 /// but duplicated here to avoid circular dependency).
 #[derive(Debug, Clone)]
 pub struct ResourceLimits {
+    /// Minimum free memory (physical + swap combined) in MB.
+    /// CSA refuses to launch a tool if the combined free memory
+    /// would drop below this threshold after accounting for the
+    /// tool's estimated usage.
     pub min_free_memory_mb: u64,
-    pub min_free_swap_mb: u64,
     pub initial_estimates: HashMap<String, u64>,
 }
 
 impl Default for ResourceLimits {
     fn default() -> Self {
         Self {
-            min_free_memory_mb: 2048,
-            min_free_swap_mb: 1024,
+            min_free_memory_mb: 4096,
             initial_estimates: HashMap::new(),
         }
     }
@@ -46,11 +48,20 @@ impl ResourceGuard {
     }
 
     /// Check if enough resources are available to launch the given tool.
+    ///
+    /// Available memory = physical available + swap free (combined).
+    /// Required = min_free_memory_mb (safety buffer) + estimated tool usage.
     pub fn check_availability(&mut self, tool_name: &str) -> Result<()> {
         self.sys.refresh_memory();
 
-        let available_mem = self.sys.available_memory() / 1024 / 1024; // bytes -> MB
-        let available_swap = self.sys.free_swap() / 1024 / 1024;
+        // Add in bytes first, then convert to MB to avoid truncation error
+        let available_phys_bytes = self.sys.available_memory();
+        let available_swap_bytes = self.sys.free_swap();
+        let available_total_bytes = available_phys_bytes.saturating_add(available_swap_bytes);
+
+        let available_phys = available_phys_bytes / 1024 / 1024;
+        let available_swap = available_swap_bytes / 1024 / 1024;
+        let available_total = available_total_bytes / 1024 / 1024;
 
         // Prefer P95 historical estimate, fallback to initial config
         let estimated_usage = self
@@ -58,24 +69,22 @@ impl ResourceGuard {
             .get_p95_estimate(tool_name)
             .unwrap_or_else(|| *self.limits.initial_estimates.get(tool_name).unwrap_or(&500));
 
-        let required_mem = self.limits.min_free_memory_mb + estimated_usage;
+        let required = self
+            .limits
+            .min_free_memory_mb
+            .saturating_add(estimated_usage);
 
-        if available_mem < required_mem {
+        if available_total < required {
             bail!(
                 "OOM Risk Prevention: Not enough memory to launch '{}'.\n\
-                Available: {} MB, Min Buffer: {} MB, Est. Tool Usage: {} MB (P95)\n\
+                Available: {} MB (physical {} + swap {}), Min Buffer: {} MB, Est. Tool Usage: {} MB (P95)\n\
                 (Try closing other apps or wait for running agents to finish)",
                 tool_name,
-                available_mem,
+                available_total,
+                available_phys,
+                available_swap,
                 self.limits.min_free_memory_mb,
                 estimated_usage
-            );
-        }
-
-        if available_swap < self.limits.min_free_swap_mb {
-            bail!(
-                "OOM Risk Prevention: Low swap space ({} MB available).",
-                available_swap
             );
         }
 
@@ -119,13 +128,12 @@ mod tests {
         initial_estimates.insert("test_tool".to_string(), 1);
         let limits = ResourceLimits {
             min_free_memory_mb: 1,
-            min_free_swap_mb: 0,
             initial_estimates,
         };
 
         let mut guard = ResourceGuard::new(limits, &stats_path);
         let result = guard.check_availability("test_tool");
-        // required_mem = 1 + 1 = 2 MB — any running system has this.
+        // required = 1 + 1 = 2 MB (physical + swap combined) — any running system has this.
         assert!(result.is_ok(), "check_availability failed: {:?}", result);
     }
 

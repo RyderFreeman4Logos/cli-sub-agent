@@ -185,8 +185,7 @@ pub fn init_project(
                 max_recursion_depth: 5,
             },
             resources: ResourcesConfig {
-                min_free_memory_mb: 2048,
-                min_free_swap_mb: 1024,
+                min_free_memory_mb: 4096,
                 initial_estimates,
             },
             tools,

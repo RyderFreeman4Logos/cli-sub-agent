@@ -171,7 +171,6 @@ pub(crate) async fn execute_with_session(
     let mut resource_guard = if let Some(cfg) = config {
         let limits = ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
-            min_free_swap_mb: cfg.resources.min_free_swap_mb,
             initial_estimates: cfg.resources.initial_estimates.clone(),
         };
         // Stats stored at project state level, not per-session
