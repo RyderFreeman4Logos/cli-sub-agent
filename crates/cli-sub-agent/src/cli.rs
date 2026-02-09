@@ -206,18 +206,6 @@ pub struct DebateArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
-    /// Starting tier name (defaults to tier_mapping.default)
-    #[arg(long)]
-    pub tier: Option<String>,
-
-    /// Maximum debate rounds per tier
-    #[arg(long, default_value = "3")]
-    pub max_rounds: u32,
-
-    /// Maximum tier escalations
-    #[arg(long, default_value = "2")]
-    pub max_escalations: u32,
-
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,

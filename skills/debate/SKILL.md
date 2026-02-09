@@ -79,9 +79,6 @@ Skip debate for: trivial changes, typo fixes, single-line edits, test additions.
 - `tool` (optional): Debate tool selection override (default: `auto`)
 - `session` (optional): Resume existing debate session (ULID or prefix)
 - `model` (optional): Override model within selected tool
-- `tier` (optional): Starting tier name (default: uses `default` tier mapping from config)
-- `max_rounds` (optional): Maximum debate rounds per tier (default: 3)
-- `max_escalations` (optional): Maximum tier escalations (default: 2)
 
 ## Prerequisites (MANDATORY — verify before ANY debate action)
 
