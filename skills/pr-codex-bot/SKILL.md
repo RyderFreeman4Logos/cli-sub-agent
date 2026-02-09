@@ -52,6 +52,22 @@ Step 7: Evaluate each comment
                              Step 13: Merge (remote + local) ✅ DONE
 ```
 
+## FORBIDDEN Actions (VIOLATION = SOP breach)
+
+- **NEVER dismiss a bot comment as "false positive" using your own reasoning alone** — you are the code author; your judgment is inherently biased
+- **NEVER reply to a bot comment without completing Step 8 (local arbitration)** — even if the false positive seems "obvious", the arbiter will confirm instantly
+- **NEVER skip the debate step for any reason** — "too simple", "clearly wrong", "design disagreement" are NOT valid excuses
+- **NEVER post a dismissal comment without full model specs** (`tool/provider/model/thinking_budget`) for both debate participants
+- **NEVER use the same model family for arbitration** as you (the main agent)
+
+**If you believe a bot comment is wrong, you MUST:**
+1. Queue it for Step 8 (local arbitration) — NOT reply directly
+2. Get an independent verdict from a heterogeneous model via CSA
+3. If the arbiter disagrees with you, debate adversarially (Step 8.3b)
+4. Post the full audit trail (with model specs for BOTH sides) to the PR comment
+
+**Any self-dismissal without arbitration is an SOP VIOLATION that undermines the entire review process. The point of heterogeneous review is that no single model — including you — gets to be judge of its own code.**
+
 ## Parameters
 
 Extract from user message or PR context:
@@ -203,6 +219,14 @@ The cloud bot has limited context and cannot execute commands to verify its
 claims. Do not debate with it directly — instead, get an independent local
 second opinion first.
 
+**SOP VIOLATION WARNING**: You MUST NOT skip Step 8 for ANY Category B comment.
+Even if you are "99% sure" it is a false positive, you MUST get an independent
+heterogeneous model verdict. Your confidence as the code author is irrelevant —
+the entire point of this process is that **no single model judges its own code**.
+
+Replying directly with your own reasoning (e.g., "This is a design choice,
+dismissing.") without completing Step 8 is a **FORBIDDEN action** (see above).
+
 ### Category C: Real Issue
 
 The bot found a genuine bug or improvement.
@@ -288,7 +312,7 @@ Arbiter says...
 
 ### Step 8.3a: Arbiter Confirms False Positive
 
-React 👎 on PR and post the arbitration result as audit trail
+React 👎 on PR and post the arbitration result as audit trail with **full model specs**
 (**do NOT `@codex`**):
 
 ```bash
@@ -296,9 +320,18 @@ gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
   -X POST -f content='-1'
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
   -X POST \
-  -f body="**Dismissed after local arbitration.** [summary of arbiter reasoning]. [cite file:line evidence]." \
+  -f body="**Dismissed after local arbitration.**
+
+**Participants:**
+- Author: \`{your_tool}/{your_provider}/{your_model}/{your_thinking_budget}\`
+- Arbiter: \`{arbiter_tool}/{arbiter_provider}/{arbiter_model}/{arbiter_thinking_budget}\`
+
+**Reasoning:** [summary of arbiter reasoning]. [cite file:line evidence]." \
   -F in_reply_to=${COMMENT_ID}
 ```
+
+**MANDATORY**: Model specs MUST use the `tool/provider/model/thinking_budget` format
+(matching CSA tiers). This enables future reviewers to verify heterogeneous arbitration.
 
 ### Step 8.3b: Arbiter Confirms Real Issue or Uncertain → YOU Debate
 
