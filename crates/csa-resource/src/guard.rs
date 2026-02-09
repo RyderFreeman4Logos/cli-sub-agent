@@ -113,17 +113,20 @@ mod tests {
         let dir = tempdir().unwrap();
         let stats_path = dir.path().join("stats.toml");
 
-        // Use very low limits to ensure test passes on any dev machine
+        // Use minimal limits so the test passes on any system (including
+        // macOS CI runners with limited memory and zero-reported swap).
+        let mut initial_estimates = HashMap::new();
+        initial_estimates.insert("test_tool".to_string(), 1);
         let limits = ResourceLimits {
-            min_free_memory_mb: 100,
-            min_free_swap_mb: 10,
-            initial_estimates: HashMap::new(),
+            min_free_memory_mb: 1,
+            min_free_swap_mb: 0,
+            initial_estimates,
         };
 
         let mut guard = ResourceGuard::new(limits, &stats_path);
         let result = guard.check_availability("test_tool");
-        // Should succeed on any machine with >600MB free memory
-        assert!(result.is_ok());
+        // required_mem = 1 + 1 = 2 MB — any running system has this.
+        assert!(result.is_ok(), "check_availability failed: {:?}", result);
     }
 
     #[test]
