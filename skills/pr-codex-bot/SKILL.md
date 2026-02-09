@@ -62,11 +62,11 @@ Step 7: Evaluate each comment
 
 **If you believe a bot comment is wrong, you MUST:**
 1. Queue it for Step 8 (local arbitration) — NOT reply directly
-2. Get an independent verdict from a heterogeneous model via CSA
+2. Get an independent verdict from a different backend via CSA
 3. If the arbiter disagrees with you, debate adversarially (Step 8.3b)
 4. Post the full audit trail (with model specs for BOTH sides) to the PR comment
 
-**Any self-dismissal without arbitration is an SOP VIOLATION that undermines the entire review process. The point of heterogeneous review is that no single model — including you — gets to be judge of its own code.**
+**Any self-dismissal without arbitration is an SOP VIOLATION that undermines the entire review process. The point of independent review is that no single model — including you — gets to be judge of its own code.**
 
 ## Parameters
 
@@ -221,7 +221,7 @@ second opinion first.
 
 **SOP VIOLATION WARNING**: You MUST NOT skip Step 8 for ANY Category B comment.
 Even if you are "99% sure" it is a false positive, you MUST get an independent
-heterogeneous model verdict. Your confidence as the code author is irrelevant —
+model verdict via CSA. Your confidence as the code author is irrelevant —
 the entire point of this process is that **no single model judges its own code**.
 
 Replying directly with your own reasoning (e.g., "This is a design choice,
@@ -252,32 +252,27 @@ gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
 
 **Do NOT debate with the cloud bot directly.** The bot cannot execute commands,
 trace cross-module dependencies, or verify its claims. Instead, use a local
-arbitration process with an **independent, heterogeneous model**.
+arbitration process with an **independent model via CSA**.
 
-### Model Heterogeneity Requirement
+### Independent Model Requirement
 
-**CRITICAL**: The arbiter MUST be a **different model family** from both:
+**CRITICAL**: The arbiter MUST be routed through CSA to ensure independent evaluation from:
 - The code author (you, the main agent)
 - The cloud bot reviewer
 
-This is the core value of arbitration — different training data, architectures,
-and biases create "cognitive friction" that catches issues a single model would
-miss. Using the same model family as the reviewer defeats the purpose.
+This is the core value of arbitration — different reasoning systems create "cognitive friction" that catches issues a single model would miss. CSA handles tool routing internally to ensure independence.
 
-| You (main agent) | Cloud Bot | Local Arbiter (MUST differ) |
+| You (main agent) | Cloud Bot | Local Arbiter (CSA routes) |
 |-------------------|-----------|---------------------------|
-| Claude Opus 4.6 | GPT-5.3-Codex | `csa debate` → auto-selects **codex** |
-| GPT-based agent | GPT-5.3-Codex | `csa debate` → auto-selects **claude-code** |
-| Gemini-based agent | GPT-5.3-Codex | `csa debate --tool codex` or `--tool claude-code` |
+| Claude Opus 4.6 | GPT-5.3-Codex | `csa debate` → CSA auto-routes |
+| GPT-based agent | GPT-5.3-Codex | `csa debate` → CSA auto-routes |
+| Gemini-based agent | GPT-5.3-Codex | `csa debate` → CSA auto-routes |
 
-**Preferred arbiter**: Use `csa debate` which auto-selects a heterogeneous
-counterpart (if you are Claude, it picks codex; if you are codex, it picks
-claude-code). No manual model-spec selection needed.
+**Preferred arbiter**: Use `csa debate` which automatically selects an appropriate backend based on configuration. CSA's internal routing ensures independent evaluation.
 
 ### Step 8.1: Get Independent Local Opinion
 
-Use `csa debate` to spawn a heterogeneous arbiter. The command automatically
-selects a different model family from you (the caller):
+Use `csa debate` to spawn an independent arbiter. CSA automatically routes to an appropriate backend:
 
 ```bash
 csa debate "A code reviewer flagged the following issue in [file:line]:
@@ -291,10 +286,9 @@ independent assessment based on the actual code."
 ```
 
 **NOTE**: `csa debate` reads `[debate]` config for tool selection. If `tool = "auto"`
-(default), it auto-detects your tool from `CSA_PARENT_TOOL` and picks the
-heterogeneous counterpart. Auto mode only maps `claude-code <-> codex`. If you
-are a **gemini-cli** or **opencode** caller, auto will error — you must pass
-`--tool codex` or `--tool claude-code` explicitly (or set `[debate].tool` in config).
+(default), CSA automatically routes to an appropriate backend based on configuration.
+Auto mode ensures independent evaluation. If auto routing cannot determine an appropriate
+backend, you may need to specify `--tool` explicitly or configure `[debate].tool` in config.
 
 **CRITICAL**: Do NOT tell the arbiter your own opinion. Let it form
 an independent judgment.
@@ -332,13 +326,13 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
 ```
 
 **MANDATORY**: Model specs MUST use the `tool/provider/model/thinking_budget` format
-(matching CSA tiers). This enables future reviewers to verify heterogeneous arbitration.
+(matching CSA tiers). This enables future reviewers to verify independent arbitration.
 
 ### Step 8.3b: Arbiter Confirms Real Issue or Uncertain → YOU Debate
 
 **CRITICAL: YOU (the main agent / code author) MUST debate with the arbiter.**
 Do NOT just accept the arbiter's verdict. You wrote the code — defend your
-design decisions. The heterogeneous debate IS the value of this step.
+design decisions. The independent adversarial debate IS the value of this step.
 
 **Resume the same debate session** (via `csa debate --session <id>`) and engage in
 adversarial debate:
@@ -355,15 +349,15 @@ csa debate --session <SESSION_ID> "I disagree because [your reasoning].
 The code is intentionally designed this way because [rationale]."
 ```
 
-**The debate is between two DIFFERENT model families (via `csa debate`):**
+**The debate is routed through CSA for independent evaluation:**
 ```
 YOU (Claude Opus 4.6, code author)
     ↕  adversarial debate via csa debate  ↕
-Arbiter (auto-selected heterogeneous model, independent evaluator)
+Arbiter (CSA-routed backend, independent evaluator)
 ```
 
-This is where model heterogeneity creates real value — if both a Claude
-and a GPT independently conclude the same thing after debate, the
+This is where independent evaluation creates real value — if multiple different
+reasoning systems independently conclude the same thing after debate, the
 confidence is much higher than a single model's judgment.
 
 **After debate concludes**:
@@ -413,7 +407,7 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
 ```
 
 **MANDATORY**: Both model specs MUST use the `tool/provider/model/thinking_budget` format.
-The audit section enables future reviewers (human or AI) to verify that heterogeneous
+The audit section enables future reviewers (human or AI) to verify that independent
 models were used and assess the quality of the arbitration.
 
 ### `@codex` Tagging Rules

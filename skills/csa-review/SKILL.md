@@ -1,6 +1,6 @@
 ---
 name: csa-review
-description: CSA-driven code review with heterogeneous model selection, session isolation, and structured outputs
+description: CSA-driven code review with independent model selection, session isolation, and structured outputs
 allowed-tools: Bash, Read, Grep, Glob
 triggers:
   - "csa-review"
@@ -8,13 +8,13 @@ triggers:
   - "CSA code review"
 ---
 
-# CSA Review: Heterogeneous Code Review Orchestration
+# CSA Review: Independent Code Review Orchestration
 
 ## Purpose
 
 Run structured code reviews through CSA, ensuring:
 - **Session isolation**: Review sessions stored in `~/.local/state/csa/`, not `~/.codex/`.
-- **Heterogeneous model selection**: Auto-selects a different model family from the caller (e.g., Claude Code caller -> Codex reviewer).
+- **Independent model selection**: CSA automatically routes to an appropriate review tool based on configuration.
 - **Self-contained review agent**: The review agent reads CLAUDE.md and builds project understanding autonomously.
 - **Structured outputs**: JSON findings + Markdown report following a tested, optimized prompt.
 
@@ -28,7 +28,7 @@ Run structured code reviews through CSA, ensuring:
   - `files:<pathspec>`
 - `mode` (optional): `review-only` (default) or `review-and-fix`
 - `security_mode` (optional): `auto` (default) | `on` | `off`
-- `tool` (optional): override review tool (default: auto-detect heterogeneous counterpart)
+- `tool` (optional): override review tool (default: auto-detect independent reviewer)
 
 ## Execution Protocol
 
@@ -299,7 +299,7 @@ or trigger another review round to verify fixes.
 | Session storage | `~/.codex/` (pollutes user sessions) | `~/.local/state/csa/` |
 | Session management | None | `csa session list`, `csa gc` |
 | Project understanding | Caller pre-reads CLAUDE.md | Review agent reads it autonomously |
-| Tool selection | Hardcoded codex | Auto heterogeneous + configurable |
+| Tool selection | Hardcoded codex | Auto independent + configurable |
 | Prompt | Bash heredoc | Reuses claude-md-scope-review's tested prompt |
 | Concurrency control | None | CSA global slots |
 | Session resume | Manual thread_id tracking | `csa run --session {id}` |
@@ -344,7 +344,7 @@ When the developer (or orchestrating agent) disagrees with a csa-review finding:
    - The finding becomes the "question" for debate
    - The reviewer's evidence is the initial proposal
    - The developer's counter-argument is the critique
-   - The debate MUST use heterogeneous models (different from both the reviewer and developer)
+   - The debate MUST use independent models (CSA routes to a different backend from both the reviewer and developer)
 
 3. **Record the outcome**: If a finding is dismissed after debate, document the
    debate verdict (with model specs) in the review report or PR comment.
@@ -365,4 +365,4 @@ The code author's confidence alone is NOT sufficient justification.
 7. If security_mode required pass 3, adversarial_pass_executed=true.
 8. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
 9. CSA session ID was reported for potential follow-up.
-10. **If any finding was contested**: debate skill was used with heterogeneous models, and outcome documented with model specs.
+10. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.

@@ -3,7 +3,7 @@ use clap::Parser;
 use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 use tokio::signal::unix::{signal, SignalKind};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 mod batch;
 mod cli;
@@ -12,6 +12,7 @@ mod debate_cmd;
 mod doctor;
 mod gc;
 mod mcp_server;
+mod pipeline;
 mod review_cmd;
 mod run_helpers;
 mod self_update;
@@ -30,15 +31,14 @@ use csa_lock::acquire_lock;
 use csa_lock::slot::{
     format_slot_diagnostic, slot_usage, try_acquire_slot, SlotAcquireResult, ToolSlot,
 };
-use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
     create_session, get_session_dir, load_session, resolve_session_prefix, save_session,
     TokenUsage, ToolState,
 };
 use run_helpers::{
-    build_executor, infer_task_edit_requirement, is_compress_command, is_tool_binary_available,
-    parse_token_usage, parse_tool_name, read_prompt, resolve_tool_and_model, truncate_prompt,
+    infer_task_edit_requirement, is_compress_command, is_tool_binary_available, parse_token_usage,
+    parse_tool_name, read_prompt, resolve_tool_and_model, truncate_prompt,
 };
 
 #[tokio::main]
@@ -224,23 +224,11 @@ async fn handle_run(
         session_arg
     };
 
-    // 3. Load configs (project config + global config)
-    let config = ProjectConfig::load(&project_root)?;
-    let global_config = GlobalConfig::load()?;
-
-    // 4. Check recursion depth (from config or default)
-    let max_depth = config
-        .as_ref()
-        .map(|c| c.project.max_recursion_depth)
-        .unwrap_or(5u32);
-
-    if current_depth > max_depth {
-        error!(
-            "Max recursion depth ({}) exceeded. Current: {}. Do it yourself.",
-            max_depth, current_depth
-        );
+    // 3. Load configs and validate recursion depth
+    let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
+    else {
         return Ok(1);
-    }
+    };
 
     // 5. Read prompt
     let prompt_text = read_prompt(prompt)?;
@@ -284,38 +272,17 @@ async fn handle_run(
     let result = loop {
         attempts += 1;
 
-        // 7. Build executor (config auto-injects suppress_notify for codex)
-        let executor = build_executor(
+        // 7. Build executor and validate tool
+        let executor = pipeline::build_and_validate_executor(
             &current_tool,
             current_model_spec.as_deref(),
             current_model.as_deref(),
             thinking.as_deref(),
             config.as_ref(),
-        )?;
+        )
+        .await?;
 
-        // 8. Check tool is installed
-        if let Err(e) = check_tool_installed(executor.executable_name()).await {
-            error!(
-                "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
-                executor.tool_name(),
-                executor.install_hint(),
-                executor.tool_name()
-            );
-            anyhow::bail!("{}", e);
-        }
-
-        // 9. Check tool is enabled in config
-        if let Some(ref cfg) = config {
-            if !cfg.is_tool_enabled(executor.tool_name()) {
-                error!(
-                    "Tool '{}' is disabled in project config",
-                    executor.tool_name()
-                );
-                return Ok(1);
-            }
-        }
-
-        // 10. Acquire global slot
+        // 8. Acquire global slot
         let tool_name_str = executor.tool_name();
         let max_concurrent = global_config.max_concurrent(tool_name_str);
         let _slot_guard: Option<ToolSlot>;
@@ -401,7 +368,7 @@ async fn handle_run(
         // Get env vars for this tool from global config
         let extra_env = global_config.env_vars(tool_name_str).cloned();
 
-        // 11. Execute
+        // 9. Execute
         let exec_result = if ephemeral {
             // Ephemeral: use temp directory
             let temp_dir = TempDir::new()?;
@@ -446,7 +413,7 @@ async fn handle_run(
             }
         };
 
-        // 12. Check for 429 rate limit and attempt failover
+        // 10. Check for 429 rate limit and attempt failover
         if let Some(rate_limit) = csa_scheduler::detect_rate_limit(
             tool_name_str,
             &exec_result.stderr_output,
@@ -540,7 +507,7 @@ async fn handle_run(
         }
     };
 
-    // 13. Print result
+    // 11. Print result
     match output_format {
         OutputFormat::Text => {
             print!("{}", result.output);
