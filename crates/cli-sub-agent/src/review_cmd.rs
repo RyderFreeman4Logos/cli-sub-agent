@@ -1,37 +1,24 @@
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::cli::ReviewArgs;
 use csa_config::global::heterogeneous_counterpart;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_process::check_tool_installed;
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::determine_project_root(args.cd.as_deref())?;
 
-    // 2. Load config (optional)
-    let config = ProjectConfig::load(&project_root)?;
+    // 2. Load config and validate recursion depth
+    let (config, global_config) =
+        match crate::pipeline::load_and_validate(&project_root, current_depth) {
+            Ok(configs) => configs,
+            Err(_) => return Ok(1),
+        };
 
-    // 3. Check recursion depth (from config or default)
-    let max_depth = config
-        .as_ref()
-        .map(|c| c.project.max_recursion_depth)
-        .unwrap_or(5u32);
-    if current_depth > max_depth {
-        error!(
-            "Max recursion depth ({}) exceeded. Current: {}. Do it yourself.",
-            max_depth, current_depth
-        );
-        return Ok(1);
-    }
-
-    // 4. Load global config for review tool selection + env injection + slot control.
-    let global_config = GlobalConfig::load()?;
-
-    // 5. Get git diff based on scope
+    // 3. Get git diff based on scope
     let diff_output = get_review_diff(&args)?;
 
     if diff_output.trim().is_empty() {
@@ -39,10 +26,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         return Ok(0);
     }
 
-    // 6. Construct review prompt
+    // 4. Construct review prompt
     let prompt = construct_review_prompt(&args, &diff_output);
 
-    // 7. Determine tool
+    // 5. Determine tool
     let parent_tool = std::env::var("CSA_TOOL")
         .ok()
         .or_else(|| std::env::var("CSA_PARENT_TOOL").ok());
@@ -54,38 +41,17 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
     )?;
 
-    // 8. Build executor
-    let executor = crate::run_helpers::build_executor(
+    // 6. Build executor and validate tool
+    let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         None,
         args.model.as_deref(),
         None,
         config.as_ref(),
-    )?;
+    )
+    .await?;
 
-    // 9. Check tool is installed
-    if let Err(e) = check_tool_installed(executor.executable_name()).await {
-        error!(
-            "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
-            executor.tool_name(),
-            executor.install_hint(),
-            executor.tool_name()
-        );
-        anyhow::bail!("{}", e);
-    }
-
-    // 10. Check tool is enabled in config
-    if let Some(ref cfg) = config {
-        if !cfg.is_tool_enabled(executor.tool_name()) {
-            error!(
-                "Tool '{}' is disabled in project config",
-                executor.tool_name()
-            );
-            return Ok(1);
-        }
-    }
-
-    // 11. Apply restrictions if configured
+    // 7. Apply restrictions if configured
     let can_edit = config
         .as_ref()
         .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
@@ -96,38 +62,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         prompt.clone()
     };
 
-    // 12. Get env injection from global config
+    // 8. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
 
-    // 12b. Acquire global slot to enforce concurrency limit
-    let max_concurrent = global_config.max_concurrent(executor.tool_name());
-    let slots_dir = GlobalConfig::slots_dir()?;
-    let _slot_guard = match csa_lock::slot::try_acquire_slot(
-        &slots_dir,
-        executor.tool_name(),
-        max_concurrent,
-        None,
-    ) {
-        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => slot,
-        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
-            anyhow::bail!(
-                "All {} slots for '{}' occupied ({}/{}). Try again later or use --tool to switch.",
-                max_concurrent,
-                executor.tool_name(),
-                status.occupied,
-                status.max_slots,
-            );
-        }
-        Err(e) => {
-            anyhow::bail!(
-                "Slot acquisition failed for '{}': {}",
-                executor.tool_name(),
-                e
-            );
-        }
-    };
+    // 9. Acquire global slot to enforce concurrency limit
+    let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
-    // 13. Execute with session
+    // 10. Execute with session
     let result = crate::execute_with_session(
         &executor,
         &tool,
@@ -141,7 +82,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     )
     .await?;
 
-    // 14. Print result
+    // 11. Print result
     print!("{}", result.output);
 
     Ok(result.exit_code)
@@ -169,7 +110,7 @@ fn resolve_review_tool(
     }
 
     match global_config.resolve_review_tool(parent_tool) {
-        Ok(tool_name) => parse_tool_name(&tool_name).ok_or_else(|| {
+        Ok(tool_name) => crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
             anyhow::anyhow!(
                 "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
                 tool_name
@@ -188,7 +129,7 @@ fn resolve_review_tool_from_value(
         let resolved = parent_tool
             .and_then(heterogeneous_counterpart)
             .ok_or_else(|| review_auto_resolution_error(parent_tool, project_root))?;
-        return parse_tool_name(resolved).ok_or_else(|| {
+        return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
             anyhow::anyhow!(
                 "BUG: auto review tool resolution returned invalid tool '{}'",
                 resolved
@@ -196,7 +137,7 @@ fn resolve_review_tool_from_value(
         });
     }
 
-    parse_tool_name(tool_value).ok_or_else(|| {
+    crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
         anyhow::anyhow!(
             "Invalid project [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
             tool_value
@@ -229,16 +170,6 @@ Choose one:\n\
 3) CLI override: csa review --tool codex\n\n\
 Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
-}
-
-fn parse_tool_name(name: &str) -> Option<ToolName> {
-    match name {
-        "gemini-cli" => Some(ToolName::GeminiCli),
-        "opencode" => Some(ToolName::Opencode),
-        "codex" => Some(ToolName::Codex),
-        "claude-code" => Some(ToolName::ClaudeCode),
-        _ => None,
-    }
 }
 
 pub(crate) fn get_review_diff(args: &ReviewArgs) -> Result<String> {
