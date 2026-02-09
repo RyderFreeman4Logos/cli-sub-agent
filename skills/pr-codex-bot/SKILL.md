@@ -340,7 +340,7 @@ multi-round adversarial debate with automatic tier escalation.
 | Arbiter convinced you | React 👍 + queue for Step 9 (fix) |
 | Deadlock (each side has valid points) | **Escalate to user** |
 
-Post the full debate summary as a PR comment for audit trail
+Post the full debate summary as a PR comment for audit trail with **full model specs**
 (**do NOT `@codex`**):
 
 ```bash
@@ -348,24 +348,37 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
   -X POST \
   -f body="**Local arbitration result: [DISMISSED|CONFIRMED|ESCALATED].**
 
+## Participants (MANDATORY for auditability)
+- **Author**: \`{your_tool}/{your_provider}/{your_model}/{your_thinking_budget}\`
+- **Arbiter**: \`{arbiter_tool}/{arbiter_provider}/{arbiter_model}/{arbiter_thinking_budget}\`
+
 ## Bot's concern
 [bot comment summary]
 
 ## Arbiter's independent assessment
 [arbiter's initial verdict and reasoning]
 
-## Debate (YOU vs Arbiter)
+## Debate (Author vs Arbiter)
 ### Round 1
-- **Author (Claude)**: [your counter-argument]
-- **Arbiter (CSA)**: [arbiter's response]
+- **Author** (\`{your_model}\`): [your counter-argument]
+- **Arbiter** (\`{arbiter_model}\`): [arbiter's response]
 ### Round 2 (if needed)
-- **Author (Claude)**: [your rebuttal]
-- **Arbiter (CSA)**: [arbiter's response]
+- **Author** (\`{your_model}\`): [your rebuttal]
+- **Arbiter** (\`{arbiter_model}\`): [arbiter's response]
 
 ## Conclusion
-[final verdict, which side prevailed, and rationale]" \
+[final verdict, which side prevailed, and rationale]
+
+## Audit
+- Debate rounds: {N}
+- CSA session: \`{session_id}\` (if applicable)
+- Debate skill used: [yes/no — if complex, the \`debate\` skill provides structured multi-round debate]" \
   -F in_reply_to=${COMMENT_ID}
 ```
+
+**MANDATORY**: Both model specs MUST use the `tool/provider/model/thinking_budget` format.
+The audit section enables future reviewers (human or AI) to verify that heterogeneous
+models were used and assess the quality of the arbitration.
 
 ### `@codex` Tagging Rules
 

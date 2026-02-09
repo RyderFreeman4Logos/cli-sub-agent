@@ -333,6 +333,27 @@ User: /csa-review tool=opencode scope=base:dev
 ```
 -> Uses opencode instead of auto-detected tool
 
+## Disagreement Escalation (when findings are contested)
+
+When the developer (or orchestrating agent) disagrees with a csa-review finding:
+
+1. **NEVER silently dismiss findings.** Every finding was produced by an independent
+   model with evidence — it deserves adversarial evaluation, not unilateral dismissal.
+
+2. **Use the `debate` skill** to arbitrate contested findings:
+   - The finding becomes the "question" for debate
+   - The reviewer's evidence is the initial proposal
+   - The developer's counter-argument is the critique
+   - The debate MUST use heterogeneous models (different from both the reviewer and developer)
+
+3. **Record the outcome**: If a finding is dismissed after debate, document the
+   debate verdict (with model specs) in the review report or PR comment.
+
+4. **Escalate to user** if debate reaches deadlock (both sides have valid points).
+
+**FORBIDDEN**: Dismissing a csa-review finding without adversarial arbitration.
+The code author's confidence alone is NOT sufficient justification.
+
 ## Done Criteria
 
 1. Review prompt was sent to CSA with the correct tool.
@@ -344,3 +365,4 @@ User: /csa-review tool=opencode scope=base:dev
 7. If security_mode required pass 3, adversarial_pass_executed=true.
 8. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
 9. CSA session ID was reported for potential follow-up.
+10. **If any finding was contested**: debate skill was used with heterogeneous models, and outcome documented with model specs.
