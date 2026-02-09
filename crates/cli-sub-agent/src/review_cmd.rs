@@ -327,6 +327,7 @@ mod tests {
             resources: ResourcesConfig::default(),
             tools: tool_map,
             review: None,
+            debate: None,
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
@@ -405,6 +406,7 @@ mod tests {
         cfg.review = Some(csa_config::global::ReviewConfig {
             tool: "opencode".to_string(),
         });
+        cfg.debate = None;
 
         let tool = resolve_review_tool(
             None,
@@ -424,6 +426,7 @@ mod tests {
         cfg.review = Some(csa_config::global::ReviewConfig {
             tool: "auto".to_string(),
         });
+        cfg.debate = None;
 
         let tool = resolve_review_tool(
             None,

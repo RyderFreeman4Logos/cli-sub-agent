@@ -34,6 +34,11 @@ pub struct ProjectConfig {
     /// ```
     #[serde(default)]
     pub review: Option<ReviewConfig>,
+    /// Optional per-project override for `csa debate` tool selection.
+    ///
+    /// Uses the same `ReviewConfig` shape (`tool = "auto" | "codex" | ...`).
+    #[serde(default)]
+    pub debate: Option<ReviewConfig>,
     #[serde(default)]
     pub tiers: HashMap<String, TierConfig>,
     #[serde(default)]
