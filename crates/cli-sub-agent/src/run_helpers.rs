@@ -309,9 +309,11 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
     }
 
     // Tokenize once: lowercase words with trailing/leading punctuation stripped.
+    // Filter empty tokens to handle prompts starting with emoji/bullets (e.g. "✅ Fix").
     let tokens: Vec<&str> = prompt_lower
         .split_whitespace()
         .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| !w.is_empty())
         .collect();
 
     // Phase 1: Unambiguous multi-word token sequences.
@@ -459,6 +461,18 @@ mod tests {
     #[test]
     fn infer_edit_bare_fix_as_first_verb() {
         let result = infer_task_edit_requirement("Fix issues in the parser");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_emoji_prefix_does_not_break_verb_detection() {
+        let result = infer_task_edit_requirement("✅ Fix the bug in auth");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_bullet_prefix_does_not_break_verb_detection() {
+        let result = infer_task_edit_requirement("- Implement the new parser");
         assert_eq!(result, Some(true));
     }
 }
