@@ -17,9 +17,10 @@ pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
     let proj_dirs = directories::ProjectDirs::from("", "", "csa")
         .context("Failed to determine project directories")?;
 
+    // state_dir() is Linux-only; fall back to data_local_dir() on macOS/Windows.
     let state_dir = proj_dirs
         .state_dir()
-        .context("Failed to determine state directory")?;
+        .unwrap_or_else(|| proj_dirs.data_local_dir());
 
     // Convert absolute project path to a relative-like key for storage
     // Strip leading "/" and replace remaining "/" with platform separator
