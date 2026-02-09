@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use csa_core::types::ToolName;
+
 /// Default maximum concurrent instances per tool.
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
 
@@ -88,6 +90,29 @@ pub fn heterogeneous_counterpart(tool: &str) -> Option<&'static str> {
         "codex" => Some("claude-code"),
         _ => None,
     }
+}
+
+/// Select a tool from a different model family than the given tool.
+/// Returns None if no heterogeneous tool is available.
+pub fn select_heterogeneous_tool(
+    parent_tool: &ToolName,
+    available_tools: &[ToolName],
+) -> Option<ToolName> {
+    let parent_family = parent_tool.model_family();
+    available_tools
+        .iter()
+        .find(|t| t.model_family() != parent_family)
+        .copied()
+}
+
+/// Returns all known tool names as a static slice.
+pub fn all_known_tools() -> &'static [ToolName] {
+    &[
+        ToolName::GeminiCli,
+        ToolName::Opencode,
+        ToolName::Codex,
+        ToolName::ClaudeCode,
+    ]
 }
 
 /// Global defaults section.
@@ -546,5 +571,56 @@ tool = "codex"
         assert!(dir.is_ok());
         let path = dir.unwrap();
         assert!(path.to_string_lossy().contains("slots"));
+    }
+
+    #[test]
+    fn test_select_heterogeneous_tool_claude_to_others() {
+        let parent = ToolName::ClaudeCode;
+        let available = vec![
+            ToolName::ClaudeCode,
+            ToolName::GeminiCli,
+            ToolName::Codex,
+            ToolName::Opencode,
+        ];
+        let result = select_heterogeneous_tool(&parent, &available);
+        assert!(result.is_some());
+        let tool = result.unwrap();
+        assert_ne!(tool.model_family(), parent.model_family());
+    }
+
+    #[test]
+    fn test_select_heterogeneous_tool_gemini_to_others() {
+        let parent = ToolName::GeminiCli;
+        let available = vec![ToolName::GeminiCli, ToolName::Codex, ToolName::ClaudeCode];
+        let result = select_heterogeneous_tool(&parent, &available);
+        assert!(result.is_some());
+        let tool = result.unwrap();
+        assert_ne!(tool.model_family(), parent.model_family());
+    }
+
+    #[test]
+    fn test_select_heterogeneous_tool_none_when_all_same_family() {
+        let parent = ToolName::ClaudeCode;
+        let available = vec![ToolName::ClaudeCode]; // Only same family
+        let result = select_heterogeneous_tool(&parent, &available);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_select_heterogeneous_tool_empty_available() {
+        let parent = ToolName::ClaudeCode;
+        let available = vec![];
+        let result = select_heterogeneous_tool(&parent, &available);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_all_known_tools() {
+        let tools = all_known_tools();
+        assert_eq!(tools.len(), 4);
+        assert!(tools.contains(&ToolName::GeminiCli));
+        assert!(tools.contains(&ToolName::Opencode));
+        assert!(tools.contains(&ToolName::Codex));
+        assert!(tools.contains(&ToolName::ClaudeCode));
     }
 }
