@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::cli::DebateArgs;
 use crate::run_helpers::read_prompt;
-use csa_config::global::heterogeneous_counterpart;
+use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 
@@ -113,15 +113,28 @@ fn resolve_debate_tool_from_value(
     project_root: &Path,
 ) -> Result<ToolName> {
     if tool_value == "auto" {
-        let resolved = parent_tool
-            .and_then(heterogeneous_counterpart)
-            .ok_or_else(|| debate_auto_resolution_error(parent_tool, project_root))?;
-        return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
-            anyhow::anyhow!(
-                "BUG: auto debate tool resolution returned invalid tool '{}'",
-                resolved
-            )
-        });
+        // Try old heterogeneous_counterpart first for backward compatibility
+        if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
+            return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
+                anyhow::anyhow!(
+                    "BUG: auto debate tool resolution returned invalid tool '{}'",
+                    resolved
+                )
+            });
+        }
+
+        // Fallback to new ModelFamily-based selection
+        if let Some(parent_str) = parent_tool {
+            if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent_str) {
+                let enabled_tools = csa_config::global::all_known_tools().to_vec();
+                if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
+                    return Ok(tool);
+                }
+            }
+        }
+
+        // Both methods failed
+        return Err(debate_auto_resolution_error(parent_tool, project_root));
     }
 
     crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {

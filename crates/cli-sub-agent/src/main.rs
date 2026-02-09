@@ -25,7 +25,7 @@ use cli::{
     Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands, TiersCommands,
 };
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::{OutputFormat, ToolName};
+use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
 use csa_executor::{create_session_log_writer, Executor};
 use csa_lock::acquire_lock;
 use csa_lock::slot::{
@@ -191,7 +191,7 @@ async fn main() -> Result<()> {
 
 #[allow(clippy::too_many_arguments)]
 async fn handle_run(
-    tool: Option<ToolName>,
+    tool: Option<ToolArg>,
     prompt: Option<String>,
     session_arg: Option<String>,
     last: bool,
@@ -233,14 +233,71 @@ async fn handle_run(
     // 5. Read prompt
     let prompt_text = read_prompt(prompt)?;
 
-    // 6. Resolve tool and model_spec
-    let (resolved_tool, resolved_model_spec, resolved_model) = resolve_tool_and_model(
-        tool.clone(),
-        model_spec.as_deref(),
-        model.as_deref(),
-        config.as_ref(),
-        &project_root,
-    )?;
+    // 6. Convert ToolArg to ToolSelectionStrategy
+    let strategy = tool.unwrap_or(ToolArg::Auto).into_strategy();
+
+    // 7. Resolve initial tool based on strategy
+    let (initial_tool, resolved_model_spec, resolved_model) = match &strategy {
+        ToolSelectionStrategy::Explicit(t) => {
+            // Explicit tool from CLI
+            (*t, model_spec.clone(), model.map(|s| s.to_string()))
+        }
+        ToolSelectionStrategy::AnyAvailable => {
+            // Use tier-based selection (current behavior)
+            resolve_tool_and_model(
+                None,
+                model_spec.as_deref(),
+                model.as_deref(),
+                config.as_ref(),
+                &project_root,
+            )?
+        }
+        ToolSelectionStrategy::HeterogeneousStrict => {
+            // Get parent tool from environment
+            let parent_tool_name = std::env::var("CSA_TOOL")
+                .or_else(|_| std::env::var("CSA_PARENT_TOOL"))
+                .ok();
+
+            if let Some(parent_str) = parent_tool_name.as_deref() {
+                // Have parent context, resolve heterogeneous tool
+                let parent_tool = parse_tool_name(parent_str)?;
+                let enabled_tools = if let Some(ref cfg) = config {
+                    csa_config::global::all_known_tools()
+                        .iter()
+                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .copied()
+                        .collect::<Vec<_>>()
+                } else {
+                    csa_config::global::all_known_tools().to_vec()
+                };
+
+                match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
+                    Some(tool) => (tool, None, None),
+                    None => {
+                        anyhow::bail!(
+                            "No heterogeneous tool available (parent: {}, family: {}).\n\n\
+                             If this is a low-risk task (exploration, documentation, code reading),\n\
+                             consider using `--tool any-available` instead.",
+                            parent_tool.as_str(),
+                            parent_tool.model_family()
+                        );
+                    }
+                }
+            } else {
+                // No parent context, fall back to AnyAvailable with warning
+                warn!("HeterogeneousStrict requested but no parent tool context found. Falling back to AnyAvailable.");
+                resolve_tool_and_model(
+                    None,
+                    model_spec.as_deref(),
+                    model.as_deref(),
+                    config.as_ref(),
+                    &project_root,
+                )?
+            }
+        }
+    };
+
+    let resolved_tool = initial_tool;
 
     // Determine max failover attempts from tier config
     let max_failover_attempts = if no_failover {
