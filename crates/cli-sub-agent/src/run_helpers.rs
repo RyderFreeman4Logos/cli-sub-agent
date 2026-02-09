@@ -344,7 +344,8 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
     // Phase 4: Ambiguous verbs — only match as the first meaningful word.
     // Skips polite prefixes and filler adverbs before the verb.
     let skip_prefixes: &[&str] = &[
-        "please", "can", "could", "would", "you", // polite prefixes
+        "please", "can", "could", "would", "should", "shall", "you", // modals & polite
+        "we", "i", "lets", "let", "us", "need", "to", "go", // pronouns & lead-ins
         "also", "just", "now", "then", "quickly", // filler adverbs
     ];
     let first_verb = tokens.iter().find(|t| !skip_prefixes.contains(t)).copied();
@@ -488,6 +489,30 @@ mod tests {
     #[test]
     fn infer_edit_filler_just_implement_triggers() {
         let result = infer_task_edit_requirement("Please just implement X");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_we_need_to_update_triggers() {
+        let result = infer_task_edit_requirement("We need to update the config");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_should_we_implement_triggers() {
+        let result = infer_task_edit_requirement("Should we implement X?");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_lets_fix_triggers() {
+        let result = infer_task_edit_requirement("Let's fix the broken tests");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_i_need_to_edit_triggers() {
+        let result = infer_task_edit_requirement("I need to edit the config file");
         assert_eq!(result, Some(true));
     }
 }
