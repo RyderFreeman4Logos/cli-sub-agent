@@ -342,8 +342,11 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
     }
 
     // Phase 4: Ambiguous verbs — only match as the first meaningful word.
-    // Skips polite prefixes like "please", "can you", "could you".
-    let skip_prefixes: &[&str] = &["please", "can", "could", "would", "you"];
+    // Skips polite prefixes and filler adverbs before the verb.
+    let skip_prefixes: &[&str] = &[
+        "please", "can", "could", "would", "you", // polite prefixes
+        "also", "just", "now", "then", "quickly", // filler adverbs
+    ];
     let first_verb = tokens.iter().find(|t| !skip_prefixes.contains(t)).copied();
     let verb_markers = ["edit", "update", "implement", "fix"];
     if let Some(verb) = first_verb {
@@ -473,6 +476,18 @@ mod tests {
     #[test]
     fn infer_edit_bullet_prefix_does_not_break_verb_detection() {
         let result = infer_task_edit_requirement("- Implement the new parser");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_filler_also_update_triggers() {
+        let result = infer_task_edit_requirement("Please also update the config");
+        assert_eq!(result, Some(true));
+    }
+
+    #[test]
+    fn infer_edit_filler_just_implement_triggers() {
+        let result = infer_task_edit_requirement("Please just implement X");
         assert_eq!(result, Some(true));
     }
 }
