@@ -94,7 +94,7 @@ If ANY prerequisite fails:
 
 ## FORBIDDEN Actions
 
-- **NEVER** execute `gemini`, `opencode`, `codex`, or `claude` commands directly
+- **NEVER** execute `opencode`, `codex`, or `claude` commands directly
 - **NEVER** bypass CSA by constructing tool commands manually
 - **NEVER** fall back to direct tool execution if CSA fails
 - **NEVER** hardcode model names — ALL models come from `csa tiers list`
@@ -139,7 +139,7 @@ Configuration in `~/.config/cli-sub-agent/config.toml` or `.csa/config.toml`:
 
 ```toml
 [debate]
-tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
+tool = "auto"  # or "codex", "claude-code", "opencode"
 ```
 
 ### Step 2: Select Starting Tier (and Filter Models)

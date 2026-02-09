@@ -15,7 +15,7 @@ triggers:
 
 Install, verify, and configure CSA at both global and project levels.
 Discovers installed tools, queries available models, groups them into
-capability tiers, and sets tool-specific restrictions (e.g., gemini-cli edit ban).
+capability tiers, and sets tool-specific restrictions.
 
 ## When to Use
 
@@ -84,12 +84,6 @@ ls ~/.config/csa/config.toml 2>/dev/null
 # ~/.config/csa/config.toml
 # Global defaults — project configs override these values.
 
-[tools.gemini-cli]
-enabled = true
-
-[tools.gemini-cli.restrictions]
-allow_edit_existing_files = false
-
 [tools.codex]
 enabled = true
 suppress_notify = true  # Suppress codex desktop notifications when run via CSA
@@ -132,7 +126,6 @@ models = [
 ### Phase 1: Detect Installed Tools
 
 ```bash
-which gemini   2>/dev/null && echo "gemini-cli: installed"
 which opencode 2>/dev/null && echo "opencode: installed"
 which codex    2>/dev/null && echo "codex: installed"
 which claude   2>/dev/null && echo "claude-code: installed"
@@ -145,7 +138,6 @@ Use `AskUserQuestion` (multiSelect=true):
 > **Which tools do you want to enable for this project?**
 >
 > Context for the user:
-> - Important/sensitive projects: consider excluding `gemini-cli` (higher risk of deleting comments/code when editing)
 > - Low-priority/quick projects: consider excluding `claude-code` and `codex` (higher cost)
 
 Only show tools that are actually installed.
@@ -156,7 +148,6 @@ For each **enabled** tool, discover models by running CLI commands with LLM assi
 
 | Tool | Discovery Method | Provider |
 |------|-----------------|----------|
-| gemini-cli | `gemini models list` | google |
 | opencode | `opencode models` | (parse from output) |
 | codex | Read `~/.codex/config.toml` (`model` field) + well-known list | openai |
 | claude-code | Known models (no discovery command) | anthropic |
@@ -169,7 +160,6 @@ For each **enabled** tool, discover models by running CLI commands with LLM assi
 
 | Tool | Provider | Models |
 |------|----------|--------|
-| gemini-cli | google | gemini-3-pro-preview, gemini-3-flash-preview, gemini-2.5-pro, gemini-2.5-flash |
 | opencode | anthropic | claude-opus-4-6, claude-sonnet-4-5 |
 | opencode | google | antigravity-gemini-3-pro, antigravity-gemini-3-flash |
 | opencode | openai | gpt-5.3-codex, gpt-5.2-codex, gpt-5.1-codex |
@@ -232,7 +222,6 @@ Group all expanded model specs into tiers. The agent **must decide grouping inte
 | Opus base model | Higher tier |
 | Low thinking budget | Lower tier |
 | High / xhigh budget | Higher tier |
-| gemini-cli (read-only preferred) | Analysis / lower tiers |
 | claude-code / codex (full sandbox) | Implementation / higher tiers |
 
 **Minimum 3 tiers** (can be more if the model set warrants it):
@@ -267,21 +256,6 @@ If codex is enabled, ask the user:
 
 Default: **`true`** (recommended for most users since CSA is non-interactive).
 
-#### 6B: gemini-cli Edit Restrictions
-
-| Restriction | Default | Rationale |
-|-------------|---------|-----------|
-| `gemini-cli.restrictions.allow_edit_existing_files` | **`false`** | Significantly higher probability of deleting comments, annotations, and even functional code when editing existing files |
-| All other tools `.restrictions.allow_edit_existing_files` | `true` | Normal editing behavior |
-
-**Why gemini-cli defaults to no-edit:**
-gemini-cli has a well-documented tendency to:
-- Delete comments written by other tools or humans
-- Remove annotations and metadata during "cleanup"
-- Occasionally delete functional code it deems unnecessary
-- Silently drop important context from edited files
-
-Restricting it to **new file creation and read-only analysis** eliminates these risks while preserving its strengths (large context, fast analysis, low cost).
 
 ### Phase 7: Generate Config
 
@@ -295,13 +269,6 @@ max_recursion_depth = 5
 
 # ─── Tool Selection ───────────────────────────────────────────
 # enabled = true/false to toggle tools for this project
-
-# [tools.gemini-cli]
-# enabled = true
-# NOTE: Uncomment when gemini-cli account is available.
-
-# [tools.gemini-cli.restrictions]
-# allow_edit_existing_files = false
 
 [tools.opencode]
 enabled = false
@@ -422,18 +389,3 @@ Two tiers (fast/heavy) are too coarse. Three tiers (quick/standard/complex) cove
 
 Users can always add more tiers. The TOML format makes this trivial — just add a new `[tiers.tier-N-name]` section.
 
-### Why gemini-cli Default No-Edit
-
-This is **not optional**. gemini-cli has a significantly higher probability of destructive edits compared to other tools:
-
-1. **Comment deletion**: Silently removes comments written by humans or other tools
-2. **Code deletion**: Occasionally removes functional code it considers "unnecessary"
-3. **Annotation loss**: Strips metadata, type annotations, safety comments
-4. **Context amnesia**: Doesn't preserve surrounding context when editing
-
-Default `allow_edit_existing_files = false` restricts gemini-cli to:
-- Reading and analyzing existing files (safe)
-- Creating entirely new files from scratch (safe)
-- Running commands and tools (safe)
-
-It **cannot** modify files that already have content. Users can override this per-project if they accept the risk.

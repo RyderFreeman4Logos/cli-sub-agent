@@ -13,7 +13,6 @@ with persistent sessions, recursive agent spawning, and resource-aware schedulin
 
 | Tool | Command | Compress | Yolo |
 |------|---------|----------|------|
-| gemini-cli | `csa run --tool gemini-cli` | `/compress` | auto |
 | opencode | `csa run --tool opencode` | `/compact` | auto |
 | codex | `csa run --tool codex` | `/compact` | auto |
 | claude-code | `csa run --tool claude-code` | `/compact` | auto |
@@ -38,8 +37,8 @@ csa init --non-interactive
 
 ### Execute Tasks
 ```bash
-# Analysis (read-only, use gemini-cli)
-csa run --tool gemini-cli "Analyze the authentication flow"
+# Analysis (read-only)
+csa run "Analyze the authentication flow"
 
 # Implementation (write, use opencode/codex/claude-code)
 csa run --tool opencode --session my-task "Fix the login bug"
@@ -51,7 +50,7 @@ csa run --tool opencode --session 01JK... "Continue the refactor"
 csa run --tool opencode --model "provider/model-name" "Implement feature X"
 
 # Ephemeral session (no project context, auto-cleanup)
-csa run --tool gemini-cli --ephemeral "What is the CAP theorem?"
+csa run --ephemeral "What is the CAP theorem?"
 ```
 
 ### Session Management
@@ -84,8 +83,8 @@ Max recursion depth is configurable (default: 5).
 
 Multiple analysis tasks can run in parallel safely:
 ```bash
-csa run --tool gemini-cli --session research-db "Query database docs" &
-csa run --tool gemini-cli --session research-ui "Query frontend docs" &
+csa run --session research-db "Query database docs" &
+csa run --session research-ui "Query frontend docs" &
 wait
 ```
 
@@ -107,8 +106,8 @@ Potential issues:
 **Recommended pattern**:
 ```bash
 # Step 1: Parallel research (read-only)
-csa run --tool gemini-cli --session research-1 "Research A" &
-csa run --tool gemini-cli --session research-2 "Research B" &
+csa run --session research-1 "Research A" &
+csa run --session research-2 "Research B" &
 wait
 
 # Step 2: Serial implementation (write)
@@ -137,7 +136,6 @@ If you see "OOM Risk Prevention":
 ## Context Window Management
 
 Each tool has a different context compression command:
-- `gemini-cli`: `/compress`
 - `opencode`, `codex`, `claude-code`: `/compact`
 
 `csa session compress` automatically selects the correct command.
@@ -154,7 +152,7 @@ CSA sets these env vars for child processes:
 
 Project config lives at `.csa/config.toml`. Key sections:
 
-- **tools**: Enable/disable tools, set restrictions (e.g., gemini-cli edit ban)
+- **tools**: Enable/disable tools, set restrictions
 - **resources**: Memory limits, per-tool estimates
 - **tiers**: Model tiers for task-based selection
 - **aliases**: Shortcut names for model specs

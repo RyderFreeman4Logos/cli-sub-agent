@@ -38,7 +38,7 @@ The review tool is configured in `~/.config/cli-sub-agent/config.toml` under `[r
 
 ```toml
 [review]
-tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
+tool = "auto"  # or "codex", "claude-code", "opencode"
 ```
 
 **Auto mode** (default):
