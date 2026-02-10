@@ -257,14 +257,17 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
 
    **Check for untracked files explicitly:**
    ```bash
-   if git ls-files --others --exclude-standard | grep -q .; then
-     echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
-     git ls-files --others --exclude-standard
-     exit 1
-   fi
+   # Wrap in subshell to avoid closing interactive sessions
+   (
+     if git ls-files --others --exclude-standard | grep -q .; then
+       echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
+       git ls-files --others --exclude-standard
+       exit 1
+     fi
+   )
    ```
 
-   > **Note**: In interactive shells, `exit 1` will close the session. Wrap in a subshell `(...)` or use `return 1` inside functions.
+   > **Note**: The subshell `(...)` prevents `exit 1` from closing an interactive session. Agents should translate `exit 1` to an appropriate abort mechanism for their shell context.
 
    If unstaged changes exist, stage or stash them. If untracked files exist, stage or .gitignore them.
    (Why: csa review --diff uses 'git diff HEAD' which does NOT see untracked files)
@@ -273,7 +276,7 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
    csa review --diff
    ↓
 4. [CSA:run] Generate commit message (if review passes)
-   csa run 'Run git diff --staged and generate a Conventional Commits message'
+   csa run "Run 'git diff --staged' and generate a Conventional Commits message"
    ↓
 5. [Main] Commit with generated message
 ```
