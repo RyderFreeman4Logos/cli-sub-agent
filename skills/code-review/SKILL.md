@@ -95,9 +95,13 @@ For large diffs (> 800 lines), delegate to avoid context bloat:
 
 ```bash
 # Option 1: Use csa review (preferred, structured review output)
-csa review --branch main  # or: csa review --commit <sha>
+# Use the PR's base branch, not a hardcoded name:
+csa review --branch <base-branch>  # e.g.: csa review --branch $(gh pr view --json baseRefName -q .baseRefName)
 
-# Option 2: Use csa run (CSA routes to appropriate backend with large context)
+# Option 2: Use csa review with a specific commit
+csa review --commit <sha>
+
+# Option 3: Use csa run (CSA routes to appropriate backend with large context)
 csa run "Review the changes in this PR comprehensively"
 ```
 

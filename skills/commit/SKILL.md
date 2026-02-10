@@ -1,7 +1,7 @@
 ---
 name: commit
 description: Enforces strict commit discipline following Conventional Commits with mandatory pre-commit security audit and test completeness verification
-allowed-tools: Bash, Read, Grep
+allowed-tools: Bash, Read, Grep, Edit, Task, TaskCreate, TaskUpdate, TaskList, TaskGet
 ---
 
 # Commit Skill
