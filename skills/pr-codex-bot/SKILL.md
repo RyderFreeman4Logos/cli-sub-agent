@@ -144,19 +144,10 @@ gh pr create --title "[type](scope): [description]" \
 PREOF
 )"
 
-# Trigger bot review
-gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
-```
-
-## Step 5: Poll for Bot Response
-
-**CRITICAL: NEVER assume the bot has replied. ALWAYS actively poll.**
-
-```bash
 # Temp file prefix (quoted to handle special chars in REPO)
 TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
 
-# Record baseline BEFORE triggering @codex review (prevents race condition)
+# Capture baseline BEFORE triggering bot review (prevents race condition)
 # Uses per_page=100 to handle PRs with many comments; add --paginate for >100
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
   --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
@@ -169,7 +160,17 @@ BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
 
 # NOW trigger bot review (after baseline is captured)
 gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
+```
 
+## Step 5: Poll for Bot Response
+
+**CRITICAL: NEVER assume the bot has replied. ALWAYS actively poll.**
+
+The baseline was captured in Step 4 before triggering `@codex review`.
+This prevents a race condition where a fast bot response gets included
+in the baseline, making the polling loop miss it.
+
+```bash
 # Poll every 45-60s (within GitHub rate limits: 5000 req/hour authenticated)
 while true; do
   sleep 45
@@ -201,10 +202,6 @@ while true; do
   fi
 done
 ```
-
-**Note**: The baseline is captured BEFORE `@codex review` to prevent a race
-condition where a fast bot response gets included in the baseline. If Step 4
-already triggered the review, capture the baseline immediately before polling.
 
 **Timeout**: If no response after 10 minutes, **notify the user** instead of
 guessing or acting on stale data.
