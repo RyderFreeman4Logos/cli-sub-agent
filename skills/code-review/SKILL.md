@@ -18,8 +18,8 @@ This skill provides comprehensive code review capabilities by integrating with G
 
 ## Prerequisites
 
-- `gh` CLI must be installed and authenticated
-- Or `GITHUB_TOKEN` environment variable must be set
+- `gh` CLI must be installed and authenticated (required — all commands use `gh`)
+- `GITHUB_TOKEN` environment variable should be set if `gh auth` is not configured
 
 ## Usage
 
@@ -93,10 +93,15 @@ Rules:
 
 For large diffs (> 800 lines), delegate to avoid context bloat:
 
+**IMPORTANT**: `csa review --branch` uses `git diff {branch}...HEAD`, so the PR branch
+must be checked out locally first. For remote PRs, use `gh pr checkout` before delegating.
+
 ```bash
-# Option 1: Use csa review (preferred, structured review output)
-# Use the PR's base branch, not a hardcoded name:
-csa review --branch <base-branch>  # e.g.: csa review --branch $(gh pr view --json baseRefName -q .baseRefName)
+# Ensure PR branch is checked out locally
+gh pr checkout <pr-number>
+
+# Option 1: Use csa review with the PR's base branch (preferred)
+csa review --branch $(gh pr view --json baseRefName -q .baseRefName)
 
 # Option 2: Use csa review with a specific commit
 csa review --commit <sha>
