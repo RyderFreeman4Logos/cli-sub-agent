@@ -172,10 +172,11 @@ fn extract_summary(output: &str) -> String {
         .find(|line| !line.trim().is_empty())
         .unwrap_or("");
 
-    if last_line.len() <= 200 {
+    if last_line.chars().nth(200).is_none() {
         last_line.to_string()
     } else {
-        format!("{}...", &last_line[..197])
+        let truncated: String = last_line.chars().take(197).collect();
+        format!("{}...", truncated)
     }
 }
 
@@ -209,17 +210,48 @@ mod tests {
     fn test_extract_summary_long_line() {
         let long = "a".repeat(250);
         let summary = extract_summary(&long);
-        assert_eq!(summary.len(), 200);
+        assert_eq!(summary.chars().count(), 200);
         assert!(summary.ends_with("..."));
-        assert_eq!(&summary[..197], &long[..197]);
+        assert_eq!(summary.strip_suffix("...").unwrap(), &long[..197]);
     }
 
     #[test]
     fn test_extract_summary_exactly_200_chars() {
         let exact = "a".repeat(200);
         let summary = extract_summary(&exact);
-        assert_eq!(summary.len(), 200);
+        assert_eq!(summary.chars().count(), 200);
         assert!(!summary.ends_with("..."));
+    }
+
+    #[test]
+    fn test_extract_summary_multibyte_truncation() {
+        // Create a string where truncation would fall in the middle of multi-byte UTF-8 characters.
+        // Emoji character '🔥' is 4 bytes (F0 9F 94 A5 in UTF-8).
+        // We need more than 200 characters total to trigger truncation.
+
+        // Use 196 ASCII chars + 10 emoji chars = 206 chars total
+        let mut long_line = "a".repeat(196);
+        for _ in 0..10 {
+            long_line.push('🔥');
+        }
+
+        // Total: 196 + 10 = 206 chars (but many more bytes due to emoji)
+        assert_eq!(long_line.chars().count(), 206);
+
+        // This should NOT panic, even with multi-byte characters
+        let summary = extract_summary(&long_line);
+
+        // Summary should be 197 chars + "..." = 200 chars total
+        assert_eq!(summary.chars().count(), 200);
+        assert!(summary.ends_with("..."));
+
+        // The truncated part should be exactly 197 characters
+        let content_without_ellipsis = summary.strip_suffix("...").unwrap();
+        assert_eq!(content_without_ellipsis.chars().count(), 197);
+
+        // Should have the first 196 'a' chars and the first emoji character
+        assert!(content_without_ellipsis.starts_with(&"a".repeat(196)));
+        assert!(content_without_ellipsis.ends_with('🔥'));
     }
 
     #[test]
