@@ -92,21 +92,34 @@ Current parser only handles flat expressions.
 
 ### Step 0: Branch Check (MUST DO FIRST)
 
-**Before ANY commit, verify you are NOT on `main`:**
+**Before ANY commit, verify you are NOT on the default/protected branch:**
 
 ```bash
+# Detect the default branch (try origin/HEAD, fall back to main/master)
+default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$default_branch" ]; then
+  if git show-ref --verify --quiet refs/heads/main 2>/dev/null; then
+    default_branch="main"
+  elif git show-ref --verify --quiet refs/heads/master 2>/dev/null; then
+    default_branch="master"
+  else
+    default_branch="main"  # safe default
+  fi
+fi
+
 branch=$(git branch --show-current)
-if [ "$branch" = "main" ]; then
-  echo "ERROR: Cannot commit directly to main. Create a feature branch first."
-  echo "  git checkout -b <type>/<description> main"
+if [ "$branch" = "$default_branch" ]; then
+  echo "ERROR: Cannot commit directly to $default_branch. Create a feature branch first."
+  echo "  git checkout -b <type>/<description>"
   exit 1
 fi
 ```
 
 Per your project's git workflow (as defined in CLAUDE.md):
-- **NEVER** commit directly to `main`
+- **NEVER** commit directly to the default/protected branch
 - **MUST** be on a feature branch: `feat/`, `fix/`, `refactor/`, `chore/`, `docs/`
-- If on `main`, create a branch first: `git checkout -b <type>/<description> main`
+- If on a protected branch, create a feature branch first: `git checkout -b <type>/<description>`
+- If your project protects additional branches (`develop`, `release/*`, etc.), extend the check in your CLAUDE.md
 
 ### Step-by-Step Checklist
 

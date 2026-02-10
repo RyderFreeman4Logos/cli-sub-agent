@@ -174,8 +174,10 @@ Before starting a review, determine who authored the code under review:
 
 In addition to standard review criteria and any context/prompt-specific review points:
 
-1. Read `AGENTS.md` at the repo/project root (if present).
-2. Verify ALL changed code complies with every applicable rule listed in AGENTS.md.
+1. For each changed file, discover all `AGENTS.md` files from the repo root down to
+   the file's directory. Apply them root-to-leaf; if rules conflict, the deepest
+   `AGENTS.md` takes precedence.
+2. Verify ALL changed code complies with every applicable rule from the combined ruleset.
 3. Report violations as review findings referencing the specific AGENTS.md rule ID (e.g., "Violates rule 010 naming: variable `x` should be descriptive").
 4. AGENTS.md violations are at least P2 (maintainability) — promote to P1 if the rule is marked MUST/CRITICAL.
 
