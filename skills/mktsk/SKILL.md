@@ -632,7 +632,7 @@ When you must pause:
    - Include commit steps (after each logical unit)
    - Include /compact steps (after stages)
    ↓
-3. [MANDATORY] Immediately start execution, do not wait for user confirmation
+3. [GATE] Execution requires approval (mktd Phase 4, user says "go", or user-authored plan)
    ↓
 4. Execute plan step-by-step (continuous execution, no stopping)
    - Use TaskUpdate to mark ONE task as "in_progress"
@@ -663,7 +663,7 @@ When you must pause:
 - ❌ Starting multi-step tasks without Task tools
 - ❌ Task items without executor tags
 - ❌ Task items without DONE WHEN conditions
-- ❌ **Creating tasks but not executing immediately (MUST create then start)**
+- ❌ **Creating tasks from approved plan but not executing (MUST start after approval)**
 - ❌ **Pausing between tasks without a decision blocker (MUST continue)**
 - ❌ **Stopping before all tasks complete (MUST execute continuously)**
 - ❌ Committing without `[Skill:commit]` (should use commit skill)
