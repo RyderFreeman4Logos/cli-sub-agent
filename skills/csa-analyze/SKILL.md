@@ -67,7 +67,8 @@ You are in directory: [CWD]
 
 Analyze the current git changes:
 1. Run `git status` to see all changed/untracked files
-2. Run `git diff HEAD` to see all uncommitted changes
+2. Run `git diff HEAD` (includes both staged and unstaged changes; does NOT include untracked files — use `git status --porcelain` for those) to see all uncommitted changes relative to HEAD
+   (To see staged-only: `git diff --cached`; unstaged-only: `git diff`)
 3. For each change, explain:
    - Purpose of the modification
    - Potential impact

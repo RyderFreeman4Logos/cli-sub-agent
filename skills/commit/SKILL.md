@@ -254,6 +254,18 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
 2. [Main] Ensure working tree is clean relative to index:
    - No unstaged changes: git diff should be empty
    - No untracked files: git status --porcelain should show no '??' entries
+
+   **Check for untracked files explicitly:**
+   ```bash
+   if git ls-files --others --exclude-standard | grep -q .; then
+     echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
+     git ls-files --others --exclude-standard
+     exit 1
+   fi
+   ```
+
+   > **Note**: In interactive shells, `exit 1` will close the session. Wrap in a subshell `(...)` or use `return 1` inside functions.
+
    If unstaged changes exist, stage or stash them. If untracked files exist, stage or .gitignore them.
    (Why: csa review --diff uses 'git diff HEAD' which does NOT see untracked files)
    ↓
@@ -261,7 +273,7 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
    csa review --diff
    ↓
 4. [CSA:run] Generate commit message (if review passes)
-   csa run "Run 'git diff --staged' and generate a Conventional Commits message"
+   csa run 'Run git diff --staged and generate a Conventional Commits message'
    ↓
 5. [Main] Commit with generated message
 ```
@@ -283,7 +295,7 @@ csa review will return:
 If csa review is not available:
 
 ```bash
-csa run "Run 'git diff --staged' and generate a Conventional Commits message"
+csa run 'Run git diff --staged and generate a Conventional Commits message'
 ```
 
 ## Commit Granularity
