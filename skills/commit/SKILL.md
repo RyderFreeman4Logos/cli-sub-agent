@@ -145,7 +145,7 @@ Each commit **must** complete the following steps:
    │   - Phase 3: Code Quality Check
    │   - Returns: PASS / PASS with deferred issues / FAIL
    ↓
-7. ✅ Pre-commit review (csa review --diff)
+7. ✅ Pre-commit review (csa review --diff — reviews all uncommitted changes vs HEAD)
    ↓
 8. Blocking issues found (in current changes)?
    ├─ YES → Fix issues → Re-run from step 1
@@ -251,13 +251,19 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
 ```
 1. [Main] Stage changes: git add <files>
    ↓
-2. [CSA:review] Review staged changes
+2. [Main] Ensure working tree is clean relative to index:
+   - No unstaged changes: git diff should be empty
+   - No untracked files: git status --porcelain should show no '??' entries
+   If unstaged changes exist, stage or stash them. If untracked files exist, stage or .gitignore them.
+   (Why: csa review --diff uses 'git diff HEAD' which does NOT see untracked files)
+   ↓
+3. [CSA:review] Review staged changes (working tree clean, so git diff HEAD = staged diff)
    csa review --diff
    ↓
-3. [CSA:run] Generate commit message (if review passes)
-   csa run "Run git diff --staged and generate a Conventional Commits message"
+4. [CSA:run] Generate commit message (if review passes)
+   csa run "Run 'git diff --staged' and generate a Conventional Commits message"
    ↓
-4. [Main] Commit with generated message
+5. [Main] Commit with generated message
 ```
 
 ### CSA Review Output Format
@@ -270,7 +276,7 @@ csa review will return:
 1. Use `csa run --tool codex` in same session to fix
 2. Run `csa review --diff` again (use `--session <ID>` to resume previous review session)
 3. Loop until no issues
-4. Generate commit message (see Step 3 above)
+4. Generate commit message (see Step 4 in Recommended Workflow above)
 
 ### Alternative: CSA
 
