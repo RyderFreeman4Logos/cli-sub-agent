@@ -475,6 +475,17 @@ git commit -m "fix(scope): [description]
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 git push origin ${BRANCH}
+
+# Refresh baseline BEFORE triggering re-review (same pattern as Step 4)
+gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json"
+gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json"
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
+
 gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
 ```
 
@@ -533,7 +544,16 @@ gh pr comment ${OLD_PR_NUM} --repo ${REPO} \
   --body "Superseded by #${NEW_PR_NUM}. Preserved for review discussion reference."
 gh pr close ${OLD_PR_NUM} --repo ${REPO}
 
-# 8. Trigger review on new PR
+# 8. Refresh baseline for new PR before triggering review
+TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${NEW_PR_NUM}"
+gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json"
+gh api "repos/${REPO}/issues/${NEW_PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json"
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/reviews" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
 gh pr comment ${NEW_PR_NUM} --repo ${REPO} --body "@codex review"
 ```
 
