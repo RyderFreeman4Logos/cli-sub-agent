@@ -5,7 +5,7 @@ description: >-
   for persistent execution across auto-compaction. Ensures every task has an
   executor tag, DONE WHEN condition, and commit step. Enforces strict serial
   development with continuous execution until completion.
-allowed-tools: TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Grep, Glob
+allowed-tools: TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Grep, Glob, Bash, Write, Edit, AskUserQuestion
 ---
 
 # mktsk: Make Task — Plan-to-Execution Bridge
@@ -53,8 +53,8 @@ After determining tasks in context (from todo.md, plan files, or discovered issu
 ❌ **Parallel sub-agent development**:
 ```python
 # WRONG - two development agents running simultaneously
-Task("Implement feature A", subagent_type="developer")  # Agent A
-Task("Implement feature B", subagent_type="developer")  # Agent B at same time!
+TaskCreate(subject="[Sub:developer] Implement feature A", ...)  # Agent A
+TaskCreate(subject="[Sub:developer] Implement feature B", ...)  # Agent B at same time!
 ```
 
 ❌ **Worktree parallel**:
@@ -268,10 +268,10 @@ TaskCreate(
     activeForm="Committing JWT validation (format/lint/test/review/commit)"
 )
 
-# When executing, update status
-TaskUpdate(taskId="1", status="in_progress")
+# When executing, update status (TaskCreate returns taskId)
+TaskUpdate(taskId=task1.taskId, status="in_progress")
 # ... complete task ...
-TaskUpdate(taskId="1", status="completed")
+TaskUpdate(taskId=task1.taskId, status="completed")
 ```
 
 **Note**: `[Skill:commit]` automatically executes:
@@ -521,48 +521,48 @@ task8 = TaskCreate(
     activeForm="Handling unstaged files"
 )
 
-# Step 2: Immediately start execution, do not wait for user confirmation
+# Step 2: After plan approval, start execution immediately
 # From first task to last, execute continuously
 
 # Execute task 1
-TaskUpdate(taskId=task1.id, status="in_progress")
+TaskUpdate(taskId=task1.taskId, status="in_progress")
 # ... perform exploration ...
-TaskUpdate(taskId=task1.id, status="completed")
+TaskUpdate(taskId=task1.taskId, status="completed")
 
 # Execute task 2 (don't stop, continue)
-TaskUpdate(taskId=task2.id, status="in_progress")
+TaskUpdate(taskId=task2.taskId, status="in_progress")
 # ... perform analysis ...
-TaskUpdate(taskId=task2.id, status="completed")
+TaskUpdate(taskId=task2.taskId, status="completed")
 
 # Execute task 3 (don't stop, continue)
-TaskUpdate(taskId=task3.id, status="in_progress")
+TaskUpdate(taskId=task3.taskId, status="in_progress")
 # ... perform implementation ...
-TaskUpdate(taskId=task3.id, status="completed")
+TaskUpdate(taskId=task3.taskId, status="completed")
 
 # Execute task 4 (don't stop, continue)
-TaskUpdate(taskId=task4.id, status="in_progress")
+TaskUpdate(taskId=task4.taskId, status="in_progress")
 # ... execute commit ...
-TaskUpdate(taskId=task4.id, status="completed")
+TaskUpdate(taskId=task4.taskId, status="completed")
 
 # Execute task 5 (don't stop, continue)
-TaskUpdate(taskId=task5.id, status="in_progress")
+TaskUpdate(taskId=task5.taskId, status="in_progress")
 # ... perform implementation ...
-TaskUpdate(taskId=task5.id, status="completed")
+TaskUpdate(taskId=task5.taskId, status="completed")
 
 # Execute task 6 (don't stop, continue)
-TaskUpdate(taskId=task6.id, status="in_progress")
+TaskUpdate(taskId=task6.taskId, status="in_progress")
 # ... execute commit ...
-TaskUpdate(taskId=task6.id, status="completed")
+TaskUpdate(taskId=task6.taskId, status="completed")
 
 # Execute task 7 (don't stop, continue)
-TaskUpdate(taskId=task7.id, status="in_progress")
+TaskUpdate(taskId=task7.taskId, status="in_progress")
 # ... execute check ...
-TaskUpdate(taskId=task7.id, status="completed")
+TaskUpdate(taskId=task7.taskId, status="completed")
 
 # Execute task 8 (don't stop, continue)
-TaskUpdate(taskId=task8.id, status="in_progress")
+TaskUpdate(taskId=task8.taskId, status="in_progress")
 # ... handle files ...
-TaskUpdate(taskId=task8.id, status="completed")
+TaskUpdate(taskId=task8.taskId, status="completed")
 
 # All tasks complete, report to user
 # "All tasks completed. Implemented JWT validation and login endpoint, both reviewed and committed."
@@ -570,13 +570,22 @@ TaskUpdate(taskId=task8.id, status="completed")
 
 ## Execution Strategy: Create and Run (STRICT)
 
-**After creating tasks, MUST immediately start execution and continue until all tasks complete.**
+**After creating tasks from an approved plan (mktd Phase 4 approval or explicit user instruction), MUST immediately start execution and continue until all tasks complete.**
+
+### Prerequisite: Approval Required
+
+Execution ONLY begins when ONE of these conditions is met:
+- User explicitly approved via mktd Phase 4 (APPROVE)
+- User explicitly says "start", "execute", "go", or equivalent
+- User invokes `/mktsk` with a plan file they authored themselves
+
+**NEVER auto-execute** from a plan that hasn't been approved.
 
 ### Core Rules
 
 | Rule | Requirement |
 |------|-------------|
-| **Immediate start** | After creating tasks, do not wait for user confirmation, immediately start first task |
+| **Immediate start** | After creating tasks from an approved plan, start first task immediately — no further confirmation |
 | **Continuous execution** | After completing one task, immediately execute next, do not pause between tasks |
 | **Stop only when done** | Only stop when all tasks marked completed, OR encounter unresolvable blocker requiring user input |
 | **Serial writes** | NEVER run parallel development sub-agents |

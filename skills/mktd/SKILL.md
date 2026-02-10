@@ -20,7 +20,7 @@ Create structured TODO files at `./drafts/TODOs/{timestamp}/todo.md` using:
 - **Pre-assigned execution** — every TODO item has an executor tag before work begins
 - **Full audit trail** — debate transcripts + structured TODOs with decision rationale
 
-Each TODO item is a `[ ]` checkbox with an executor tag indicating who should execute it. The user's native language is auto-detected and used for descriptions.
+Each TODO item is a `[ ]` checkbox with an executor tag indicating who should execute it. Descriptions are written in the user's preferred language (as configured in CLAUDE.md or inferred from conversation).
 
 ### Why Use This Skill
 
@@ -68,7 +68,9 @@ After approval, use the `mktsk` skill to convert TODOs into executable tasks.
 
 **Goal**: Gather codebase context without polluting main agent's context window.
 
-**CRITICAL**: Main agent MUST NOT use Read, Glob, Grep, or Bash to directly explore files (e.g. `cat`, `grep`, `find`). The ONLY permitted Bash usage in Phase 1 is invoking CSA commands (`csa run`, `csa debate`). CSA sub-agents have direct file system access and read files natively.
+**CRITICAL**: In Phase 1, main agent MUST NOT use Read, Glob, Grep, or Bash to explore codebase files. The ONLY permitted Bash usage in Phase 1 is invoking CSA commands (`csa run`, `csa debate`). CSA sub-agents have direct file system access and read files natively.
+
+**Note**: Read/Write/Edit are allowed in later phases (e.g., Phase 2 for writing `todo.md`, Phase 4 for presenting to user). The restriction applies **only to Phase 1 codebase exploration**.
 
 ### Execution
 
@@ -196,7 +198,11 @@ Critique for:
 4. Alternatives — better approaches the plan missed
 5. Risks — security, performance, maintenance concerns
 
-Be adversarial. Challenge every assumption. Identify what will break."
+Be adversarial. Challenge every assumption. Identify what will break.
+
+IMPORTANT: Do NOT include secrets, credentials, API keys, or .env contents
+in the plan text. Only include task descriptions, architectural decisions,
+and risk summaries — not source code snippets containing sensitive data."
 ```
 
 ### Evaluate Critique
