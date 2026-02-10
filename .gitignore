@@ -57,6 +57,7 @@ Thumbs.db
 # Documentation or auxiliary files not needed in source control
 GEMINI.md
 AGENTS.md
+!skills/AGENTS.md
 drafts
 **/*.zh.md
 CLAUDE.md
