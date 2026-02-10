@@ -19,7 +19,7 @@ secrets/credentials:
 1. Install CSA: use the `install-update-csa` skill
 2. Daily commits: use the `commit` skill (includes formatting, linting, testing, security audit, CSA review)
 3. PR review loops: use the `pr-codex-bot` skill (iterative bot review with false-positive arbitration)
-4. Feature planning: use the `plan-debate` skill (CSA recon + adversarial debate + task decomposition)
+4. Feature planning: use `mktd` (CSA recon + adversarial debate + TODO output) then `mktsk` (convert TODOs to Task tools + serial execution)
 
 ## Skill Catalog
 
@@ -48,11 +48,12 @@ secrets/credentials:
 | `ai-reviewed-commit` | Pre-commit review loop: review -> fix -> re-review until clean | `csa review --diff` or `csa debate` |
 | `pr-codex-bot` | Iterative PR review loop with cloud review bots | `csa debate` for false-positive arbitration |
 
-### Planning
+### Planning & Execution
 
 | Skill | Purpose | CSA Integration |
 |-------|---------|-----------------|
-| `plan-debate` | Debate-enhanced planning: recon -> draft -> debate -> decompose -> execute | `csa run`, `csa debate`, `csa review` |
+| `mktd` | Make TODO: CSA recon + draft + adversarial debate → `./drafts/TODOs/{timestamp}/todo.md` | `csa run`, `csa debate` |
+| `mktsk` | Make Task: convert TODO plans into Task tool entries for persistent serial execution | Uses executor tags from `mktd` output |
 
 ## Skill Dependency Graph
 
@@ -69,7 +70,8 @@ install-update-csa
          │
          ├── code-review (uses csa-review, debate for large PRs)
          │
-         ├── plan-debate (uses csa run, debate, commit in execution)
+         ├── mktd (uses csa run, debate for TODO generation)
+         │    └── mktsk (converts TODOs to Task tools, uses commit in execution)
          │
          └── pr-codex-bot (uses csa-review, debate, commit)
 ```
@@ -100,13 +102,17 @@ commit -> pr-codex-bot skill
 ### Pattern 3: Feature Planning & Implementation
 
 ```
-plan-debate skill
+mktd skill (planning)
   Phase 1: RECON — csa run (parallel reconnaissance, zero main-agent reads)
-  Phase 2: DRAFT — main agent drafts plan from CSA summaries
+  Phase 2: DRAFT — main agent drafts todo.md with [ ] items and executor tags
   Phase 3: DEBATE — csa debate (mandatory adversarial review)
-  Phase 4: DECOMPOSE — task breakdown with executor tags
-  Phase 5: APPROVE — user gate
-  Phase 6: EXECUTE — delegated execution (commit skill per unit)
+  Phase 4: APPROVE — user gate
+  Output: ./drafts/TODOs/{timestamp}/todo.md
+
+mktsk skill (execution)
+  Parse todo.md → TaskCreate entries with executor + DONE WHEN
+  Serial execution: implement → review → commit → next
+  Context management: /compact after logical stages
 ```
 
 ### Pattern 4: PR Code Review
