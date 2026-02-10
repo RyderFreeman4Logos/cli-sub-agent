@@ -59,6 +59,7 @@ Step 7: Evaluate each comment
 - **NEVER skip the debate step for any reason** — "too simple", "clearly wrong", "design disagreement" are NOT valid excuses
 - **NEVER post a dismissal comment without full model specs** (`tool/provider/model/thinking_budget`) for both debate participants
 - **NEVER use the same model family for arbitration** as you (the main agent)
+- **NEVER run Step 2 (local review) as a background task** — it MUST complete synchronously before Step 4 (push PR). Running it in background causes merge-before-review bugs
 
 **If you believe a bot comment is wrong, you MUST:**
 1. Queue it for Step 8 (local arbitration) — NOT reply directly
@@ -96,21 +97,29 @@ Example for `user/repo` PR `3`: `/tmp/codex-bot-user-repo-3-baseline.json`
 Commit work using proper commit workflow. Ensure all changes are staged
 and committed before proceeding.
 
-## Step 2: Local Review
+## Step 2: Local Review (MUST BLOCK)
+
+**CRITICAL: This step MUST run synchronously. NEVER launch the local review as a
+background task.** The merge-before-review bug occurs when the local review runs in
+the background while subsequent steps proceed without waiting for results.
 
 Run `csa-review` skill with `scope=range:main...HEAD` to audit all changes since main
 before submitting the PR. This catches cross-commit interaction issues early and reduces bot iterations.
 Sessions are stored in `~/.local/state/csa/` (not `~/.codex/`).
 
-## Step 3: Fix Local Review Issues
+**FORBIDDEN**: `run_in_background: true` for the local review command. You MUST wait
+for the review output before proceeding.
+
+## Step 3: Fix Local Review Issues (GATE)
 
 If the local review found issues:
 1. Fix each issue
 2. Commit fixes
-3. Re-run local review
+3. Re-run local review (synchronously — same blocking rule as Step 2)
 4. Repeat until clean
 
-**Only proceed to Step 4 when local review passes.**
+**GATE: Only proceed to Step 4 when local review returns zero issues.
+This is a hard gate — no exceptions, no "review is probably fine", no skipping.**
 
 ## Step 4: Submit PR
 
