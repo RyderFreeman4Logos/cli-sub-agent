@@ -98,8 +98,8 @@ and committed before proceeding.
 
 ## Step 2: Local Review
 
-Run `csa-review` skill with `scope=base:main` to audit `origin/main...HEAD`
-before submitting the PR. This catches issues early and reduces bot iterations.
+Run `csa-review` skill with `scope=range:main...HEAD` to audit all changes since main
+before submitting the PR. This catches cross-commit interaction issues early and reduces bot iterations.
 Sessions are stored in `~/.local/state/csa/` (not `~/.codex/`).
 
 ## Step 3: Fix Local Review Issues
@@ -546,7 +546,7 @@ git checkout main && git pull origin main
 
 | Control | Value | Rationale |
 |---------|-------|-----------|
-| Max iterations per PR | 5 | Prevents infinite loop |
+| Max iterations per PR | 10 | Prevents infinite loop |
 | Same issue threshold | 2 | If bot flags same issue twice, escalate |
 | Poll interval | 45-60s | Within GitHub rate limits |
 | Poll timeout | 10 min | Notify user if exceeded |
