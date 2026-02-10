@@ -4,6 +4,16 @@
 > These skills leverage CSA (CLI Sub-Agent) for heterogeneous model
 > orchestration, independent code review, and context-efficient delegation.
 
+## Data Handling
+
+CSA skills may send code diffs and file contents to external LLM providers
+for analysis. Before using CSA with private repositories or code containing
+secrets/credentials:
+
+1. Run a secrets scan first (e.g., `git secrets --scan`, `trufflehog`)
+2. Verify your CSA config routes to approved providers only
+3. Use `--tool opencode` for local-only analysis when data sensitivity requires it
+
 ## Quick Start
 
 1. Install CSA: use the `install-update-csa` skill

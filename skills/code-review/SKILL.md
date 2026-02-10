@@ -1,6 +1,7 @@
 ---
 name: code-review
 description: "CRITICAL: Code review skill using GitHub API. Triggers on: review PR, code review, PR review, pull request review, review changes, check this PR, analyze this PR, review #"
+allowed-tools: Bash, Read, Grep, Glob
 ---
 
 # Code Review
@@ -130,19 +131,23 @@ gh api repos/{owner}/{repo}/pulls/123/reviews
 
 ### Submit Review Comments
 
+**IMPORTANT**: By default, generate review output locally only. Do NOT post
+comments or submit reviews to GitHub unless the user explicitly requests it.
+Always confirm the target PR number and repository before any write operation.
+
 ```bash
-# Add a comment to a PR
+# Add a comment to a PR (ONLY when user explicitly requests posting)
 gh pr comment 123 --body "Review comment here"
 
-# Create a review with comments
+# Create a review with comments (ONLY when user explicitly requests posting)
 gh api repos/{owner}/{repo}/pulls/123/reviews \
   -f body="Review summary" \
   -f event="COMMENT"
 
-# Approve a PR
+# Approve a PR (ONLY when user explicitly requests approval)
 gh pr review 123 --approve --body "LGTM"
 
-# Request changes
+# Request changes (ONLY when user explicitly requests it)
 gh pr review 123 --request-changes --body "Please address the issues"
 ```
 

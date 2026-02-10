@@ -1,7 +1,7 @@
 ---
-name: Security Audit
+name: security-audit
 description: Pre-commit security audit with test completeness verification. Adopts adversarial role to find vulnerabilities and missing tests.
-allowed-tools: Read, Grep, Glob, Bash (read-only commands only)
+allowed-tools: Read, Grep, Glob, Bash
 ---
 
 # Security Audit Skill

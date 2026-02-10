@@ -1,5 +1,5 @@
 ---
-name: AI-Reviewed Commit
+name: ai-reviewed-commit
 description: Enforces pre-commit code review using `csa review` with fix-and-retry loop until no issues found. Prevents committing code that fails review.
 allowed-tools: Bash, Task, Read, Edit
 ---
@@ -76,7 +76,7 @@ Before running the review, determine who authored the staged code:
 
 ### Step 3: Run csa review
 
-**MUST use `csa review --diff`** to review staged + unstaged changes (or `csa debate` if authorship check in Step 2.5 indicates you wrote the code):
+**MUST use `csa review --diff`** to review all uncommitted changes relative to HEAD (or `csa debate` if authorship check in Step 2.5 indicates you wrote the code):
 
 ```bash
 csa review --diff
@@ -86,10 +86,10 @@ csa review --diff
 
 | Flag | Purpose |
 |------|---------|
-| `--diff` | Review uncommitted (staged + unstaged) changes |
+| `--diff` | Review all uncommitted changes vs HEAD (`git diff HEAD`) |
 | `--commit <sha>` | Review a specific commit |
 | `--branch <name>` | Compare against a branch |
-| `--tool <tool>` | Override review tool (default: codex) |
+| `--tool <tool>` | Override review tool (default: from config) |
 | `--session <id>` | Resume a previous review session |
 
 **IMPORTANT**: Do NOT use `--branch` or `--commit` for pre-commit review. Those are for different use cases.

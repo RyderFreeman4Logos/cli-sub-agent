@@ -1,5 +1,5 @@
 ---
-name: Commit
+name: commit
 description: Enforces strict commit discipline following Conventional Commits with mandatory pre-commit security audit and test completeness verification
 allowed-tools: Bash, Read, Grep
 ---
@@ -123,29 +123,31 @@ Each commit **must** complete the following steps:
    ↓
 4. ✅ Security scan (check for secrets, debug code)
    ↓
-5. ✅ **Security Audit (the `security-audit` skill)**
+5. ✅ Stage changes (git add <files>) + verify working tree is clean
+   ↓
+6. ✅ **Security Audit (the `security-audit` skill)**
    │   - Phase 1: Test Completeness Check ("can't write more tests" standard)
    │   - Phase 2: Security Vulnerability Scan
    │   - Phase 3: Code Quality Check
    │   - Returns: PASS / PASS with deferred issues / FAIL
    ↓
-6. ✅ Pre-commit review (csa review --diff)
+7. ✅ Pre-commit review (csa review --diff)
    ↓
-7. Blocking issues found (in current changes)?
+8. Blocking issues found (in current changes)?
    ├─ YES → Fix issues → Re-run from step 1
    │
-   └─ NO → Continue to step 8
+   └─ NO → Continue to step 9
    ↓
-8. ✅ Generate commit message → Commit
+9. ✅ Generate commit message → Commit
    ↓
-9. ✅ **Post-Commit: Push & PR consideration** (see below)
+10. ✅ **Post-Commit: Push & PR consideration** (see below)
    ↓
-10. Deferred issues found (in other modules)?
-    ├─ YES → Invoke Task tools (TaskCreate/TaskUpdate) → Fix immediately (step 11)
+11. Deferred issues found (in other modules)?
+    ├─ YES → Invoke Task tools (TaskCreate/TaskUpdate) → Fix immediately (step 12)
     │
     └─ NO → Done
     ↓
-11. ✅ **Post-Commit Fix** (if deferred issues exist)
+12. ✅ **Post-Commit Fix** (if deferred issues exist)
     - Fix deferred issues by priority (Critical → High → Medium)
     - Each fix goes through full workflow (steps 0-8)
     - Continue until all deferred issues resolved
@@ -190,10 +192,9 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
 ```
 
 **Remind user to consider**:
-- Pushing to personal fork triggers GitHub Actions LLM audit
 - Earlier push = earlier problem discovery
 - No need to wait for "perfect" before pushing — draft PR is fine
-- `mandate-dev-drafts` doesn't participate in this workflow
+- If your project has CI/bot review pipelines, pushing triggers them automatically
 
 ### Security Scan Checklist
 
@@ -262,7 +263,7 @@ csa review will return:
 If csa review is not available:
 
 ```bash
-csa run "Run `git diff --staged` and generate a Conventional Commits message"
+csa run "Run 'git diff --staged' and generate a Conventional Commits message"
 ```
 
 ## Commit Granularity
@@ -430,9 +431,7 @@ Add JWT token validation to support authenticated API endpoints.
 - Implemented claims extraction and expiry check
 - Added 10 test cases for valid/invalid tokens
 
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-Co-Authored-By: Claude Sonnet 4.5 <noreply@anthropic.com>
+Co-Authored-By: Claude <noreply@anthropic.com>
 EOF
 )"
 

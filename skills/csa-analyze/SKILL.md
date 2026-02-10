@@ -1,6 +1,7 @@
 ---
 name: csa-analyze
 description: Delegate analysis tasks to CSA with proper context isolation. Use when analyzing code, git changes, or large documentation. CSA sub-agents gather their own context - DO NOT pre-fetch data.
+allowed-tools: Bash, Read, Grep, Glob
 ---
 
 # CSA Analysis Delegation Skill
@@ -66,7 +67,7 @@ You are in directory: [CWD]
 
 Analyze the current git changes:
 1. Run `git status` to see all changed/untracked files
-2. Run `git diff` to see staged and unstaged changes
+2. Run `git diff HEAD` to see all uncommitted changes
 3. For each change, explain:
    - Purpose of the modification
    - Potential impact
