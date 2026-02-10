@@ -85,12 +85,16 @@ All temp files are namespaced by `${REPO}` and `${PR_NUM}` to prevent
 collisions when multiple projects use this skill concurrently:
 
 ```
-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-baseline.json
+/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-baseline.json          # PR review comments (inline)
+/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-issue-baseline.json    # Issue-level comments (general)
 /tmp/codex-bot-${REPO//\//-}-${PR_NUM}-poll-result.txt
 /tmp/codex-bot-${REPO//\//-}-${PR_NUM}-watch.sh
 ```
 
 Example for `user/repo` PR `3`: `/tmp/codex-bot-user-repo-3-baseline.json`
+
+**IMPORTANT**: The bot primarily posts to **issue-level comments** (`issues/{pr}/comments`),
+not PR review comments (`pulls/{pr}/comments`). Both endpoints must be polled.
 
 ## Step 1: Commit Changes
 
@@ -140,7 +144,22 @@ gh pr create --title "[type](scope): [description]" \
 PREOF
 )"
 
-# Trigger bot review
+# Temp file prefix (quoted to handle special chars in REPO)
+TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
+
+# Capture baseline BEFORE triggering bot review (prevents race condition)
+# Uses per_page=100 to handle PRs with many comments; add --paginate for >100
+gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json"
+gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json"
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
+echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
+
+# NOW trigger bot review (after baseline is captured)
 gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
 ```
 
@@ -148,28 +167,44 @@ gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
 
 **CRITICAL: NEVER assume the bot has replied. ALWAYS actively poll.**
 
+The baseline was captured in Step 4 before triggering `@codex review`.
+This prevents a race condition where a fast bot response gets included
+in the baseline, making the polling loop miss it.
+
 ```bash
-# Record baseline
-gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id]' \
-  > /tmp/codex-bot-${REPO//\//-}-${PR_NUM}-baseline.json
+# Ensure variables from prior steps are available (defensive re-init for separate shell invocations)
+TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
+BASELINE_REVIEW_COUNT="${BASELINE_REVIEW_COUNT:-$(cat "${TMP_PREFIX}-review-count.txt" 2>/dev/null || echo 0)}"
 
 # Poll every 45-60s (within GitHub rate limits: 5000 req/hour authenticated)
 while true; do
   sleep 45
-  CURRENT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
-    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id]')
-  BASELINE=$(cat /tmp/codex-bot-${REPO//\//-}-${PR_NUM}-baseline.json)
+
+  # Check PR review comments (inline code comments)
+  CURRENT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
+  BASELINE=$(cat "${TMP_PREFIX}-baseline.json")
   if [ "$CURRENT" != "$BASELINE" ]; then
     echo "NEW_COMMENTS_DETECTED"
     break
   fi
-  # Check for review-only response (approved, no new inline comments)
-  # IMPORTANT: Compare timestamps in UTC to avoid timezone bugs
-  LATEST_REVIEW_UTC=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
-    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | last | .submitted_at')
-  PUSH_UTC=$(git log -1 --format=%cI | TZ=UTC date -f - +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
-  # If latest review is after push AND no new comments, bot approved
+
+  # Check issue-level comments (general PR comments — bot's primary channel)
+  ISSUE_CURRENT=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
+  ISSUE_BASELINE=$(cat "${TMP_PREFIX}-issue-baseline.json")
+  if [ "$ISSUE_CURRENT" != "$ISSUE_BASELINE" ]; then
+    echo "NEW_COMMENTS_DETECTED"
+    break
+  fi
+
+  # Check for new reviews (compare count against baseline, not just > 0)
+  CURRENT_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
+    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || continue
+  if [ "$CURRENT_REVIEW_COUNT" -gt "$BASELINE_REVIEW_COUNT" ] 2>/dev/null; then
+    echo "NEW_COMMENTS_DETECTED"
+    break
+  fi
 done
 ```
 
@@ -203,13 +238,22 @@ The bot reviewed an older commit; the issue is already addressed.
 **Detection**: Read the file at the path mentioned. If the code no longer
 matches what the bot described, it's already fixed.
 
-**Action**: React 👍 + reply acknowledging (**do NOT `@codex`** — avoid wasting bot tokens):
+**Action**: React 👍 + reply acknowledging (**do NOT `@codex`** — avoid wasting bot tokens).
+Use the correct API based on where the bot posted:
+
 ```bash
+# For PR review comments (inline, found via pulls/{PR}/comments)
 gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
   -X POST -f content='+1'
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
   -X POST -f body="Fixed in ${COMMIT_SHA}. [brief explanation]." \
   -F in_reply_to=${COMMENT_ID}
+
+# For issue-level comments (general, found via issues/{PR}/comments)
+gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+  -X POST -f content='+1'
+gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+  -X POST -f body="Fixed in ${COMMIT_SHA}. [brief explanation]."
 ```
 
 ### Category B: Suspected False Positive
@@ -241,9 +285,15 @@ dismissing.") without completing Step 8 is a **FORBIDDEN action** (see above).
 The bot found a genuine bug or improvement.
 
 **Action**: React 👍 → **queue for Step 9** (**do NOT `@codex`** — avoid wasting
-bot tokens; the fix + `@codex review` in Step 9 will trigger re-evaluation):
+bot tokens; the fix + `@codex review` in Step 9 will trigger re-evaluation).
+Use the correct API based on where the bot posted:
 ```bash
+# For PR review comments (inline)
 gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
+  -X POST -f content='+1'
+
+# For issue-level comments (general)
+gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
   -X POST -f content='+1'
 ```
 
@@ -317,9 +367,10 @@ Arbiter says...
 ### Step 8.3a: Arbiter Confirms False Positive
 
 React 👎 on PR and post the arbitration result as audit trail with **full model specs**
-(**do NOT `@codex`**):
+(**do NOT `@codex`**). Use the correct API based on where the bot posted:
 
 ```bash
+# For PR review comments (inline)
 gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
   -X POST -f content='-1'
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
@@ -332,6 +383,19 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
 
 **Reasoning:** [summary of arbiter reasoning]. [cite file:line evidence]." \
   -F in_reply_to=${COMMENT_ID}
+
+# For issue-level comments (general)
+gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
+  -X POST -f content='-1'
+gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+  -X POST \
+  -f body="**Dismissed after local arbitration.**
+
+**Participants:**
+- Author: \`{your_tool}/{your_provider}/{your_model}/{your_thinking_budget}\`
+- Arbiter: \`{arbiter_tool}/{arbiter_provider}/{arbiter_model}/{arbiter_thinking_budget}\`
+
+**Reasoning:** [summary of arbiter reasoning]. [cite file:line evidence]."
 ```
 
 **MANDATORY**: Model specs MUST use the `tool/provider/model/thinking_budget` format
@@ -380,12 +444,28 @@ confidence is much higher than a single model's judgment.
 | Deadlock (each side has valid points) | **Escalate to user** |
 
 Post the full debate summary as a PR comment for audit trail with **full model specs**
-(**do NOT `@codex`**):
+(**do NOT `@codex`**). Use the correct reply API based on where the bot posted:
 
 ```bash
+# For PR review comments (inline) — use pulls/{PR}/comments with in_reply_to
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
   -X POST \
   -f body="**Local arbitration result: [DISMISSED|CONFIRMED|ESCALATED].**
+...
+[debate body omitted for brevity — see template below]" \
+  -F in_reply_to=${COMMENT_ID}
+
+# For issue-level comments (general) — use issues/{PR}/comments
+gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+  -X POST \
+  -f body="**Local arbitration result: [DISMISSED|CONFIRMED|ESCALATED].**
+...
+[debate body — same content as above]"
+```
+
+**Debate body template** (use in both API variants above):
+```
+**Local arbitration result: [DISMISSED|CONFIRMED|ESCALATED].**
 
 ## Participants (MANDATORY for auditability)
 - **Author**: \`{your_tool}/{your_provider}/{your_model}/{your_thinking_budget}\`
@@ -411,8 +491,7 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
 ## Audit
 - Debate rounds: {N}
 - CSA session: \`{session_id}\` (if applicable)
-- Debate skill used: [yes/no — if complex, the \`debate\` skill provides structured multi-round debate]" \
-  -F in_reply_to=${COMMENT_ID}
+- Debate skill used: [yes/no — if complex, the \`debate\` skill provides structured multi-round debate]
 ```
 
 **MANDATORY**: Both model specs MUST use the `tool/provider/model/thinking_budget` format.
@@ -445,6 +524,21 @@ git commit -m "fix(scope): [description]
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 git push origin ${BRANCH}
+
+# Ensure TMP_PREFIX is available (defensive re-init for separate shell invocations)
+TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
+
+# Refresh baseline BEFORE triggering re-review (same pattern as Step 4)
+gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json"
+gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json"
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
+echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
+
 gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
 ```
 
@@ -503,8 +597,21 @@ gh pr comment ${OLD_PR_NUM} --repo ${REPO} \
   --body "Superseded by #${NEW_PR_NUM}. Preserved for review discussion reference."
 gh pr close ${OLD_PR_NUM} --repo ${REPO}
 
-# 8. Trigger review on new PR
+# 8. Refresh baseline for new PR before triggering review
+TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${NEW_PR_NUM}"
+gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json"
+gh api "repos/${REPO}/issues/${NEW_PR_NUM}/comments?per_page=100" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json"
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/reviews" \
+  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
+echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 gh pr comment ${NEW_PR_NUM} --repo ${REPO} --body "@codex review"
+
+# 9. Update PR_NUM so Step 5 polls the correct PR
+PR_NUM=${NEW_PR_NUM}
 ```
 
 ### Commit Grouping Strategy
@@ -589,14 +696,27 @@ git checkout main && git pull origin main
 
 ## GitHub API Reference
 
-**IMPORTANT**: PR review comment APIs have subtle path differences:
+**IMPORTANT**: GitHub has THREE different comment APIs for PRs:
+
+| Type | Endpoint | When Bot Uses It |
+|------|----------|------------------|
+| **Issue comments** (general) | `GET/POST repos/{REPO}/issues/{PR}/comments` | **Primary** — bot posts here |
+| **Review comments** (inline) | `GET repos/{REPO}/pulls/{PR}/comments` | When bot has line-specific feedback |
+| **Reviews** (approve/reject) | `GET repos/{REPO}/pulls/{PR}/reviews` | Formal review submissions |
+
+**CRITICAL**: The bot (`chatgpt-codex-connector[bot]`) primarily posts to
+**issue-level comments** (`issues/{PR}/comments`), but may also use PR review
+comments (`pulls/{PR}/comments`) for inline feedback. Polling MUST check all
+three endpoints (issue comments, review comments, reviews).
 
 | Operation | Endpoint | Notes |
 |-----------|----------|-------|
-| List comments | `GET repos/{REPO}/pulls/{PR}/comments` | Includes `in_reply_to_id` |
-| Get one comment | `GET repos/{REPO}/pulls/comments/{ID}` | No PR number! |
-| Reply to comment | `POST repos/{REPO}/pulls/{PR}/comments` with `-F in_reply_to={ID}` | Uses PR number |
-| Add reaction | `POST repos/{REPO}/pulls/comments/{ID}/reactions` with `-f content='+1'` or `'-1'` | No PR number! |
+| List issue comments | `GET repos/{REPO}/issues/{PR}/comments` | Bot's primary channel |
+| List review comments | `GET repos/{REPO}/pulls/{PR}/comments` | Inline code comments |
+| Get one review comment | `GET repos/{REPO}/pulls/comments/{ID}` | No PR number! |
+| Reply to review comment | `POST repos/{REPO}/pulls/{PR}/comments` with `-F in_reply_to={ID}` | Uses PR number |
+| Add reaction (review) | `POST repos/{REPO}/pulls/comments/{ID}/reactions` with `-f content='+1'` or `'-1'` | No PR number! |
+| Add reaction (issue) | `POST repos/{REPO}/issues/comments/{ID}/reactions` with `-f content='+1'` or `'-1'` | No PR number! |
 
 Bot user login: `chatgpt-codex-connector[bot]`
 
