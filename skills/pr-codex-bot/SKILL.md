@@ -79,22 +79,7 @@ Extract from user message or PR context:
 | `PR_NUM` | PR URL or `gh pr view` | `1` |
 | `BRANCH` | Current git branch | `feat/hooks-system` |
 
-### Temp File Naming Convention
-
-All temp files are namespaced by `${REPO}` and `${PR_NUM}` to prevent
-collisions when multiple projects use this skill concurrently:
-
-```
-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-baseline.json          # PR review comments (inline)
-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-issue-baseline.json    # Issue-level comments (general)
-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-poll-result.txt
-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}-watch.sh
-```
-
-Example for `user/repo` PR `3`: `/tmp/codex-bot-user-repo-3-baseline.json`
-
-**IMPORTANT**: The bot primarily posts to **issue-level comments** (`issues/{pr}/comments`),
-not PR review comments (`pulls/{pr}/comments`). Both endpoints must be polled.
+> **See**: [Baseline Capture Template](references/baseline-template.md) — run this before every `@codex review` trigger.
 
 ## Step 1: Commit Changes
 
@@ -114,7 +99,23 @@ Sessions are stored in `~/.local/state/csa/` (not `~/.codex/`).
 **FORBIDDEN**: `run_in_background: true` for the local review command. You MUST wait
 for the review output before proceeding.
 
+After completing the local review:
+```bash
+# Use LOCAL_REVIEW_MARKER (not TMP_PREFIX) — PR_NUM not known until Step 4
+LOCAL_REVIEW_MARKER="/tmp/codex-local-review-${REPO//\//-}-${BRANCH//\//-}.marker"
+git rev-parse HEAD > "${LOCAL_REVIEW_MARKER}"
+```
+
 ## Step 3: Fix Local Review Issues (GATE)
+
+```bash
+# Verify Step 2 was performed for current HEAD
+LOCAL_REVIEW_MARKER="/tmp/codex-local-review-${REPO//\//-}-${BRANCH//\//-}.marker"
+if [ ! -f "${LOCAL_REVIEW_MARKER}" ] || [ "$(cat "${LOCAL_REVIEW_MARKER}")" != "$(git rev-parse HEAD)" ]; then
+  echo "ERROR: Local review marker missing or stale (HEAD changed). Re-run Step 2."
+  exit 1
+fi
+```
 
 If the local review found issues:
 1. Fix each issue
@@ -128,7 +129,14 @@ This is a hard gate — no exceptions, no "review is probably fine", no skipping
 ## Step 4: Submit PR
 
 ```bash
-git push -u origin ${BRANCH}
+# Final gate: ensure local review was performed for current HEAD
+LOCAL_REVIEW_MARKER="/tmp/codex-local-review-${REPO//\//-}-${BRANCH//\//-}.marker"
+if [ ! -f "${LOCAL_REVIEW_MARKER}" ] || [ "$(cat "${LOCAL_REVIEW_MARKER}")" != "$(git rev-parse HEAD)" ]; then
+  echo "ERROR: Local review marker missing or stale. Re-run Step 2 before submitting PR."
+  exit 1
+fi
+
+git push -u origin "${BRANCH}"
 
 gh pr create --title "[type](scope): [description]" \
   --body "$(cat <<'PREOF'
@@ -144,23 +152,29 @@ gh pr create --title "[type](scope): [description]" \
 PREOF
 )"
 
-# Temp file prefix (quoted to handle special chars in REPO)
+# Use Baseline Capture Template (see above)
 TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
 
-# Capture baseline BEFORE triggering bot review (prevents race condition)
-# Uses per_page=100 to handle PRs with many comments; add --paginate for >100
-gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-baseline.json"
-gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-issue-baseline.json"
-BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
+gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
+  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json" || {
+  echo "ERROR: Failed to capture PR comments baseline"
+  exit 1
+}
+gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" --paginate --slurp \
+  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json" || {
+  echo "ERROR: Failed to capture issue comments baseline"
+  exit 1
+}
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" --paginate --slurp \
+  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || {
+  echo "ERROR: Failed to capture baseline review count"
+  exit 1
+}
 echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 
-# NOW trigger bot review (after baseline is captured)
-gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 
 ## Step 5: Poll for Bot Response
@@ -174,15 +188,25 @@ in the baseline, making the polling loop miss it.
 ```bash
 # Ensure variables from prior steps are available (defensive re-init for separate shell invocations)
 TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
-BASELINE_REVIEW_COUNT="${BASELINE_REVIEW_COUNT:-$(cat "${TMP_PREFIX}-review-count.txt" 2>/dev/null || echo 0)}"
+
+# Recover baseline from file (defensive — variable may be lost across shell sessions)
+: "${TMP_PREFIX:?TMP_PREFIX not set}"
+if [ ! -f "${TMP_PREFIX}-review-count.txt" ]; then
+  echo "ERROR: Missing baseline review count file: ${TMP_PREFIX}-review-count.txt"
+  exit 1
+fi
+BASELINE_REVIEW_COUNT="${BASELINE_REVIEW_COUNT:-$(cat "${TMP_PREFIX}-review-count.txt")}"
+case "${BASELINE_REVIEW_COUNT}" in
+  ''|*[!0-9]*) echo "ERROR: Invalid BASELINE_REVIEW_COUNT: ${BASELINE_REVIEW_COUNT}"; exit 1 ;;
+esac
 
 # Poll every 45-60s (within GitHub rate limits: 5000 req/hour authenticated)
 while true; do
   sleep 45
 
   # Check PR review comments (inline code comments)
-  CURRENT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
+  CURRENT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
+    --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
   BASELINE=$(cat "${TMP_PREFIX}-baseline.json")
   if [ "$CURRENT" != "$BASELINE" ]; then
     echo "NEW_COMMENTS_DETECTED"
@@ -190,8 +214,8 @@ while true; do
   fi
 
   # Check issue-level comments (general PR comments — bot's primary channel)
-  ISSUE_CURRENT=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
+  ISSUE_CURRENT=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" --paginate --slurp \
+    --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
   ISSUE_BASELINE=$(cat "${TMP_PREFIX}-issue-baseline.json")
   if [ "$ISSUE_CURRENT" != "$ISSUE_BASELINE" ]; then
     echo "NEW_COMMENTS_DETECTED"
@@ -199,8 +223,8 @@ while true; do
   fi
 
   # Check for new reviews (compare count against baseline, not just > 0)
-  CURRENT_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
-    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || continue
+  CURRENT_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" --paginate --slurp \
+    --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || continue
   if [ "$CURRENT_REVIEW_COUNT" -gt "$BASELINE_REVIEW_COUNT" ] 2>/dev/null; then
     echo "NEW_COMMENTS_DETECTED"
     break
@@ -218,7 +242,7 @@ response), the PR is clean on first pass:
 
 ```bash
 # Merge remotely
-gh pr merge ${PR_NUM} --repo ${REPO} --squash --delete-branch
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 
 # Update local main
 git checkout main && git pull origin main
@@ -247,7 +271,7 @@ gh api "repos/${REPO}/pulls/comments/${COMMENT_ID}/reactions" \
   -X POST -f content='+1'
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
   -X POST -f body="Fixed in ${COMMIT_SHA}. [brief explanation]." \
-  -F in_reply_to=${COMMENT_ID}
+  -F "in_reply_to=${COMMENT_ID}"
 
 # For issue-level comments (general, found via issues/{PR}/comments)
 gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
@@ -382,7 +406,7 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
 - Arbiter: \`{arbiter_tool}/{arbiter_provider}/{arbiter_model}/{arbiter_thinking_budget}\`
 
 **Reasoning:** [summary of arbiter reasoning]. [cite file:line evidence]." \
-  -F in_reply_to=${COMMENT_ID}
+  -F "in_reply_to=${COMMENT_ID}"
 
 # For issue-level comments (general)
 gh api "repos/${REPO}/issues/comments/${COMMENT_ID}/reactions" \
@@ -453,7 +477,7 @@ gh api "repos/${REPO}/pulls/${PR_NUM}/comments" \
   -f body="**Local arbitration result: [DISMISSED|CONFIRMED|ESCALATED].**
 ...
 [debate body omitted for brevity — see template below]" \
-  -F in_reply_to=${COMMENT_ID}
+  -F "in_reply_to=${COMMENT_ID}"
 
 # For issue-level comments (general) — use issues/{PR}/comments
 gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
@@ -523,23 +547,31 @@ git add [fixed files]
 git commit -m "fix(scope): [description]
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
-git push origin ${BRANCH}
+git push origin "${BRANCH}"
 
-# Ensure TMP_PREFIX is available (defensive re-init for separate shell invocations)
+# Use Baseline Capture Template (see above) — ensure TMP_PREFIX is set
 TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
 
-# Refresh baseline BEFORE triggering re-review (same pattern as Step 4)
-gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-baseline.json"
-gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-issue-baseline.json"
-BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
+gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
+  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-baseline.json" || {
+  echo "ERROR: Failed to capture PR comments baseline"
+  exit 1
+}
+gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" --paginate --slurp \
+  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
+  > "${TMP_PREFIX}-issue-baseline.json" || {
+  echo "ERROR: Failed to capture issue comments baseline"
+  exit 1
+}
+BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" --paginate --slurp \
+  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || {
+  echo "ERROR: Failed to capture baseline review count"
+  exit 1
+}
 echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 
-gh pr comment ${PR_NUM} --repo ${REPO} --body "@codex review"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 
 **Then poll (Step 5) and re-evaluate (Step 7).**
@@ -555,89 +587,7 @@ After pushing fixes, poll for bot response (Step 5):
 When the bot converges after fix iterations, the PR has accumulated
 incremental fix commits. Create a clean PR for audit-friendly history.
 
-```bash
-# 1. Create new branch from main
-git checkout -b ${BRANCH}-clean main
-
-# 2. Squash merge all changes
-git merge --squash ${BRANCH}
-
-# 3. Unstage for selective re-commit
-git reset HEAD
-
-# 4. Recommit in logical groups by concern
-#    Use `git add <specific files>` to stage by group
-#    Each commit = one logical concern (not one file)
-
-# 5. Push new branch
-git push -u origin ${BRANCH}-clean
-
-# 6. Create new PR linking to old one
-gh pr create --title "[type](scope): [description]" \
-  --body "$(cat <<'PREOF'
-## Summary
-[description]
-
-## Background
-Clean resubmission of #${OLD_PR_NUM}. The original PR went through
-N rounds of iterative review with @codex. Fix commits have been
-consolidated into logical groups here.
-
-See #${OLD_PR_NUM} for the full review discussion.
-
-## Test plan
-- [ ] `cargo clippy -p [package] -- -D warnings`
-- [ ] `cargo test -p [package]`
-- [ ] @codex review
-PREOF
-)"
-
-# 7. Close old PR
-gh pr comment ${OLD_PR_NUM} --repo ${REPO} \
-  --body "Superseded by #${NEW_PR_NUM}. Preserved for review discussion reference."
-gh pr close ${OLD_PR_NUM} --repo ${REPO}
-
-# 8. Refresh baseline for new PR before triggering review
-TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${NEW_PR_NUM}"
-gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/comments?per_page=100" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-baseline.json"
-gh api "repos/${REPO}/issues/${NEW_PR_NUM}/comments?per_page=100" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-issue-baseline.json"
-BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/reviews" \
-  --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length')
-echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
-gh pr comment ${NEW_PR_NUM} --repo ${REPO} --body "@codex review"
-
-# 9. Update PR_NUM so Step 5 polls the correct PR
-PR_NUM=${NEW_PR_NUM}
-```
-
-### Commit Grouping Strategy
-
-Group by **concern**, not by chronology or file:
-
-| Concern | Typical Files | Commit Convention |
-|---------|--------------|-------------------|
-| Core abstractions | types, mod, registry | `feat(scope): [what the types enable]` |
-| Implementation | executor, engine | `feat(scope): [what the engine does]` |
-| Configuration | config, schema | `feat(scope): [what becomes configurable]` |
-| Integration | router, dispatch | `feat(scope): [where it's wired in]` |
-| Tests | test modules | `test(scope): [what is verified]` |
-| Formatting | (if needed) | `style(scope): apply cargo fmt` |
-
-**Number of commits is flexible** — use as many as needed for logical separation.
-
-### Preservation Policy
-
-| Artifact | Action | Reason |
-|----------|--------|--------|
-| Old branch | Keep | Audit trail |
-| Old commits | Keep | Shows iterative development |
-| Old PR | Close with comment | Links to new PR, preserves discussion |
-| New branch | Active | Clean history for merge |
-| New PR | Active | Fresh review with coherent diff |
+> **See**: [Clean Resubmission Flow](references/clean-resubmission-flow.md) — detailed procedure for creating clean PRs.
 
 ## Step 12: Review New PR
 
@@ -652,7 +602,7 @@ Poll for bot response on the new clean PR (Step 5):
 
 ```bash
 # Merge remotely
-gh pr merge ${NEW_PR_NUM} --repo ${REPO} --squash --delete-branch
+gh pr merge "${NEW_PR_NUM}" --repo "${REPO}" --squash --delete-branch
 
 # Update local main
 git checkout main && git pull origin main
