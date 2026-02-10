@@ -103,7 +103,8 @@ if [ -z "$default_branch" ]; then
   elif git show-ref --verify --quiet refs/heads/master 2>/dev/null; then
     default_branch="master"
   else
-    default_branch="main"  # safe default
+    # Could not detect default branch — override in CLAUDE.md if needed
+    default_branch="main"
   fi
 fi
 

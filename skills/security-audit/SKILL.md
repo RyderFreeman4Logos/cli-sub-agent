@@ -161,10 +161,12 @@ The auditor MUST produce a structured report in this exact format:
 
 ### Verdict
 
-- [ ] PASS: Ready to commit
-- [x] FAIL: Issues must be resolved
+- [ ] PASS: Ready to commit (no issues found)
+- [ ] PASS_DEFERRED: Current changes OK, but other-module issues found (commit, then fix)
+- [x] FAIL: Blocking issues must be resolved before commit
 
 **Blocking Issues:** 3
+**Deferred Issues (other modules):** 0
 **Non-blocking Suggestions:** 2
 ```
 
