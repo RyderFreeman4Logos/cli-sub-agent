@@ -187,16 +187,16 @@ For tasks requiring massive context (whole codebase analysis, large docs), use C
 CSA supports three `--tool` modes:
 - `auto` (default): CSA selects the best available tool automatically
 - `any-available`: Round-robin across available tools (for low-risk tasks)
-- `<tool-name>`: Explicitly select a specific tool (e.g., `codex`, `review`)
+- `<tool-name>`: Explicitly select a specific tool (e.g., `codex`, `opencode`, `gemini-cli`, `claude-code`)
 
 ### When to Use CSA
 
-| Task | CSA Tool | Why |
-|------|----------|-----|
-| Analyze 10+ files | `auto` | Large context window |
-| Architecture design | `debate` | Multi-perspective reasoning |
-| Review git diff | `review` | Specialized code review |
-| Implement in sandbox | `codex` | Safe execution environment |
+| Task | CSA Command | Why |
+|------|-------------|-----|
+| Analyze 10+ files | `csa run` | Large context window |
+| Architecture design | `csa debate` | Multi-perspective reasoning |
+| Review git diff | `csa review` | Specialized code review |
+| Implement in sandbox | `csa run --tool codex` | Safe execution environment |
 
 ### CRITICAL: Never Pre-fetch for CSA
 
