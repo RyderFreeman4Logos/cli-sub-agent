@@ -61,7 +61,7 @@ gh pr diff 123 --stat
 |----------|---------------|----------|
 | Small | < 200 lines | Direct review in main agent |
 | Medium | 200–800 lines | Direct review, use `update_plan` for progress |
-| Large | > 800 lines | Delegate to `csa review --branch main` or `csa run` |
+| Large | > 800 lines | Delegate to `csa review --branch <base-branch>` or `csa run` |
 
 ### Small PR: Direct Review
 

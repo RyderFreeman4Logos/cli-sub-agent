@@ -129,7 +129,7 @@ When user says: "Analyze the uncommitted changes"
 
 DO THIS:
 ```bash
-csa run "You are in /path/to/project. Run \`git status\` and \`git diff\` to analyze all uncommitted changes. For each file, explain what changed and why. Max 500 tokens."
+csa run "You are in /path/to/project. Run \`git status\` and \`git diff HEAD\` to analyze all uncommitted changes. For each file, explain what changed and why. Max 500 tokens."
 ```
 
 DO NOT:
