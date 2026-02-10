@@ -145,7 +145,7 @@ Each commit **must** complete the following steps:
    │   - Phase 3: Code Quality Check
    │   - Returns: PASS / PASS with deferred issues / FAIL
    ↓
-7. ✅ Pre-commit review (csa review --diff)
+7. ✅ Pre-commit review (csa review --diff — reviews all uncommitted changes vs HEAD)
    ↓
 8. Blocking issues found (in current changes)?
    ├─ YES → Fix issues → Re-run from step 1
@@ -251,13 +251,17 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
 ```
 1. [Main] Stage changes: git add <files>
    ↓
-2. [CSA:review] Review staged changes
+2. [Main] Ensure no unstaged changes remain (git diff should be empty)
+   If unstaged changes exist, either stage them or stash them first.
+   ↓
+3. [CSA:review] Review all uncommitted changes relative to HEAD
    csa review --diff
+   (Note: --diff uses 'git diff HEAD', covering both staged and unstaged changes)
    ↓
-3. [CSA:run] Generate commit message (if review passes)
-   csa run "Run git diff --staged and generate a Conventional Commits message"
+4. [CSA:run] Generate commit message (if review passes)
+   csa run "Run 'git diff --staged' and generate a Conventional Commits message"
    ↓
-4. [Main] Commit with generated message
+5. [Main] Commit with generated message
 ```
 
 ### CSA Review Output Format

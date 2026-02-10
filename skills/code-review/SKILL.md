@@ -19,7 +19,9 @@ This skill provides comprehensive code review capabilities by integrating with G
 ## Prerequisites
 
 - `gh` CLI must be installed and authenticated (required — all commands use `gh`)
-- `GITHUB_TOKEN` environment variable should be set if `gh auth` is not configured
+- Prefer `gh auth login` over raw `GITHUB_TOKEN` — interactive auth is safer
+- If using `GITHUB_TOKEN`, use fine-grained tokens with minimal scopes (read repo contents, write pull requests)
+- **NEVER** echo, log, or embed tokens in prompts, commit messages, or review output
 
 ## Usage
 
