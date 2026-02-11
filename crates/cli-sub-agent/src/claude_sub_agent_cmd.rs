@@ -154,6 +154,14 @@ fn read_skill_content(skill_path: &str) -> Result<Option<String>> {
 /// Priority: CLI --tool > auto (heterogeneous selection based on parent tool,
 /// then first enabled+available tool in preference order).
 ///
+/// NOTE: `ToolArg::Auto` here intentionally uses "heterogeneous-preferred"
+/// semantics (try hetero, fall back to any available) rather than the strict
+/// semantics used by review/debate (which error when hetero is impossible).
+/// This is because claude-sub-agent is a general-purpose executor where model
+/// family diversity is preferred but not essential, unlike review/debate where
+/// independent evaluation requires strict heterogeneity.
+/// See: https://github.com/RyderFreeman4Logos/cli-sub-agent/issues/45
+///
 /// Config-based selection (`[claude-sub-agent].tool` in project/global config)
 /// is not yet implemented — auto selection is the current default.
 fn resolve_claude_tool(
