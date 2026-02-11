@@ -20,9 +20,11 @@ mod session_cmds;
 mod setup_cmds;
 mod skill_cmds;
 mod tiers_cmd;
+mod todo_cmd;
 
 use cli::{
     Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands, TiersCommands,
+    TodoCommands,
 };
 use csa_config::GlobalConfig;
 use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
@@ -182,6 +184,48 @@ async fn main() -> Result<()> {
         Commands::Tiers { cmd } => match cmd {
             TiersCommands::List { cd } => {
                 tiers_cmd::handle_tiers_list(cd, output_format)?;
+            }
+        },
+        Commands::Todo { cmd } => match cmd {
+            TodoCommands::Create { title, branch, cd } => {
+                todo_cmd::handle_create(title, branch, cd)?;
+            }
+            TodoCommands::Save {
+                timestamp,
+                message,
+                cd,
+            } => {
+                todo_cmd::handle_save(timestamp, message, cd)?;
+            }
+            TodoCommands::Diff {
+                timestamp,
+                revision,
+                cd,
+            } => {
+                todo_cmd::handle_diff(timestamp, revision, cd)?;
+            }
+            TodoCommands::History { timestamp, cd } => {
+                todo_cmd::handle_history(timestamp, cd)?;
+            }
+            TodoCommands::List { status, cd } => {
+                todo_cmd::handle_list(status, cd)?;
+            }
+            TodoCommands::Find { branch, status, cd } => {
+                todo_cmd::handle_find(branch, status, cd)?;
+            }
+            TodoCommands::Show {
+                timestamp,
+                path,
+                cd,
+            } => {
+                todo_cmd::handle_show(timestamp, path, cd)?;
+            }
+            TodoCommands::Status {
+                timestamp,
+                status,
+                cd,
+            } => {
+                todo_cmd::handle_status(timestamp, status, cd)?;
             }
         },
         Commands::SelfUpdate { check } => {

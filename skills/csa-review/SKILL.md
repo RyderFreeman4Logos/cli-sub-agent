@@ -29,6 +29,7 @@ Run structured code reviews through CSA, ensuring:
 - `mode` (optional): `review-only` (default) or `review-and-fix`
 - `security_mode` (optional): `auto` (default) | `on` | `off`
 - `tool` (optional): override review tool (default: auto-detect independent reviewer)
+- `context` (optional): path to a TODO plan file (e.g., from `csa todo show -t <timestamp>`) to check implementation alignment against the planned design
 
 ## Execution Protocol
 
@@ -128,6 +129,20 @@ git diff --no-color "{from}...{to}"
 git diff --no-color -- "{pathspec}"
 ```
 
+## Step 2.5: TODO Plan Alignment (when context is provided)
+
+Context: {context}
+
+When a TODO plan path is provided, read it and verify implementation alignment:
+
+1. **Task completion**: Are all `[ ]` tasks from the plan addressed in the diff?
+2. **Design drift**: Does the implementation deviate from key decisions documented in the plan?
+3. **Scope creep**: Are there changes not covered by the plan (undocumented additions)?
+4. **Risk coverage**: Are the mitigations from the plan's "Risks & Mitigations" section actually implemented?
+
+Flag deviations as findings with `finding_type: "plan-deviation"` at P2 priority.
+If no context path is provided, skip this step entirely.
+
 ## Step 3: Three-Pass Review
 
 ### Pass 1: Broad Issue Discovery (maximize recall)
@@ -182,7 +197,7 @@ High-impact security suspicion without concrete exploit path -> list under open_
     {
       "id": "string",
       "priority": "P0|P1|P2|P3",
-      "finding_type": "correctness|regression|security|test-gap|maintainability|agents-md-violation",
+      "finding_type": "correctness|regression|security|test-gap|maintainability|agents-md-violation|plan-deviation",
       "file": "string",
       "line": 0,
       "summary": "string",
@@ -349,6 +364,12 @@ User: /csa-review scope=base:main security_mode=on
 User: /csa-review scope=uncommitted mode=review-and-fix
 ```
 -> Reviews, then fixes P0/P1 in the same session
+
+### Review with TODO Plan Context
+```
+User: /csa-review scope=uncommitted context=$(csa todo show -t 20260210T212420 --path)
+```
+-> Reviews changes and checks alignment against the TODO plan
 
 ### Explicit Tool Override
 ```
