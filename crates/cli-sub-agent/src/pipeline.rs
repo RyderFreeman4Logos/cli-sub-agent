@@ -14,6 +14,7 @@ use tracing::{error, info, warn};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{create_session_log_writer, Executor};
+use csa_hooks::{global_hooks_path, load_hooks_config, run_hooks_for_event, HookEvent};
 use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
@@ -352,6 +353,39 @@ pub(crate) async fn execute_with_session(
 
     // Save session
     save_session(&session)?;
+
+    // Fire PostRun and SessionComplete hooks (best-effort)
+    let project_hooks_path = csa_session::get_session_root(project_root)
+        .ok()
+        .map(|root| root.join("hooks.toml"));
+    let hooks_config = load_hooks_config(
+        project_hooks_path.as_deref(),
+        global_hooks_path().as_deref(),
+        None,
+    );
+    let mut hook_vars = std::collections::HashMap::new();
+    hook_vars.insert("session_id".to_string(), session.meta_session_id.clone());
+    hook_vars.insert("session_dir".to_string(), session_dir.display().to_string());
+    hook_vars.insert(
+        "sessions_root".to_string(),
+        session_dir
+            .parent()
+            .unwrap_or(&session_dir)
+            .display()
+            .to_string(),
+    );
+    hook_vars.insert("tool".to_string(), executor.tool_name().to_string());
+    hook_vars.insert("exit_code".to_string(), result.exit_code.to_string());
+
+    // PostRun hook: fires after every tool execution
+    if let Err(e) = run_hooks_for_event(HookEvent::PostRun, &hooks_config, &hook_vars) {
+        warn!("PostRun hook failed: {}", e);
+    }
+
+    // SessionComplete hook: git-commits session artifacts
+    if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &hook_vars) {
+        warn!("SessionComplete hook failed: {}", e);
+    }
 
     Ok(result)
 }

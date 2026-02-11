@@ -19,6 +19,7 @@ csa-config = { path = "crates/csa-config" }
 csa-resource = { path = "crates/csa-resource" }
 csa-scheduler = { path = "crates/csa-scheduler" }
 csa-todo = { path = "crates/csa-todo" }
+csa-hooks = { path = "crates/csa-hooks" }
 
 # CLI & Async
 clap = { version = "4.5", features = ["derive"] }

@@ -1,0 +1,239 @@
+//! Hook configuration loading with 4-tier priority.
+
+use crate::event::HookEvent;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
+
+/// Configuration for a single hook
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HookConfig {
+    /// Whether this hook is enabled (default: true for built-in events)
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Shell command template. If None, uses the built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    /// Timeout in seconds (default: 30)
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+fn default_timeout() -> u64 {
+    30
+}
+
+/// All hooks configuration, keyed by event name
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HooksConfig {
+    #[serde(flatten)]
+    pub hooks: HashMap<String, HookConfig>,
+}
+
+impl HooksConfig {
+    /// Load from a TOML file, returning empty config on error.
+    fn load_from_file(path: &Path) -> Self {
+        if !path.exists() {
+            return Self::default();
+        }
+
+        match fs::read_to_string(path) {
+            Ok(content) => match toml::from_str(&content) {
+                Ok(config) => config,
+                Err(e) => {
+                    tracing::warn!("Failed to parse hooks config at {}: {}", path.display(), e);
+                    Self::default()
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to read hooks config at {}: {}", path.display(), e);
+                Self::default()
+            }
+        }
+    }
+
+    /// Merge another config into self, with other taking priority.
+    fn merge_with(&mut self, other: Self) {
+        for (key, value) in other.hooks {
+            self.hooks.insert(key, value);
+        }
+    }
+
+    /// Get configuration for a specific event, falling back to built-in defaults.
+    pub fn get_for_event(&self, event: HookEvent) -> HookConfig {
+        let key = event.as_config_key();
+        if let Some(config) = self.hooks.get(key) {
+            config.clone()
+        } else if event.builtin_command().is_some() {
+            // Use built-in default for events that have one
+            HookConfig {
+                enabled: true,
+                command: None, // Will be resolved from builtin_command()
+                timeout_secs: 30,
+            }
+        } else {
+            // Events without built-in: disabled by default
+            HookConfig {
+                enabled: false,
+                command: None,
+                timeout_secs: 30,
+            }
+        }
+    }
+}
+
+/// Load hooks config with 4-tier priority:
+/// 1. runtime_overrides (CLI params) — highest
+/// 2. project config (~/.local/state/csa/{project}/hooks.toml)
+/// 3. global config (~/.config/cli-sub-agent/hooks.toml)
+/// 4. built-in defaults — lowest
+///
+/// For each hook event key, the first non-None source wins.
+pub fn load_hooks_config(
+    project_hooks_path: Option<&Path>,
+    global_hooks_path: Option<&Path>,
+    runtime_overrides: Option<&HashMap<String, HookConfig>>,
+) -> HooksConfig {
+    // Start with built-in defaults (empty map, resolved on-demand via get_for_event)
+    let mut config = HooksConfig::default();
+
+    // Layer 4 (lowest): built-in defaults are implicit in get_for_event()
+
+    // Layer 3: global config
+    if let Some(path) = global_hooks_path {
+        let global = HooksConfig::load_from_file(path);
+        config.merge_with(global);
+    }
+
+    // Layer 2: project config
+    if let Some(path) = project_hooks_path {
+        let project = HooksConfig::load_from_file(path);
+        config.merge_with(project);
+    }
+
+    // Layer 1 (highest): runtime overrides
+    if let Some(overrides) = runtime_overrides {
+        let runtime_config = HooksConfig {
+            hooks: overrides.clone(),
+        };
+        config.merge_with(runtime_config);
+    }
+
+    config
+}
+
+/// Resolve the global hooks config path
+pub fn global_hooks_path() -> Option<std::path::PathBuf> {
+    directories::ProjectDirs::from("", "", "cli-sub-agent")
+        .map(|dirs| dirs.config_dir().join("hooks.toml"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_load_empty_config() {
+        let config = load_hooks_config(None, None, None);
+        // Should use built-in defaults
+        let session_hook = config.get_for_event(HookEvent::SessionComplete);
+        assert!(session_hook.enabled);
+        assert!(session_hook.command.is_none()); // Will resolve from builtin
+    }
+
+    #[test]
+    fn test_load_global_config() {
+        let mut global_file = NamedTempFile::new().unwrap();
+        writeln!(
+            global_file,
+            r#"
+[session_complete]
+enabled = false
+"#
+        )
+        .unwrap();
+        global_file.flush().unwrap();
+
+        let config = load_hooks_config(None, Some(global_file.path()), None);
+        let session_hook = config.get_for_event(HookEvent::SessionComplete);
+        assert!(!session_hook.enabled);
+    }
+
+    #[test]
+    fn test_priority_merge() {
+        let mut global_file = NamedTempFile::new().unwrap();
+        writeln!(
+            global_file,
+            r#"
+[session_complete]
+enabled = false
+"#
+        )
+        .unwrap();
+        global_file.flush().unwrap();
+
+        let mut project_file = NamedTempFile::new().unwrap();
+        writeln!(
+            project_file,
+            r#"
+[session_complete]
+enabled = true
+command = "echo project"
+"#
+        )
+        .unwrap();
+        project_file.flush().unwrap();
+
+        // Project should override global
+        let config = load_hooks_config(Some(project_file.path()), Some(global_file.path()), None);
+        let session_hook = config.get_for_event(HookEvent::SessionComplete);
+        assert!(session_hook.enabled);
+        assert_eq!(session_hook.command.as_deref(), Some("echo project"));
+    }
+
+    #[test]
+    fn test_runtime_overrides() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "session_complete".to_string(),
+            HookConfig {
+                enabled: false,
+                command: Some("echo runtime".to_string()),
+                timeout_secs: 10,
+            },
+        );
+
+        let mut project_file = NamedTempFile::new().unwrap();
+        writeln!(
+            project_file,
+            r#"
+[session_complete]
+enabled = true
+command = "echo project"
+"#
+        )
+        .unwrap();
+        project_file.flush().unwrap();
+
+        // Runtime should override project
+        let config = load_hooks_config(Some(project_file.path()), None, Some(&overrides));
+        let session_hook = config.get_for_event(HookEvent::SessionComplete);
+        assert!(!session_hook.enabled);
+        assert_eq!(session_hook.command.as_deref(), Some("echo runtime"));
+        assert_eq!(session_hook.timeout_secs, 10);
+    }
+
+    #[test]
+    fn test_events_without_builtin() {
+        let config = load_hooks_config(None, None, None);
+        let pre_run_hook = config.get_for_event(HookEvent::PreRun);
+        // PreRun has no built-in, should be disabled by default
+        assert!(!pre_run_hook.enabled);
+    }
+}
