@@ -125,7 +125,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None)
+        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None, None)
             .expect("Failed to create parent");
 
         let child1 = create_session_in(
@@ -133,6 +133,7 @@ mod tests {
             project_path,
             Some("Child 1"),
             Some(&parent.meta_session_id),
+            None,
         )
         .expect("Failed to create child 1");
 
@@ -141,6 +142,7 @@ mod tests {
             project_path,
             Some("Child 2"),
             Some(&parent.meta_session_id),
+            None,
         )
         .expect("Failed to create child 2");
 
@@ -157,7 +159,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let session = create_session_in(temp_dir.path(), project_path, Some("Lonely"), None)
+        let session = create_session_in(temp_dir.path(), project_path, Some("Lonely"), None, None)
             .expect("Failed to create session");
 
         let children = find_children_in(temp_dir.path(), &session.meta_session_id)
@@ -171,8 +173,14 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let root = create_session_in(temp_dir.path(), project_path, Some("Root session"), None)
-            .expect("Failed to create root");
+        let root = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Root session"),
+            None,
+            None,
+        )
+        .expect("Failed to create root");
 
         let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
 
@@ -186,7 +194,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let root = create_session_in(temp_dir.path(), project_path, Some("Root"), None)
+        let root = create_session_in(temp_dir.path(), project_path, Some("Root"), None, None)
             .expect("Failed to create root");
 
         let child = create_session_in(
@@ -194,6 +202,7 @@ mod tests {
             project_path,
             Some("Child"),
             Some(&root.meta_session_id),
+            None,
         )
         .expect("Failed to create child");
 
@@ -209,10 +218,10 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let root1 = create_session_in(temp_dir.path(), project_path, Some("Root 1"), None)
+        let root1 = create_session_in(temp_dir.path(), project_path, Some("Root 1"), None, None)
             .expect("Failed to create root 1");
 
-        let root2 = create_session_in(temp_dir.path(), project_path, Some("Root 2"), None)
+        let root2 = create_session_in(temp_dir.path(), project_path, Some("Root 2"), None, None)
             .expect("Failed to create root 2");
 
         let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
@@ -228,7 +237,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let session = create_session_in(temp_dir.path(), project_path, Some("Test"), None)
+        let session = create_session_in(temp_dir.path(), project_path, Some("Test"), None, None)
             .expect("Failed to create session");
 
         let all_sessions = vec![session.clone()];
@@ -244,7 +253,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let root = create_session_in(temp_dir.path(), project_path, Some("Root"), None)
+        let root = create_session_in(temp_dir.path(), project_path, Some("Root"), None, None)
             .expect("Failed to create root");
 
         assert!(root.genealogy.parent_session_id.is_none());
@@ -259,7 +268,7 @@ mod tests {
         let project_path = temp_dir.path();
 
         // Create session using public API (stores in proper location)
-        let root = create_session(project_path, Some("Root session"), None)
+        let root = create_session(project_path, Some("Root session"), None, None)
             .expect("Failed to create root");
 
         // Use public API which should convert project_path to session root

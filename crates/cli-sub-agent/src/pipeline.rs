@@ -145,10 +145,17 @@ pub(crate) async fn execute_with_session(
     let mut session = if let Some(ref session_id) = session_arg {
         let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
         let resolved_id = resolve_session_prefix(&sessions_dir, session_id)?;
+        // Validate tool access before loading
+        csa_session::validate_tool_access(project_root, &resolved_id, tool.as_str())?;
         load_session(project_root, &resolved_id)?
     } else {
         let parent_id = parent.or_else(|| std::env::var("CSA_SESSION_ID").ok());
-        create_session(project_root, description.as_deref(), parent_id.as_deref())?
+        create_session(
+            project_root,
+            description.as_deref(),
+            parent_id.as_deref(),
+            Some(tool.as_str()),
+        )?
     };
 
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
