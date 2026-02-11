@@ -1,9 +1,8 @@
 # Review Trigger Procedure (Single Entry Point)
 
 **All review triggers (Steps 4, 9, 11/12) MUST use this unified procedure.**
-It handles cloud `@codex review`, polling with timeout, quota detection,
-and local CSA fallback. This prevents duplicating baseline/poll/fallback
-logic across multiple steps.
+It handles cloud `@codex review`, polling with timeout, and quota detection.
+This prevents duplicating baseline/poll logic across multiple steps.
 
 ## Normalized Review Outcomes
 
@@ -11,7 +10,9 @@ logic across multiple steps.
 |---------|---------|-------------|
 | `CLEAN` | No issues found | Proceed to merge path |
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
-| `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
+| `UNAVAILABLE(quota)` | Cloud bot quota exhausted | **Merge directly** — local review already covers `main...HEAD` |
+| `UNAVAILABLE(timeout)` | Cloud bot did not respond in 10 min | **Merge directly** — local review already covers `main...HEAD` |
+| `ESCALATE(api_error)` | GitHub API failed (transient) | **Notify user** — bot may still be reviewing |
 
 **Note**: The poll loop produces an intermediate result `NEW_COMMENTS_DETECTED`
 which means the bot responded but the main agent must still evaluate the
@@ -20,38 +21,22 @@ This is not a bug — the procedure intentionally defers classification to the
 agent because the bot's response format varies (inline comments, review-level
 approval, issue comments).
 
-## Phase 1: Check Fallback State
+## PREREQUISITE: LOCAL_REVIEW_MARKER Must Match Current HEAD
 
-The fallback marker uses `WORKFLOW_BRANCH` (the original branch the workflow
-started on, set once in Step 1 and never re-derived). This ensures the marker
-persists even when Step 11 creates clean branches (`${BRANCH}-clean`,
-`${BRANCH}-clean-2`, etc.) — the marker path stays the same because
-`WORKFLOW_BRANCH` doesn't change. A new workflow on a different branch
-starts fresh.
+**Before this procedure can allow direct merge on UNAVAILABLE, the
+LOCAL_REVIEW_MARKER MUST exist and match the current HEAD.** This is initially
+set in Step 2 (pre-PR local review) and MUST be refreshed in Step 9 after
+each fix cycle (re-run local review, update marker).
 
-**CRITICAL**: `WORKFLOW_BRANCH` MUST be set once at workflow start (Step 1)
-and passed unchanged through all steps. Do NOT re-derive it from
-`git branch --show-current` after Step 11 branch switches.
+The direct-merge-on-UNAVAILABLE behavior is ONLY safe because the local review
+has already covered the full `main...HEAD` scope at the current HEAD.
 
-```bash
-TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
-# Marker uses WORKFLOW_BRANCH (original branch, not current) for cross-PR persistence
-FALLBACK_MARKER="/tmp/codex-bot-${REPO//\//-}-${WORKFLOW_BRANCH//\//-}-cloud-fallback.marker"
+If LOCAL_REVIEW_MARKER is missing or stale (HEAD moved since last local review),
+direct merge is FORBIDDEN. Re-run local review first.
 
-if [ -f "${FALLBACK_MARKER}" ]; then
-  echo "CLOUD_FALLBACK_ACTIVE: Skipping cloud @codex review, using local CSA review"
-  # → Skip Phase 2 entirely, go directly to Phase 3 (Local Fallback Path)
-  # The main agent should run: csa review --branch main
-  # Then map output to CLEAN or HAS_ISSUES and proceed to Step 7
-else
-  # → Continue to Phase 2 (Cloud Path)
-  :
-fi
-```
+## Phase 1: Cloud Path (Baseline + Trigger + Poll)
 
-## Phase 2: Cloud Path (Baseline + Trigger + Poll)
-
-### 2a. Baseline Capture
+### 1a. Baseline Capture
 
 Capture before triggering review to prevent race conditions:
 
@@ -79,7 +64,7 @@ esac
 echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 ```
 
-### 2b. Trigger Cloud Review
+### 1b. Trigger Cloud Review
 
 ```bash
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review" || {
@@ -88,7 +73,7 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review" || {
 }
 ```
 
-### 2c. Poll with Timeout
+### 1c. Poll with Timeout
 
 Max 10 minutes, bounded API error retry:
 
@@ -116,7 +101,7 @@ while [ "$POLL_COUNT" -lt "$MAX_POLLS" ]; do
     --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || {
     API_FAIL_COUNT=$((API_FAIL_COUNT + 1))
     if [ "$API_FAIL_COUNT" -ge "$API_FAIL_LIMIT" ]; then
-      REVIEW_RESULT="UNAVAILABLE(api_error)"
+      REVIEW_RESULT="ESCALATE(api_error)"
       break
     fi
     continue
@@ -133,7 +118,7 @@ while [ "$POLL_COUNT" -lt "$MAX_POLLS" ]; do
     --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || {
     API_FAIL_COUNT=$((API_FAIL_COUNT + 1))
     if [ "$API_FAIL_COUNT" -ge "$API_FAIL_LIMIT" ]; then
-      REVIEW_RESULT="UNAVAILABLE(api_error)"
+      REVIEW_RESULT="ESCALATE(api_error)"
       break
     fi
     continue
@@ -150,7 +135,7 @@ while [ "$POLL_COUNT" -lt "$MAX_POLLS" ]; do
     --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || {
     API_FAIL_COUNT=$((API_FAIL_COUNT + 1))
     if [ "$API_FAIL_COUNT" -ge "$API_FAIL_LIMIT" ]; then
-      REVIEW_RESULT="UNAVAILABLE(api_error)"
+      REVIEW_RESULT="ESCALATE(api_error)"
       break
     fi
     continue
@@ -168,7 +153,7 @@ if [ -z "$REVIEW_RESULT" ]; then
 fi
 ```
 
-### 2d. Classify Result
+### 1d. Classify Result
 
 - `NEW_COMMENTS_DETECTED` → Check for quota message in bot reply. If bot reply
   (scoped to `chatgpt-codex-connector[bot]` user only) matches known quota
@@ -181,75 +166,60 @@ fi
   - Generic keywords: `"quota exceeded"`, `"subscription required"`,
     `"rate limit"`, `"usage limits"`, `"add credits"`
 - `UNAVAILABLE(timeout)` → Cloud bot did not respond within 10 minutes.
-- `UNAVAILABLE(api_error)` → GitHub API failed 5+ consecutive times.
+- `ESCALATE(api_error)` → GitHub API failed 5+ consecutive times. Unlike quota/timeout,
+  this is a transient failure — the bot may still be processing. Escalate to user.
 
-### 2e. Handle UNAVAILABLE
+## Phase 2: Handle Results
 
-Check the fallback policy before prompting:
+### UNAVAILABLE(quota) or UNAVAILABLE(timeout) — Direct Merge
+
+When the cloud bot is deterministically unavailable (quota exhausted, or timed out),
+**verify the local review marker and merge directly**.
+
+**Rationale**: Step 2 (pre-PR local review) already reviews the FULL `main...HEAD`
+range — the exact same scope the cloud bot would review. The cloud bot is an
+*additional* layer of review, not the *only* layer. When it's deterministically
+unavailable, the local review has already provided independent coverage.
 
 ```bash
-# Use --global to prevent project config from overriding user's global safety policy
-FALLBACK_POLICY=$(csa config get fallback.cloud_review_exhausted --global --default "ask-user")
+# UNAVAILABLE(quota/timeout) — verify marker, then merge directly
+LOCAL_REVIEW_MARKER="/tmp/codex-local-review-${REPO//\//-}-${BRANCH//\//-}.marker"
+if [ ! -f "${LOCAL_REVIEW_MARKER}" ] || [ "$(cat "${LOCAL_REVIEW_MARKER}")" != "$(git rev-parse HEAD)" ]; then
+  echo "ERROR: LOCAL_REVIEW_MARKER missing or stale. Cannot direct-merge."
+  echo "Re-run local review (csa review --branch main) and refresh marker before merging."
+  exit 1
+fi
+
+echo "Cloud bot UNAVAILABLE (reason: ${REVIEW_RESULT}). Merging directly."
+echo "LOCAL_REVIEW_MARKER verified: local review covers main...HEAD at current HEAD."
+
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+git checkout main && git pull origin main
 ```
 
-**Behavior by policy:**
+**No fallback marker needed.** No user prompt needed. No local CSA fallback review
+needed. The pre-PR local review IS the safety net.
 
-| Policy | Action |
-|--------|--------|
-| `auto-local` | Log reason, automatically fall back to local CSA review (still reviews, just locally) |
-| `ask-user` | Notify user and ask for confirmation (default) |
+### ESCALATE(api_error) — Notify User
 
-**If `ask-user` (default):** Notify user with the specific reason and ask for
-confirmation before switching to local CSA review.
+API errors are transient (network issues, GitHub outages, permission problems).
+The bot may still be processing the review — we just can't read the result.
 
 ```
-UNAVAILABLE detected:
-  Reason: [timeout | quota | api_error]
+ESCALATE(api_error) detected:
+  GitHub API failed 5 consecutive times.
+  The bot may still be reviewing — we cannot confirm either way.
 
   Options:
-  1. Fall back to local CSA review for remainder of this workflow
-  2. Retry cloud @codex review (reset poll timer)
+  1. Wait and retry polling (reset timer)
+  2. Merge directly (if you're confident local review is sufficient)
+  3. Cancel and investigate API issues
 ```
 
-**If `auto-local`:** Log the reason and proceed directly to local fallback.
-Both policies still perform a review — `auto-local` just skips the user prompt.
+**Do NOT auto-merge on api_error.** This is fundamentally different from
+quota/timeout: we don't know if the bot has findings we can't see.
 
-When falling back (either auto or user-confirmed):
-```bash
-echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) reason=${REASON}" > "${FALLBACK_MARKER}"
-```
-
-Then proceed to Phase 3 (Local Fallback Path).
-
-## Phase 3: Local Fallback Path
-
-When `${FALLBACK_MARKER}` exists (cloud unavailable for this workflow):
-
-Run local CSA review using the `csa-review` skill with the same scope as the
-cloud bot would review:
-
-```bash
-# Same scope as cloud bot: all committed changes since main
-csa review --branch main  # Reviews committed changes vs main (not just uncommitted)
-```
-
-**Map CSA output to normalized outcomes**:
-- CSA finds zero issues → `CLEAN`
-- CSA finds one or more issues → `HAS_ISSUES` (treat each CSA finding like
-  a bot comment — proceed to Step 7 evaluation with the same Category A/B/C
-  classification)
-
-**Key difference from cloud bot**: Local CSA output is structured text (not
-GitHub PR comments). The main agent reads the CSA output directly instead of
-polling GitHub APIs. Step 7 evaluation applies the same logic — classify each
-finding, queue false positives for Step 8 arbitration, fix real issues.
-
-**Next workflow resets**: The fallback marker is scoped to `${WORKFLOW_BRANCH}`.
-A new workflow on a different branch starts fresh with cloud `@codex review`.
-Within the same branch family (including Step 11 clean PRs), the fallback
-state persists so you don't wait another 10 minutes for a known-unavailable bot.
-
-## Fallback State Diagram
+## Flow Diagram
 
 ```
 @codex review triggered
@@ -265,35 +235,26 @@ state persists so you don't wait another 10 minutes for a known-unavailable bot.
        |
        +── Timeout (10 min) ──> UNAVAILABLE(timeout)
        |
-       +── API errors (5x) ──> UNAVAILABLE(api_error)
+       +── API errors (5x) ──> ESCALATE(api_error) → notify user
        |
        v
-  UNAVAILABLE:
-  Check fallback.cloud_review_exhausted policy (--global)
+  UNAVAILABLE(quota/timeout):
+  Verify LOCAL_REVIEW_MARKER matches HEAD
        |
-       +── auto-local ──> Fallback immediately (still reviews)
+       +── Marker valid → Merge directly ✅
        |
-       +── ask-user (default) ──> Notify user
-       |         |
-       |         +── User confirms fallback
-       |         |         |
-       |         |         v
-       |         |    Create ${FALLBACK_MARKER} (WORKFLOW_BRANCH-scoped)
-       |         |    Run local CSA review (--branch main)
-       |         |    (all subsequent reviews in this workflow use local)
-       |         |
-       |         +── User retries cloud ──> Reset poll timer, try again
+       +── Marker stale → Re-run local review first
 ```
 
 ## Limitations
 
-- **Per-workflow-branch, not per-session**: Fallback marker uses
-  `${WORKFLOW_BRANCH}` (set once at workflow start) so it persists across
-  PRs and clean branches within the same workflow. Concurrent workflows on
-  the same original branch would share state. Acceptable for single-user usage.
-- **Old markers accumulate**: `/tmp` files are not auto-cleaned between workflows.
-  They are cleaned on system reboot. Non-critical for low-frequency usage.
 - **10 min timeout may be short for large PRs**: The bot may take longer for
-  very large diffs. User confirmation provides an escape hatch to retry.
+  very large diffs. However, since the local review already provides coverage,
+  we merge directly instead of waiting indefinitely.
 - **Approximate timing**: `MAX_POLLS=13 * sleep 45` is approximately 10 minutes.
   Actual wall time may vary due to API call latency.
+- **Cloud bot is additive**: The cloud bot provides a SECOND independent review
+  from a different model family. When it's available, it adds value. When it's
+  not, the pre-PR local review is sufficient.
+- **Marker freshness**: After Step 9 fixes, HEAD moves. The marker MUST be
+  refreshed (re-run `csa review --branch main`) before direct merge is safe.
