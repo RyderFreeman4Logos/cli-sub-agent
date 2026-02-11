@@ -24,16 +24,16 @@ git push -u origin "${BRANCH}-clean"
 
 # 6. Create new PR linking to old one
 gh pr create --title "[type](scope): [description]" \
-  --body "$(cat <<'PREOF'
+  --body "$(sed "s/{{OLD_PR_NUM}}/${OLD_PR_NUM}/g" <<'PREOF'
 ## Summary
 [description]
 
 ## Background
-Clean resubmission of #${OLD_PR_NUM}. The original PR went through
+Clean resubmission of #{{OLD_PR_NUM}}. The original PR went through
 N rounds of iterative review with @codex. Fix commits have been
 consolidated into logical groups here.
 
-See #${OLD_PR_NUM} for the full review discussion.
+See #{{OLD_PR_NUM}} for the full review discussion.
 
 ## Test plan
 - [ ] `cargo clippy -p [package] -- -D warnings`
@@ -69,9 +69,8 @@ BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/reviews?per_pa
 echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 gh pr comment "${NEW_PR_NUM}" --repo "${REPO}" --body "@codex review"
 
-# 9. Update PR_NUM and reset TMP_PREFIX to match new PR
+# 9. Update PR_NUM for subsequent polling loop (TMP_PREFIX already set on line 51)
 PR_NUM="${NEW_PR_NUM}"
-TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"  # Force reset after PR change
 ```
 
 ## Commit Grouping Strategy

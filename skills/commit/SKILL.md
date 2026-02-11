@@ -260,11 +260,12 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
    if git ls-files --others --exclude-standard | grep -q .; then
      echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
      git ls-files --others --exclude-standard
-     exit 1
+     echo "HARD GATE: Do NOT proceed to csa review --diff until all files are tracked."
+     false  # Return non-zero so tool runners / set -e / && chains stop here
    fi
    ```
 
-   > **Note**: In interactive shells, `exit 1` will close the session. Wrap in a subshell `(...)` or use `return 1` inside functions.
+   > **Note**: This is a hard gate. The snippet returns non-zero when untracked files exist. Agents and scripts MUST stop here — do NOT continue to step 3 until all files are staged or added to .gitignore.
 
    If unstaged changes exist, stage or stash them. If untracked files exist, stage or .gitignore them.
    (Why: csa review --diff uses 'git diff HEAD' which does NOT see untracked files)
@@ -273,7 +274,7 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
    csa review --diff
    ↓
 4. [CSA:run] Generate commit message (if review passes)
-   csa run 'Run git diff --staged and generate a Conventional Commits message'
+   csa run "Run 'git diff --staged' and generate a Conventional Commits message"
    ↓
 5. [Main] Commit with generated message
 ```

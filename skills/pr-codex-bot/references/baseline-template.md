@@ -6,10 +6,8 @@
 # Ensure TMP_PREFIX is set (use PR_NUM for the target PR)
 TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
 
-# Bot login used in jq filters below:
-CODEX_BOT_LOGIN="chatgpt-codex-connector[bot]"
-
 # Capture baseline BEFORE triggering bot review
+# Bot login: chatgpt-codex-connector[bot] (hardcoded in jq filters below)
 gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
   --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
   > "${TMP_PREFIX}-baseline.json" || {
