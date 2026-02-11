@@ -71,6 +71,98 @@ pub(crate) fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
     Ok(())
 }
 
+/// Get a raw config value by dotted key path.
+///
+/// Reads raw TOML files (not the merged/defaulted effective config).
+/// Fallback order: project `.csa/config.toml` → global config → `--default`.
+pub(crate) fn handle_config_get(
+    key: String,
+    default: Option<String>,
+    project_only: bool,
+    cd: Option<String>,
+) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let project_config_path = ProjectConfig::config_path(&project_root);
+
+    // Try project config first
+    match load_and_resolve(&project_config_path, &key) {
+        Ok(Some(value)) => {
+            println!("{}", format_toml_value(&value));
+            return Ok(());
+        }
+        Ok(None) => {} // Key not found, try next source
+        Err(e) => anyhow::bail!(
+            "Failed to read project config {}: {e}",
+            project_config_path.display()
+        ),
+    }
+
+    // Try global config (unless --project flag)
+    if !project_only {
+        if let Ok(global_path) = GlobalConfig::config_path() {
+            match load_and_resolve(&global_path, &key) {
+                Ok(Some(value)) => {
+                    println!("{}", format_toml_value(&value));
+                    return Ok(());
+                }
+                Ok(None) => {} // Key not found
+                Err(e) => anyhow::bail!(
+                    "Failed to read global config {}: {e}",
+                    global_path.display()
+                ),
+            }
+        }
+    }
+
+    // Fall back to --default or report key not found
+    match default {
+        Some(d) => {
+            println!("{d}");
+            Ok(())
+        }
+        None => anyhow::bail!("Key not found: {key}"),
+    }
+}
+
+/// Load a TOML file and resolve a dotted key path.
+///
+/// Returns `Ok(None)` if the file doesn't exist or the key path is absent.
+/// Returns `Err` if the file exists but cannot be read or parsed.
+fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Value>> {
+    let content = match std::fs::read_to_string(path) {
+        Ok(c) => c,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => anyhow::bail!("{e}"),
+    };
+    let root: toml::Value = content
+        .parse()
+        .map_err(|e| anyhow::anyhow!("TOML parse error: {e}"))?;
+    Ok(resolve_key(&root, key))
+}
+
+/// Navigate a TOML value by dotted key path (e.g., "tools.codex.enabled").
+fn resolve_key(root: &toml::Value, key: &str) -> Option<toml::Value> {
+    let mut current = root;
+    for part in key.split('.') {
+        current = current.as_table()?.get(part)?;
+    }
+    Some(current.clone())
+}
+
+/// Format a TOML value for stdout (inline for scalars, pretty for tables/arrays).
+fn format_toml_value(value: &toml::Value) -> String {
+    match value {
+        toml::Value::String(s) => s.clone(),
+        toml::Value::Integer(i) => i.to_string(),
+        toml::Value::Float(f) => f.to_string(),
+        toml::Value::Boolean(b) => b.to_string(),
+        toml::Value::Table(_) | toml::Value::Array(_) => {
+            toml::to_string_pretty(value).unwrap_or_else(|_| format!("{value:?}"))
+        }
+        toml::Value::Datetime(d) => d.to_string(),
+    }
+}
+
 pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
