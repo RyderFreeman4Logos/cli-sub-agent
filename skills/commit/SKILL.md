@@ -261,10 +261,11 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
      echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
      git ls-files --others --exclude-standard
      echo "HARD GATE: Do NOT proceed to csa review --diff until all files are tracked."
+     false  # Return non-zero so tool runners / set -e / && chains stop here
    fi
    ```
 
-   > **Note**: This is a hard gate. If untracked files are detected, the workflow MUST stop here. Agents: do NOT continue to step 3 until all files are staged or added to .gitignore.
+   > **Note**: This is a hard gate. The snippet returns non-zero when untracked files exist. Agents and scripts MUST stop here — do NOT continue to step 3 until all files are staged or added to .gitignore.
 
    If unstaged changes exist, stage or stash them. If untracked files exist, stage or .gitignore them.
    (Why: csa review --diff uses 'git diff HEAD' which does NOT see untracked files)
