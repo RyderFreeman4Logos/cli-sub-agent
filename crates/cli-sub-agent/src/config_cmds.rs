@@ -117,7 +117,7 @@ pub(crate) fn handle_config_get(
                     ),
                 }
             }
-            Err(e) if global_only => {
+            Err(e) if global_only && default.is_none() => {
                 anyhow::bail!("Cannot determine global config path: {e}");
             }
             Err(_) => {} // Non-critical when falling through to default
@@ -231,13 +231,11 @@ mod tests {
 
     #[test]
     fn load_and_resolve_invalid_toml() {
-        let dir = std::env::temp_dir().join("csa-test-config-cmds");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("bad.toml");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bad.toml");
         std::fs::write(&path, "{{invalid toml").unwrap();
         let result = load_and_resolve(&path, "key");
         assert!(result.is_err());
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
