@@ -188,16 +188,16 @@ fi
 Check the fallback policy before prompting:
 
 ```bash
-FALLBACK_POLICY=$(csa config get fallback.cloud_review_exhausted --default "ask-user")
+# Use --global to prevent project config from overriding user's global safety policy
+FALLBACK_POLICY=$(csa config get fallback.cloud_review_exhausted --global --default "ask-user")
 ```
 
 **Behavior by policy:**
 
 | Policy | Action |
 |--------|--------|
-| `auto-local` | Automatically fall back to local CSA review (no user prompt) |
+| `auto-local` | Log reason, automatically fall back to local CSA review (still reviews, just locally) |
 | `ask-user` | Notify user and ask for confirmation (default) |
-| `skip` | Mark review as `CLEAN` and proceed |
 
 **If `ask-user` (default):** Notify user with the specific reason and ask for
 confirmation before switching to local CSA review.
@@ -209,12 +209,10 @@ UNAVAILABLE detected:
   Options:
   1. Fall back to local CSA review for remainder of this workflow
   2. Retry cloud @codex review (reset poll timer)
-  3. Skip review and proceed manually
 ```
 
 **If `auto-local`:** Log the reason and proceed directly to local fallback.
-
-**If `skip`:** Set `REVIEW_RESULT="CLEAN"` and continue.
+Both policies still perform a review — `auto-local` just skips the user prompt.
 
 When falling back (either auto or user-confirmed):
 ```bash
@@ -231,8 +229,8 @@ Run local CSA review using the `csa-review` skill with the same scope as the
 cloud bot would review:
 
 ```bash
-# Same scope as Step 2 local review, but this replaces cloud bot review
-csa review --diff  # Reviews uncommitted + committed changes vs main
+# Same scope as cloud bot: all committed changes since main
+csa review --branch main  # Reviews committed changes vs main (not just uncommitted)
 ```
 
 **Map CSA output to normalized outcomes**:
@@ -271,17 +269,20 @@ state persists so you don't wait another 10 minutes for a known-unavailable bot.
        |
        v
   UNAVAILABLE:
-  Notify user + ask confirmation
+  Check fallback.cloud_review_exhausted policy (--global)
        |
-       +── User confirms fallback
+       +── auto-local ──> Fallback immediately (still reviews)
+       |
+       +── ask-user (default) ──> Notify user
        |         |
-       |         v
-       |    Create ${FALLBACK_MARKER} (WORKFLOW_BRANCH-scoped)
-       |    Run local CSA review
-       |    (all subsequent reviews in this workflow use local)
-       |
-       +── User retries cloud ──> Reset poll timer, try again
-       +── User skips review ──> Manual proceed
+       |         +── User confirms fallback
+       |         |         |
+       |         |         v
+       |         |    Create ${FALLBACK_MARKER} (WORKFLOW_BRANCH-scoped)
+       |         |    Run local CSA review (--branch main)
+       |         |    (all subsequent reviews in this workflow use local)
+       |         |
+       |         +── User retries cloud ──> Reset poll timer, try again
 ```
 
 ## Limitations

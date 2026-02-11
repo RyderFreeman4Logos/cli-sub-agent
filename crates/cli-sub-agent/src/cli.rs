@@ -346,8 +346,12 @@ pub enum ConfigCommands {
         default: Option<String>,
 
         /// Only search project config (skip global fallback)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "global")]
         project: bool,
+
+        /// Only search global config (skip project config)
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
 
         /// Working directory (defaults to CWD)
         #[arg(long)]

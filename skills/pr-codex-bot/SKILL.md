@@ -154,12 +154,11 @@ This is a hard gate — no exceptions, no "review is probably fine", no skipping
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
 | `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
 
-**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: check fallback policy, then local `csa review --diff` or user prompt.
+**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: check fallback policy, then local `csa review --branch main` or user prompt.
 
-**Fallback policy** (configured via `csa config get fallback.cloud_review_exhausted`):
-- `auto-local`: Automatically fall back to local CSA review (no user prompt)
+**Fallback policy** (configured via `csa config get fallback.cloud_review_exhausted --global`):
+- `auto-local`: Automatically fall back to local CSA review (still reviews, just locally)
 - `ask-user` (default): Notify user and ask for confirmation before switching
-- `skip`: Mark review as CLEAN and proceed
 
 Fallback marker uses `BRANCH` (not `PR_NUM`) so it persists across PRs
 within the same workflow (e.g., Step 11 clean resubmission). A new workflow
@@ -579,9 +578,9 @@ git checkout main && git pull origin main
 | Max iterations reached | **Escalate** - report to user |
 | Same issue re-flagged after fix | **Escalate** - root cause missed |
 | Bot flags architectural issue | **Escalate** - needs human decision |
-| Poll timeout (10 min) | **UNAVAILABLE(timeout)** - notify user, offer local fallback |
-| Bot replies with quota message | **UNAVAILABLE(quota)** - notify user, offer local fallback |
-| API errors (5 consecutive) | **UNAVAILABLE(api_error)** - notify user, offer local fallback |
+| Poll timeout (10 min) | **UNAVAILABLE(timeout)** - per `fallback.cloud_review_exhausted` policy |
+| Bot replies with quota message | **UNAVAILABLE(quota)** - per `fallback.cloud_review_exhausted` policy |
+| API errors (5 consecutive) | **UNAVAILABLE(api_error)** - per `fallback.cloud_review_exhausted` policy |
 | Cloud fallback active | **Local CSA review** - skip cloud, use local for remainder |
 
 ## Anti-Trust Protocol
@@ -633,4 +632,4 @@ Bot user login: `chatgpt-codex-connector[bot]`
 | `debate` | Step 8: adversarial arbitration for suspected false positives |
 | `commit` | After fixing issues |
 | `csa run --tier tier-4-critical` | If bot flags security issue (deep analysis) |
-| `csa review --diff` | Cloud fallback: local CSA review when `@codex` is unavailable |
+| `csa review --branch main` | Cloud fallback: local CSA review when `@codex` is unavailable |

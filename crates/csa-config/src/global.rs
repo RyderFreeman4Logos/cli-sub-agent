@@ -86,9 +86,12 @@ impl Default for DebateConfig {
 pub struct FallbackConfig {
     /// Behavior when cloud review bot is unavailable (quota, timeout, or API errors).
     ///
-    /// - `"auto-local"`: Automatically fall back to local CSA review
+    /// - `"auto-local"`: Automatically fall back to local CSA review (still reviews)
     /// - `"ask-user"`: Prompt user before falling back (default)
-    /// - `"skip"`: Mark review as CLEAN and proceed (use with caution)
+    ///
+    /// Both policies ensure code is still reviewed — `auto-local` just skips the
+    /// user confirmation prompt. There is no `skip` option because bypassing
+    /// review entirely violates the heterogeneous review safety model.
     #[serde(default = "default_cloud_review_exhausted")]
     pub cloud_review_exhausted: String,
 }
@@ -285,10 +288,9 @@ tool = "auto"
 tool = "auto"
 
 # Fallback behavior when external services are unavailable.
-# cloud_review_exhausted: what to do when cloud review bot quota is exhausted.
-#   "auto-local" = automatically fall back to local CSA review
+# cloud_review_exhausted: what to do when cloud review bot is unavailable.
+#   "auto-local" = automatically fall back to local CSA review (still reviews)
 #   "ask-user"   = prompt user before falling back (default)
-#   "skip"       = mark review as CLEAN and proceed
 [fallback]
 cloud_review_exhausted = "ask-user"
 "#

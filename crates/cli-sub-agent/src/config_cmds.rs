@@ -75,26 +75,30 @@ pub(crate) fn handle_init(non_interactive: bool, minimal: bool) -> Result<()> {
 ///
 /// Reads raw TOML files (not the merged/defaulted effective config).
 /// Fallback order: project `.csa/config.toml` → global config → `--default`.
+/// Use `--project` to skip global, `--global` to skip project.
 pub(crate) fn handle_config_get(
     key: String,
     default: Option<String>,
     project_only: bool,
+    global_only: bool,
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let project_config_path = ProjectConfig::config_path(&project_root);
 
-    // Try project config first
-    match load_and_resolve(&project_config_path, &key) {
-        Ok(Some(value)) => {
-            println!("{}", format_toml_value(&value));
-            return Ok(());
+    // Try project config first (unless --global flag)
+    if !global_only {
+        match load_and_resolve(&project_config_path, &key) {
+            Ok(Some(value)) => {
+                println!("{}", format_toml_value(&value));
+                return Ok(());
+            }
+            Ok(None) => {} // Key not found, try next source
+            Err(e) => anyhow::bail!(
+                "Failed to read project config {}: {e}",
+                project_config_path.display()
+            ),
         }
-        Ok(None) => {} // Key not found, try next source
-        Err(e) => anyhow::bail!(
-            "Failed to read project config {}: {e}",
-            project_config_path.display()
-        ),
     }
 
     // Try global config (unless --project flag)

@@ -137,9 +137,10 @@ async fn main() -> Result<()> {
                 key,
                 default,
                 project,
+                global,
                 cd,
             } => {
-                config_cmds::handle_config_get(key, default, project, cd)?;
+                config_cmds::handle_config_get(key, default, project, global, cd)?;
             }
         },
         Commands::Review(args) => {
