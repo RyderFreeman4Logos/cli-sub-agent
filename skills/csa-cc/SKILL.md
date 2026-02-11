@@ -32,8 +32,8 @@ csa claude-sub-agent --skill ~/.claude/skills/csa-rust-dev "implement the handle
 # Without domain skill (no keyword match)
 csa claude-sub-agent "quick search for auth files"
 
-# With explicit tier
-csa claude-sub-agent --skill ~/.claude/skills/csa-security --tier tier-4-critical "audit this module"
+# With explicit tool selection
+csa claude-sub-agent --tool claude-code --skill ~/.claude/skills/csa-security "audit this module"
 ```
 
 ## Routing Decision Table

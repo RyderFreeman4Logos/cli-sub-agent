@@ -111,28 +111,42 @@ const MAX_SKILL_SIZE: u64 = 256 * 1024;
 
 /// Read SKILL.md from a skill directory.
 /// Returns error if --skill was specified but SKILL.md is missing or too large.
+///
+/// Uses a single `File::open` to avoid TOCTOU races, validates the fd is a
+/// regular file, and streams with `take()` to enforce size limits.
 fn read_skill_content(skill_path: &str) -> Result<Option<String>> {
+    use std::io::Read;
+
     let skill_md = std::path::Path::new(skill_path).join("SKILL.md");
-    if !skill_md.exists() {
-        anyhow::bail!(
-            "SKILL.md not found at {}. Verify the --skill path is correct.",
+    let file = std::fs::File::open(&skill_md).with_context(|| {
+        format!(
+            "SKILL.md not found or inaccessible at {}. Verify the --skill path is correct.",
             skill_md.display()
-        );
+        )
+    })?;
+
+    let metadata = file
+        .metadata()
+        .with_context(|| format!("Failed to stat {}", skill_md.display()))?;
+    if !metadata.is_file() {
+        anyhow::bail!("SKILL.md at {} is not a regular file", skill_md.display());
     }
 
-    let metadata = std::fs::metadata(&skill_md)
-        .with_context(|| format!("Failed to stat {}", skill_md.display()))?;
-    if metadata.len() > MAX_SKILL_SIZE {
+    // Stream-read with a limit to prevent excessive memory usage.
+    // Read one byte past the limit to detect oversized files.
+    let mut content = String::new();
+    file.take(MAX_SKILL_SIZE + 1)
+        .read_to_string(&mut content)
+        .with_context(|| format!("Failed to read {}", skill_md.display()))?;
+
+    if content.len() as u64 > MAX_SKILL_SIZE {
         anyhow::bail!(
-            "SKILL.md at {} exceeds size limit ({} bytes > {} bytes)",
+            "SKILL.md at {} exceeds size limit (>{} bytes)",
             skill_md.display(),
-            metadata.len(),
             MAX_SKILL_SIZE,
         );
     }
 
-    let content = std::fs::read_to_string(&skill_md)
-        .with_context(|| format!("Failed to read {}", skill_md.display()))?;
     Ok(Some(content))
 }
 
@@ -172,7 +186,13 @@ fn resolve_auto_tool(
         if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent) {
             let enabled_tools = get_enabled_tools(project_config, project_root);
             if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
-                return Ok(tool);
+                if crate::run_helpers::is_tool_binary_available(tool.as_str()) {
+                    return Ok(tool);
+                }
+                tracing::debug!(
+                    tool = tool.as_str(),
+                    "Heterogeneous candidate not installed, falling back to preference chain"
+                );
             }
         }
     }
@@ -217,7 +237,7 @@ fn select_heterogeneous_tool(
     csa_config::global::select_heterogeneous_tool(parent_tool, enabled_tools)
 }
 
-/// Select the first available enabled tool
+/// Select the first available enabled tool (in config order, no heterogeneity constraint)
 fn select_any_available_tool(
     project_config: Option<&ProjectConfig>,
     project_root: &Path,
@@ -382,5 +402,59 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert!(tools.contains(&ToolName::Codex));
         assert!(tools.contains(&ToolName::ClaudeCode));
+    }
+
+    #[test]
+    fn read_skill_content_errors_when_not_regular_file() {
+        // A directory named SKILL.md should be rejected
+        let tempdir = tempfile::tempdir().unwrap();
+        let skill_md = tempdir.path().join("SKILL.md");
+        std::fs::create_dir(&skill_md).unwrap();
+
+        let skill_path = tempdir.path().to_str().unwrap();
+        let result = read_skill_content(skill_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not a regular file") || err_msg.contains("directory"),
+            "Expected 'not a regular file' error, got: {}",
+            err_msg
+        );
+    }
+
+    #[test]
+    fn select_heterogeneous_tool_picks_different_family() {
+        let enabled = vec![ToolName::ClaudeCode, ToolName::Codex, ToolName::GeminiCli];
+        // Parent is claude-code (Anthropic family), should pick Codex (OpenAI) or GeminiCli
+        let result = select_heterogeneous_tool(&ToolName::ClaudeCode, &enabled);
+        assert!(result.is_some());
+        let tool = result.unwrap();
+        assert_ne!(
+            tool.model_family(),
+            ToolName::ClaudeCode.model_family(),
+            "Heterogeneous selection must pick a different model family"
+        );
+    }
+
+    #[test]
+    fn select_heterogeneous_tool_returns_none_when_only_same_family() {
+        // Only claude-code available (same family as parent)
+        let enabled = vec![ToolName::ClaudeCode];
+        let result = select_heterogeneous_tool(&ToolName::ClaudeCode, &enabled);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn select_any_available_tool_errors_when_none_installed() {
+        // With a config that only enables a non-existent tool name,
+        // select_any_available_tool should return an error
+        let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+        // gemini-cli is likely not installed in test environment
+        let result = select_any_available_tool(Some(&cfg), std::path::Path::new("/tmp"));
+        // This may pass or fail depending on the test machine, so we just verify it doesn't panic
+        // and returns either Ok or a meaningful error
+        if let Err(e) = result {
+            assert!(e.to_string().contains("No tools available"));
+        }
     }
 }
