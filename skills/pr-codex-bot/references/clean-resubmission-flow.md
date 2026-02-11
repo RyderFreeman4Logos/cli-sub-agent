@@ -47,30 +47,12 @@ gh pr comment "${OLD_PR_NUM}" --repo "${REPO}" \
   --body "Superseded by #${NEW_PR_NUM}. Preserved for review discussion reference."
 gh pr close "${OLD_PR_NUM}" --repo "${REPO}"
 
-# 8. Use Baseline Capture Template (see above) for new PR
-TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${NEW_PR_NUM}"
-gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/comments?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-baseline.json" || {
-  echo "ERROR: Failed to capture PR comments baseline"
-  exit 1
-}
-gh api "repos/${REPO}/issues/${NEW_PR_NUM}/comments?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-issue-baseline.json" || {
-  echo "ERROR: Failed to capture issue comments baseline"
-  exit 1
-}
-BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${NEW_PR_NUM}/reviews?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || {
-  echo "ERROR: Failed to capture baseline review count"
-  exit 1
-}
-echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
-gh pr comment "${NEW_PR_NUM}" --repo "${REPO}" --body "@codex review"
-
-# 9. Update PR_NUM for subsequent polling loop (TMP_PREFIX already set on line 51)
+# 8. Update variables for Step 12
 PR_NUM="${NEW_PR_NUM}"
+TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
+# NOTE: Do NOT trigger @codex review here.
+# Step 12 handles review via the Review Trigger Procedure
+# (baseline capture + trigger + poll + fallback) to avoid double-triggering.
 ```
 
 ## Commit Grouping Strategy
