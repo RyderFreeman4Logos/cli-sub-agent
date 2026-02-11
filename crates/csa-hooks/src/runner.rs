@@ -4,7 +4,7 @@ use crate::config::HookConfig;
 use crate::event::HookEvent;
 use anyhow::{bail, Result};
 use std::collections::HashMap;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// Escape a string for safe shell usage by wrapping in single quotes.
@@ -89,11 +89,23 @@ pub fn run_hook(
     let expanded_command = substitute_variables(template, variables);
     tracing::debug!(event = ?event, "Executing hook");
 
-    // Execute via sh -c with timeout
-    let mut child = Command::new("sh")
-        .arg("-c")
+    // Execute via sh -c with timeout.
+    // Suppress stdout/stderr to avoid polluting CLI output (e.g., --format json).
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
         .arg(&expanded_command)
-        .spawn()?;
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    // Create new process group so timeout can kill the entire group,
+    // not just the shell process (which would orphan its children).
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = cmd.spawn()?;
 
     let timeout = Duration::from_secs(config.timeout_secs);
     let start = Instant::now();
@@ -111,8 +123,19 @@ pub fn run_hook(
             }
             None => {
                 if start.elapsed() >= timeout {
-                    // Kill the child process on timeout
-                    let _ = child.kill();
+                    // Kill the entire process group on timeout
+                    #[cfg(unix)]
+                    {
+                        // SAFETY: kill() is async-signal-safe. Negative PID targets
+                        // the entire process group created by process_group(0).
+                        unsafe {
+                            libc::kill(-(child.id() as i32), libc::SIGKILL);
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    {
+                        let _ = child.kill();
+                    }
                     let _ = child.wait(); // Reap zombie
                     bail!("Hook {event:?} timed out after {}s", config.timeout_secs);
                 }

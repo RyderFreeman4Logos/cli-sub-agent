@@ -1,17 +1,31 @@
 //! Hook event definitions and metadata.
 
-/// Hook events that trigger hook execution
+/// Hook events that trigger hook execution.
+///
+/// Currently wired trigger points:
+/// - `PostRun` — fired after every tool execution in `pipeline::execute_with_session`
+/// - `SessionComplete` — fired after session save in `pipeline::execute_with_session`
+///
+/// Future trigger points (defined but not yet wired):
+/// - `PreRun` — will be wired before tool spawn in pipeline
+/// - `TodoCreate` — will be wired in `csa-todo` crate on plan creation
+/// - `TodoSave` — will be wired in `csa-todo` crate on plan save/update
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
-    /// After a session execution completes (success or failure)
+    /// After a session execution completes (success or failure).
+    /// Triggered in `pipeline::execute_with_session` after session save.
     SessionComplete,
-    /// After a new TODO plan is created
+    /// After a new TODO plan is created.
+    /// Not yet wired — will integrate with `csa-todo` crate.
     TodoCreate,
-    /// After a TODO plan is saved/updated
+    /// After a TODO plan is saved/updated.
+    /// Not yet wired — will integrate with `csa-todo` crate.
     TodoSave,
-    /// Before a tool execution starts
+    /// Before a tool execution starts.
+    /// Not yet wired — will integrate with pipeline pre-spawn.
     PreRun,
-    /// After a tool execution finishes
+    /// After a tool execution finishes.
+    /// Triggered in `pipeline::execute_with_session` after session save.
     PostRun,
 }
 

@@ -294,6 +294,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "directories",
+ "libc",
  "serde",
  "tempfile",
  "toml",
