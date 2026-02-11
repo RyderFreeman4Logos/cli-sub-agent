@@ -10,7 +10,7 @@ Grandchild CSA explores and fixes errors.
 ┌──────────────────────────────────────────────────┐
 │  Tier 0: Dispatcher (Main Agent / You)           │
 │                                                  │
-│  • Pure dispatch — NEVER read files or output    │
+│  • Pure dispatch — NEVER read source/transcripts │
 │  • Parse result.toml path → present to user      │
 │  • Gate user approval between phases             │
 │  • Resume child session for next phase           │
@@ -53,8 +53,8 @@ Grandchild CSA explores and fixes errors.
 
 | MUST | MUST NOT |
 |------|----------|
-| Parse result.toml paths | Read source files |
-| Present artifacts to user | Read CSA session output |
+| Read result.toml (structured metadata) | Read source files |
+| Present artifact paths to user | Read CSA session transcripts |
 | Gate approval between phases | Fix code directly |
 | Resume child sessions | Run `csa review`/`csa debate` |
 | Track progress via Task tools | Pre-fetch data for child CSA |
@@ -180,7 +180,7 @@ Tier 1 runs: just pre-commit
     +── FAIL → delegate to Tier 2
                    │
                    v
-              csa run --tool codex "Fix: {error output}"
+              csa run --tool codex --prompt-file <errors>
                    │
                    +── Fixed → Tier 1 verifies intent preserved
                    │
@@ -206,9 +206,9 @@ a result.toml entry with `commit_hash`.
 
 ### Tier 0 (Dispatcher)
 
-- NEVER `Read` source files (use result.toml paths only)
+- NEVER `Read` source files (only read result.toml for structured metadata)
 - NEVER `Grep`/`Glob` for code exploration
-- NEVER read CSA session transcripts or output
+- NEVER read CSA session transcripts (only the result.toml path)
 - NEVER fix code — always delegate to Tier 1
 - NEVER run `csa review` or `csa debate` directly
 
@@ -234,12 +234,18 @@ The main agent constructs a planning prompt and dispatches to Tier 1.
 NEVER pre-read files — include only the user's requirements.
 
 ```bash
-# Write prompt to temp file to avoid shell injection from user input
-cat > /tmp/sa-planning-prompt.txt <<'PROMPT_EOF'
-You are in sa planning mode (Tier 1).
+# Use mktemp for unique temp files (avoids race conditions / symlink attacks)
+PROMPT_FILE=$(mktemp /tmp/sa-planning-XXXXXX.txt)
+trap 'rm -f "$PROMPT_FILE"' EXIT
 
-TASK: <USER_FEATURE_DESCRIPTION>
-
+# Build prompt safely: write user description first, then append instructions
+{
+  echo "You are in sa planning mode (Tier 1)."
+  echo ""
+  echo "TASK:"
+  cat /tmp/sa-feature-desc.txt   # user input stays in data position, never in shell syntax
+  echo ""
+  cat <<'INSTRUCTIONS'
 PROCEDURE:
 1. Spawn up to 3 parallel Tier 2 workers for codebase exploration:
    - csa run --tool codex "Analyze structure relevant to the task. Report: files, types, dependencies."
@@ -259,34 +265,40 @@ PROCEDURE:
    todo_path = "artifacts/TODO.md"
 
 OUTPUT: Print ONLY the result.toml path. Do NOT print TODO content.
-PROMPT_EOF
+INSTRUCTIONS
+} > "$PROMPT_FILE"
 
-# Replace placeholder with actual user input (sed-safe via temp file)
-sed -i "s|<USER_FEATURE_DESCRIPTION>|$(cat /tmp/sa-feature-desc.txt)|" /tmp/sa-planning-prompt.txt
-csa run --tool claude-code --prompt-file /tmp/sa-planning-prompt.txt
+csa run --tool claude-code --prompt-file "$PROMPT_FILE"
 ```
 
-**Note on prompt construction**: Always use `--prompt-file` or heredoc with
-literal delimiters (`<<'EOF'`) to pass prompts. NEVER interpolate user input
-or error output directly into shell command strings — this prevents injection.
+**Prompt safety rules**:
+- Always use `mktemp` for temp files (unique names, no race conditions)
+- Use `cat` to include user data in data position (not shell syntax)
+- Use heredoc with literal delimiters (`<<'EOF'`) for static template parts
+- NEVER interpolate user input or error output into shell command strings
 
 ### Tier 0 Presents TODO
 
 After Tier 1 returns:
 
 ```bash
-# 1. Extract result.toml path (last line of CSA output)
+# 1. Extract result.toml path (last line of CSA structured output)
 RESULT_PATH="<last line>"
 
 # 2. Read session_id from result.toml (Tier 0's only source for session ID)
 SESSION_ID=$(grep 'session_id = ' "$RESULT_PATH" | cut -d'"' -f2)
 STATUS=$(grep 'status = ' "$RESULT_PATH" | head -1 | cut -d'"' -f2)
 
-# 3. If success, read TODO path and present to user
+# 3. If success, read TODO path with path escape validation
 TODO_REL=$(grep 'todo_path = ' "$RESULT_PATH" | cut -d'"' -f2)
 SESSION_DIR=$(dirname "$RESULT_PATH")
-echo "TODO plan ready at: ${SESSION_DIR}/${TODO_REL}"
-echo "Review with: cat ${SESSION_DIR}/${TODO_REL}"
+TODO_ABS=$(realpath -m "${SESSION_DIR}/${TODO_REL}")
+# Path escape check: must stay within session directory
+case "$TODO_ABS" in
+  "${SESSION_DIR}"/*) ;; # OK
+  *) echo "ERROR: artifact path escapes session directory"; exit 1 ;;
+esac
+echo "TODO plan ready at: ${TODO_ABS}"
 ```
 
 Present the TODO path to the user. Let the user read and approve/modify.
@@ -300,13 +312,17 @@ Present the TODO path to the user. Let the user read and approve/modify.
 | REJECT | Abandon plan, ask user for new direction |
 
 ```bash
-# APPROVE: resume for implementation (use --prompt-file for safety)
-echo "User approved the TODO. Begin implementation." > /tmp/sa-resume-prompt.txt
-csa run --tool claude-code --session "$SESSION_ID" --prompt-file /tmp/sa-resume-prompt.txt
+RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
+trap 'rm -f "$RESUME_FILE"' EXIT
+
+# APPROVE: resume for implementation
+printf '%s' "User approved the TODO. Begin implementation." > "$RESUME_FILE"
+csa run --tool claude-code --session "$SESSION_ID" --prompt-file "$RESUME_FILE"
 
 # MODIFY: write feedback to file, then resume
-echo "User feedback: <paste feedback>. Revise the TODO." > /tmp/sa-resume-prompt.txt
-csa run --tool claude-code --session "$SESSION_ID" --prompt-file /tmp/sa-resume-prompt.txt
+printf '%s' "User feedback follows. Revise the TODO accordingly." > "$RESUME_FILE"
+cat /tmp/sa-user-feedback.txt >> "$RESUME_FILE"  # user data appended safely
+csa run --tool claude-code --session "$SESSION_ID" --prompt-file "$RESUME_FILE"
 ```
 
 ## sa-mktsk: Implementation Phase Protocol
@@ -316,7 +332,10 @@ csa run --tool claude-code --session "$SESSION_ID" --prompt-file /tmp/sa-resume-
 After user approval, resume the Tier 1 session:
 
 ```bash
-cat > /tmp/sa-impl-prompt.txt <<'PROMPT_EOF'
+IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
+trap 'rm -f "$IMPL_FILE"' EXIT
+
+cat > "$IMPL_FILE" <<'PROMPT_EOF'
 User approved the TODO. Begin implementation.
 
 PROCEDURE:
@@ -324,9 +343,9 @@ PROCEDURE:
 2. For each task in order (strictly serial):
    a. Implement the change.
    b. Run: just pre-commit
-      - If FAIL: delegate to Tier 2. Write errors to a temp file, then:
-        csa run --tool codex --prompt-file /tmp/sa-fix-errors.txt
-        (prompt: "Fix these errors. Do NOT delete code or change semantics.")
+      - If FAIL: delegate to Tier 2. Write errors to a temp file (mktemp), then:
+        csa run --tool codex --prompt-file "$ERRORS_FILE"
+        (prompt content: "Fix these errors. Do NOT delete code or change semantics.")
         Verify Tier 2 fix preserves intent. If Tier 2 fails, fix it yourself.
    c. Run heterogeneous review: csa review --diff
       - If HAS_ISSUES: fix and re-review (max 3 rounds).
@@ -339,7 +358,7 @@ PROCEDURE:
 OUTPUT: Print ONLY the result.toml path.
 PROMPT_EOF
 
-csa run --tool claude-code --session "$SESSION_ID" --prompt-file /tmp/sa-impl-prompt.txt
+csa run --tool claude-code --session "$SESSION_ID" --prompt-file "$IMPL_FILE"
 ```
 
 ### Error Delegation Detail
@@ -400,6 +419,20 @@ After all tasks complete, Tier 1 writes final result.toml:
 ```toml
 [result]
 status = "success"
+error_code = ""
+session_id = "019c4c24-9f5c-7502-96db-c72b71efd1c0"
+
+[timing]
+started_at = "2026-02-11T10:00:00Z"
+ended_at = "2026-02-11T10:30:00Z"
+
+[tool]
+name = "claude-code"
+version = "1.0.0"
+
+[review]
+author_tool = "claude-code"
+reviewer_tool = "codex"
 
 [artifacts]
 commit_hash = "abc1234def"
@@ -408,7 +441,10 @@ tasks_completed = 5
 tasks_total = 5
 ```
 
-Tier 0 reads this and reports to the user.
+All result.toml files (planning and implementation phases) follow the same
+schema. Required fields: `result.status`, `result.session_id`, `tool.name`.
+Other fields are phase-dependent (planning has `todo_path`, implementation
+has `commit_hash`/`review_result`).
 
 ## Integration
 
