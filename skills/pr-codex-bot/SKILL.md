@@ -152,14 +152,18 @@ This is a hard gate — no exceptions, no "review is probably fine", no skipping
 |---------|---------|-------------|
 | `CLEAN` | No issues found | Proceed to merge path |
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
-| `UNAVAILABLE(reason)` | Cloud bot did not respond | User confirms local fallback |
+| `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
 
-**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: notify user, confirm fallback, run local `csa review --diff` instead.
+**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: check fallback policy, then local `csa review --diff` or user prompt.
 
-**CRITICAL**: Do NOT silently fall back. User MUST confirm before switching
-to local CSA review. Fallback marker uses `BRANCH` (not `PR_NUM`) so it
-persists across PRs within the same workflow (e.g., Step 11 clean
-resubmission). A new workflow on a different branch starts fresh.
+**Fallback policy** (configured via `csa config get fallback.cloud_review_exhausted`):
+- `auto-local`: Automatically fall back to local CSA review (no user prompt)
+- `ask-user` (default): Notify user and ask for confirmation before switching
+- `skip`: Mark review as CLEAN and proceed
+
+Fallback marker uses `BRANCH` (not `PR_NUM`) so it persists across PRs
+within the same workflow (e.g., Step 11 clean resubmission). A new workflow
+on a different branch starts fresh.
 
 ## Step 4: Submit PR
 

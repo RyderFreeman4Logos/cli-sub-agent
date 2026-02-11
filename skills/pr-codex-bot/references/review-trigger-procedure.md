@@ -11,7 +11,7 @@ logic across multiple steps.
 |---------|---------|-------------|
 | `CLEAN` | No issues found | Proceed to merge path |
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
-| `UNAVAILABLE(reason)` | Cloud bot did not respond | User confirms local fallback |
+| `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
 
 **Note**: The poll loop produces an intermediate result `NEW_COMMENTS_DETECTED`
 which means the bot responded but the main agent must still evaluate the
@@ -185,8 +185,22 @@ fi
 
 ### 2e. Handle UNAVAILABLE
 
-**CRITICAL: Do NOT silently fall back.** Notify user with the specific reason
-and ask for confirmation before switching to local CSA review.
+Check the fallback policy before prompting:
+
+```bash
+FALLBACK_POLICY=$(csa config get fallback.cloud_review_exhausted --default "ask-user")
+```
+
+**Behavior by policy:**
+
+| Policy | Action |
+|--------|--------|
+| `auto-local` | Automatically fall back to local CSA review (no user prompt) |
+| `ask-user` | Notify user and ask for confirmation (default) |
+| `skip` | Mark review as `CLEAN` and proceed |
+
+**If `ask-user` (default):** Notify user with the specific reason and ask for
+confirmation before switching to local CSA review.
 
 ```
 UNAVAILABLE detected:
@@ -198,7 +212,11 @@ UNAVAILABLE detected:
   3. Skip review and proceed manually
 ```
 
-If user confirms fallback:
+**If `auto-local`:** Log the reason and proceed directly to local fallback.
+
+**If `skip`:** Set `REVIEW_RESULT="CLEAN"` and continue.
+
+When falling back (either auto or user-confirmed):
 ```bash
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) reason=${REASON}" > "${FALLBACK_MARKER}"
 ```

@@ -27,6 +27,8 @@ pub struct GlobalConfig {
     pub review: ReviewConfig,
     #[serde(default)]
     pub debate: DebateConfig,
+    #[serde(default)]
+    pub fallback: FallbackConfig,
 }
 
 /// Configuration for the code review workflow.
@@ -75,6 +77,30 @@ impl Default for DebateConfig {
     fn default() -> Self {
         Self {
             tool: default_debate_tool(),
+        }
+    }
+}
+
+/// Configuration for fallback behavior when external services are unavailable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FallbackConfig {
+    /// Behavior when cloud review bot is unavailable (quota, timeout, or API errors).
+    ///
+    /// - `"auto-local"`: Automatically fall back to local CSA review
+    /// - `"ask-user"`: Prompt user before falling back (default)
+    /// - `"skip"`: Mark review as CLEAN and proceed (use with caution)
+    #[serde(default = "default_cloud_review_exhausted")]
+    pub cloud_review_exhausted: String,
+}
+
+fn default_cloud_review_exhausted() -> String {
+    "ask-user".to_string()
+}
+
+impl Default for FallbackConfig {
+    fn default() -> Self {
+        Self {
+            cloud_review_exhausted: default_cloud_review_exhausted(),
         }
     }
 }
@@ -257,6 +283,14 @@ tool = "auto"
 # Set explicitly if auto-detection fails (e.g., parent is opencode).
 [debate]
 tool = "auto"
+
+# Fallback behavior when external services are unavailable.
+# cloud_review_exhausted: what to do when cloud review bot quota is exhausted.
+#   "auto-local" = automatically fall back to local CSA review
+#   "ask-user"   = prompt user before falling back (default)
+#   "skip"       = mark review as CLEAN and proceed
+[fallback]
+cloud_review_exhausted = "ask-user"
 "#
         .to_string()
     }
