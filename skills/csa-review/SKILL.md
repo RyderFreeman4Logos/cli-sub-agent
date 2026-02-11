@@ -367,7 +367,7 @@ User: /csa-review scope=uncommitted mode=review-and-fix
 
 ### Review with TODO Plan Context
 ```
-User: /csa-review scope=uncommitted context=$(csa todo show -t 2026-02-10T21:24:20-08:00 --path)
+User: /csa-review scope=uncommitted context=$(csa todo show -t 20260210T212420 --path)
 ```
 -> Reviews changes and checks alignment against the TODO plan
 

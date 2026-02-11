@@ -213,8 +213,12 @@ async fn main() -> Result<()> {
             TodoCommands::Find { branch, status, cd } => {
                 todo_cmd::handle_find(branch, status, cd)?;
             }
-            TodoCommands::Show { timestamp, cd } => {
-                todo_cmd::handle_show(timestamp, cd)?;
+            TodoCommands::Show {
+                timestamp,
+                path,
+                cd,
+            } => {
+                todo_cmd::handle_show(timestamp, path, cd)?;
             }
             TodoCommands::Status {
                 timestamp,

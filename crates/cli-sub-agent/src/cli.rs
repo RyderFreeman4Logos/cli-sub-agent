@@ -491,6 +491,10 @@ pub enum TodoCommands {
         #[arg(short, long)]
         timestamp: String,
 
+        /// Print only the file path (for scripting)
+        #[arg(long)]
+        path: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,

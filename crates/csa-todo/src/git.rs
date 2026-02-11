@@ -122,6 +122,13 @@ pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<String> 
         .output()
         .context("Failed to get commit hash")?;
 
+    if !hash_output.status.success() {
+        anyhow::bail!(
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&hash_output.stderr)
+        );
+    }
+
     Ok(String::from_utf8_lossy(&hash_output.stdout)
         .trim()
         .to_string())

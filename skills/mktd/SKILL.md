@@ -137,8 +137,8 @@ If a matching plan exists, resume editing it instead of creating a new one.
 
 ```bash
 # Create a new plan (returns timestamp to stdout, path to stderr)
-TIMESTAMP=$(csa todo create "Feature/Task Name" --branch "$(git branch --show-current)" 2>/tmp/csa-todo-create.log)
-TODO_PATH=$(grep 'Path:' /tmp/csa-todo-create.log | sed 's/.*Path: //')
+TIMESTAMP=$(csa todo create "Feature/Task Name" --branch "$(git branch --show-current)" 2>/dev/null)
+TODO_PATH=$(csa todo show -t "$TIMESTAMP" --path)
 
 # The plan is auto-committed with initial template.
 # Now overwrite TODO.md with the full draft content using Write tool.
@@ -372,8 +372,8 @@ csa run "Find existing auth patterns, middleware, token handling..."
 csa run "Identify security constraints, dependency requirements..."
 
 # Phase 2: DRAFT — Create plan via csa todo
-TIMESTAMP=$(csa todo create "Add JWT Authentication" --branch "$(git branch --show-current)" 2>/tmp/csa-todo-create.log)
-TODO_PATH=$(grep 'Path:' /tmp/csa-todo-create.log | sed 's/.*Path: //')
+TIMESTAMP=$(csa todo create "Add JWT Authentication" --branch "$(git branch --show-current)" 2>/dev/null)
+TODO_PATH=$(csa todo show -t "$TIMESTAMP" --path)
 # Write full plan content to $TODO_PATH using Write tool
 csa todo save -t "$TIMESTAMP" "draft: initial plan"
 

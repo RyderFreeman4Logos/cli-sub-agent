@@ -162,13 +162,17 @@ pub(crate) fn handle_find(
     Ok(())
 }
 
-pub(crate) fn handle_show(timestamp: String, cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_show(timestamp: String, path: bool, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
     let plan = manager.load(&timestamp)?;
 
-    let content = std::fs::read_to_string(plan.todo_md_path())?;
-    print!("{content}");
+    if path {
+        println!("{}", plan.todo_md_path().display());
+    } else {
+        let content = std::fs::read_to_string(plan.todo_md_path())?;
+        print!("{content}");
+    }
 
     Ok(())
 }
