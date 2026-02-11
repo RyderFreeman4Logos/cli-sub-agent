@@ -10,16 +10,18 @@ triggers:
 
 # CSA Review: Independent Code Review Orchestration
 
-## Role Detection (READ FIRST)
+## Role Detection (READ THIS FIRST — MANDATORY)
 
-**If you were spawned by `csa run` to perform a code review** (i.e., your prompt contains scope/mode/security_mode parameters):
-- You are the **review agent**. **SKIP the entire "Execution Protocol" section below.**
-- Go directly to [Review Protocol](references/review-protocol.md) and follow it step by step.
-- Your parameters (scope, mode, security_mode, context) are in the prompt that spawned you.
-- Output schema: [Output Schema](references/output-schema.md).
-- **Do NOT run `csa run` or `csa review`** — that would create infinite recursion.
+**Check your initial prompt.** If it contains `"Use the csa-review skill"` or mentions `scope=`, `mode=`, `security_mode=` parameters, then:
 
-**If you are Claude Code responding to a user's `/csa-review` command**:
+**YOU ARE THE REVIEW AGENT.** Follow these rules:
+1. **SKIP the entire "Execution Protocol" section below** — it is for the orchestrator, not you.
+2. **Read [Review Protocol](references/review-protocol.md)** and follow it step by step. That file tells you exactly how to perform the review.
+3. **Read [Output Schema](references/output-schema.md)** for the required output format.
+4. Your scope/mode/security_mode parameters are in your initial prompt. Parse them from there.
+5. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the review DIRECTLY by running `git diff`, reading files, and analyzing code yourself. Running any `csa` command causes infinite recursion and will be terminated.
+
+**Only if you are Claude Code and a human user typed `/csa-review` in the chat**:
 - You are the **orchestrator**. Follow the "Execution Protocol" steps below.
 
 ---

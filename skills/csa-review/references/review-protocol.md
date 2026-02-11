@@ -3,8 +3,9 @@
 > This file is loaded by the review agent as part of the csa-review skill.
 > It defines the full review procedure the agent must follow autonomously.
 
-> **CRITICAL**: You are the review agent. Your job is to review code, NOT to orchestrate.
-> **Do NOT** run `csa run`, `csa review`, or spawn sub-agents. Follow the steps below directly.
+> **CRITICAL**: You are the review agent. Your job is to review code DIRECTLY — NOT to orchestrate.
+> **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command.
+> Do NOT spawn sub-agents. Do NOT delegate. Execute every step below yourself using `git`, `cat`, `grep`, etc.
 
 ## Step 1: Read Project Context
 
