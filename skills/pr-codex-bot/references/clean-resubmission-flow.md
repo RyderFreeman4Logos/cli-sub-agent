@@ -24,20 +24,20 @@ git push -u origin "${BRANCH}-clean"
 
 # 6. Create new PR linking to old one
 gh pr create --title "[type](scope): [description]" \
-  --body "$(cat <<PREOF
+  --body "$(sed "s/{{OLD_PR_NUM}}/${OLD_PR_NUM}/g" <<'PREOF'
 ## Summary
 [description]
 
 ## Background
-Clean resubmission of #${OLD_PR_NUM}. The original PR went through
+Clean resubmission of #{{OLD_PR_NUM}}. The original PR went through
 N rounds of iterative review with @codex. Fix commits have been
 consolidated into logical groups here.
 
-See #${OLD_PR_NUM} for the full review discussion.
+See #{{OLD_PR_NUM}} for the full review discussion.
 
 ## Test plan
-- [ ] \`cargo clippy -p [package] -- -D warnings\`
-- [ ] \`cargo test -p [package]\`
+- [ ] `cargo clippy -p [package] -- -D warnings`
+- [ ] `cargo test -p [package]`
 - [ ] @codex review
 PREOF
 )"
