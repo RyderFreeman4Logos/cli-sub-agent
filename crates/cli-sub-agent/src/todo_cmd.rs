@@ -29,34 +29,46 @@ pub(crate) fn handle_create(
 }
 
 pub(crate) fn handle_save(
-    timestamp: String,
+    timestamp: Option<String>,
     message: Option<String>,
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
-    let plan = manager.load(&timestamp)?;
+    let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
+    let plan = manager.load(&ts)?;
 
     let commit_msg = message.unwrap_or_else(|| format!("update: {}", plan.metadata.title));
-    let hash = csa_todo::git::save(manager.todos_dir(), &timestamp, &commit_msg)?;
+    let hash = csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)?;
 
-    eprintln!("Saved {} ({})", timestamp, hash);
+    eprintln!("Saved {} ({})", ts, hash);
 
     Ok(())
 }
 
 pub(crate) fn handle_diff(
-    timestamp: String,
+    timestamp: Option<String>,
     revision: Option<String>,
+    from: Option<usize>,
+    to: Option<usize>,
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
+    let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
 
     // Validate the plan exists
-    manager.load(&timestamp)?;
+    manager.load(&ts)?;
 
-    let diff_output = csa_todo::git::diff(manager.todos_dir(), &timestamp, revision.as_deref())?;
+    let diff_output = if from.is_some() || to.is_some() {
+        // Version-to-version diff
+        let from_v = from.unwrap_or(2);
+        let to_v = to.unwrap_or(1);
+        csa_todo::git::diff_versions(manager.todos_dir(), &ts, from_v, to_v)?
+    } else {
+        // Working copy diff against revision (or file's last commit)
+        csa_todo::git::diff(manager.todos_dir(), &ts, revision.as_deref())?
+    };
 
     if diff_output.is_empty() {
         eprintln!("No changes.");
@@ -67,14 +79,15 @@ pub(crate) fn handle_diff(
     Ok(())
 }
 
-pub(crate) fn handle_history(timestamp: String, cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_history(timestamp: Option<String>, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
+    let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
 
     // Validate the plan exists
-    manager.load(&timestamp)?;
+    manager.load(&ts)?;
 
-    let log_output = csa_todo::git::history(manager.todos_dir(), &timestamp)?;
+    let log_output = csa_todo::git::history(manager.todos_dir(), &ts)?;
 
     if log_output.is_empty() {
         eprintln!("No history found.");
@@ -162,13 +175,22 @@ pub(crate) fn handle_find(
     Ok(())
 }
 
-pub(crate) fn handle_show(timestamp: String, path: bool, cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_show(
+    timestamp: Option<String>,
+    version: Option<usize>,
+    path: bool,
+    cd: Option<String>,
+) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
-    let plan = manager.load(&timestamp)?;
+    let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
+    let plan = manager.load(&ts)?;
 
     if path {
         println!("{}", plan.todo_md_path().display());
+    } else if let Some(v) = version {
+        let content = csa_todo::git::show_version(manager.todos_dir(), &ts, v)?;
+        print!("{content}");
     } else {
         let content = std::fs::read_to_string(plan.todo_md_path())?;
         print!("{content}");
@@ -180,16 +202,49 @@ pub(crate) fn handle_show(timestamp: String, path: bool, cd: Option<String>) -> 
 pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
+    let old_plan = manager.load(&timestamp)?;
+    let old_status = old_plan.metadata.status;
     let new_status: TodoStatus = status.parse()?;
 
     let plan = manager.update_status(&timestamp, new_status)?;
 
-    eprintln!(
-        "Updated {} status → {}",
-        plan.timestamp, plan.metadata.status
+    // Auto-commit the status change
+    csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let commit_msg = format!(
+        "status: {} → {} ({})",
+        old_status, plan.metadata.status, plan.metadata.title
     );
+    match csa_todo::git::save(manager.todos_dir(), &timestamp, &commit_msg) {
+        Ok(hash) => {
+            eprintln!(
+                "Updated {} status: {} → {} ({})",
+                plan.timestamp, old_status, plan.metadata.status, hash
+            );
+        }
+        Err(e) => {
+            // save() fails if there are no changes to commit (e.g., same status)
+            tracing::debug!("Auto-commit after status change skipped: {e}");
+            eprintln!(
+                "Updated {} status → {}",
+                plan.timestamp, plan.metadata.status
+            );
+        }
+    }
 
     Ok(())
+}
+
+/// Resolve an optional timestamp to an actual plan timestamp.
+/// If `None`, uses the most recent plan.
+fn resolve_timestamp(manager: &TodoManager, timestamp: Option<&str>) -> Result<String> {
+    match timestamp {
+        Some(ts) => Ok(ts.to_string()),
+        None => {
+            let plan = manager.latest()?;
+            eprintln!("(using latest plan: {})", plan.timestamp);
+            Ok(plan.timestamp)
+        }
+    }
 }
 
 /// Truncate a string to `max_len` characters (not bytes), appending "…" if truncated.

@@ -209,9 +209,11 @@ async fn main() -> Result<()> {
             TodoCommands::Diff {
                 timestamp,
                 revision,
+                from,
+                to,
                 cd,
             } => {
-                todo_cmd::handle_diff(timestamp, revision, cd)?;
+                todo_cmd::handle_diff(timestamp, revision, from, to, cd)?;
             }
             TodoCommands::History { timestamp, cd } => {
                 todo_cmd::handle_history(timestamp, cd)?;
@@ -224,10 +226,11 @@ async fn main() -> Result<()> {
             }
             TodoCommands::Show {
                 timestamp,
+                version,
                 path,
                 cd,
             } => {
-                todo_cmd::handle_show(timestamp, path, cd)?;
+                todo_cmd::handle_show(timestamp, version, path, cd)?;
             }
             TodoCommands::Status {
                 timestamp,
