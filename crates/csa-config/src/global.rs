@@ -27,6 +27,8 @@ pub struct GlobalConfig {
     pub review: ReviewConfig,
     #[serde(default)]
     pub debate: DebateConfig,
+    #[serde(default)]
+    pub fallback: FallbackConfig,
 }
 
 /// Configuration for the code review workflow.
@@ -75,6 +77,33 @@ impl Default for DebateConfig {
     fn default() -> Self {
         Self {
             tool: default_debate_tool(),
+        }
+    }
+}
+
+/// Configuration for fallback behavior when external services are unavailable.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FallbackConfig {
+    /// Behavior when cloud review bot is unavailable (quota, timeout, or API errors).
+    ///
+    /// - `"auto-local"`: Automatically fall back to local CSA review (still reviews)
+    /// - `"ask-user"`: Prompt user before falling back (default)
+    ///
+    /// Both policies ensure code is still reviewed — `auto-local` just skips the
+    /// user confirmation prompt. There is no `skip` option because bypassing
+    /// review entirely violates the heterogeneous review safety model.
+    #[serde(default = "default_cloud_review_exhausted")]
+    pub cloud_review_exhausted: String,
+}
+
+fn default_cloud_review_exhausted() -> String {
+    "ask-user".to_string()
+}
+
+impl Default for FallbackConfig {
+    fn default() -> Self {
+        Self {
+            cloud_review_exhausted: default_cloud_review_exhausted(),
         }
     }
 }
@@ -257,6 +286,13 @@ tool = "auto"
 # Set explicitly if auto-detection fails (e.g., parent is opencode).
 [debate]
 tool = "auto"
+
+# Fallback behavior when external services are unavailable.
+# cloud_review_exhausted: what to do when cloud review bot is unavailable.
+#   "auto-local" = automatically fall back to local CSA review (still reviews)
+#   "ask-user"   = prompt user before falling back (default)
+[fallback]
+cloud_review_exhausted = "ask-user"
 "#
         .to_string()
     }
@@ -612,6 +648,32 @@ tool = "codex"
         let available = vec![];
         let result = select_heterogeneous_tool(&parent, &available);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fallback_config_default() {
+        let config = GlobalConfig::default();
+        assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
+    }
+
+    #[test]
+    fn test_fallback_config_auto_local() {
+        let toml_str = r#"
+[fallback]
+cloud_review_exhausted = "auto-local"
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.fallback.cloud_review_exhausted, "auto-local");
+    }
+
+    #[test]
+    fn test_fallback_config_missing_uses_default() {
+        let toml_str = r#"
+[defaults]
+max_concurrent = 3
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
     }
 
     #[test]

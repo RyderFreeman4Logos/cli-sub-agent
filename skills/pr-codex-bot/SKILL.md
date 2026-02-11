@@ -22,7 +22,7 @@ Step 3: Fix local review issues (loop until clean)
        v
 Step 4: Submit PR + Review Trigger Procedure
        |                    |
-       |        (UNAVAILABLE? → User confirms → Local CSA fallback)
+       |        (UNAVAILABLE? → Per fallback policy → Local CSA fallback)
        |
        v
 Step 5: (Handled by Review Trigger Procedure — bounded poll + timeout)
@@ -152,14 +152,17 @@ This is a hard gate — no exceptions, no "review is probably fine", no skipping
 |---------|---------|-------------|
 | `CLEAN` | No issues found | Proceed to merge path |
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
-| `UNAVAILABLE(reason)` | Cloud bot did not respond | User confirms local fallback |
+| `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
 
-**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: notify user, confirm fallback, run local `csa review --diff` instead.
+**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: check fallback policy, then local `csa review --branch main` or user prompt.
 
-**CRITICAL**: Do NOT silently fall back. User MUST confirm before switching
-to local CSA review. Fallback marker uses `BRANCH` (not `PR_NUM`) so it
-persists across PRs within the same workflow (e.g., Step 11 clean
-resubmission). A new workflow on a different branch starts fresh.
+**Fallback policy** (configured via `csa config get fallback.cloud_review_exhausted --global`):
+- `auto-local`: Automatically fall back to local CSA review (still reviews, just locally)
+- `ask-user` (default): Notify user and ask for confirmation before switching
+
+Fallback marker uses `BRANCH` (not `PR_NUM`) so it persists across PRs
+within the same workflow (e.g., Step 11 clean resubmission). A new workflow
+on a different branch starts fresh.
 
 ## Step 4: Submit PR
 
@@ -526,7 +529,7 @@ Then re-evaluate (Step 7).
 After pushing fixes, follow the **[Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**:
 - Result is `HAS_ISSUES` → back to Step 7 (evaluate, debate/fix)
 - Result is `CLEAN` → proceed to Step 11 (clean resubmission)
-- Result is `UNAVAILABLE` → user confirms fallback, local CSA review takes over
+- Result is `UNAVAILABLE` → per `fallback.cloud_review_exhausted` policy
 
 ## Step 11: Clean Resubmission
 
@@ -544,7 +547,7 @@ on the new clean PR (update `PR_NUM` and `TMP_PREFIX` for the new PR first):
   - If fixes are needed again, repeat the full cycle including
     another clean resubmission (Step 11) with incrementing branch
     names: `${BRANCH}-clean-2`, `${BRANCH}-clean-3`, etc.
-- Result is `UNAVAILABLE` → user confirms fallback, local CSA review takes over
+- Result is `UNAVAILABLE` → per `fallback.cloud_review_exhausted` policy
 
 ## Step 13: Merge
 
@@ -575,9 +578,9 @@ git checkout main && git pull origin main
 | Max iterations reached | **Escalate** - report to user |
 | Same issue re-flagged after fix | **Escalate** - root cause missed |
 | Bot flags architectural issue | **Escalate** - needs human decision |
-| Poll timeout (10 min) | **UNAVAILABLE(timeout)** - notify user, offer local fallback |
-| Bot replies with quota message | **UNAVAILABLE(quota)** - notify user, offer local fallback |
-| API errors (5 consecutive) | **UNAVAILABLE(api_error)** - notify user, offer local fallback |
+| Poll timeout (10 min) | **UNAVAILABLE(timeout)** - per `fallback.cloud_review_exhausted` policy |
+| Bot replies with quota message | **UNAVAILABLE(quota)** - per `fallback.cloud_review_exhausted` policy |
+| API errors (5 consecutive) | **UNAVAILABLE(api_error)** - per `fallback.cloud_review_exhausted` policy |
 | Cloud fallback active | **Local CSA review** - skip cloud, use local for remainder |
 
 ## Anti-Trust Protocol
@@ -629,4 +632,4 @@ Bot user login: `chatgpt-codex-connector[bot]`
 | `debate` | Step 8: adversarial arbitration for suspected false positives |
 | `commit` | After fixing issues |
 | `csa run --tier tier-4-critical` | If bot flags security issue (deep analysis) |
-| `csa review --diff` | Cloud fallback: local CSA review when `@codex` is unavailable |
+| `csa review --branch main` | Cloud fallback: local CSA review when `@codex` is unavailable |

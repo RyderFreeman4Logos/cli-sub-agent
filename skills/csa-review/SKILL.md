@@ -70,6 +70,28 @@ First, read CLAUDE.md at the project root to understand:
 
 If CLAUDE.md is missing, report this as a warning but continue with general best practices.
 
+### AGENTS.md Compliance Check
+
+After reading CLAUDE.md, discover and apply AGENTS.md coding rules:
+
+1. **Discovery**: Starting from the repository root, find all AGENTS.md files on the
+   path from root to each changed file's directory. For example, if a change touches
+   `crates/csa-config/src/lib.rs`, check: `./AGENTS.md`, `crates/AGENTS.md`,
+   `crates/csa-config/AGENTS.md`, `crates/csa-config/src/AGENTS.md`.
+
+2. **Root-to-leaf application**: Rules accumulate from root to leaf. When rules at
+   different levels conflict, the **deepest (most specific) AGENTS.md wins**. All
+   non-conflicting rules from parent directories still apply.
+
+3. **Compliance verification**: For each finding, check if any AGENTS.md rule is
+   violated. If so, reference the rule ID (e.g., "Rust 002: error-handling") in
+   the finding's evidence field.
+
+4. **Priority mapping**:
+   - AGENTS.md violation -> at least P2
+   - If the violated rule uses MUST, CRITICAL, or FORBIDDEN language -> promote to P1
+   - If the rule covers security or correctness -> promote to P1
+
 ## Step 2: Collect Scope
 
 Scope: {scope}
@@ -140,14 +162,15 @@ High-impact security suspicion without concrete exploit path -> list under open_
 ## Non-Negotiable Rules
 
 1. Always read CLAUDE.md before any review reasoning.
-2. Do not call `codex review` subcommand.
-3. Prefer read-only inspection for review steps.
-4. Focus findings on correctness, regressions, security, and missing tests.
-5. Treat insufficient tests as first-class findings using finding_type: test-gap with explicit priority.
-6. Every finding must include concrete evidence with trigger, expected, actual, and file+line references.
-7. If evidence is insufficient, do not emit a finding; emit an open_questions item instead.
-8. Any high-impact security suspicion without a concrete exploit path must be listed under open_questions instead of findings.
-9. Confidence must be calibrated with evidence strength. High confidence without concrete evidence is invalid.
+2. Discover and apply all AGENTS.md files (root-to-leaf) for changed file paths.
+3. Do not call `codex review` subcommand.
+4. Prefer read-only inspection for review steps.
+5. Focus findings on correctness, regressions, security, AGENTS.md compliance, and missing tests.
+6. Treat insufficient tests as first-class findings using finding_type: test-gap with explicit priority.
+7. Every finding must include concrete evidence with trigger, expected, actual, and file+line references. AGENTS.md violations must reference the rule ID.
+8. If evidence is insufficient, do not emit a finding; emit an open_questions item instead.
+9. Any high-impact security suspicion without a concrete exploit path must be listed under open_questions instead of findings.
+10. Confidence must be calibrated with evidence strength. High confidence without concrete evidence is invalid.
 
 ## Step 4: Generate Outputs
 
@@ -159,7 +182,7 @@ High-impact security suspicion without concrete exploit path -> list under open_
     {
       "id": "string",
       "priority": "P0|P1|P2|P3",
-      "finding_type": "correctness|regression|security|test-gap|maintainability",
+      "finding_type": "correctness|regression|security|test-gap|maintainability|agents-md-violation",
       "file": "string",
       "line": 0,
       "summary": "string",
@@ -360,9 +383,10 @@ The code author's confidence alone is NOT sufficient justification.
 2. CSA session was created in `~/.local/state/csa/` (verify with `csa session list`).
 3. No sessions were created in `~/.codex/`.
 4. Review agent read CLAUDE.md autonomously (not pre-fed by orchestrator).
-5. `review-findings.json` and `review-report.md` were generated.
-6. Every finding has concrete evidence (trigger, expected, actual) and calibrated confidence.
-7. If security_mode required pass 3, adversarial_pass_executed=true.
-8. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
-9. CSA session ID was reported for potential follow-up.
-10. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.
+5. Review agent discovered and applied AGENTS.md files (root-to-leaf) for all changed paths.
+6. `review-findings.json` and `review-report.md` were generated.
+7. Every finding has concrete evidence (trigger, expected, actual) and calibrated confidence. AGENTS.md violations reference rule IDs.
+8. If security_mode required pass 3, adversarial_pass_executed=true.
+9. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
+10. CSA session ID was reported for potential follow-up.
+11. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.

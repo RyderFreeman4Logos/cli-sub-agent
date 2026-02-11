@@ -336,6 +336,27 @@ pub enum ConfigCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+    /// Get a config value by dotted key path (e.g., "fallback.cloud_review_exhausted")
+    Get {
+        /// Dotted key path (e.g., "tools.codex.enabled", "review.tool")
+        key: String,
+
+        /// Default value if key not found (exit code 1 if omitted and key missing)
+        #[arg(long)]
+        default: Option<String>,
+
+        /// Only search project config (skip global fallback)
+        #[arg(long, conflicts_with = "global")]
+        project: bool,
+
+        /// Only search global config (skip project config)
+        #[arg(long, conflicts_with = "project")]
+        global: bool,
+
+        /// Working directory (defaults to CWD)
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
