@@ -80,6 +80,12 @@ Extract from user message or PR context:
 | `REPO` | PR URL or git remote | `user/repo` |
 | `PR_NUM` | PR URL or `gh pr view` | `1` |
 | `BRANCH` | Current git branch | `feat/hooks-system` |
+| `WORKFLOW_BRANCH` | Set once in Step 1 (= `BRANCH` at start) | `feat/hooks-system` |
+
+**CRITICAL**: `WORKFLOW_BRANCH` is the original branch name set once at
+workflow start. It MUST NOT be re-derived from `git branch --show-current`
+after Step 11 branch switches (e.g., `${BRANCH}-clean`). The fallback
+marker uses `WORKFLOW_BRANCH` to persist across clean resubmission branches.
 
 > **See**: [Baseline Capture Template](references/baseline-template.md) — run this before every `@codex review` trigger.
 
@@ -87,6 +93,11 @@ Extract from user message or PR context:
 
 Commit work using proper commit workflow. Ensure all changes are staged
 and committed before proceeding.
+
+```bash
+# Set WORKFLOW_BRANCH once — persists through Step 11 clean branch switches
+WORKFLOW_BRANCH="$(git branch --show-current)"
+```
 
 ## Step 2: Local Review (MUST BLOCK)
 

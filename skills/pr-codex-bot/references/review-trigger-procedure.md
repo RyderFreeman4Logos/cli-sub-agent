@@ -22,15 +22,21 @@ approval, issue comments).
 
 ## Phase 1: Check Fallback State
 
-The fallback marker uses `BRANCH` (not `PR_NUM`) so it persists across
-PRs within the same workflow (e.g., when Step 11 creates a new clean PR,
-the fallback state carries over). A new workflow on a different branch
+The fallback marker uses `WORKFLOW_BRANCH` (the original branch the workflow
+started on, set once in Step 1 and never re-derived). This ensures the marker
+persists even when Step 11 creates clean branches (`${BRANCH}-clean`,
+`${BRANCH}-clean-2`, etc.) — the marker path stays the same because
+`WORKFLOW_BRANCH` doesn't change. A new workflow on a different branch
 starts fresh.
+
+**CRITICAL**: `WORKFLOW_BRANCH` MUST be set once at workflow start (Step 1)
+and passed unchanged through all steps. Do NOT re-derive it from
+`git branch --show-current` after Step 11 branch switches.
 
 ```bash
 TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
-# Marker uses BRANCH for cross-PR persistence within same workflow
-FALLBACK_MARKER="/tmp/codex-bot-${REPO//\//-}-${BRANCH//\//-}-cloud-fallback.marker"
+# Marker uses WORKFLOW_BRANCH (original branch, not current) for cross-PR persistence
+FALLBACK_MARKER="/tmp/codex-bot-${REPO//\//-}-${WORKFLOW_BRANCH//\//-}-cloud-fallback.marker"
 
 if [ -f "${FALLBACK_MARKER}" ]; then
   echo "CLOUD_FALLBACK_ACTIVE: Skipping cloud @codex review, using local CSA review"
@@ -217,7 +223,7 @@ GitHub PR comments). The main agent reads the CSA output directly instead of
 polling GitHub APIs. Step 7 evaluation applies the same logic — classify each
 finding, queue false positives for Step 8 arbitration, fix real issues.
 
-**Next workflow resets**: The fallback marker is scoped to `${BRANCH}`.
+**Next workflow resets**: The fallback marker is scoped to `${WORKFLOW_BRANCH}`.
 A new workflow on a different branch starts fresh with cloud `@codex review`.
 Within the same branch family (including Step 11 clean PRs), the fallback
 state persists so you don't wait another 10 minutes for a known-unavailable bot.
@@ -247,7 +253,7 @@ state persists so you don't wait another 10 minutes for a known-unavailable bot.
        +── User confirms fallback
        |         |
        |         v
-       |    Create ${FALLBACK_MARKER} (branch-scoped)
+       |    Create ${FALLBACK_MARKER} (WORKFLOW_BRANCH-scoped)
        |    Run local CSA review
        |    (all subsequent reviews in this workflow use local)
        |
@@ -257,10 +263,10 @@ state persists so you don't wait another 10 minutes for a known-unavailable bot.
 
 ## Limitations
 
-- **Per-branch, not per-session**: Fallback marker uses `${BRANCH}` so it
-  persists across PRs within the same workflow (Step 11 creates new PRs on
-  related branches). Concurrent workflows on branches with the same name
-  prefix would share state. Acceptable for single-user usage.
+- **Per-workflow-branch, not per-session**: Fallback marker uses
+  `${WORKFLOW_BRANCH}` (set once at workflow start) so it persists across
+  PRs and clean branches within the same workflow. Concurrent workflows on
+  the same original branch would share state. Acceptable for single-user usage.
 - **Old markers accumulate**: `/tmp` files are not auto-cleaned between workflows.
   They are cleaned on system reboot. Non-critical for low-frequency usage.
 - **10 min timeout may be short for large PRs**: The bot may take longer for
