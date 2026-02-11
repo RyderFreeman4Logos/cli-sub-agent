@@ -41,7 +41,7 @@ FALLBACK_MARKER="/tmp/codex-bot-${REPO//\//-}-${WORKFLOW_BRANCH//\//-}-cloud-fal
 if [ -f "${FALLBACK_MARKER}" ]; then
   echo "CLOUD_FALLBACK_ACTIVE: Skipping cloud @codex review, using local CSA review"
   # → Skip Phase 2 entirely, go directly to Phase 3 (Local Fallback Path)
-  # The main agent should run: csa review --diff
+  # The main agent should run: csa review --branch main
   # Then map output to CLEAN or HAS_ISSUES and proceed to Step 7
 else
   # → Continue to Phase 2 (Cloud Path)
