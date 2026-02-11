@@ -153,6 +153,10 @@ pub enum Commands {
         #[arg(long)]
         check: bool,
     },
+
+    /// Route tasks through CSA with Claude model selection and optional skill injection
+    #[command(name = "claude-sub-agent")]
+    ClaudeSubAgent(ClaudeSubAgentArgs),
 }
 
 #[derive(clap::Args)]
@@ -205,6 +209,36 @@ pub struct DebateArgs {
     /// Override model
     #[arg(short, long)]
     pub model: Option<String>,
+
+    /// Working directory
+    #[arg(long)]
+    pub cd: Option<String>,
+}
+
+#[derive(clap::Args)]
+pub struct ClaudeSubAgentArgs {
+    /// Task prompt; reads from stdin if omitted
+    pub question: Option<String>,
+
+    /// Skill directory path (contains SKILL.md)
+    #[arg(long)]
+    pub skill: Option<String>,
+
+    /// Tool to use (overrides config-based selection)
+    #[arg(long)]
+    pub tool: Option<ToolArg>,
+
+    /// Resume existing session
+    #[arg(short, long)]
+    pub session: Option<String>,
+
+    /// Override model
+    #[arg(short, long)]
+    pub model: Option<String>,
+
+    /// Model spec override
+    #[arg(long)]
+    pub model_spec: Option<String>,
 
     /// Working directory
     #[arg(long)]

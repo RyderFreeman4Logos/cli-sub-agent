@@ -4,6 +4,7 @@ use tempfile::TempDir;
 use tracing::{info, warn};
 
 mod batch;
+mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;
 mod debate_cmd;
@@ -176,6 +177,11 @@ async fn main() -> Result<()> {
         },
         Commands::SelfUpdate { check } => {
             self_update::handle_self_update(check)?;
+        }
+        Commands::ClaudeSubAgent(args) => {
+            let exit_code =
+                claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth).await?;
+            std::process::exit(exit_code);
         }
     }
 
