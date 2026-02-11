@@ -12,7 +12,7 @@ triggers:
 
 ## Role Detection (READ THIS FIRST — MANDATORY)
 
-**Check your initial prompt.** If it contains `"Use the csa-review skill"` or mentions `scope=`, `mode=`, `security_mode=` parameters, then:
+**Check your initial prompt.** If it contains the literal string `"Use the csa-review skill"`, then:
 
 **YOU ARE THE REVIEW AGENT.** Follow these rules:
 1. **SKIP the entire "Execution Protocol" section below** — it is for the orchestrator, not you.

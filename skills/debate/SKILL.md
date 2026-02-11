@@ -14,7 +14,7 @@ triggers:
 
 ## Role Detection (READ THIS FIRST — MANDATORY)
 
-**Check your initial prompt.** If it contains `"Use the debate skill"` or `"question="` or `"continuation=true"` parameters, then:
+**Check your initial prompt.** If it contains the literal string `"Use the debate skill"`, then:
 
 **YOU ARE THE DEBATE PARTICIPANT.** Follow these rules:
 1. **SKIP the "Execution Protocol" and "CLI Reference" sections below** — they are for the orchestrator, not you.
