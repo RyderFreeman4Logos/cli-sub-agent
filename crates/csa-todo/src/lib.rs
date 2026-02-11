@@ -30,7 +30,7 @@ const LOCK_FILE: &str = ".lock";
 ///
 /// Accepts: `20260211T023000` or `20260211T023000-1` (collision suffix).
 /// Rejects: `../x`, `/tmp/x`, `a/b`, empty, etc.
-fn validate_timestamp(timestamp: &str) -> Result<()> {
+pub(crate) fn validate_timestamp(timestamp: &str) -> Result<()> {
     if timestamp.is_empty() {
         anyhow::bail!("Timestamp must not be empty");
     }
@@ -398,6 +398,8 @@ fn atomic_write(target: &Path, data: &[u8]) -> Result<()> {
 
     Ok(())
 }
+
+pub mod git;
 
 // ---------------------------------------------------------------------------
 // Tests

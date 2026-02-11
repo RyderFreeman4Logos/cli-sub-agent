@@ -147,6 +147,12 @@ pub enum Commands {
         cmd: SetupCommands,
     },
 
+    /// Manage TODO plans
+    Todo {
+        #[command(subcommand)]
+        cmd: TodoCommands,
+    },
+
     /// Update CSA to the latest release
     SelfUpdate {
         /// Check for updates without installing
@@ -395,4 +401,111 @@ pub enum SetupCommands {
 
     /// Setup MCP integration for OpenCode
     OpenCode,
+}
+
+#[derive(Subcommand)]
+pub enum TodoCommands {
+    /// Create a new TODO plan
+    Create {
+        /// Plan title
+        title: String,
+
+        /// Associate with a git branch
+        #[arg(short, long)]
+        branch: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Save (git commit) current TODO plan changes
+    Save {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: String,
+
+        /// Commit message
+        message: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Show diff of TODO plan changes
+    Diff {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: String,
+
+        /// Git revision to diff against (default: HEAD)
+        #[arg(long)]
+        revision: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Show git history of a TODO plan
+    History {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// List all TODO plans for this project
+    List {
+        /// Filter by status (draft, debating, approved, implementing, done)
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Find TODO plans by criteria
+    Find {
+        /// Filter by branch name
+        #[arg(long)]
+        branch: Option<String>,
+
+        /// Filter by status
+        #[arg(long)]
+        status: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Show a TODO plan's content
+    Show {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Update a TODO plan's status
+    Status {
+        /// Timestamp of the TODO plan
+        timestamp: String,
+
+        /// New status (draft, debating, approved, implementing, done)
+        status: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }

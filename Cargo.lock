@@ -185,6 +185,7 @@ dependencies = [
  "csa-resource",
  "csa-scheduler",
  "csa-session",
+ "csa-todo",
  "directories",
  "libc",
  "serde",
