@@ -120,6 +120,28 @@ When executing, reason from attacker perspective and evaluate exploitability for
 
 High-impact security suspicion without concrete exploit path -> list under open_questions, not findings.
 
+## Step 4: Generate Outputs (when review is clean)
+
+After the three-pass review, if there are **no P0 or P1 findings**, generate additional outputs:
+
+### Commit Message (per-commit scope only)
+
+When scope is `uncommitted` (per-commit review), generate a suggested commit message:
+- Follow Conventional Commits format: `<type>(<scope>): <description>`
+- Type: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
+- Scope: the primary crate or module affected
+- Description: concise summary of what changed and why (not how)
+- Include in `generated_outputs.commit_message` in review-findings.json
+
+### PR Body (pre-PR scope only)
+
+When scope is `base:<branch>` or `range:` (pre-PR review), generate a suggested PR body:
+- `## Summary` with 2-4 bullet points describing the changes
+- `## Test plan` with a checklist of verification steps
+- Include in `generated_outputs.pr_body` in review-findings.json
+
+If P0 or P1 findings exist, set both fields to `null` — the developer needs to fix issues first.
+
 ## Non-Negotiable Rules
 
 1. Always read CLAUDE.md before any review reasoning.

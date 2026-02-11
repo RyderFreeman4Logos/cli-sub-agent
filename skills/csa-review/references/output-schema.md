@@ -47,9 +47,20 @@
     "adversarial_pass_executed": true,
     "triggered_by": ["string"]
   },
-  "suggested_next_actions": ["string"]
+  "suggested_next_actions": ["string"],
+  "generated_outputs": {
+    "commit_message": "string or null",
+    "pr_body": "string or null"
+  }
 }
 ```
+
+### generated_outputs
+
+Optional outputs generated when the review finds **no P0 or P1 issues**:
+
+- **commit_message**: A Conventional Commits message (English) summarizing the changes. Only generated for per-commit reviews (`uncommitted` scope). Set to `null` if P0/P1 issues exist or scope is not per-commit.
+- **pr_body**: A PR description with `## Summary` (bullet points) and `## Test plan` (checklist). Only generated for pre-PR reviews (`base:<branch>` or `range:` scope). Set to `null` if P0/P1 issues exist or scope is not pre-PR.
 
 ## review-report.md
 
@@ -87,6 +98,18 @@
 
 ## Recommended Actions
 1. <action>
+
+## Suggested Commit Message
+<!-- Only present when no P0/P1 findings and scope is per-commit -->
+<type>(<scope>): <description>
+
+## Suggested PR Body
+<!-- Only present when no P0/P1 findings and scope is pre-PR -->
+## Summary
+- <bullet points>
+
+## Test plan
+- [ ] <checklist items>
 ```
 
 Write both files to the current working directory (or a designated output location).
