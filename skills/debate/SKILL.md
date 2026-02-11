@@ -12,6 +12,27 @@ triggers:
 
 # Debate: Adversarial Multi-Tool Strategy Formulation
 
+## Role Detection (READ THIS FIRST — MANDATORY)
+
+**Check your initial prompt.** If it contains the literal string `"Use the debate skill"`, then:
+
+**YOU ARE THE DEBATE PARTICIPANT.** Follow these rules:
+1. **SKIP the "Execution Protocol" and "CLI Reference" sections below** — they are for the orchestrator, not you.
+2. Parse your `question` from the initial prompt. If `continuation=true`, this is a follow-up in an ongoing debate.
+3. **Respond directly to the question.** Analyze it thoroughly and provide your position.
+4. **For new debates**, structure your response as:
+   - **Position**: Your concrete stance (2-3 sentences)
+   - **Key Arguments**: Numbered, with evidence and reasoning
+   - **Implementation**: Concrete actionable steps (if applicable)
+   - **Anticipated Counterarguments**: Honestly acknowledge weaknesses
+5. **For continuations** (`continuation=true`): Respond directly to the arguments, concede valid points, defend your position with evidence.
+6. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa debate`, `csa review`, or ANY `csa` command. You must respond directly. Running any `csa` command causes infinite recursion.
+
+**Only if you are Claude Code and a human user typed `/debate` in the chat**:
+- You are the **orchestrator**. Follow the sections below.
+
+---
+
 ## Purpose
 
 Orchestrate an adversarial debate using CSA's independent model routing to produce well-reasoned strategies. The `csa debate` command automatically selects an appropriate debate model: when the caller is claude-code, CSA routes to an independent backend (ensuring different reasoning systems stress-test each other).

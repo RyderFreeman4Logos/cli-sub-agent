@@ -3,6 +3,10 @@
 > This file is loaded by the review agent as part of the csa-review skill.
 > It defines the full review procedure the agent must follow autonomously.
 
+> **CRITICAL**: You are the review agent. Your job is to review code DIRECTLY — NOT to orchestrate.
+> **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command.
+> Do NOT spawn sub-agents. Do NOT delegate. Execute every step below yourself using `git`, `cat`, `grep`, etc.
+
 ## Step 1: Read Project Context
 
 First, read CLAUDE.md at the project root to understand:
@@ -120,7 +124,7 @@ High-impact security suspicion without concrete exploit path -> list under open_
 
 1. Always read CLAUDE.md before any review reasoning.
 2. Discover and apply all AGENTS.md files (root-to-leaf) for changed file paths.
-3. Do not call `codex review` subcommand.
+3. **Do NOT call `csa run`, `csa review`, `codex review`, or any sub-agent spawning command.** You ARE the review agent — executing these would cause infinite recursion.
 4. Prefer read-only inspection for review steps.
 5. Focus findings on correctness, regressions, security, AGENTS.md compliance, and missing tests.
 6. Treat insufficient tests as first-class findings using finding_type: test-gap with explicit priority.

@@ -21,8 +21,8 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     // 3. Read question (from arg or stdin)
     let question = read_prompt(args.question)?;
 
-    // 4. Construct debate prompt
-    let prompt = construct_debate_prompt(&question, args.session.is_some());
+    // 4. Build debate instruction (parameter passing — tool loads debate skill)
+    let prompt = build_debate_instruction(&question, args.session.is_some());
 
     // 5. Determine tool (heterogeneous enforcement)
     let parent_tool = crate::run_helpers::detect_parent_tool();
@@ -184,35 +184,15 @@ Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
 }
 
-/// Construct a debate prompt that frames the model as a debate participant.
+/// Build a debate instruction that passes parameters to the debate skill.
 ///
-/// When `is_continuation` is true (resuming a session), the prompt is lighter —
-/// the model already has the debate context from previous turns.
-fn construct_debate_prompt(question: &str, is_continuation: bool) -> String {
+/// The debate tool loads the debate skill from the project's `.claude/skills/`
+/// directory and follows its instructions autonomously. We only pass parameters.
+fn build_debate_instruction(question: &str, is_continuation: bool) -> String {
     if is_continuation {
-        // Continuing an existing debate — the session already has context.
-        // The question here is the caller's counterpoint or follow-up.
-        format!(
-            "The following is a counterpoint or follow-up in our ongoing debate. \
-Respond directly to the arguments presented. Be specific, cite evidence, \
-and concede valid points while defending your position where warranted.\n\n\
-{question}"
-        )
+        format!("Use the debate skill. continuation=true. question={question}")
     } else {
-        // New debate — frame the model's role clearly.
-        format!(
-            "You are participating in an adversarial debate to stress-test ideas \
-through model heterogeneity. A different AI model (the caller) will evaluate \
-your response and may counter-argue in subsequent rounds.\n\n\
-Analyze the following question or proposal thoroughly:\n\n\
-{question}\n\n\
-Structure your response as:\n\
-1. **Position**: Your concrete stance or proposed solution (2-3 sentences)\n\
-2. **Key Arguments**: Numbered, with evidence and reasoning\n\
-3. **Implementation**: Concrete actionable steps (if applicable)\n\
-4. **Anticipated Counterarguments**: Honestly acknowledge weaknesses and preemptively address them\n\n\
-Be intellectually rigorous. Take a clear position — do not hedge or give a \"it depends\" non-answer."
-        )
+        format!("Use the debate skill. question={question}")
     }
 }
 
@@ -367,19 +347,18 @@ mod tests {
     }
 
     #[test]
-    fn construct_debate_prompt_new_debate() {
-        let prompt = construct_debate_prompt("Should we use gRPC or REST?", false);
-        assert!(prompt.contains("adversarial debate"));
+    fn build_debate_instruction_new_debate() {
+        let prompt = build_debate_instruction("Should we use gRPC or REST?", false);
+        assert!(prompt.contains("debate skill"));
         assert!(prompt.contains("Should we use gRPC or REST?"));
-        assert!(prompt.contains("Position"));
-        assert!(prompt.contains("Anticipated Counterarguments"));
+        assert!(!prompt.contains("continuation=true"));
     }
 
     #[test]
-    fn construct_debate_prompt_continuation() {
-        let prompt = construct_debate_prompt("I disagree because X", true);
-        assert!(prompt.contains("counterpoint"));
+    fn build_debate_instruction_continuation() {
+        let prompt = build_debate_instruction("I disagree because X", true);
+        assert!(prompt.contains("debate skill"));
+        assert!(prompt.contains("continuation=true"));
         assert!(prompt.contains("I disagree because X"));
-        assert!(!prompt.contains("Structure your response as"));
     }
 }
