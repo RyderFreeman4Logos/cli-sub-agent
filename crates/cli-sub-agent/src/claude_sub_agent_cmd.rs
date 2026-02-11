@@ -181,30 +181,25 @@ fn resolve_auto_tool(
     project_config: Option<&ProjectConfig>,
     project_root: &Path,
 ) -> Result<ToolName> {
-    // Try heterogeneous selection based on parent tool
+    // Build the set of tools that are both enabled in config AND have binaries installed
+    let available_tools: Vec<ToolName> = get_enabled_tools(project_config, project_root)
+        .into_iter()
+        .filter(|t| crate::run_helpers::is_tool_binary_available(t.as_str()))
+        .collect();
+
+    // Try heterogeneous selection on actually-available tools
     if let Some(parent) = parent_tool {
         if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent) {
-            let enabled_tools = get_enabled_tools(project_config, project_root);
-            if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
-                if crate::run_helpers::is_tool_binary_available(tool.as_str()) {
-                    return Ok(tool);
-                }
-                tracing::debug!(
-                    tool = tool.as_str(),
-                    "Heterogeneous candidate not installed, falling back to preference chain"
-                );
+            if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &available_tools) {
+                return Ok(tool);
             }
         }
     }
 
-    // Default: try codex first (lightweight), then claude-code
-    // Only consider tools that are both enabled in config and have binaries installed
-    let enabled_tools = get_enabled_tools(project_config, project_root);
+    // Fallback: first available in preference order
     for preferred in &["codex", "claude-code", "opencode", "gemini-cli"] {
         if let Ok(tool) = crate::run_helpers::parse_tool_name(preferred) {
-            if enabled_tools.contains(&tool)
-                && crate::run_helpers::is_tool_binary_available(tool.as_str())
-            {
+            if available_tools.contains(&tool) {
                 return Ok(tool);
             }
         }
@@ -237,7 +232,7 @@ fn select_heterogeneous_tool(
     csa_config::global::select_heterogeneous_tool(parent_tool, enabled_tools)
 }
 
-/// Select the first available enabled tool (in config order, no heterogeneity constraint)
+/// Select the first available enabled tool (in built-in preference order, no heterogeneity constraint)
 fn select_any_available_tool(
     project_config: Option<&ProjectConfig>,
     project_root: &Path,

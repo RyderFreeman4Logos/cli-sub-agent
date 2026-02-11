@@ -63,7 +63,7 @@ impl std::fmt::Display for ModelFamily {
 pub enum ToolArg {
     /// Auto-select (HeterogeneousStrict). Default when --tool omitted.
     Auto,
-    /// First available tool in config order, no heterogeneity requirement.
+    /// First available tool in built-in preference order, no heterogeneity requirement.
     AnyAvailable,
     /// Explicit tool, no negotiation.
     Specific(ToolName),

@@ -38,14 +38,14 @@ csa claude-sub-agent --tool claude-code --skill ~/.claude/skills/csa-security "a
 
 ## Routing Decision Table
 
-| Task Characteristic | CSA Tier | Tool | Domain Skill |
-|--------------------|----------|------|-------------|
-| Quick lookup, summary, simple edit | tier-1-quick | config-driven | none |
-| Standard implementation, write tests | tier-2-standard | config-driven | matched (if any) |
-| Complex architecture, multi-file refactor | tier-3-complex | claude-code | matched (if any) |
-| Security-critical code | tier-4-critical | claude-code | `csa-security` |
-| Rust tasks | tier-2 or tier-3 | config-driven | `csa-rust-dev` |
-| Async/concurrency debugging | tier-3-complex | claude-code | `csa-async-debug` |
+| Task Characteristic | Tool Selection | Domain Skill |
+|--------------------|---------------|-------------|
+| Quick lookup, summary, simple edit | auto (heterogeneous) | none |
+| Standard implementation, write tests | auto (heterogeneous) | matched (if any) |
+| Complex architecture, multi-file refactor | `--tool claude-code` | matched (if any) |
+| Security-critical code | `--tool claude-code` | `csa-security` |
+| Rust tasks | auto (heterogeneous) | `csa-rust-dev` |
+| Async/concurrency debugging | `--tool claude-code` | `csa-async-debug` |
 
 ## What This Replaces
 
@@ -57,4 +57,4 @@ Now: This single routing skill + 5 domain skills + `csa claude-sub-agent` subcom
 
 ## Audit Trail
 
-Every invocation logs: tier, tool, skill path, exit code (via CSA's tracing).
+Every invocation logs: tool, skill path, exit code (via CSA's tracing).
