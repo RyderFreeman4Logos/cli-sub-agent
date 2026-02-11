@@ -222,12 +222,17 @@ pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String
             );
         }
         Err(e) => {
-            // save() fails if there are no changes to commit (e.g., same status)
-            tracing::debug!("Auto-commit after status change skipped: {e}");
-            eprintln!(
-                "Updated {} status → {}",
-                plan.timestamp, plan.metadata.status
-            );
+            let msg = e.to_string();
+            if msg.contains("No changes to save") {
+                // Same status set again — no git changes, that's fine
+                tracing::debug!("Auto-commit after status change skipped: {e}");
+                eprintln!(
+                    "Updated {} status → {}",
+                    plan.timestamp, plan.metadata.status
+                );
+            } else {
+                return Err(e);
+            }
         }
     }
 

@@ -198,47 +198,6 @@ pub fn diff(todos_dir: &Path, timestamp: &str, revision: Option<&str>) -> Result
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Also diff metadata.toml for a plan.
-pub fn diff_all(todos_dir: &Path, timestamp: &str, revision: Option<&str>) -> Result<String> {
-    crate::validate_timestamp(timestamp)?;
-
-    if !todos_dir.join(".git").exists() {
-        anyhow::bail!("No git repository in todos directory (run `csa todo save` first)");
-    }
-
-    let plan_prefix = format!("{}/", timestamp);
-
-    let rev = match revision {
-        Some(r) => {
-            validate_revision(r)?;
-            r.to_string()
-        }
-        None => match file_last_commit(todos_dir, &format!("{timestamp}/TODO.md"))? {
-            Some(hash) => hash,
-            None => {
-                // Fall back to diffing TODO.md only
-                return diff(todos_dir, timestamp, None);
-            }
-        },
-    };
-
-    let output = Command::new("git")
-        .args(["diff", &rev, "--", &plan_prefix])
-        .current_dir(todos_dir)
-        .output()
-        .context("Failed to run git diff")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "git diff failed (exit {}): {}",
-            output.status.code().unwrap_or(-1),
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
-}
-
 /// Find the last commit hash that touched a specific file.
 ///
 /// Returns `None` if the file has never been committed.
@@ -249,11 +208,15 @@ fn file_last_commit(todos_dir: &Path, file_path: &str) -> Result<Option<String>>
         .output()
         .context("Failed to run git log")?;
 
-    if !output.status.success() {
-        anyhow::bail!(
-            "git log failed: {}",
+    match output.status.code() {
+        Some(0) => {}
+        // Exit 128 = unborn branch (no commits yet) — treat as "never committed"
+        Some(128) => return Ok(None),
+        Some(code) => anyhow::bail!(
+            "git log failed (exit {code}): {}",
             String::from_utf8_lossy(&output.stderr)
-        );
+        ),
+        None => anyhow::bail!("git log terminated by signal"),
     }
 
     let hash = String::from_utf8_lossy(&output.stdout).trim().to_string();

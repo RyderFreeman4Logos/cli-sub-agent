@@ -477,7 +477,7 @@ pub enum TodoCommands {
         timestamp: Option<String>,
 
         /// Git revision to diff against (default: file's last commit)
-        #[arg(long)]
+        #[arg(long, conflicts_with_all = ["from", "to"])]
         revision: Option<String>,
 
         /// Diff from this version number (1 = last committed, 2 = before that)
