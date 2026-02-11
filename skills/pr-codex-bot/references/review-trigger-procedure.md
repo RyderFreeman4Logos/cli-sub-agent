@@ -171,10 +171,15 @@ fi
 ### 2d. Classify Result
 
 - `NEW_COMMENTS_DETECTED` → Check for quota message in bot reply. If bot reply
-  contains quota/subscription keywords (scoped to `chatgpt-codex-connector[bot]`
-  user only, e.g., "quota exceeded", "subscription required", "rate limit"),
-  classify as `UNAVAILABLE(quota)`. Otherwise proceed to Step 7 evaluation
-  which will classify as `CLEAN` or `HAS_ISSUES`.
+  (scoped to `chatgpt-codex-connector[bot]` user only) matches known quota
+  patterns, classify as `UNAVAILABLE(quota)`. Otherwise proceed to Step 7
+  evaluation which will classify as `CLEAN` or `HAS_ISSUES`.
+
+  **Known quota message patterns** (observed from production):
+  - `"You have reached your Codex usage limits for code reviews"`
+  - `"add credits to your account and enable them for code reviews"`
+  - Generic keywords: `"quota exceeded"`, `"subscription required"`,
+    `"rate limit"`, `"usage limits"`, `"add credits"`
 - `UNAVAILABLE(timeout)` → Cloud bot did not respond within 10 minutes.
 - `UNAVAILABLE(api_error)` → GitHub API failed 5+ consecutive times.
 
