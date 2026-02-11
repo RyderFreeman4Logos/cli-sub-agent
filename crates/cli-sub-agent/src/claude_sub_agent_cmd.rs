@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::path::Path;
 use tracing::info;
 
@@ -20,21 +20,8 @@ pub(crate) async fn handle_claude_sub_agent(
         return Ok(1);
     };
 
-    // 3. Read skill content (if provided)
-    let skill_content = if let Some(ref skill_path) = args.skill {
-        read_skill_content(skill_path)?
-    } else {
-        None
-    };
-
-    // 4. Read prompt
-    let raw_prompt = crate::run_helpers::read_prompt(args.question)?;
-
-    // 5. Combine prompt (skill content + user prompt)
-    let prompt = match skill_content {
-        Some(ref content) => format!("{}\n\n---\n\nTask:\n{}", content, raw_prompt),
-        None => raw_prompt,
-    };
+    // 3. Read prompt
+    let prompt = crate::run_helpers::read_prompt(args.question)?;
 
     // 6. Resolve tool
     let parent_tool = crate::run_helpers::detect_parent_tool();
@@ -72,11 +59,8 @@ pub(crate) async fn handle_claude_sub_agent(
     // 10. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
 
-    // 11. Construct session description
-    let description = args
-        .skill
-        .as_deref()
-        .map(|s| format!("claude-sub-agent: {}", s));
+    // 11. Session description (no longer derived from --skill)
+    let description: Option<String> = None;
 
     // 12. Execute with session
     let result = crate::pipeline::execute_with_session(
@@ -95,7 +79,6 @@ pub(crate) async fn handle_claude_sub_agent(
     // 13. Audit logging
     info!(
         tool = %tool_name.as_str(),
-        skill = ?args.skill,
         exit_code = result.exit_code,
         "claude-sub-agent execution completed"
     );
@@ -107,49 +90,6 @@ pub(crate) async fn handle_claude_sub_agent(
 }
 
 /// Maximum SKILL.md file size (256 KB) to prevent excessive memory/token usage
-const MAX_SKILL_SIZE: u64 = 256 * 1024;
-
-/// Read SKILL.md from a skill directory.
-/// Returns error if --skill was specified but SKILL.md is missing or too large.
-///
-/// Uses a single `File::open` to avoid TOCTOU races, validates the fd is a
-/// regular file, and streams with `take()` to enforce size limits.
-fn read_skill_content(skill_path: &str) -> Result<Option<String>> {
-    use std::io::Read;
-
-    let skill_md = std::path::Path::new(skill_path).join("SKILL.md");
-    let file = std::fs::File::open(&skill_md).with_context(|| {
-        format!(
-            "SKILL.md not found or inaccessible at {}. Verify the --skill path is correct.",
-            skill_md.display()
-        )
-    })?;
-
-    let metadata = file
-        .metadata()
-        .with_context(|| format!("Failed to stat {}", skill_md.display()))?;
-    if !metadata.is_file() {
-        anyhow::bail!("SKILL.md at {} is not a regular file", skill_md.display());
-    }
-
-    // Stream-read with a limit to prevent excessive memory usage.
-    // Read one byte past the limit to detect oversized files.
-    let mut content = String::new();
-    file.take(MAX_SKILL_SIZE + 1)
-        .read_to_string(&mut content)
-        .with_context(|| format!("Failed to read {}", skill_md.display()))?;
-
-    if content.len() as u64 > MAX_SKILL_SIZE {
-        anyhow::bail!(
-            "SKILL.md at {} exceeds size limit (>{} bytes)",
-            skill_md.display(),
-            MAX_SKILL_SIZE,
-        );
-    }
-
-    Ok(Some(content))
-}
-
 /// Resolve which tool to use for claude-sub-agent.
 /// Priority: CLI --tool > auto (heterogeneous selection based on parent tool,
 /// then first enabled+available tool in preference order).
@@ -291,30 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn read_skill_content_errors_when_skill_md_missing() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let skill_path = tempdir.path().to_str().unwrap();
-        let result = read_skill_content(skill_path);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("SKILL.md not found"));
-    }
-
-    #[test]
-    fn read_skill_content_returns_content_when_skill_md_exists() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let skill_md = tempdir.path().join("SKILL.md");
-        std::fs::write(&skill_md, "# Test Skill\nThis is a test skill.").unwrap();
-
-        let skill_path = tempdir.path().to_str().unwrap();
-        let result = read_skill_content(skill_path).unwrap();
-        assert!(result.is_some());
-        assert!(result.unwrap().contains("Test Skill"));
-    }
-
-    #[test]
     fn resolve_claude_tool_prefers_cli_override() {
         let global = GlobalConfig::default();
         let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
@@ -333,23 +249,6 @@ mod tests {
     fn get_enabled_tools_returns_all_when_no_config() {
         let tools = get_enabled_tools(None, std::path::Path::new("/tmp"));
         assert_eq!(tools.len(), csa_config::global::all_known_tools().len());
-    }
-
-    #[test]
-    fn read_skill_content_errors_when_too_large() {
-        let tempdir = tempfile::tempdir().unwrap();
-        let skill_md = tempdir.path().join("SKILL.md");
-        // Create a file exceeding MAX_SKILL_SIZE
-        let content = "x".repeat((MAX_SKILL_SIZE + 1) as usize);
-        std::fs::write(&skill_md, content).unwrap();
-
-        let skill_path = tempdir.path().to_str().unwrap();
-        let result = read_skill_content(skill_path);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("exceeds size limit"));
     }
 
     #[test]
@@ -405,24 +304,6 @@ mod tests {
         assert_eq!(tools.len(), 2);
         assert!(tools.contains(&ToolName::Codex));
         assert!(tools.contains(&ToolName::ClaudeCode));
-    }
-
-    #[test]
-    fn read_skill_content_errors_when_not_regular_file() {
-        // A directory named SKILL.md should be rejected
-        let tempdir = tempfile::tempdir().unwrap();
-        let skill_md = tempdir.path().join("SKILL.md");
-        std::fs::create_dir(&skill_md).unwrap();
-
-        let skill_path = tempdir.path().to_str().unwrap();
-        let result = read_skill_content(skill_path);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("not a regular file") || err_msg.contains("directory"),
-            "Expected 'not a regular file' error, got: {}",
-            err_msg
-        );
     }
 
     #[test]
