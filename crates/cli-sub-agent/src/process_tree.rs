@@ -152,7 +152,7 @@ fn read_comm(_pid: u32) -> Option<String> {
 /// Handles both bare names (`claude`) and full paths (`/usr/local/bin/claude`).
 /// Trims whitespace and extracts the last path component.
 fn normalize_basename(raw: &str) -> &str {
-    let trimmed = raw.trim();
+    let trimmed = raw.trim().trim_end_matches('/');
     trimmed.rsplit('/').next().unwrap_or(trimmed)
 }
 
@@ -194,9 +194,8 @@ mod tests {
 
     #[test]
     fn test_normalize_basename_trailing_slash() {
-        // Edge case: trailing slash gives empty basename, but rsplit
-        // returns the empty string after the last '/'
-        assert_eq!(normalize_basename("/usr/bin/"), "");
+        // Trailing slashes are stripped before extracting basename
+        assert_eq!(normalize_basename("/usr/bin/"), "bin");
     }
 
     #[test]
