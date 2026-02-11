@@ -22,7 +22,7 @@ Step 3: Fix local review issues (loop until clean)
        v
 Step 4: Submit PR + Review Trigger Procedure
        |                    |
-       |        (UNAVAILABLE? → Per fallback policy → Local CSA fallback)
+       |        (UNAVAILABLE? → Merge directly — local review already covers main...HEAD)
        |
        v
 Step 5: (Handled by Review Trigger Procedure — bounded poll + timeout)
@@ -33,7 +33,7 @@ Step 6: No issues? ──> Merge (remote + local) ✅ DONE
        Has issues
        |
        v
-Step 7: Evaluate each comment (cloud bot OR local CSA findings)
+Step 7: Evaluate each comment
        ├── False positive → Step 8: Debate (@codex in reply)
        └── Real issue ────→ Step 9: Fix + push + Review Trigger Procedure
                                     |
@@ -62,6 +62,7 @@ Step 7: Evaluate each comment (cloud bot OR local CSA findings)
 - **NEVER post a dismissal comment without full model specs** (`tool/provider/model/thinking_budget`) for both debate participants
 - **NEVER use the same model family for arbitration** as you (the main agent)
 - **NEVER run Step 2 (local review) as a background task** — it MUST complete synchronously before Step 4 (push PR). Running it in background causes merge-before-review bugs
+- **NEVER create or submit a PR without completing Step 2 (pre-PR local review)** — this is an ABSOLUTE, NON-NEGOTIABLE prerequisite. No local review = No PR. No exceptions, no "the changes are trivial", no "I'll review after". The local review (scope `main...HEAD`) is the FOUNDATION of the entire workflow — without it, cloud bot unavailability cannot safely fall through to merge.
 
 **If you believe a bot comment is wrong, you MUST:**
 1. Queue it for Step 8 (local arbitration) — NOT reply directly
@@ -84,8 +85,7 @@ Extract from user message or PR context:
 
 **CRITICAL**: `WORKFLOW_BRANCH` is the original branch name set once at
 workflow start. It MUST NOT be re-derived from `git branch --show-current`
-after Step 11 branch switches (e.g., `${BRANCH}-clean`). The fallback
-marker uses `WORKFLOW_BRANCH` to persist across clean resubmission branches.
+after Step 11 branch switches (e.g., `${BRANCH}-clean`).
 
 > **See**: [Baseline Capture Template](references/baseline-template.md) — run this before every `@codex review` trigger.
 
@@ -99,7 +99,13 @@ and committed before proceeding.
 WORKFLOW_BRANCH="$(git branch --show-current)"
 ```
 
-## Step 2: Local Review (MUST BLOCK)
+## Step 2: Local Review (ABSOLUTE PREREQUISITE — MUST BLOCK)
+
+**THIS IS THE MOST CRITICAL STEP IN THE ENTIRE WORKFLOW.**
+
+The pre-PR local review (`main...HEAD`) is the FOUNDATION that makes the entire
+workflow safe. It is what allows us to merge directly when the cloud bot is
+unavailable. **Without this step, the PR MUST NOT be created — period.**
 
 **CRITICAL: This step MUST run synchronously. NEVER launch the local review as a
 background task.** The merge-before-review bug occurs when the local review runs in
@@ -137,14 +143,16 @@ If the local review found issues:
    then update the marker: `git rev-parse HEAD > "${LOCAL_REVIEW_MARKER}"`
 4. Repeat until clean
 
-**GATE: Only proceed to Step 4 when local review returns zero issues.
-This is a hard gate — no exceptions, no "review is probably fine", no skipping.**
+**HARD GATE: Only proceed to Step 4 when local review returns zero issues.
+No exceptions. No "review is probably fine". No skipping. No "changes are trivial".
+If the local review has not been completed for the current HEAD, the PR MUST NOT
+be created. This gate is what makes UNAVAILABLE → direct merge safe.**
 
 ## Review Trigger Procedure (Single Entry Point)
 
 **All review triggers (Steps 4, 9, 11/12) MUST use this unified procedure.**
 
-> **See**: [Review Trigger Procedure](references/review-trigger-procedure.md) — complete procedure with baseline capture, bounded poll loop, quota detection, and local CSA fallback.
+> **See**: [Review Trigger Procedure](references/review-trigger-procedure.md) — complete procedure with baseline capture, bounded poll loop, quota detection, and direct merge on UNAVAILABLE.
 
 **Quick reference** — Normalized review outcomes:
 
@@ -152,17 +160,27 @@ This is a hard gate — no exceptions, no "review is probably fine", no skipping
 |---------|---------|-------------|
 | `CLEAN` | No issues found | Proceed to merge path |
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
-| `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
+| `UNAVAILABLE(quota)` | Cloud bot quota exhausted | **Merge directly** — local review already covers `main...HEAD` |
+| `UNAVAILABLE(timeout)` | Cloud bot did not respond in 10 min | **Merge directly** — local review already covers `main...HEAD` |
+| `ESCALATE(api_error)` | GitHub API failed (transient) | **Notify user** — bot may still be reviewing, retry or decide |
 
-**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: check fallback policy, then local `csa review --branch main` or user prompt.
+**Phases**: (1) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (2) If `UNAVAILABLE(quota/timeout)`: verify LOCAL_REVIEW_MARKER exists and matches HEAD, then **merge directly**. If `ESCALATE(api_error)`: notify user (transient failure, not conclusive).
 
-**Fallback policy** (configured via `csa config get fallback.cloud_review_exhausted --global`):
-- `auto-local`: Automatically fall back to local CSA review (still reviews, just locally)
-- `ask-user` (default): Notify user and ask for confirmation before switching
+**Rationale for direct merge on UNAVAILABLE**: Step 2 (pre-PR local review) already
+reviews the FULL `main...HEAD` range — the exact same scope the cloud bot would review.
+When the cloud bot is deterministically unavailable (quota exhausted, timeout), the local
+review has ALREADY provided equivalent independent coverage. No fallback review, no
+user prompt, no fallback marker needed. Just merge.
 
-Fallback marker uses `BRANCH` (not `PR_NUM`) so it persists across PRs
-within the same workflow (e.g., Step 11 clean resubmission). A new workflow
-on a different branch starts fresh.
+**Why api_error is ESCALATE, not UNAVAILABLE**: API errors are transient (network
+issues, GitHub outages, permission problems). The bot may still be processing the
+review — we just can't read the result. Unlike quota (bot explicitly says "can't
+review") or timeout (bot didn't respond at all), api_error doesn't prove the bot
+won't review. Escalate to user for retry/decision.
+
+**PREREQUISITE**: Direct-merge-on-UNAVAILABLE is ONLY safe when LOCAL_REVIEW_MARKER
+matches the current HEAD. Step 9 MUST refresh the marker after fixes (re-run local
+review). If the marker is missing or stale, direct merge is FORBIDDEN.
 
 ## Step 4: Submit PR
 
@@ -195,7 +213,7 @@ TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
 ```
 
 **Now follow the [Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**
-to trigger review (cloud or local fallback) and wait for results.
+to trigger cloud review and wait for results.
 
 ## Step 5: Poll for Bot Response
 
@@ -498,8 +516,6 @@ models were used and assess the quality of the arbitration.
   + `@codex review` in Step 9 will trigger re-evaluation
 - **The ONLY place to `@codex`** is `gh pr comment` to trigger a full
   re-review (Steps 4, 9, 11) — handled by the Review Trigger Procedure
-- **When cloud fallback is active** (marker exists), `@codex` is NOT
-  triggered at all — local CSA review is used instead
 
 ## Step 9: Fix Real Issues
 
@@ -517,11 +533,23 @@ git add [fixed files]
 git commit -m "fix(scope): [description]
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
+```
+
+**MANDATORY: Re-run local review before push** — the fix has moved HEAD, so the
+LOCAL_REVIEW_MARKER from Step 2 is now stale. The direct-merge-on-UNAVAILABLE
+path requires a fresh marker matching the current HEAD.
+
+```bash
+# Re-run local review for updated HEAD (same blocking rule as Step 2)
+csa review --branch main
+LOCAL_REVIEW_MARKER="/tmp/codex-local-review-${REPO//\//-}-${BRANCH//\//-}.marker"
+git rev-parse HEAD > "${LOCAL_REVIEW_MARKER}"
+
 git push origin "${BRANCH}"
 ```
 
 **Now follow the [Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**
-to trigger review (cloud or local fallback) and wait for results.
+to trigger cloud review and wait for results.
 Then re-evaluate (Step 7).
 
 ## Step 10: Re-Review Loop
@@ -529,7 +557,8 @@ Then re-evaluate (Step 7).
 After pushing fixes, follow the **[Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**:
 - Result is `HAS_ISSUES` → back to Step 7 (evaluate, debate/fix)
 - Result is `CLEAN` → proceed to Step 11 (clean resubmission)
-- Result is `UNAVAILABLE` → per `fallback.cloud_review_exhausted` policy
+- Result is `UNAVAILABLE(quota/timeout)` → merge directly (local review refreshed in Step 9)
+- Result is `ESCALATE(api_error)` → notify user (transient failure, retry or decide)
 
 ## Step 11: Clean Resubmission
 
@@ -547,7 +576,8 @@ on the new clean PR (update `PR_NUM` and `TMP_PREFIX` for the new PR first):
   - If fixes are needed again, repeat the full cycle including
     another clean resubmission (Step 11) with incrementing branch
     names: `${BRANCH}-clean-2`, `${BRANCH}-clean-3`, etc.
-- Result is `UNAVAILABLE` → per `fallback.cloud_review_exhausted` policy
+- Result is `UNAVAILABLE(quota/timeout)` → merge directly (local review covers `main...HEAD`)
+- Result is `ESCALATE(api_error)` → notify user (transient failure, retry or decide)
 
 ## Step 13: Merge
 
@@ -578,10 +608,9 @@ git checkout main && git pull origin main
 | Max iterations reached | **Escalate** - report to user |
 | Same issue re-flagged after fix | **Escalate** - root cause missed |
 | Bot flags architectural issue | **Escalate** - needs human decision |
-| Poll timeout (10 min) | **UNAVAILABLE(timeout)** - per `fallback.cloud_review_exhausted` policy |
-| Bot replies with quota message | **UNAVAILABLE(quota)** - per `fallback.cloud_review_exhausted` policy |
-| API errors (5 consecutive) | **UNAVAILABLE(api_error)** - per `fallback.cloud_review_exhausted` policy |
-| Cloud fallback active | **Local CSA review** - skip cloud, use local for remainder |
+| Poll timeout (10 min) | **UNAVAILABLE(timeout)** — merge directly (local review covers `main...HEAD`) |
+| Bot replies with quota message | **UNAVAILABLE(quota)** — merge directly (local review covers `main...HEAD`) |
+| API errors (5 consecutive) | **ESCALATE(api_error)** — notify user (transient failure, bot may still be reviewing) |
 
 ## Anti-Trust Protocol
 
@@ -632,4 +661,3 @@ Bot user login: `chatgpt-codex-connector[bot]`
 | `debate` | Step 8: adversarial arbitration for suspected false positives |
 | `commit` | After fixing issues |
 | `csa run --tier tier-4-critical` | If bot flags security issue (deep analysis) |
-| `csa review --branch main` | Cloud fallback: local CSA review when `@codex` is unavailable |

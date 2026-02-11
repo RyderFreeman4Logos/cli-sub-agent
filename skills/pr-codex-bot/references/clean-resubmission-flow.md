@@ -52,7 +52,7 @@ PR_NUM="${NEW_PR_NUM}"
 TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
 # NOTE: Do NOT trigger @codex review here.
 # Step 12 handles review via the Review Trigger Procedure
-# (baseline capture + trigger + poll + fallback) to avoid double-triggering.
+# (baseline capture + trigger + poll) to avoid double-triggering.
 ```
 
 ## Commit Grouping Strategy
