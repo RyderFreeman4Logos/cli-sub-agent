@@ -217,6 +217,15 @@ impl TodoManager {
         self.load_inner(timestamp)
     }
 
+    /// Load the most recent TODO plan, or error if none exist.
+    pub fn latest(&self) -> Result<TodoPlan> {
+        let plans = self.list()?;
+        plans
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("No TODO plans found for this project"))
+    }
+
     /// List all TODO plans for this project, sorted newest-first.
     pub fn list(&self) -> Result<Vec<TodoPlan>> {
         if !self.todos_dir.exists() {
@@ -706,6 +715,30 @@ mod tests {
 
         let reloaded = manager.load(&plan.timestamp).unwrap();
         assert!(reloaded.metadata.updated_at > original_updated_at);
+    }
+
+    #[test]
+    fn test_latest() {
+        let dir = tempdir().unwrap();
+        let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+        manager.create("Plan A", None).unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(1));
+        let plan_b = manager.create("Plan B", None).unwrap();
+
+        let latest = manager.latest().unwrap();
+        assert_eq!(latest.metadata.title, "Plan B");
+        assert_eq!(latest.timestamp, plan_b.timestamp);
+    }
+
+    #[test]
+    fn test_latest_empty() {
+        let dir = tempdir().unwrap();
+        let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+        let result = manager.latest();
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("No TODO plans"));
     }
 
     #[test]

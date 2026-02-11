@@ -458,9 +458,9 @@ pub enum TodoCommands {
 
     /// Save (git commit) current TODO plan changes
     Save {
-        /// Timestamp of the TODO plan
+        /// Timestamp of the TODO plan (default: latest)
         #[arg(short, long)]
-        timestamp: String,
+        timestamp: Option<String>,
 
         /// Commit message
         message: Option<String>,
@@ -472,13 +472,21 @@ pub enum TodoCommands {
 
     /// Show diff of TODO plan changes
     Diff {
-        /// Timestamp of the TODO plan
+        /// Timestamp of the TODO plan (default: latest)
         #[arg(short, long)]
-        timestamp: String,
+        timestamp: Option<String>,
 
-        /// Git revision to diff against (default: HEAD)
-        #[arg(long)]
+        /// Git revision to diff against (default: file's last commit)
+        #[arg(long, conflicts_with_all = ["from", "to"])]
         revision: Option<String>,
+
+        /// Diff from this version number (1 = last committed, 2 = before that)
+        #[arg(long)]
+        from: Option<usize>,
+
+        /// Diff to this version number (1 = last committed, 2 = before that)
+        #[arg(long)]
+        to: Option<usize>,
 
         /// Working directory
         #[arg(long)]
@@ -487,9 +495,9 @@ pub enum TodoCommands {
 
     /// Show git history of a TODO plan
     History {
-        /// Timestamp of the TODO plan
+        /// Timestamp of the TODO plan (default: latest)
         #[arg(short, long)]
-        timestamp: String,
+        timestamp: Option<String>,
 
         /// Working directory
         #[arg(long)]
@@ -524,12 +532,16 @@ pub enum TodoCommands {
 
     /// Show a TODO plan's content
     Show {
-        /// Timestamp of the TODO plan
+        /// Timestamp of the TODO plan (default: latest)
         #[arg(short, long)]
-        timestamp: String,
+        timestamp: Option<String>,
+
+        /// Show a historical version (1 = last committed, 2 = before that)
+        #[arg(short, long)]
+        version: Option<usize>,
 
         /// Print only the file path (for scripting)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "version")]
         path: bool,
 
         /// Working directory
