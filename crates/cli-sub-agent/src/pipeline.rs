@@ -6,19 +6,21 @@
 //! - Global slot acquisition with concurrency limits
 
 use anyhow::{Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::signal::unix::{signal, SignalKind};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{create_session_log_writer, Executor};
+use csa_hooks::{global_hooks_path, load_hooks_config, run_hooks_for_event, HookEvent};
 use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
-    create_session, get_session_dir, load_session, resolve_session_prefix, save_session,
-    TokenUsage, ToolState,
+    create_session, get_session_dir, load_session, resolve_session_prefix, save_result,
+    save_session, SessionResult, TokenUsage, ToolState,
 };
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
@@ -145,10 +147,17 @@ pub(crate) async fn execute_with_session(
     let mut session = if let Some(ref session_id) = session_arg {
         let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
         let resolved_id = resolve_session_prefix(&sessions_dir, session_id)?;
+        // Validate tool access before loading
+        csa_session::validate_tool_access(project_root, &resolved_id, tool.as_str())?;
         load_session(project_root, &resolved_id)?
     } else {
         let parent_id = parent.or_else(|| std::env::var("CSA_SESSION_ID").ok());
-        create_session(project_root, description.as_deref(), parent_id.as_deref())?
+        create_session(
+            project_root,
+            description.as_deref(),
+            parent_id.as_deref(),
+            Some(tool.as_str()),
+        )?
     };
 
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
@@ -200,6 +209,9 @@ pub(crate) async fn execute_with_session(
     // Build command
     let tool_state = session.tools.get(executor.tool_name()).cloned();
     let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
+
+    // Record execution start time before spawning
+    let execution_start_time = chrono::Utc::now();
 
     // Spawn child process
     let child = csa_process::spawn_tool(cmd)
@@ -315,8 +327,65 @@ pub(crate) async fn execute_with_session(
         );
     }
 
+    // Write prompt to input/ for audit trail
+    let input_dir = session_dir.join("input");
+    if input_dir.exists() {
+        let prompt_path = input_dir.join("prompt.txt");
+        if let Err(e) = fs::write(&prompt_path, prompt) {
+            warn!("Failed to write prompt to input/: {}", e);
+        }
+    }
+
+    // Write structured result
+    let execution_end_time = chrono::Utc::now();
+    let session_result = SessionResult {
+        status: SessionResult::status_from_exit_code(result.exit_code),
+        exit_code: result.exit_code,
+        summary: result.summary.clone(),
+        tool: executor.tool_name().to_string(),
+        started_at: execution_start_time,
+        completed_at: execution_end_time,
+        artifacts: Vec::new(), // populated by hooks later (Phase 3.3)
+    };
+    if let Err(e) = save_result(project_root, &session.meta_session_id, &session_result) {
+        warn!("Failed to save session result: {}", e);
+    }
+
     // Save session
     save_session(&session)?;
+
+    // Fire PostRun and SessionComplete hooks (best-effort)
+    let project_hooks_path = csa_session::get_session_root(project_root)
+        .ok()
+        .map(|root| root.join("hooks.toml"));
+    let hooks_config = load_hooks_config(
+        project_hooks_path.as_deref(),
+        global_hooks_path().as_deref(),
+        None,
+    );
+    let mut hook_vars = std::collections::HashMap::new();
+    hook_vars.insert("session_id".to_string(), session.meta_session_id.clone());
+    hook_vars.insert("session_dir".to_string(), session_dir.display().to_string());
+    hook_vars.insert(
+        "sessions_root".to_string(),
+        session_dir
+            .parent()
+            .unwrap_or(&session_dir)
+            .display()
+            .to_string(),
+    );
+    hook_vars.insert("tool".to_string(), executor.tool_name().to_string());
+    hook_vars.insert("exit_code".to_string(), result.exit_code.to_string());
+
+    // PostRun hook: fires after every tool execution
+    if let Err(e) = run_hooks_for_event(HookEvent::PostRun, &hooks_config, &hook_vars) {
+        warn!("PostRun hook failed: {}", e);
+    }
+
+    // SessionComplete hook: git-commits session artifacts
+    if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &hook_vars) {
+        warn!("SessionComplete hook failed: {}", e);
+    }
 
     Ok(result)
 }

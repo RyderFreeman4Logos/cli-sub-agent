@@ -4,8 +4,8 @@ use tracing::info;
 
 use csa_core::types::OutputFormat;
 use csa_session::{
-    delete_session, get_session_dir, list_sessions, list_sessions_tree, load_session,
-    resolve_session_prefix,
+    delete_session, get_session_dir, list_artifacts, list_sessions, list_sessions_tree,
+    load_result, load_session, resolve_session_prefix,
 };
 
 pub(crate) fn handle_session_list(
@@ -265,5 +265,65 @@ pub(crate) fn handle_session_clean(
         removed
     );
 
+    Ok(())
+}
+
+pub(crate) fn handle_session_result(session: String, json: bool, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    match load_result(&project_root, &resolved_id)? {
+        Some(result) => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            } else {
+                println!("Session: {}", resolved_id);
+                println!("Status:  {}", result.status);
+                println!("Exit:    {}", result.exit_code);
+                println!("Tool:    {}", result.tool);
+                println!("Started: {}", result.started_at);
+                println!("Ended:   {}", result.completed_at);
+                println!("Summary: {}", result.summary);
+                if !result.artifacts.is_empty() {
+                    println!("Artifacts:");
+                    for a in &result.artifacts {
+                        println!("  - {}", a);
+                    }
+                }
+            }
+        }
+        None => {
+            eprintln!("No result found for session '{}'", resolved_id);
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    let artifacts = list_artifacts(&project_root, &resolved_id)?;
+    if artifacts.is_empty() {
+        eprintln!("No artifacts for session '{}'", resolved_id);
+    } else {
+        let session_dir = get_session_dir(&project_root, &resolved_id)?;
+        for a in &artifacts {
+            println!("{}", session_dir.join("output").join(a).display());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    let log = csa_session::git::history(&sessions_dir, &resolved_id)?;
+    if log.is_empty() {
+        eprintln!("No git history for session '{}'", resolved_id);
+    } else {
+        print!("{}", log);
+    }
     Ok(())
 }

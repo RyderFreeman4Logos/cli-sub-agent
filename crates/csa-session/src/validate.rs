@@ -48,6 +48,10 @@ pub fn resolve_session_prefix(sessions_dir: &Path, prefix: &str) -> Result<Strin
         let file_name = entry.file_name();
         let name = file_name.to_string_lossy();
 
+        // Skip hidden directories (e.g. .git, .lock) that aren't session IDs
+        if name.starts_with('.') {
+            continue;
+        }
         if name.to_uppercase().starts_with(&prefix.to_uppercase()) {
             matches.push(name.to_string());
         }

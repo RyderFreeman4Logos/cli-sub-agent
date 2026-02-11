@@ -180,6 +180,7 @@ dependencies = [
  "csa-config",
  "csa-core",
  "csa-executor",
+ "csa-hooks",
  "csa-lock",
  "csa-process",
  "csa-resource",
@@ -285,6 +286,19 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-appender",
+]
+
+[[package]]
+name = "csa-hooks"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "directories",
+ "libc",
+ "serde",
+ "tempfile",
+ "toml",
+ "tracing",
 ]
 
 [[package]]

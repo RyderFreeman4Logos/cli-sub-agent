@@ -112,6 +112,15 @@ async fn main() -> Result<()> {
             SessionCommands::Logs { session, tail, cd } => {
                 session_cmds::handle_session_logs(session, tail, cd)?;
             }
+            SessionCommands::Result { session, json, cd } => {
+                session_cmds::handle_session_result(session, json, cd)?;
+            }
+            SessionCommands::Artifacts { session, cd } => {
+                session_cmds::handle_session_artifacts(session, cd)?;
+            }
+            SessionCommands::Log { session, cd } => {
+                session_cmds::handle_session_log(session, cd)?;
+            }
         },
         Commands::Init {
             non_interactive,

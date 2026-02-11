@@ -1,5 +1,6 @@
 //! Session CRUD operations
 
+use crate::result::{SessionResult, RESULT_FILE_NAME};
 use crate::state::MetaSessionState;
 use crate::validate::{new_session_id, validate_session_id};
 use anyhow::{bail, Context, Result};
@@ -47,13 +48,15 @@ fn get_session_dir_in(base_dir: &Path, session_id: &str) -> PathBuf {
 ///
 /// If `parent_id` is provided, this session will be a child of that parent.
 /// Depth is computed from the parent (parent.depth + 1).
+/// If `tool` is provided, metadata.toml is created with tool ownership info.
 pub fn create_session(
     project_path: &Path,
     description: Option<&str>,
     parent_id: Option<&str>,
+    tool: Option<&str>,
 ) -> Result<MetaSessionState> {
     let base_dir = get_session_root(project_path)?;
-    create_session_in(&base_dir, project_path, description, parent_id)
+    create_session_in(&base_dir, project_path, description, parent_id, tool)
 }
 
 /// Internal implementation: create session in explicit base directory
@@ -62,6 +65,7 @@ pub(crate) fn create_session_in(
     project_path: &Path,
     description: Option<&str>,
     parent_id: Option<&str>,
+    tool: Option<&str>,
 ) -> Result<MetaSessionState> {
     let session_id = new_session_id();
     let session_dir = get_session_dir_in(base_dir, &session_id);
@@ -75,6 +79,10 @@ pub(crate) fn create_session_in(
         (None, 0)
     };
 
+    // Ensure sessions dir is a git repo (before creating session dir to avoid orphans on failure)
+    let sessions_dir = base_dir.join("sessions");
+    crate::git::ensure_git_init(&sessions_dir)?;
+
     // Create session directory
     fs::create_dir_all(&session_dir).with_context(|| {
         format!(
@@ -82,6 +90,23 @@ pub(crate) fn create_session_in(
             session_dir.display()
         )
     })?;
+
+    // Create input/ and output/ subdirectories
+    fs::create_dir_all(session_dir.join("input"))?;
+    fs::create_dir_all(session_dir.join("output"))?;
+
+    // Write metadata.toml if tool is specified
+    if let Some(tool_name) = tool {
+        let metadata = crate::metadata::SessionMetadata {
+            tool: tool_name.to_string(),
+            tool_locked: true,
+        };
+        let metadata_path = session_dir.join(crate::metadata::METADATA_FILE_NAME);
+        let contents =
+            toml::to_string_pretty(&metadata).context("Failed to serialize session metadata")?;
+        fs::write(&metadata_path, contents)
+            .with_context(|| format!("Failed to write metadata: {}", metadata_path.display()))?;
+    }
 
     let now = Utc::now();
 
@@ -207,8 +232,11 @@ pub(crate) fn list_all_sessions_in(base_dir: &Path) -> Result<Vec<MetaSessionSta
         let entry = entry.context("Failed to read directory entry")?;
         let session_id = entry.file_name().to_string_lossy().to_string();
 
-        // Skip non-directory entries
+        // Skip non-directory entries and hidden directories (e.g. .git)
         if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        if session_id.starts_with('.') {
             continue;
         }
 
@@ -317,6 +345,140 @@ pub fn update_last_accessed(state: &mut MetaSessionState) -> Result<()> {
     save_session(state)
 }
 
+/// Mark a session as complete and commit its state to git.
+/// Returns the short commit hash.
+pub fn complete_session(project_path: &Path, session_id: &str, message: &str) -> Result<String> {
+    let base_dir = get_session_root(project_path)?;
+    complete_session_in(&base_dir, session_id, message)
+}
+
+/// Internal implementation: complete session in explicit base directory
+pub(crate) fn complete_session_in(
+    base_dir: &Path,
+    session_id: &str,
+    message: &str,
+) -> Result<String> {
+    validate_session_id(session_id)?;
+    let sessions_dir = base_dir.join("sessions");
+    crate::git::commit_session(&sessions_dir, session_id, message)
+}
+
+/// Load session metadata (tool ownership info)
+pub fn load_metadata(
+    project_path: &Path,
+    session_id: &str,
+) -> Result<Option<crate::metadata::SessionMetadata>> {
+    let base_dir = get_session_root(project_path)?;
+    load_metadata_in(&base_dir, session_id)
+}
+
+/// Internal implementation: load metadata from explicit base directory
+pub(crate) fn load_metadata_in(
+    base_dir: &Path,
+    session_id: &str,
+) -> Result<Option<crate::metadata::SessionMetadata>> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let metadata_path = session_dir.join(crate::metadata::METADATA_FILE_NAME);
+
+    if !metadata_path.exists() {
+        return Ok(None);
+    }
+
+    let contents = fs::read_to_string(&metadata_path)
+        .with_context(|| format!("Failed to read metadata: {}", metadata_path.display()))?;
+    let metadata: crate::metadata::SessionMetadata = toml::from_str(&contents)
+        .with_context(|| format!("Failed to parse metadata: {}", metadata_path.display()))?;
+
+    Ok(Some(metadata))
+}
+
+/// Validate that the given tool can access this session.
+/// Returns Ok(()) if access is allowed, Err if tool_locked and tool doesn't match.
+pub fn validate_tool_access(project_path: &Path, session_id: &str, tool: &str) -> Result<()> {
+    let base_dir = get_session_root(project_path)?;
+    validate_tool_access_in(&base_dir, session_id, tool)
+}
+
+/// Internal implementation: validate tool access in explicit base directory
+pub(crate) fn validate_tool_access_in(base_dir: &Path, session_id: &str, tool: &str) -> Result<()> {
+    if let Some(metadata) = load_metadata_in(base_dir, session_id)? {
+        if metadata.tool_locked && metadata.tool != tool {
+            anyhow::bail!(
+                "Session '{}' is locked to tool '{}', cannot access with '{}'",
+                session_id,
+                metadata.tool,
+                tool
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Write a session result to disk
+pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
+    let base_dir = get_session_root(project_path)?;
+    save_result_in(&base_dir, session_id, result)
+}
+
+pub(crate) fn save_result_in(
+    base_dir: &Path,
+    session_id: &str,
+    result: &SessionResult,
+) -> Result<()> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let result_path = session_dir.join(RESULT_FILE_NAME);
+    let contents = toml::to_string_pretty(result).context("Failed to serialize session result")?;
+    fs::write(&result_path, contents)
+        .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
+    Ok(())
+}
+
+/// Load a session result
+pub fn load_result(project_path: &Path, session_id: &str) -> Result<Option<SessionResult>> {
+    let base_dir = get_session_root(project_path)?;
+    load_result_in(&base_dir, session_id)
+}
+
+pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option<SessionResult>> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let result_path = session_dir.join(RESULT_FILE_NAME);
+    if !result_path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&result_path)
+        .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
+    let result: SessionResult = toml::from_str(&contents)
+        .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
+    Ok(Some(result))
+}
+
+/// List artifacts in a session's output/ directory
+pub fn list_artifacts(project_path: &Path, session_id: &str) -> Result<Vec<String>> {
+    let base_dir = get_session_root(project_path)?;
+    list_artifacts_in(&base_dir, session_id)
+}
+
+pub(crate) fn list_artifacts_in(base_dir: &Path, session_id: &str) -> Result<Vec<String>> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let output_dir = session_dir.join("output");
+    if !output_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut artifacts = Vec::new();
+    for entry in fs::read_dir(&output_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            artifacts.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    artifacts.sort();
+    Ok(artifacts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,8 +489,14 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let state = create_session_in(temp_dir.path(), project_path, Some("Test session"), None)
-            .expect("Failed to create session");
+        let state = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Test session"),
+            None,
+            None,
+        )
+        .expect("Failed to create session");
 
         assert_eq!(state.description, Some("Test session".to_string()));
         assert_eq!(state.genealogy.depth, 0);
@@ -337,6 +505,8 @@ mod tests {
         let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
         assert!(session_dir.exists());
         assert!(session_dir.join(STATE_FILE_NAME).exists());
+        assert!(session_dir.join("input").is_dir());
+        assert!(session_dir.join("output").is_dir());
     }
 
     #[test]
@@ -344,7 +514,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let created = create_session_in(temp_dir.path(), project_path, Some("Test"), None)
+        let created = create_session_in(temp_dir.path(), project_path, Some("Test"), None, None)
             .expect("Failed to create session");
 
         let loaded = load_session_in(temp_dir.path(), &created.meta_session_id)
@@ -359,7 +529,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let state = create_session_in(temp_dir.path(), project_path, None, None)
+        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
             .expect("Failed to create session");
 
         let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
@@ -376,9 +546,9 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        create_session_in(temp_dir.path(), project_path, Some("Session 1"), None)
+        create_session_in(temp_dir.path(), project_path, Some("Session 1"), None, None)
             .expect("Failed to create session 1");
-        create_session_in(temp_dir.path(), project_path, Some("Session 2"), None)
+        create_session_in(temp_dir.path(), project_path, Some("Session 2"), None, None)
             .expect("Failed to create session 2");
 
         let sessions = list_all_sessions_in(temp_dir.path()).expect("Failed to list sessions");
@@ -391,8 +561,9 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let mut state1 = create_session_in(temp_dir.path(), project_path, Some("Session 1"), None)
-            .expect("Failed to create session 1");
+        let mut state1 =
+            create_session_in(temp_dir.path(), project_path, Some("Session 1"), None, None)
+                .expect("Failed to create session 1");
 
         state1.tools.insert(
             "codex".to_string(),
@@ -406,7 +577,7 @@ mod tests {
         );
         save_session_in(temp_dir.path(), &state1).expect("Failed to save state1");
 
-        create_session_in(temp_dir.path(), project_path, Some("Session 2"), None)
+        create_session_in(temp_dir.path(), project_path, Some("Session 2"), None, None)
             .expect("Failed to create session 2");
 
         let filtered = list_sessions_in(temp_dir.path(), Some(&["codex"]))
@@ -421,7 +592,7 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None)
+        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None, None)
             .expect("Failed to create parent");
 
         let child = create_session_in(
@@ -429,6 +600,7 @@ mod tests {
             project_path,
             Some("Child"),
             Some(&parent.meta_session_id),
+            None,
         )
         .expect("Failed to create child");
 
@@ -444,9 +616,14 @@ mod tests {
         let temp_dir = tempdir().expect("Failed to create temp dir");
         let project_path = temp_dir.path();
 
-        let created =
-            create_session_in(temp_dir.path(), project_path, Some("Round trip test"), None)
-                .expect("Failed to create session");
+        let created = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Round trip test"),
+            None,
+            None,
+        )
+        .expect("Failed to create session");
 
         let loaded = load_session_in(temp_dir.path(), &created.meta_session_id)
             .expect("Failed to load session");
@@ -455,5 +632,158 @@ mod tests {
         assert_eq!(loaded.description, created.description);
         assert_eq!(loaded.project_path, created.project_path);
         assert_eq!(loaded.genealogy.depth, created.genealogy.depth);
+    }
+
+    #[test]
+    fn test_create_session_with_tool() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Test"),
+            None,
+            Some("codex"),
+        )
+        .expect("Failed to create session");
+
+        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
+        assert!(session_dir.join("metadata.toml").exists());
+        assert!(session_dir.join("input").is_dir());
+        assert!(session_dir.join("output").is_dir());
+
+        let metadata = load_metadata_in(temp_dir.path(), &state.meta_session_id)
+            .expect("Failed to load metadata")
+            .expect("Metadata should exist");
+        assert_eq!(metadata.tool, "codex");
+        assert!(metadata.tool_locked);
+    }
+
+    #[test]
+    fn test_tool_access_validation() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
+            .expect("Failed to create session");
+
+        // Same tool should be allowed
+        validate_tool_access_in(temp_dir.path(), &state.meta_session_id, "codex")
+            .expect("Same tool should be allowed");
+
+        // Different tool should fail
+        let result = validate_tool_access_in(temp_dir.path(), &state.meta_session_id, "gemini-cli");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("locked to tool"));
+    }
+
+    #[test]
+    fn test_no_tool_no_metadata() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
+            .expect("Failed to create session");
+
+        let metadata = load_metadata_in(temp_dir.path(), &state.meta_session_id)
+            .expect("Failed to load metadata");
+        assert!(metadata.is_none());
+    }
+
+    #[test]
+    fn test_complete_session() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Test"),
+            None,
+            Some("codex"),
+        )
+        .expect("Failed to create session");
+
+        let hash = complete_session_in(temp_dir.path(), &state.meta_session_id, "session complete")
+            .expect("Failed to complete session");
+        assert!(!hash.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_result() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
+            .expect("Failed to create session");
+
+        let result = crate::result::SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "Test completed".to_string(),
+            tool: "codex".to_string(),
+            started_at: chrono::Utc::now(),
+            completed_at: chrono::Utc::now(),
+            artifacts: vec!["output/result.txt".to_string()],
+        };
+
+        save_result_in(temp_dir.path(), &state.meta_session_id, &result)
+            .expect("Failed to save result");
+
+        let loaded = load_result_in(temp_dir.path(), &state.meta_session_id)
+            .expect("Failed to load result")
+            .expect("Result should exist");
+
+        assert_eq!(loaded.status, "success");
+        assert_eq!(loaded.exit_code, 0);
+        assert_eq!(loaded.tool, "codex");
+        assert_eq!(loaded.artifacts.len(), 1);
+    }
+
+    #[test]
+    fn test_load_result_not_found() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
+            .expect("Failed to create session");
+
+        let loaded =
+            load_result_in(temp_dir.path(), &state.meta_session_id).expect("Failed to load result");
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_list_artifacts() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
+            .expect("Failed to create session");
+
+        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
+        // Create some artifact files
+        std::fs::write(session_dir.join("output/report.txt"), "test").unwrap();
+        std::fs::write(session_dir.join("output/diff.patch"), "test").unwrap();
+
+        let artifacts = list_artifacts_in(temp_dir.path(), &state.meta_session_id)
+            .expect("Failed to list artifacts");
+        assert_eq!(artifacts.len(), 2);
+        assert!(artifacts.contains(&"diff.patch".to_string()));
+        assert!(artifacts.contains(&"report.txt".to_string()));
+    }
+
+    #[test]
+    fn test_status_from_exit_code() {
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(0),
+            "success"
+        );
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(1),
+            "failure"
+        );
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(137),
+            "signal"
+        );
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(143),
+            "signal"
+        );
     }
 }
