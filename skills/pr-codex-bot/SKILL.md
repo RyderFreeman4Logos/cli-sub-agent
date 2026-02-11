@@ -20,10 +20,12 @@ Step 2: Local review (codex-noninteractive-review-orchestrator)
 Step 3: Fix local review issues (loop until clean)
        |
        v
-Step 4: Submit PR + @codex review
+Step 4: Submit PR + Review Trigger Procedure
+       |                    |
+       |        (UNAVAILABLE? → User confirms → Local CSA fallback)
        |
        v
-Step 5: Poll for bot response (NEVER assume, ALWAYS poll)
+Step 5: (Handled by Review Trigger Procedure — bounded poll + timeout)
        |
        v
 Step 6: No issues? ──> Merge (remote + local) ✅ DONE
@@ -31,12 +33,12 @@ Step 6: No issues? ──> Merge (remote + local) ✅ DONE
        Has issues
        |
        v
-Step 7: Evaluate each comment
+Step 7: Evaluate each comment (cloud bot OR local CSA findings)
        ├── False positive → Step 8: Debate (@codex in reply)
-       └── Real issue ────→ Step 9: Fix + push + @codex review
+       └── Real issue ────→ Step 9: Fix + push + Review Trigger Procedure
                                     |
                                     v
-                             Step 10: Poll → Has issues? → Back to Step 7
+                             Step 10: Review result → Has issues? → Back to Step 7
                                     |
                                     No issues
                                     |
@@ -44,7 +46,7 @@ Step 7: Evaluate each comment
                              Step 11: Clean resubmission (new branch + new PR)
                                     |
                                     v
-                             Step 12: Poll new PR → Has issues? → Back to Step 7
+                             Step 12: Review Trigger Procedure → Has issues? → Back to Step 7
                                     |
                                     No issues
                                     |
@@ -127,6 +129,27 @@ If the local review found issues:
 **GATE: Only proceed to Step 4 when local review returns zero issues.
 This is a hard gate — no exceptions, no "review is probably fine", no skipping.**
 
+## Review Trigger Procedure (Single Entry Point)
+
+**All review triggers (Steps 4, 9, 11/12) MUST use this unified procedure.**
+
+> **See**: [Review Trigger Procedure](references/review-trigger-procedure.md) — complete procedure with baseline capture, bounded poll loop, quota detection, and local CSA fallback.
+
+**Quick reference** — Normalized review outcomes:
+
+| Outcome | Meaning | Next Action |
+|---------|---------|-------------|
+| `CLEAN` | No issues found | Proceed to merge path |
+| `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
+| `UNAVAILABLE(reason)` | Cloud bot did not respond | User confirms local fallback |
+
+**Phases**: (1) Check fallback marker → (2) Cloud path: baseline + `@codex review` + bounded poll (max 10 min, max 5 API failures) → (3) If `UNAVAILABLE`: notify user, confirm fallback, run local `csa review --diff` instead.
+
+**CRITICAL**: Do NOT silently fall back. User MUST confirm before switching
+to local CSA review. Fallback marker uses `BRANCH` (not `PR_NUM`) so it
+persists across PRs within the same workflow (e.g., Step 11 clean
+resubmission). A new workflow on a different branch starts fresh.
+
 ## Step 4: Submit PR
 
 ```bash
@@ -153,91 +176,18 @@ gh pr create --title "[type](scope): [description]" \
 PREOF
 )"
 
-# Use Baseline Capture Template (see above)
+# Initialize TMP_PREFIX for this PR
 TMP_PREFIX="/tmp/codex-bot-${REPO//\//-}-${PR_NUM}"
-
-gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-baseline.json" || {
-  echo "ERROR: Failed to capture PR comments baseline"
-  exit 1
-}
-gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-issue-baseline.json" || {
-  echo "ERROR: Failed to capture issue comments baseline"
-  exit 1
-}
-BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || {
-  echo "ERROR: Failed to capture baseline review count"
-  exit 1
-}
-case "${BASELINE_REVIEW_COUNT}" in
-  ''|*[!0-9]*) echo "ERROR: Invalid BASELINE_REVIEW_COUNT: ${BASELINE_REVIEW_COUNT}"; exit 1 ;;
-esac
-echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
-
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
+
+**Now follow the [Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**
+to trigger review (cloud or local fallback) and wait for results.
 
 ## Step 5: Poll for Bot Response
 
-**CRITICAL: NEVER assume the bot has replied. ALWAYS actively poll.**
-
-The baseline was captured in Step 4 before triggering `@codex review`.
-This prevents a race condition where a fast bot response gets included
-in the baseline, making the polling loop miss it.
-
-```bash
-# Ensure variables from prior steps are available (defensive re-init for separate shell invocations)
-TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
-
-# Recover baseline from file (defensive — variable may be lost across shell sessions)
-: "${TMP_PREFIX:?TMP_PREFIX not set}"
-if [ ! -f "${TMP_PREFIX}-review-count.txt" ]; then
-  echo "ERROR: Missing baseline review count file: ${TMP_PREFIX}-review-count.txt"
-  exit 1
-fi
-BASELINE_REVIEW_COUNT="${BASELINE_REVIEW_COUNT:-$(cat "${TMP_PREFIX}-review-count.txt")}"
-case "${BASELINE_REVIEW_COUNT}" in
-  ''|*[!0-9]*) echo "ERROR: Invalid BASELINE_REVIEW_COUNT: ${BASELINE_REVIEW_COUNT}"; exit 1 ;;
-esac
-
-# Poll every 45-60s (within GitHub rate limits: 5000 req/hour authenticated)
-while true; do
-  sleep 45
-
-  # Check PR review comments (inline code comments)
-  CURRENT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
-    --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
-  BASELINE=$(cat "${TMP_PREFIX}-baseline.json")
-  if [ "$CURRENT" != "$BASELINE" ]; then
-    echo "NEW_COMMENTS_DETECTED"
-    break
-  fi
-
-  # Check issue-level comments (general PR comments — bot's primary channel)
-  ISSUE_CURRENT=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" --paginate --slurp \
-    --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort') || continue
-  ISSUE_BASELINE=$(cat "${TMP_PREFIX}-issue-baseline.json")
-  if [ "$ISSUE_CURRENT" != "$ISSUE_BASELINE" ]; then
-    echo "NEW_COMMENTS_DETECTED"
-    break
-  fi
-
-  # Check for new reviews (compare count against baseline, not just > 0)
-  CURRENT_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" --paginate --slurp \
-    --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || continue
-  if [ "$CURRENT_REVIEW_COUNT" -gt "$BASELINE_REVIEW_COUNT" ] 2>/dev/null; then
-    echo "NEW_COMMENTS_DETECTED"
-    break
-  fi
-done
-```
-
-**Timeout**: If no response after 10 minutes, **notify the user** instead of
-guessing or acting on stale data.
+Handled by the **Review Trigger Procedure** (Phase 2c). The procedure
+implements a bounded poll loop (max 10 min) with API error retry limits.
+See the procedure for the complete polling code with timeout.
 
 ## Step 6: First-Pass Clean → Merge
 
@@ -533,7 +483,9 @@ models were used and assess the quality of the arbitration.
 - **NEVER `@codex` in real issue / already-fixed replies** — the fix commit
   + `@codex review` in Step 9 will trigger re-evaluation
 - **The ONLY place to `@codex`** is `gh pr comment` to trigger a full
-  re-review (Steps 4, 9, 11)
+  re-review (Steps 4, 9, 11) — handled by the Review Trigger Procedure
+- **When cloud fallback is active** (marker exists), `@codex` is NOT
+  triggered at all — local CSA review is used instead
 
 ## Step 9: Fix Real Issues
 
@@ -552,42 +504,18 @@ git commit -m "fix(scope): [description]
 
 Co-Authored-By: Claude Opus 4.6 <noreply@anthropic.com>"
 git push origin "${BRANCH}"
-
-# Use Baseline Capture Template (see above) — ensure TMP_PREFIX is set
-TMP_PREFIX="${TMP_PREFIX:-/tmp/codex-bot-${REPO//\//-}-${PR_NUM}}"
-
-gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-baseline.json" || {
-  echo "ERROR: Failed to capture PR comments baseline"
-  exit 1
-}
-gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]") | .id] | sort' \
-  > "${TMP_PREFIX}-issue-baseline.json" || {
-  echo "ERROR: Failed to capture issue comments baseline"
-  exit 1
-}
-BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" --paginate --slurp \
-  --jq '[.[].[] | select(.user.login == "chatgpt-codex-connector[bot]")] | length') || {
-  echo "ERROR: Failed to capture baseline review count"
-  exit 1
-}
-case "${BASELINE_REVIEW_COUNT}" in
-  ''|*[!0-9]*) echo "ERROR: Invalid BASELINE_REVIEW_COUNT: ${BASELINE_REVIEW_COUNT}"; exit 1 ;;
-esac
-echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
-
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 
-**Then poll (Step 5) and re-evaluate (Step 7).**
+**Now follow the [Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**
+to trigger review (cloud or local fallback) and wait for results.
+Then re-evaluate (Step 7).
 
 ## Step 10: Re-Review Loop
 
-After pushing fixes, poll for bot response (Step 5):
-- **Has issues** → back to Step 7 (evaluate, debate/fix)
-- **No issues** → proceed to Step 11 (clean resubmission)
+After pushing fixes, follow the **[Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**:
+- Result is `HAS_ISSUES` → back to Step 7 (evaluate, debate/fix)
+- Result is `CLEAN` → proceed to Step 11 (clean resubmission)
+- Result is `UNAVAILABLE` → user confirms fallback, local CSA review takes over
 
 ## Step 11: Clean Resubmission
 
@@ -598,12 +526,14 @@ incremental fix commits. Create a clean PR for audit-friendly history.
 
 ## Step 12: Review New PR
 
-Poll for bot response on the new clean PR (Step 5):
-- **No issues** → Step 13 (merge)
-- **Has issues** → back to Step 7 (evaluate each comment, debate/fix)
+Follow the **[Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**
+on the new clean PR (update `PR_NUM` and `TMP_PREFIX` for the new PR first):
+- Result is `CLEAN` → Step 13 (merge)
+- Result is `HAS_ISSUES` → back to Step 7 (evaluate each comment, debate/fix)
   - If fixes are needed again, repeat the full cycle including
     another clean resubmission (Step 11) with incrementing branch
     names: `${BRANCH}-clean-2`, `${BRANCH}-clean-3`, etc.
+- Result is `UNAVAILABLE` → user confirms fallback, local CSA review takes over
 
 ## Step 13: Merge
 
@@ -634,7 +564,10 @@ git checkout main && git pull origin main
 | Max iterations reached | **Escalate** - report to user |
 | Same issue re-flagged after fix | **Escalate** - root cause missed |
 | Bot flags architectural issue | **Escalate** - needs human decision |
-| Poll timeout (10 min) | **Notify user** - don't act on stale data |
+| Poll timeout (10 min) | **UNAVAILABLE(timeout)** - notify user, offer local fallback |
+| Bot replies with quota message | **UNAVAILABLE(quota)** - notify user, offer local fallback |
+| API errors (5 consecutive) | **UNAVAILABLE(api_error)** - notify user, offer local fallback |
+| Cloud fallback active | **Local CSA review** - skip cloud, use local for remainder |
 
 ## Anti-Trust Protocol
 
@@ -685,3 +618,4 @@ Bot user login: `chatgpt-codex-connector[bot]`
 | `debate` | Step 8: adversarial arbitration for suspected false positives |
 | `commit` | After fixing issues |
 | `csa run --tier tier-4-critical` | If bot flags security issue (deep analysis) |
+| `csa review --diff` | Cloud fallback: local CSA review when `@codex` is unavailable |
