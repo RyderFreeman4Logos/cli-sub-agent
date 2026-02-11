@@ -14,9 +14,10 @@ pub(crate) fn handle_create(
 
     let plan = manager.create(&title, branch.as_deref())?;
 
-    // Auto-commit the initial plan
+    // Auto-commit the initial plan (freshly created, should always have changes)
     let commit_msg = format!("create: {}", title);
-    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, &commit_msg)?;
+    csa_todo::git::save(manager.todos_dir(), &plan.timestamp, &commit_msg)?
+        .ok_or_else(|| anyhow::anyhow!("BUG: newly created plan had no changes to commit"))?;
 
     println!("{}", plan.timestamp);
     eprintln!(
@@ -39,9 +40,10 @@ pub(crate) fn handle_save(
     let plan = manager.load(&ts)?;
 
     let commit_msg = message.unwrap_or_else(|| format!("update: {}", plan.metadata.title));
-    let hash = csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)?;
-
-    eprintln!("Saved {} ({})", ts, hash);
+    match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
+        Some(hash) => eprintln!("Saved {} ({})", ts, hash),
+        None => eprintln!("No changes to save for plan '{ts}'."),
+    }
 
     Ok(())
 }
@@ -206,33 +208,33 @@ pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String
     let old_status = old_plan.metadata.status;
     let new_status: TodoStatus = status.parse()?;
 
+    // Idempotent: skip if status unchanged
+    if old_status == new_status {
+        eprintln!("Status already '{}' — no change.", old_status);
+        return Ok(());
+    }
+
     let plan = manager.update_status(&timestamp, new_status)?;
 
-    // Auto-commit the status change
+    // Auto-commit only metadata.toml (don't accidentally commit other changes)
     csa_todo::git::ensure_git_init(manager.todos_dir())?;
+    let metadata_path = format!("{}/metadata.toml", timestamp);
     let commit_msg = format!(
         "status: {} → {} ({})",
         old_status, plan.metadata.status, plan.metadata.title
     );
-    match csa_todo::git::save(manager.todos_dir(), &timestamp, &commit_msg) {
-        Ok(hash) => {
+    match csa_todo::git::save_file(manager.todos_dir(), &timestamp, &metadata_path, &commit_msg)? {
+        Some(hash) => {
             eprintln!(
                 "Updated {} status: {} → {} ({})",
                 plan.timestamp, old_status, plan.metadata.status, hash
             );
         }
-        Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("No changes to save") {
-                // Same status set again — no git changes, that's fine
-                tracing::debug!("Auto-commit after status change skipped: {e}");
-                eprintln!(
-                    "Updated {} status → {}",
-                    plan.timestamp, plan.metadata.status
-                );
-            } else {
-                return Err(e);
-            }
+        None => {
+            eprintln!(
+                "Updated {} status → {}",
+                plan.timestamp, plan.metadata.status
+            );
         }
     }
 

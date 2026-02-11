@@ -541,7 +541,7 @@ pub enum TodoCommands {
         version: Option<usize>,
 
         /// Print only the file path (for scripting)
-        #[arg(long)]
+        #[arg(long, conflicts_with = "version")]
         path: bool,
 
         /// Working directory

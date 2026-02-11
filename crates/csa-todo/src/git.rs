@@ -62,15 +62,40 @@ pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
 
 /// Stage and commit changes for a specific plan directory.
 ///
-/// Returns the short commit hash on success.
-pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<String> {
+/// Returns the short commit hash, or `None` if there were no changes to commit.
+pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<String>> {
+    let plan_path = format!("{}/", timestamp);
+    save_paths(todos_dir, timestamp, &[&plan_path], message)
+}
+
+/// Stage and commit specific files within a plan directory.
+///
+/// `files` are paths relative to `todos_dir` (e.g. `["20260211T023000/metadata.toml"]`).
+/// Returns the short commit hash, or `None` if there were no changes to commit.
+pub fn save_file(
+    todos_dir: &Path,
+    timestamp: &str,
+    file: &str,
+    message: &str,
+) -> Result<Option<String>> {
+    save_paths(todos_dir, timestamp, &[file], message)
+}
+
+/// Internal: stage given paths and commit.
+fn save_paths(
+    todos_dir: &Path,
+    timestamp: &str,
+    paths: &[&str],
+    message: &str,
+) -> Result<Option<String>> {
     crate::validate_timestamp(timestamp)?;
     ensure_git_init(todos_dir)?;
 
-    // Stage the plan's files (use `--` to prevent option injection)
-    let plan_path = format!("{}/", timestamp);
+    // Stage the specified paths (use `--` to prevent option injection)
+    let mut args: Vec<&str> = vec!["add", "--"];
+    args.extend(paths.iter().copied());
     let output = Command::new("git")
-        .args(["add", "--", &plan_path])
+        .args(&args)
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git add")?;
@@ -91,8 +116,8 @@ pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<String> 
         .context("Failed to run git diff --cached")?;
 
     match status.status.code() {
-        Some(0) => anyhow::bail!("No changes to save for plan '{timestamp}'"),
-        Some(1) => {} // Has staged changes, continue
+        Some(0) => return Ok(None), // No changes
+        Some(1) => {}               // Has staged changes, continue
         Some(code) => anyhow::bail!(
             "git diff --cached failed (exit {}): {}",
             code,
@@ -129,9 +154,11 @@ pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<String> 
         );
     }
 
-    Ok(String::from_utf8_lossy(&hash_output.stdout)
-        .trim()
-        .to_string())
+    Ok(Some(
+        String::from_utf8_lossy(&hash_output.stdout)
+            .trim()
+            .to_string(),
+    ))
 }
 
 /// Get the diff of a plan's TODO.md against a revision.
@@ -231,10 +258,10 @@ pub fn history(todos_dir: &Path, timestamp: &str) -> Result<String> {
         anyhow::bail!("No git repository in todos directory (run `csa todo save` first)");
     }
 
-    let file_path = format!("{}/TODO.md", timestamp);
+    let plan_prefix = format!("{}/", timestamp);
 
     let output = Command::new("git")
-        .args(["log", "--oneline", "--follow", "--", &file_path])
+        .args(["log", "--oneline", "--", &plan_prefix])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git log")?;
@@ -260,10 +287,10 @@ pub fn list_versions(todos_dir: &Path, timestamp: &str) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    let file_path = format!("{}/TODO.md", timestamp);
+    let plan_prefix = format!("{}/", timestamp);
 
     let output = Command::new("git")
-        .args(["log", "--format=%H", "--follow", "--", &file_path])
+        .args(["log", "--format=%H", "--", &plan_prefix])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git log")?;
