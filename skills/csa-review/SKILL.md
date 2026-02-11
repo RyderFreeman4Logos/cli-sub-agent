@@ -10,6 +10,20 @@ triggers:
 
 # CSA Review: Independent Code Review Orchestration
 
+## Role Detection (READ FIRST)
+
+**If you were spawned by `csa run` to perform a code review** (i.e., your prompt contains scope/mode/security_mode parameters):
+- You are the **review agent**. **SKIP the entire "Execution Protocol" section below.**
+- Go directly to [Review Protocol](references/review-protocol.md) and follow it step by step.
+- Your parameters (scope, mode, security_mode, context) are in the prompt that spawned you.
+- Output schema: [Output Schema](references/output-schema.md).
+- **Do NOT run `csa run` or `csa review`** — that would create infinite recursion.
+
+**If you are Claude Code responding to a user's `/csa-review` command**:
+- You are the **orchestrator**. Follow the "Execution Protocol" steps below.
+
+---
+
 ## Purpose
 
 Run structured code reviews through CSA, ensuring:
@@ -18,7 +32,7 @@ Run structured code reviews through CSA, ensuring:
 - **Self-contained review agent**: The review agent reads CLAUDE.md and builds project understanding autonomously.
 - **Structured outputs**: JSON findings + Markdown report following a tested, optimized prompt.
 
-## Required Inputs
+## Required Inputs (Orchestrator)
 
 - `scope`: one of:
   - `uncommitted` (default)
@@ -31,7 +45,7 @@ Run structured code reviews through CSA, ensuring:
 - `tool` (optional): override review tool (default: auto-detect independent reviewer)
 - `context` (optional): path to a TODO plan file (e.g., from `csa todo show -t <timestamp>`) to check implementation alignment against the planned design
 
-## Execution Protocol
+## Execution Protocol (ORCHESTRATOR ONLY — review agents MUST skip this section)
 
 ### Step 1: Determine Review Tool
 
@@ -140,11 +154,12 @@ When findings are contested, use the `debate` skill for adversarial arbitration.
 1. Review prompt was sent to CSA with the correct tool.
 2. CSA session was created in `~/.local/state/csa/` (verify with `csa session list`).
 3. No sessions were created in `~/.codex/`.
-4. Review agent read CLAUDE.md autonomously (not pre-fed by orchestrator).
-5. Review agent discovered and applied AGENTS.md files (root-to-leaf) for all changed paths.
-6. `review-findings.json` and `review-report.md` were generated.
-7. Every finding has concrete evidence (trigger, expected, actual) and calibrated confidence. AGENTS.md violations reference rule IDs.
-8. If security_mode required pass 3, adversarial_pass_executed=true.
-9. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
-10. CSA session ID was reported for potential follow-up.
-11. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.
+4. **No recursive `csa run` or `csa review` calls** from the review agent (session tree depth = 2 max: orchestrator → review agent).
+5. Review agent read CLAUDE.md autonomously (not pre-fed by orchestrator).
+6. Review agent discovered and applied AGENTS.md files (root-to-leaf) for all changed paths.
+7. `review-findings.json` and `review-report.md` were generated.
+8. Every finding has concrete evidence (trigger, expected, actual) and calibrated confidence. AGENTS.md violations reference rule IDs.
+9. If security_mode required pass 3, adversarial_pass_executed=true.
+10. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
+11. CSA session ID was reported for potential follow-up.
+12. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.
