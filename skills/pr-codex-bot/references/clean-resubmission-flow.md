@@ -36,8 +36,8 @@ consolidated into logical groups here.
 See #${OLD_PR_NUM} for the full review discussion.
 
 ## Test plan
-- [ ] `cargo clippy -p [package] -- -D warnings`
-- [ ] `cargo test -p [package]`
+- [ ] \`cargo clippy -p [package] -- -D warnings\`
+- [ ] \`cargo test -p [package]\`
 - [ ] @codex review
 PREOF
 )"

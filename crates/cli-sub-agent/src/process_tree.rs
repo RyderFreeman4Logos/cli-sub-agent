@@ -30,7 +30,9 @@ const KNOWN_TOOL_EXECUTABLES: &[(&str, &str)] = &[
 /// each ancestor's comm (executable basename) against known tools.
 ///
 /// Returns the tool name string (e.g., `"claude-code"`) if found,
-/// or `None` on any failure (unsupported platform, permission denied, no match).
+/// or `None` if no known tool is found, the platform is unsupported, or the
+/// parent chain cannot be read. Individual ancestors that cannot be read
+/// (e.g., permission denied on comm) are skipped rather than aborting the walk.
 pub(crate) fn detect_ancestor_tool() -> Option<String> {
     let mut current_pid = read_ppid(std::process::id())?;
 
@@ -39,18 +41,21 @@ pub(crate) fn detect_ancestor_tool() -> Option<String> {
             return None;
         }
 
-        let comm = read_comm(current_pid)?;
-
-        if let Some(tool_name) = match_tool_by_comm(&comm) {
-            tracing::debug!(
-                tool = tool_name,
-                ancestor_pid = current_pid,
-                depth,
-                "Detected calling tool from process tree"
-            );
-            return Some(tool_name.to_string());
+        // Best-effort: if we can read the comm, check it; if not, skip this
+        // ancestor and try the next one (don't abort the entire walk).
+        if let Some(comm) = read_comm(current_pid) {
+            if let Some(tool_name) = match_tool_by_comm(&comm) {
+                tracing::debug!(
+                    tool = tool_name,
+                    ancestor_pid = current_pid,
+                    depth,
+                    "Detected calling tool from process tree"
+                );
+                return Some(tool_name.to_string());
+            }
         }
 
+        // If we can't read the parent PID, we truly can't continue.
         current_pid = read_ppid(current_pid)?;
     }
 
@@ -91,9 +96,11 @@ fn read_comm(pid: u32) -> Option<String> {
 // ---------------------------------------------------------------------------
 
 /// Read the parent PID via `ps -o ppid= -p <pid>`.
+///
+/// Uses absolute path to avoid PATH injection.
 #[cfg(target_os = "macos")]
 fn read_ppid(pid: u32) -> Option<u32> {
-    let output = std::process::Command::new("ps")
+    let output = std::process::Command::new("/bin/ps")
         .args(["-o", "ppid=", "-p", &pid.to_string()])
         .output()
         .ok()?;
@@ -105,28 +112,25 @@ fn read_ppid(pid: u32) -> Option<u32> {
 
 /// Read the command name via `ps -o comm= -p <pid>`.
 ///
-/// On macOS, `ps -o comm=` returns the full path (e.g., `/usr/local/bin/claude`),
-/// so we extract the basename.
+/// On macOS, `ps -o comm=` may return either a full path (e.g.,
+/// `/usr/local/bin/claude`) or just the basename depending on how the
+/// process was launched. We always extract the basename to normalize.
+///
+/// Uses absolute path to avoid PATH injection.
 #[cfg(target_os = "macos")]
 fn read_comm(pid: u32) -> Option<String> {
-    let output = std::process::Command::new("ps")
+    let output = std::process::Command::new("/bin/ps")
         .args(["-o", "comm=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    let full_path = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if full_path.is_empty() {
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
         return None;
     }
-    // Extract basename: "/usr/local/bin/claude" → "claude"
-    let basename = full_path
-        .rsplit('/')
-        .next()
-        .unwrap_or(&full_path)
-        .to_string();
-    Some(basename)
+    Some(normalize_basename(&raw).to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -143,17 +147,57 @@ fn read_comm(_pid: u32) -> Option<String> {
     None
 }
 
+/// Normalize a process name to its basename.
+///
+/// Handles both bare names (`claude`) and full paths (`/usr/local/bin/claude`).
+/// Trims whitespace and extracts the last path component.
+fn normalize_basename(raw: &str) -> &str {
+    let trimmed = raw.trim();
+    trimmed.rsplit('/').next().unwrap_or(trimmed)
+}
+
 /// Match a comm field against known tool executables.
+///
+/// Normalizes to basename before matching, so both bare names and full
+/// paths work correctly.
 fn match_tool_by_comm(comm: &str) -> Option<&'static str> {
+    let basename = normalize_basename(comm);
     KNOWN_TOOL_EXECUTABLES
         .iter()
-        .find(|(exe, _)| *exe == comm)
+        .find(|(exe, _)| *exe == basename)
         .map(|(_, name)| *name)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_basename_bare_name() {
+        assert_eq!(normalize_basename("claude"), "claude");
+    }
+
+    #[test]
+    fn test_normalize_basename_full_path() {
+        assert_eq!(normalize_basename("/usr/local/bin/claude"), "claude");
+    }
+
+    #[test]
+    fn test_normalize_basename_with_whitespace() {
+        assert_eq!(normalize_basename("  /bin/ps  "), "ps");
+    }
+
+    #[test]
+    fn test_normalize_basename_root_binary() {
+        assert_eq!(normalize_basename("/bin/sh"), "sh");
+    }
+
+    #[test]
+    fn test_normalize_basename_trailing_slash() {
+        // Edge case: trailing slash gives empty basename, but rsplit
+        // returns the empty string after the last '/'
+        assert_eq!(normalize_basename("/usr/bin/"), "");
+    }
 
     #[test]
     fn test_match_tool_by_comm_claude() {
@@ -181,6 +225,19 @@ mod tests {
         assert_eq!(match_tool_by_comm("zsh"), None);
         assert_eq!(match_tool_by_comm("python"), None);
         assert_eq!(match_tool_by_comm(""), None);
+    }
+
+    #[test]
+    fn test_match_tool_by_comm_full_path() {
+        // macOS ps may return full paths; match_tool_by_comm normalizes
+        assert_eq!(
+            match_tool_by_comm("/usr/local/bin/claude"),
+            Some("claude-code")
+        );
+        assert_eq!(
+            match_tool_by_comm("/opt/homebrew/bin/gemini"),
+            Some("gemini-cli")
+        );
     }
 
     #[test]

@@ -257,17 +257,14 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
 
    **Check for untracked files explicitly:**
    ```bash
-   # Wrap in subshell to avoid closing interactive sessions
-   (
-     if git ls-files --others --exclude-standard | grep -q .; then
-       echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
-       git ls-files --others --exclude-standard
-       exit 1
-     fi
-   )
+   if git ls-files --others --exclude-standard | grep -q .; then
+     echo "ERROR: Untracked files detected. MUST stage them or add to .gitignore before proceeding."
+     git ls-files --others --exclude-standard
+     echo "HARD GATE: Do NOT proceed to csa review --diff until all files are tracked."
+   fi
    ```
 
-   > **Note**: The subshell `(...)` prevents `exit 1` from closing an interactive session. Agents should translate `exit 1` to an appropriate abort mechanism for their shell context.
+   > **Note**: This is a hard gate. If untracked files are detected, the workflow MUST stop here. Agents: do NOT continue to step 3 until all files are staged or added to .gitignore.
 
    If unstaged changes exist, stage or stash them. If untracked files exist, stage or .gitignore them.
    (Why: csa review --diff uses 'git diff HEAD' which does NOT see untracked files)
