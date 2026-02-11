@@ -83,11 +83,10 @@ pub(crate) fn handle_config_get(
     global_only: bool,
     cd: Option<String>,
 ) -> Result<()> {
-    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let project_config_path = ProjectConfig::config_path(&project_root);
-
     // Try project config first (unless --global flag)
     if !global_only {
+        let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+        let project_config_path = ProjectConfig::config_path(&project_root);
         match load_and_resolve(&project_config_path, &key) {
             Ok(Some(value)) => {
                 println!("{}", format_toml_value(&value));
