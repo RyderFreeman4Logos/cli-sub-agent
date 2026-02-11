@@ -651,6 +651,32 @@ tool = "codex"
     }
 
     #[test]
+    fn test_fallback_config_default() {
+        let config = GlobalConfig::default();
+        assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
+    }
+
+    #[test]
+    fn test_fallback_config_auto_local() {
+        let toml_str = r#"
+[fallback]
+cloud_review_exhausted = "auto-local"
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.fallback.cloud_review_exhausted, "auto-local");
+    }
+
+    #[test]
+    fn test_fallback_config_missing_uses_default() {
+        let toml_str = r#"
+[defaults]
+max_concurrent = 3
+"#;
+        let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
+    }
+
+    #[test]
     fn test_all_known_tools() {
         let tools = all_known_tools();
         assert_eq!(tools.len(), 4);

@@ -22,7 +22,7 @@ Step 3: Fix local review issues (loop until clean)
        v
 Step 4: Submit PR + Review Trigger Procedure
        |                    |
-       |        (UNAVAILABLE? → User confirms → Local CSA fallback)
+       |        (UNAVAILABLE? → Per fallback policy → Local CSA fallback)
        |
        v
 Step 5: (Handled by Review Trigger Procedure — bounded poll + timeout)
@@ -529,7 +529,7 @@ Then re-evaluate (Step 7).
 After pushing fixes, follow the **[Review Trigger Procedure](#review-trigger-procedure-single-entry-point)**:
 - Result is `HAS_ISSUES` → back to Step 7 (evaluate, debate/fix)
 - Result is `CLEAN` → proceed to Step 11 (clean resubmission)
-- Result is `UNAVAILABLE` → user confirms fallback, local CSA review takes over
+- Result is `UNAVAILABLE` → per `fallback.cloud_review_exhausted` policy
 
 ## Step 11: Clean Resubmission
 
@@ -547,7 +547,7 @@ on the new clean PR (update `PR_NUM` and `TMP_PREFIX` for the new PR first):
   - If fixes are needed again, repeat the full cycle including
     another clean resubmission (Step 11) with incrementing branch
     names: `${BRANCH}-clean-2`, `${BRANCH}-clean-3`, etc.
-- Result is `UNAVAILABLE` → user confirms fallback, local CSA review takes over
+- Result is `UNAVAILABLE` → per `fallback.cloud_review_exhausted` policy
 
 ## Step 13: Merge
 

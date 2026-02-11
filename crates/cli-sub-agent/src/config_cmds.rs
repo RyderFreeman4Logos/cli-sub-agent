@@ -103,18 +103,24 @@ pub(crate) fn handle_config_get(
 
     // Try global config (unless --project flag)
     if !project_only {
-        if let Ok(global_path) = GlobalConfig::config_path() {
-            match load_and_resolve(&global_path, &key) {
-                Ok(Some(value)) => {
-                    println!("{}", format_toml_value(&value));
-                    return Ok(());
+        match GlobalConfig::config_path() {
+            Ok(global_path) => {
+                match load_and_resolve(&global_path, &key) {
+                    Ok(Some(value)) => {
+                        println!("{}", format_toml_value(&value));
+                        return Ok(());
+                    }
+                    Ok(None) => {} // Key not found
+                    Err(e) => anyhow::bail!(
+                        "Failed to read global config {}: {e}",
+                        global_path.display()
+                    ),
                 }
-                Ok(None) => {} // Key not found
-                Err(e) => anyhow::bail!(
-                    "Failed to read global config {}: {e}",
-                    global_path.display()
-                ),
             }
+            Err(e) if global_only => {
+                anyhow::bail!("Cannot determine global config path: {e}");
+            }
+            Err(_) => {} // Non-critical when falling through to default
         }
     }
 
@@ -164,6 +170,74 @@ fn format_toml_value(value: &toml::Value) -> String {
             toml::to_string_pretty(value).unwrap_or_else(|_| format!("{value:?}"))
         }
         toml::Value::Datetime(d) => d.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_key_scalar() {
+        let root: toml::Value = "[review]\ntool = \"auto\"\n".parse().unwrap();
+        let val = resolve_key(&root, "review.tool").unwrap();
+        assert_eq!(val.as_str(), Some("auto"));
+    }
+
+    #[test]
+    fn resolve_key_nested() {
+        let root: toml::Value = "[tools.codex]\nenabled = true\n".parse().unwrap();
+        let val = resolve_key(&root, "tools.codex.enabled").unwrap();
+        assert_eq!(val.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn resolve_key_missing() {
+        let root: toml::Value = "[review]\ntool = \"auto\"\n".parse().unwrap();
+        assert!(resolve_key(&root, "nonexistent.key").is_none());
+    }
+
+    #[test]
+    fn resolve_key_partial_path() {
+        let root: toml::Value = "[review]\ntool = \"auto\"\n".parse().unwrap();
+        // "review" is a table, not a leaf — resolve_key returns the table
+        let val = resolve_key(&root, "review").unwrap();
+        assert!(val.is_table());
+    }
+
+    #[test]
+    fn format_toml_value_string() {
+        let v = toml::Value::String("hello".to_string());
+        assert_eq!(format_toml_value(&v), "hello");
+    }
+
+    #[test]
+    fn format_toml_value_integer() {
+        let v = toml::Value::Integer(42);
+        assert_eq!(format_toml_value(&v), "42");
+    }
+
+    #[test]
+    fn format_toml_value_bool() {
+        let v = toml::Value::Boolean(true);
+        assert_eq!(format_toml_value(&v), "true");
+    }
+
+    #[test]
+    fn load_and_resolve_missing_file() {
+        let result = load_and_resolve(std::path::Path::new("/nonexistent/config.toml"), "key");
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn load_and_resolve_invalid_toml() {
+        let dir = std::env::temp_dir().join("csa-test-config-cmds");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bad.toml");
+        std::fs::write(&path, "{{invalid toml").unwrap();
+        let result = load_and_resolve(&path, "key");
+        assert!(result.is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 
