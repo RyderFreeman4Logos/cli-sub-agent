@@ -179,7 +179,7 @@ pub struct ReviewArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
-    /// Review uncommitted changes (git diff)
+    /// Review uncommitted changes (git diff HEAD)
     #[arg(long)]
     pub diff: bool,
 
@@ -191,8 +191,25 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub commit: Option<String>,
 
-    /// Custom review instructions
-    pub prompt: Option<String>,
+    /// Review a commit range (e.g., "main...HEAD")
+    #[arg(long)]
+    pub range: Option<String>,
+
+    /// Review specific files (pathspec)
+    #[arg(long)]
+    pub files: Option<String>,
+
+    /// Review-and-fix mode (apply fixes directly)
+    #[arg(long)]
+    pub fix: bool,
+
+    /// Security review mode: auto, on, off
+    #[arg(long, default_value = "auto")]
+    pub security_mode: String,
+
+    /// Path to context file (e.g., TODO plan)
+    #[arg(long)]
+    pub context: Option<String>,
 
     /// Working directory
     #[arg(long)]
@@ -225,10 +242,6 @@ pub struct DebateArgs {
 pub struct ClaudeSubAgentArgs {
     /// Task prompt; reads from stdin if omitted
     pub question: Option<String>,
-
-    /// Skill directory path (contains SKILL.md)
-    #[arg(long)]
-    pub skill: Option<String>,
 
     /// Tool to use (overrides config-based selection)
     #[arg(long)]
