@@ -11,7 +11,7 @@ logic across multiple steps.
 |---------|---------|-------------|
 | `CLEAN` | No issues found | Proceed to merge path |
 | `HAS_ISSUES` | Reviewer found issues | Proceed to Step 7 (evaluate) |
-| `UNAVAILABLE(reason)` | Cloud bot did not respond | User confirms local fallback |
+| `UNAVAILABLE(reason)` | Cloud bot did not respond | Per `fallback.cloud_review_exhausted` policy |
 
 **Note**: The poll loop produces an intermediate result `NEW_COMMENTS_DETECTED`
 which means the bot responded but the main agent must still evaluate the
@@ -41,7 +41,7 @@ FALLBACK_MARKER="/tmp/codex-bot-${REPO//\//-}-${WORKFLOW_BRANCH//\//-}-cloud-fal
 if [ -f "${FALLBACK_MARKER}" ]; then
   echo "CLOUD_FALLBACK_ACTIVE: Skipping cloud @codex review, using local CSA review"
   # → Skip Phase 2 entirely, go directly to Phase 3 (Local Fallback Path)
-  # The main agent should run: csa review --diff
+  # The main agent should run: csa review --branch main
   # Then map output to CLEAN or HAS_ISSUES and proceed to Step 7
 else
   # → Continue to Phase 2 (Cloud Path)
@@ -185,8 +185,22 @@ fi
 
 ### 2e. Handle UNAVAILABLE
 
-**CRITICAL: Do NOT silently fall back.** Notify user with the specific reason
-and ask for confirmation before switching to local CSA review.
+Check the fallback policy before prompting:
+
+```bash
+# Use --global to prevent project config from overriding user's global safety policy
+FALLBACK_POLICY=$(csa config get fallback.cloud_review_exhausted --global --default "ask-user")
+```
+
+**Behavior by policy:**
+
+| Policy | Action |
+|--------|--------|
+| `auto-local` | Log reason, automatically fall back to local CSA review (still reviews, just locally) |
+| `ask-user` | Notify user and ask for confirmation (default) |
+
+**If `ask-user` (default):** Notify user with the specific reason and ask for
+confirmation before switching to local CSA review.
 
 ```
 UNAVAILABLE detected:
@@ -195,10 +209,12 @@ UNAVAILABLE detected:
   Options:
   1. Fall back to local CSA review for remainder of this workflow
   2. Retry cloud @codex review (reset poll timer)
-  3. Skip review and proceed manually
 ```
 
-If user confirms fallback:
+**If `auto-local`:** Log the reason and proceed directly to local fallback.
+Both policies still perform a review — `auto-local` just skips the user prompt.
+
+When falling back (either auto or user-confirmed):
 ```bash
 echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) reason=${REASON}" > "${FALLBACK_MARKER}"
 ```
@@ -213,8 +229,8 @@ Run local CSA review using the `csa-review` skill with the same scope as the
 cloud bot would review:
 
 ```bash
-# Same scope as Step 2 local review, but this replaces cloud bot review
-csa review --diff  # Reviews uncommitted + committed changes vs main
+# Same scope as cloud bot: all committed changes since main
+csa review --branch main  # Reviews committed changes vs main (not just uncommitted)
 ```
 
 **Map CSA output to normalized outcomes**:
@@ -253,17 +269,20 @@ state persists so you don't wait another 10 minutes for a known-unavailable bot.
        |
        v
   UNAVAILABLE:
-  Notify user + ask confirmation
+  Check fallback.cloud_review_exhausted policy (--global)
        |
-       +── User confirms fallback
+       +── auto-local ──> Fallback immediately (still reviews)
+       |
+       +── ask-user (default) ──> Notify user
        |         |
-       |         v
-       |    Create ${FALLBACK_MARKER} (WORKFLOW_BRANCH-scoped)
-       |    Run local CSA review
-       |    (all subsequent reviews in this workflow use local)
-       |
-       +── User retries cloud ──> Reset poll timer, try again
-       +── User skips review ──> Manual proceed
+       |         +── User confirms fallback
+       |         |         |
+       |         |         v
+       |         |    Create ${FALLBACK_MARKER} (WORKFLOW_BRANCH-scoped)
+       |         |    Run local CSA review (--branch main)
+       |         |    (all subsequent reviews in this workflow use local)
+       |         |
+       |         +── User retries cloud ──> Reset poll timer, try again
 ```
 
 ## Limitations

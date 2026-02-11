@@ -133,6 +133,15 @@ async fn main() -> Result<()> {
             ConfigCommands::Validate { cd } => {
                 config_cmds::handle_config_validate(cd)?;
             }
+            ConfigCommands::Get {
+                key,
+                default,
+                project,
+                global,
+                cd,
+            } => {
+                config_cmds::handle_config_get(key, default, project, global, cd)?;
+            }
         },
         Commands::Review(args) => {
             let exit_code = review_cmd::handle_review(args, current_depth).await?;
