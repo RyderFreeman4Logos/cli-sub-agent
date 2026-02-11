@@ -107,10 +107,12 @@ fn save_paths(
         );
     }
 
-    // Check if there are staged changes.
+    // Check if there are staged changes for the specified paths only.
     // git diff --cached --quiet exit codes: 0 = no diff, 1 = has diff, >1 = error
+    let mut diff_args: Vec<&str> = vec!["diff", "--cached", "--quiet", "--"];
+    diff_args.extend(paths.iter().copied());
     let status = Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
+        .args(&diff_args)
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git diff --cached")?;
@@ -126,9 +128,11 @@ fn save_paths(
         None => anyhow::bail!("git diff --cached terminated by signal"),
     }
 
-    // Commit
+    // Commit only the specified paths (not other staged changes)
+    let mut commit_args: Vec<&str> = vec!["commit", "-m", message, "--"];
+    commit_args.extend(paths.iter().copied());
     let output = Command::new("git")
-        .args(["commit", "-m", message])
+        .args(&commit_args)
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git commit")?;
@@ -287,10 +291,12 @@ pub fn list_versions(todos_dir: &Path, timestamp: &str) -> Result<Vec<String>> {
         return Ok(Vec::new());
     }
 
-    let plan_prefix = format!("{}/", timestamp);
+    // Track TODO.md specifically — versions correspond to document changes,
+    // not metadata-only commits (which show in `history` instead).
+    let file_path = format!("{}/TODO.md", timestamp);
 
     let output = Command::new("git")
-        .args(["log", "--format=%H", "--", &plan_prefix])
+        .args(["log", "--format=%H", "--", &file_path])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git log")?;
