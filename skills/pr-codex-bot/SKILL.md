@@ -120,7 +120,8 @@ fi
 If the local review found issues:
 1. Fix each issue
 2. Commit fixes
-3. Re-run local review (synchronously — same blocking rule as Step 2)
+3. Re-run local review (synchronously — same blocking rule as Step 2),
+   then update the marker: `git rev-parse HEAD > "${LOCAL_REVIEW_MARKER}"`
 4. Repeat until clean
 
 **GATE: Only proceed to Step 4 when local review returns zero issues.
@@ -172,6 +173,9 @@ BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=1
   echo "ERROR: Failed to capture baseline review count"
   exit 1
 }
+case "${BASELINE_REVIEW_COUNT}" in
+  ''|*[!0-9]*) echo "ERROR: Invalid BASELINE_REVIEW_COUNT: ${BASELINE_REVIEW_COUNT}"; exit 1 ;;
+esac
 echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
@@ -569,6 +573,9 @@ BASELINE_REVIEW_COUNT=$(gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=1
   echo "ERROR: Failed to capture baseline review count"
   exit 1
 }
+case "${BASELINE_REVIEW_COUNT}" in
+  ''|*[!0-9]*) echo "ERROR: Invalid BASELINE_REVIEW_COUNT: ${BASELINE_REVIEW_COUNT}"; exit 1 ;;
+esac
 echo "${BASELINE_REVIEW_COUNT}" > "${TMP_PREFIX}-review-count.txt"
 
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
