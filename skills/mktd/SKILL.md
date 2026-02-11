@@ -2,7 +2,7 @@
 name: mktd
 description: >-
   Generate structured TODO plans with CSA-powered reconnaissance and adversarial debate.
-  Outputs ./drafts/TODOs/{timestamp}/todo.md with ordered checklist items and executor tags.
+  Uses `csa todo` for git-tracked plan lifecycle (create/save/find/show).
   Triggers on: plan, mktd, design, architecture, implement feature, refactor,
   when non-trivial multi-step task (>3 steps, multi-file, architectural decision).
 allowed-tools: TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Grep, Glob, Bash, Write, Edit, AskUserQuestion
@@ -12,7 +12,7 @@ allowed-tools: TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Grep, Glob, Bash
 
 ## Purpose
 
-Create structured TODO files at `./drafts/TODOs/{timestamp}/todo.md` using:
+Create git-tracked TODO plans via `csa todo` using:
 
 - **Zero main-agent file reads during exploration** — CSA sub-agents gather context
 - **Mandatory adversarial review** — heterogeneous model debate catches blind spots
@@ -122,9 +122,36 @@ Main agent receives 3 structured summaries (~500 tokens total). Synthesize into 
 
 **Goal**: Synthesize CSA reconnaissance into a structured TODO checklist.
 
-### TODO File
+### Check for Existing Plan
 
-Create the directory and write the draft TODO to `./drafts/TODOs/{timestamp}/todo.md` (use filesystem-safe timestamp format, e.g. `20260209T143000`). The `Write` tool creates parent directories automatically; if using Bash, run `mkdir -p` first:
+Before creating a new plan, check if one already exists for the current branch:
+
+```bash
+# Check for existing plan on current branch
+csa todo find --branch "$(git branch --show-current)"
+```
+
+If a matching plan exists, resume editing it instead of creating a new one.
+
+### Create Plan via `csa todo`
+
+```bash
+# Create a new plan (returns timestamp to stdout, path to stderr)
+TIMESTAMP=$(csa todo create "Feature/Task Name" --branch "$(git branch --show-current)" 2>/tmp/csa-todo-create.log)
+TODO_PATH=$(grep 'Path:' /tmp/csa-todo-create.log | sed 's/.*Path: //')
+
+# The plan is auto-committed with initial template.
+# Now overwrite TODO.md with the full draft content using Write tool.
+```
+
+After `csa todo create`, use the `Write` tool to overwrite the TODO.md at `$TODO_PATH` with the full plan content, then save:
+
+```bash
+# After writing full content via Write tool:
+csa todo save -t "$TIMESTAMP" "draft: initial plan"
+```
+
+### TODO File Format
 
 ```markdown
 # TODO: [Feature/Task Name]
@@ -233,7 +260,7 @@ Remaining questions:
 
 ### Record Debate Insights
 
-Append to the TODO file:
+Append to the TODO file using Edit tool, then save the revision:
 
 ```markdown
 ## Debate Insights
@@ -252,6 +279,14 @@ Append to the TODO file:
 - [uncertainty]: accepted because [reason]
 ```
 
+```bash
+# Save post-debate revision
+csa todo save -t "$TIMESTAMP" "post-debate revision"
+
+# Update plan status to debating (tracks lifecycle)
+csa todo status "$TIMESTAMP" debating
+```
+
 ---
 
 ## Phase 4: APPROVE (User Gate)
@@ -268,8 +303,15 @@ Use AskUserQuestion to present:
 
 ### User Options
 
-- **Approve** → User can proceed with `mktsk` skill to execute
-- **Modify** → Adjust TODO per feedback, re-present
+- **Approve** → Update status and proceed with `mktsk` skill to execute:
+  ```bash
+  csa todo status "$TIMESTAMP" approved
+  csa todo save -t "$TIMESTAMP" "approved by user"
+  ```
+- **Modify** → Adjust TODO per feedback, save, re-present:
+  ```bash
+  csa todo save -t "$TIMESTAMP" "revised per user feedback"
+  ```
 - **Reject** → Abandon plan, ask user for new direction
 
 ---
@@ -323,22 +365,28 @@ After user approval, use the `mktsk` skill to convert this TODO file into Task t
 
 ## Complete Example: Adding JWT Authentication
 
-```python
+```bash
 # Phase 1: RECON — 3 parallel CSA tasks
 csa run "Analyze auth-related code structure in this project..."
 csa run "Find existing auth patterns, middleware, token handling..."
 csa run "Identify security constraints, dependency requirements..."
 
-# Phase 2: DRAFT — Main agent writes TODO from summaries
-Write("./drafts/TODOs/20260209T143000/todo.md", todo_content)
+# Phase 2: DRAFT — Create plan via csa todo
+TIMESTAMP=$(csa todo create "Add JWT Authentication" --branch "$(git branch --show-current)" 2>/tmp/csa-todo-create.log)
+TODO_PATH=$(grep 'Path:' /tmp/csa-todo-create.log | sed 's/.*Path: //')
+# Write full plan content to $TODO_PATH using Write tool
+csa todo save -t "$TIMESTAMP" "draft: initial plan"
 
 # Phase 3: DEBATE — Mandatory adversarial review
 csa debate "Review this JWT auth plan critically: [TODO]..."
 # Debate catches: missing token refresh, CSRF risk, rate limiting gap
-# Revise TODO, debate again:
-csa debate --session 01JK... "Revised plan addresses: [changes]..."
+# Revise TODO via Edit tool, then:
+csa todo save -t "$TIMESTAMP" "post-debate revision"
+csa todo status "$TIMESTAMP" debating
 
 # Phase 4: APPROVE — AskUserQuestion with TODO + debate insights
+csa todo status "$TIMESTAMP" approved
+csa todo save -t "$TIMESTAMP" "approved by user"
 
 # After approval: User invokes mktsk skill to execute
 ```
@@ -419,9 +467,9 @@ Implement JWT-based authentication for API endpoints with token validation, logi
 | Phase | Verification |
 |-------|-------------|
 | Phase 1 (RECON) | 3 CSA summaries received, zero main-agent file reads |
-| Phase 2 (DRAFT) | TODO file exists at `./drafts/TODOs/{timestamp}/todo.md` |
-| Phase 3 (DEBATE) | TODO file contains `## Debate Insights` with session ID |
-| Phase 4 (APPROVE) | User explicitly approved |
+| Phase 2 (DRAFT) | `csa todo show -t $TIMESTAMP` returns full plan content |
+| Phase 3 (DEBATE) | TODO file contains `## Debate Insights` with session ID; `csa todo history -t $TIMESTAMP` shows "post-debate revision" |
+| Phase 4 (APPROVE) | User explicitly approved; `csa todo list --status approved` includes plan |
 
 After approval, execution is handled by the `mktsk` skill.
 
@@ -496,6 +544,14 @@ Be pessimistic — flag anything that could go wrong."
 ```
 
 ### Phase 2: DRAFT Template
+
+#### Plan Discovery
+
+```bash
+# Check if plan already exists for current branch
+csa todo find --branch "$(git branch --show-current)"
+# If found, resume with existing timestamp instead of creating new
+```
 
 #### TODO File Structure
 
@@ -576,6 +632,8 @@ Remaining questions:
 
 #### Template 3C: Debate Insights Record
 
+After appending to TODO.md via Edit tool:
+
 ```markdown
 ## Debate Insights
 
@@ -595,6 +653,12 @@ Remaining questions:
 
 ### Remaining Uncertainties
 - [Uncertainty]: accepted because [mitigation exists / low probability / acceptable risk]
+```
+
+```bash
+# Save debate revision to git
+csa todo save -t "$TIMESTAMP" "post-debate revision"
+csa todo status "$TIMESTAMP" debating
 ```
 
 ### Phase 4: APPROVE (No Templates Needed)
