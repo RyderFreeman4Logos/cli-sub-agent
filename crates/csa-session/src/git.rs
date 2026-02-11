@@ -146,6 +146,17 @@ pub fn history(sessions_dir: &Path, session_id: &str) -> Result<String> {
         anyhow::bail!("No git repository in sessions directory (run a session first)");
     }
 
+    // Check if there are any commits (git log fails on empty repos)
+    let head_check = Command::new("git")
+        .args(["rev-parse", "--verify", "HEAD"])
+        .current_dir(sessions_dir)
+        .output()
+        .context("Failed to check HEAD")?;
+
+    if !head_check.status.success() {
+        return Ok(String::new()); // No commits yet
+    }
+
     let session_path = format!("{}/", session_id);
 
     let output = Command::new("git")

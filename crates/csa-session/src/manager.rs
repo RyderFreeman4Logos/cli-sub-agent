@@ -1,5 +1,6 @@
 //! Session CRUD operations
 
+use crate::result::{SessionResult, RESULT_FILE_NAME};
 use crate::state::MetaSessionState;
 use crate::validate::{new_session_id, validate_session_id};
 use anyhow::{bail, Context, Result};
@@ -414,6 +415,70 @@ pub(crate) fn validate_tool_access_in(base_dir: &Path, session_id: &str, tool: &
     Ok(())
 }
 
+/// Write a session result to disk
+pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
+    let base_dir = get_session_root(project_path)?;
+    save_result_in(&base_dir, session_id, result)
+}
+
+pub(crate) fn save_result_in(
+    base_dir: &Path,
+    session_id: &str,
+    result: &SessionResult,
+) -> Result<()> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let result_path = session_dir.join(RESULT_FILE_NAME);
+    let contents = toml::to_string_pretty(result).context("Failed to serialize session result")?;
+    fs::write(&result_path, contents)
+        .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
+    Ok(())
+}
+
+/// Load a session result
+pub fn load_result(project_path: &Path, session_id: &str) -> Result<Option<SessionResult>> {
+    let base_dir = get_session_root(project_path)?;
+    load_result_in(&base_dir, session_id)
+}
+
+pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option<SessionResult>> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let result_path = session_dir.join(RESULT_FILE_NAME);
+    if !result_path.exists() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&result_path)
+        .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
+    let result: SessionResult = toml::from_str(&contents)
+        .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
+    Ok(Some(result))
+}
+
+/// List artifacts in a session's output/ directory
+pub fn list_artifacts(project_path: &Path, session_id: &str) -> Result<Vec<String>> {
+    let base_dir = get_session_root(project_path)?;
+    list_artifacts_in(&base_dir, session_id)
+}
+
+pub(crate) fn list_artifacts_in(base_dir: &Path, session_id: &str) -> Result<Vec<String>> {
+    validate_session_id(session_id)?;
+    let session_dir = get_session_dir_in(base_dir, session_id);
+    let output_dir = session_dir.join("output");
+    if !output_dir.exists() {
+        return Ok(Vec::new());
+    }
+    let mut artifacts = Vec::new();
+    for entry in fs::read_dir(&output_dir)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            artifacts.push(entry.file_name().to_string_lossy().to_string());
+        }
+    }
+    artifacts.sort();
+    Ok(artifacts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +704,86 @@ mod tests {
         let hash = complete_session_in(temp_dir.path(), &state.meta_session_id, "session complete")
             .expect("Failed to complete session");
         assert!(!hash.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_result() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
+            .expect("Failed to create session");
+
+        let result = crate::result::SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "Test completed".to_string(),
+            tool: "codex".to_string(),
+            started_at: chrono::Utc::now(),
+            completed_at: chrono::Utc::now(),
+            artifacts: vec!["output/result.txt".to_string()],
+        };
+
+        save_result_in(temp_dir.path(), &state.meta_session_id, &result)
+            .expect("Failed to save result");
+
+        let loaded = load_result_in(temp_dir.path(), &state.meta_session_id)
+            .expect("Failed to load result")
+            .expect("Result should exist");
+
+        assert_eq!(loaded.status, "success");
+        assert_eq!(loaded.exit_code, 0);
+        assert_eq!(loaded.tool, "codex");
+        assert_eq!(loaded.artifacts.len(), 1);
+    }
+
+    #[test]
+    fn test_load_result_not_found() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
+            .expect("Failed to create session");
+
+        let loaded =
+            load_result_in(temp_dir.path(), &state.meta_session_id).expect("Failed to load result");
+        assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_list_artifacts() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
+            .expect("Failed to create session");
+
+        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
+        // Create some artifact files
+        std::fs::write(session_dir.join("output/report.txt"), "test").unwrap();
+        std::fs::write(session_dir.join("output/diff.patch"), "test").unwrap();
+
+        let artifacts = list_artifacts_in(temp_dir.path(), &state.meta_session_id)
+            .expect("Failed to list artifacts");
+        assert_eq!(artifacts.len(), 2);
+        assert!(artifacts.contains(&"diff.patch".to_string()));
+        assert!(artifacts.contains(&"report.txt".to_string()));
+    }
+
+    #[test]
+    fn test_status_from_exit_code() {
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(0),
+            "success"
+        );
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(1),
+            "failure"
+        );
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(137),
+            "signal"
+        );
+        assert_eq!(
+            crate::result::SessionResult::status_from_exit_code(143),
+            "signal"
+        );
     }
 }

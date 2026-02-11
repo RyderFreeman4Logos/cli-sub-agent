@@ -320,6 +320,43 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// Show the last execution result for a session
+    Result {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Output as JSON instead of human-readable
+        #[arg(long)]
+        json: bool,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// List artifacts in a session's output directory
+    Artifacts {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Show git history for a session
+    Log {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

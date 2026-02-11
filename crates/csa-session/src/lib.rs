@@ -4,6 +4,7 @@ pub mod genealogy;
 pub mod git;
 pub mod manager;
 pub mod metadata;
+pub mod result;
 pub mod state;
 pub mod validate;
 
@@ -14,11 +15,13 @@ pub use state::{
 
 pub use metadata::SessionMetadata;
 
+pub use result::SessionResult;
+
 // Re-export manager functions
 pub use manager::{
     complete_session, create_session, delete_session, get_session_dir, get_session_root,
-    list_all_sessions, list_sessions, load_metadata, load_session, save_session,
-    update_last_accessed, validate_tool_access,
+    list_all_sessions, list_artifacts, list_sessions, load_metadata, load_result, load_session,
+    save_result, save_session, update_last_accessed, validate_tool_access,
 };
 
 // Re-export genealogy functions

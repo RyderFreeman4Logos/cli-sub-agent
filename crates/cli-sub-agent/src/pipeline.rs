@@ -6,9 +6,10 @@
 //! - Global slot acquisition with concurrency limits
 
 use anyhow::{Context, Result};
+use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::signal::unix::{signal, SignalKind};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
@@ -17,8 +18,8 @@ use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
-    create_session, get_session_dir, load_session, resolve_session_prefix, save_session,
-    TokenUsage, ToolState,
+    create_session, get_session_dir, load_session, resolve_session_prefix, save_result,
+    save_session, SessionResult, TokenUsage, ToolState,
 };
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
@@ -208,6 +209,9 @@ pub(crate) async fn execute_with_session(
     let tool_state = session.tools.get(executor.tool_name()).cloned();
     let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
 
+    // Record execution start time before spawning
+    let execution_start_time = chrono::Utc::now();
+
     // Spawn child process
     let child = csa_process::spawn_tool(cmd)
         .await
@@ -320,6 +324,30 @@ pub(crate) async fn execute_with_session(
             cumulative.estimated_cost_usd.unwrap_or(0.0)
                 + new_usage.estimated_cost_usd.unwrap_or(0.0),
         );
+    }
+
+    // Write prompt to input/ for audit trail
+    let input_dir = session_dir.join("input");
+    if input_dir.exists() {
+        let prompt_path = input_dir.join("prompt.txt");
+        if let Err(e) = fs::write(&prompt_path, prompt) {
+            warn!("Failed to write prompt to input/: {}", e);
+        }
+    }
+
+    // Write structured result
+    let execution_end_time = chrono::Utc::now();
+    let session_result = SessionResult {
+        status: SessionResult::status_from_exit_code(result.exit_code),
+        exit_code: result.exit_code,
+        summary: result.summary.clone(),
+        tool: executor.tool_name().to_string(),
+        started_at: execution_start_time,
+        completed_at: execution_end_time,
+        artifacts: Vec::new(), // populated by hooks later (Phase 3.3)
+    };
+    if let Err(e) = save_result(project_root, &session.meta_session_id, &session_result) {
+        warn!("Failed to save session result: {}", e);
     }
 
     // Save session
