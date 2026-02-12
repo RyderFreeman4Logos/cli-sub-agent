@@ -28,9 +28,11 @@ use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt
 /// RAII guard that cleans up a newly created session directory on failure.
 ///
 /// When `execute_with_session` creates a new session but the tool fails to spawn
-/// (or any step before `save_session` errors out), the session directory would
-/// remain on disk as an orphan. This guard deletes it automatically on drop
-/// unless `defuse()` is called after successful session save.
+/// (or any pre-execution step errors out), the session directory would remain on
+/// disk as an orphan. This guard deletes it automatically on drop unless
+/// `defuse()` is called after successful tool execution. Once the tool has
+/// produced output, the session directory is preserved even if later persistence
+/// steps (save_session, hooks) fail.
 struct SessionCleanupGuard {
     session_dir: PathBuf,
     defused: bool,
@@ -201,7 +203,7 @@ pub(crate) async fn execute_with_session(
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
 
     // Arm cleanup guard for new sessions only (not resumed ones).
-    // If any step before save_session fails, the guard deletes the orphan directory.
+    // If any pre-execution step fails, the guard deletes the orphan directory.
     let mut cleanup_guard = if session_arg.is_none() {
         Some(SessionCleanupGuard::new(session_dir.clone()))
     } else {
@@ -312,6 +314,13 @@ pub(crate) async fn execute_with_session(
         guard.record_usage(executor.tool_name(), peak_memory_mb);
     }
 
+    // Tool execution completed — defuse cleanup guard now.
+    // The session directory contains execution artifacts worth preserving
+    // even if a later persistence step (save_session, hooks) fails.
+    if let Some(ref mut guard) = cleanup_guard {
+        guard.defuse();
+    }
+
     // Extract provider session ID from output
     let provider_session_id = csa_executor::extract_session_id(tool, &result.output);
 
@@ -399,11 +408,6 @@ pub(crate) async fn execute_with_session(
 
     // Save session
     save_session(&session)?;
-
-    // Session saved successfully — defuse the cleanup guard
-    if let Some(ref mut guard) = cleanup_guard {
-        guard.defuse();
-    }
 
     // Fire PostRun and SessionComplete hooks (best-effort)
     let project_hooks_path = csa_session::get_session_root(project_root)

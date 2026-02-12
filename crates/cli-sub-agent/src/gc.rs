@@ -536,10 +536,11 @@ fn discover_roots_recursive(
             }
         }
         if path.join("sessions").is_dir() {
-            roots.push(path);
-        } else {
-            discover_roots_recursive(&path, canonical_base, false, roots);
+            roots.push(path.clone());
         }
+        // Always recurse to find nested sub-project roots, even if current
+        // directory is itself a root (parent and child can coexist).
+        discover_roots_recursive(&path, canonical_base, false, roots);
     }
 }
 
@@ -549,7 +550,8 @@ fn discover_roots_recursive(
 /// `SlotDiagnostic` in `csa-lock`). Uses serde_json for robust parsing.
 fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
     let v: serde_json::Value = serde_json::from_str(json_content).ok()?;
-    v.get("pid")?.as_u64().map(|n| n as u32)
+    let n = v.get("pid")?.as_u64()?;
+    u32::try_from(n).ok()
 }
 
 /// Check if a process is alive (cross-platform Unix).
@@ -630,6 +632,37 @@ mod tests {
     fn test_extract_pid_from_lock_invalid() {
         assert_eq!(extract_pid_from_lock("not json"), None);
         assert_eq!(extract_pid_from_lock(r#"{"no_pid": 1}"#), None);
+    }
+
+    #[test]
+    fn test_extract_pid_from_lock_overflow_rejected() {
+        // PID > u32::MAX must be rejected, not silently truncated
+        assert_eq!(
+            extract_pid_from_lock(r#"{"pid": 4294967297}"#),
+            None,
+            "PID > u32::MAX should return None"
+        );
+        assert_eq!(
+            extract_pid_from_lock(r#"{"pid": 18446744073709551615}"#),
+            None,
+            "u64::MAX PID should return None"
+        );
+    }
+
+    #[test]
+    fn test_discover_finds_ancestor_and_descendant_roots() {
+        let tmp = tempdir().unwrap();
+        // Parent is a root (has sessions/)
+        make_project_root(tmp.path(), &["home", "user"]);
+        // Child is also a root (nested inside parent)
+        make_project_root(tmp.path(), &["home", "user", "subproject"]);
+
+        let roots = discover_project_roots(tmp.path());
+        assert_eq!(
+            roots.len(),
+            2,
+            "Both ancestor and descendant roots must be discovered"
+        );
     }
 
     #[test]
