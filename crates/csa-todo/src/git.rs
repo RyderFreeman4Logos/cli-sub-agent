@@ -18,58 +18,80 @@ fn validate_revision(rev: &str) -> Result<()> {
 }
 
 /// Ensure the todos directory is a git repository. Initializes if needed.
+/// Also ensures `.gitignore` excludes lock files (backfills for existing repos).
 pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
     let git_dir = todos_dir.join(".git");
-    if git_dir.exists() {
-        return Ok(());
+    if !git_dir.exists() {
+        std::fs::create_dir_all(todos_dir)
+            .with_context(|| format!("Failed to create todos dir: {}", todos_dir.display()))?;
+
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(todos_dir)
+            .output()
+            .context("Failed to run git init")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "git init failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        // Configure git user for this repo (avoids "please tell me who you are" errors)
+        let email_result = Command::new("git")
+            .args(["config", "user.email", "csa@localhost"])
+            .current_dir(todos_dir)
+            .output();
+        if let Err(e) = &email_result {
+            tracing::warn!("Failed to set git user.email: {e}");
+        }
+
+        let name_result = Command::new("git")
+            .args(["config", "user.name", "CSA Todo"])
+            .current_dir(todos_dir)
+            .output();
+        if let Err(e) = &name_result {
+            tracing::warn!("Failed to set git user.name: {e}");
+        }
     }
 
-    std::fs::create_dir_all(todos_dir)
-        .with_context(|| format!("Failed to create todos dir: {}", todos_dir.display()))?;
+    // Ensure .gitignore excludes lock files (backfills for pre-existing repos)
+    ensure_gitignore(todos_dir)?;
 
-    let output = Command::new("git")
-        .args(["init"])
-        .current_dir(todos_dir)
-        .output()
-        .context("Failed to run git init")?;
+    Ok(())
+}
 
-    if !output.status.success() {
-        anyhow::bail!(
-            "git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    // Configure git user for this repo (avoids "please tell me who you are" errors)
-    let email_result = Command::new("git")
-        .args(["config", "user.email", "csa@localhost"])
-        .current_dir(todos_dir)
-        .output();
-    if let Err(e) = &email_result {
-        tracing::warn!("Failed to set git user.email: {e}");
-    }
-
-    let name_result = Command::new("git")
-        .args(["config", "user.name", "CSA Todo"])
-        .current_dir(todos_dir)
-        .output();
-    if let Err(e) = &name_result {
-        tracing::warn!("Failed to set git user.name: {e}");
-    }
-
-    // Create .gitignore (exclude lock files) and commit as bootstrap
+/// Ensure `.gitignore` exists and contains `.lock` exclusion.
+/// Creates the file if missing, or appends `.lock` if present but lacking it.
+/// Commits the change as a bootstrap commit when newly created.
+fn ensure_gitignore(todos_dir: &Path) -> Result<()> {
     let gitignore = todos_dir.join(".gitignore");
-    if !gitignore.exists() {
+    if gitignore.exists() {
+        let content = std::fs::read_to_string(&gitignore).context("Failed to read .gitignore")?;
+        if content.lines().any(|l| l.trim() == ".lock") {
+            return Ok(()); // already has .lock exclusion
+        }
+        // Append .lock exclusion to existing .gitignore
+        let mut new_content = content;
+        if !new_content.ends_with('\n') && !new_content.is_empty() {
+            new_content.push('\n');
+        }
+        new_content.push_str(".lock\n");
+        std::fs::write(&gitignore, new_content).context("Failed to update .gitignore")?;
+    } else {
         std::fs::write(&gitignore, ".lock\n").context("Failed to write .gitignore")?;
-        let _ = Command::new("git")
-            .args(["add", "--", ".gitignore"])
-            .current_dir(todos_dir)
-            .output();
-        let _ = Command::new("git")
-            .args(["commit", "-m", "bootstrap: add .gitignore"])
-            .current_dir(todos_dir)
-            .output();
     }
+
+    // Stage and commit the .gitignore change (no-op if already committed)
+    let _ = Command::new("git")
+        .args(["add", "--", ".gitignore"])
+        .current_dir(todos_dir)
+        .output();
+    let _ = Command::new("git")
+        .args(["commit", "-m", "bootstrap: add .gitignore"])
+        .current_dir(todos_dir)
+        .output();
 
     Ok(())
 }
@@ -572,6 +594,43 @@ mod tests {
         assert!(
             !files.contains(".lock"),
             ".lock should be excluded by .gitignore, tracked files: {files}"
+        );
+    }
+
+    #[test]
+    fn test_gitignore_backfill_for_existing_repo() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+
+        // Simulate a pre-existing repo WITHOUT .gitignore
+        fs::create_dir_all(todos).unwrap();
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let _ = Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(todos)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(todos)
+            .output();
+
+        // .git exists but NO .gitignore
+        assert!(todos.join(".git").exists());
+        assert!(!todos.join(".gitignore").exists());
+
+        // Call ensure_git_init — should backfill .gitignore
+        ensure_git_init(todos).unwrap();
+
+        // .gitignore should now exist and contain .lock
+        let gitignore = fs::read_to_string(todos.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.contains(".lock"),
+            ".gitignore should contain .lock after backfill, got: {gitignore}"
         );
     }
 

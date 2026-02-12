@@ -185,19 +185,39 @@ fn test_discover_traverses_sessions_path_segment() {
 }
 
 #[test]
-fn test_discover_finds_orphan_only_roots() {
-    // Regression: orphan-only session roots must be discovered for cleanup
+fn test_discover_traverses_sessions_ulid_path_segment() {
+    // Regression: sessions/<ULID>/ as a path segment must not block recursion
+    let tmp = tempdir().unwrap();
+    let ulid_segment = "01234567890123456789ABCDEF";
+    // Project root is at sessions/<ULID>/project-a — "sessions" is a path segment
+    make_project_root(
+        tmp.path(),
+        &["home", "user", "sessions", ulid_segment, "project-a"],
+    );
+    let roots = discover_project_roots(tmp.path());
+    assert_eq!(
+        roots.len(),
+        1,
+        "Must find root through sessions/<ULID> path segment"
+    );
+}
+
+#[test]
+fn test_discover_skips_orphan_only_without_confirmation() {
+    // Orphan-only roots (ULID dir without state.toml or rotation.toml) are
+    // indistinguishable from path segments, so global GC does NOT discover them.
+    // Project-level GC handles these via direct session listing.
     let tmp = tempdir().unwrap();
     let ulid = "01234567890123456789ABCDEF";
-    // sessions/<ulid> WITHOUT state.toml — orphan-only root, still discoverable
+    // sessions/<ulid> WITHOUT state.toml — ambiguous, not discovered by global GC
     fs::create_dir_all(tmp.path().join("orphan_proj").join("sessions").join(ulid)).unwrap();
-    // sessions/<ulid> WITH state.toml — active root
+    // sessions/<ulid> WITH state.toml — confirmed active root
     make_project_root(tmp.path(), &["active_proj"]);
     let roots = discover_project_roots(tmp.path());
     assert_eq!(
         roots.len(),
-        2,
-        "Both orphan-only and active roots should be discovered"
+        1,
+        "Only confirmed roots (with state.toml or rotation.toml) should be discovered"
     );
 }
 

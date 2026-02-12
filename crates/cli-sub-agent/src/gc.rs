@@ -550,13 +550,14 @@ fn discover_roots_recursive(
             && !fs::symlink_metadata(&sessions_path)
                 .map(|m| m.file_type().is_symlink())
                 .unwrap_or(true)
-            && (has_any_ulid_subdirs(&sessions_path) || path.join("rotation.toml").exists());
+            && (has_confirmed_sessions(&sessions_path) || path.join("rotation.toml").exists());
         if has_sessions {
             roots.push(path.clone());
         }
-        // Skip real session dirs; path-segment "sessions" dirs are traversed.
+        // Skip confirmed session containers (ULID subdirs with state.toml).
+        // Path-segment "sessions" dirs with ULID-like children but no state.toml are traversed.
         let name = entry.file_name();
-        if name.to_string_lossy() == "sessions" && has_any_ulid_subdirs(&path) {
+        if name.to_string_lossy() == "sessions" && has_confirmed_sessions(&path) {
             continue;
         }
         // Recurse to find nested sub-project roots (parent and child can coexist).
@@ -592,14 +593,15 @@ fn is_orphan_session_dir(entry: &fs::DirEntry) -> bool {
     true
 }
 
-/// Check if a directory has any ULID-named subdirectories (regardless of `state.toml`).
-/// Used for project root discovery: catches both active sessions and orphan-only roots.
-/// Safety boundary for deletion is in `is_orphan_session_dir` and session listing, not here.
-fn has_any_ulid_subdirs(dir: &std::path::Path) -> bool {
+/// Check if a directory has ULID subdirs with `state.toml` (confirmed session container).
+/// Used for recursion skip: only skip traversal into confirmed session containers.
+/// Path-segment "sessions/" dirs whose ULID children lack `state.toml` are traversed.
+fn has_confirmed_sessions(dir: &std::path::Path) -> bool {
     fs::read_dir(dir).is_ok_and(|rd| {
         rd.flatten().any(|e| {
             e.file_type().is_ok_and(|ft| ft.is_dir())
                 && csa_session::validate_session_id(&e.file_name().to_string_lossy()).is_ok()
+                && e.path().join("state.toml").exists()
         })
     })
 }
