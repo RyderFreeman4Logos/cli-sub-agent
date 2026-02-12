@@ -1,4 +1,5 @@
 use anyhow::Result;
+use csa_config::global::GlobalConfig;
 use csa_core::types::OutputFormat;
 use csa_todo::{TodoManager, TodoStatus};
 
@@ -91,7 +92,8 @@ pub(crate) fn handle_diff(
     if diff_output.is_empty() {
         eprintln!("No changes.");
     } else {
-        print!("{diff_output}");
+        let global = GlobalConfig::load().unwrap_or_default();
+        print_or_pipe(&diff_output, global.todo.diff_command.as_deref());
     }
 
     Ok(())
@@ -253,12 +255,14 @@ pub(crate) fn handle_show(
 
     if path {
         println!("{}", plan.todo_md_path().display());
-    } else if let Some(v) = version {
-        let content = csa_todo::git::show_version(manager.todos_dir(), &ts, v)?;
-        print!("{content}");
     } else {
-        let content = std::fs::read_to_string(plan.todo_md_path())?;
-        print!("{content}");
+        let content = if let Some(v) = version {
+            csa_todo::git::show_version(manager.todos_dir(), &ts, v)?
+        } else {
+            std::fs::read_to_string(plan.todo_md_path())?
+        };
+        let global = GlobalConfig::load().unwrap_or_default();
+        print_or_pipe(&content, global.todo.show_command.as_deref());
     }
 
     Ok(())
@@ -313,6 +317,57 @@ fn resolve_timestamp(manager: &TodoManager, timestamp: Option<&str>) -> Result<S
             let plan = manager.latest()?;
             eprintln!("(using latest plan: {})", plan.timestamp);
             Ok(plan.timestamp)
+        }
+    }
+}
+
+/// Pipe content through an external command (e.g., `bat -l md`, `delta`).
+///
+/// Only activates when stdout is a terminal. Falls back to plain `print!()` if:
+/// - stdout is not a terminal (piped or redirected)
+/// - the command fails to spawn (e.g., not installed)
+/// - the command string is empty/blank
+///
+/// Note: if the child process exits non-zero after receiving stdin, content may
+/// have been partially displayed. We do not re-print in that case to avoid
+/// garbled/duplicated output.
+fn print_or_pipe(content: &str, command: Option<&str>) {
+    use std::io::IsTerminal;
+    use std::io::Write;
+
+    let Some(cmd_str) = command else {
+        print!("{content}");
+        return;
+    };
+
+    if !std::io::stdout().is_terminal() {
+        print!("{content}");
+        return;
+    }
+
+    let parts: Vec<&str> = cmd_str.split_whitespace().collect();
+    let Some((program, args)) = parts.split_first() else {
+        print!("{content}");
+        return;
+    };
+
+    let child = std::process::Command::new(program)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .spawn();
+
+    match child {
+        Ok(mut child) => {
+            if let Some(mut stdin) = child.stdin.take() {
+                // Ignore write errors — the child may close stdin early (e.g., head -n)
+                let _ = stdin.write_all(content.as_bytes());
+                drop(stdin);
+            }
+            let _ = child.wait();
+        }
+        Err(_) => {
+            // Command not found or failed to spawn — fall back to plain print
+            print!("{content}");
         }
     }
 }

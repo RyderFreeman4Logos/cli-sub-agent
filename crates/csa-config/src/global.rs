@@ -29,6 +29,8 @@ pub struct GlobalConfig {
     pub debate: DebateConfig,
     #[serde(default)]
     pub fallback: FallbackConfig,
+    #[serde(default)]
+    pub todo: TodoDisplayConfig,
 }
 
 /// Configuration for the code review workflow.
@@ -106,6 +108,20 @@ impl Default for FallbackConfig {
             cloud_review_exhausted: default_cloud_review_exhausted(),
         }
     }
+}
+
+/// Display configuration for `csa todo` subcommands.
+///
+/// When set, output is piped through the specified external command.
+/// Falls back to plain `print!()` when the command is absent or stdout is not a terminal.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct TodoDisplayConfig {
+    /// Command to pipe `csa todo show` output through (e.g., `"bat -l md"`).
+    #[serde(default)]
+    pub show_command: Option<String>,
+    /// Command to pipe `csa todo diff` output through (e.g., `"delta"`).
+    #[serde(default)]
+    pub diff_command: Option<String>,
 }
 
 /// Returns the heterogeneous counterpart tool for model-diversity enforcement.
@@ -301,6 +317,12 @@ tool = "auto"
 #   "ask-user"   = prompt user before falling back (default)
 [fallback]
 cloud_review_exhausted = "ask-user"
+
+# Display commands for `csa todo` subcommands.
+# When set, output is piped through the specified command (only when stdout is a terminal).
+# [todo]
+# show_command = "bat -l md"   # Pipe `csa todo show` output through bat
+# diff_command = "delta"       # Pipe `csa todo diff` output through delta
 "#
         .to_string()
     }
