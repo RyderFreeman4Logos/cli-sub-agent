@@ -211,6 +211,16 @@ pub fn list_all_sessions(project_path: &Path) -> Result<Vec<MetaSessionState>> {
     list_all_sessions_in(&base_dir)
 }
 
+/// List all sessions from an explicit session root directory (for global GC).
+pub fn list_sessions_from_root(session_root: &Path) -> Result<Vec<MetaSessionState>> {
+    list_all_sessions_in(session_root)
+}
+
+/// Delete a session from an explicit session root directory (for global GC).
+pub fn delete_session_from_root(session_root: &Path, session_id: &str) -> Result<()> {
+    delete_session_in(session_root, session_id)
+}
+
 /// Internal implementation: list all sessions from explicit base directory
 pub(crate) fn list_all_sessions_in(base_dir: &Path) -> Result<Vec<MetaSessionState>> {
     let sessions_dir = base_dir.join("sessions");

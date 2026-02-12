@@ -131,8 +131,13 @@ async fn main() -> Result<()> {
         Commands::Gc {
             dry_run,
             max_age_days,
+            global,
         } => {
-            gc::handle_gc(dry_run, max_age_days, output_format)?;
+            if global {
+                gc::handle_gc_global(dry_run, max_age_days, output_format)?;
+            } else {
+                gc::handle_gc(dry_run, max_age_days, output_format)?;
+            }
         }
         Commands::Config { cmd } => match cmd {
             ConfigCommands::Show { cd } => {
