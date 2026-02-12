@@ -51,12 +51,16 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
     // 9. Execute with session
+    let description = format!(
+        "debate: {}",
+        crate::run_helpers::truncate_prompt(&question, 80)
+    );
     let result = crate::pipeline::execute_with_session(
         &executor,
         &tool,
         &prompt,
         args.session,
-        Some("Debate session".to_string()),
+        Some(description),
         None,
         &project_root,
         config.as_ref(),
