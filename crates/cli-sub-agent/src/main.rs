@@ -394,7 +394,7 @@ async fn handle_run(
                 eprintln!(
                     "hint: reusable session available for {}: --session {}",
                     best.tool_name,
-                    &best.session_id[..8], // prefix for brevity
+                    best.session_id.get(..8).unwrap_or(&best.session_id),
                 );
             }
             _ => {} // No candidates or error — silently continue
