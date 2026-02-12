@@ -28,7 +28,6 @@ pub(crate) fn handle_gc(
         let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
         let locks_dir = session_dir.join("locks");
 
-        // 1. Check for stale locks
         if locks_dir.exists() {
             if let Ok(entries) = fs::read_dir(&locks_dir) {
                 for entry in entries.flatten() {
@@ -60,7 +59,6 @@ pub(crate) fn handle_gc(
             }
         }
 
-        // 2. Check for empty sessions (no tools used)
         if session.tools.is_empty() {
             if dry_run {
                 eprintln!(
@@ -73,7 +71,6 @@ pub(crate) fn handle_gc(
             empty_sessions_removed += 1;
         }
 
-        // 3. Check for expired sessions (--max-age-days)
         if let Some(days) = max_age_days {
             let age = now.signed_duration_since(session.last_accessed);
             if age.num_days() > days as i64 {
@@ -91,7 +88,6 @@ pub(crate) fn handle_gc(
         }
     }
 
-    // Clean rotation.toml if all sessions are gone
     let session_root = csa_session::get_session_root(&project_root)?;
     let rotation_path = session_root.join("rotation.toml");
     if rotation_path.exists() {
@@ -106,7 +102,6 @@ pub(crate) fn handle_gc(
         }
     }
 
-    // Clean orphan directories (no state.toml, excluding hidden dirs like .git)
     let sessions_dir = session_root.join("sessions");
 
     if sessions_dir.exists() {
@@ -132,7 +127,6 @@ pub(crate) fn handle_gc(
         }
     }
 
-    // Clean stale slot files (global, not per-project)
     let mut stale_slots_cleaned = 0;
     if let Ok(slots_dir) = GlobalConfig::slots_dir() {
         if slots_dir.exists() {
@@ -140,7 +134,6 @@ pub(crate) fn handle_gc(
                 for entry in entries.flatten() {
                     if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                         let tool_dir = entry.path();
-                        // Check each slot file for stale PIDs
                         if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
                             for slot_entry in slot_entries.flatten() {
                                 let path = slot_entry.path();
@@ -168,7 +161,6 @@ pub(crate) fn handle_gc(
                                 }
                             }
                         }
-                        // Remove empty tool directories
                         if !dry_run {
                             let _ = fs::remove_dir(&tool_dir); // only succeeds if empty
                         }
@@ -281,7 +273,6 @@ pub(crate) fn handle_gc_global(
             let session_dir = session_root.join("sessions").join(&session.meta_session_id);
             let locks_dir = session_dir.join("locks");
 
-            // Stale locks
             if locks_dir.exists() {
                 if let Ok(entries) = fs::read_dir(&locks_dir) {
                     for entry in entries.flatten() {
@@ -313,7 +304,6 @@ pub(crate) fn handle_gc_global(
                 }
             }
 
-            // Empty sessions (mutually exclusive with expired — skip expired if empty)
             if session.tools.is_empty() {
                 if dry_run {
                     eprintln!(
@@ -332,7 +322,6 @@ pub(crate) fn handle_gc_global(
                 continue;
             }
 
-            // Expired sessions
             if let Some(days) = max_age_days {
                 let age = now.signed_duration_since(session.last_accessed);
                 if age.num_days() > days as i64 {
@@ -361,7 +350,6 @@ pub(crate) fn handle_gc_global(
             }
         }
 
-        // Orphan directories (excluding hidden dirs like .git)
         // Skip if sessions_dir is a symlink (safety: avoid traversal outside state base)
         let sessions_dir = session_root.join("sessions");
         let sessions_is_real_dir = sessions_dir.is_dir()
@@ -390,7 +378,6 @@ pub(crate) fn handle_gc_global(
             }
         }
 
-        // Clean rotation.toml if project has no sessions remaining
         let rotation_path = session_root.join("rotation.toml");
         if rotation_path.exists() {
             let no_sessions_remain = if dry_run {
@@ -414,7 +401,6 @@ pub(crate) fn handle_gc_global(
         }
     }
 
-    // Also clean stale slots (same as per-project GC)
     let mut stale_slots_cleaned = 0u64;
     if let Ok(slots_dir) = GlobalConfig::slots_dir() {
         if slots_dir.exists() {
@@ -508,13 +494,8 @@ pub(crate) fn handle_gc_global(
     Ok(())
 }
 
-/// Discover all project session roots under the CSA state base directory.
-///
-/// A project root is any directory that contains a `sessions/` subdirectory.
-/// Walks the tree recursively with safety guards:
-/// - Skips symlinks to prevent traversal outside the state tree
-/// - Validates canonical paths stay within the state base
-/// - Skips known top-level non-project directories (`slots/`, `tmp/`, `todos/`)
+/// Discover project roots (dirs with ULID-containing `sessions/`) under state base.
+/// Skips symlinks, validates canonical paths, and skips `slots/`/`todos/` at top level.
 fn discover_project_roots(state_base: &std::path::Path) -> Vec<std::path::PathBuf> {
     let canonical_base = match state_base.canonicalize() {
         Ok(p) => p,
@@ -567,19 +548,18 @@ fn discover_roots_recursive(
             }
         }
         let sessions_path = path.join("sessions");
-        // Only accept sessions/ if it's a real directory (not a symlink)
+        // Accept sessions/ only if real dir (not symlink) with ULID-length entries.
         let has_sessions = sessions_path.is_dir()
             && !fs::symlink_metadata(&sessions_path)
                 .map(|m| m.file_type().is_symlink())
-                .unwrap_or(true);
+                .unwrap_or(true)
+            && looks_like_session_container(&sessions_path);
         if has_sessions {
             roots.push(path.clone());
         }
-        // Skip directories named "sessions" to avoid recursing into session
-        // artifact trees (which may contain nested sessions/ dirs that would
-        // be falsely identified as project roots).
+        // Skip real session containers; path-segment "sessions" dirs are traversed.
         let name = entry.file_name();
-        if name.to_string_lossy() == "sessions" {
+        if name.to_string_lossy() == "sessions" && looks_like_session_container(&path) {
             continue;
         }
         // Recurse to find nested sub-project roots (parent and child can coexist).
@@ -594,23 +574,33 @@ fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
     u32::try_from(n).ok()
 }
 
-/// Returns `true` for non-hidden dirs in `sessions/` lacking `state.toml`.
+/// Returns `true` for ULID-length non-hidden dirs in `sessions/` lacking `state.toml`.
 fn is_orphan_session_dir(entry: &fs::DirEntry) -> bool {
     let name = entry.file_name();
-    if name.to_string_lossy().starts_with('.') {
+    let name_str = name.to_string_lossy();
+    if name_str.starts_with('.') {
+        return false;
+    }
+    // Only ULID-length (26 char) dirs can be orphan sessions.
+    if name_str.len() != 26 {
         return false;
     }
     let path = entry.path();
-    // Not an orphan if it has a valid session state
     if path.join("state.toml").exists() {
         return false;
     }
-    // Not an orphan if it contains sessions/ subdir — this means it's a path
-    // segment leading to a nested project root, not an orphan session directory.
     if path.join("sessions").is_dir() {
         return false;
     }
     true
+}
+
+/// Check if a directory looks like a session container (has 26-char ULID entries).
+fn looks_like_session_container(dir: &std::path::Path) -> bool {
+    fs::read_dir(dir).is_ok_and(|rd| {
+        rd.flatten()
+            .any(|e| e.file_type().is_ok_and(|ft| ft.is_dir()) && e.file_name().len() == 26)
+    })
 }
 
 /// Check if a process is alive (cross-platform Unix).
@@ -632,7 +622,7 @@ mod tests {
         for s in segments {
             path = path.join(s);
         }
-        fs::create_dir_all(path.join("sessions")).unwrap();
+        fs::create_dir_all(path.join("sessions").join("01234567890123456789ABCDEF")).unwrap();
     }
 
     #[test]
@@ -649,30 +639,22 @@ mod tests {
     fn test_discover_skips_symlinks() {
         let tmp = tempdir().unwrap();
         let external = tempdir().unwrap();
-        // Create a real project root inside the external dir
-        fs::create_dir_all(external.path().join("sessions")).unwrap();
-        // Create a symlink inside state base pointing to external
+        let ulid = "01234567890123456789ABCDEF";
+        fs::create_dir_all(external.path().join("sessions").join(ulid)).unwrap();
         unix_fs::symlink(external.path(), tmp.path().join("evil_link")).unwrap();
-
         let roots = discover_project_roots(tmp.path());
-        // The symlinked directory must NOT be discovered
         assert!(roots.is_empty());
     }
 
     #[test]
     fn test_discover_skips_top_level_only() {
         let tmp = tempdir().unwrap();
-        // "slots" at top level should be skipped (CSA internal)
-        fs::create_dir_all(tmp.path().join("slots").join("sessions")).unwrap();
-        // "todos" at top level should be skipped (CSA internal)
-        fs::create_dir_all(tmp.path().join("todos").join("sessions")).unwrap();
-        // "tmp" at top level should NOT be skipped (legitimate /tmp projects)
-        fs::create_dir_all(tmp.path().join("tmp").join("sessions")).unwrap();
-        // "tmp" nested inside a project path should NOT be skipped
+        let ulid = "01234567890123456789ABCDEF";
+        fs::create_dir_all(tmp.path().join("slots").join("sessions").join(ulid)).unwrap();
+        fs::create_dir_all(tmp.path().join("todos").join("sessions").join(ulid)).unwrap();
+        fs::create_dir_all(tmp.path().join("tmp").join("sessions").join(ulid)).unwrap();
         make_project_root(tmp.path(), &["home", "user", "tmp", "myproject"]);
-
         let roots = discover_project_roots(tmp.path());
-        // Both tmp (top-level) and nested myproject found; only slots/todos skipped
         assert_eq!(roots.len(), 2);
     }
 
@@ -711,9 +693,7 @@ mod tests {
     #[test]
     fn test_discover_finds_ancestor_and_descendant_roots() {
         let tmp = tempdir().unwrap();
-        // Parent is a root (has sessions/)
         make_project_root(tmp.path(), &["home", "user"]);
-        // Child is also a root (nested inside parent)
         make_project_root(tmp.path(), &["home", "user", "subproject"]);
 
         let roots = discover_project_roots(tmp.path());
@@ -742,28 +722,34 @@ mod tests {
         let sessions = tmp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
         fs::create_dir_all(sessions.join(".git")).unwrap();
-        let valid = sessions.join("valid-session");
+        let valid = sessions.join("01VALID0SESSION0ID000000000");
         fs::create_dir_all(&valid).unwrap();
         fs::write(valid.join("state.toml"), "").unwrap();
-        fs::create_dir_all(sessions.join("orphan-no-state")).unwrap();
+        // Orphan must be ULID-length (26 chars) to be detected
+        fs::create_dir_all(sessions.join("01ORPHAN000000000NOSTATE00")).unwrap();
         let entries: Vec<_> = fs::read_dir(&sessions).unwrap().flatten().collect();
         let orphans: Vec<_> = entries
             .iter()
             .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(e))
             .collect();
         assert_eq!(orphans.len(), 1);
-        assert_eq!(orphans[0].file_name().to_string_lossy(), "orphan-no-state");
+        assert_eq!(
+            orphans[0].file_name().to_string_lossy(),
+            "01ORPHAN000000000NOSTATE00"
+        );
     }
 
     #[test]
-    fn test_orphan_check_skips_path_segments_with_nested_sessions() {
+    fn test_orphan_check_skips_path_segments_and_non_ulid() {
         let tmp = tempdir().unwrap();
         let sessions = tmp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
-        // Dir without state.toml but WITH sessions/ subdir = path segment, not orphan
-        fs::create_dir_all(sessions.join("app").join("sessions")).unwrap();
-        // Dir without state.toml and WITHOUT sessions/ = actual orphan
-        fs::create_dir_all(sessions.join("orphan")).unwrap();
+        // Path segment (has sessions/ subdir) — not orphan regardless of name length
+        fs::create_dir_all(sessions.join("01PATHSEG0000000000NESTED0").join("sessions")).unwrap();
+        // Short name — not orphan (not ULID-length)
+        fs::create_dir_all(sessions.join("short")).unwrap();
+        // ULID-length dir without state.toml or sessions/ = actual orphan
+        fs::create_dir_all(sessions.join("01ORPHAN000000000REALONE00")).unwrap();
         let entries: Vec<_> = fs::read_dir(&sessions).unwrap().flatten().collect();
         let orphans: Vec<_> = entries
             .iter()
@@ -772,17 +758,20 @@ mod tests {
         assert_eq!(
             orphans.len(),
             1,
-            "Path segment with sessions/ must not be orphan"
+            "Only ULID-length dirs without state.toml are orphans"
         );
-        assert_eq!(orphans[0].file_name().to_string_lossy(), "orphan");
+        assert_eq!(
+            orphans[0].file_name().to_string_lossy(),
+            "01ORPHAN000000000REALONE00"
+        );
     }
 
     #[test]
     fn test_discover_skips_symlinked_sessions_dir() {
         let tmp = tempdir().unwrap();
         let external = tempdir().unwrap();
-        fs::create_dir_all(external.path().join("victim")).unwrap();
-        // Regular dir with sessions/ as a symlink to external path
+        let ulid = "01234567890123456789ABCDEF";
+        fs::create_dir_all(external.path().join(ulid)).unwrap();
         let dir = tmp.path().join("project");
         fs::create_dir_all(&dir).unwrap();
         unix_fs::symlink(external.path(), dir.join("sessions")).unwrap();
@@ -790,6 +779,19 @@ mod tests {
         assert!(
             roots.is_empty(),
             "Symlinked sessions/ must not be treated as root"
+        );
+    }
+
+    #[test]
+    fn test_discover_traverses_sessions_path_segment() {
+        let tmp = tempdir().unwrap();
+        // Project at /home/user/sessions/app — "sessions" is a path segment
+        make_project_root(tmp.path(), &["home", "user", "sessions", "app"]);
+        let roots = discover_project_roots(tmp.path());
+        assert_eq!(
+            roots.len(),
+            1,
+            "Must find root through sessions path segment"
         );
     }
 }
