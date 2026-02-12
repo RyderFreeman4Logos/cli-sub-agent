@@ -88,8 +88,15 @@ fn ensure_gitignore(todos_dir: &Path) -> Result<()> {
         .args(["add", "--", ".gitignore"])
         .current_dir(todos_dir)
         .output();
+    // Pathspec `-- .gitignore` prevents committing unrelated pre-staged files.
     let _ = Command::new("git")
-        .args(["commit", "-m", "bootstrap: add .gitignore"])
+        .args([
+            "commit",
+            "-m",
+            "bootstrap: add .gitignore",
+            "--",
+            ".gitignore",
+        ])
         .current_dir(todos_dir)
         .output();
 
@@ -631,6 +638,67 @@ mod tests {
         assert!(
             gitignore.contains(".lock"),
             ".gitignore should contain .lock after backfill, got: {gitignore}"
+        );
+    }
+
+    #[test]
+    fn test_gitignore_bootstrap_does_not_commit_unrelated_staged_files() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+
+        // Set up pre-existing repo WITHOUT .gitignore
+        fs::create_dir_all(todos).unwrap();
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let _ = Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(todos)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(todos)
+            .output();
+
+        // Create and stage an unrelated plan file BEFORE bootstrap
+        let plan_dir = todos.join("20260101T000000");
+        fs::create_dir_all(&plan_dir).unwrap();
+        fs::write(plan_dir.join("TODO.md"), "# Plan A").unwrap();
+        let _ = Command::new("git")
+            .args(["add", "20260101T000000/TODO.md"])
+            .current_dir(todos)
+            .output();
+
+        // Trigger bootstrap via ensure_git_init
+        ensure_git_init(todos).unwrap();
+
+        // Bootstrap commit should contain ONLY .gitignore, not the staged plan
+        let log_output = Command::new("git")
+            .args(["show", "--name-only", "--pretty=format:", "HEAD"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let committed_files = String::from_utf8_lossy(&log_output.stdout);
+        let files: Vec<&str> = committed_files.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            files,
+            vec![".gitignore"],
+            "Bootstrap commit must only contain .gitignore, got: {files:?}"
+        );
+
+        // The unrelated plan file should still be staged (not committed)
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let status_str = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            status_str.contains("A  20260101T000000/TODO.md"),
+            "Plan file should remain staged after bootstrap, got: {status_str}"
         );
     }
 
