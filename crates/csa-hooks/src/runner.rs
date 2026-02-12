@@ -316,4 +316,130 @@ mod tests {
         // callers handle it gracefully
         assert!(result.is_err());
     }
+
+    #[test]
+    fn test_run_hooks_for_event_empty_config() {
+        let hooks_config = crate::config::HooksConfig::default();
+        let vars = HashMap::new();
+
+        // PreRun has no built-in and empty config means disabled by default
+        let result = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &vars);
+        assert!(
+            result.is_ok(),
+            "Empty config + no-builtin event should be Ok (disabled)"
+        );
+    }
+
+    #[test]
+    fn test_run_hooks_for_event_builtin_event_empty_config() {
+        let hooks_config = crate::config::HooksConfig::default();
+        let mut vars = HashMap::new();
+        vars.insert("session_id".to_string(), "test-id".to_string());
+        vars.insert("sessions_root".to_string(), "/nonexistent".to_string());
+
+        // SessionComplete has a built-in command; empty config still enables it
+        let result = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &vars);
+        // Built-in command will fail (not a git repo), but the function should run
+        assert!(
+            result.is_err(),
+            "Built-in hook should execute and fail on non-git dir"
+        );
+    }
+
+    #[test]
+    fn test_run_hook_no_command_no_builtin_skips() {
+        // PreRun has no builtin_command, and no command configured => should skip
+        let config = HookConfig {
+            enabled: true,
+            command: None,
+            timeout_secs: 30,
+        };
+        let vars = HashMap::new();
+
+        let result = run_hook(HookEvent::PreRun, &config, &vars);
+        assert!(
+            result.is_ok(),
+            "Event with no command and no builtin should skip (Ok)"
+        );
+    }
+
+    #[test]
+    fn test_run_hook_missing_script_error() {
+        let config = HookConfig {
+            enabled: true,
+            command: Some("/nonexistent/path/to/script_abc123.sh".to_string()),
+            timeout_secs: 5,
+        };
+        let vars = HashMap::new();
+
+        let result = run_hook(HookEvent::PreRun, &config, &vars);
+        // sh -c will fail with non-zero exit when script doesn't exist
+        assert!(
+            result.is_err(),
+            "Non-existent script should produce an error"
+        );
+    }
+
+    #[test]
+    fn test_run_hook_with_tempdir_script() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("hook.sh");
+        std::fs::write(&script_path, "#!/bin/sh\nexit 0\n").unwrap();
+
+        let config = HookConfig {
+            enabled: true,
+            command: Some(format!("sh {}", script_path.display())),
+            timeout_secs: 10,
+        };
+        let vars = HashMap::new();
+
+        let result = run_hook(HookEvent::PreRun, &config, &vars);
+        assert!(result.is_ok(), "Valid script in tempdir should succeed");
+    }
+
+    #[test]
+    fn test_run_hook_script_with_nonzero_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("fail.sh");
+        std::fs::write(&script_path, "#!/bin/sh\nexit 42\n").unwrap();
+
+        let config = HookConfig {
+            enabled: true,
+            command: Some(format!("sh {}", script_path.display())),
+            timeout_secs: 10,
+        };
+        let vars = HashMap::new();
+
+        let result = run_hook(HookEvent::PreRun, &config, &vars);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("exited with code 42"),
+            "Error should contain exit code, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_substitute_variables_empty_template() {
+        let vars = HashMap::new();
+        let result = substitute_variables("", &vars);
+        assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_substitute_variables_no_placeholders() {
+        let mut vars = HashMap::new();
+        vars.insert("key".to_string(), "value".to_string());
+        let result = substitute_variables("echo hello world", &vars);
+        assert_eq!(result, "echo hello world");
+    }
+
+    #[test]
+    fn test_substitute_variables_empty_key() {
+        let mut vars = HashMap::new();
+        vars.insert(String::new(), "empty_key_value".to_string());
+        let result = substitute_variables("echo {}", &vars);
+        // {} has an empty key, which matches the empty-string key
+        assert_eq!(result, "echo 'empty_key_value'");
+    }
 }

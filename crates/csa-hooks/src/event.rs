@@ -112,4 +112,139 @@ mod tests {
         assert!(cmd.contains("{version}"));
         assert!(cmd.contains("{message}"));
     }
+
+    /// Exhaustive test: all variants return distinct, non-empty config keys.
+    #[test]
+    fn test_all_config_keys_unique_and_nonempty() {
+        let all_events = [
+            HookEvent::SessionComplete,
+            HookEvent::TodoCreate,
+            HookEvent::TodoSave,
+            HookEvent::PreRun,
+            HookEvent::PostRun,
+        ];
+
+        let mut seen_keys = std::collections::HashSet::new();
+        for event in &all_events {
+            let key = event.as_config_key();
+            assert!(!key.is_empty(), "{event:?} has empty config key");
+            assert!(
+                seen_keys.insert(key),
+                "Duplicate config key: {key} (from {event:?})"
+            );
+        }
+        // Ensure we covered all 5 variants
+        assert_eq!(seen_keys.len(), 5, "Expected 5 unique config keys");
+    }
+
+    /// Verify config keys match the expected snake_case convention.
+    #[test]
+    fn test_config_keys_are_snake_case() {
+        let all_events = [
+            HookEvent::SessionComplete,
+            HookEvent::TodoCreate,
+            HookEvent::TodoSave,
+            HookEvent::PreRun,
+            HookEvent::PostRun,
+        ];
+
+        for event in &all_events {
+            let key = event.as_config_key();
+            assert!(
+                key.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "Config key {key:?} for {event:?} is not snake_case"
+            );
+        }
+    }
+
+    /// Boundary: builtin_command for events WITH builtins always contains
+    /// at least one template variable placeholder.
+    #[test]
+    fn test_builtin_commands_contain_template_vars() {
+        let events_with_builtins = [
+            HookEvent::SessionComplete,
+            HookEvent::TodoCreate,
+            HookEvent::TodoSave,
+        ];
+
+        for event in &events_with_builtins {
+            let cmd = event
+                .builtin_command()
+                .unwrap_or_else(|| panic!("{event:?} should have a builtin command"));
+            assert!(
+                cmd.contains('{') && cmd.contains('}'),
+                "Builtin command for {event:?} should contain template variables, got: {cmd}"
+            );
+        }
+    }
+
+    /// Verify SessionComplete builtin contains all required variables.
+    #[test]
+    fn test_session_complete_builtin_has_required_vars() {
+        let cmd = HookEvent::SessionComplete.builtin_command().unwrap();
+        assert!(
+            cmd.contains("{sessions_root}"),
+            "SessionComplete builtin must reference sessions_root"
+        );
+        assert!(
+            cmd.contains("{session_id}"),
+            "SessionComplete builtin must reference session_id"
+        );
+    }
+
+    /// Verify TodoCreate builtin contains all required variables.
+    #[test]
+    fn test_todo_create_builtin_has_required_vars() {
+        let cmd = HookEvent::TodoCreate.builtin_command().unwrap();
+        assert!(
+            cmd.contains("{todo_root}"),
+            "TodoCreate builtin must reference todo_root"
+        );
+        assert!(
+            cmd.contains("{plan_dir}"),
+            "TodoCreate builtin must reference plan_dir"
+        );
+        assert!(
+            cmd.contains("{plan_id}"),
+            "TodoCreate builtin must reference plan_id"
+        );
+    }
+
+    /// Verify TodoSave builtin contains all required variables.
+    #[test]
+    fn test_todo_save_builtin_has_required_vars() {
+        let cmd = HookEvent::TodoSave.builtin_command().unwrap();
+        assert!(
+            cmd.contains("{todo_root}"),
+            "TodoSave builtin must reference todo_root"
+        );
+        assert!(
+            cmd.contains("{plan_dir}"),
+            "TodoSave builtin must reference plan_dir"
+        );
+        assert!(
+            cmd.contains("{version}"),
+            "TodoSave builtin must reference version"
+        );
+        assert!(
+            cmd.contains("{message}"),
+            "TodoSave builtin must reference message"
+        );
+    }
+
+    /// Boundary: HookEvent derives Copy, Clone, PartialEq, Eq, Hash correctly.
+    #[test]
+    fn test_hook_event_traits() {
+        let a = HookEvent::PreRun;
+        let b = a; // Copy
+        assert_eq!(a, b); // PartialEq + Eq
+
+        let c = a.clone(); // Clone
+        assert_eq!(a, c);
+
+        // Hash: can be used as HashMap key
+        let mut map = std::collections::HashMap::new();
+        map.insert(a, "value");
+        assert_eq!(map.get(&b), Some(&"value"));
+    }
 }
