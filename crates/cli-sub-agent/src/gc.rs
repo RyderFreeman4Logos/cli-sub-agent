@@ -257,7 +257,12 @@ pub(crate) fn handle_gc_global(
     }
 
     for session_root in &project_roots {
-        let sessions = match csa_session::list_sessions_from_root(session_root) {
+        // Use readonly variant in dry-run to avoid corrupt-state recovery writes
+        let sessions = match if dry_run {
+            csa_session::list_sessions_from_root_readonly(session_root)
+        } else {
+            csa_session::list_sessions_from_root(session_root)
+        } {
             Ok(s) => s,
             Err(_) => continue,
         };
@@ -370,7 +375,11 @@ pub(crate) fn handle_gc_global(
         // Clean rotation.toml if project has no sessions remaining
         let rotation_path = session_root.join("rotation.toml");
         if rotation_path.exists() {
-            let remaining = csa_session::list_sessions_from_root(session_root).unwrap_or_default();
+            let remaining = if dry_run {
+                csa_session::list_sessions_from_root_readonly(session_root).unwrap_or_default()
+            } else {
+                csa_session::list_sessions_from_root(session_root).unwrap_or_default()
+            };
             if remaining.is_empty() {
                 if dry_run {
                     eprintln!("[dry-run] Would remove rotation state: {:?}", rotation_path);
@@ -491,8 +500,9 @@ fn discover_project_roots(state_base: &std::path::Path) -> Vec<std::path::PathBu
     roots
 }
 
-/// Top-level non-project directories that exist directly under the state base.
-const TOP_LEVEL_SKIP: &[&str] = &["slots", "tmp", "todos"];
+/// Top-level CSA internal directories (not project paths) under the state base.
+/// Note: "tmp" is NOT skipped because `/tmp/...` project paths map to `<state>/csa/tmp/...`.
+const TOP_LEVEL_SKIP: &[&str] = &["slots", "todos"];
 
 fn discover_roots_recursive(
     dir: &std::path::Path,
@@ -618,17 +628,18 @@ mod tests {
     #[test]
     fn test_discover_skips_top_level_only() {
         let tmp = tempdir().unwrap();
-        // "slots" at top level should be skipped
+        // "slots" at top level should be skipped (CSA internal)
         fs::create_dir_all(tmp.path().join("slots").join("sessions")).unwrap();
-        // "tmp" at top level should be skipped
+        // "todos" at top level should be skipped (CSA internal)
+        fs::create_dir_all(tmp.path().join("todos").join("sessions")).unwrap();
+        // "tmp" at top level should NOT be skipped (legitimate /tmp projects)
         fs::create_dir_all(tmp.path().join("tmp").join("sessions")).unwrap();
         // "tmp" nested inside a project path should NOT be skipped
         make_project_root(tmp.path(), &["home", "user", "tmp", "myproject"]);
 
         let roots = discover_project_roots(tmp.path());
-        // Only the nested one should be found (top-level slots/tmp skipped)
-        assert_eq!(roots.len(), 1);
-        assert!(roots[0].to_string_lossy().contains("myproject"));
+        // Both tmp (top-level) and nested myproject found; only slots/todos skipped
+        assert_eq!(roots.len(), 2);
     }
 
     #[test]

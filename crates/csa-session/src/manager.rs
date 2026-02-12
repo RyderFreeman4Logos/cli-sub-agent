@@ -11,9 +11,7 @@ use std::path::{Path, PathBuf};
 
 const STATE_FILE_NAME: &str = "state.toml";
 
-/// Get the session root directory for a project
-///
-/// Uses XDG state directory: `~/.local/state/csa/{project_path}`
+/// Get the session root directory for a project (`~/.local/state/csa/{project_path}`)
 pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
     let proj_dirs = directories::ProjectDirs::from("", "", "csa")
         .context("Failed to determine project directories")?;
@@ -216,13 +214,27 @@ pub fn list_sessions_from_root(session_root: &Path) -> Result<Vec<MetaSessionSta
     list_all_sessions_in(session_root)
 }
 
+/// Read-only variant of `list_sessions_from_root` (skips corrupt-state recovery).
+pub fn list_sessions_from_root_readonly(session_root: &Path) -> Result<Vec<MetaSessionState>> {
+    list_all_sessions_in_readonly(session_root)
+}
+
 /// Delete a session from an explicit session root directory (for global GC).
 pub fn delete_session_from_root(session_root: &Path, session_id: &str) -> Result<()> {
     delete_session_in(session_root, session_id)
 }
 
-/// Internal implementation: list all sessions from explicit base directory
+/// List sessions with corrupt-state recovery (BUG-11).
 pub(crate) fn list_all_sessions_in(base_dir: &Path) -> Result<Vec<MetaSessionState>> {
+    list_all_sessions_impl(base_dir, true)
+}
+
+/// List sessions without writes (for dry-run GC). Corrupt sessions are skipped.
+pub(crate) fn list_all_sessions_in_readonly(base_dir: &Path) -> Result<Vec<MetaSessionState>> {
+    list_all_sessions_impl(base_dir, false)
+}
+
+fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSessionState>> {
     let sessions_dir = base_dir.join("sessions");
 
     if !sessions_dir.exists() {
@@ -242,78 +254,67 @@ pub(crate) fn list_all_sessions_in(base_dir: &Path) -> Result<Vec<MetaSessionSta
         let entry = entry.context("Failed to read directory entry")?;
         let session_id = entry.file_name().to_string_lossy().to_string();
 
-        // Skip non-directory entries and hidden directories (e.g. .git)
-        if !entry.file_type()?.is_dir() {
-            continue;
-        }
-        if session_id.starts_with('.') {
+        if !entry.file_type()?.is_dir() || session_id.starts_with('.') {
             continue;
         }
 
-        // Try to load the session
         match load_session_in(base_dir, &session_id) {
-            Ok(state) => {
-                sessions.push(state);
+            Ok(state) => sessions.push(state),
+            Err(e) if !recover => {
+                tracing::debug!(
+                    session_id = %session_id,
+                    error = %e,
+                    "Skipping session with unreadable state (readonly mode)"
+                );
             }
             Err(e) => {
                 // BUG-11: Corrupt state.toml recovery
                 let session_dir = get_session_dir_in(base_dir, &session_id);
                 let state_path = session_dir.join(STATE_FILE_NAME);
-
-                if state_path.exists() {
-                    // Backup corrupt file
-                    let backup_path = session_dir.join("state.toml.corrupt");
-                    if let Err(backup_err) = fs::rename(&state_path, &backup_path) {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            error = %backup_err,
-                            "Failed to backup corrupt state.toml"
-                        );
-                        continue;
-                    }
-
-                    tracing::warn!(
-                        session_id = %session_id,
-                        error = %e,
-                        "Recovered corrupt state.toml, backed up to state.toml.corrupt"
-                    );
-
-                    // Create minimal valid state
-                    let minimal_state = MetaSessionState {
-                        meta_session_id: session_id.clone(),
-                        description: Some("(recovered from corrupt state)".to_string()),
-                        project_path: "(unknown)".to_string(),
-                        created_at: chrono::Utc::now(),
-                        last_accessed: chrono::Utc::now(),
-                        genealogy: crate::state::Genealogy {
-                            parent_session_id: None,
-                            depth: 0,
-                        },
-                        tools: std::collections::HashMap::new(),
-                        context_status: Default::default(),
-                        total_token_usage: None,
-                        phase: Default::default(),
-                        task_context: Default::default(),
-                    };
-
-                    // Save minimal state
-                    if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            error = %save_err,
-                            "Failed to save minimal state after recovery"
-                        );
-                        continue;
-                    }
-
-                    sessions.push(minimal_state);
-                } else {
-                    // No state.toml file at all - will be handled as orphan by GC
-                    tracing::warn!(
-                        session_id = %session_id,
-                        "Session directory exists but has no state.toml"
-                    );
+                if !state_path.exists() {
+                    tracing::warn!(session_id = %session_id, "No state.toml");
+                    continue;
                 }
+                let backup_path = session_dir.join("state.toml.corrupt");
+                if let Err(backup_err) = fs::rename(&state_path, &backup_path) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %backup_err,
+                        "Failed to backup corrupt state.toml"
+                    );
+                    continue;
+                }
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "Recovered corrupt state.toml → state.toml.corrupt"
+                );
+                let now = chrono::Utc::now();
+                let minimal_state = MetaSessionState {
+                    meta_session_id: session_id.clone(),
+                    description: Some("(recovered from corrupt state)".to_string()),
+                    project_path: "(unknown)".to_string(),
+                    created_at: now,
+                    last_accessed: now,
+                    genealogy: crate::state::Genealogy {
+                        parent_session_id: None,
+                        depth: 0,
+                    },
+                    tools: HashMap::new(),
+                    context_status: Default::default(),
+                    total_token_usage: None,
+                    phase: Default::default(),
+                    task_context: Default::default(),
+                };
+                if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %save_err,
+                        "Failed to save minimal state after recovery"
+                    );
+                    continue;
+                }
+                sessions.push(minimal_state);
             }
         }
     }
