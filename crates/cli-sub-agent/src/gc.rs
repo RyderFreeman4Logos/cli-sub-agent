@@ -231,13 +231,6 @@ pub(crate) fn handle_gc_global(
     }
 
     let project_roots = discover_project_roots(&state_base);
-    if project_roots.is_empty() {
-        eprintln!(
-            "No project session roots found under {}",
-            state_base.display()
-        );
-        return Ok(());
-    }
 
     let now = chrono::Utc::now();
     let mut total_stale_locks = 0u64;
@@ -389,8 +382,8 @@ pub(crate) fn handle_gc_global(
                 project_removed >= sessions.len()
             } else {
                 csa_session::list_sessions_from_root(session_root)
-                    .unwrap_or_default()
-                    .is_empty()
+                    .map(|s| s.is_empty())
+                    .unwrap_or(false) // treat error as "sessions might still exist"
             };
             if no_sessions_remain {
                 if dry_run {
