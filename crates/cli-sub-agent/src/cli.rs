@@ -9,7 +9,7 @@ pub struct Cli {
     pub command: Commands,
 
     /// Output format (text or json)
-    #[arg(long, default_value = "text")]
+    #[arg(long, global = true, default_value = "text")]
     pub format: OutputFormat,
 }
 

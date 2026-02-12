@@ -168,7 +168,7 @@ async fn main() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Doctor => {
-            doctor::run_doctor().await?;
+            doctor::run_doctor(output_format).await?;
         }
         Commands::Batch { file, cd, dry_run } => {
             batch::handle_batch(file, cd, dry_run, current_depth).await?;
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
         },
         Commands::Todo { cmd } => match cmd {
             TodoCommands::Create { title, branch, cd } => {
-                todo_cmd::handle_create(title, branch, cd)?;
+                todo_cmd::handle_create(title, branch, cd, output_format)?;
             }
             TodoCommands::Save {
                 timestamp,
@@ -224,10 +224,10 @@ async fn main() -> Result<()> {
                 todo_cmd::handle_history(timestamp, cd)?;
             }
             TodoCommands::List { status, cd } => {
-                todo_cmd::handle_list(status, cd)?;
+                todo_cmd::handle_list(status, cd, output_format)?;
             }
             TodoCommands::Find { branch, status, cd } => {
-                todo_cmd::handle_find(branch, status, cd)?;
+                todo_cmd::handle_find(branch, status, cd, output_format)?;
             }
             TodoCommands::Show {
                 timestamp,
