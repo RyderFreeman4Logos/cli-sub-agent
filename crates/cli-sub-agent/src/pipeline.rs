@@ -417,11 +417,25 @@ pub(crate) async fn execute_with_session(
     if result.exit_code == 0 && is_compress_command(prompt) {
         session.context_status.is_compacted = true;
         session.context_status.last_compacted_at = Some(chrono::Utc::now());
-        session.phase = csa_session::SessionPhase::Available;
-        info!(
-            session = %session.meta_session_id,
-            "Session compacted and marked Available for reuse"
-        );
+        match session
+            .phase
+            .transition(&csa_session::PhaseEvent::Compressed)
+        {
+            Ok(new_phase) => {
+                session.phase = new_phase;
+                info!(
+                    session = %session.meta_session_id,
+                    "Session compacted and marked Available for reuse"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    session = %session.meta_session_id,
+                    error = %e,
+                    "Skipping phase transition on compress"
+                );
+            }
+        }
     }
 
     // Update cumulative token usage if we got new tokens
