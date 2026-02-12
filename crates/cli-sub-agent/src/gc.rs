@@ -481,35 +481,64 @@ pub(crate) fn handle_gc_global(
 /// Discover all project session roots under the CSA state base directory.
 ///
 /// A project root is any directory that contains a `sessions/` subdirectory.
-/// Walks the tree recursively, skipping known non-project directories (`slots/`, `tmp/`).
+/// Walks the tree recursively with safety guards:
+/// - Skips symlinks to prevent traversal outside the state tree
+/// - Validates canonical paths stay within the state base
+/// - Skips known top-level non-project directories (`slots/`, `tmp/`, `todos/`)
 fn discover_project_roots(state_base: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let canonical_base = match state_base.canonicalize() {
+        Ok(p) => p,
+        Err(_) => return Vec::new(),
+    };
     let mut roots = Vec::new();
-    discover_roots_recursive(state_base, &mut roots);
+    discover_roots_recursive(&canonical_base, &canonical_base, true, &mut roots);
     roots
 }
 
-fn discover_roots_recursive(dir: &std::path::Path, roots: &mut Vec<std::path::PathBuf>) {
+/// Top-level non-project directories that exist directly under the state base.
+const TOP_LEVEL_SKIP: &[&str] = &["slots", "tmp", "todos"];
+
+fn discover_roots_recursive(
+    dir: &std::path::Path,
+    canonical_base: &std::path::Path,
+    is_top_level: bool,
+    roots: &mut Vec<std::path::PathBuf>,
+) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
     };
     for entry in entries.flatten() {
+        // Skip symlinks to prevent traversal outside state tree.
+        // Use file_type() which does NOT follow symlinks (unlike metadata()).
+        let ft = match entry.file_type() {
+            Ok(ft) => ft,
+            Err(_) => continue,
+        };
+        if ft.is_symlink() || !ft.is_dir() {
+            continue;
+        }
         let path = entry.path();
-        if !path.is_dir() {
+        // Canonical path check: ensure we stay within state base
+        let canonical = match path.canonicalize() {
+            Ok(p) => p,
+            Err(_) => continue,
+        };
+        if !canonical.starts_with(canonical_base) {
             continue;
         }
-        let name = entry.file_name();
-        let name_str = name.to_string_lossy();
-        // Skip known non-project directories
-        if name_str == "slots" || name_str == "tmp" || name_str == "todos" {
-            continue;
+        // Only skip known directories at the top level of the state base
+        if is_top_level {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if TOP_LEVEL_SKIP.contains(&name_str.as_ref()) {
+                continue;
+            }
         }
-        // If this directory contains a "sessions/" subdir, it's a project root
         if path.join("sessions").is_dir() {
             roots.push(path);
         } else {
-            // Recurse deeper
-            discover_roots_recursive(&path, roots);
+            discover_roots_recursive(&path, canonical_base, false, roots);
         }
     }
 }
@@ -536,4 +565,82 @@ fn is_process_alive(pid: u32) -> bool {
     }
     // EPERM means the process exists but we can't signal it.
     std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs as unix_fs;
+    use tempfile::tempdir;
+
+    fn make_project_root(base: &std::path::Path, segments: &[&str]) {
+        let mut path = base.to_path_buf();
+        for s in segments {
+            path = path.join(s);
+        }
+        fs::create_dir_all(path.join("sessions")).unwrap();
+    }
+
+    #[test]
+    fn test_discover_finds_nested_project_roots() {
+        let tmp = tempdir().unwrap();
+        make_project_root(tmp.path(), &["home", "user", "project"]);
+        make_project_root(tmp.path(), &["home", "user", "other"]);
+
+        let roots = discover_project_roots(tmp.path());
+        assert_eq!(roots.len(), 2);
+    }
+
+    #[test]
+    fn test_discover_skips_symlinks() {
+        let tmp = tempdir().unwrap();
+        let external = tempdir().unwrap();
+        // Create a real project root inside the external dir
+        fs::create_dir_all(external.path().join("sessions")).unwrap();
+        // Create a symlink inside state base pointing to external
+        unix_fs::symlink(external.path(), tmp.path().join("evil_link")).unwrap();
+
+        let roots = discover_project_roots(tmp.path());
+        // The symlinked directory must NOT be discovered
+        assert!(roots.is_empty());
+    }
+
+    #[test]
+    fn test_discover_skips_top_level_only() {
+        let tmp = tempdir().unwrap();
+        // "slots" at top level should be skipped
+        fs::create_dir_all(tmp.path().join("slots").join("sessions")).unwrap();
+        // "tmp" at top level should be skipped
+        fs::create_dir_all(tmp.path().join("tmp").join("sessions")).unwrap();
+        // "tmp" nested inside a project path should NOT be skipped
+        make_project_root(tmp.path(), &["home", "user", "tmp", "myproject"]);
+
+        let roots = discover_project_roots(tmp.path());
+        // Only the nested one should be found (top-level slots/tmp skipped)
+        assert_eq!(roots.len(), 1);
+        assert!(roots[0].to_string_lossy().contains("myproject"));
+    }
+
+    #[test]
+    fn test_extract_pid_from_lock_valid() {
+        assert_eq!(extract_pid_from_lock(r#"{"pid": 12345}"#), Some(12345));
+    }
+
+    #[test]
+    fn test_extract_pid_from_lock_invalid() {
+        assert_eq!(extract_pid_from_lock("not json"), None);
+        assert_eq!(extract_pid_from_lock(r#"{"no_pid": 1}"#), None);
+    }
+
+    #[test]
+    fn test_is_process_alive_self() {
+        // Current process should always be alive
+        assert!(is_process_alive(std::process::id()));
+    }
+
+    #[test]
+    fn test_is_process_alive_dead() {
+        // PID 0 is kernel, likely not accessible; very high PID unlikely to exist
+        assert!(!is_process_alive(4_000_000));
+    }
 }
