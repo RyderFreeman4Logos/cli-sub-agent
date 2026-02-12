@@ -548,11 +548,18 @@ fn discover_roots_recursive(
                 continue;
             }
         }
-        if path.join("sessions").is_dir() {
+        let has_sessions = path.join("sessions").is_dir();
+        if has_sessions {
             roots.push(path.clone());
         }
-        // Always recurse to find nested sub-project roots, even if current
-        // directory is itself a root (parent and child can coexist).
+        // Skip directories named "sessions" to avoid recursing into session
+        // artifact trees (which may contain nested sessions/ dirs that would
+        // be falsely identified as project roots).
+        let name = entry.file_name();
+        if name.to_string_lossy() == "sessions" {
+            continue;
+        }
+        // Recurse to find nested sub-project roots (parent and child can coexist).
         discover_roots_recursive(&path, canonical_base, false, roots);
     }
 }
@@ -647,6 +654,25 @@ mod tests {
         let roots = discover_project_roots(tmp.path());
         // Both tmp (top-level) and nested myproject found; only slots/todos skipped
         assert_eq!(roots.len(), 2);
+    }
+
+    #[test]
+    fn test_discover_ignores_nested_sessions_in_artifacts() {
+        let tmp = tempdir().unwrap();
+        // Real project root
+        make_project_root(tmp.path(), &["home", "user", "proj"]);
+        // Nested sessions/ inside a session's output — must NOT be a root
+        let nested = tmp
+            .path()
+            .join("home/user/proj/sessions/01ARZ3NDEK/output/cache/sessions");
+        fs::create_dir_all(nested.join("random-dir")).unwrap();
+
+        let roots = discover_project_roots(tmp.path());
+        assert_eq!(roots.len(), 1, "Only the real project root should be found");
+        assert!(
+            roots[0].to_string_lossy().contains("home/user/proj"),
+            "Root should be the actual project, not nested artifact"
+        );
     }
 
     #[test]
