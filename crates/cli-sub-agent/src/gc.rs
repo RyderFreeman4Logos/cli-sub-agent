@@ -106,31 +106,27 @@ pub(crate) fn handle_gc(
         }
     }
 
-    // Clean orphan directories (no state.toml)
+    // Clean orphan directories (no state.toml, excluding hidden dirs like .git)
     let sessions_dir = session_root.join("sessions");
 
     if sessions_dir.exists() {
         if let Ok(entries) = fs::read_dir(&sessions_dir) {
             for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
                     let session_dir = entry.path();
-                    let state_path = session_dir.join("state.toml");
-
-                    if !state_path.exists() {
-                        if dry_run {
-                            eprintln!(
-                                "[dry-run] Would remove orphan directory: {}",
-                                session_dir.display()
-                            );
-                        } else {
-                            let _ = fs::remove_dir_all(&session_dir);
-                            info!(
-                                "Removed orphan directory without state.toml: {}",
-                                session_dir.display()
-                            );
-                        }
-                        orphan_dirs_removed += 1;
+                    if dry_run {
+                        eprintln!(
+                            "[dry-run] Would remove orphan directory: {}",
+                            session_dir.display()
+                        );
+                    } else {
+                        let _ = fs::remove_dir_all(&session_dir);
+                        info!(
+                            "Removed orphan directory without state.toml: {}",
+                            session_dir.display()
+                        );
                     }
+                    orphan_dirs_removed += 1;
                 }
             }
         }
@@ -347,25 +343,25 @@ pub(crate) fn handle_gc_global(
             }
         }
 
-        // Orphan directories
+        // Orphan directories (excluding hidden dirs like .git)
         let sessions_dir = session_root.join("sessions");
         if sessions_dir.exists() {
             if let Ok(entries) = fs::read_dir(&sessions_dir) {
                 for entry in entries.flatten() {
-                    if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                    if entry.file_type().is_ok_and(|ft| ft.is_dir())
+                        && is_orphan_session_dir(&entry)
+                    {
                         let session_dir = entry.path();
-                        if !session_dir.join("state.toml").exists() {
-                            if dry_run {
-                                eprintln!(
-                                    "[dry-run] Would remove orphan directory: {}",
-                                    session_dir.display()
-                                );
-                            } else {
-                                let _ = fs::remove_dir_all(&session_dir);
-                                info!("Removed orphan directory: {}", session_dir.display());
-                            }
-                            total_orphan_dirs += 1;
+                        if dry_run {
+                            eprintln!(
+                                "[dry-run] Would remove orphan directory: {}",
+                                session_dir.display()
+                            );
+                        } else {
+                            let _ = fs::remove_dir_all(&session_dir);
+                            info!("Removed orphan directory: {}", session_dir.display());
                         }
+                        total_orphan_dirs += 1;
                     }
                 }
             }
@@ -554,6 +550,18 @@ fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
     u32::try_from(n).ok()
 }
 
+/// Check if a directory inside `sessions/` is an orphan that should be cleaned.
+///
+/// Returns `true` for non-hidden directories that lack `state.toml`.
+/// Hidden directories (`.git`, etc.) are never considered orphans.
+fn is_orphan_session_dir(entry: &fs::DirEntry) -> bool {
+    let name = entry.file_name();
+    if name.to_string_lossy().starts_with('.') {
+        return false;
+    }
+    !entry.path().join("state.toml").exists()
+}
+
 /// Check if a process is alive (cross-platform Unix).
 fn is_process_alive(pid: u32) -> bool {
     // kill(pid, 0) checks existence without sending a signal.
@@ -675,5 +683,30 @@ mod tests {
     fn test_is_process_alive_dead() {
         // PID 0 is kernel, likely not accessible; very high PID unlikely to exist
         assert!(!is_process_alive(4_000_000));
+    }
+
+    #[test]
+    fn test_orphan_cleanup_preserves_git_dir() {
+        let tmp = tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+
+        // .git should be preserved (hidden infrastructure)
+        fs::create_dir_all(sessions.join(".git")).unwrap();
+        // Valid session with state.toml should be preserved
+        let valid = sessions.join("valid-session");
+        fs::create_dir_all(&valid).unwrap();
+        fs::write(valid.join("state.toml"), "").unwrap();
+        // Orphan directory without state.toml should be detected
+        fs::create_dir_all(sessions.join("orphan-no-state")).unwrap();
+
+        let entries: Vec<_> = fs::read_dir(&sessions).unwrap().flatten().collect();
+        let orphans: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(e))
+            .collect();
+
+        assert_eq!(orphans.len(), 1, "Only the orphan should be detected");
+        assert_eq!(orphans[0].file_name().to_string_lossy(), "orphan-no-state");
     }
 }
