@@ -69,6 +69,7 @@ pub(crate) fn handle_gc(
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 empty_sessions_removed += 1;
             }
+            continue;
         }
 
         if let Some(days) = max_age_days {
