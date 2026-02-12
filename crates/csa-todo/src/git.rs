@@ -40,12 +40,6 @@ pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
         );
     }
 
-    // Ensure .gitignore exists (exclude lock files from version tracking)
-    let gitignore = todos_dir.join(".gitignore");
-    if !gitignore.exists() {
-        let _ = std::fs::write(&gitignore, ".lock\n");
-    }
-
     // Configure git user for this repo (avoids "please tell me who you are" errors)
     let email_result = Command::new("git")
         .args(["config", "user.email", "csa@localhost"])
@@ -61,6 +55,20 @@ pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
         .output();
     if let Err(e) = &name_result {
         tracing::warn!("Failed to set git user.name: {e}");
+    }
+
+    // Create .gitignore (exclude lock files) and commit as bootstrap
+    let gitignore = todos_dir.join(".gitignore");
+    if !gitignore.exists() {
+        std::fs::write(&gitignore, ".lock\n").context("Failed to write .gitignore")?;
+        let _ = Command::new("git")
+            .args(["add", "--", ".gitignore"])
+            .current_dir(todos_dir)
+            .output();
+        let _ = Command::new("git")
+            .args(["commit", "-m", "bootstrap: add .gitignore"])
+            .current_dir(todos_dir)
+            .output();
     }
 
     Ok(())
