@@ -17,6 +17,8 @@ pub struct ModelSpec {
 /// Thinking budget for AI models.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ThinkingBudget {
+    /// Use the tool's default thinking budget.
+    DefaultBudget,
     Low,
     Medium,
     High,
@@ -46,9 +48,10 @@ impl ModelSpec {
 impl ThinkingBudget {
     /// Parse thinking budget from string.
     ///
-    /// Accepts: low, medium/med, high, xhigh/extra-high, or a numeric value.
+    /// Accepts: default, low, medium/med, high, xhigh/extra-high, or a numeric value.
     pub fn parse(s: &str) -> Result<Self> {
         match s.to_lowercase().as_str() {
+            "default" => Ok(Self::DefaultBudget),
             "low" => Ok(Self::Low),
             "medium" | "med" => Ok(Self::Medium),
             "high" => Ok(Self::High),
@@ -58,7 +61,7 @@ impl ThinkingBudget {
                     Ok(Self::Custom(n))
                 } else {
                     bail!(
-                        "Invalid thinking budget '{}': expected low/medium/high/xhigh or a number",
+                        "Invalid thinking budget '{}': expected default/low/medium/high/xhigh or a number",
                         other
                     )
                 }
@@ -69,6 +72,7 @@ impl ThinkingBudget {
     /// Returns the token count for this thinking budget level.
     pub fn token_count(&self) -> u32 {
         match self {
+            Self::DefaultBudget => 10000,
             Self::Low => 1024,
             Self::Medium => 8192,
             Self::High => 32768,
@@ -82,6 +86,7 @@ impl ThinkingBudget {
     /// Maps thinking budget levels to codex's --reasoning-effort values.
     pub fn codex_effort(&self) -> &'static str {
         match self {
+            Self::DefaultBudget => "medium",
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
@@ -121,6 +126,22 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("expected tool/provider/model/thinking_budget"));
+    }
+
+    #[test]
+    fn test_thinking_budget_parse_default() {
+        assert!(matches!(
+            ThinkingBudget::parse("default").unwrap(),
+            ThinkingBudget::DefaultBudget
+        ));
+        assert!(matches!(
+            ThinkingBudget::parse("Default").unwrap(),
+            ThinkingBudget::DefaultBudget
+        ));
+        assert!(matches!(
+            ThinkingBudget::parse("DEFAULT").unwrap(),
+            ThinkingBudget::DefaultBudget
+        ));
     }
 
     #[test]
@@ -193,6 +214,7 @@ mod tests {
 
     #[test]
     fn test_thinking_budget_token_count() {
+        assert_eq!(ThinkingBudget::DefaultBudget.token_count(), 10000);
         assert_eq!(ThinkingBudget::Low.token_count(), 1024);
         assert_eq!(ThinkingBudget::Medium.token_count(), 8192);
         assert_eq!(ThinkingBudget::High.token_count(), 32768);
@@ -202,6 +224,7 @@ mod tests {
 
     #[test]
     fn test_thinking_budget_codex_effort() {
+        assert_eq!(ThinkingBudget::DefaultBudget.codex_effort(), "medium");
         assert_eq!(ThinkingBudget::Low.codex_effort(), "low");
         assert_eq!(ThinkingBudget::Medium.codex_effort(), "medium");
         assert_eq!(ThinkingBudget::High.codex_effort(), "high");

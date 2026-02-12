@@ -350,6 +350,7 @@ impl Executor {
                 }
                 if let Some(budget) = thinking_budget {
                     let variant = match budget {
+                        ThinkingBudget::DefaultBudget => "medium",
                         ThinkingBudget::Low => "minimal",
                         ThinkingBudget::Medium => "medium",
                         ThinkingBudget::High => "high",
