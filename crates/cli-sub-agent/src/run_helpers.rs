@@ -78,8 +78,7 @@ pub(crate) fn build_executor(
 ) -> Result<Executor> {
     let mut executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
-        let tool_name = parse_tool_name(&parsed.tool)?;
-        Executor::from_tool_name(&tool_name, Some(parsed.model))
+        Executor::from_spec(&parsed)?
     } else {
         let mut final_model = model.map(|s| s.to_string());
 
