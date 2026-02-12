@@ -65,10 +65,9 @@ pub(crate) fn handle_gc(
                     "[dry-run] Would remove empty session: {}",
                     session.meta_session_id
                 );
-            } else {
-                let _ = delete_session(&project_root, &session.meta_session_id);
+            } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
+                empty_sessions_removed += 1;
             }
-            empty_sessions_removed += 1;
         }
 
         if let Some(days) = max_age_days {
@@ -82,8 +81,8 @@ pub(crate) fn handle_gc(
                     );
                 } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                     info!("Removed expired session: {}", session.meta_session_id);
+                    expired_sessions_removed += 1;
                 }
-                expired_sessions_removed += 1;
             }
         }
     }
@@ -114,14 +113,13 @@ pub(crate) fn handle_gc(
                             "[dry-run] Would remove orphan directory: {}",
                             session_dir.display()
                         );
-                    } else {
-                        let _ = fs::remove_dir_all(&session_dir);
+                    } else if fs::remove_dir_all(&session_dir).is_ok() {
                         info!(
                             "Removed orphan directory without state.toml: {}",
                             session_dir.display()
                         );
+                        orphan_dirs_removed += 1;
                     }
-                    orphan_dirs_removed += 1;
                 }
             }
         }
@@ -311,14 +309,15 @@ pub(crate) fn handle_gc_global(
                         session.meta_session_id,
                         session_root.display()
                     );
-                } else {
-                    let _ = csa_session::delete_session_from_root(
-                        session_root,
-                        &session.meta_session_id,
-                    );
+                } else if csa_session::delete_session_from_root(
+                    session_root,
+                    &session.meta_session_id,
+                )
+                .is_ok()
+                {
+                    total_empty_sessions += 1;
+                    project_removed += 1;
                 }
-                total_empty_sessions += 1;
-                project_removed += 1;
                 continue;
             }
 
@@ -343,9 +342,9 @@ pub(crate) fn handle_gc_global(
                             session.meta_session_id,
                             session_root.display()
                         );
+                        total_expired_sessions += 1;
+                        project_removed += 1;
                     }
-                    total_expired_sessions += 1;
-                    project_removed += 1;
                 }
             }
         }
@@ -368,11 +367,10 @@ pub(crate) fn handle_gc_global(
                                 "[dry-run] Would remove orphan directory: {}",
                                 session_dir.display()
                             );
-                        } else {
-                            let _ = fs::remove_dir_all(&session_dir);
+                        } else if fs::remove_dir_all(&session_dir).is_ok() {
                             info!("Removed orphan directory: {}", session_dir.display());
+                            total_orphan_dirs += 1;
                         }
-                        total_orphan_dirs += 1;
                     }
                 }
             }
