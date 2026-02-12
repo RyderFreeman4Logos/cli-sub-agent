@@ -251,6 +251,7 @@ pub(crate) fn handle_gc_global(
     let mut total_empty_sessions = 0u64;
     let mut total_orphan_dirs = 0u64;
     let mut total_expired_sessions = 0u64;
+    let mut projects_failed = 0u64;
 
     if dry_run {
         eprintln!("[dry-run] Global GC — no changes will be made.");
@@ -264,7 +265,15 @@ pub(crate) fn handle_gc_global(
             csa_session::list_sessions_from_root(session_root)
         } {
             Ok(s) => s,
-            Err(_) => continue,
+            Err(e) => {
+                tracing::warn!(
+                    path = %session_root.display(),
+                    error = %e,
+                    "Failed to list sessions for project root (skipping)"
+                );
+                projects_failed += 1;
+                continue;
+            }
         };
 
         let mut project_removed = 0usize; // track per-project removals for rotation preview
@@ -450,6 +459,7 @@ pub(crate) fn handle_gc_global(
                 "dry_run": dry_run,
                 "global": true,
                 "projects_scanned": project_roots.len(),
+                "projects_failed": projects_failed,
                 "stale_locks_removed": total_stale_locks,
                 "empty_sessions_removed": total_empty_sessions,
                 "orphan_dirs_removed": total_orphan_dirs,
@@ -468,6 +478,9 @@ pub(crate) fn handle_gc_global(
                 if dry_run { "preview" } else { "complete" }
             );
             eprintln!("{}  Projects scanned: {}", prefix, project_roots.len());
+            if projects_failed > 0 {
+                eprintln!("{}  Projects failed: {}", prefix, projects_failed);
+            }
             eprintln!("{}  Stale locks removed: {}", prefix, total_stale_locks);
             eprintln!(
                 "{}  Empty sessions removed: {}",
