@@ -39,6 +39,12 @@ After reading CLAUDE.md, discover and apply AGENTS.md coding rules:
    - If the violated rule uses MUST, CRITICAL, or FORBIDDEN language -> promote to P1
    - If the rule covers security or correctness -> promote to P1
 
+5. **Mechanical checklist (MANDATORY)**:
+   - Build an AGENTS.md checklist for each changed file and each applicable rule.
+   - Mark each item as checked with PASS or VIOLATION.
+   - No unchecked items are allowed when finalizing the review.
+   - Include this checklist in output artifacts (`review-findings.json` and `review-report.md`).
+
 ## Step 2: Collect Scope
 
 Scope: {scope}
@@ -154,3 +160,4 @@ If P0 or P1 findings exist, set both fields to `null` — the developer needs to
 8. If evidence is insufficient, do not emit a finding; emit an open_questions item instead.
 9. Any high-impact security suspicion without a concrete exploit path must be listed under open_questions instead of findings.
 10. Confidence must be calibrated with evidence strength. High confidence without concrete evidence is invalid.
+11. Review completion is invalid if AGENTS.md checklist has any unchecked item or missing applicable rule.

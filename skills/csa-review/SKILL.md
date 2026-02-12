@@ -110,7 +110,8 @@ Key behaviors:
 After CSA returns:
 1. Read and display `review-report.md` if generated.
 2. Read and display `review-findings.json` summary (finding count by priority).
-3. Report the CSA session ID for potential follow-up.
+3. Read and display AGENTS.md checklist summary (checked rule count and violation count).
+4. Report the CSA session ID for potential follow-up.
 
 ### Step 5: Fix Mode (optional, when mode=review-and-fix)
 
@@ -161,7 +162,9 @@ When findings are contested, use the `debate` skill for adversarial arbitration.
 6. Review agent discovered and applied AGENTS.md files (root-to-leaf) for all changed paths.
 7. `review-findings.json` and `review-report.md` were generated.
 8. Every finding has concrete evidence (trigger, expected, actual) and calibrated confidence. AGENTS.md violations reference rule IDs.
-9. If security_mode required pass 3, adversarial_pass_executed=true.
-10. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
-11. CSA session ID was reported for potential follow-up.
-12. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.
+9. `review-findings.json` includes a complete `agents_md_checklist` with no missing applicable rules.
+10. `review-report.md` includes AGENTS.md checklist section with all items checked.
+11. If security_mode required pass 3, adversarial_pass_executed=true.
+12. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
+13. CSA session ID was reported for potential follow-up.
+14. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.

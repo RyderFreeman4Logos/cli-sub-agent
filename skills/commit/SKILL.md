@@ -17,7 +17,7 @@ allowed-tools: Bash, Read, Grep, Edit, Task, TaskCreate, TaskUpdate, TaskList, T
 - ✅ Atomic commits (one logical unit per commit)
 - ✅ **Mandatory security audit (the `security-audit` skill)**
 - ✅ **Test completeness verification ("can't write more tests" standard)**
-- ✅ Pre-commit code review (csa review)
+- ✅ Pre-commit code review with explicit `AGENTS.md` compliance checklist
 - ✅ Security checks (no secrets, no debug code)
 - ✅ Quality gates (formatters, linters, tests)
 
@@ -146,6 +146,8 @@ Each commit **must** complete the following steps:
    │   - Returns: PASS / PASS with deferred issues / FAIL
    ↓
 7. ✅ Pre-commit review (csa review --diff — reviews all uncommitted changes vs HEAD)
+   │   - MUST include AGENTS.md compliance review (all applicable rules, root->leaf)
+   │   - MUST produce AGENTS.md checklist with zero unchecked items
    ↓
 8. Blocking issues found (in current changes)?
    ├─ YES → Fix issues → Re-run from step 1
@@ -171,6 +173,27 @@ Each commit **must** complete the following steps:
 - Ensures issues persist through auto-compact cycles
 - Forces explicit executor assignment
 - Prevents issue loss in long sessions
+
+### AGENTS.md Rule Gate (MANDATORY)
+
+Before committing, pre-commit review must explicitly verify `AGENTS.md` compliance:
+
+1. Discover all `AGENTS.md` files from repository root to each changed file directory.
+2. Apply rules root-to-leaf; deepest file wins on conflicts.
+3. Check every applicable rule and record result in a checklist.
+4. Any violation must reference rule ID and become a review finding.
+5. Hard gate: checklist missing/incomplete means commit is blocked.
+
+Required checklist template:
+
+```markdown
+## AGENTS.md Checklist
+- [ ] File path analyzed: <path>
+- [ ] AGENTS chain discovered (root->leaf): <a/AGENTS.md>, <b/AGENTS.md>, <c/AGENTS.md>
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> PASS
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> PASS
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> VIOLATION (finding id: <id>)
+```
 
 ### Security Audit (CRITICAL)
 
@@ -272,6 +295,7 @@ Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
    ↓
 3. [CSA:review] Review staged changes (working tree clean, so git diff HEAD = staged diff)
    csa review --diff
+   # MUST include AGENTS.md checklist coverage for all applicable rules
    ↓
 4. [CSA:run] Generate commit message (if review passes)
    csa run "Run 'git diff --staged' and generate a Conventional Commits message"

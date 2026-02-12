@@ -173,14 +173,32 @@ Exit the loop when:
 | Security issues | Security-focused review + main agent | Critical, needs review |
 | Architecture issues | Report to user | Requires human decision |
 
-## Coding Standards Compliance Check
+## AGENTS.md Compliance Check (MANDATORY)
 
 In addition to standard review criteria and any context/prompt-specific review points:
 
-1. The review agent SHOULD read coding standards documentation at the repo/project root (if present).
-2. Verify ALL staged code complies with every applicable rule.
-3. Report coding standards violations as review issues — these are first-class findings, not optional suggestions.
-4. Reference the specific rule ID in each violation (e.g., "Violates rule 010 naming").
+1. The review agent MUST read `AGENTS.md` from repo root to each staged file directory (root-to-leaf).
+2. Verify ALL staged code complies with every applicable rule from the combined `AGENTS.md` ruleset.
+3. Report `AGENTS.md` violations as first-class review findings, and reference the exact rule ID in each violation.
+4. If a violated rule is marked MUST/CRITICAL/FORBIDDEN, escalate to at least P1.
+5. Hard gate: if AGENTS.md checklist is missing or incomplete, do NOT proceed to commit.
+
+### Required AGENTS.md Checklist (mechanically verifiable)
+
+The reviewer MUST produce and complete a checklist like:
+
+```markdown
+## AGENTS.md Checklist
+- [ ] File path analyzed: <path>
+- [ ] AGENTS chain discovered (root->leaf): <a/AGENTS.md>, <b/AGENTS.md>, <c/AGENTS.md>
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> PASS
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> PASS
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> VIOLATION (finding id: <id>)
+```
+
+Completion rule:
+- Every applicable `AGENTS.md` rule for each staged file appears in checklist.
+- Zero unchecked items allowed before commit.
 
 ## Anti-Patterns
 
