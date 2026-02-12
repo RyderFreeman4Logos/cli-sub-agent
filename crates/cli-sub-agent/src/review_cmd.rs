@@ -84,6 +84,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
         config.as_ref(),
         extra_env,
+        Some("review"),
+        None, // review does not use tier-based selection
     )
     .await?;
 

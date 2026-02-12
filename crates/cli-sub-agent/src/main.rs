@@ -418,6 +418,17 @@ async fn handle_run(
             .unwrap_or(1)
     };
 
+    // Resolve tier name for TaskContext (same logic as tier_mapping lookup)
+    let resolved_tier_name: Option<String> = config.as_ref().and_then(|cfg| {
+        cfg.tier_mapping.get("default").cloned().or_else(|| {
+            if cfg.tiers.contains_key("tier3") {
+                Some("tier3".to_string())
+            } else {
+                cfg.tiers.keys().next().cloned()
+            }
+        })
+    });
+
     // Resolve slots directory
     let slots_dir = GlobalConfig::slots_dir()?;
 
@@ -547,6 +558,8 @@ async fn handle_run(
                 &project_root,
                 config.as_ref(),
                 extra_env.as_ref(),
+                Some("run"),
+                resolved_tier_name.as_deref(),
             )
             .await
             {

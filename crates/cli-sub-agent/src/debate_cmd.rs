@@ -65,6 +65,8 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         &project_root,
         config.as_ref(),
         extra_env,
+        Some("debate"),
+        None, // debate does not use tier-based selection
     )
     .await?;
 
