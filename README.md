@@ -196,6 +196,25 @@ analysis = "tier-1-quick"         # For future keyword-based selection
 
 The `default` tier resolves to the first model in the tier's `models` list, which determines both the tool and the model. To override, use `--tool` explicitly or `--model-spec tool/provider/model/thinking`.
 
+### Skill-Friendly Config Access
+
+Skills and agents can query CSA configuration at runtime via `csa config get`, enabling behavior adaptation without code changes:
+
+```bash
+# Read a key (project config takes precedence over global)
+csa config get review.tool            # → "auto"
+csa config get tools.codex.enabled    # → "true"
+
+# Scope to project or global explicitly
+csa config get review.tool --project
+csa config get review.tool --global
+
+# Provide a fallback default
+csa config get fallback.cloud_review_exhausted --default ask-user
+```
+
+This makes CSA configuration a shared contract: project-level `.csa/config.toml` holds project-specific values, global `~/.config/cli-sub-agent/config.toml` holds user-wide defaults, and `csa config get` resolves them with a deterministic priority chain (project > global > `--default`).
+
 See [docs/configuration.md](docs/configuration.md) for the full reference.
 
 ## Advanced Usage
