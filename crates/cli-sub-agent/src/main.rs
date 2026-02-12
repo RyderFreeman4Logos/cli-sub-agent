@@ -376,6 +376,26 @@ async fn handle_run(
 
     let resolved_tool = initial_tool;
 
+    // Hint: suggest reusable sessions when creating a new session
+    if session_arg.is_none() {
+        let tool_names = vec![resolved_tool.as_str().to_string()];
+        match csa_scheduler::session_reuse::find_reusable_sessions(
+            &project_root,
+            "run",
+            &tool_names,
+        ) {
+            Ok(candidates) if !candidates.is_empty() => {
+                let best = &candidates[0];
+                eprintln!(
+                    "hint: reusable session available for {}: --session {}",
+                    best.tool_name,
+                    &best.session_id[..8], // prefix for brevity
+                );
+            }
+            _ => {} // No candidates or error — silently continue
+        }
+    }
+
     // Determine max failover attempts from tier config
     let max_failover_attempts = if no_failover {
         1 // Single attempt, no failover
