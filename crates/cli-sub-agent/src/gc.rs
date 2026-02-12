@@ -4,7 +4,9 @@ use tracing::{info, warn};
 
 use csa_config::GlobalConfig;
 use csa_core::types::OutputFormat;
-use csa_session::{delete_session, get_session_dir, list_sessions, PhaseEvent};
+use csa_session::{
+    delete_session, get_session_dir, get_session_root, list_sessions, save_session_in, PhaseEvent,
+};
 
 /// Default age threshold (in days) for retiring stale Active sessions.
 const RETIRE_AFTER_DAYS: i64 = 7;
@@ -15,6 +17,7 @@ pub(crate) fn handle_gc(
     format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(None)?;
+    let session_root = get_session_root(&project_root)?;
     let sessions = list_sessions(&project_root, None)?;
     let now = chrono::Utc::now();
 
@@ -94,7 +97,7 @@ pub(crate) fn handle_gc(
                 match updated.phase.transition(&PhaseEvent::Retired) {
                     Ok(new_phase) => {
                         updated.phase = new_phase;
-                        match csa_session::save_session(&updated) {
+                        match save_session_in(&session_root, &updated) {
                             Ok(_) => {
                                 info!(
                                     session = %session.meta_session_id,
@@ -393,7 +396,7 @@ pub(crate) fn handle_gc_global(
                     match updated.phase.transition(&PhaseEvent::Retired) {
                         Ok(new_phase) => {
                             updated.phase = new_phase;
-                            match csa_session::save_session(&updated) {
+                            match save_session_in(session_root, &updated) {
                                 Ok(_) => {
                                     info!(
                                         session = %session.meta_session_id,

@@ -23,7 +23,7 @@ pub use manager::{
     complete_session, create_session, delete_session, delete_session_from_root, get_session_dir,
     get_session_root, list_all_sessions, list_artifacts, list_sessions, list_sessions_from_root,
     list_sessions_from_root_readonly, load_metadata, load_result, load_session, save_result,
-    save_session, update_last_accessed, validate_tool_access,
+    save_session, save_session_in, update_last_accessed, validate_tool_access,
 };
 
 // Re-export genealogy functions
