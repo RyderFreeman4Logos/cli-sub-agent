@@ -43,14 +43,15 @@ pub(crate) fn handle_gc(
                                             pid,
                                             path.file_name()
                                         );
+                                        stale_locks_removed += 1;
                                     } else if fs::remove_file(&path).is_ok() {
                                         info!(
                                             "Removed stale lock for dead PID {}: {:?}",
                                             pid,
                                             path.file_name()
                                         );
+                                        stale_locks_removed += 1;
                                     }
-                                    stale_locks_removed += 1;
                                 }
                             }
                         }
@@ -156,14 +157,15 @@ pub(crate) fn handle_gc(
                                                         "[dry-run] Would clean stale slot: {:?} (dead PID {})",
                                                         path.file_name(), pid
                                                     );
+                                                    stale_slots_cleaned += 1;
                                                 } else if fs::remove_file(&path).is_ok() {
                                                     info!(
                                                         "Cleaned stale slot: {:?} (dead PID {})",
                                                         path.file_name(),
                                                         pid
                                                     );
+                                                    stale_slots_cleaned += 1;
                                                 }
-                                                stale_slots_cleaned += 1;
                                             }
                                         }
                                     }
@@ -223,18 +225,13 @@ pub(crate) fn handle_gc(
     Ok(())
 }
 
-/// Extract PID from lock file JSON content
+/// Extract PID from lock file JSON content.
+///
+/// Lock files contain JSON with a `pid` field (see `LockDiagnostic` and
+/// `SlotDiagnostic` in `csa-lock`). Uses serde_json for robust parsing.
 fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
-    // Simple parsing: look for "pid": followed by a number
-    json_content
-        .split("\"pid\":")
-        .nth(1)?
-        .trim()
-        .split(',')
-        .next()?
-        .trim()
-        .parse::<u32>()
-        .ok()
+    let v: serde_json::Value = serde_json::from_str(json_content).ok()?;
+    v.get("pid")?.as_u64().map(|n| n as u32)
 }
 
 /// Check if a process is alive (cross-platform Unix).
