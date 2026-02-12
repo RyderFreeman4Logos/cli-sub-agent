@@ -107,26 +107,30 @@ impl Executor {
         }
     }
 
-    /// Construct executor from ToolName enum.
-    pub fn from_tool_name(tool: &ToolName, model: Option<String>) -> Self {
+    /// Construct executor from ToolName enum with optional model and thinking budget.
+    pub fn from_tool_name(
+        tool: &ToolName,
+        model: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
+    ) -> Self {
         match tool {
             ToolName::GeminiCli => Self::GeminiCli {
                 model_override: model,
-                thinking_budget: None,
+                thinking_budget,
             },
             ToolName::Opencode => Self::Opencode {
                 model_override: model,
                 agent: None,
-                thinking_budget: None,
+                thinking_budget,
             },
             ToolName::Codex => Self::Codex {
                 model_override: model,
-                thinking_budget: None,
+                thinking_budget,
                 suppress_notify: false,
             },
             ToolName::ClaudeCode => Self::ClaudeCode {
                 model_override: model,
-                thinking_budget: None,
+                thinking_budget,
             },
         }
     }

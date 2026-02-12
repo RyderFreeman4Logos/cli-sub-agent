@@ -154,7 +154,7 @@ fn test_yolo_args() {
 
 #[test]
 fn test_from_tool_name() {
-    let exec = Executor::from_tool_name(&ToolName::GeminiCli, Some("model-1".to_string()));
+    let exec = Executor::from_tool_name(&ToolName::GeminiCli, Some("model-1".to_string()), None);
     assert_eq!(exec.tool_name(), "gemini-cli");
     assert!(matches!(
         exec,
@@ -164,7 +164,7 @@ fn test_from_tool_name() {
         }
     ));
 
-    let exec = Executor::from_tool_name(&ToolName::Opencode, None);
+    let exec = Executor::from_tool_name(&ToolName::Opencode, None, None);
     assert_eq!(exec.tool_name(), "opencode");
     assert!(matches!(
         exec,
@@ -175,7 +175,7 @@ fn test_from_tool_name() {
         }
     ));
 
-    let exec = Executor::from_tool_name(&ToolName::Codex, Some("model-2".to_string()));
+    let exec = Executor::from_tool_name(&ToolName::Codex, Some("model-2".to_string()), None);
     assert_eq!(exec.tool_name(), "codex");
     assert!(matches!(
         exec,
@@ -186,7 +186,7 @@ fn test_from_tool_name() {
         }
     ));
 
-    let exec = Executor::from_tool_name(&ToolName::ClaudeCode, None);
+    let exec = Executor::from_tool_name(&ToolName::ClaudeCode, None, None);
     assert_eq!(exec.tool_name(), "claude-code");
     assert!(matches!(
         exec,
@@ -195,6 +195,39 @@ fn test_from_tool_name() {
             thinking_budget: None,
         }
     ));
+}
+
+#[test]
+fn test_from_tool_name_with_model_and_thinking() {
+    let exec = Executor::from_tool_name(
+        &ToolName::Codex,
+        Some("gpt-5.1-codex-mini".to_string()),
+        Some(ThinkingBudget::Low),
+    );
+    assert!(matches!(
+        exec,
+        Executor::Codex {
+            model_override: Some(_),
+            thinking_budget: Some(ThinkingBudget::Low),
+            ..
+        }
+    ));
+
+    let mut cmd = Command::new(exec.executable_name());
+    exec.append_tool_args(&mut cmd, "test prompt", None);
+    let debug_str = format!("{:?}", cmd);
+    assert!(
+        debug_str.contains("gpt-5.1-codex-mini"),
+        "Missing model in args: {debug_str}"
+    );
+    assert!(
+        debug_str.contains("--reasoning-effort"),
+        "Missing reasoning-effort in args: {debug_str}"
+    );
+    assert!(
+        debug_str.contains("\"low\""),
+        "Expected low reasoning effort: {debug_str}"
+    );
 }
 
 #[test]

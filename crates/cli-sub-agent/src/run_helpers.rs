@@ -3,11 +3,10 @@
 use anyhow::Result;
 use std::io::Read;
 use std::path::Path;
-use tracing::warn;
 
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
-use csa_executor::{Executor, ModelSpec};
+use csa_executor::{Executor, ModelSpec, ThinkingBudget};
 use csa_session::TokenUsage;
 
 /// Resolve tool and model from CLI args and config.
@@ -80,19 +79,10 @@ pub(crate) fn build_executor(
         let parsed = ModelSpec::parse(spec)?;
         Executor::from_spec(&parsed)?
     } else {
-        let mut final_model = model.map(|s| s.to_string());
+        let final_model = model.map(|s| s.to_string());
+        let budget = thinking.map(ThinkingBudget::parse).transpose()?;
 
-        // Apply thinking budget if specified (tool-specific logic)
-        if let Some(thinking_level) = thinking {
-            if final_model.is_none() {
-                // Generate model string with thinking budget
-                final_model = Some(format!("thinking:{}", thinking_level));
-            } else {
-                warn!("Both --model and --thinking specified; --thinking ignored");
-            }
-        }
-
-        Executor::from_tool_name(tool, final_model)
+        Executor::from_tool_name(tool, final_model, budget)
     };
 
     // Inject config-driven settings
@@ -358,7 +348,8 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{infer_task_edit_requirement, truncate_prompt};
+    use super::{build_executor, infer_task_edit_requirement, truncate_prompt};
+    use csa_core::types::ToolName;
 
     #[test]
     fn truncate_prompt_short_string_unchanged() {
@@ -432,5 +423,57 @@ mod tests {
     fn infer_edit_requirement_keeps_analysis_only_prompt_ambiguous() {
         let result = infer_task_edit_requirement("Review auth flow and report issues");
         assert_eq!(result, None);
+    }
+
+    #[test]
+    fn build_executor_model_and_thinking_coexist() {
+        let exec = build_executor(
+            &ToolName::Codex,
+            None,
+            Some("gpt-5.1-codex-mini"),
+            Some("low"),
+            None,
+        )
+        .unwrap();
+        let debug = format!("{:?}", exec);
+        assert!(
+            debug.contains("gpt-5.1-codex-mini"),
+            "model missing: {debug}"
+        );
+        assert!(debug.contains("Low"), "thinking budget missing: {debug}");
+    }
+
+    #[test]
+    fn build_executor_thinking_only() {
+        let exec = build_executor(&ToolName::Codex, None, None, Some("high"), None).unwrap();
+        let debug = format!("{:?}", exec);
+        assert!(debug.contains("High"), "thinking budget missing: {debug}");
+    }
+
+    #[test]
+    fn build_executor_invalid_thinking_errors() {
+        let result = build_executor(&ToolName::Codex, None, None, Some("bogus"), None);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_executor_model_spec_overrides_both() {
+        let exec = build_executor(
+            &ToolName::Codex,
+            Some("codex/openai/gpt-5.3-codex/xhigh"),
+            Some("ignored-model"),
+            Some("ignored-thinking"),
+            None,
+        )
+        .unwrap();
+        let debug = format!("{:?}", exec);
+        assert!(
+            debug.contains("gpt-5.3-codex"),
+            "model_spec model missing: {debug}"
+        );
+        assert!(
+            debug.contains("Xhigh"),
+            "model_spec thinking missing: {debug}"
+        );
     }
 }
