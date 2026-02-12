@@ -267,6 +267,7 @@ pub(crate) fn handle_gc_global(
             Err(_) => continue,
         };
 
+        let mut project_removed = 0usize; // track per-project removals for rotation preview
         for session in &sessions {
             let session_dir = session_root.join("sessions").join(&session.meta_session_id);
             let locks_dir = session_dir.join("locks");
@@ -303,7 +304,7 @@ pub(crate) fn handle_gc_global(
                 }
             }
 
-            // Empty sessions
+            // Empty sessions (mutually exclusive with expired — skip expired if empty)
             if session.tools.is_empty() {
                 if dry_run {
                     eprintln!(
@@ -318,6 +319,8 @@ pub(crate) fn handle_gc_global(
                     );
                 }
                 total_empty_sessions += 1;
+                project_removed += 1;
+                continue;
             }
 
             // Expired sessions
@@ -344,6 +347,7 @@ pub(crate) fn handle_gc_global(
                         );
                     }
                     total_expired_sessions += 1;
+                    project_removed += 1;
                 }
             }
         }
@@ -375,12 +379,15 @@ pub(crate) fn handle_gc_global(
         // Clean rotation.toml if project has no sessions remaining
         let rotation_path = session_root.join("rotation.toml");
         if rotation_path.exists() {
-            let remaining = if dry_run {
-                csa_session::list_sessions_from_root_readonly(session_root).unwrap_or_default()
+            let no_sessions_remain = if dry_run {
+                // Use tracked counter: all sessions would be removed
+                project_removed >= sessions.len()
             } else {
-                csa_session::list_sessions_from_root(session_root).unwrap_or_default()
+                csa_session::list_sessions_from_root(session_root)
+                    .unwrap_or_default()
+                    .is_empty()
             };
-            if remaining.is_empty() {
+            if no_sessions_remain {
                 if dry_run {
                     eprintln!("[dry-run] Would remove rotation state: {:?}", rotation_path);
                 } else if fs::remove_file(&rotation_path).is_ok() {
