@@ -70,16 +70,22 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
     // 10. Execute with session
+    let description = format!(
+        "review: {}",
+        crate::run_helpers::truncate_prompt(&scope, 80)
+    );
     let result = crate::pipeline::execute_with_session(
         &executor,
         &tool,
         &effective_prompt,
         args.session,
-        Some("Code review session".to_string()),
+        Some(description),
         None,
         &project_root,
         config.as_ref(),
         extra_env,
+        Some("review"),
+        None, // review does not use tier-based selection
     )
     .await?;
 

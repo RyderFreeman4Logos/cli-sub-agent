@@ -195,6 +195,37 @@ csa todo save -t "$TIMESTAMP" "draft: initial plan"
 | `[CSA:codex]` | Independent feature implementation (sandbox) |
 | `[Skill:commit]` | Full commit workflow (format/lint/test/review/commit) |
 
+### Language Detection (MANDATORY)
+
+**The TODO plan MUST be written in the user's preferred language.** Detect language using this priority chain:
+
+1. **CLAUDE.md directive** — Check project or global CLAUDE.md for explicit language instructions (e.g., a Chinese communication directive)
+2. **Conversation language** — If the user has been writing in a specific language throughout the conversation, use that language
+3. **Explicit request** — If the user explicitly requests a language, use it
+4. **Default** — English (only if no signal detected)
+
+**What to write in the detected language:**
+- TODO title and Goal section
+- Context Brief descriptions (file paths stay as-is)
+- Key Decisions explanations
+- Task descriptions (executor tags and commit messages stay in English per Conventional Commits)
+- Risks & Mitigations descriptions
+- Debate Insights summaries
+
+**What ALWAYS stays in English:**
+- Executor tags: `[Main]`, `[Sub:developer]`, `[Skill:commit]`, etc.
+- Commit message suggestions: `fix(session): ...`
+- File paths and code references
+- Section headers (Markdown `##` headings) — keep in English for tooling compatibility
+
+**Example (non-English user):**
+```markdown
+- [ ] `[Sub:developer]` <task description in user's language> review_cmd.rs:78
+- [ ] `[Skill:commit]` Commit — `fix(session): dynamic description for review/debate sessions`
+```
+
+Note: Task descriptions use the detected language, but executor tags and commit messages stay in English.
+
 ### Guidelines
 
 - Keep TODO concise (<2000 tokens)

@@ -1,10 +1,15 @@
 use anyhow::Result;
 use std::fs;
-use tracing::info;
+use tracing::{info, warn};
 
 use csa_config::GlobalConfig;
 use csa_core::types::OutputFormat;
-use csa_session::{delete_session, get_session_dir, list_sessions};
+use csa_session::{
+    delete_session, get_session_dir, get_session_root, list_sessions, save_session_in, PhaseEvent,
+};
+
+/// Default age threshold (in days) for retiring stale Active sessions.
+const RETIRE_AFTER_DAYS: i64 = 7;
 
 pub(crate) fn handle_gc(
     dry_run: bool,
@@ -12,6 +17,7 @@ pub(crate) fn handle_gc(
     format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(None)?;
+    let session_root = get_session_root(&project_root)?;
     let sessions = list_sessions(&project_root, None)?;
     let now = chrono::Utc::now();
 
@@ -19,6 +25,7 @@ pub(crate) fn handle_gc(
     let mut empty_sessions_removed = 0;
     let mut orphan_dirs_removed = 0;
     let mut expired_sessions_removed = 0;
+    let mut sessions_retired = 0u64;
 
     if dry_run {
         eprintln!("[dry-run] No changes will be made.");
@@ -72,8 +79,54 @@ pub(crate) fn handle_gc(
             continue;
         }
 
+        // Retire stale Active/Available sessions (>7 days since last access)
+        let age = now.signed_duration_since(session.last_accessed);
+        if age.num_days() > RETIRE_AFTER_DAYS
+            && session.phase.transition(&PhaseEvent::Retired).is_ok()
+        {
+            if dry_run {
+                eprintln!(
+                    "[dry-run] Would retire stale session: {} (phase={}, {} days old)",
+                    session.meta_session_id,
+                    session.phase,
+                    age.num_days()
+                );
+                sessions_retired += 1;
+            } else {
+                let mut updated = session.clone();
+                match updated.phase.transition(&PhaseEvent::Retired) {
+                    Ok(new_phase) => {
+                        updated.phase = new_phase;
+                        match save_session_in(&session_root, &updated) {
+                            Ok(_) => {
+                                info!(
+                                    session = %session.meta_session_id,
+                                    age_days = age.num_days(),
+                                    "Retired stale session"
+                                );
+                                sessions_retired += 1;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    session = %session.meta_session_id,
+                                    error = %e,
+                                    "Failed to persist retirement"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            session = %session.meta_session_id,
+                            error = %e,
+                            "Skipping retirement"
+                        );
+                    }
+                }
+            }
+        }
+
         if let Some(days) = max_age_days {
-            let age = now.signed_duration_since(session.last_accessed);
             if age.num_days() > days as i64 {
                 if dry_run {
                     eprintln!(
@@ -178,6 +231,7 @@ pub(crate) fn handle_gc(
                 "stale_locks_removed": stale_locks_removed,
                 "empty_sessions_removed": empty_sessions_removed,
                 "orphan_dirs_removed": orphan_dirs_removed,
+                "sessions_retired": sessions_retired,
                 "stale_slots_cleaned": stale_slots_cleaned,
             });
             if max_age_days.is_some() {
@@ -197,6 +251,9 @@ pub(crate) fn handle_gc(
                 "{}  Empty sessions removed: {}",
                 prefix, empty_sessions_removed
             );
+            if sessions_retired > 0 {
+                eprintln!("{}  Sessions retired: {}", prefix, sessions_retired);
+            }
             if max_age_days.is_some() {
                 eprintln!(
                     "{}  Expired sessions removed: {}",
@@ -237,6 +294,7 @@ pub(crate) fn handle_gc_global(
     let mut total_empty_sessions = 0u64;
     let mut total_orphan_dirs = 0u64;
     let mut total_expired_sessions = 0u64;
+    let mut total_sessions_retired = 0u64;
     let mut projects_failed = 0u64;
 
     if dry_run {
@@ -319,8 +377,57 @@ pub(crate) fn handle_gc_global(
                 continue;
             }
 
+            // Retire stale Active/Available sessions (>7 days since last access)
+            let age = now.signed_duration_since(session.last_accessed);
+            if age.num_days() > RETIRE_AFTER_DAYS
+                && session.phase.transition(&PhaseEvent::Retired).is_ok()
+            {
+                if dry_run {
+                    eprintln!(
+                        "[dry-run] Would retire stale session: {} (phase={}, {} days old, in {})",
+                        session.meta_session_id,
+                        session.phase,
+                        age.num_days(),
+                        session_root.display()
+                    );
+                    total_sessions_retired += 1;
+                } else {
+                    let mut updated = session.clone();
+                    match updated.phase.transition(&PhaseEvent::Retired) {
+                        Ok(new_phase) => {
+                            updated.phase = new_phase;
+                            match save_session_in(session_root, &updated) {
+                                Ok(_) => {
+                                    info!(
+                                        session = %session.meta_session_id,
+                                        age_days = age.num_days(),
+                                        root = %session_root.display(),
+                                        "Retired stale session"
+                                    );
+                                    total_sessions_retired += 1;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        session = %session.meta_session_id,
+                                        error = %e,
+                                        root = %session_root.display(),
+                                        "Failed to persist retirement"
+                                    );
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            warn!(
+                                session = %session.meta_session_id,
+                                error = %e,
+                                "Skipping retirement"
+                            );
+                        }
+                    }
+                }
+            }
+
             if let Some(days) = max_age_days {
-                let age = now.signed_duration_since(session.last_accessed);
                 if age.num_days() > days as i64 {
                     if dry_run {
                         eprintln!(
@@ -451,6 +558,7 @@ pub(crate) fn handle_gc_global(
                 "stale_locks_removed": total_stale_locks,
                 "empty_sessions_removed": total_empty_sessions,
                 "orphan_dirs_removed": total_orphan_dirs,
+                "sessions_retired": total_sessions_retired,
                 "stale_slots_cleaned": stale_slots_cleaned,
             });
             if max_age_days.is_some() {
@@ -474,6 +582,9 @@ pub(crate) fn handle_gc_global(
                 "{}  Empty sessions removed: {}",
                 prefix, total_empty_sessions
             );
+            if total_sessions_retired > 0 {
+                eprintln!("{}  Sessions retired: {}", prefix, total_sessions_retired);
+            }
             if max_age_days.is_some() {
                 eprintln!(
                     "{}  Expired sessions removed: {}",

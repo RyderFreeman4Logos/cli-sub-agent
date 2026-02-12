@@ -109,6 +109,17 @@ pub struct ContextStatus {
     pub last_compacted_at: Option<DateTime<Utc>>,
 }
 
+/// Events that trigger session phase transitions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PhaseEvent {
+    /// Context compression completed successfully.
+    Compressed,
+    /// Session is being resumed for a new task.
+    Resumed,
+    /// Session should be retired (by GC aging or explicit request).
+    Retired,
+}
+
 /// Session lifecycle phase.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -122,6 +133,44 @@ pub enum SessionPhase {
     Retired,
 }
 
+impl SessionPhase {
+    /// Attempt a phase transition driven by `event`.
+    ///
+    /// Returns the new phase on success, or an error description for invalid
+    /// transitions. The state machine is intentionally simple:
+    ///
+    /// ```text
+    ///   Active  --Compressed--> Available
+    ///   Active  --Retired-----> Retired
+    ///   Available --Resumed---> Active
+    ///   Available --Retired---> Retired
+    /// ```
+    ///
+    /// All other combinations are invalid.
+    pub fn transition(&self, event: &PhaseEvent) -> Result<SessionPhase, String> {
+        match (self, event) {
+            (SessionPhase::Active, PhaseEvent::Compressed) => Ok(SessionPhase::Available),
+            (SessionPhase::Active, PhaseEvent::Retired) => Ok(SessionPhase::Retired),
+            (SessionPhase::Available, PhaseEvent::Resumed) => Ok(SessionPhase::Active),
+            (SessionPhase::Available, PhaseEvent::Retired) => Ok(SessionPhase::Retired),
+            (current, event) => Err(format!(
+                "invalid phase transition: {:?} + {:?}",
+                current, event
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for SessionPhase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SessionPhase::Active => write!(f, "active"),
+            SessionPhase::Available => write!(f, "available"),
+            SessionPhase::Retired => write!(f, "retired"),
+        }
+    }
+}
+
 /// Lightweight context about what the session was doing.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskContext {
@@ -131,4 +180,99 @@ pub struct TaskContext {
     /// Which tier this session was allocated from.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier_name: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Valid transitions ────────────────────────────────────────────
+
+    #[test]
+    fn test_active_compressed_becomes_available() {
+        let phase = SessionPhase::Active;
+        assert_eq!(
+            phase.transition(&PhaseEvent::Compressed),
+            Ok(SessionPhase::Available)
+        );
+    }
+
+    #[test]
+    fn test_active_retired_becomes_retired() {
+        let phase = SessionPhase::Active;
+        assert_eq!(
+            phase.transition(&PhaseEvent::Retired),
+            Ok(SessionPhase::Retired)
+        );
+    }
+
+    #[test]
+    fn test_available_resumed_becomes_active() {
+        let phase = SessionPhase::Available;
+        assert_eq!(
+            phase.transition(&PhaseEvent::Resumed),
+            Ok(SessionPhase::Active)
+        );
+    }
+
+    #[test]
+    fn test_available_retired_becomes_retired() {
+        let phase = SessionPhase::Available;
+        assert_eq!(
+            phase.transition(&PhaseEvent::Retired),
+            Ok(SessionPhase::Retired)
+        );
+    }
+
+    // ── Invalid transitions ─────────────────────────────────────────
+
+    #[test]
+    fn test_active_resumed_is_invalid() {
+        let phase = SessionPhase::Active;
+        assert!(phase.transition(&PhaseEvent::Resumed).is_err());
+    }
+
+    #[test]
+    fn test_available_compressed_is_invalid() {
+        let phase = SessionPhase::Available;
+        assert!(phase.transition(&PhaseEvent::Compressed).is_err());
+    }
+
+    #[test]
+    fn test_retired_compressed_is_invalid() {
+        let phase = SessionPhase::Retired;
+        assert!(phase.transition(&PhaseEvent::Compressed).is_err());
+    }
+
+    #[test]
+    fn test_retired_resumed_is_invalid() {
+        let phase = SessionPhase::Retired;
+        assert!(phase.transition(&PhaseEvent::Resumed).is_err());
+    }
+
+    #[test]
+    fn test_retired_retired_is_invalid() {
+        let phase = SessionPhase::Retired;
+        assert!(phase.transition(&PhaseEvent::Retired).is_err());
+    }
+
+    // ── Display ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_display() {
+        assert_eq!(SessionPhase::Active.to_string(), "active");
+        assert_eq!(SessionPhase::Available.to_string(), "available");
+        assert_eq!(SessionPhase::Retired.to_string(), "retired");
+    }
+
+    // ── Round-trip: Active → Available → Active ─────────────────────
+
+    #[test]
+    fn test_round_trip_active_available_active() {
+        let phase = SessionPhase::Active;
+        let available = phase.transition(&PhaseEvent::Compressed).unwrap();
+        assert_eq!(available, SessionPhase::Available);
+        let active_again = available.transition(&PhaseEvent::Resumed).unwrap();
+        assert_eq!(active_again, SessionPhase::Active);
+    }
 }

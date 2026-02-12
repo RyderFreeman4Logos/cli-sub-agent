@@ -34,6 +34,16 @@
   ],
   "overall_risk": "low|medium|high|critical",
   "overall_summary": "string",
+  "agents_md_checklist": [
+    {
+      "file": "string",
+      "agents_chain": ["string"],
+      "rule_id": "string",
+      "source_agents_md": "string",
+      "result": "pass|violation",
+      "evidence": "string"
+    }
+  ],
   "test_gaps": ["string"],
   "open_questions": [
     {
@@ -62,6 +72,14 @@ Optional outputs generated when the review finds **no P0 or P1 issues**:
 - **commit_message**: A Conventional Commits message (English) summarizing the changes. Only generated for per-commit reviews (`uncommitted` scope). Set to `null` if P0/P1 issues exist or scope is not per-commit.
 - **pr_body**: A PR description with `## Summary` (bullet points) and `## Test plan` (checklist). Only generated for pre-PR reviews (`base:<branch>` or `range:` scope). Set to `null` if P0/P1 issues exist or scope is not pre-PR.
 
+### agents_md_checklist
+
+Mandatory AGENTS.md compliance evidence:
+
+- One entry per `(changed file, applicable AGENTS.md rule)` pair.
+- `result` must be `pass` or `violation` (no third state).
+- Missing entries mean review is incomplete.
+
 ## review-report.md
 
 ```markdown
@@ -75,6 +93,10 @@ Optional outputs generated when the review finds **no P0 or P1 issues**:
 
 ## Findings (ordered by severity)
 1. [P?][<finding_type>] <summary> (`<file>:<line>`, confidence=<0.00>)
+
+## AGENTS.md Checklist
+- [x] `<file>` | `<rule-id>` | `<source AGENTS.md>` | PASS
+- [x] `<file>` | `<rule-id>` | `<source AGENTS.md>` | VIOLATION (finding: `<id>`)
 
 ## Security Findings (attacker perspective)
 1. [P?][security] <summary> (`<file>:<line>`)

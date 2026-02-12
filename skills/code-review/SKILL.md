@@ -183,6 +183,23 @@ In addition to standard review criteria and any context/prompt-specific review p
 3. Report violations as review findings referencing the specific AGENTS.md rule ID (e.g., "Violates rule 010 naming: variable `x` should be descriptive").
 4. AGENTS.md violations are at least P2 (maintainability) — promote to P1 if the rule is marked MUST/CRITICAL.
 
+### Mandatory AGENTS.md Checklist (Hard Gate)
+
+The reviewer MUST produce a checklist proving every applicable `AGENTS.md` rule was checked:
+
+```markdown
+## AGENTS.md Checklist
+- [ ] File path analyzed: <path>
+- [ ] AGENTS chain discovered (root->leaf): <a/AGENTS.md>, <b/AGENTS.md>, <c/AGENTS.md>
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> PASS
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> PASS
+- [ ] Rule checked: <rule-id> from <source AGENTS.md> -> VIOLATION (finding id: <id>)
+```
+
+Completion requirement:
+- Every applicable rule appears exactly once with PASS or VIOLATION.
+- No unchecked checklist items when the review is marked complete.
+
 ## Review Workflow
 
 ### Step 1: Fetch PR Context

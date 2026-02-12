@@ -199,6 +199,8 @@ pub(crate) async fn execute_with_session(
     project_root: &Path,
     config: Option<&ProjectConfig>,
     extra_env: Option<&std::collections::HashMap<String, String>>,
+    task_type: Option<&str>,
+    tier_name: Option<&str>,
 ) -> Result<csa_process::ExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg {
@@ -220,12 +222,18 @@ pub(crate) async fn execute_with_session(
         // Auto-generate description from prompt when not provided
         let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
         let parent_id = parent.or_else(|| std::env::var("CSA_SESSION_ID").ok());
-        create_session(
+        let mut new_session = create_session(
             project_root,
             effective_description.as_deref(),
             parent_id.as_deref(),
             Some(tool.as_str()),
-        )?
+        )?;
+        // Populate task context on newly created sessions
+        new_session.task_context = csa_session::TaskContext {
+            task_type: task_type.map(|s| s.to_string()),
+            tier_name: tier_name.map(|s| s.to_string()),
+        };
+        new_session
     };
 
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
@@ -409,11 +417,25 @@ pub(crate) async fn execute_with_session(
     if result.exit_code == 0 && is_compress_command(prompt) {
         session.context_status.is_compacted = true;
         session.context_status.last_compacted_at = Some(chrono::Utc::now());
-        session.phase = csa_session::SessionPhase::Available;
-        info!(
-            session = %session.meta_session_id,
-            "Session compacted and marked Available for reuse"
-        );
+        match session
+            .phase
+            .transition(&csa_session::PhaseEvent::Compressed)
+        {
+            Ok(new_phase) => {
+                session.phase = new_phase;
+                info!(
+                    session = %session.meta_session_id,
+                    "Session compacted and marked Available for reuse"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    session = %session.meta_session_id,
+                    error = %e,
+                    "Skipping phase transition on compress"
+                );
+            }
+        }
     }
 
     // Update cumulative token usage if we got new tokens

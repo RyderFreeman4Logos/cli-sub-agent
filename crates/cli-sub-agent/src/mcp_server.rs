@@ -588,6 +588,8 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             &project_root,
             config.as_ref(),
             extra_env_ref,
+            Some("run"),
+            None, // MCP server does not use tier-based selection
         )
         .await?
     };

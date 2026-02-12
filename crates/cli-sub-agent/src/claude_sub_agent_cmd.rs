@@ -73,6 +73,8 @@ pub(crate) async fn handle_claude_sub_agent(
         &project_root,
         config.as_ref(),
         extra_env,
+        Some("run"),
+        None, // claude-sub-agent does not use tier-based selection
     )
     .await?;
 

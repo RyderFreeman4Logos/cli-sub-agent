@@ -1,10 +1,12 @@
 use anyhow::Result;
+use csa_core::types::OutputFormat;
 use csa_todo::{TodoManager, TodoStatus};
 
 pub(crate) fn handle_create(
     title: String,
     branch: Option<String>,
     cd: Option<String>,
+    format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
@@ -19,12 +21,26 @@ pub(crate) fn handle_create(
     csa_todo::git::save(manager.todos_dir(), &plan.timestamp, &commit_msg)?
         .ok_or_else(|| anyhow::anyhow!("BUG: newly created plan had no changes to commit"))?;
 
-    println!("{}", plan.timestamp);
-    eprintln!(
-        "Created TODO plan: {} ({})",
-        plan.metadata.title, plan.timestamp
-    );
-    eprintln!("  Path: {}", plan.todo_md_path().display());
+    match format {
+        OutputFormat::Json => {
+            let json = serde_json::json!({
+                "timestamp": plan.timestamp,
+                "title": plan.metadata.title,
+                "status": plan.metadata.status.to_string(),
+                "branch": plan.metadata.branch,
+                "path": plan.todo_md_path().display().to_string(),
+            });
+            println!("{}", serde_json::to_string_pretty(&json)?);
+        }
+        OutputFormat::Text => {
+            println!("{}", plan.timestamp);
+            eprintln!(
+                "Created TODO plan: {} ({})",
+                plan.metadata.title, plan.timestamp
+            );
+            eprintln!("  Path: {}", plan.todo_md_path().display());
+        }
+    }
 
     Ok(())
 }
@@ -100,7 +116,11 @@ pub(crate) fn handle_history(timestamp: Option<String>, cd: Option<String>) -> R
     Ok(())
 }
 
-pub(crate) fn handle_list(status: Option<String>, cd: Option<String>) -> Result<()> {
+pub(crate) fn handle_list(
+    status: Option<String>,
+    cd: Option<String>,
+    format: OutputFormat,
+) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
 
@@ -112,24 +132,45 @@ pub(crate) fn handle_list(status: Option<String>, cd: Option<String>) -> Result<
     };
 
     if plans.is_empty() {
-        eprintln!("No TODO plans found.");
+        match format {
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Text => eprintln!("No TODO plans found."),
+        }
         return Ok(());
     }
 
-    // Table header
-    println!(
-        "{:<18}  {:<14}  {:<30}  BRANCH",
-        "TIMESTAMP", "STATUS", "TITLE"
-    );
+    match format {
+        OutputFormat::Json => {
+            let json_plans: Vec<_> = plans
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "timestamp": p.timestamp,
+                        "status": p.metadata.status.to_string(),
+                        "title": p.metadata.title,
+                        "branch": p.metadata.branch,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json_plans)?);
+        }
+        OutputFormat::Text => {
+            // Table header
+            println!(
+                "{:<18}  {:<14}  {:<30}  BRANCH",
+                "TIMESTAMP", "STATUS", "TITLE"
+            );
 
-    for plan in &plans {
-        println!(
-            "{:<18}  {:<14}  {:<30}  {}",
-            plan.timestamp,
-            plan.metadata.status,
-            truncate(&plan.metadata.title, 30),
-            plan.metadata.branch.as_deref().unwrap_or("-"),
-        );
+            for plan in &plans {
+                println!(
+                    "{:<18}  {:<14}  {:<30}  {}",
+                    plan.timestamp,
+                    plan.metadata.status,
+                    truncate(&plan.metadata.title, 30),
+                    plan.metadata.branch.as_deref().unwrap_or("-"),
+                );
+            }
+        }
     }
 
     Ok(())
@@ -139,6 +180,7 @@ pub(crate) fn handle_find(
     branch: Option<String>,
     status: Option<String>,
     cd: Option<String>,
+    format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
@@ -155,23 +197,44 @@ pub(crate) fn handle_find(
     }
 
     if plans.is_empty() {
-        eprintln!("No matching TODO plans found.");
+        match format {
+            OutputFormat::Json => println!("[]"),
+            OutputFormat::Text => eprintln!("No matching TODO plans found."),
+        }
         return Ok(());
     }
 
-    println!(
-        "{:<18}  {:<14}  {:<30}  BRANCH",
-        "TIMESTAMP", "STATUS", "TITLE"
-    );
+    match format {
+        OutputFormat::Json => {
+            let json_plans: Vec<_> = plans
+                .iter()
+                .map(|p| {
+                    serde_json::json!({
+                        "timestamp": p.timestamp,
+                        "status": p.metadata.status.to_string(),
+                        "title": p.metadata.title,
+                        "branch": p.metadata.branch,
+                    })
+                })
+                .collect();
+            println!("{}", serde_json::to_string_pretty(&json_plans)?);
+        }
+        OutputFormat::Text => {
+            println!(
+                "{:<18}  {:<14}  {:<30}  BRANCH",
+                "TIMESTAMP", "STATUS", "TITLE"
+            );
 
-    for plan in &plans {
-        println!(
-            "{:<18}  {:<14}  {:<30}  {}",
-            plan.timestamp,
-            plan.metadata.status,
-            truncate(&plan.metadata.title, 30),
-            plan.metadata.branch.as_deref().unwrap_or("-"),
-        );
+            for plan in &plans {
+                println!(
+                    "{:<18}  {:<14}  {:<30}  {}",
+                    plan.timestamp,
+                    plan.metadata.status,
+                    truncate(&plan.metadata.title, 30),
+                    plan.metadata.branch.as_deref().unwrap_or("-"),
+                );
+            }
+        }
     }
 
     Ok(())

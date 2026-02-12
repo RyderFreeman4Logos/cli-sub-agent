@@ -115,6 +115,11 @@ Run `csa-review` skill with `scope=range:main...HEAD` to audit all changes since
 before submitting the PR. This catches cross-commit interaction issues early and reduces bot iterations.
 Sessions are stored in `~/.local/state/csa/` (not `~/.codex/`).
 
+`csa-review` output MUST include explicit `AGENTS.md` compliance evidence:
+- `review-findings.json` contains complete `agents_md_checklist`
+- `review-report.md` contains AGENTS.md checklist section with all items checked
+- No missing applicable AGENTS.md rule is allowed
+
 **FORBIDDEN**: `run_in_background: true` for the local review command. You MUST wait
 for the review output before proceeding.
 
@@ -124,6 +129,8 @@ After completing the local review:
 LOCAL_REVIEW_MARKER="/tmp/codex-local-review-${REPO//\//-}-${BRANCH//\//-}.marker"
 git rev-parse HEAD > "${LOCAL_REVIEW_MARKER}"
 ```
+
+Do not set `LOCAL_REVIEW_MARKER` unless AGENTS.md checklist is complete (all applicable rules checked, none missing).
 
 ## Step 3: Fix Local Review Issues (GATE)
 

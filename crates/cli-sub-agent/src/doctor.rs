@@ -2,6 +2,7 @@
 
 use anyhow::Result;
 use csa_config::ProjectConfig;
+use csa_core::types::OutputFormat;
 use std::env;
 use std::process::Command;
 use sysinfo::System;
@@ -26,7 +27,15 @@ fn install_hint(tool_name: &str) -> &'static str {
 }
 
 /// Run full environment diagnostics.
-pub async fn run_doctor() -> Result<()> {
+pub async fn run_doctor(format: OutputFormat) -> Result<()> {
+    match format {
+        OutputFormat::Json => run_doctor_json().await,
+        OutputFormat::Text => run_doctor_text().await,
+    }
+}
+
+/// Run diagnostics with human-readable text output.
+async fn run_doctor_text() -> Result<()> {
     println!("=== CSA Environment Check ===");
     print_platform_info();
     print_state_dir();
@@ -42,6 +51,94 @@ pub async fn run_doctor() -> Result<()> {
 
     println!("=== Resource Status ===");
     print_resource_status();
+
+    Ok(())
+}
+
+/// Run diagnostics with JSON output.
+async fn run_doctor_json() -> Result<()> {
+    let os = env::consts::OS;
+    let arch = env::consts::ARCH;
+    let version = env!("CARGO_PKG_VERSION");
+
+    let state_dir = directories::ProjectDirs::from("", "", "csa")
+        .and_then(|p| p.state_dir().map(|d| d.display().to_string()))
+        .unwrap_or_default();
+
+    // Check tools
+    let tools = [
+        ("gemini-cli", "gemini"),
+        ("opencode", "opencode"),
+        ("codex", "codex"),
+        ("claude-code", "claude"),
+    ];
+
+    let tool_statuses: Vec<serde_json::Value> = tools
+        .iter()
+        .map(|(tool_name, exe_name)| {
+            let status = check_tool_status(tool_name, exe_name);
+            serde_json::json!({
+                "name": status.name,
+                "installed": status.installed,
+                "version": status.version,
+            })
+        })
+        .collect();
+
+    // Check project config
+    let cwd = env::current_dir()?;
+    let config_status = match ProjectConfig::load(&cwd) {
+        Ok(Some(config)) => {
+            let mut enabled = Vec::new();
+            let mut disabled = Vec::new();
+            for tool_name in &["gemini-cli", "opencode", "codex", "claude-code"] {
+                if config.is_tool_enabled(tool_name) {
+                    enabled.push(*tool_name);
+                } else {
+                    disabled.push(*tool_name);
+                }
+            }
+            serde_json::json!({
+                "found": true,
+                "valid": true,
+                "enabled_tools": enabled,
+                "disabled_tools": disabled,
+            })
+        }
+        Ok(None) => serde_json::json!({
+            "found": false,
+            "valid": false,
+        }),
+        Err(e) => serde_json::json!({
+            "found": true,
+            "valid": false,
+            "error": e.to_string(),
+        }),
+    };
+
+    // Resource status
+    let mut sys = System::new();
+    sys.refresh_memory();
+    let available_memory = sys.available_memory();
+    let free_swap = sys.free_swap();
+
+    let result = serde_json::json!({
+        "platform": {
+            "os": os,
+            "arch": arch,
+        },
+        "csa_version": version,
+        "state_dir": state_dir,
+        "tools": tool_statuses,
+        "config": config_status,
+        "resources": {
+            "available_memory_bytes": available_memory,
+            "free_swap_bytes": free_swap,
+            "total_free_bytes": available_memory.saturating_add(free_swap),
+        },
+    });
+
+    println!("{}", serde_json::to_string_pretty(&result)?);
 
     Ok(())
 }

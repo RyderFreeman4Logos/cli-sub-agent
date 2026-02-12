@@ -164,8 +164,8 @@ pub fn save_session(state: &MetaSessionState) -> Result<()> {
     save_session_in(&base_dir, state)
 }
 
-/// Internal implementation: save session in explicit base directory
-pub(crate) fn save_session_in(base_dir: &Path, state: &MetaSessionState) -> Result<()> {
+///// Save session state to an explicit base directory.
+pub fn save_session_in(base_dir: &Path, state: &MetaSessionState) -> Result<()> {
     let session_dir = get_session_dir_in(base_dir, &state.meta_session_id);
     let state_path = session_dir.join(STATE_FILE_NAME);
 

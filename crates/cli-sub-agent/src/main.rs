@@ -168,7 +168,7 @@ async fn main() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Doctor => {
-            doctor::run_doctor().await?;
+            doctor::run_doctor(output_format).await?;
         }
         Commands::Batch { file, cd, dry_run } => {
             batch::handle_batch(file, cd, dry_run, current_depth).await?;
@@ -202,7 +202,7 @@ async fn main() -> Result<()> {
         },
         Commands::Todo { cmd } => match cmd {
             TodoCommands::Create { title, branch, cd } => {
-                todo_cmd::handle_create(title, branch, cd)?;
+                todo_cmd::handle_create(title, branch, cd, output_format)?;
             }
             TodoCommands::Save {
                 timestamp,
@@ -224,10 +224,10 @@ async fn main() -> Result<()> {
                 todo_cmd::handle_history(timestamp, cd)?;
             }
             TodoCommands::List { status, cd } => {
-                todo_cmd::handle_list(status, cd)?;
+                todo_cmd::handle_list(status, cd, output_format)?;
             }
             TodoCommands::Find { branch, status, cd } => {
-                todo_cmd::handle_find(branch, status, cd)?;
+                todo_cmd::handle_find(branch, status, cd, output_format)?;
             }
             TodoCommands::Show {
                 timestamp,
@@ -418,6 +418,17 @@ async fn handle_run(
             .unwrap_or(1)
     };
 
+    // Resolve tier name for TaskContext (same logic as tier_mapping lookup)
+    let resolved_tier_name: Option<String> = config.as_ref().and_then(|cfg| {
+        cfg.tier_mapping.get("default").cloned().or_else(|| {
+            if cfg.tiers.contains_key("tier3") {
+                Some("tier3".to_string())
+            } else {
+                cfg.tiers.keys().next().cloned()
+            }
+        })
+    });
+
     // Resolve slots directory
     let slots_dir = GlobalConfig::slots_dir()?;
 
@@ -547,6 +558,8 @@ async fn handle_run(
                 &project_root,
                 config.as_ref(),
                 extra_env.as_ref(),
+                Some("run"),
+                resolved_tier_name.as_deref(),
             )
             .await
             {
