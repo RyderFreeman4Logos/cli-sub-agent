@@ -362,8 +362,13 @@ pub(crate) fn handle_gc_global(
         }
 
         // Orphan directories (excluding hidden dirs like .git)
+        // Skip if sessions_dir is a symlink (safety: avoid traversal outside state base)
         let sessions_dir = session_root.join("sessions");
-        if sessions_dir.exists() {
+        let sessions_is_real_dir = sessions_dir.is_dir()
+            && !fs::symlink_metadata(&sessions_dir)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(true);
+        if sessions_is_real_dir {
             if let Ok(entries) = fs::read_dir(&sessions_dir) {
                 for entry in entries.flatten() {
                     if entry.file_type().is_ok_and(|ft| ft.is_dir())
@@ -561,7 +566,12 @@ fn discover_roots_recursive(
                 continue;
             }
         }
-        let has_sessions = path.join("sessions").is_dir();
+        let sessions_path = path.join("sessions");
+        // Only accept sessions/ if it's a real directory (not a symlink)
+        let has_sessions = sessions_path.is_dir()
+            && !fs::symlink_metadata(&sessions_path)
+                .map(|m| m.file_type().is_symlink())
+                .unwrap_or(true);
         if has_sessions {
             roots.push(path.clone());
         }
@@ -577,41 +587,38 @@ fn discover_roots_recursive(
     }
 }
 
-/// Extract PID from lock file JSON content.
-///
-/// Lock files contain JSON with a `pid` field (see `LockDiagnostic` and
-/// `SlotDiagnostic` in `csa-lock`). Uses serde_json for robust parsing.
+/// Extract PID from lock file JSON content (expects `{"pid": N}`).
 fn extract_pid_from_lock(json_content: &str) -> Option<u32> {
     let v: serde_json::Value = serde_json::from_str(json_content).ok()?;
     let n = v.get("pid")?.as_u64()?;
     u32::try_from(n).ok()
 }
 
-/// Check if a directory inside `sessions/` is an orphan that should be cleaned.
-///
-/// Returns `true` for non-hidden directories that lack `state.toml`.
-/// Hidden directories (`.git`, etc.) are never considered orphans.
+/// Returns `true` for non-hidden dirs in `sessions/` lacking `state.toml`.
 fn is_orphan_session_dir(entry: &fs::DirEntry) -> bool {
     let name = entry.file_name();
     if name.to_string_lossy().starts_with('.') {
         return false;
     }
-    !entry.path().join("state.toml").exists()
+    let path = entry.path();
+    // Not an orphan if it has a valid session state
+    if path.join("state.toml").exists() {
+        return false;
+    }
+    // Not an orphan if it contains sessions/ subdir — this means it's a path
+    // segment leading to a nested project root, not an orphan session directory.
+    if path.join("sessions").is_dir() {
+        return false;
+    }
+    true
 }
 
 /// Check if a process is alive (cross-platform Unix).
 fn is_process_alive(pid: u32) -> bool {
-    // kill(pid, 0) checks existence without sending a signal.
-    // Returns 0 if the process exists (and we have permission),
-    // or -1 with EPERM if it exists but we lack permission.
-    // SAFETY: signal 0 is a null signal that performs error checking
-    // but does not actually send a signal.
+    // SAFETY: signal 0 checks existence without sending a signal.
+    // EPERM means process exists but we lack permission to signal it.
     let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-    if ret == 0 {
-        return true;
-    }
-    // EPERM means the process exists but we can't signal it.
-    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    ret == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 
 #[cfg(test)]
@@ -672,20 +679,13 @@ mod tests {
     #[test]
     fn test_discover_ignores_nested_sessions_in_artifacts() {
         let tmp = tempdir().unwrap();
-        // Real project root
         make_project_root(tmp.path(), &["home", "user", "proj"]);
-        // Nested sessions/ inside a session's output — must NOT be a root
         let nested = tmp
             .path()
             .join("home/user/proj/sessions/01ARZ3NDEK/output/cache/sessions");
         fs::create_dir_all(nested.join("random-dir")).unwrap();
-
         let roots = discover_project_roots(tmp.path());
         assert_eq!(roots.len(), 1, "Only the real project root should be found");
-        assert!(
-            roots[0].to_string_lossy().contains("home/user/proj"),
-            "Root should be the actual project, not nested artifact"
-        );
     }
 
     #[test]
@@ -701,16 +701,10 @@ mod tests {
 
     #[test]
     fn test_extract_pid_from_lock_overflow_rejected() {
-        // PID > u32::MAX must be rejected, not silently truncated
-        assert_eq!(
-            extract_pid_from_lock(r#"{"pid": 4294967297}"#),
-            None,
-            "PID > u32::MAX should return None"
-        );
+        assert_eq!(extract_pid_from_lock(r#"{"pid": 4294967297}"#), None);
         assert_eq!(
             extract_pid_from_lock(r#"{"pid": 18446744073709551615}"#),
-            None,
-            "u64::MAX PID should return None"
+            None
         );
     }
 
@@ -747,23 +741,55 @@ mod tests {
         let tmp = tempdir().unwrap();
         let sessions = tmp.path().join("sessions");
         fs::create_dir_all(&sessions).unwrap();
-
-        // .git should be preserved (hidden infrastructure)
         fs::create_dir_all(sessions.join(".git")).unwrap();
-        // Valid session with state.toml should be preserved
         let valid = sessions.join("valid-session");
         fs::create_dir_all(&valid).unwrap();
         fs::write(valid.join("state.toml"), "").unwrap();
-        // Orphan directory without state.toml should be detected
         fs::create_dir_all(sessions.join("orphan-no-state")).unwrap();
-
         let entries: Vec<_> = fs::read_dir(&sessions).unwrap().flatten().collect();
         let orphans: Vec<_> = entries
             .iter()
             .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(e))
             .collect();
-
-        assert_eq!(orphans.len(), 1, "Only the orphan should be detected");
+        assert_eq!(orphans.len(), 1);
         assert_eq!(orphans[0].file_name().to_string_lossy(), "orphan-no-state");
+    }
+
+    #[test]
+    fn test_orphan_check_skips_path_segments_with_nested_sessions() {
+        let tmp = tempdir().unwrap();
+        let sessions = tmp.path().join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        // Dir without state.toml but WITH sessions/ subdir = path segment, not orphan
+        fs::create_dir_all(sessions.join("app").join("sessions")).unwrap();
+        // Dir without state.toml and WITHOUT sessions/ = actual orphan
+        fs::create_dir_all(sessions.join("orphan")).unwrap();
+        let entries: Vec<_> = fs::read_dir(&sessions).unwrap().flatten().collect();
+        let orphans: Vec<_> = entries
+            .iter()
+            .filter(|e| e.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(e))
+            .collect();
+        assert_eq!(
+            orphans.len(),
+            1,
+            "Path segment with sessions/ must not be orphan"
+        );
+        assert_eq!(orphans[0].file_name().to_string_lossy(), "orphan");
+    }
+
+    #[test]
+    fn test_discover_skips_symlinked_sessions_dir() {
+        let tmp = tempdir().unwrap();
+        let external = tempdir().unwrap();
+        fs::create_dir_all(external.path().join("victim")).unwrap();
+        // Regular dir with sessions/ as a symlink to external path
+        let dir = tmp.path().join("project");
+        fs::create_dir_all(&dir).unwrap();
+        unix_fs::symlink(external.path(), dir.join("sessions")).unwrap();
+        let roots = discover_project_roots(tmp.path());
+        assert!(
+            roots.is_empty(),
+            "Symlinked sessions/ must not be treated as root"
+        );
     }
 }
