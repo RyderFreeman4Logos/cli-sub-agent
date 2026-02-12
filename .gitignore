@@ -79,3 +79,8 @@ strix_runs
 **/*.repomix.lock
 .repomix/
 .csa/
+
+# Review artifacts
+review-findings.json
+review-findings.json.tmp
+review-report.md

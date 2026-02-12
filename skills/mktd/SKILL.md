@@ -195,9 +195,11 @@ csa todo save -t "$TIMESTAMP" "draft: initial plan"
 | `[CSA:codex]` | Independent feature implementation (sandbox) |
 | `[Skill:commit]` | Full commit workflow (format/lint/test/review/commit) |
 
-### Language Detection (MANDATORY)
+### Language Detection (MANDATORY — OVERRIDES EXAMPLE LANGUAGE)
 
-**The TODO plan MUST be written in the user's preferred language.** Detect language using this priority chain:
+**CRITICAL: The TODO plan MUST be written in the user's preferred language, NOT in the language of the example below.** The example section uses Chinese to demonstrate the format, but your actual plan must match the detected user language. If your CLAUDE.md says `用中文与用户交流`, the plan MUST be in Chinese regardless of what language any example or template uses.
+
+Detect language using this priority chain:
 
 1. **CLAUDE.md directive** — Check project or global CLAUDE.md for explicit language instructions (e.g., a Chinese communication directive)
 2. **Conversation language** — If the user has been writing in a specific language throughout the conversation, use that language
@@ -394,7 +396,9 @@ After user approval, use the `mktsk` skill to convert this TODO file into Task t
 
 ---
 
-## Complete Example: Adding JWT Authentication
+## Complete Example: Adding JWT Authentication (Chinese-speaking user)
+
+This example demonstrates a Chinese-speaking user (detected via CLAUDE.md `用中文与用户交流` directive). Note how task descriptions are in Chinese while executor tags, commit messages, file paths, and section headers remain in English.
 
 ```bash
 # Phase 1: RECON — 3 parallel CSA tasks
@@ -403,92 +407,93 @@ csa run "Find existing auth patterns, middleware, token handling..."
 csa run "Identify security constraints, dependency requirements..."
 
 # Phase 2: DRAFT — Create plan via csa todo
-TIMESTAMP=$(csa todo create "Add JWT Authentication" --branch "$(git branch --show-current)" 2>/dev/null)
+TIMESTAMP=$(csa todo create "JWT 身份认证" --branch "$(git branch --show-current)" 2>/dev/null)
 TODO_PATH=$(csa todo show -t "$TIMESTAMP" --path)
 # Write full plan content to $TODO_PATH using Write tool
 csa todo save -t "$TIMESTAMP" "draft: initial plan"
 
 # Phase 3: DEBATE — Mandatory adversarial review
 csa debate "Review this JWT auth plan critically: [TODO]..."
-# Debate catches: missing token refresh, CSRF risk, rate limiting gap
-# Revise TODO via Edit tool, then:
 csa todo save -t "$TIMESTAMP" "post-debate revision"
 csa todo status "$TIMESTAMP" debating
 
 # Phase 4: APPROVE — AskUserQuestion with TODO + debate insights
 csa todo status "$TIMESTAMP" approved
 csa todo save -t "$TIMESTAMP" "approved by user"
-
-# After approval: User invokes mktsk skill to execute
 ```
 
 Example TODO file after Phase 3:
 
 ```markdown
-# TODO: Add JWT Authentication
+# TODO: JWT 身份认证
 
 ## Goal
-Implement JWT-based authentication for API endpoints with token validation, login endpoint, and secure token issuance.
+
+为 API 端点实现基于 JWT 的身份认证，包括 token 验证、登录端点和安全的 token 签发。
 
 ## Context Brief
 
-**Relevant files**:
-- `src/auth/` — existing auth module with middleware
-- `src/api/auth.rs` — auth API endpoints
-- `src/middleware/auth.rs` — request authentication middleware
+**相关文件**:
+- `src/auth/` — 现有认证模块，含中间件
+- `src/api/auth.rs` — 认证 API 端点
+- `src/middleware/auth.rs` — 请求认证中间件
 
-**Existing patterns**:
-- Error handling uses `thiserror` for domain errors
-- Middleware pattern: `tower::Service` implementations
-- Tests use `rstest` for parameterized cases
+**现有模式**:
+- 错误处理使用 `thiserror` 定义域错误
+- 中间件模式：`tower::Service` 实现
+- 测试使用 `rstest` 做参数化用例
 
-**Critical constraints**:
-- Must maintain backward compatibility with existing session-based auth
-- Rate limiting required for login endpoint
-- Token expiry and refresh mechanism needed
+**关键约束**:
+- 必须保持与现有 session-based 认证的向后兼容
+- 登录端点需要限流
+- 需要 token 过期和刷新机制
 
 ## Key Decisions
 
-- Decision 1: Use `jsonwebtoken` crate over custom implementation — battle-tested, widely used, ECDSA support
-- Decision 2: Store JWT secret in env var, not config file — security best practice
-- Decision 3: 15-minute access token + 7-day refresh token — balance security vs UX
+- Decision 1: 使用 `jsonwebtoken` crate 而非自行实现 — 久经考验，广泛使用，支持 ECDSA
+- Decision 2: JWT 密钥存储在环境变量中，不放配置文件 — 安全最佳实践
+- Decision 3: 15 分钟 access token + 7 天 refresh token — 平衡安全性与用户体验
 
 ## Tasks
 
-- [ ] `[Sub:Explore]` Find all authentication entry points and middleware usage patterns
-- [ ] `[Sub:developer]` Implement JWT token validation logic in `src/auth/jwt.rs`
+- [ ] `[Sub:Explore]` 查找所有认证入口点和中间件使用模式
+- [ ] `[Sub:developer]` 在 `src/auth/jwt.rs` 中实现 JWT token 验证逻辑
 - [ ] `[Skill:commit]` Commit JWT validation — `feat(auth): add JWT token validation with ECDSA`
-- [ ] `[Sub:developer]` Add login endpoint with JWT issuance to `src/api/auth.rs`
-- [ ] `[Sub:developer]` Add rate limiting middleware for login endpoint
+- [ ] `[Sub:developer]` 在 `src/api/auth.rs` 中添加登录端点，签发 JWT
+- [ ] `[Sub:developer]` 为登录端点添加限流中间件
 - [ ] `[Skill:commit]` Commit login endpoint — `feat(auth): add login endpoint with rate limiting`
-- [ ] `[Sub:developer]` Implement token refresh endpoint in `src/api/auth.rs`
+- [ ] `[Sub:developer]` 在 `src/api/auth.rs` 中实现 token 刷新端点
 - [ ] `[Skill:commit]` Commit token refresh — `feat(auth): add token refresh endpoint`
-- [ ] `[CSA:review]` Review all auth changes for security issues
-- [ ] `[Main]` Verify git status clean and all tests passing
+- [ ] `[CSA:review]` 审查所有认证变更的安全性
+- [ ] `[Main]` 验证 git status 干净且所有测试通过
 
 ## Risks & Mitigations
 
-- Risk 1: Token secret exposure → Mitigation: env var only, never logged, .env in .gitignore
-- Risk 2: Brute force login attempts → Mitigation: rate limiting (10 req/min per IP)
-- Risk 3: Token replay attacks → Mitigation: short expiry + refresh token rotation
-- Risk 4: CSRF on token refresh → Mitigation: SameSite cookie attribute + CSRF token
+- 风险 1: Token 密钥泄露 → 缓解: 仅使用环境变量，绝不写日志，.env 加入 .gitignore
+- 风险 2: 暴力破解登录 → 缓解: 限流（每 IP 每分钟 10 次请求）
+- 风险 3: Token 重放攻击 → 缓解: 短过期时间 + refresh token 轮转
+- 风险 4: 刷新端点的 CSRF → 缓解: SameSite cookie 属性 + CSRF token
 
 ## Debate Insights
 
 **Session**: `01JKX7R2M3N4P5Q6R7S8T9U0V1`
 **Rounds**: 2
-**Key findings**:
-- Missing: token refresh mechanism (added refresh endpoint task)
-- Missing: rate limiting on login (added rate limiting task)
-- Risk identified: CSRF on refresh endpoint (added mitigation strategy)
-- Alternative considered: OAuth2 library → rejected because over-engineered for current needs
+**Debate tool**: codex (gpt-5.3-codex)
 
-**Resolved tensions**:
-- Access token expiry (5min vs 15min): resolved by 15min + refresh token for better UX
-- Storage location (Redis vs in-memory): resolved by starting simple (in-memory), scale later if needed
+### Findings That Changed the Plan
+- 缺失: token 刷新机制（已添加刷新端点任务）
+- 缺失: 登录限流（已添加限流任务）
+- 新识别风险: 刷新端点的 CSRF（已添加缓解策略）
 
-**Remaining uncertainties**:
-- Token revocation strategy: accepted as future enhancement, low priority for MVP
+### Considered and Rejected Alternatives
+- OAuth2 库：拒绝，对当前需求过度工程化
+
+### Resolved Tensions
+- Access token 过期时间（5 分钟 vs 15 分钟）：选择 15 分钟 + refresh token 以改善用户体验
+- 存储位置（Redis vs 内存）：先从简单方案（内存）开始，后续需要时再扩展
+
+### Remaining Uncertainties
+- Token 撤销策略：作为后续增强接受，MVP 阶段低优先级
 ```
 
 ---
