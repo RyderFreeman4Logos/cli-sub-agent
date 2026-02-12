@@ -122,7 +122,11 @@ pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<Execut
         1
     });
 
-    let summary = extract_summary(&output);
+    let summary = if exit_code == 0 {
+        extract_summary(&output)
+    } else {
+        failure_summary(&output, &stderr_output, exit_code)
+    };
 
     Ok(ExecutionResult {
         output,
@@ -166,17 +170,44 @@ pub async fn check_tool_installed(executable: &str) -> Result<()> {
 
 /// Extract summary from output (last non-empty line, truncated to 200 chars).
 fn extract_summary(output: &str) -> String {
-    let last_line = output
-        .lines()
+    truncate_line(last_non_empty_line(output), 200)
+}
+
+/// Build summary for failed executions (exit_code != 0).
+///
+/// Priority chain:
+/// 1. stdout last non-empty line (if present — some tools write errors to stdout)
+/// 2. stderr last non-empty line (fallback for tools that write errors to stderr)
+/// 3. `"exit code {N}"` (final fallback when both streams are empty)
+fn failure_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
+    let stdout_line = last_non_empty_line(stdout);
+    if !stdout_line.is_empty() {
+        return truncate_line(stdout_line, 200);
+    }
+
+    let stderr_line = last_non_empty_line(stderr);
+    if !stderr_line.is_empty() {
+        return truncate_line(stderr_line, 200);
+    }
+
+    format!("exit code {exit_code}")
+}
+
+/// Return the last non-empty line from the given text, or `""` if none.
+fn last_non_empty_line(text: &str) -> &str {
+    text.lines()
         .rev()
         .find(|line| !line.trim().is_empty())
-        .unwrap_or("");
+        .unwrap_or("")
+}
 
-    if last_line.chars().nth(200).is_none() {
-        last_line.to_string()
+/// Truncate a line to `max_chars` characters, appending "..." if truncated.
+fn truncate_line(line: &str, max_chars: usize) -> String {
+    if line.chars().nth(max_chars).is_none() {
+        line.to_string()
     } else {
-        let truncated: String = last_line.chars().take(197).collect();
-        format!("{}...", truncated)
+        let truncated: String = line.chars().take(max_chars - 3).collect();
+        format!("{truncated}...")
     }
 }
 
@@ -312,5 +343,92 @@ mod tests {
         assert_eq!(result.exit_code, 0);
         assert!(result.output.contains("stdout_line"));
         assert!(result.stderr_output.contains("stderr_line"));
+    }
+
+    // --- failure_summary tests ---
+
+    #[test]
+    fn test_failure_summary_prefers_stdout() {
+        let summary = failure_summary("stdout error\n", "stderr error\n", 1);
+        assert_eq!(summary, "stdout error");
+    }
+
+    #[test]
+    fn test_failure_summary_falls_back_to_stderr() {
+        let summary = failure_summary("", "stderr error message\n", 1);
+        assert_eq!(summary, "stderr error message");
+    }
+
+    #[test]
+    fn test_failure_summary_falls_back_to_stderr_when_stdout_whitespace_only() {
+        let summary = failure_summary("  \n\n", "stderr msg\n", 42);
+        assert_eq!(summary, "stderr msg");
+    }
+
+    #[test]
+    fn test_failure_summary_exit_code_fallback() {
+        let summary = failure_summary("", "", 137);
+        assert_eq!(summary, "exit code 137");
+    }
+
+    #[test]
+    fn test_failure_summary_exit_code_when_both_whitespace() {
+        let summary = failure_summary("  \n", "  \n", 2);
+        assert_eq!(summary, "exit code 2");
+    }
+
+    #[test]
+    fn test_failure_summary_truncates_long_stderr() {
+        let long_err = "e".repeat(250);
+        let summary = failure_summary("", &long_err, 1);
+        assert_eq!(summary.chars().count(), 200);
+        assert!(summary.ends_with("..."));
+    }
+
+    #[tokio::test]
+    async fn test_failed_command_uses_stderr_summary() {
+        // Command that writes to stderr and exits non-zero
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "echo 'fatal: something went wrong' >&2; exit 1"]);
+
+        let child = spawn_tool(cmd).await.expect("Failed to spawn");
+        let result = wait_and_capture(child).await.expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 1);
+        assert_eq!(result.summary, "fatal: something went wrong");
+    }
+
+    #[tokio::test]
+    async fn test_failed_command_exit_code_only() {
+        // Command that produces no output and exits non-zero
+        let mut cmd = Command::new("bash");
+        cmd.args(["-c", "exit 42"]);
+
+        let child = spawn_tool(cmd).await.expect("Failed to spawn");
+        let result = wait_and_capture(child).await.expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 42);
+        assert_eq!(result.summary, "exit code 42");
+    }
+
+    // --- helper function tests ---
+
+    #[test]
+    fn test_last_non_empty_line() {
+        assert_eq!(last_non_empty_line(""), "");
+        assert_eq!(last_non_empty_line("hello"), "hello");
+        assert_eq!(last_non_empty_line("a\nb\nc\n"), "c");
+        assert_eq!(last_non_empty_line("  \n  \n"), "");
+        assert_eq!(last_non_empty_line("first\n\nlast\n\n"), "last");
+    }
+
+    #[test]
+    fn test_truncate_line() {
+        assert_eq!(truncate_line("short", 200), "short");
+        assert_eq!(truncate_line("", 200), "");
+        let long = "x".repeat(250);
+        let result = truncate_line(&long, 200);
+        assert_eq!(result.chars().count(), 200);
+        assert!(result.ends_with("..."));
     }
 }
