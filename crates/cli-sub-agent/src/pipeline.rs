@@ -162,6 +162,32 @@ pub(crate) fn acquire_slot(
     }
 }
 
+/// Write an error result.toml for pre-execution failures.
+///
+/// Called when the session directory exists but the tool never executed
+/// (e.g., spawn failure, resource exhaustion). Preserves the session directory
+/// so downstream tools can see the failure instead of an orphan with no result.
+fn write_pre_exec_error_result(
+    project_root: &Path,
+    session_id: &str,
+    tool_name: &str,
+    error: &anyhow::Error,
+) {
+    let now = chrono::Utc::now();
+    let result = SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: format!("pre-exec: {error}"),
+        tool: tool_name.to_string(),
+        started_at: now,
+        completed_at: now,
+        artifacts: Vec::new(),
+    };
+    if let Err(e) = save_result(project_root, session_id, &result) {
+        warn!("Failed to save pre-execution error result: {}", e);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_with_session(
     executor: &Executor,
@@ -191,10 +217,12 @@ pub(crate) async fn execute_with_session(
         csa_session::validate_tool_access(project_root, &resolved_id, tool.as_str())?;
         load_session(project_root, &resolved_id)?
     } else {
+        // Auto-generate description from prompt when not provided
+        let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
         let parent_id = parent.or_else(|| std::env::var("CSA_SESSION_ID").ok());
         create_session(
             project_root,
-            description.as_deref(),
+            effective_description.as_deref(),
             parent_id.as_deref(),
             Some(tool.as_str()),
         )?
@@ -240,7 +268,18 @@ pub(crate) async fn execute_with_session(
 
     // Check resource availability
     if let Some(ref mut guard) = resource_guard {
-        guard.check_availability(executor.tool_name())?;
+        if let Err(e) = guard.check_availability(executor.tool_name()) {
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &e,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(e);
+        }
     }
 
     info!("Executing in session: {}", session.meta_session_id);
@@ -262,9 +301,21 @@ pub(crate) async fn execute_with_session(
     let execution_start_time = chrono::Utc::now();
 
     // Spawn child process
-    let child = csa_process::spawn_tool(cmd)
-        .await
-        .context("Failed to spawn tool process")?;
+    let child = match csa_process::spawn_tool(cmd).await {
+        Ok(child) => child,
+        Err(e) => {
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &e,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(e).context("Failed to spawn tool process");
+        }
+    };
 
     // Get child PID and start memory monitor
     let child_pid = child.id().context("Failed to get child process PID")?;
