@@ -121,18 +121,26 @@ pub(crate) fn parse_tool_name(name: &str) -> Result<ToolName> {
 }
 
 /// Truncate a string to max_len characters, adding "..." if truncated.
+///
+/// Uses character (not byte) counting to safely handle multi-byte UTF-8.
 pub(crate) fn truncate_prompt(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len {
+    let char_count = s.chars().count();
+    if char_count <= max_len {
         s.to_string()
     } else {
-        // Find a good break point (preferably a space)
-        let truncate_at = max_len.saturating_sub(3);
-        let substring = &s[..truncate_at.min(s.len())];
+        // Find byte offset for the character at position (max_len - 3)
+        let truncate_at_chars = max_len.saturating_sub(3);
+        let byte_offset = s
+            .char_indices()
+            .nth(truncate_at_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(s.len());
+        let substring = &s[..byte_offset];
 
         // Try to break at last space if possible
         if let Some(last_space) = substring.rfind(' ') {
-            if last_space > truncate_at / 2 {
-                return format!("{}...", &substring[..last_space]);
+            if last_space > byte_offset / 2 {
+                return format!("{}...", &s[..last_space]);
             }
         }
 
@@ -350,7 +358,51 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::infer_task_edit_requirement;
+    use super::{infer_task_edit_requirement, truncate_prompt};
+
+    #[test]
+    fn truncate_prompt_short_string_unchanged() {
+        assert_eq!(truncate_prompt("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_prompt_exact_length_unchanged() {
+        assert_eq!(truncate_prompt("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_prompt_ascii_truncated() {
+        let result = truncate_prompt("hello world this is long", 15);
+        assert!(result.ends_with("..."));
+        assert!(result.chars().count() <= 15);
+    }
+
+    #[test]
+    fn truncate_prompt_multibyte_no_panic() {
+        // 10 CJK chars (3 bytes each = 30 bytes); truncate to 6 chars should not panic
+        let cjk =
+            "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{6d4b}\u{8bd5}\u{8fd9}\u{662f}\u{4e2d}\u{6587}";
+        let result = truncate_prompt(cjk, 6);
+        assert!(result.ends_with("..."));
+        assert!(result.chars().count() <= 6);
+    }
+
+    #[test]
+    fn truncate_prompt_emoji_no_panic() {
+        let emoji = "Hello \u{1f30d}\u{1f525}\u{1f680} world test";
+        let result = truncate_prompt(emoji, 10);
+        assert!(result.ends_with("..."));
+        assert!(result.chars().count() <= 10);
+    }
+
+    #[test]
+    fn truncate_prompt_mixed_multibyte() {
+        // Mix of ASCII, CJK, emoji
+        let mixed = "Fix \u{4fee}\u{590d} bug \u{1f41b} in auth";
+        let result = truncate_prompt(mixed, 12);
+        assert!(result.ends_with("..."));
+        assert!(result.chars().count() <= 12);
+    }
 
     #[test]
     fn infer_edit_requirement_detects_explicit_read_only() {
