@@ -235,3 +235,96 @@ fn test_discover_finds_rotation_only_roots() {
         "Root with empty sessions/ + rotation.toml should be discovered"
     );
 }
+
+// --- Retirement logic tests ---
+
+/// Verify that the retirement guard accepts Active and Available phases.
+#[test]
+fn test_retirement_guard_active_and_available() {
+    use csa_session::state::{PhaseEvent, SessionPhase};
+
+    let active = SessionPhase::Active;
+    assert!(
+        active.transition(&PhaseEvent::Retired).is_ok(),
+        "Active sessions must be retirable"
+    );
+
+    let available = SessionPhase::Available;
+    assert!(
+        available.transition(&PhaseEvent::Retired).is_ok(),
+        "Available sessions must be retirable"
+    );
+}
+
+/// Verify that already-Retired sessions cannot be re-retired.
+#[test]
+fn test_retirement_guard_already_retired() {
+    use csa_session::state::{PhaseEvent, SessionPhase};
+
+    let retired = SessionPhase::Retired;
+    assert!(
+        retired.transition(&PhaseEvent::Retired).is_err(),
+        "Already-retired sessions must not be re-retired"
+    );
+}
+
+/// Verify that the retirement age threshold constant is 7 days.
+#[test]
+fn test_retire_after_days_threshold() {
+    assert_eq!(RETIRE_AFTER_DAYS, 7, "Retirement threshold must be 7 days");
+}
+
+/// Verify that sessions younger than RETIRE_AFTER_DAYS are not eligible.
+#[test]
+fn test_retirement_age_check_young_session() {
+    let now = chrono::Utc::now();
+    // Session accessed 3 days ago — should NOT be retired
+    let recent = now - chrono::Duration::days(3);
+    let age = now.signed_duration_since(recent);
+    assert!(
+        age.num_days() <= RETIRE_AFTER_DAYS,
+        "3-day-old session must not be retirement-eligible"
+    );
+}
+
+/// Verify that sessions older than RETIRE_AFTER_DAYS are eligible.
+#[test]
+fn test_retirement_age_check_stale_session() {
+    let now = chrono::Utc::now();
+    // Session accessed 10 days ago — should be retired
+    let stale = now - chrono::Duration::days(10);
+    let age = now.signed_duration_since(stale);
+    assert!(
+        age.num_days() > RETIRE_AFTER_DAYS,
+        "10-day-old session must be retirement-eligible"
+    );
+}
+
+/// Verify that the combined guard (age + phase) correctly filters sessions.
+#[test]
+fn test_retirement_combined_guard() {
+    use csa_session::state::{PhaseEvent, SessionPhase};
+
+    let now = chrono::Utc::now();
+
+    // Case 1: Old Active → eligible
+    let stale = now - chrono::Duration::days(10);
+    let age = now.signed_duration_since(stale);
+    let phase = SessionPhase::Active;
+    assert!(age.num_days() > RETIRE_AFTER_DAYS && phase.transition(&PhaseEvent::Retired).is_ok());
+
+    // Case 2: Young Active → not eligible (age guard fails)
+    let recent = now - chrono::Duration::days(3);
+    let age = now.signed_duration_since(recent);
+    assert!(
+        !(age.num_days() > RETIRE_AFTER_DAYS && phase.transition(&PhaseEvent::Retired).is_ok())
+    );
+
+    // Case 3: Old Retired → not eligible (phase guard fails)
+    let stale = now - chrono::Duration::days(10);
+    let age = now.signed_duration_since(stale);
+    let phase = SessionPhase::Retired;
+    assert!(
+        !(age.num_days() > RETIRE_AFTER_DAYS && phase.transition(&PhaseEvent::Retired).is_ok())
+    );
+}

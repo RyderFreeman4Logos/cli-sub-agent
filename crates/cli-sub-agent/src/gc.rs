@@ -94,13 +94,22 @@ pub(crate) fn handle_gc(
                 match updated.phase.transition(&PhaseEvent::Retired) {
                     Ok(new_phase) => {
                         updated.phase = new_phase;
-                        if csa_session::save_session(&updated).is_ok() {
-                            info!(
-                                session = %session.meta_session_id,
-                                age_days = age.num_days(),
-                                "Retired stale session"
-                            );
-                            sessions_retired += 1;
+                        match csa_session::save_session(&updated) {
+                            Ok(_) => {
+                                info!(
+                                    session = %session.meta_session_id,
+                                    age_days = age.num_days(),
+                                    "Retired stale session"
+                                );
+                                sessions_retired += 1;
+                            }
+                            Err(e) => {
+                                warn!(
+                                    session = %session.meta_session_id,
+                                    error = %e,
+                                    "Failed to persist retirement"
+                                );
+                            }
                         }
                     }
                     Err(e) => {
@@ -384,14 +393,24 @@ pub(crate) fn handle_gc_global(
                     match updated.phase.transition(&PhaseEvent::Retired) {
                         Ok(new_phase) => {
                             updated.phase = new_phase;
-                            if csa_session::save_session(&updated).is_ok() {
-                                info!(
-                                    session = %session.meta_session_id,
-                                    age_days = age.num_days(),
-                                    root = %session_root.display(),
-                                    "Retired stale session"
-                                );
-                                total_sessions_retired += 1;
+                            match csa_session::save_session(&updated) {
+                                Ok(_) => {
+                                    info!(
+                                        session = %session.meta_session_id,
+                                        age_days = age.num_days(),
+                                        root = %session_root.display(),
+                                        "Retired stale session"
+                                    );
+                                    total_sessions_retired += 1;
+                                }
+                                Err(e) => {
+                                    warn!(
+                                        session = %session.meta_session_id,
+                                        error = %e,
+                                        root = %session_root.display(),
+                                        "Failed to persist retirement"
+                                    );
+                                }
                             }
                         }
                         Err(e) => {
