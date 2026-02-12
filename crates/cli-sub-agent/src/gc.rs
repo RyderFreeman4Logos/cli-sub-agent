@@ -65,6 +65,7 @@ pub(crate) fn handle_gc(
                     "[dry-run] Would remove empty session: {}",
                     session.meta_session_id
                 );
+                empty_sessions_removed += 1;
             } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                 empty_sessions_removed += 1;
             }
@@ -79,6 +80,7 @@ pub(crate) fn handle_gc(
                         session.meta_session_id,
                         age.num_days()
                     );
+                    expired_sessions_removed += 1;
                 } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
                     info!("Removed expired session: {}", session.meta_session_id);
                     expired_sessions_removed += 1;
@@ -90,7 +92,6 @@ pub(crate) fn handle_gc(
     let session_root = csa_session::get_session_root(&project_root)?;
     let rotation_path = session_root.join("rotation.toml");
     if rotation_path.exists() {
-        // If no sessions remain (all removed above), clean rotation state
         let remaining = list_sessions(&project_root, None)?;
         if remaining.is_empty() {
             if dry_run {
@@ -113,6 +114,7 @@ pub(crate) fn handle_gc(
                             "[dry-run] Would remove orphan directory: {}",
                             session_dir.display()
                         );
+                        orphan_dirs_removed += 1;
                     } else if fs::remove_dir_all(&session_dir).is_ok() {
                         info!(
                             "Removed orphan directory without state.toml: {}",
@@ -309,6 +311,8 @@ pub(crate) fn handle_gc_global(
                         session.meta_session_id,
                         session_root.display()
                     );
+                    total_empty_sessions += 1;
+                    project_removed += 1;
                 } else if csa_session::delete_session_from_root(
                     session_root,
                     &session.meta_session_id,
@@ -331,6 +335,8 @@ pub(crate) fn handle_gc_global(
                             age.num_days(),
                             session_root.display()
                         );
+                        total_expired_sessions += 1;
+                        project_removed += 1;
                     } else if csa_session::delete_session_from_root(
                         session_root,
                         &session.meta_session_id,
@@ -349,7 +355,6 @@ pub(crate) fn handle_gc_global(
             }
         }
 
-        // Skip if sessions_dir is a symlink (safety: avoid traversal outside state base)
         let sessions_dir = session_root.join("sessions");
         let sessions_is_real_dir = sessions_dir.is_dir()
             && !fs::symlink_metadata(&sessions_dir)
@@ -367,6 +372,7 @@ pub(crate) fn handle_gc_global(
                                 "[dry-run] Would remove orphan directory: {}",
                                 session_dir.display()
                             );
+                            total_orphan_dirs += 1;
                         } else if fs::remove_dir_all(&session_dir).is_ok() {
                             info!("Removed orphan directory: {}", session_dir.display());
                             total_orphan_dirs += 1;
@@ -379,7 +385,6 @@ pub(crate) fn handle_gc_global(
         let rotation_path = session_root.join("rotation.toml");
         if rotation_path.exists() {
             let no_sessions_remain = if dry_run {
-                // Use tracked counter: all sessions would be removed
                 project_removed >= sessions.len()
             } else {
                 csa_session::list_sessions_from_root(session_root)
