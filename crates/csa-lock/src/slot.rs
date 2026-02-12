@@ -391,4 +391,164 @@ mod tests {
         assert!(msg.contains("claude-code (1 free)"));
         assert!(msg.contains("--wait to block"));
     }
+
+    #[test]
+    fn test_slot_path_construction() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        let result = try_acquire_slot(slots_dir, "my-tool", 3, None).unwrap();
+        if let SlotAcquireResult::Acquired(slot) = result {
+            let expected = slots_dir.join("my-tool").join("slot-00.lock");
+            assert_eq!(slot.slot_path, expected);
+        } else {
+            panic!("expected Acquired");
+        }
+    }
+
+    #[test]
+    fn test_slot_path_index_padding() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        // Acquire first slot so the second goes to index 1
+        let _s0 = try_acquire_slot(slots_dir, "pad-tool", 10, None).unwrap();
+        let result = try_acquire_slot(slots_dir, "pad-tool", 10, None).unwrap();
+        if let SlotAcquireResult::Acquired(slot) = result {
+            let expected = slots_dir.join("pad-tool").join("slot-01.lock");
+            assert_eq!(slot.slot_path, expected);
+        } else {
+            panic!("expected Acquired at index 1");
+        }
+    }
+
+    #[test]
+    fn test_slot_usage_all_free_returns_zero() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        // Create the tool directories but don't acquire any locks
+        fs::create_dir_all(slots_dir.join("alpha")).unwrap();
+        fs::create_dir_all(slots_dir.join("beta")).unwrap();
+
+        let usage = slot_usage(slots_dir, &[("alpha", 5), ("beta", 2)]);
+        assert_eq!(usage.len(), 2);
+        for s in &usage {
+            assert_eq!(s.occupied, 0, "{} should have 0 occupied", s.tool_name);
+            assert_eq!(s.free(), s.max_slots);
+        }
+    }
+
+    #[test]
+    fn test_slot_status_free_saturating() {
+        // Ensure `free()` never underflows even with bad data
+        let status = SlotStatus {
+            tool_name: "x".to_string(),
+            max_slots: 0,
+            occupied: 5,
+        };
+        assert_eq!(status.free(), 0);
+    }
+
+    #[test]
+    fn test_acquire_slot_blocking_timeout() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        // Exhaust the single available slot
+        let _held = try_acquire_slot(slots_dir, "busy", 1, None).unwrap();
+
+        let start = std::time::Instant::now();
+        let result = acquire_slot_blocking(slots_dir, "busy", 1, Duration::from_millis(300), None);
+
+        assert!(result.is_err(), "should timeout when all slots held");
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Timed out"), "error: {err}");
+        // Verify we actually waited (at least ~200ms given poll backoff)
+        assert!(start.elapsed() >= Duration::from_millis(200));
+    }
+
+    #[test]
+    fn test_acquire_slot_blocking_immediate_success() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        // No slots held — should succeed without blocking
+        let slot = acquire_slot_blocking(
+            slots_dir,
+            "fast-tool",
+            2,
+            Duration::from_secs(5),
+            Some("sess-1"),
+        )
+        .unwrap();
+        assert_eq!(slot.tool_name(), "fast-tool");
+        assert_eq!(slot.slot_index(), 0);
+    }
+
+    #[test]
+    fn test_format_slot_diagnostic_zero_slots() {
+        let status = SlotStatus {
+            tool_name: "empty".to_string(),
+            max_slots: 0,
+            occupied: 0,
+        };
+        let all_usage = vec![status.clone()];
+        let msg = format_slot_diagnostic("empty", &status, &all_usage);
+        assert!(msg.contains("empty: all 0 slots occupied"));
+        // No alternatives line because no other tools
+        assert!(!msg.contains("alternatives:"));
+    }
+
+    #[test]
+    fn test_format_slot_diagnostic_all_tools_full() {
+        let status_a = SlotStatus {
+            tool_name: "a".to_string(),
+            max_slots: 2,
+            occupied: 2,
+        };
+        let status_b = SlotStatus {
+            tool_name: "b".to_string(),
+            max_slots: 1,
+            occupied: 1,
+        };
+        let all_usage = vec![status_a.clone(), status_b];
+        let msg = format_slot_diagnostic("a", &status_a, &all_usage);
+        // No alternatives since b is also full
+        assert!(!msg.contains("alternatives:"));
+        assert!(msg.contains("--wait to block"));
+    }
+
+    #[test]
+    fn test_try_acquire_slot_with_session_id_none() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        let result = try_acquire_slot(slots_dir, "sid-tool", 1, None).unwrap();
+        if let SlotAcquireResult::Acquired(_slot) = &result {
+            let content = fs::read_to_string(slots_dir.join("sid-tool/slot-00.lock")).unwrap();
+            let diag: SlotDiagnostic = serde_json::from_str(&content).unwrap();
+            assert!(diag.session_id.is_none());
+        } else {
+            panic!("expected Acquired");
+        }
+    }
+
+    #[test]
+    fn test_exhausted_returns_correct_status() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        let _s = try_acquire_slot(slots_dir, "one", 1, None).unwrap();
+        let result = try_acquire_slot(slots_dir, "one", 1, None).unwrap();
+        match result {
+            SlotAcquireResult::Exhausted(st) => {
+                assert_eq!(st.tool_name, "one");
+                assert_eq!(st.max_slots, 1);
+                assert_eq!(st.occupied, 1);
+                assert_eq!(st.free(), 0);
+            }
+            _ => panic!("expected Exhausted"),
+        }
+    }
 }
