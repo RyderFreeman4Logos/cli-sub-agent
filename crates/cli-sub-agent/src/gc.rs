@@ -545,18 +545,18 @@ fn discover_roots_recursive(
             }
         }
         let sessions_path = path.join("sessions");
-        // Accept sessions/ only if real dir (not symlink) with ULID-length entries.
+        // Accept sessions/ only if real dir (not symlink) with ULID entries or rotation state.
         let has_sessions = sessions_path.is_dir()
             && !fs::symlink_metadata(&sessions_path)
                 .map(|m| m.file_type().is_symlink())
                 .unwrap_or(true)
-            && looks_like_session_container(&sessions_path);
+            && (has_any_ulid_subdirs(&sessions_path) || path.join("rotation.toml").exists());
         if has_sessions {
             roots.push(path.clone());
         }
-        // Skip real session containers; path-segment "sessions" dirs are traversed.
+        // Skip real session dirs; path-segment "sessions" dirs are traversed.
         let name = entry.file_name();
-        if name.to_string_lossy() == "sessions" && looks_like_session_container(&path) {
+        if name.to_string_lossy() == "sessions" && has_any_ulid_subdirs(&path) {
             continue;
         }
         // Recurse to find nested sub-project roots (parent and child can coexist).
@@ -592,13 +592,14 @@ fn is_orphan_session_dir(entry: &fs::DirEntry) -> bool {
     true
 }
 
-/// Check if a directory looks like a session container (has ULID subdirs with `state.toml`).
-fn looks_like_session_container(dir: &std::path::Path) -> bool {
+/// Check if a directory has any ULID-named subdirectories (regardless of `state.toml`).
+/// Used for project root discovery: catches both active sessions and orphan-only roots.
+/// Safety boundary for deletion is in `is_orphan_session_dir` and session listing, not here.
+fn has_any_ulid_subdirs(dir: &std::path::Path) -> bool {
     fs::read_dir(dir).is_ok_and(|rd| {
         rd.flatten().any(|e| {
             e.file_type().is_ok_and(|ft| ft.is_dir())
                 && csa_session::validate_session_id(&e.file_name().to_string_lossy()).is_ok()
-                && e.path().join("state.toml").exists()
         })
     })
 }

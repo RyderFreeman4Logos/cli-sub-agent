@@ -185,22 +185,33 @@ fn test_discover_traverses_sessions_path_segment() {
 }
 
 #[test]
-fn test_session_container_requires_state_toml() {
-    // Regression: ULID-named dirs without state.toml must NOT make a session container
+fn test_discover_finds_orphan_only_roots() {
+    // Regression: orphan-only session roots must be discovered for cleanup
     let tmp = tempdir().unwrap();
     let ulid = "01234567890123456789ABCDEF";
-    // sessions/<ulid> WITHOUT state.toml — not a real session container
-    fs::create_dir_all(tmp.path().join("fake").join("sessions").join(ulid)).unwrap();
-    // sessions/<ulid> WITH state.toml — real session container
-    make_project_root(tmp.path(), &["real"]);
+    // sessions/<ulid> WITHOUT state.toml — orphan-only root, still discoverable
+    fs::create_dir_all(tmp.path().join("orphan_proj").join("sessions").join(ulid)).unwrap();
+    // sessions/<ulid> WITH state.toml — active root
+    make_project_root(tmp.path(), &["active_proj"]);
+    let roots = discover_project_roots(tmp.path());
+    assert_eq!(
+        roots.len(),
+        2,
+        "Both orphan-only and active roots should be discovered"
+    );
+}
+
+#[test]
+fn test_discover_finds_rotation_only_roots() {
+    // A project with empty sessions/ but rotation.toml should still be discovered
+    let tmp = tempdir().unwrap();
+    let proj = tmp.path().join("stale_proj");
+    fs::create_dir_all(proj.join("sessions")).unwrap();
+    fs::write(proj.join("rotation.toml"), "").unwrap();
     let roots = discover_project_roots(tmp.path());
     assert_eq!(
         roots.len(),
         1,
-        "Only root with state.toml sessions should be found"
-    );
-    assert!(
-        roots[0].ends_with("real"),
-        "Root should be 'real', not 'fake'"
+        "Root with empty sessions/ + rotation.toml should be discovered"
     );
 }
