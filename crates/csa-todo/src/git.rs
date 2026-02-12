@@ -40,6 +40,12 @@ pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
         );
     }
 
+    // Ensure .gitignore exists (exclude lock files from version tracking)
+    let gitignore = todos_dir.join(".gitignore");
+    if !gitignore.exists() {
+        let _ = std::fs::write(&gitignore, ".lock\n");
+    }
+
     // Configure git user for this repo (avoids "please tell me who you are" errors)
     let email_result = Command::new("git")
         .args(["config", "user.email", "csa@localhost"])
@@ -60,35 +66,36 @@ pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Stage and commit ALL pending changes in the todos repository.
+/// Stage and commit changes in a specific plan's directory.
 ///
-/// Unlike [`save_file`] (which targets a single file), `save` captures every
-/// outstanding change — lock files, other timestamps' metadata, etc.
-/// The todos repo only contains TODO.md + metadata.toml files, so `git add -A`
-/// is safe here.
+/// Only stages files under `<timestamp>/` (the plan's directory), keeping
+/// other plans' pending changes untouched. Use [`save_file`] to target a
+/// single file within the plan directory.
 ///
 /// Returns the short commit hash, or `None` if there were no changes to commit.
 pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<String>> {
     crate::validate_timestamp(timestamp)?;
     ensure_git_init(todos_dir)?;
 
-    // Stage all pending changes in the todos repo (not just this plan's directory)
+    let plan_dir = format!("{}/", timestamp);
+
+    // Stage changes in this plan's directory only (additions, modifications, deletions)
     let output = Command::new("git")
-        .args(["add", "-A"])
+        .args(["add", "-A", "--", &plan_dir])
         .current_dir(todos_dir)
         .output()
-        .context("Failed to run git add -A")?;
+        .context("Failed to run git add")?;
 
     if !output.status.success() {
         anyhow::bail!(
-            "git add -A failed: {}",
+            "git add failed: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
 
-    // Check for any staged changes (repo-wide, not path-restricted)
+    // Check for staged changes in the plan directory
     let status = Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
+        .args(["diff", "--cached", "--quiet", "--", &plan_dir])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git diff --cached")?;
@@ -104,9 +111,9 @@ pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<S
         None => anyhow::bail!("git diff --cached terminated by signal"),
     }
 
-    // Commit all staged changes (no path restriction)
+    // Commit only the plan directory changes
     let output = Command::new("git")
-        .args(["commit", "-m", message])
+        .args(["commit", "-m", message, "--", &plan_dir])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git commit")?;
@@ -491,7 +498,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_commits_all_pending_changes() {
+    fn test_save_scoped_to_plan_directory() {
         let dir = tempdir().unwrap();
         let todos = dir.path();
         let ts_a = "20260101T000000";
@@ -503,11 +510,11 @@ mod tests {
         fs::create_dir_all(&plan_b_dir).unwrap();
         fs::write(plan_b_dir.join("TODO.md"), "# Plan B\n").unwrap();
 
-        // Save plan A — should also commit plan B's files
-        let hash = save(todos, ts_a, "save all").unwrap();
-        assert!(hash.is_some(), "should have committed");
+        // Save plan A — should NOT commit plan B's files
+        let hash = save(todos, ts_a, "save A only").unwrap();
+        assert!(hash.is_some(), "should have committed plan A");
 
-        // Verify git status is clean (no untracked/modified files)
+        // Plan B's directory should still be untracked
         let status = Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(todos)
@@ -515,8 +522,8 @@ mod tests {
             .unwrap();
         let status_str = String::from_utf8_lossy(&status.stdout);
         assert!(
-            status_str.trim().is_empty(),
-            "working tree should be clean after save, got: {status_str}"
+            status_str.contains(ts_b),
+            "plan B should still be untracked, got: {status_str}"
         );
     }
 
@@ -532,6 +539,32 @@ mod tests {
         // Second save with no changes should return None
         let hash = save(todos, ts, "no-op").unwrap();
         assert!(hash.is_none(), "should return None when nothing to commit");
+    }
+
+    #[test]
+    fn test_gitignore_excludes_lock_file() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts = "20260101T000000";
+
+        setup_todos_dir(todos, ts);
+        // Create a .lock file (used by TodoManager for flock)
+        fs::write(todos.join(".lock"), "").unwrap();
+
+        let hash = save(todos, ts, "initial").unwrap();
+        assert!(hash.is_some());
+
+        // .lock should NOT appear in committed files
+        let output = Command::new("git")
+            .args(["ls-files"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let files = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !files.contains(".lock"),
+            ".lock should be excluded by .gitignore, tracked files: {files}"
+        );
     }
 
     #[test]
