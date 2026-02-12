@@ -25,6 +25,46 @@ use csa_session::{
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
 
+/// RAII guard that cleans up a newly created session directory on failure.
+///
+/// When `execute_with_session` creates a new session but the tool fails to spawn
+/// (or any pre-execution step errors out), the session directory would remain on
+/// disk as an orphan. This guard deletes it automatically on drop unless
+/// `defuse()` is called after successful tool execution. Once the tool has
+/// produced output, the session directory is preserved even if later persistence
+/// steps (save_session, hooks) fail.
+struct SessionCleanupGuard {
+    session_dir: PathBuf,
+    defused: bool,
+}
+
+impl SessionCleanupGuard {
+    fn new(session_dir: PathBuf) -> Self {
+        Self {
+            session_dir,
+            defused: false,
+        }
+    }
+
+    fn defuse(&mut self) {
+        self.defused = true;
+    }
+}
+
+impl Drop for SessionCleanupGuard {
+    fn drop(&mut self) {
+        if !self.defused {
+            info!(
+                dir = %self.session_dir.display(),
+                "Cleaning up orphan session directory"
+            );
+            if let Err(e) = fs::remove_dir_all(&self.session_dir) {
+                warn!("Failed to clean up orphan session: {}", e);
+            }
+        }
+    }
+}
+
 /// Load ProjectConfig and GlobalConfig, validate recursion depth.
 ///
 /// Returns `Some((project_config, global_config))` on success.
@@ -162,6 +202,14 @@ pub(crate) async fn execute_with_session(
 
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
 
+    // Arm cleanup guard for new sessions only (not resumed ones).
+    // If any pre-execution step fails, the guard deletes the orphan directory.
+    let mut cleanup_guard = if session_arg.is_none() {
+        Some(SessionCleanupGuard::new(session_dir.clone()))
+    } else {
+        None
+    };
+
     // Create session log writer
     let (_log_writer, _log_guard) =
         create_session_log_writer(&session_dir).context("Failed to create session log writer")?;
@@ -264,6 +312,13 @@ pub(crate) async fn execute_with_session(
     let peak_memory_mb = monitor.stop().await;
     if let Some(ref mut guard) = resource_guard {
         guard.record_usage(executor.tool_name(), peak_memory_mb);
+    }
+
+    // Tool execution completed — defuse cleanup guard now.
+    // The session directory contains execution artifacts worth preserving
+    // even if a later persistence step (save_session, hooks) fails.
+    if let Some(ref mut guard) = cleanup_guard {
+        guard.defuse();
     }
 
     // Extract provider session ID from output

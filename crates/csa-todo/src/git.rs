@@ -18,54 +18,169 @@ fn validate_revision(rev: &str) -> Result<()> {
 }
 
 /// Ensure the todos directory is a git repository. Initializes if needed.
+/// Also ensures `.gitignore` excludes lock files (backfills for existing repos).
 pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
     let git_dir = todos_dir.join(".git");
-    if git_dir.exists() {
-        return Ok(());
+    if !git_dir.exists() {
+        std::fs::create_dir_all(todos_dir)
+            .with_context(|| format!("Failed to create todos dir: {}", todos_dir.display()))?;
+
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(todos_dir)
+            .output()
+            .context("Failed to run git init")?;
+
+        if !output.status.success() {
+            anyhow::bail!(
+                "git init failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        // Configure git user for this repo (avoids "please tell me who you are" errors)
+        let email_result = Command::new("git")
+            .args(["config", "user.email", "csa@localhost"])
+            .current_dir(todos_dir)
+            .output();
+        if let Err(e) = &email_result {
+            tracing::warn!("Failed to set git user.email: {e}");
+        }
+
+        let name_result = Command::new("git")
+            .args(["config", "user.name", "CSA Todo"])
+            .current_dir(todos_dir)
+            .output();
+        if let Err(e) = &name_result {
+            tracing::warn!("Failed to set git user.name: {e}");
+        }
     }
 
-    std::fs::create_dir_all(todos_dir)
-        .with_context(|| format!("Failed to create todos dir: {}", todos_dir.display()))?;
-
-    let output = Command::new("git")
-        .args(["init"])
-        .current_dir(todos_dir)
-        .output()
-        .context("Failed to run git init")?;
-
-    if !output.status.success() {
-        anyhow::bail!(
-            "git init failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    // Configure git user for this repo (avoids "please tell me who you are" errors)
-    let email_result = Command::new("git")
-        .args(["config", "user.email", "csa@localhost"])
-        .current_dir(todos_dir)
-        .output();
-    if let Err(e) = &email_result {
-        tracing::warn!("Failed to set git user.email: {e}");
-    }
-
-    let name_result = Command::new("git")
-        .args(["config", "user.name", "CSA Todo"])
-        .current_dir(todos_dir)
-        .output();
-    if let Err(e) = &name_result {
-        tracing::warn!("Failed to set git user.name: {e}");
-    }
+    // Ensure .gitignore excludes lock files (backfills for pre-existing repos)
+    ensure_gitignore(todos_dir)?;
 
     Ok(())
 }
 
-/// Stage and commit changes for a specific plan directory.
+/// Ensure `.gitignore` exists and contains `.lock` exclusion.
+/// Creates the file if missing, or appends `.lock` if present but lacking it.
+/// Commits the change as a bootstrap commit when newly created.
+fn ensure_gitignore(todos_dir: &Path) -> Result<()> {
+    let gitignore = todos_dir.join(".gitignore");
+    if gitignore.exists() {
+        let content = std::fs::read_to_string(&gitignore).context("Failed to read .gitignore")?;
+        if content.lines().any(|l| l.trim() == ".lock") {
+            return Ok(()); // already has .lock exclusion
+        }
+        // Append .lock exclusion to existing .gitignore
+        let mut new_content = content;
+        if !new_content.ends_with('\n') && !new_content.is_empty() {
+            new_content.push('\n');
+        }
+        new_content.push_str(".lock\n");
+        std::fs::write(&gitignore, new_content).context("Failed to update .gitignore")?;
+    } else {
+        std::fs::write(&gitignore, ".lock\n").context("Failed to write .gitignore")?;
+    }
+
+    // Stage and commit the .gitignore change (no-op if already committed)
+    let _ = Command::new("git")
+        .args(["add", "--", ".gitignore"])
+        .current_dir(todos_dir)
+        .output();
+    // Pathspec `-- .gitignore` prevents committing unrelated pre-staged files.
+    let _ = Command::new("git")
+        .args([
+            "commit",
+            "-m",
+            "bootstrap: add .gitignore",
+            "--",
+            ".gitignore",
+        ])
+        .current_dir(todos_dir)
+        .output();
+
+    Ok(())
+}
+
+/// Stage and commit changes in a specific plan's directory.
+///
+/// Only stages files under `<timestamp>/` (the plan's directory), keeping
+/// other plans' pending changes untouched. Use [`save_file`] to target a
+/// single file within the plan directory.
 ///
 /// Returns the short commit hash, or `None` if there were no changes to commit.
 pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<String>> {
-    let plan_path = format!("{}/", timestamp);
-    save_paths(todos_dir, timestamp, &[&plan_path], message)
+    crate::validate_timestamp(timestamp)?;
+    ensure_git_init(todos_dir)?;
+
+    let plan_dir = format!("{}/", timestamp);
+
+    // Stage changes in this plan's directory only (additions, modifications, deletions)
+    let output = Command::new("git")
+        .args(["add", "-A", "--", &plan_dir])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git add")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git add failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Check for staged changes in the plan directory
+    let status = Command::new("git")
+        .args(["diff", "--cached", "--quiet", "--", &plan_dir])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git diff --cached")?;
+
+    match status.status.code() {
+        Some(0) => return Ok(None),
+        Some(1) => {}
+        Some(code) => anyhow::bail!(
+            "git diff --cached failed (exit {}): {}",
+            code,
+            String::from_utf8_lossy(&status.stderr)
+        ),
+        None => anyhow::bail!("git diff --cached terminated by signal"),
+    }
+
+    // Commit only the plan directory changes
+    let output = Command::new("git")
+        .args(["commit", "-m", message, "--", &plan_dir])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git commit")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git commit failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Return short hash
+    let hash_output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to get commit hash")?;
+
+    if !hash_output.status.success() {
+        anyhow::bail!(
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&hash_output.stderr)
+        );
+    }
+
+    Ok(Some(
+        String::from_utf8_lossy(&hash_output.stdout)
+            .trim()
+            .to_string(),
+    ))
 }
 
 /// Stage and commit specific files within a plan directory.
@@ -398,4 +513,226 @@ pub fn diff_versions(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Helper: create a minimal todos repo with a plan directory.
+    fn setup_todos_dir(dir: &Path, ts: &str) {
+        let plan_dir = dir.join(ts);
+        fs::create_dir_all(&plan_dir).unwrap();
+        fs::write(plan_dir.join("TODO.md"), "# Test\n").unwrap();
+        fs::write(
+            plan_dir.join("metadata.toml"),
+            "title = \"test\"\nstatus = \"draft\"\n",
+        )
+        .unwrap();
+        ensure_git_init(dir).unwrap();
+    }
+
+    #[test]
+    fn test_save_scoped_to_plan_directory() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts_a = "20260101T000000";
+        let ts_b = "20260102T000000";
+
+        // Create two plans
+        setup_todos_dir(todos, ts_a);
+        let plan_b_dir = todos.join(ts_b);
+        fs::create_dir_all(&plan_b_dir).unwrap();
+        fs::write(plan_b_dir.join("TODO.md"), "# Plan B\n").unwrap();
+
+        // Save plan A — should NOT commit plan B's files
+        let hash = save(todos, ts_a, "save A only").unwrap();
+        assert!(hash.is_some(), "should have committed plan A");
+
+        // Plan B's directory should still be untracked
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let status_str = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            status_str.contains(ts_b),
+            "plan B should still be untracked, got: {status_str}"
+        );
+    }
+
+    #[test]
+    fn test_save_returns_none_when_clean() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts = "20260101T000000";
+
+        setup_todos_dir(todos, ts);
+        // First save commits everything
+        save(todos, ts, "initial").unwrap();
+        // Second save with no changes should return None
+        let hash = save(todos, ts, "no-op").unwrap();
+        assert!(hash.is_none(), "should return None when nothing to commit");
+    }
+
+    #[test]
+    fn test_gitignore_excludes_lock_file() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts = "20260101T000000";
+
+        setup_todos_dir(todos, ts);
+        // Create a .lock file (used by TodoManager for flock)
+        fs::write(todos.join(".lock"), "").unwrap();
+
+        let hash = save(todos, ts, "initial").unwrap();
+        assert!(hash.is_some());
+
+        // .lock should NOT appear in committed files
+        let output = Command::new("git")
+            .args(["ls-files"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let files = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !files.contains(".lock"),
+            ".lock should be excluded by .gitignore, tracked files: {files}"
+        );
+    }
+
+    #[test]
+    fn test_gitignore_backfill_for_existing_repo() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+
+        // Simulate a pre-existing repo WITHOUT .gitignore
+        fs::create_dir_all(todos).unwrap();
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let _ = Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(todos)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(todos)
+            .output();
+
+        // .git exists but NO .gitignore
+        assert!(todos.join(".git").exists());
+        assert!(!todos.join(".gitignore").exists());
+
+        // Call ensure_git_init — should backfill .gitignore
+        ensure_git_init(todos).unwrap();
+
+        // .gitignore should now exist and contain .lock
+        let gitignore = fs::read_to_string(todos.join(".gitignore")).unwrap();
+        assert!(
+            gitignore.contains(".lock"),
+            ".gitignore should contain .lock after backfill, got: {gitignore}"
+        );
+    }
+
+    #[test]
+    fn test_gitignore_bootstrap_does_not_commit_unrelated_staged_files() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+
+        // Set up pre-existing repo WITHOUT .gitignore
+        fs::create_dir_all(todos).unwrap();
+        let output = Command::new("git")
+            .args(["init"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let _ = Command::new("git")
+            .args(["config", "user.email", "test@test"])
+            .current_dir(todos)
+            .output();
+        let _ = Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(todos)
+            .output();
+
+        // Create and stage an unrelated plan file BEFORE bootstrap
+        let plan_dir = todos.join("20260101T000000");
+        fs::create_dir_all(&plan_dir).unwrap();
+        fs::write(plan_dir.join("TODO.md"), "# Plan A").unwrap();
+        let _ = Command::new("git")
+            .args(["add", "20260101T000000/TODO.md"])
+            .current_dir(todos)
+            .output();
+
+        // Trigger bootstrap via ensure_git_init
+        ensure_git_init(todos).unwrap();
+
+        // Bootstrap commit should contain ONLY .gitignore, not the staged plan
+        let log_output = Command::new("git")
+            .args(["show", "--name-only", "--pretty=format:", "HEAD"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let committed_files = String::from_utf8_lossy(&log_output.stdout);
+        let files: Vec<&str> = committed_files.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            files,
+            vec![".gitignore"],
+            "Bootstrap commit must only contain .gitignore, got: {files:?}"
+        );
+
+        // The unrelated plan file should still be staged (not committed)
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let status_str = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            status_str.contains("A  20260101T000000/TODO.md"),
+            "Plan file should remain staged after bootstrap, got: {status_str}"
+        );
+    }
+
+    #[test]
+    fn test_save_file_only_commits_specified_file() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts = "20260101T000000";
+
+        setup_todos_dir(todos, ts);
+        // Initial commit of everything
+        save(todos, ts, "initial").unwrap();
+
+        // Modify two files
+        fs::write(todos.join(ts).join("TODO.md"), "# Updated\n").unwrap();
+        fs::write(
+            todos.join(ts).join("metadata.toml"),
+            "title = \"updated\"\nstatus = \"approved\"\n",
+        )
+        .unwrap();
+
+        // save_file only the metadata — TODO.md should remain dirty
+        let file_path = format!("{}/metadata.toml", ts);
+        save_file(todos, ts, &file_path, "metadata only").unwrap();
+
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let status_str = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            status_str.contains("TODO.md"),
+            "TODO.md should still be dirty after save_file on metadata only, got: {status_str}"
+        );
+    }
 }

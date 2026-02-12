@@ -95,6 +95,10 @@ pub enum Commands {
         /// Remove sessions not accessed within N days
         #[arg(long)]
         max_age_days: Option<u64>,
+
+        /// Scan all projects under ~/.local/state/csa/ (not just current project)
+        #[arg(long)]
+        global: bool,
     },
 
     /// Show/manage configuration

@@ -222,6 +222,21 @@ impl GlobalConfig {
 
     /// Path to the global slots directory.
     ///
+    /// Base state directory for all CSA data (`~/.local/state/csa/`).
+    ///
+    /// Used by `--global` GC to scan all project session trees.
+    pub fn state_base_dir() -> Result<PathBuf> {
+        let base = directories::ProjectDirs::from("", "", "csa")
+            .map(|dirs| {
+                // Mirror get_session_root fallback: state_dir → data_local_dir
+                dirs.state_dir()
+                    .unwrap_or_else(|| dirs.data_local_dir())
+                    .to_path_buf()
+            })
+            .unwrap_or_else(|| std::env::temp_dir().join("csa-state"));
+        Ok(base)
+    }
+
     /// Resolution order:
     /// 1. `~/.local/state/csa/slots/` (XDG state dir on Linux)
     /// 2. Platform-equivalent state dir (macOS/Windows)
@@ -230,14 +245,7 @@ impl GlobalConfig {
     ///
     /// This function never fails — it always returns a usable path.
     pub fn slots_dir() -> Result<PathBuf> {
-        let base = directories::ProjectDirs::from("", "", "csa")
-            .and_then(|dirs| dirs.state_dir().map(|d| d.to_path_buf()))
-            .unwrap_or_else(|| {
-                // Fallback for containers/CI without HOME, or platforms
-                // without state_dir (macOS)
-                std::env::temp_dir().join("csa-state")
-            });
-        Ok(base.join("slots"))
+        Ok(Self::state_base_dir()?.join("slots"))
     }
 
     /// Generate default config TOML with comments as a template.
