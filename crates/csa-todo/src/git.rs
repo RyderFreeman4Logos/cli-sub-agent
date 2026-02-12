@@ -60,12 +60,83 @@ pub fn ensure_git_init(todos_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Stage and commit changes for a specific plan directory.
+/// Stage and commit ALL pending changes in the todos repository.
+///
+/// Unlike [`save_file`] (which targets a single file), `save` captures every
+/// outstanding change — lock files, other timestamps' metadata, etc.
+/// The todos repo only contains TODO.md + metadata.toml files, so `git add -A`
+/// is safe here.
 ///
 /// Returns the short commit hash, or `None` if there were no changes to commit.
 pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<String>> {
-    let plan_path = format!("{}/", timestamp);
-    save_paths(todos_dir, timestamp, &[&plan_path], message)
+    crate::validate_timestamp(timestamp)?;
+    ensure_git_init(todos_dir)?;
+
+    // Stage all pending changes in the todos repo (not just this plan's directory)
+    let output = Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git add -A")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git add -A failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Check for any staged changes (repo-wide, not path-restricted)
+    let status = Command::new("git")
+        .args(["diff", "--cached", "--quiet"])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git diff --cached")?;
+
+    match status.status.code() {
+        Some(0) => return Ok(None),
+        Some(1) => {}
+        Some(code) => anyhow::bail!(
+            "git diff --cached failed (exit {}): {}",
+            code,
+            String::from_utf8_lossy(&status.stderr)
+        ),
+        None => anyhow::bail!("git diff --cached terminated by signal"),
+    }
+
+    // Commit all staged changes (no path restriction)
+    let output = Command::new("git")
+        .args(["commit", "-m", message])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git commit")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git commit failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Return short hash
+    let hash_output = Command::new("git")
+        .args(["rev-parse", "--short", "HEAD"])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to get commit hash")?;
+
+    if !hash_output.status.success() {
+        anyhow::bail!(
+            "git rev-parse failed: {}",
+            String::from_utf8_lossy(&hash_output.stderr)
+        );
+    }
+
+    Ok(Some(
+        String::from_utf8_lossy(&hash_output.stdout)
+            .trim()
+            .to_string(),
+    ))
 }
 
 /// Stage and commit specific files within a plan directory.
@@ -398,4 +469,102 @@ pub fn diff_versions(
     }
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::tempdir;
+
+    /// Helper: create a minimal todos repo with a plan directory.
+    fn setup_todos_dir(dir: &Path, ts: &str) {
+        let plan_dir = dir.join(ts);
+        fs::create_dir_all(&plan_dir).unwrap();
+        fs::write(plan_dir.join("TODO.md"), "# Test\n").unwrap();
+        fs::write(
+            plan_dir.join("metadata.toml"),
+            "title = \"test\"\nstatus = \"draft\"\n",
+        )
+        .unwrap();
+        ensure_git_init(dir).unwrap();
+    }
+
+    #[test]
+    fn test_save_commits_all_pending_changes() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts_a = "20260101T000000";
+        let ts_b = "20260102T000000";
+
+        // Create two plans
+        setup_todos_dir(todos, ts_a);
+        let plan_b_dir = todos.join(ts_b);
+        fs::create_dir_all(&plan_b_dir).unwrap();
+        fs::write(plan_b_dir.join("TODO.md"), "# Plan B\n").unwrap();
+
+        // Save plan A — should also commit plan B's files
+        let hash = save(todos, ts_a, "save all").unwrap();
+        assert!(hash.is_some(), "should have committed");
+
+        // Verify git status is clean (no untracked/modified files)
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let status_str = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            status_str.trim().is_empty(),
+            "working tree should be clean after save, got: {status_str}"
+        );
+    }
+
+    #[test]
+    fn test_save_returns_none_when_clean() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts = "20260101T000000";
+
+        setup_todos_dir(todos, ts);
+        // First save commits everything
+        save(todos, ts, "initial").unwrap();
+        // Second save with no changes should return None
+        let hash = save(todos, ts, "no-op").unwrap();
+        assert!(hash.is_none(), "should return None when nothing to commit");
+    }
+
+    #[test]
+    fn test_save_file_only_commits_specified_file() {
+        let dir = tempdir().unwrap();
+        let todos = dir.path();
+        let ts = "20260101T000000";
+
+        setup_todos_dir(todos, ts);
+        // Initial commit of everything
+        save(todos, ts, "initial").unwrap();
+
+        // Modify two files
+        fs::write(todos.join(ts).join("TODO.md"), "# Updated\n").unwrap();
+        fs::write(
+            todos.join(ts).join("metadata.toml"),
+            "title = \"updated\"\nstatus = \"approved\"\n",
+        )
+        .unwrap();
+
+        // save_file only the metadata — TODO.md should remain dirty
+        let file_path = format!("{}/metadata.toml", ts);
+        save_file(todos, ts, &file_path, "metadata only").unwrap();
+
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(todos)
+            .output()
+            .unwrap();
+        let status_str = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            status_str.contains("TODO.md"),
+            "TODO.md should still be dirty after save_file on metadata only, got: {status_str}"
+        );
+    }
 }
