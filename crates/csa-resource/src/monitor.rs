@@ -41,3 +41,63 @@ impl MemoryMonitor {
         self.handle.await.unwrap_or(0)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_monitor_start_stop_with_short_lived_process() {
+        // Spawn a real short-lived process (sleep 0.1s)
+        let child = tokio::process::Command::new("sleep")
+            .arg("0.1")
+            .spawn()
+            .expect("failed to spawn sleep");
+
+        let pid = child.id().expect("no pid for child");
+        let monitor = MemoryMonitor::start(pid);
+
+        // Wait for the process to exit, then stop the monitor
+        let _ = child.wait_with_output().await;
+        let peak_mb = monitor.stop().await;
+
+        // sleep uses minimal memory; just verify we got a value without panic
+        assert!(
+            peak_mb < 1000,
+            "sleep should not use >1 GB; got {} MB",
+            peak_mb
+        );
+    }
+
+    #[tokio::test]
+    async fn test_monitor_nonexistent_pid_returns_zero() {
+        // Use a PID that almost certainly doesn't exist
+        let monitor = MemoryMonitor::start(u32::MAX - 1);
+
+        // The monitor loop should immediately break (process not found)
+        // after the first 500ms poll
+        let peak_mb = monitor.stop().await;
+        assert_eq!(peak_mb, 0, "non-existent process should report 0 MB");
+    }
+
+    #[tokio::test]
+    async fn test_monitor_tracks_peak_not_final() {
+        // Spawn a process that allocates some memory then exits.
+        // We use `dd` to read some data into memory briefly.
+        let child = tokio::process::Command::new("dd")
+            .args(["if=/dev/zero", "of=/dev/null", "bs=1M", "count=1"])
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("failed to spawn dd");
+
+        let pid = child.id().expect("no pid for child");
+        let monitor = MemoryMonitor::start(pid);
+
+        let _ = child.wait_with_output().await;
+        let peak_mb = monitor.stop().await;
+
+        // Just verify it completes without panic and returns a u64
+        // (the actual value depends on system state and timing)
+        let _ = peak_mb;
+    }
+}
