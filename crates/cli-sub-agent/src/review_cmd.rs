@@ -1,11 +1,27 @@
 use anyhow::{Context, Result};
 use std::path::Path;
+use tokio::task::JoinSet;
 use tracing::{debug, info};
 
 use crate::cli::ReviewArgs;
+use crate::review_consensus::{
+    CLEAN, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
+    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_verdict,
+    resolve_consensus,
+};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
+use csa_core::consensus::AgentResponse;
 use csa_core::types::ToolName;
+
+#[derive(Debug, Clone)]
+struct ReviewerOutcome {
+    reviewer_index: usize,
+    tool: ToolName,
+    output: String,
+    exit_code: i32,
+    verdict: &'static str,
+}
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -43,57 +59,175 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
     )?;
 
-    // 6. Build executor and validate tool
+    if args.reviewers == 1 {
+        // Keep single-reviewer behavior unchanged.
+        let result = execute_review(
+            tool,
+            prompt,
+            args.session,
+            args.model,
+            format!(
+                "review: {}",
+                crate::run_helpers::truncate_prompt(&scope, 80)
+            ),
+            &project_root,
+            config.as_ref(),
+            &global_config,
+        )
+        .await?;
+        print!("{}", result.output);
+        return Ok(result.exit_code);
+    }
+
+    if args.fix {
+        anyhow::bail!("--fix is not supported when --reviewers > 1");
+    }
+    if args.session.is_some() {
+        anyhow::bail!("--session is only supported when --reviewers=1");
+    }
+
+    let reviewers = args.reviewers as usize;
+    let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
+    let reviewer_tools = build_reviewer_tools(args.tool, tool, config.as_ref(), reviewers);
+
+    let mut join_set = JoinSet::new();
+    for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
+        let reviewer_prompt =
+            build_multi_reviewer_instruction(&prompt, reviewer_index + 1, reviewer_tool);
+        let reviewer_model = args.model.clone();
+        let reviewer_project_root = project_root.clone();
+        let reviewer_config = config.clone();
+        let reviewer_global = global_config.clone();
+        let reviewer_description = format!(
+            "review[{}]: {}",
+            reviewer_index + 1,
+            crate::run_helpers::truncate_prompt(&scope, 80)
+        );
+
+        join_set.spawn(async move {
+            let result = execute_review(
+                reviewer_tool,
+                reviewer_prompt,
+                None,
+                reviewer_model,
+                reviewer_description,
+                &reviewer_project_root,
+                reviewer_config.as_ref(),
+                &reviewer_global,
+            )
+            .await?;
+            Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
+                reviewer_index,
+                tool: reviewer_tool,
+                verdict: parse_review_verdict(&result.output, result.exit_code),
+                output: result.output,
+                exit_code: result.exit_code,
+            })
+        });
+    }
+
+    let mut outcomes = Vec::with_capacity(reviewers);
+    while let Some(joined) = join_set.join_next().await {
+        let outcome = joined.context("reviewer task join failure")??;
+        outcomes.push(outcome);
+    }
+    outcomes.sort_by_key(|o| o.reviewer_index);
+
+    let responses: Vec<AgentResponse> = outcomes
+        .iter()
+        .map(|o| AgentResponse {
+            agent: format!("reviewer-{}:{}", o.reviewer_index + 1, o.tool.as_str()),
+            content: o.verdict.to_string(),
+            weight: 1.0,
+            timed_out: false,
+        })
+        .collect();
+
+    let consensus_result = resolve_consensus(consensus_strategy, &responses);
+    let final_verdict = consensus_verdict(&consensus_result);
+    let agreement = agreement_level(&consensus_result);
+
+    for outcome in &outcomes {
+        println!(
+            "===== Reviewer {} ({}) | verdict={} | exit_code={} =====",
+            outcome.reviewer_index + 1,
+            outcome.tool,
+            outcome.verdict,
+            outcome.exit_code
+        );
+        print!("{}", outcome.output);
+        if !outcome.output.ends_with('\n') {
+            println!();
+        }
+    }
+
+    println!("===== Consensus =====");
+    println!(
+        "strategy: {}",
+        consensus_strategy_label(consensus_result.strategy_used)
+    );
+    println!("consensus_reached: {}", consensus_result.consensus_reached);
+    println!("agreement_level: {:.0}%", agreement * 100.0);
+    println!("final_decision: {final_verdict}");
+    println!("individual_verdicts:");
+    for outcome in &outcomes {
+        println!(
+            "- reviewer {} ({}) => {}",
+            outcome.reviewer_index + 1,
+            outcome.tool,
+            outcome.verdict
+        );
+    }
+
+    Ok(if final_verdict == CLEAN { 0 } else { 1 })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn execute_review(
+    tool: ToolName,
+    prompt: String,
+    session: Option<String>,
+    model: Option<String>,
+    description: String,
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Result<csa_process::ExecutionResult> {
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         None,
-        args.model.as_deref(),
+        model.as_deref(),
         None,
-        config.as_ref(),
+        project_config,
     )
     .await?;
 
-    // 7. Apply restrictions if configured
-    let can_edit = config
-        .as_ref()
-        .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+    let can_edit =
+        project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let effective_prompt = if !can_edit {
         info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
         executor.apply_restrictions(&prompt, false)
     } else {
-        prompt.clone()
+        prompt
     };
 
-    // 8. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
+    let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
-    // 9. Acquire global slot to enforce concurrency limit
-    let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
-
-    // 10. Execute with session
-    let description = format!(
-        "review: {}",
-        crate::run_helpers::truncate_prompt(&scope, 80)
-    );
-    let result = crate::pipeline::execute_with_session(
+    crate::pipeline::execute_with_session(
         &executor,
         &tool,
         &effective_prompt,
-        args.session,
+        session,
         Some(description),
         None,
-        &project_root,
-        config.as_ref(),
+        project_root,
+        project_config,
         extra_env,
         Some("review"),
-        None, // review does not use tier-based selection
+        None,
     )
-    .await?;
-
-    // 11. Print result
-    print!("{}", result.output);
-
-    Ok(result.exit_code)
+    .await
 }
 
 fn resolve_review_tool(
@@ -253,11 +387,23 @@ fn build_review_instruction(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
     use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
     use std::collections::HashMap;
 
     fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         let mut tool_map = HashMap::new();
+        for tool in csa_config::global::all_known_tools() {
+            tool_map.insert(
+                tool.as_str().to_string(),
+                ToolConfig {
+                    enabled: false,
+                    restrictions: None,
+                    suppress_notify: false,
+                },
+            );
+        }
         for tool in tools {
             tool_map.insert(
                 (*tool).to_string(),
@@ -279,6 +425,14 @@ mod tests {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+        }
+    }
+
+    fn parse_review_args(argv: &[&str]) -> ReviewArgs {
+        let cli = Cli::try_parse_from(argv).expect("review CLI args should parse");
+        match cli.command {
+            Commands::Review(args) => args,
+            _ => panic!("expected review subcommand"),
         }
     }
 
@@ -326,9 +480,10 @@ mod tests {
             std::path::Path::new("/tmp/test-project"),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("AUTO review tool selection failed"));
+        assert!(
+            err.to_string()
+                .contains("AUTO review tool selection failed")
+        );
     }
 
     #[test]
@@ -344,9 +499,10 @@ mod tests {
             std::path::Path::new("/tmp/test-project"),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Invalid [review].tool value 'invalid-tool'"));
+        assert!(
+            err.to_string()
+                .contains("Invalid [review].tool value 'invalid-tool'")
+        );
     }
 
     #[test]
@@ -405,6 +561,8 @@ mod tests {
             fix: false,
             security_mode: "auto".to_string(),
             context: None,
+            reviewers: 1,
+            consensus: "majority".to_string(),
             cd: None,
         };
         assert_eq!(derive_scope(&args), "uncommitted");
@@ -424,6 +582,8 @@ mod tests {
             fix: false,
             security_mode: "auto".to_string(),
             context: None,
+            reviewers: 1,
+            consensus: "majority".to_string(),
             cd: None,
         };
         assert_eq!(derive_scope(&args), "commit:abc123");
@@ -443,6 +603,8 @@ mod tests {
             fix: false,
             security_mode: "auto".to_string(),
             context: None,
+            reviewers: 1,
+            consensus: "majority".to_string(),
             cd: None,
         };
         assert_eq!(derive_scope(&args), "range:main...HEAD");
@@ -462,6 +624,8 @@ mod tests {
             fix: false,
             security_mode: "auto".to_string(),
             context: None,
+            reviewers: 1,
+            consensus: "majority".to_string(),
             cd: None,
         };
         assert_eq!(derive_scope(&args), "files:src/**/*.rs");
@@ -481,6 +645,8 @@ mod tests {
             fix: false,
             security_mode: "auto".to_string(),
             context: None,
+            reviewers: 1,
+            consensus: "majority".to_string(),
             cd: None,
         };
         assert_eq!(derive_scope(&args), "base:develop");
@@ -500,10 +666,66 @@ mod tests {
             fix: false,
             security_mode: "auto".to_string(),
             context: None,
+            reviewers: 1,
+            consensus: "majority".to_string(),
             cd: None,
         };
         // --range has highest priority
         assert_eq!(derive_scope(&args), "range:v1...v2");
+    }
+
+    #[test]
+    fn review_cli_parses_range_scope_with_multiple_reviewers() {
+        let args = parse_review_args(&[
+            "csa",
+            "review",
+            "--range",
+            "main...HEAD",
+            "--reviewers",
+            "3",
+        ]);
+
+        assert_eq!(args.reviewers, 3);
+        assert_eq!(derive_scope(&args), "range:main...HEAD");
+    }
+
+    #[test]
+    fn review_cli_parses_weighted_consensus_for_multi_reviewer_mode() {
+        let args = parse_review_args(&[
+            "csa",
+            "review",
+            "--diff",
+            "--reviewers",
+            "2",
+            "--consensus",
+            "weighted",
+        ]);
+
+        let strategy = parse_consensus_strategy(&args.consensus).unwrap();
+        assert_eq!(consensus_strategy_label(strategy), "weighted");
+    }
+
+    #[test]
+    fn review_cli_builds_multi_reviewer_config_from_args() {
+        let args = parse_review_args(&[
+            "csa",
+            "review",
+            "--tool",
+            "codex",
+            "--reviewers",
+            "4",
+            "--consensus",
+            "unanimous",
+        ]);
+
+        let strategy = parse_consensus_strategy(&args.consensus).unwrap();
+        let reviewers = args.reviewers as usize;
+        let reviewer_tools = build_reviewer_tools(args.tool, ToolName::Codex, None, reviewers);
+
+        assert!(reviewers > 1);
+        assert_eq!(consensus_strategy_label(strategy), "unanimous");
+        assert_eq!(reviewer_tools.len(), reviewers);
+        assert!(reviewer_tools.iter().all(|tool| *tool == ToolName::Codex));
     }
 
     // --- build_review_instruction tests ---

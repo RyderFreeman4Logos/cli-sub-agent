@@ -408,6 +408,7 @@ fn atomic_write(target: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub mod dag;
 pub mod git;
 
 // ---------------------------------------------------------------------------
@@ -543,9 +544,11 @@ mod tests {
 
         let found = manager.find_by_branch("feat/alpha").unwrap();
         assert_eq!(found.len(), 2);
-        assert!(found
-            .iter()
-            .all(|p| p.metadata.branch.as_deref() == Some("feat/alpha")));
+        assert!(
+            found
+                .iter()
+                .all(|p| p.metadata.branch.as_deref() == Some("feat/alpha"))
+        );
     }
 
     #[test]

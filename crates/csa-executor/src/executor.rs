@@ -1,7 +1,7 @@
 //! Executor enum for 4 AI tools.
 
-use anyhow::{bail, Result};
-use csa_core::types::{prompt_transport_capabilities, PromptTransport, ToolName};
+use anyhow::{Result, bail};
+use csa_core::types::{PromptTransport, ToolName, prompt_transport_capabilities};
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};

@@ -205,11 +205,7 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
         }
     }
 
-    if found_any {
-        Some(usage)
-    } else {
-        None
-    }
+    if found_any { Some(usage) } else { None }
 }
 
 /// Extract a number after colon or equals sign.

@@ -42,6 +42,22 @@ If you only use a single AI tool for simple tasks, the tool's native CLI may suf
 
 ## Installation
 
+## Prerequisites
+
+Requires [Rust toolchain](https://rustup.rs/) and a sibling checkout for the local path crate dependency:
+
+```toml
+agent-teams = { path = "../agent-teams-rs" }
+```
+
+Expected directory layout:
+
+```text
+<parent>/
+  cli-sub-agent/
+  agent-teams-rs/
+```
+
 ### Quick Install (macOS / Linux)
 
 ```bash
@@ -50,17 +66,18 @@ curl -sSf https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/mai
 
 ### Manual Install
 
-Requires [Rust toolchain](https://rustup.rs/):
+Clone both repositories into the same parent directory, then install from source:
 
 ```bash
-cargo install --git https://github.com/RyderFreeman4Logos/cli-sub-agent \
-  -p cli-sub-agent --all-features --locked
+git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git
+git clone https://github.com/RyderFreeman4Logos/agent-teams-rs.git
+cd cli-sub-agent
+cargo install --all-features --path crates/cli-sub-agent
 ```
 
 ### From Source
 
 ```bash
-git clone https://github.com/RyderFreeman4Logos/cli-sub-agent
 cd cli-sub-agent
 cargo install --all-features --path crates/cli-sub-agent
 ```

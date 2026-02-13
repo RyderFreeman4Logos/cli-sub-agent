@@ -337,10 +337,12 @@ mod tests {
     fn determine_target_directory_unsupported_codex_errors() {
         let result = determine_target_directory(Some("codex"));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("not yet supported"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("not yet supported")
+        );
     }
 
     #[test]

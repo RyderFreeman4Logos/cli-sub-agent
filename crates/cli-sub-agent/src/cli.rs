@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use csa_core::types::{OutputFormat, ToolArg, ToolName};
 
 #[derive(Parser)]
@@ -214,6 +214,18 @@ pub struct ReviewArgs {
     /// Path to context file (e.g., TODO plan)
     #[arg(long)]
     pub context: Option<String>,
+
+    /// Number of reviewers to run in parallel (default: 1)
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub reviewers: u32,
+
+    /// Consensus strategy for multi-reviewer mode
+    #[arg(
+        long,
+        default_value = "majority",
+        value_parser = ["majority", "weighted", "unanimous"]
+    )]
+    pub consensus: String,
 
     /// Working directory
     #[arg(long)]
@@ -578,4 +590,26 @@ pub enum TodoCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// Visualize TODO task dependency DAG
+    Dag {
+        /// Timestamp of the TODO plan (default: latest)
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// DAG output format
+        #[arg(long, default_value = "mermaid")]
+        format: TodoDagFormat,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum TodoDagFormat {
+    Mermaid,
+    Terminal,
+    Dot,
 }

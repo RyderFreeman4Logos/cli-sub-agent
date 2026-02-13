@@ -1,6 +1,8 @@
+use crate::cli::TodoDagFormat;
 use anyhow::Result;
 use csa_config::global::GlobalConfig;
 use csa_core::types::OutputFormat;
+use csa_todo::dag::DependencyGraph;
 use csa_todo::{TodoManager, TodoStatus};
 
 pub(crate) fn handle_create(
@@ -305,6 +307,36 @@ pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String
         }
     }
 
+    Ok(())
+}
+
+pub(crate) fn handle_dag(
+    timestamp: Option<String>,
+    format: TodoDagFormat,
+    cd: Option<String>,
+) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let manager = TodoManager::new(&project_root)?;
+    let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
+    let plan = manager.load(&ts)?;
+
+    let content = std::fs::read_to_string(plan.todo_md_path())?;
+    let graph = DependencyGraph::from_markdown(&content)?;
+
+    if let Some(cycle_nodes) = graph.cycle_nodes_bfs() {
+        anyhow::bail!("Dependency cycle detected: {}", cycle_nodes.join(" -> "));
+    }
+
+    // Validate execution order exists for the graph before rendering.
+    let _ = graph.topological_sort()?;
+
+    let rendered = match format {
+        TodoDagFormat::Mermaid => graph.to_mermaid(),
+        TodoDagFormat::Terminal => graph.to_terminal(),
+        TodoDagFormat::Dot => graph.to_dot(),
+    };
+
+    print!("{rendered}");
     Ok(())
 }
 

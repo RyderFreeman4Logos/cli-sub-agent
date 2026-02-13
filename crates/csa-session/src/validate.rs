@@ -1,6 +1,6 @@
 //! ULID validation and prefix matching
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use std::path::Path;
 
 /// Generate a new ULID session ID

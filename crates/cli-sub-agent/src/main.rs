@@ -14,6 +14,7 @@ mod mcp_server;
 mod pipeline;
 mod process_tree;
 mod review_cmd;
+mod review_consensus;
 mod run_helpers;
 mod self_update;
 mod session_cmds;
@@ -29,7 +30,7 @@ use cli::{
 use csa_config::GlobalConfig;
 use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::slot::{
-    format_slot_diagnostic, slot_usage, try_acquire_slot, SlotAcquireResult, ToolSlot,
+    SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
 use csa_session::{load_session, resolve_session_prefix};
 use run_helpers::{
@@ -244,6 +245,13 @@ async fn main() -> Result<()> {
             } => {
                 todo_cmd::handle_status(timestamp, status, cd)?;
             }
+            TodoCommands::Dag {
+                timestamp,
+                format,
+                cd,
+            } => {
+                todo_cmd::handle_dag(timestamp, format, cd)?;
+            }
         },
         Commands::SelfUpdate { check } => {
             self_update::handle_self_update(check)?;
@@ -369,7 +377,9 @@ async fn handle_run(
                 }
             } else {
                 // No parent context/default fallback, fall back to AnyAvailable with warning
-                warn!("HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable.");
+                warn!(
+                    "HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
+                );
                 resolve_tool_and_model(
                     None,
                     model_spec.as_deref(),

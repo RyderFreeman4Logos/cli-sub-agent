@@ -1,15 +1,24 @@
 //! Session CRUD operations
 
-use crate::result::{SessionResult, RESULT_FILE_NAME};
+use crate::result::{RESULT_FILE_NAME, SessionResult};
 use crate::state::MetaSessionState;
-use crate::validate::{new_session_id, validate_session_id};
-use anyhow::{bail, Context, Result};
+use crate::validate::{new_session_id, resolve_session_prefix, validate_session_id};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 const STATE_FILE_NAME: &str = "state.toml";
+
+/// Resolved identifiers for resuming a tool session.
+#[derive(Debug, Clone)]
+pub struct ResumeSessionResolution {
+    /// Fully resolved CSA meta session ID (ULID).
+    pub meta_session_id: String,
+    /// Provider-native session ID for the requested tool, if present in state.
+    pub provider_session_id: Option<String>,
+}
 
 /// Get the session root directory for a project (`~/.local/state/csa/{project_path}`)
 pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
@@ -350,6 +359,43 @@ pub(crate) fn list_sessions_in(
     }
 }
 
+/// Resolve a user-provided session reference for resume.
+///
+/// This function accepts a full ULID or unique prefix, validates tool ownership,
+/// and returns both CSA meta session ID and provider session ID (if present)
+/// from `state.toml`.
+pub fn resolve_resume_session(
+    project_path: &Path,
+    session_ref: &str,
+    tool: &str,
+) -> Result<ResumeSessionResolution> {
+    let base_dir = get_session_root(project_path)?;
+    resolve_resume_session_in(&base_dir, session_ref, tool)
+}
+
+/// Internal implementation: resolve resume IDs from explicit base directory.
+pub(crate) fn resolve_resume_session_in(
+    base_dir: &Path,
+    session_ref: &str,
+    tool: &str,
+) -> Result<ResumeSessionResolution> {
+    let sessions_dir = base_dir.join("sessions");
+    let meta_session_id = resolve_session_prefix(&sessions_dir, session_ref)?;
+
+    validate_tool_access_in(base_dir, &meta_session_id, tool)?;
+
+    let session = load_session_in(base_dir, &meta_session_id)?;
+    let provider_session_id = session
+        .tools
+        .get(tool)
+        .and_then(|state| state.provider_session_id.clone());
+
+    Ok(ResumeSessionResolution {
+        meta_session_id,
+        provider_session_id,
+    })
+}
+
 /// Update the last_accessed timestamp and save
 pub fn update_last_accessed(state: &mut MetaSessionState) -> Result<()> {
     state.last_accessed = Utc::now();
@@ -559,6 +605,55 @@ mod tests {
     }
 
     #[test]
+    fn test_resolve_resume_session_with_provider_id() {
+        let td = tempdir().unwrap();
+        let mut state =
+            create_session_in(td.path(), td.path(), Some("Resume"), None, None).unwrap();
+        state.tools.insert(
+            "codex".to_string(),
+            crate::state::ToolState {
+                provider_session_id: Some("provider_session_123".to_string()),
+                last_action_summary: "resume".to_string(),
+                last_exit_code: 0,
+                updated_at: Utc::now(),
+                token_usage: None,
+            },
+        );
+        save_session_in(td.path(), &state).unwrap();
+
+        let prefix = &state.meta_session_id[..10];
+        let resolved = resolve_resume_session_in(td.path(), prefix, "codex").unwrap();
+
+        assert_eq!(resolved.meta_session_id, state.meta_session_id);
+        assert_eq!(
+            resolved.provider_session_id,
+            Some("provider_session_123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_resume_session_without_provider_id() {
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), Some("Resume"), None, None).unwrap();
+
+        let resolved =
+            resolve_resume_session_in(td.path(), &state.meta_session_id, "codex").unwrap();
+        assert_eq!(resolved.meta_session_id, state.meta_session_id);
+        assert!(resolved.provider_session_id.is_none());
+    }
+
+    #[test]
+    fn test_resolve_resume_session_respects_tool_lock() {
+        let td = tempdir().unwrap();
+        let state =
+            create_session_in(td.path(), td.path(), Some("Locked"), None, Some("codex")).unwrap();
+
+        let err =
+            resolve_resume_session_in(td.path(), &state.meta_session_id, "gemini-cli").unwrap_err();
+        assert!(err.to_string().contains("locked to tool"));
+    }
+
+    #[test]
     fn test_create_child_session() {
         let td = tempdir().unwrap();
         let parent = create_session_in(td.path(), td.path(), Some("Parent"), None, None).unwrap();
@@ -603,150 +698,5 @@ mod tests {
         assert!(meta.tool_locked);
     }
 
-    #[test]
-    fn test_tool_access_validation() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
-        validate_tool_access_in(td.path(), &state.meta_session_id, "codex").unwrap();
-        let err = validate_tool_access_in(td.path(), &state.meta_session_id, "gemini-cli");
-        assert!(err.unwrap_err().to_string().contains("locked to tool"));
-    }
-
-    #[test]
-    fn test_no_tool_no_metadata() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
-        assert!(load_metadata_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn test_complete_session() {
-        let td = tempdir().unwrap();
-        let state =
-            create_session_in(td.path(), td.path(), Some("Test"), None, Some("codex")).unwrap();
-        let hash =
-            complete_session_in(td.path(), &state.meta_session_id, "session complete").unwrap();
-        assert!(!hash.is_empty());
-    }
-
-    #[test]
-    fn test_save_and_load_result() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
-        let result = crate::result::SessionResult {
-            status: "success".to_string(),
-            exit_code: 0,
-            summary: "Test completed".to_string(),
-            tool: "codex".to_string(),
-            started_at: chrono::Utc::now(),
-            completed_at: chrono::Utc::now(),
-            artifacts: vec!["output/result.txt".to_string()],
-        };
-        save_result_in(td.path(), &state.meta_session_id, &result).unwrap();
-        let loaded = load_result_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .unwrap();
-        assert_eq!(loaded.status, "success");
-        assert_eq!(loaded.exit_code, 0);
-        assert_eq!(loaded.tool, "codex");
-        assert_eq!(loaded.artifacts.len(), 1);
-    }
-
-    #[test]
-    fn test_load_result_not_found() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
-        assert!(load_result_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .is_none());
-    }
-
-    #[test]
-    fn test_list_artifacts() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
-        let dir = get_session_dir_in(td.path(), &state.meta_session_id);
-        std::fs::write(dir.join("output/report.txt"), "test").unwrap();
-        std::fs::write(dir.join("output/diff.patch"), "test").unwrap();
-        let artifacts = list_artifacts_in(td.path(), &state.meta_session_id).unwrap();
-        assert_eq!(artifacts.len(), 2);
-        assert!(artifacts.contains(&"diff.patch".to_string()));
-        assert!(artifacts.contains(&"report.txt".to_string()));
-    }
-
-    #[test]
-    fn test_status_from_exit_code() {
-        use crate::result::SessionResult;
-        assert_eq!(SessionResult::status_from_exit_code(0), "success");
-        assert_eq!(SessionResult::status_from_exit_code(1), "failure");
-        assert_eq!(SessionResult::status_from_exit_code(137), "signal");
-        assert_eq!(SessionResult::status_from_exit_code(143), "signal");
-    }
-
-    #[test]
-    fn test_save_session_in_explicit_base() {
-        let td = tempdir().unwrap();
-        let mut state =
-            create_session_in(td.path(), td.path(), Some("Explicit save"), None, None).unwrap();
-        state.description = Some("Modified".to_string());
-        save_session_in(td.path(), &state).unwrap();
-        let loaded = load_session_in(td.path(), &state.meta_session_id).unwrap();
-        assert_eq!(loaded.description, Some("Modified".to_string()));
-    }
-
-    #[test]
-    fn test_list_sessions_empty_and_missing() {
-        let td = tempdir().unwrap();
-        assert!(list_all_sessions_in(td.path()).unwrap().is_empty());
-        assert!(list_sessions_in(td.path(), None).unwrap().is_empty());
-    }
-
-    #[test]
-    fn test_delete_nonexistent_session() {
-        let td = tempdir().unwrap();
-        std::fs::create_dir_all(td.path().join("sessions")).unwrap();
-        let r = delete_session_in(td.path(), &crate::validate::new_session_id());
-        assert!(r.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[test]
-    fn test_load_nonexistent_session() {
-        let td = tempdir().unwrap();
-        let r = load_session_in(td.path(), &crate::validate::new_session_id());
-        assert!(r.unwrap_err().to_string().contains("not found"));
-    }
-
-    #[test]
-    fn test_update_last_accessed_advances_timestamp() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), Some("ts"), None, None).unwrap();
-        let t0 = state.last_accessed;
-        std::thread::sleep(std::time::Duration::from_millis(10));
-        let mut s = load_session_in(td.path(), &state.meta_session_id).unwrap();
-        s.last_accessed = Utc::now();
-        save_session_in(td.path(), &s).unwrap();
-        let s2 = load_session_in(td.path(), &state.meta_session_id).unwrap();
-        assert!(s2.last_accessed > t0);
-    }
-
-    #[test]
-    fn test_list_artifacts_empty_output() {
-        let td = tempdir().unwrap();
-        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
-        assert!(list_artifacts_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .is_empty());
-    }
-
-    #[test]
-    fn test_operations_with_invalid_session_id() {
-        let td = tempdir().unwrap();
-        let bad = "not-a-valid-ulid";
-        assert!(load_session_in(td.path(), bad).is_err());
-        assert!(delete_session_in(td.path(), bad).is_err());
-        assert!(load_metadata_in(td.path(), bad).is_err());
-        assert!(validate_tool_access_in(td.path(), bad, "codex").is_err());
-    }
+    include!("manager_tests_tail.rs");
 }

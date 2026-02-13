@@ -2,7 +2,7 @@
 
 use crate::config::HookConfig;
 use crate::event::HookEvent;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};

@@ -282,9 +282,11 @@ fn save_paths(
 
 /// Get the diff of a plan's TODO.md against a revision.
 ///
-/// When `revision` is `None`, diffs against the file's own last commit
-/// (not HEAD, which may belong to a different plan in this multi-plan repo).
-/// If the file has never been committed, shows the entire file as new content.
+/// When `revision` is `None`:
+/// - if working copy has uncommitted TODO.md changes, show working copy diff
+/// - if working copy is clean and there are >=2 committed versions, show v2 -> v1
+/// - if working copy is clean and there is 1 committed version, show initial content as new
+/// - if file has never been committed, show the entire working file as new content
 pub fn diff(todos_dir: &Path, timestamp: &str, revision: Option<&str>) -> Result<String> {
     crate::validate_timestamp(timestamp)?;
 
@@ -306,22 +308,7 @@ pub fn diff(todos_dir: &Path, timestamp: &str, revision: Option<&str>) -> Result
                 Some(hash) => hash,
                 None => {
                     // File never committed — show full working copy as new
-                    let full_path = todos_dir.join(&file_path);
-                    return if full_path.exists() {
-                        let content = std::fs::read_to_string(&full_path)
-                            .with_context(|| format!("Failed to read {}", full_path.display()))?;
-                        Ok(format!(
-                            "--- /dev/null\n+++ b/{file_path}\n@@ -0,0 +1,{} @@\n{}",
-                            content.lines().count(),
-                            content
-                                .lines()
-                                .map(|l| format!("+{l}"))
-                                .collect::<Vec<_>>()
-                                .join("\n")
-                        ))
-                    } else {
-                        Ok(String::new())
-                    };
+                    return new_file_diff_from_working_copy(todos_dir, &file_path);
                 }
             }
         }
@@ -341,7 +328,59 @@ pub fn diff(todos_dir: &Path, timestamp: &str, revision: Option<&str>) -> Result
         );
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    let working_diff = String::from_utf8_lossy(&output.stdout).to_string();
+    if revision.is_some() || !working_diff.is_empty() {
+        return Ok(working_diff);
+    }
+
+    // Working copy is clean: show most recent saved changes by default.
+    let versions = list_versions(todos_dir, timestamp)?;
+    match versions.len() {
+        0 => Ok(String::new()),
+        1 => new_file_diff_from_commit(todos_dir, &versions[0], &file_path),
+        _ => diff_versions(todos_dir, timestamp, 2, 1),
+    }
+}
+
+fn new_file_diff_from_working_copy(todos_dir: &Path, file_path: &str) -> Result<String> {
+    let full_path = todos_dir.join(file_path);
+    if !full_path.exists() {
+        return Ok(String::new());
+    }
+
+    let content = std::fs::read_to_string(&full_path)
+        .with_context(|| format!("Failed to read {}", full_path.display()))?;
+    Ok(render_new_file_diff(file_path, &content))
+}
+
+fn new_file_diff_from_commit(todos_dir: &Path, hash: &str, file_path: &str) -> Result<String> {
+    let output = Command::new("git")
+        .args(["show", &format!("{hash}:{file_path}")])
+        .current_dir(todos_dir)
+        .output()
+        .context("Failed to run git show")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "git show failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    let content = String::from_utf8_lossy(&output.stdout);
+    Ok(render_new_file_diff(file_path, &content))
+}
+
+fn render_new_file_diff(file_path: &str, content: &str) -> String {
+    format!(
+        "--- /dev/null\n+++ b/{file_path}\n@@ -0,0 +1,{} @@\n{}",
+        content.lines().count(),
+        content
+            .lines()
+            .map(|line| format!("+{line}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
 }
 
 /// Find the last commit hash that touched a specific file.

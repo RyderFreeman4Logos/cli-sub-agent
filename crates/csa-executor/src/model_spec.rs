@@ -1,6 +1,6 @@
 //! Model specification parsing.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Unified model spec: tool/provider/model/thinking_budget
@@ -122,10 +122,12 @@ mod tests {
     fn test_parse_invalid_spec_wrong_parts() {
         let result = ModelSpec::parse("opencode/google/gemini");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("expected tool/provider/model/thinking_budget"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("expected tool/provider/model/thinking_budget")
+        );
     }
 
     #[test]
@@ -190,10 +192,12 @@ mod tests {
     fn test_thinking_budget_parse_invalid() {
         let result = ThinkingBudget::parse("invalid");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid thinking budget"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid thinking budget")
+        );
     }
 
     #[test]

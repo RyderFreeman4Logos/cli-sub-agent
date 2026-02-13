@@ -46,6 +46,6 @@ pub mod event;
 pub mod runner;
 
 // Re-export key types
-pub use config::{global_hooks_path, load_hooks_config, HookConfig, HooksConfig};
+pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
 pub use event::HookEvent;
 pub use runner::{run_hook, run_hooks_for_event};

@@ -76,7 +76,7 @@ fn read_ppid(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     let idx = stat.rfind(')')?;
     let after_comm = stat.get(idx + 2..)?; // skip ") "
-                                           // Fields after comm: state ppid ...
+    // Fields after comm: state ppid ...
     after_comm.split_whitespace().nth(1)?.parse().ok()
 }
 

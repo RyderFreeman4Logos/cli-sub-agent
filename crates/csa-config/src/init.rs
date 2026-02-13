@@ -1,12 +1,12 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::config::{
-    ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, ToolRestrictions,
-    CURRENT_SCHEMA_VERSION,
+    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
+    ToolRestrictions,
 };
 
 /// Detect which tools are installed on the system

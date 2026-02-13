@@ -2,7 +2,7 @@ use anyhow::Result;
 use tracing::{error, warn};
 
 use csa_config::init::init_project;
-use csa_config::{validate_config, GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig, validate_config};
 use csa_core::types::OutputFormat;
 
 pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {

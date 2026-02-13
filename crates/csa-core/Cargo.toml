@@ -11,3 +11,4 @@ serde.workspace = true
 chrono.workspace = true
 ulid.workspace = true
 clap.workspace = true
+agent-teams.workspace = true
