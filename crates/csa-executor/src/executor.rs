@@ -420,3 +420,7 @@ impl Executor {
 #[cfg(test)]
 #[path = "executor_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "executor_build_cmd_tests.rs"]
+mod build_cmd_tests;
