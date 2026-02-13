@@ -135,6 +135,12 @@ async fn main() -> Result<()> {
             SessionCommands::Log { session, cd } => {
                 session_cmds::handle_session_log(session, cd)?;
             }
+            SessionCommands::Checkpoint { session, cd } => {
+                session_cmds::handle_session_checkpoint(session, cd)?;
+            }
+            SessionCommands::Checkpoints { cd } => {
+                session_cmds::handle_session_checkpoints(cd)?;
+            }
         },
         Commands::Init {
             non_interactive,
