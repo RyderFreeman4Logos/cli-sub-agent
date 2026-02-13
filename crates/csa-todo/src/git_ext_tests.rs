@@ -246,6 +246,51 @@ fn test_diff_against_last_commit() {
 }
 
 #[test]
+fn test_diff_clean_working_copy_defaults_to_last_two_versions() {
+    let dir = tempdir().unwrap();
+    let todos = dir.path();
+    let ts = "20260101T000000";
+
+    setup_todos_dir(todos, ts);
+    fs::write(todos.join(ts).join("TODO.md"), "# Version 1\n").unwrap();
+    save(todos, ts, "v1").unwrap();
+
+    fs::write(todos.join(ts).join("TODO.md"), "# Version 2\n").unwrap();
+    save(todos, ts, "v2").unwrap();
+
+    let diff_output = diff(todos, ts, None).unwrap();
+    assert!(
+        diff_output.contains("-# Version 1"),
+        "clean default diff should include previous version, got: {diff_output}"
+    );
+    assert!(
+        diff_output.contains("+# Version 2"),
+        "clean default diff should include latest version, got: {diff_output}"
+    );
+}
+
+#[test]
+fn test_diff_clean_working_copy_with_single_version_shows_initial_content() {
+    let dir = tempdir().unwrap();
+    let todos = dir.path();
+    let ts = "20260101T000000";
+
+    setup_todos_dir(todos, ts);
+    fs::write(todos.join(ts).join("TODO.md"), "# Initial save\n").unwrap();
+    save(todos, ts, "v1").unwrap();
+
+    let diff_output = diff(todos, ts, None).unwrap();
+    assert!(
+        diff_output.contains("--- /dev/null"),
+        "single-version clean diff should render as new file, got: {diff_output}"
+    );
+    assert!(
+        diff_output.contains("+# Initial save"),
+        "single-version clean diff should include initial content, got: {diff_output}"
+    );
+}
+
+#[test]
 fn test_diff_uncommitted_file_shows_full_content() {
     let dir = tempdir().unwrap();
     let todos = dir.path();
