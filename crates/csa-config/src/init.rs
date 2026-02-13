@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::config::{
@@ -10,12 +11,21 @@ use crate::config::{
 
 /// Detect which tools are installed on the system
 pub fn detect_installed_tools() -> Vec<&'static str> {
+    let system_path = std::env::var_os("PATH").unwrap_or_default();
+    detect_installed_tools_in_paths(&system_path)
+}
+
+/// Detect which tools are installed, searching only the given `paths`.
+///
+/// This avoids relying on the process-global `PATH` environment variable,
+/// making it safe to call from parallel tests.
+fn detect_installed_tools_in_paths(paths: &OsStr) -> Vec<&'static str> {
     let tools = ["gemini", "opencode", "codex", "claude"];
     let names = ["gemini-cli", "opencode", "codex", "claude-code"];
     tools
         .iter()
         .zip(names.iter())
-        .filter(|(exec, _)| which::which(exec).is_ok())
+        .filter(|(exec, _)| which::which_in(exec, Some(paths), ".").is_ok())
         .map(|(_, name)| *name)
         .collect()
 }
@@ -613,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_detect_installed_tools_with_mock_path() {
-        // Create a tempdir with mock executables and override PATH
+        // Create a tempdir with mock executables and pass as custom paths
         let dir = tempdir().unwrap();
         let bin_dir = dir.path().join("bin");
         std::fs::create_dir_all(&bin_dir).unwrap();
@@ -635,14 +645,9 @@ mod tests {
             std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
 
-        // Override PATH so only our bin_dir is searched
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", bin_dir.to_str().unwrap());
-
-        let tools = detect_installed_tools();
-
-        // Restore PATH
-        std::env::set_var("PATH", &original_path);
+        // Use detect_installed_tools_in_paths directly — no global PATH mutation
+        let custom_path = std::ffi::OsStr::new(bin_dir.to_str().unwrap());
+        let tools = detect_installed_tools_in_paths(custom_path);
 
         // Should detect gemini-cli and codex (mapped from "gemini" and "codex" executables)
         assert!(
@@ -666,13 +671,9 @@ mod tests {
 
     #[test]
     fn test_detect_installed_tools_with_empty_path() {
-        // Use a non-existent path so no tools are found
-        let original_path = std::env::var("PATH").unwrap_or_default();
-        std::env::set_var("PATH", "/nonexistent_path_for_test");
-
-        let tools = detect_installed_tools();
-
-        std::env::set_var("PATH", &original_path);
+        // Use a non-existent path so no tools are found — no global PATH mutation
+        let custom_path = std::ffi::OsStr::new("/nonexistent_path_for_test");
+        let tools = detect_installed_tools_in_paths(custom_path);
 
         assert!(
             tools.is_empty(),
