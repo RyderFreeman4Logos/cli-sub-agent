@@ -207,6 +207,7 @@ pub(crate) async fn execute_with_session(
     extra_env: Option<&std::collections::HashMap<String, String>>,
     task_type: Option<&str>,
     tier_name: Option<&str>,
+    stream_mode: csa_process::StreamMode,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -220,6 +221,7 @@ pub(crate) async fn execute_with_session(
         extra_env,
         task_type,
         tier_name,
+        stream_mode,
     )
     .await?;
 
@@ -239,6 +241,7 @@ pub(crate) async fn execute_with_session_and_meta(
     extra_env: Option<&std::collections::HashMap<String, String>>,
     task_type: Option<&str>,
     tier_name: Option<&str>,
+    stream_mode: csa_process::StreamMode,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg {
@@ -395,7 +398,7 @@ pub(crate) async fn execute_with_session_and_meta(
     let mut sigint = signal(SignalKind::interrupt()).context("Failed to install SIGINT handler")?;
 
     // Wait for either child completion or signal
-    let wait_future = csa_process::wait_and_capture(child);
+    let wait_future = csa_process::wait_and_capture(child, stream_mode);
     tokio::pin!(wait_future);
 
     let result = tokio::select! {

@@ -219,7 +219,12 @@ impl AgentSession for ExecutorAgentSession {
 
         match self
             .executor
-            .execute_in(&prompt, &self.cwd, extra_env)
+            .execute_in(
+                &prompt,
+                &self.cwd,
+                extra_env,
+                csa_process::StreamMode::BufferOnly,
+            )
             .await
         {
             Ok(result) => {

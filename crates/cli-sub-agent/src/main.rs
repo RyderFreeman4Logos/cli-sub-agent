@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::Parser;
 use tempfile::TempDir;
@@ -71,7 +73,17 @@ async fn main() -> Result<()> {
             thinking,
             no_failover,
             wait,
+            stream_stdout,
         } => {
+            // Determine stream mode: explicit flag > auto-detect (text format + stderr is TTY)
+            let stream_mode = if stream_stdout
+                || (matches!(output_format, OutputFormat::Text) && std::io::stderr().is_terminal())
+            {
+                csa_process::StreamMode::TeeToStderr
+            } else {
+                csa_process::StreamMode::BufferOnly
+            };
+
             let exit_code = handle_run(
                 tool,
                 prompt,
@@ -88,6 +100,7 @@ async fn main() -> Result<()> {
                 wait,
                 current_depth,
                 output_format,
+                stream_mode,
             )
             .await?;
             std::process::exit(exit_code);
@@ -283,6 +296,7 @@ async fn handle_run(
     wait: bool,
     current_depth: u32,
     output_format: OutputFormat,
+    stream_mode: csa_process::StreamMode,
 ) -> Result<i32> {
     // 1. Determine project root
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
@@ -556,7 +570,12 @@ async fn handle_run(
             let temp_dir = TempDir::new()?;
             info!("Ephemeral session in: {:?}", temp_dir.path());
             executor
-                .execute_in(&prompt_text, temp_dir.path(), extra_env.as_ref())
+                .execute_in(
+                    &prompt_text,
+                    temp_dir.path(),
+                    extra_env.as_ref(),
+                    stream_mode,
+                )
                 .await?
         } else {
             // Persistent session
@@ -572,6 +591,7 @@ async fn handle_run(
                 extra_env.as_ref(),
                 Some("run"),
                 resolved_tier_name.as_deref(),
+                stream_mode,
             )
             .await
             {

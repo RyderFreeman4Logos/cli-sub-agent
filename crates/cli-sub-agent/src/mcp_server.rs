@@ -574,7 +574,12 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
         // Ephemeral: use temp directory
         let temp_dir = TempDir::new()?;
         executor
-            .execute_in(prompt, temp_dir.path(), extra_env_ref)
+            .execute_in(
+                prompt,
+                temp_dir.path(),
+                extra_env_ref,
+                csa_process::StreamMode::BufferOnly,
+            )
             .await?
     } else {
         // Persistent session
@@ -590,6 +595,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             extra_env_ref,
             Some("run"),
             None, // MCP server does not use tier-based selection
+            csa_process::StreamMode::BufferOnly,
         )
         .await?
     };

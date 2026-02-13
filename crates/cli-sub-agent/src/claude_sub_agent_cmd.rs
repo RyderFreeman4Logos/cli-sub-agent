@@ -75,6 +75,7 @@ pub(crate) async fn handle_claude_sub_agent(
         extra_env,
         Some("run"),
         None, // claude-sub-agent does not use tier-based selection
+        csa_process::StreamMode::BufferOnly,
     )
     .await?;
 

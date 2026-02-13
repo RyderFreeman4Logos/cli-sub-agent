@@ -226,6 +226,7 @@ async fn execute_review(
         extra_env,
         Some("review"),
         None,
+        csa_process::StreamMode::BufferOnly,
     )
     .await
 }

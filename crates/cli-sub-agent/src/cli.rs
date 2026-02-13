@@ -67,6 +67,10 @@ pub enum Commands {
         /// Block-wait for a free slot instead of failing when all slots are occupied
         #[arg(long)]
         wait: bool,
+
+        /// Stream child stdout to stderr in real-time (prefix: [stdout])
+        #[arg(long)]
+        stream_stdout: bool,
     },
 
     /// Manage sessions

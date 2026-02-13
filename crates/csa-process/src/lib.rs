@@ -6,6 +6,20 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
+/// Controls whether stdout is forwarded to stderr in real-time.
+///
+/// By default, stdout is only buffered and returned in `ExecutionResult::output`.
+/// When set to `TeeToStderr`, each stdout line is also printed to stderr with
+/// a `[stdout] ` prefix, allowing callers to distinguish "thinking" from "hung".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StreamMode {
+    /// Only buffer stdout; do not forward (default).
+    #[default]
+    BufferOnly,
+    /// Buffer stdout AND forward each line to stderr with `[stdout] ` prefix.
+    TeeToStderr,
+}
+
 /// Result of executing a command.
 #[derive(Debug, Clone, Serialize)]
 pub struct ExecutionResult {
@@ -88,12 +102,17 @@ pub async fn spawn_tool(
 ///
 /// - Reads stdout until EOF
 /// - Reads stderr in tee mode (forwards each line to parent stderr + accumulates)
+/// - When `stream_mode` is [`StreamMode::TeeToStderr`], also forwards each stdout
+///   line to stderr with a `[stdout] ` prefix for real-time observability
 /// - Waits for the process to exit
 /// - Returns ExecutionResult with output, stderr_output, summary, and exit code
 ///
 /// IMPORTANT: The child's stdout and stderr must be piped. This function will take
 /// ownership of both handles.
-pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<ExecutionResult> {
+pub async fn wait_and_capture(
+    mut child: tokio::process::Child,
+    stream_mode: StreamMode,
+) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let stderr = child.stderr.take();
 
@@ -117,6 +136,9 @@ pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<Execut
                     match result {
                         Ok(0) => stdout_done = true,
                         Ok(_) => {
+                            if stream_mode == StreamMode::TeeToStderr {
+                                eprint!("[stdout] {}", stdout_line);
+                            }
                             output.push_str(&stdout_line);
                             stdout_line.clear();
                         }
@@ -142,6 +164,9 @@ pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<Execut
         while let Ok(n) = stdout_reader.read_line(&mut stdout_line).await {
             if n == 0 {
                 break;
+            }
+            if stream_mode == StreamMode::TeeToStderr {
+                eprint!("[stdout] {}", stdout_line);
             }
             output.push_str(&stdout_line);
             stdout_line.clear();
@@ -180,16 +205,17 @@ pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<Execut
 /// This is a convenience function that combines `spawn_tool()` and `wait_and_capture()`.
 /// Use `spawn_tool()` directly if you need the PID before waiting (e.g., for monitoring).
 pub async fn run_and_capture(cmd: Command) -> Result<ExecutionResult> {
-    run_and_capture_with_stdin(cmd, None).await
+    run_and_capture_with_stdin(cmd, None, StreamMode::BufferOnly).await
 }
 
 /// Execute a command and capture output, optionally writing prompt data to stdin.
 pub async fn run_and_capture_with_stdin(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,
+    stream_mode: StreamMode,
 ) -> Result<ExecutionResult> {
     let child = spawn_tool(cmd, stdin_data).await?;
-    wait_and_capture(child).await
+    wait_and_capture(child, stream_mode).await
 }
 
 /// Check if a tool is installed by attempting to locate it.
@@ -352,7 +378,7 @@ mod tests {
         assert!(pid > 0);
 
         // Clean up by waiting for the child
-        let result = wait_and_capture(child)
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
             .await
             .expect("Failed to wait for child");
         assert_eq!(result.exit_code, 0);
@@ -363,7 +389,9 @@ mod tests {
     async fn test_spawn_tool_with_none_stdin_uses_null_stdin() {
         let cmd = Command::new("cat");
         let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-        let result = wait_and_capture(child).await.expect("Failed to wait");
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
+            .await
+            .expect("Failed to wait");
 
         assert_eq!(result.exit_code, 0);
         assert!(
@@ -380,7 +408,9 @@ mod tests {
         let child = spawn_tool(cmd, Some(payload.clone()))
             .await
             .expect("Failed to spawn");
-        let result = wait_and_capture(child).await.expect("Failed to wait");
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
+            .await
+            .expect("Failed to wait");
 
         assert_eq!(result.exit_code, 0);
         assert_eq!(result.output, String::from_utf8(payload).unwrap());
@@ -406,7 +436,9 @@ mod tests {
         cmd.args(["-c", "echo stdout_line && echo stderr_line >&2"]);
 
         let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-        let result = wait_and_capture(child).await.expect("Failed to wait");
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
+            .await
+            .expect("Failed to wait");
 
         assert_eq!(result.exit_code, 0);
         assert!(result.output.contains("stdout_line"));
@@ -460,7 +492,9 @@ mod tests {
         cmd.args(["-c", "echo 'fatal: something went wrong' >&2; exit 1"]);
 
         let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-        let result = wait_and_capture(child).await.expect("Failed to wait");
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
+            .await
+            .expect("Failed to wait");
 
         assert_eq!(result.exit_code, 1);
         assert_eq!(result.summary, "fatal: something went wrong");
@@ -473,7 +507,9 @@ mod tests {
         cmd.args(["-c", "exit 42"]);
 
         let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-        let result = wait_and_capture(child).await.expect("Failed to wait");
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
+            .await
+            .expect("Failed to wait");
 
         assert_eq!(result.exit_code, 42);
         assert_eq!(result.summary, "exit code 42");
@@ -616,5 +652,74 @@ mod tests {
     fn test_last_non_empty_line_only_whitespace_lines() {
         assert_eq!(last_non_empty_line("\n\n\n"), "");
         assert_eq!(last_non_empty_line("   \n\t\n  \n"), "");
+    }
+
+    // --- StreamMode tests ---
+
+    #[test]
+    fn test_stream_mode_default_is_buffer_only() {
+        let mode: StreamMode = Default::default();
+        assert_eq!(mode, StreamMode::BufferOnly);
+    }
+
+    #[test]
+    fn test_stream_mode_clone_copy_eq() {
+        let a = StreamMode::TeeToStderr;
+        let b = a; // Copy
+        let c = a.clone(); // Clone
+        assert_eq!(a, b);
+        assert_eq!(a, c);
+        assert_ne!(StreamMode::BufferOnly, StreamMode::TeeToStderr);
+    }
+
+    #[test]
+    fn test_stream_mode_debug_format() {
+        assert_eq!(format!("{:?}", StreamMode::BufferOnly), "BufferOnly");
+        assert_eq!(format!("{:?}", StreamMode::TeeToStderr), "TeeToStderr");
+    }
+
+    #[tokio::test]
+    async fn test_buffer_only_captures_stdout_without_tee() {
+        let mut cmd = Command::new("echo");
+        cmd.arg("captured-only");
+
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+        let result = wait_and_capture(child, StreamMode::BufferOnly)
+            .await
+            .expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.contains("captured-only"));
+    }
+
+    #[tokio::test]
+    async fn test_tee_to_stderr_still_captures_stdout() {
+        // TeeToStderr should tee to stderr AND capture stdout in result.output
+        let mut cmd = Command::new("echo");
+        cmd.arg("tee-test");
+
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+        let result = wait_and_capture(child, StreamMode::TeeToStderr)
+            .await
+            .expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.output.contains("tee-test"),
+            "TeeToStderr must still capture stdout in result.output"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_and_capture_with_stdin_passes_stream_mode() {
+        let cmd = Command::new("cat");
+        let payload = b"stream-mode-test\n".to_vec();
+
+        let result = run_and_capture_with_stdin(cmd, Some(payload), StreamMode::BufferOnly)
+            .await
+            .expect("Failed");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.contains("stream-mode-test"));
     }
 }
