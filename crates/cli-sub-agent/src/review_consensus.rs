@@ -194,6 +194,26 @@ mod tests {
         }
     }
 
+    fn response(agent: &str, verdict: &str, timed_out: bool) -> AgentResponse {
+        AgentResponse {
+            agent: agent.to_string(),
+            content: verdict.to_string(),
+            weight: 1.0,
+            timed_out,
+        }
+    }
+
+    fn verdict_to_exit_code(verdict: &str) -> i32 {
+        if verdict == CLEAN { 0 } else { 1 }
+    }
+
+    #[test]
+    fn build_reviewer_tools_returns_empty_when_reviewer_count_is_zero() {
+        let cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
+        let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), 0);
+        assert!(tools.is_empty());
+    }
+
     #[test]
     fn build_reviewer_tools_round_robin_across_enabled_tools() {
         let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
@@ -230,6 +250,20 @@ mod tests {
     fn parse_review_verdict_falls_back_to_exit_code() {
         assert_eq!(parse_review_verdict("no explicit verdict", 0), CLEAN);
         assert_eq!(parse_review_verdict("no explicit verdict", 1), HAS_ISSUES);
+    }
+
+    #[test]
+    fn parse_review_verdict_is_case_insensitive_and_token_aware() {
+        assert_eq!(
+            parse_review_verdict("final verdict: clean.", 1),
+            CLEAN,
+            "token matching should be case-insensitive"
+        );
+        assert_eq!(
+            parse_review_verdict("status: unclean output", 1),
+            HAS_ISSUES,
+            "partial-word matches must not be treated as CLEAN"
+        );
     }
 
     #[test]
@@ -274,5 +308,60 @@ mod tests {
         let result = resolve_unanimous(&responses);
         assert!((agreement_level(&result) - (2.0 / 3.0)).abs() < f32::EPSILON);
         assert_eq!(consensus_verdict(&result), HAS_ISSUES);
+    }
+
+    #[test]
+    fn multi_reviewer_majority_clean_maps_to_exit_code_zero() {
+        let responses = vec![
+            response("reviewer-1:codex", parse_review_verdict("CLEAN", 0), false),
+            response(
+                "reviewer-2:opencode",
+                parse_review_verdict("CLEAN", 0),
+                false,
+            ),
+            response(
+                "reviewer-3:claude-code",
+                parse_review_verdict("HAS_ISSUES", 1),
+                false,
+            ),
+        ];
+
+        let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
+        let final_verdict = consensus_verdict(&consensus);
+
+        assert!(consensus.consensus_reached);
+        assert_eq!(final_verdict, CLEAN);
+        assert_eq!(verdict_to_exit_code(final_verdict), 0);
+        assert!((agreement_level(&consensus) - (2.0 / 3.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn multi_reviewer_unanimous_disagreement_maps_to_exit_code_one() {
+        let responses = vec![
+            response("reviewer-1:codex", CLEAN, false),
+            response("reviewer-2:opencode", HAS_ISSUES, false),
+            response("reviewer-3:claude-code", CLEAN, false),
+        ];
+
+        let consensus = resolve_consensus(ConsensusStrategy::Unanimous, &responses);
+        let final_verdict = consensus_verdict(&consensus);
+
+        assert!(!consensus.consensus_reached);
+        assert!(consensus.decision.is_none());
+        assert_eq!(final_verdict, HAS_ISSUES);
+        assert_eq!(verdict_to_exit_code(final_verdict), 1);
+    }
+
+    #[test]
+    fn agreement_level_ignores_timed_out_responses_with_consensus_decision() {
+        let responses = vec![
+            response("reviewer-1:codex", CLEAN, false),
+            response("reviewer-2:opencode", CLEAN, false),
+            response("reviewer-3:claude-code", HAS_ISSUES, true),
+        ];
+        let consensus = resolve_consensus(ConsensusStrategy::Majority, &responses);
+
+        assert_eq!(consensus.decision.as_deref(), Some(CLEAN));
+        assert!((agreement_level(&consensus) - 1.0).abs() < f32::EPSILON);
     }
 }

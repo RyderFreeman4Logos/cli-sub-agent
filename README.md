@@ -42,6 +42,20 @@ If you only use a single AI tool for simple tasks, the tool's native CLI may suf
 
 ## Installation
 
+## Prerequisites
+
+This workspace depends on a local path crate:
+
+```toml
+agent-teams = { path = "../agent-teams-rs" }
+```
+
+Clone [`agent-teams-rs`](https://github.com/RyderFreeman4Logos/agent-teams-rs) as a sibling directory before building from source:
+
+```bash
+git clone https://github.com/RyderFreeman4Logos/agent-teams-rs.git ../agent-teams-rs
+```
+
 ### Quick Install (macOS / Linux)
 
 ```bash
