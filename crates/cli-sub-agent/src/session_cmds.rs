@@ -8,6 +8,25 @@ use csa_session::{
     load_result, load_session, resolve_session_prefix,
 };
 
+fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
+    if input.chars().count() <= max_chars {
+        return input.to_string();
+    }
+
+    if max_chars <= 3 {
+        return ".".repeat(max_chars);
+    }
+
+    let visible_chars = max_chars - 3;
+    let end = input
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .nth(visible_chars)
+        .unwrap_or(input.len());
+
+    format!("{}...", &input[..end])
+}
+
 pub(crate) fn handle_session_list(
     cd: Option<String>,
     tool: Option<String>,
@@ -69,12 +88,8 @@ pub(crate) fn handle_session_list(
                         .as_deref()
                         .filter(|d| !d.is_empty())
                         .unwrap_or("-");
-                    // Truncate description to 25 chars
-                    let desc_display = if desc.len() > 25 {
-                        format!("{}...", &desc[..22])
-                    } else {
-                        desc.to_string()
-                    };
+                    // Truncate description to 25 visible chars using UTF-8 safe boundaries.
+                    let desc_display = truncate_with_ellipsis(desc, 25);
                     let tools: Vec<&String> = session.tools.keys().collect();
                     let tools_str = if tools.is_empty() {
                         "-".to_string()
@@ -326,4 +341,28 @@ pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<
         print!("{}", log);
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::truncate_with_ellipsis;
+
+    #[test]
+    fn truncate_with_ellipsis_preserves_ascii_short_input() {
+        let input = "short description";
+        assert_eq!(truncate_with_ellipsis(input, 25), "short description");
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_handles_multibyte_chinese() {
+        let input = "\u{8FD9}\u{662F}\u{4E00}\u{4E2A}\u{7528}\u{4E8E}\u{6D4B}\u{8BD5}\u{622A}\u{65AD}\u{903B}\u{8F91}\u{7684}\u{4E2D}\u{6587}\u{63CF}\u{8FF0}\u{6587}\u{672C}";
+        let expected = "\u{8FD9}\u{662F}\u{4E00}\u{4E2A}\u{7528}\u{4E8E}\u{6D4B}...";
+        assert_eq!(truncate_with_ellipsis(input, 10), expected);
+    }
+
+    #[test]
+    fn truncate_with_ellipsis_handles_emoji_without_panic() {
+        let input = "session 😀😃😄😁 description";
+        assert_eq!(truncate_with_ellipsis(input, 12), "session 😀...");
+    }
 }
