@@ -343,6 +343,54 @@ pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<
     Ok(())
 }
 
+pub(crate) fn handle_session_checkpoint(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+
+    // Load the session state to build the checkpoint note
+    let state = csa_session::load_session(&project_root, &resolved_id)?;
+    let mut note = csa_session::checkpoint::note_from_session(&state);
+    // Use the CLI-resolved ID as the authoritative session identity,
+    // not state.meta_session_id which could be stale or tampered.
+    note.session_id.clone_from(&resolved_id);
+
+    csa_session::checkpoint::write_checkpoint(&sessions_dir, &note)?;
+    eprintln!(
+        "Checkpoint written for session '{}' (tool={}, turns={}, status={})",
+        resolved_id,
+        note.tool.as_deref().unwrap_or("none"),
+        note.turn_count,
+        note.status,
+    );
+
+    Ok(())
+}
+
+pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+
+    let checkpoints = csa_session::checkpoint::list_checkpoints(&sessions_dir)?;
+    if checkpoints.is_empty() {
+        eprintln!("No checkpoint notes found.");
+        return Ok(());
+    }
+
+    for (commit, note) in &checkpoints {
+        println!(
+            "{:.7}  {}  tool={}  turns={}  status={}",
+            commit,
+            note.session_id,
+            note.tool.as_deref().unwrap_or("none"),
+            note.turn_count,
+            note.status,
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::truncate_with_ellipsis;

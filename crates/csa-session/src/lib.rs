@@ -1,5 +1,6 @@
 //! Session management with ULID-based genealogy tracking.
 
+pub mod checkpoint;
 pub mod genealogy;
 pub mod git;
 pub mod manager;

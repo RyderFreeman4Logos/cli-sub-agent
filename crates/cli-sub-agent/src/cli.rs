@@ -390,6 +390,24 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// Write a checkpoint note (git notes) for audit trail
+    Checkpoint {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// List all checkpoint notes
+    Checkpoints {
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
