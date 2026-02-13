@@ -29,7 +29,7 @@ use cli::{
 use csa_config::GlobalConfig;
 use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::slot::{
-    format_slot_diagnostic, slot_usage, try_acquire_slot, SlotAcquireResult, ToolSlot,
+    SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
 use csa_session::{load_session, resolve_session_prefix};
 use run_helpers::{
@@ -369,7 +369,9 @@ async fn handle_run(
                 }
             } else {
                 // No parent context/default fallback, fall back to AnyAvailable with warning
-                warn!("HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable.");
+                warn!(
+                    "HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
+                );
                 resolve_tool_and_model(
                     None,
                     model_spec.as_deref(),

@@ -5,7 +5,7 @@ pub mod rate_limit;
 pub mod rotation;
 pub mod session_reuse;
 
-pub use failover::{decide_failover, FailoverAction};
-pub use rate_limit::{detect_rate_limit, RateLimitDetected};
+pub use failover::{FailoverAction, decide_failover};
+pub use rate_limit::{RateLimitDetected, detect_rate_limit};
 pub use rotation::resolve_tier_tool_rotated;
-pub use session_reuse::{find_reusable_sessions, ReuseCandidate};
+pub use session_reuse::{ReuseCandidate, find_reusable_sessions};

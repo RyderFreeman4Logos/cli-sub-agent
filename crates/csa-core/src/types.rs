@@ -198,9 +198,11 @@ mod tests {
     fn test_tool_arg_from_str_invalid() {
         let result = ToolArg::from_str("invalid-tool");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Invalid tool argument 'invalid-tool'"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid tool argument 'invalid-tool'")
+        );
     }
 
     #[test]

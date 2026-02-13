@@ -8,19 +8,19 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::signal::unix::{signal, SignalKind};
+use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_executor::{create_session_log_writer, Executor};
-use csa_hooks::{global_hooks_path, load_hooks_config, run_hooks_for_event, HookEvent};
+use csa_executor::{Executor, create_session_log_writer};
+use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_lock::acquire_lock;
 use csa_process::check_tool_installed;
 use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
 use csa_session::{
-    create_session, get_session_dir, load_session, resolve_session_prefix, save_result,
-    save_session, SessionResult, TokenUsage, ToolState,
+    SessionResult, TokenUsage, ToolState, create_session, get_session_dir, load_session,
+    resolve_session_prefix, save_result, save_session,
 };
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
@@ -293,7 +293,7 @@ pub(crate) async fn execute_with_session(
     info!("Executing in session: {}", session.meta_session_id);
 
     // Apply restrictions if configured
-    let can_edit = config.map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+    let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let effective_prompt = if !can_edit {
         info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
         executor.apply_restrictions(prompt, false)

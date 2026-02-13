@@ -280,9 +280,11 @@ mod tests {
 
         // Verify session is stored in correct location
         let session_root = get_session_root(project_path).expect("Failed to get session root");
-        assert!(session_root
-            .join("sessions")
-            .join(&root.meta_session_id)
-            .exists());
+        assert!(
+            session_root
+                .join("sessions")
+                .join(&root.meta_session_id)
+                .exists()
+        );
     }
 }

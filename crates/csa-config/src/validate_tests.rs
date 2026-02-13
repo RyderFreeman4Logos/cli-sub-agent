@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::{
-    ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, CURRENT_SCHEMA_VERSION,
+    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
 };
 use crate::global::ReviewConfig;
 use chrono::Utc;
@@ -145,10 +145,12 @@ fn test_validate_config_fails_on_invalid_review_tool() {
 
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid [review].tool value"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid [review].tool value")
+    );
 }
 
 #[test]
@@ -184,10 +186,12 @@ fn test_validate_config_fails_on_invalid_model_spec() {
 
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid model spec"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid model spec")
+    );
 }
 
 #[test]
@@ -238,10 +242,12 @@ fn test_validate_config_fails_if_no_config() {
     let project_path = dir.path().join(".csa").join("config.toml");
     let result = validate_config_with_paths(None, &project_path);
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("No configuration found"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("No configuration found")
+    );
 }
 
 #[test]
@@ -277,10 +283,12 @@ fn test_validate_config_fails_on_empty_models() {
 
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("must have at least one model"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("must have at least one model")
+    );
 }
 
 #[test]
@@ -347,10 +355,12 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
 
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("Invalid [debate].tool value"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Invalid [debate].tool value")
+    );
 }
 
 #[test]
@@ -436,10 +446,12 @@ fn test_validate_model_spec_two_parts() {
     config.save(dir.path()).unwrap();
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid model spec"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid model spec")
+    );
 }
 
 #[test]
@@ -474,10 +486,12 @@ fn test_validate_model_spec_five_parts() {
     config.save(dir.path()).unwrap();
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid model spec"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid model spec")
+    );
 }
 
 #[test]
@@ -788,8 +802,10 @@ fn test_validate_tier_with_one_bad_model_in_list() {
     config.save(dir.path()).unwrap();
     let result = validate_config(dir.path());
     assert!(result.is_err());
-    assert!(result
-        .unwrap_err()
-        .to_string()
-        .contains("invalid model spec"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid model spec")
+    );
 }

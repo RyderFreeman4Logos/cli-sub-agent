@@ -5,7 +5,7 @@ use tracing::{info, warn};
 use csa_config::GlobalConfig;
 use csa_core::types::OutputFormat;
 use csa_session::{
-    delete_session, get_session_dir, get_session_root, list_sessions, save_session_in, PhaseEvent,
+    PhaseEvent, delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
 };
 
 /// Default age threshold (in days) for retiring stale Active sessions.
@@ -198,7 +198,8 @@ pub(crate) fn handle_gc(
                                                 if dry_run {
                                                     eprintln!(
                                                         "[dry-run] Would clean stale slot: {:?} (dead PID {})",
-                                                        path.file_name(), pid
+                                                        path.file_name(),
+                                                        pid
                                                     );
                                                     stale_slots_cleaned += 1;
                                                 } else if fs::remove_file(&path).is_ok() {
@@ -522,7 +523,8 @@ pub(crate) fn handle_gc_global(
                                                 if dry_run {
                                                     eprintln!(
                                                         "[dry-run] Would clean stale slot: {:?} (dead PID {})",
-                                                        path.file_name(), pid
+                                                        path.file_name(),
+                                                        pid
                                                     );
                                                     stale_slots_cleaned += 1;
                                                 } else if fs::remove_file(&path).is_ok() {

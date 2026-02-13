@@ -98,9 +98,7 @@ pub fn resolve_tier_tool_rotated(
         let mut chosen = None;
         for offset in 0..total {
             let candidate_idx = (start + offset) % total;
-            if let Some((_, ref tool, ref spec)) =
-                eligible.iter().find(|(i, _, _)| *i == candidate_idx)
-            {
+            if let Some((_, tool, spec)) = eligible.iter().find(|(i, _, _)| *i == candidate_idx) {
                 chosen = Some((candidate_idx, tool.clone(), spec.clone()));
                 break;
             }

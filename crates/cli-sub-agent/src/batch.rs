@@ -387,7 +387,7 @@ async fn execute_parallel_tasks(
         let config = config.cloned();
 
         // Check resource availability before spawning (best effort)
-        if let Some(ref mut guard) = resource_guard {
+        if let Some(guard) = resource_guard {
             let tool_name = parse_tool_name(&task.tool)?;
             if let Err(e) = guard.check_availability(tool_name.as_str()) {
                 warn!(
@@ -497,7 +497,7 @@ async fn execute_task(
     };
 
     // Check resource availability
-    if let Some(ref mut guard) = resource_guard {
+    if let Some(guard) = resource_guard {
         if let Err(e) = guard.check_availability(executor.tool_name()) {
             error!("{} - Resource check failed: {}", task_label, e);
             return TaskResult {

@@ -293,9 +293,10 @@ mod tests {
             std::path::Path::new("/tmp/test-project"),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("AUTO debate tool selection failed"));
+        assert!(
+            err.to_string()
+                .contains("AUTO debate tool selection failed")
+        );
     }
 
     #[test]
@@ -310,9 +311,10 @@ mod tests {
             std::path::Path::new("/tmp/test-project"),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("AUTO debate tool selection failed"));
+        assert!(
+            err.to_string()
+                .contains("AUTO debate tool selection failed")
+        );
     }
 
     #[test]

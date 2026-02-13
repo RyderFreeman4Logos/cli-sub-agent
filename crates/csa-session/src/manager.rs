@@ -1,9 +1,9 @@
 //! Session CRUD operations
 
-use crate::result::{SessionResult, RESULT_FILE_NAME};
+use crate::result::{RESULT_FILE_NAME, SessionResult};
 use crate::state::MetaSessionState;
 use crate::validate::{new_session_id, validate_session_id};
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
@@ -616,9 +616,11 @@ mod tests {
     fn test_no_tool_no_metadata() {
         let td = tempdir().unwrap();
         let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
-        assert!(load_metadata_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .is_none());
+        assert!(
+            load_metadata_in(td.path(), &state.meta_session_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -658,9 +660,11 @@ mod tests {
     fn test_load_result_not_found() {
         let td = tempdir().unwrap();
         let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
-        assert!(load_result_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .is_none());
+        assert!(
+            load_result_in(td.path(), &state.meta_session_id)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]
@@ -735,9 +739,11 @@ mod tests {
     fn test_list_artifacts_empty_output() {
         let td = tempdir().unwrap();
         let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
-        assert!(list_artifacts_in(td.path(), &state.meta_session_id)
-            .unwrap()
-            .is_empty());
+        assert!(
+            list_artifacts_in(td.path(), &state.meta_session_id)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

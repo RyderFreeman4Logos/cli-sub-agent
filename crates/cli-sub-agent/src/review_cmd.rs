@@ -56,7 +56,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 7. Apply restrictions if configured
     let can_edit = config
         .as_ref()
-        .map_or(true, |cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+        .is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let effective_prompt = if !can_edit {
         info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
         executor.apply_restrictions(&prompt, false)
@@ -326,9 +326,10 @@ mod tests {
             std::path::Path::new("/tmp/test-project"),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("AUTO review tool selection failed"));
+        assert!(
+            err.to_string()
+                .contains("AUTO review tool selection failed")
+        );
     }
 
     #[test]
@@ -344,9 +345,10 @@ mod tests {
             std::path::Path::new("/tmp/test-project"),
         )
         .unwrap_err();
-        assert!(err
-            .to_string()
-            .contains("Invalid [review].tool value 'invalid-tool'"));
+        assert!(
+            err.to_string()
+                .contains("Invalid [review].tool value 'invalid-tool'")
+        );
     }
 
     #[test]
