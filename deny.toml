@@ -3,7 +3,11 @@
 
 [advisories]
 version = 2
-ignore = []
+ignore = [
+    # Transitive from agent-teams -> cc-sdk -> reqwest.
+    # rustls-pemfile is archived; no non-breaking safe upgrade is available yet.
+    "RUSTSEC-2025-0134",
+]
 
 [licenses]
 version = 2
