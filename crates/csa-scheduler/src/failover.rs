@@ -340,4 +340,205 @@ mod tests {
         let session_trivial = make_session(vec![("gemini-cli", "Hello world test")], false);
         assert!(!has_valuable_context(&session_trivial));
     }
+
+    #[test]
+    fn test_failover_on_cooldown_error() {
+        let config = make_config(
+            vec![
+                "gemini-cli/g/m/0",
+                "codex/openai/o4-mini/0",
+                "claude-code/anthropic/sonnet/0",
+            ],
+            vec![],
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "default",
+            Some(false),
+            None,
+            &[],
+            &config,
+            "429 Too Many Requests: cooldown for 60 seconds",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "codex");
+            }
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_on_quota_error() {
+        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
+        let action = decide_failover(
+            "codex",
+            "default",
+            Some(false),
+            None,
+            &[],
+            &config,
+            "Error: quota exceeded for model o4-mini",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "gemini-cli");
+            }
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_normal_error_no_match() {
+        // A non-rate-limit error should still go through failover logic
+        // (the caller decides whether to invoke failover; this function just picks next tool)
+        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
+        let action = decide_failover(
+            "gemini-cli",
+            "default",
+            Some(false),
+            None,
+            &[],
+            &config,
+            "Internal server error",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "codex");
+            }
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_disabled_tool_skipped() {
+        let config = make_config(
+            vec![
+                "gemini-cli/g/m/0",
+                "codex/openai/o4-mini/0",
+                "claude-code/anthropic/sonnet/0",
+            ],
+            vec!["codex"],
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "default",
+            Some(false),
+            None,
+            &[],
+            &config,
+            "429",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "claude-code");
+            }
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_missing_tier_returns_error() {
+        let config = make_config(vec!["gemini-cli/g/m/0"], vec![]);
+        // Use a task_type that maps to a non-existent tier
+        let mut config_with_bad_mapping = config;
+        config_with_bad_mapping
+            .tier_mapping
+            .insert("special".to_string(), "tier99".to_string());
+        let action = decide_failover(
+            "gemini-cli",
+            "special",
+            Some(false),
+            None,
+            &[],
+            &config_with_bad_mapping,
+            "429",
+        );
+        match action {
+            FailoverAction::ReportError { reason, .. } => {
+                assert!(reason.contains("tier99"), "reason: {}", reason);
+                assert!(reason.contains("not found"), "reason: {}", reason);
+            }
+            other => panic!("Expected ReportError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_valuable_session_tool_slot_occupied() {
+        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
+        // Session has valuable context (review keyword) + codex slot already occupied
+        let session = make_session(
+            vec![
+                ("gemini-cli", "deep security audit in progress"),
+                ("codex", "prior audit run"),
+            ],
+            false,
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "default",
+            Some(false),
+            Some(&session),
+            &[],
+            &config,
+            "429",
+        );
+        match action {
+            FailoverAction::ReportError { reason, .. } => {
+                assert!(reason.contains("valuable context"), "reason: {}", reason);
+                assert!(reason.contains("occupied"), "reason: {}", reason);
+            }
+            other => panic!("Expected ReportError, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_no_session_no_valuable_context() {
+        // Session exists but has no valuable context (trivial summary, not compacted)
+        // and tool slot is occupied → falls through to sibling session
+        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
+        let session = make_session(
+            vec![
+                ("gemini-cli", "simple hello world"),
+                ("codex", "simple run"),
+            ],
+            false,
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "default",
+            Some(false),
+            Some(&session),
+            &[],
+            &config,
+            "429",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "codex");
+            }
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_failover_needs_edit_none_skips_filter() {
+        // When task_needs_edit is None, no edit capability filtering happens
+        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
+        let action = decide_failover(
+            "gemini-cli",
+            "default",
+            None, // unknown edit requirement
+            None,
+            &[],
+            &config,
+            "429",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "codex");
+            }
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
 }

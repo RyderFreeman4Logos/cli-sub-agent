@@ -427,4 +427,164 @@ mod tests {
         assert_eq!(eligible.len(), 1);
         assert_eq!(eligible[0].1, "codex");
     }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_round_robin() {
+        let temp = tempdir().unwrap();
+        let config = make_config(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/0",
+                "codex/openai/o4-mini/0",
+                "claude-code/anthropic/sonnet/0",
+            ],
+            vec![],
+        );
+
+        // First call → index 1 (codex)
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.0, "codex", "First rotation should pick codex");
+
+        // Second call → index 2 (claude-code)
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.0, "claude-code",
+            "Second rotation should pick claude-code"
+        );
+
+        // Third call → wraps to index 0 (gemini-cli)
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.0, "gemini-cli",
+            "Third rotation should wrap to gemini-cli"
+        );
+
+        // Fourth call → back to index 1 (codex)
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.0, "codex",
+            "Fourth rotation should cycle back to codex"
+        );
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_skips_disabled() {
+        let temp = tempdir().unwrap();
+        let config = make_config(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/0",
+                "codex/openai/o4-mini/0",
+                "claude-code/anthropic/sonnet/0",
+            ],
+            vec!["codex"], // codex disabled
+        );
+
+        // First call → skips codex (disabled), picks claude-code (index 2)
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.0, "claude-code",
+            "Should skip disabled codex and pick claude-code"
+        );
+
+        // Second call → wraps, skips codex again, picks gemini-cli (index 0)
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.0, "gemini-cli", "Should wrap and pick gemini-cli");
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_all_disabled() {
+        let temp = tempdir().unwrap();
+        let config = make_config(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/0",
+                "codex/openai/o4-mini/0",
+            ],
+            vec!["gemini-cli", "codex"],
+        );
+
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false).unwrap();
+        assert!(
+            result.is_none(),
+            "Should return None when all tools disabled"
+        );
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_empty_models() {
+        let temp = tempdir().unwrap();
+        let config = make_config(vec![], vec![]);
+
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false).unwrap();
+        assert!(result.is_none(), "Should return None for empty models list");
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_single_tool() {
+        let temp = tempdir().unwrap();
+        let config = make_config(vec!["gemini-cli/google/gemini-2.5-pro/0"], vec![]);
+
+        // With only one tool, it should always return that tool
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.0, "gemini-cli");
+
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.0, "gemini-cli",
+            "Single tool should always be selected"
+        );
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_returns_full_spec() {
+        let temp = tempdir().unwrap();
+        let config = make_config(vec!["codex/openai/o4-mini/0"], vec![]);
+
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.0, "codex");
+        assert_eq!(result.1, "codex/openai/o4-mini/0");
+    }
+
+    #[test]
+    fn test_resolve_tier_name_missing_tier_returns_none() {
+        // Config with no tiers at all
+        let config = ProjectConfig {
+            schema_version: 1,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: Default::default(),
+            tools: HashMap::new(),
+            review: None,
+            debate: None,
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+        };
+        assert_eq!(resolve_tier_name(&config, "anything"), None);
+    }
+
+    #[test]
+    fn test_rotation_state_default_is_empty() {
+        let state = RotationState::default();
+        assert!(state.tiers.is_empty());
+    }
 }

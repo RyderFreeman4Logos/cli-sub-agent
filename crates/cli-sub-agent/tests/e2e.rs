@@ -1,9 +1,33 @@
 // End-to-end tests for the csa binary.
 // Requires actual tool installations for full testing.
 
+use std::process::Command;
+
+/// Create a [`Command`] pointing at the built `csa` binary with HOME, XDG_STATE_HOME,
+/// and XDG_CONFIG_HOME redirected to the given temp directory so tests never touch
+/// real user state.
+fn csa_cmd(tmp: &std::path::Path) -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_csa"));
+    cmd.env("HOME", tmp)
+        .env("XDG_STATE_HOME", tmp.join(".local/state"))
+        .env("XDG_CONFIG_HOME", tmp.join(".config"));
+    cmd
+}
+
+/// Run `csa init` inside the given temp directory so that a project config exists.
+fn init_project(tmp: &std::path::Path) {
+    let status = csa_cmd(tmp)
+        .arg("init")
+        .current_dir(tmp)
+        .status()
+        .expect("failed to run csa init");
+    assert!(status.success(), "csa init should succeed");
+}
+
 #[test]
 fn cli_help_displays_correctly() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_csa"))
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
         .arg("--help")
         .output()
         .expect("failed to run csa --help");
@@ -20,7 +44,8 @@ fn cli_help_displays_correctly() {
 
 #[test]
 fn run_help_shows_tool_options() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_csa"))
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
         .args(["run", "--help"])
         .output()
         .expect("failed to run csa run --help");
@@ -35,7 +60,8 @@ fn run_help_shows_tool_options() {
 
 #[test]
 fn review_help_shows_options() {
-    let output = std::process::Command::new(env!("CARGO_BIN_EXE_csa"))
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
         .args(["review", "--help"])
         .output()
         .expect("failed to run csa review --help");
@@ -49,4 +75,106 @@ fn review_help_shows_options() {
     assert!(stdout.contains("--branch"));
     assert!(stdout.contains("--commit"));
     assert!(stdout.contains("--model"));
+}
+
+// ---------------------------------------------------------------------------
+// Smoke tests for subcommands that do NOT launch real LLM tools.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn config_show_exits_zero_after_init() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_project(tmp.path());
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "show"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config show");
+
+    assert!(output.status.success(), "csa config show should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Config output is TOML — verify a few expected keys.
+    assert!(
+        stdout.contains("schema_version"),
+        "should contain schema_version"
+    );
+    assert!(
+        stdout.contains("[project]"),
+        "should contain [project] section"
+    );
+    assert!(
+        stdout.contains("[tools"),
+        "should contain [tools.*] sections"
+    );
+}
+
+#[test]
+fn gc_dry_run_exits_zero() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
+        .args(["gc", "--dry-run"])
+        .output()
+        .expect("failed to run csa gc --dry-run");
+
+    assert!(output.status.success(), "csa gc --dry-run should exit 0");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        combined.contains("dry-run"),
+        "output should mention dry-run mode"
+    );
+}
+
+#[test]
+fn tiers_list_exits_zero_after_init() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_project(tmp.path());
+
+    let output = csa_cmd(tmp.path())
+        .args(["tiers", "list"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa tiers list");
+
+    assert!(output.status.success(), "csa tiers list should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    // Default config always defines at least these tiers.
+    assert!(stdout.contains("tier-1"), "should list tier-1");
+    assert!(stdout.contains("tier-2"), "should list tier-2");
+    assert!(stdout.contains("tier-3"), "should list tier-3");
+}
+
+#[test]
+fn skill_list_exits_zero() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
+        .args(["skill", "list"])
+        .output()
+        .expect("failed to run csa skill list");
+
+    assert!(output.status.success(), "csa skill list should exit 0");
+}
+
+#[test]
+fn session_list_exits_zero() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
+        .args(["session", "list"])
+        .output()
+        .expect("failed to run csa session list");
+
+    assert!(output.status.success(), "csa session list should exit 0");
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert!(
+        combined.contains("No sessions found"),
+        "empty state should report no sessions"
+    );
 }

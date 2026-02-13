@@ -142,4 +142,64 @@ mod tests {
         let stats = UsageStats::default();
         assert!(stats.history.is_empty());
     }
+
+    #[test]
+    fn test_p95_estimate_two_records() {
+        let mut stats = UsageStats::default();
+        stats.record("tool1", 50);
+        stats.record("tool1", 200);
+        // ceil(2 * 0.95) = 2, min(2,2)-1 = 1 → sorted[1] = 200
+        assert_eq!(stats.get_p95_estimate("tool1"), Some(200));
+    }
+
+    #[test]
+    fn test_p95_estimate_unsorted_input() {
+        let mut stats = UsageStats::default();
+        // Insert in descending order — P95 must still sort correctly
+        for v in [100, 80, 60, 40, 20, 10, 5, 3, 2, 1] {
+            stats.record("tool1", v);
+        }
+        // sorted: [1,2,3,5,10,20,40,60,80,100]
+        // idx = ceil(10 * 0.95) = 10, min(10,10)-1 = 9 → sorted[9] = 100
+        assert_eq!(stats.get_p95_estimate("tool1"), Some(100));
+    }
+
+    #[test]
+    fn test_p95_estimate_independent_tools() {
+        let mut stats = UsageStats::default();
+        stats.record("tool_a", 100);
+        stats.record("tool_b", 999);
+        assert_eq!(stats.get_p95_estimate("tool_a"), Some(100));
+        assert_eq!(stats.get_p95_estimate("tool_b"), Some(999));
+        assert_eq!(stats.get_p95_estimate("tool_c"), None);
+    }
+
+    #[test]
+    fn test_load_nonexistent_returns_default() {
+        let dir = tempdir().unwrap();
+        let stats_path = dir.path().join("nonexistent.toml");
+        let stats = UsageStats::load(&stats_path).unwrap();
+        assert!(stats.history.is_empty());
+    }
+
+    #[test]
+    fn test_load_corrupt_file_returns_error() {
+        let dir = tempdir().unwrap();
+        let stats_path = dir.path().join("corrupt.toml");
+        std::fs::write(&stats_path, "not valid {{{ toml").unwrap();
+        let result = UsageStats::load(&stats_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_save_creates_parent_directories() {
+        let dir = tempdir().unwrap();
+        let stats_path = dir.path().join("nested").join("deep").join("stats.toml");
+        let mut stats = UsageStats::default();
+        stats.record("tool1", 42);
+        stats.save(&stats_path).unwrap();
+
+        let loaded = UsageStats::load(&stats_path).unwrap();
+        assert_eq!(loaded.get_p95_estimate("tool1"), Some(42));
+    }
 }

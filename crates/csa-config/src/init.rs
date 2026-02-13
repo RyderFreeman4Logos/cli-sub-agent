@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use chrono::Utc;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::config::{
@@ -10,12 +11,21 @@ use crate::config::{
 
 /// Detect which tools are installed on the system
 pub fn detect_installed_tools() -> Vec<&'static str> {
+    let system_path = std::env::var_os("PATH").unwrap_or_default();
+    detect_installed_tools_in_paths(&system_path)
+}
+
+/// Detect which tools are installed, searching only the given `paths`.
+///
+/// This avoids relying on the process-global `PATH` environment variable,
+/// making it safe to call from parallel tests.
+fn detect_installed_tools_in_paths(paths: &OsStr) -> Vec<&'static str> {
     let tools = ["gemini", "opencode", "codex", "claude"];
     let names = ["gemini-cli", "opencode", "codex", "claude-code"];
     tools
         .iter()
         .zip(names.iter())
-        .filter(|(exec, _)| which::which(exec).is_ok())
+        .filter(|(exec, _)| which::which_in(exec, Some(paths), ".").is_ok())
         .map(|(_, name)| *name)
         .collect()
 }
@@ -451,5 +461,284 @@ mod tests {
             "tier-2-standard",
             "'default' should map to 'tier-2-standard'"
         );
+    }
+
+    // --- New tests below ---
+
+    #[test]
+    fn test_build_smart_tiers_with_only_codex() {
+        let installed = vec!["codex"];
+        let tiers = build_smart_tiers(&installed);
+
+        assert_eq!(tiers.len(), 3);
+
+        // tier-1-quick: codex (no gemini, so codex is first fallback)
+        let tier1 = tiers.get("tier-1-quick").unwrap();
+        assert!(tier1.models[0].starts_with("codex/"));
+        assert!(tier1.models[0].contains("sonnet"));
+
+        // tier-2-standard: codex (preferred for standard)
+        let tier2 = tiers.get("tier-2-standard").unwrap();
+        assert!(tier2.models[0].starts_with("codex/"));
+        assert!(tier2.models[0].contains("sonnet"));
+
+        // tier-3-complex: codex (no claude-code, so codex is first fallback)
+        let tier3 = tiers.get("tier-3-complex").unwrap();
+        assert!(tier3.models[0].starts_with("codex/"));
+        assert!(tier3.models[0].contains("opus"));
+    }
+
+    #[test]
+    fn test_build_smart_tiers_with_only_claude_code() {
+        let installed = vec!["claude-code"];
+        let tiers = build_smart_tiers(&installed);
+
+        assert_eq!(tiers.len(), 3);
+
+        // tier-1-quick: claude-code sonnet (last fallback for tier1)
+        let tier1 = tiers.get("tier-1-quick").unwrap();
+        assert!(tier1.models[0].starts_with("claude-code/"));
+        assert!(tier1.models[0].contains("sonnet"));
+
+        // tier-2-standard: claude-code sonnet
+        let tier2 = tiers.get("tier-2-standard").unwrap();
+        assert!(tier2.models[0].starts_with("claude-code/"));
+        assert!(tier2.models[0].contains("sonnet"));
+
+        // tier-3-complex: claude-code opus (preferred for complex)
+        let tier3 = tiers.get("tier-3-complex").unwrap();
+        assert!(tier3.models[0].starts_with("claude-code/"));
+        assert!(tier3.models[0].contains("opus"));
+    }
+
+    #[test]
+    fn test_build_smart_tiers_with_only_opencode() {
+        let installed = vec!["opencode"];
+        let tiers = build_smart_tiers(&installed);
+
+        assert_eq!(tiers.len(), 3);
+
+        // tier-1-quick: opencode sonnet
+        let tier1 = tiers.get("tier-1-quick").unwrap();
+        assert!(tier1.models[0].starts_with("opencode/"));
+        assert!(tier1.models[0].contains("sonnet"));
+
+        // tier-2-standard: opencode sonnet
+        let tier2 = tiers.get("tier-2-standard").unwrap();
+        assert!(tier2.models[0].starts_with("opencode/"));
+
+        // tier-3-complex: opencode opus
+        let tier3 = tiers.get("tier-3-complex").unwrap();
+        assert!(tier3.models[0].starts_with("opencode/"));
+        assert!(tier3.models[0].contains("opus"));
+    }
+
+    #[test]
+    fn test_build_smart_tiers_with_gemini_and_codex() {
+        let installed = vec!["gemini-cli", "codex"];
+        let tiers = build_smart_tiers(&installed);
+
+        // tier-1-quick should use gemini flash (fastest/cheapest)
+        let tier1 = tiers.get("tier-1-quick").unwrap();
+        assert!(tier1.models[0].starts_with("gemini-cli/"));
+        assert!(tier1.models[0].contains("flash"));
+
+        // tier-2-standard should prefer codex
+        let tier2 = tiers.get("tier-2-standard").unwrap();
+        assert!(tier2.models[0].starts_with("codex/"));
+
+        // tier-3-complex should use codex opus (no claude-code)
+        let tier3 = tiers.get("tier-3-complex").unwrap();
+        assert!(tier3.models[0].starts_with("codex/"));
+        assert!(tier3.models[0].contains("opus"));
+    }
+
+    #[test]
+    fn test_build_smart_tiers_each_tier_has_exactly_one_model() {
+        let installed = vec!["gemini-cli", "codex", "claude-code", "opencode"];
+        let tiers = build_smart_tiers(&installed);
+
+        for (name, tier) in &tiers {
+            assert_eq!(
+                tier.models.len(),
+                1,
+                "Tier '{}' should have exactly one model, got {}",
+                name,
+                tier.models.len()
+            );
+        }
+    }
+
+    #[test]
+    fn test_build_smart_tiers_descriptions_not_empty() {
+        let installed = vec!["gemini-cli"];
+        let tiers = build_smart_tiers(&installed);
+
+        for (name, tier) in &tiers {
+            assert!(
+                !tier.description.is_empty(),
+                "Tier '{}' should have a non-empty description",
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn test_default_tier_mapping_completeness() {
+        let mapping = default_tier_mapping();
+
+        // Must have a 'default' entry
+        assert!(mapping.contains_key("default"));
+
+        // Known expected task types
+        let expected_keys = [
+            "default",
+            "security_audit",
+            "architecture_design",
+            "code_review",
+            "feature_implementation",
+            "bug_fix",
+            "documentation",
+            "quick_question",
+        ];
+        for key in &expected_keys {
+            assert!(
+                mapping.contains_key(*key),
+                "tier_mapping should contain '{}'",
+                key
+            );
+        }
+
+        // All mapped tiers should reference valid tier names
+        let valid_tiers = ["tier-1-quick", "tier-2-standard", "tier-3-complex"];
+        for (task, tier) in &mapping {
+            assert!(
+                valid_tiers.contains(&tier.as_str()),
+                "task '{}' maps to unknown tier '{}'",
+                task,
+                tier
+            );
+        }
+    }
+
+    #[test]
+    fn test_detect_installed_tools_with_mock_path() {
+        // Create a tempdir with mock executables and pass as custom paths
+        let dir = tempdir().unwrap();
+        let bin_dir = dir.path().join("bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+
+        // Create mock "gemini" and "codex" executables
+        let gemini_path = bin_dir.join("gemini");
+        std::fs::write(&gemini_path, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&gemini_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let codex_path = bin_dir.join("codex");
+        std::fs::write(&codex_path, "#!/bin/sh\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&codex_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        // Use detect_installed_tools_in_paths directly — no global PATH mutation
+        let custom_path = std::ffi::OsStr::new(bin_dir.to_str().unwrap());
+        let tools = detect_installed_tools_in_paths(custom_path);
+
+        // Should detect gemini-cli and codex (mapped from "gemini" and "codex" executables)
+        assert!(
+            tools.contains(&"gemini-cli"),
+            "Should detect gemini-cli from mock 'gemini' executable"
+        );
+        assert!(
+            tools.contains(&"codex"),
+            "Should detect codex from mock 'codex' executable"
+        );
+        // Should NOT detect tools we didn't mock
+        assert!(
+            !tools.contains(&"claude-code"),
+            "Should not detect claude-code without mock"
+        );
+        assert!(
+            !tools.contains(&"opencode"),
+            "Should not detect opencode without mock"
+        );
+    }
+
+    #[test]
+    fn test_detect_installed_tools_with_empty_path() {
+        // Use a non-existent path so no tools are found — no global PATH mutation
+        let custom_path = std::ffi::OsStr::new("/nonexistent_path_for_test");
+        let tools = detect_installed_tools_in_paths(custom_path);
+
+        assert!(
+            tools.is_empty(),
+            "Should detect no tools with empty/invalid PATH"
+        );
+    }
+
+    #[test]
+    fn test_init_project_minimal_mode() {
+        let dir = tempdir().unwrap();
+        let config = init_project(dir.path(), true, true).unwrap();
+
+        // Minimal mode should still have project name
+        assert!(!config.project.name.is_empty());
+
+        // Should have tiers (built from smart tiers)
+        assert!(!config.tiers.is_empty());
+
+        // Should have tier_mapping
+        assert!(config.tier_mapping.contains_key("default"));
+
+        // Minimal mode uses ResourcesConfig::default()
+        // (initial_estimates may be empty)
+        let config_path = ProjectConfig::config_path(dir.path());
+        assert!(config_path.exists());
+    }
+
+    #[test]
+    fn test_init_project_uses_directory_name() {
+        let dir = tempdir().unwrap();
+        let config = init_project(dir.path(), true, false).unwrap();
+
+        // Project name should be derived from directory name
+        let expected_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        assert_eq!(config.project.name, expected_name);
+    }
+
+    #[test]
+    fn test_init_project_creates_gitignore_with_csa() {
+        let dir = tempdir().unwrap();
+        init_project(dir.path(), true, false).unwrap();
+
+        let gitignore_path = dir.path().join(".gitignore");
+        assert!(gitignore_path.exists());
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        assert!(content.contains(".csa/"));
+    }
+
+    #[test]
+    fn test_update_gitignore_no_trailing_newline() {
+        let dir = tempdir().unwrap();
+        let gitignore_path = dir.path().join(".gitignore");
+
+        // Write file without trailing newline
+        std::fs::write(&gitignore_path, "target/").unwrap();
+
+        update_gitignore(dir.path()).unwrap();
+
+        let content = std::fs::read_to_string(&gitignore_path).unwrap();
+        // Should have added a newline before .csa/
+        assert!(content.contains("target/\n.csa/"));
     }
 }

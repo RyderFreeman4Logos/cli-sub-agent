@@ -257,4 +257,80 @@ mod tests {
             "Different tools should have different lock files"
         );
     }
+
+    #[test]
+    fn test_lock_path_follows_convention() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let session_dir = temp_dir.path();
+
+        let lock = acquire_lock(session_dir, "codex", "running task").expect("Lock should succeed");
+
+        // Convention: {session_dir}/locks/{tool_name}.lock
+        let expected = session_dir.join("locks").join("codex.lock");
+        assert_eq!(lock.lock_path(), expected);
+    }
+
+    #[test]
+    fn test_locks_dir_created_automatically() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let session_dir = temp_dir.path();
+
+        // locks/ subdir should not exist yet
+        assert!(!session_dir.join("locks").exists());
+
+        let _lock = acquire_lock(session_dir, "auto-dir", "test").expect("Lock should succeed");
+
+        assert!(session_dir.join("locks").exists());
+        assert!(session_dir.join("locks").is_dir());
+    }
+
+    #[test]
+    fn test_acquire_lock_nonexistent_parent_dir() {
+        // session_dir itself does not exist — create_dir_all should handle it
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let session_dir = temp_dir.path().join("deep").join("nested").join("session");
+
+        let lock = acquire_lock(&session_dir, "tool", "reason");
+        assert!(lock.is_ok(), "Should create intermediate dirs");
+    }
+
+    #[test]
+    fn test_acquire_lock_invalid_path() {
+        // /dev/null is a file, not a directory — creating locks/ under it should fail
+        let result = acquire_lock(Path::new("/dev/null"), "tool", "reason");
+        assert!(
+            result.is_err(),
+            "Should fail for non-directory session path"
+        );
+    }
+
+    #[test]
+    fn test_lock_debug_format() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let session_dir = temp_dir.path();
+
+        let lock = acquire_lock(session_dir, "debug-tool", "test").expect("Lock should succeed");
+
+        let debug = format!("{:?}", lock);
+        assert!(debug.contains("SessionLock"));
+        assert!(debug.contains("lock_path"));
+    }
+
+    #[test]
+    fn test_second_lock_error_contains_diagnostic() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let session_dir = temp_dir.path();
+
+        let _lock1 = acquire_lock(session_dir, "diag-tool", "first task")
+            .expect("First lock should succeed");
+
+        let err = acquire_lock(session_dir, "diag-tool", "second task")
+            .unwrap_err()
+            .to_string();
+
+        // Error must contain PID, tool name, and original reason
+        assert!(err.contains(&std::process::id().to_string()), "missing PID");
+        assert!(err.contains("diag-tool"), "missing tool name");
+        assert!(err.contains("first task"), "missing original reason");
+    }
 }

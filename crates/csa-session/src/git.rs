@@ -174,3 +174,123 @@ pub fn history(sessions_dir: &Path, session_id: &str) -> Result<String> {
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    // ── ensure_git_init ────────────────────────────────────────────
+
+    #[test]
+    fn test_ensure_git_init_creates_repo() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+
+        ensure_git_init(&sessions_dir).expect("First git init should succeed");
+        assert!(sessions_dir.join(".git").exists());
+    }
+
+    #[test]
+    fn test_ensure_git_init_idempotent() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+
+        ensure_git_init(&sessions_dir).expect("First call should succeed");
+        ensure_git_init(&sessions_dir).expect("Second call should also succeed (idempotent)");
+        assert!(sessions_dir.join(".git").exists());
+    }
+
+    // ── commit_session ─────────────────────────────────────────────
+
+    #[test]
+    fn test_commit_session_returns_short_hash() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        ensure_git_init(&sessions_dir).unwrap();
+
+        // Create a valid session directory with a file
+        let session_id = ulid::Ulid::new().to_string();
+        let session_dir = sessions_dir.join(&session_id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("state.toml"), "placeholder = true").unwrap();
+
+        let hash =
+            commit_session(&sessions_dir, &session_id, "test commit").expect("Commit should work");
+        assert!(!hash.is_empty(), "Should return a non-empty short hash");
+        // Short git hashes are typically 7+ hex characters
+        assert!(hash.len() >= 7, "Short hash should be at least 7 chars");
+    }
+
+    #[test]
+    fn test_commit_session_no_changes_errors() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        ensure_git_init(&sessions_dir).unwrap();
+
+        // Create session with a file, commit it first
+        let session_id = ulid::Ulid::new().to_string();
+        let session_dir = sessions_dir.join(&session_id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("state.toml"), "placeholder = true").unwrap();
+        commit_session(&sessions_dir, &session_id, "initial").unwrap();
+
+        // Second commit without changes should fail
+        let result = commit_session(&sessions_dir, &session_id, "no changes");
+        assert!(result.is_err(), "Should error when there are no changes");
+        assert!(
+            result.unwrap_err().to_string().contains("No changes"),
+            "Error message should mention no changes"
+        );
+    }
+
+    // ── history ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_history_after_commit() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        ensure_git_init(&sessions_dir).unwrap();
+
+        let session_id = ulid::Ulid::new().to_string();
+        let session_dir = sessions_dir.join(&session_id);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::write(session_dir.join("state.toml"), "v = 1").unwrap();
+        commit_session(&sessions_dir, &session_id, "first commit").unwrap();
+
+        let log = history(&sessions_dir, &session_id).expect("History should work");
+        assert!(
+            log.contains("first commit"),
+            "Log should contain the commit message"
+        );
+    }
+
+    #[test]
+    fn test_history_empty_repo_returns_empty_string() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+        ensure_git_init(&sessions_dir).unwrap();
+
+        let session_id = ulid::Ulid::new().to_string();
+        let log = history(&sessions_dir, &session_id).expect("History on empty repo should work");
+        assert!(log.is_empty(), "Empty repo should return empty log");
+    }
+
+    #[test]
+    fn test_history_no_git_repo_errors() {
+        let tmp = tempdir().expect("Failed to create temp dir");
+        let sessions_dir = tmp.path().join("sessions");
+        // Do NOT init git
+
+        let session_id = ulid::Ulid::new().to_string();
+        let result = history(&sessions_dir, &session_id);
+        assert!(
+            result.is_err(),
+            "Should error when no .git directory exists"
+        );
+    }
+}

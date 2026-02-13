@@ -236,4 +236,158 @@ command = "echo project"
         // PreRun has no built-in, should be disabled by default
         assert!(!pre_run_hook.enabled);
     }
+
+    #[test]
+    fn test_load_from_tempdir_with_hooks_toml() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(
+            &hooks_path,
+            r#"
+[pre_run]
+enabled = true
+command = "echo pre-run"
+timeout_secs = 15
+
+[post_run]
+enabled = true
+command = "echo post-run"
+timeout_secs = 20
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+
+        let pre_run = config.get_for_event(HookEvent::PreRun);
+        assert!(pre_run.enabled);
+        assert_eq!(pre_run.command.as_deref(), Some("echo pre-run"));
+        assert_eq!(pre_run.timeout_secs, 15);
+
+        let post_run = config.get_for_event(HookEvent::PostRun);
+        assert!(post_run.enabled);
+        assert_eq!(post_run.command.as_deref(), Some("echo post-run"));
+        assert_eq!(post_run.timeout_secs, 20);
+    }
+
+    #[test]
+    fn test_get_for_event_all_variants() {
+        let config = load_hooks_config(None, None, None);
+
+        // Events with built-in commands default to enabled
+        let session = config.get_for_event(HookEvent::SessionComplete);
+        assert!(session.enabled);
+        assert!(session.command.is_none()); // resolved lazily
+
+        let todo_create = config.get_for_event(HookEvent::TodoCreate);
+        assert!(todo_create.enabled);
+
+        let todo_save = config.get_for_event(HookEvent::TodoSave);
+        assert!(todo_save.enabled);
+
+        // Events without built-in commands default to disabled
+        let pre_run = config.get_for_event(HookEvent::PreRun);
+        assert!(!pre_run.enabled);
+
+        let post_run = config.get_for_event(HookEvent::PostRun);
+        assert!(!post_run.enabled);
+    }
+
+    #[test]
+    fn test_missing_config_file_returns_default() {
+        let nonexistent = Path::new("/nonexistent/dir/hooks.toml");
+        let config = load_hooks_config(Some(nonexistent), None, None);
+
+        // Should fall back to default (empty hooks map)
+        assert!(config.hooks.is_empty());
+
+        // Built-in events should still work via get_for_event defaults
+        let session = config.get_for_event(HookEvent::SessionComplete);
+        assert!(session.enabled);
+    }
+
+    #[test]
+    fn test_malformed_toml_returns_default() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(&hooks_path, "this is not valid toml {{{{").unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+
+        // Should gracefully return default config
+        assert!(config.hooks.is_empty());
+    }
+
+    #[test]
+    fn test_default_timeout_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        // Only set enabled and command; timeout_secs should get default 30
+        std::fs::write(
+            &hooks_path,
+            r#"
+[pre_run]
+enabled = true
+command = "echo test"
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+        let pre_run = config.get_for_event(HookEvent::PreRun);
+        assert_eq!(pre_run.timeout_secs, 30, "Default timeout should be 30");
+    }
+
+    #[test]
+    fn test_merge_global_and_project_partial_overlap() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let global_path = dir.path().join("global_hooks.toml");
+        std::fs::write(
+            &global_path,
+            r#"
+[pre_run]
+enabled = true
+command = "echo global-pre"
+
+[post_run]
+enabled = true
+command = "echo global-post"
+"#,
+        )
+        .unwrap();
+
+        let project_path = dir.path().join("project_hooks.toml");
+        std::fs::write(
+            &project_path,
+            r#"
+[pre_run]
+enabled = false
+command = "echo project-pre"
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&project_path), Some(&global_path), None);
+
+        // pre_run: project overrides global
+        let pre_run = config.get_for_event(HookEvent::PreRun);
+        assert!(!pre_run.enabled);
+        assert_eq!(pre_run.command.as_deref(), Some("echo project-pre"));
+
+        // post_run: only in global, not overridden
+        let post_run = config.get_for_event(HookEvent::PostRun);
+        assert!(post_run.enabled);
+        assert_eq!(post_run.command.as_deref(), Some("echo global-post"));
+    }
+
+    #[test]
+    fn test_empty_hooks_toml_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(&hooks_path, "").unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+        assert!(config.hooks.is_empty());
+    }
 }

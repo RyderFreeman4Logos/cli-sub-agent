@@ -226,4 +226,80 @@ mod tests {
         assert_eq!(ModelFamily::OpenAI.to_string(), "OpenAI");
         assert_eq!(ModelFamily::Other.to_string(), "Other");
     }
+
+    #[test]
+    fn test_tool_name_as_str() {
+        assert_eq!(ToolName::GeminiCli.as_str(), "gemini-cli");
+        assert_eq!(ToolName::Opencode.as_str(), "opencode");
+        assert_eq!(ToolName::Codex.as_str(), "codex");
+        assert_eq!(ToolName::ClaudeCode.as_str(), "claude-code");
+    }
+
+    #[test]
+    fn test_tool_name_display() {
+        assert_eq!(ToolName::GeminiCli.to_string(), "gemini-cli");
+        assert_eq!(ToolName::Opencode.to_string(), "opencode");
+        assert_eq!(ToolName::Codex.to_string(), "codex");
+        assert_eq!(ToolName::ClaudeCode.to_string(), "claude-code");
+    }
+
+    #[test]
+    fn test_tool_arg_from_str_specific_opencode() {
+        let arg = ToolArg::from_str("opencode").unwrap();
+        assert!(matches!(arg, ToolArg::Specific(ToolName::Opencode)));
+    }
+
+    #[test]
+    fn test_tool_arg_from_str_specific_claude_code() {
+        let arg = ToolArg::from_str("claude-code").unwrap();
+        assert!(matches!(arg, ToolArg::Specific(ToolName::ClaudeCode)));
+    }
+
+    #[test]
+    fn test_tool_arg_display_fromstr_roundtrip() {
+        let cases = [
+            ToolArg::Auto,
+            ToolArg::AnyAvailable,
+            ToolArg::Specific(ToolName::GeminiCli),
+            ToolArg::Specific(ToolName::Opencode),
+            ToolArg::Specific(ToolName::Codex),
+            ToolArg::Specific(ToolName::ClaudeCode),
+        ];
+        for original in &cases {
+            let s = original.to_string();
+            let parsed = ToolArg::from_str(&s).unwrap();
+            assert_eq!(parsed.to_string(), s);
+        }
+    }
+
+    #[test]
+    fn test_tool_arg_into_strategy_all_specific() {
+        let tools = [
+            (ToolName::GeminiCli, "GeminiCli"),
+            (ToolName::Opencode, "Opencode"),
+            (ToolName::Codex, "Codex"),
+            (ToolName::ClaudeCode, "ClaudeCode"),
+        ];
+        for (tool, label) in tools {
+            let strategy = ToolArg::Specific(tool).into_strategy();
+            match strategy {
+                ToolSelectionStrategy::Explicit(t) => assert_eq!(t, tool, "Mismatch for {label}"),
+                _ => panic!("Expected Explicit for {label}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_tool_arg_from_str_empty_string() {
+        let result = ToolArg::from_str("");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_tool_arg_from_str_case_sensitive() {
+        // Tool names are case-sensitive: "Auto" should fail
+        assert!(ToolArg::from_str("Auto").is_err());
+        assert!(ToolArg::from_str("CODEX").is_err());
+        assert!(ToolArg::from_str("Claude-Code").is_err());
+    }
 }

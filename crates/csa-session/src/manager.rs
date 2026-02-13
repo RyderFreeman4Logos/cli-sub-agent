@@ -497,86 +497,51 @@ mod tests {
 
     #[test]
     fn test_create_session() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        let state = create_session_in(
-            temp_dir.path(),
-            project_path,
-            Some("Test session"),
-            None,
-            None,
-        )
-        .expect("Failed to create session");
-
+        let td = tempdir().unwrap();
+        let state =
+            create_session_in(td.path(), td.path(), Some("Test session"), None, None).unwrap();
         assert_eq!(state.description, Some("Test session".to_string()));
         assert_eq!(state.genealogy.depth, 0);
         assert!(state.genealogy.parent_session_id.is_none());
-
-        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
-        assert!(session_dir.exists());
-        assert!(session_dir.join(STATE_FILE_NAME).exists());
-        assert!(session_dir.join("input").is_dir());
-        assert!(session_dir.join("output").is_dir());
+        let dir = get_session_dir_in(td.path(), &state.meta_session_id);
+        assert!(dir.exists());
+        assert!(dir.join(STATE_FILE_NAME).exists());
+        assert!(dir.join("input").is_dir());
+        assert!(dir.join("output").is_dir());
     }
 
     #[test]
     fn test_load_session() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        let created = create_session_in(temp_dir.path(), project_path, Some("Test"), None, None)
-            .expect("Failed to create session");
-
-        let loaded = load_session_in(temp_dir.path(), &created.meta_session_id)
-            .expect("Failed to load session");
-
+        let td = tempdir().unwrap();
+        let created = create_session_in(td.path(), td.path(), Some("Test"), None, None).unwrap();
+        let loaded = load_session_in(td.path(), &created.meta_session_id).unwrap();
         assert_eq!(loaded.meta_session_id, created.meta_session_id);
         assert_eq!(loaded.description, created.description);
     }
 
     #[test]
     fn test_delete_session() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
-            .expect("Failed to create session");
-
-        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
-        assert!(session_dir.exists());
-
-        delete_session_in(temp_dir.path(), &state.meta_session_id)
-            .expect("Failed to delete session");
-
-        assert!(!session_dir.exists());
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
+        let dir = get_session_dir_in(td.path(), &state.meta_session_id);
+        assert!(dir.exists());
+        delete_session_in(td.path(), &state.meta_session_id).unwrap();
+        assert!(!dir.exists());
     }
 
     #[test]
     fn test_list_all_sessions() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        create_session_in(temp_dir.path(), project_path, Some("Session 1"), None, None)
-            .expect("Failed to create session 1");
-        create_session_in(temp_dir.path(), project_path, Some("Session 2"), None, None)
-            .expect("Failed to create session 2");
-
-        let sessions = list_all_sessions_in(temp_dir.path()).expect("Failed to list sessions");
-
-        assert_eq!(sessions.len(), 2);
+        let td = tempdir().unwrap();
+        create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
+        create_session_in(td.path(), td.path(), Some("S2"), None, None).unwrap();
+        assert_eq!(list_all_sessions_in(td.path()).unwrap().len(), 2);
     }
 
     #[test]
     fn test_list_sessions_with_tool_filter() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        let mut state1 =
-            create_session_in(temp_dir.path(), project_path, Some("Session 1"), None, None)
-                .expect("Failed to create session 1");
-
-        state1.tools.insert(
+        let td = tempdir().unwrap();
+        let mut s1 = create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
+        s1.tools.insert(
             "codex".to_string(),
             crate::state::ToolState {
                 provider_session_id: Some("thread_123".to_string()),
@@ -586,35 +551,25 @@ mod tests {
                 token_usage: None,
             },
         );
-        save_session_in(temp_dir.path(), &state1).expect("Failed to save state1");
-
-        create_session_in(temp_dir.path(), project_path, Some("Session 2"), None, None)
-            .expect("Failed to create session 2");
-
-        let filtered = list_sessions_in(temp_dir.path(), Some(&["codex"]))
-            .expect("Failed to list filtered sessions");
-
+        save_session_in(td.path(), &s1).unwrap();
+        create_session_in(td.path(), td.path(), Some("S2"), None, None).unwrap();
+        let filtered = list_sessions_in(td.path(), Some(&["codex"])).unwrap();
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].meta_session_id, state1.meta_session_id);
+        assert_eq!(filtered[0].meta_session_id, s1.meta_session_id);
     }
 
     #[test]
     fn test_create_child_session() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None, None)
-            .expect("Failed to create parent");
-
+        let td = tempdir().unwrap();
+        let parent = create_session_in(td.path(), td.path(), Some("Parent"), None, None).unwrap();
         let child = create_session_in(
-            temp_dir.path(),
-            project_path,
+            td.path(),
+            td.path(),
             Some("Child"),
             Some(&parent.meta_session_id),
             None,
         )
-        .expect("Failed to create child");
-
+        .unwrap();
         assert_eq!(
             child.genealogy.parent_session_id,
             Some(parent.meta_session_id.clone())
@@ -624,21 +579,10 @@ mod tests {
 
     #[test]
     fn test_round_trip() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-
-        let created = create_session_in(
-            temp_dir.path(),
-            project_path,
-            Some("Round trip test"),
-            None,
-            None,
-        )
-        .expect("Failed to create session");
-
-        let loaded = load_session_in(temp_dir.path(), &created.meta_session_id)
-            .expect("Failed to load session");
-
+        let td = tempdir().unwrap();
+        let created =
+            create_session_in(td.path(), td.path(), Some("Round trip"), None, None).unwrap();
+        let loaded = load_session_in(td.path(), &created.meta_session_id).unwrap();
         assert_eq!(loaded.meta_session_id, created.meta_session_id);
         assert_eq!(loaded.description, created.description);
         assert_eq!(loaded.project_path, created.project_path);
@@ -647,83 +591,50 @@ mod tests {
 
     #[test]
     fn test_create_session_with_tool() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(
-            temp_dir.path(),
-            project_path,
-            Some("Test"),
-            None,
-            Some("codex"),
-        )
-        .expect("Failed to create session");
-
-        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
-        assert!(session_dir.join("metadata.toml").exists());
-        assert!(session_dir.join("input").is_dir());
-        assert!(session_dir.join("output").is_dir());
-
-        let metadata = load_metadata_in(temp_dir.path(), &state.meta_session_id)
-            .expect("Failed to load metadata")
-            .expect("Metadata should exist");
-        assert_eq!(metadata.tool, "codex");
-        assert!(metadata.tool_locked);
+        let td = tempdir().unwrap();
+        let state =
+            create_session_in(td.path(), td.path(), Some("Test"), None, Some("codex")).unwrap();
+        let dir = get_session_dir_in(td.path(), &state.meta_session_id);
+        assert!(dir.join("metadata.toml").exists());
+        let meta = load_metadata_in(td.path(), &state.meta_session_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(meta.tool, "codex");
+        assert!(meta.tool_locked);
     }
 
     #[test]
     fn test_tool_access_validation() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
-            .expect("Failed to create session");
-
-        // Same tool should be allowed
-        validate_tool_access_in(temp_dir.path(), &state.meta_session_id, "codex")
-            .expect("Same tool should be allowed");
-
-        // Different tool should fail
-        let result = validate_tool_access_in(temp_dir.path(), &state.meta_session_id, "gemini-cli");
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("locked to tool"));
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+        validate_tool_access_in(td.path(), &state.meta_session_id, "codex").unwrap();
+        let err = validate_tool_access_in(td.path(), &state.meta_session_id, "gemini-cli");
+        assert!(err.unwrap_err().to_string().contains("locked to tool"));
     }
 
     #[test]
     fn test_no_tool_no_metadata() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
-            .expect("Failed to create session");
-
-        let metadata = load_metadata_in(temp_dir.path(), &state.meta_session_id)
-            .expect("Failed to load metadata");
-        assert!(metadata.is_none());
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
+        assert!(load_metadata_in(td.path(), &state.meta_session_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn test_complete_session() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(
-            temp_dir.path(),
-            project_path,
-            Some("Test"),
-            None,
-            Some("codex"),
-        )
-        .expect("Failed to create session");
-
-        let hash = complete_session_in(temp_dir.path(), &state.meta_session_id, "session complete")
-            .expect("Failed to complete session");
+        let td = tempdir().unwrap();
+        let state =
+            create_session_in(td.path(), td.path(), Some("Test"), None, Some("codex")).unwrap();
+        let hash =
+            complete_session_in(td.path(), &state.meta_session_id, "session complete").unwrap();
         assert!(!hash.is_empty());
     }
 
     #[test]
     fn test_save_and_load_result() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
-            .expect("Failed to create session");
-
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
         let result = crate::result::SessionResult {
             status: "success".to_string(),
             exit_code: 0,
@@ -733,14 +644,10 @@ mod tests {
             completed_at: chrono::Utc::now(),
             artifacts: vec!["output/result.txt".to_string()],
         };
-
-        save_result_in(temp_dir.path(), &state.meta_session_id, &result)
-            .expect("Failed to save result");
-
-        let loaded = load_result_in(temp_dir.path(), &state.meta_session_id)
-            .expect("Failed to load result")
-            .expect("Result should exist");
-
+        save_result_in(td.path(), &state.meta_session_id, &result).unwrap();
+        let loaded = load_result_in(td.path(), &state.meta_session_id)
+            .unwrap()
+            .unwrap();
         assert_eq!(loaded.status, "success");
         assert_eq!(loaded.exit_code, 0);
         assert_eq!(loaded.tool, "codex");
@@ -749,30 +656,21 @@ mod tests {
 
     #[test]
     fn test_load_result_not_found() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(temp_dir.path(), project_path, None, None, None)
-            .expect("Failed to create session");
-
-        let loaded =
-            load_result_in(temp_dir.path(), &state.meta_session_id).expect("Failed to load result");
-        assert!(loaded.is_none());
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
+        assert!(load_result_in(td.path(), &state.meta_session_id)
+            .unwrap()
+            .is_none());
     }
 
     #[test]
     fn test_list_artifacts() {
-        let temp_dir = tempdir().expect("Failed to create temp dir");
-        let project_path = temp_dir.path();
-        let state = create_session_in(temp_dir.path(), project_path, None, None, Some("codex"))
-            .expect("Failed to create session");
-
-        let session_dir = get_session_dir_in(temp_dir.path(), &state.meta_session_id);
-        // Create some artifact files
-        std::fs::write(session_dir.join("output/report.txt"), "test").unwrap();
-        std::fs::write(session_dir.join("output/diff.patch"), "test").unwrap();
-
-        let artifacts = list_artifacts_in(temp_dir.path(), &state.meta_session_id)
-            .expect("Failed to list artifacts");
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+        let dir = get_session_dir_in(td.path(), &state.meta_session_id);
+        std::fs::write(dir.join("output/report.txt"), "test").unwrap();
+        std::fs::write(dir.join("output/diff.patch"), "test").unwrap();
+        let artifacts = list_artifacts_in(td.path(), &state.meta_session_id).unwrap();
         assert_eq!(artifacts.len(), 2);
         assert!(artifacts.contains(&"diff.patch".to_string()));
         assert!(artifacts.contains(&"report.txt".to_string()));
@@ -780,21 +678,75 @@ mod tests {
 
     #[test]
     fn test_status_from_exit_code() {
-        assert_eq!(
-            crate::result::SessionResult::status_from_exit_code(0),
-            "success"
-        );
-        assert_eq!(
-            crate::result::SessionResult::status_from_exit_code(1),
-            "failure"
-        );
-        assert_eq!(
-            crate::result::SessionResult::status_from_exit_code(137),
-            "signal"
-        );
-        assert_eq!(
-            crate::result::SessionResult::status_from_exit_code(143),
-            "signal"
-        );
+        use crate::result::SessionResult;
+        assert_eq!(SessionResult::status_from_exit_code(0), "success");
+        assert_eq!(SessionResult::status_from_exit_code(1), "failure");
+        assert_eq!(SessionResult::status_from_exit_code(137), "signal");
+        assert_eq!(SessionResult::status_from_exit_code(143), "signal");
+    }
+
+    #[test]
+    fn test_save_session_in_explicit_base() {
+        let td = tempdir().unwrap();
+        let mut state =
+            create_session_in(td.path(), td.path(), Some("Explicit save"), None, None).unwrap();
+        state.description = Some("Modified".to_string());
+        save_session_in(td.path(), &state).unwrap();
+        let loaded = load_session_in(td.path(), &state.meta_session_id).unwrap();
+        assert_eq!(loaded.description, Some("Modified".to_string()));
+    }
+
+    #[test]
+    fn test_list_sessions_empty_and_missing() {
+        let td = tempdir().unwrap();
+        assert!(list_all_sessions_in(td.path()).unwrap().is_empty());
+        assert!(list_sessions_in(td.path(), None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn test_delete_nonexistent_session() {
+        let td = tempdir().unwrap();
+        std::fs::create_dir_all(td.path().join("sessions")).unwrap();
+        let r = delete_session_in(td.path(), &crate::validate::new_session_id());
+        assert!(r.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_load_nonexistent_session() {
+        let td = tempdir().unwrap();
+        let r = load_session_in(td.path(), &crate::validate::new_session_id());
+        assert!(r.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_update_last_accessed_advances_timestamp() {
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), Some("ts"), None, None).unwrap();
+        let t0 = state.last_accessed;
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let mut s = load_session_in(td.path(), &state.meta_session_id).unwrap();
+        s.last_accessed = Utc::now();
+        save_session_in(td.path(), &s).unwrap();
+        let s2 = load_session_in(td.path(), &state.meta_session_id).unwrap();
+        assert!(s2.last_accessed > t0);
+    }
+
+    #[test]
+    fn test_list_artifacts_empty_output() {
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
+        assert!(list_artifacts_in(td.path(), &state.meta_session_id)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn test_operations_with_invalid_session_id() {
+        let td = tempdir().unwrap();
+        let bad = "not-a-valid-ulid";
+        assert!(load_session_in(td.path(), bad).is_err());
+        assert!(delete_session_in(td.path(), bad).is_err());
+        assert!(load_metadata_in(td.path(), bad).is_err());
+        assert!(validate_tool_access_in(td.path(), bad, "codex").is_err());
     }
 }
