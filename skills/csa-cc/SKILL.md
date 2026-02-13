@@ -1,3 +1,9 @@
+---
+name: csa-cc
+description: Thin routing skill that replaces all 14 Claude Code agents with csa claude-sub-agent
+allowed-tools: Bash, Read, Grep, Glob, Task
+---
+
 # csa-cc: Claude Code Sub-Agent Router
 
 Thin routing skill that replaces all 14 Claude Code agents with `csa claude-sub-agent`.

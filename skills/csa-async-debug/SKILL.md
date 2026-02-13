@@ -1,3 +1,9 @@
+---
+name: csa-async-debug
+description: Expert diagnosis for Tokio/async Rust issues including deadlocks, task leaks, performance bottlenecks, and cancellation safety
+allowed-tools: Bash, Read, Grep, Glob
+---
+
 # Async/Tokio Debugging Guide
 
 Expert diagnosis for Tokio/async Rust issues: deadlocks, task leaks, performance bottlenecks, and cancellation safety.

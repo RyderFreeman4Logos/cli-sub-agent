@@ -1,3 +1,9 @@
+---
+name: sa
+description: Three-tier recursive delegation for planning and implementing features with main agent dispatching and child CSA building
+allowed-tools: Bash, Read, Grep, Glob, Task
+---
+
 # sa: Sub-Agent Orchestration (Three-Tier Architecture)
 
 Three-tier recursive delegation for planning and implementing features.
