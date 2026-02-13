@@ -338,13 +338,27 @@ impl Executor {
         }
 
         // Prompt (position matters per tool)
-        if matches!(prompt_transport, PromptTransport::Argv) {
-            match self {
+        match prompt_transport {
+            PromptTransport::Argv => match self {
                 Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
                     cmd.arg("-p").arg(prompt);
                 }
                 Self::Opencode { .. } | Self::Codex { .. } => {
                     cmd.arg(prompt);
+                }
+            },
+            PromptTransport::Stdin => {
+                // When prompt is delivered via stdin, tools that use `-p` for
+                // non-interactive/pipe mode still need the flag (without the
+                // prompt argument) so they read from stdin instead of entering
+                // interactive mode.
+                match self {
+                    Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
+                        cmd.arg("-p");
+                    }
+                    Self::Opencode { .. } | Self::Codex { .. } => {
+                        // These tools read from stdin natively without extra flags.
+                    }
                 }
             }
         }

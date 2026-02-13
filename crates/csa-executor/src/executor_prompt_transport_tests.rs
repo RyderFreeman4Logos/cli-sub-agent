@@ -95,6 +95,10 @@ fn test_build_command_long_prompt_uses_stdin_for_gemini_cli() {
         !args.contains(&prompt),
         "long prompt should not be in argv for gemini-cli"
     );
+    assert!(
+        args.contains(&"-p".to_string()),
+        "gemini-cli must retain -p flag in stdin mode for non-interactive operation"
+    );
     assert_eq!(
         stdin_data,
         Some(prompt.as_bytes().to_vec()),
@@ -121,6 +125,10 @@ fn test_build_command_long_prompt_uses_stdin_for_claude_code() {
     assert!(
         !args.contains(&prompt),
         "long prompt should not be in argv for claude-code"
+    );
+    assert!(
+        args.contains(&"-p".to_string()),
+        "claude-code must retain -p flag in stdin mode for pipe/non-interactive operation"
     );
     assert_eq!(
         stdin_data,
