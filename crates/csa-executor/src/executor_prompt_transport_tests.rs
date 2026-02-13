@@ -76,6 +76,60 @@ fn test_build_command_long_prompt_uses_stdin_for_stdin_capable_tool() {
 }
 
 #[test]
+fn test_build_command_long_prompt_uses_stdin_for_gemini_cli() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let prompt = "g".repeat(MAX_ARGV_PROMPT_LEN + 1);
+
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.contains(&prompt),
+        "long prompt should not be in argv for gemini-cli"
+    );
+    assert_eq!(
+        stdin_data,
+        Some(prompt.as_bytes().to_vec()),
+        "gemini-cli should transport long prompts via stdin"
+    );
+}
+
+#[test]
+fn test_build_command_long_prompt_uses_stdin_for_claude_code() {
+    let exec = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let prompt = "c".repeat(MAX_ARGV_PROMPT_LEN + 1);
+
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.contains(&prompt),
+        "long prompt should not be in argv for claude-code"
+    );
+    assert_eq!(
+        stdin_data,
+        Some(prompt.as_bytes().to_vec()),
+        "claude-code should transport long prompts via stdin"
+    );
+}
+
+#[test]
 fn test_build_command_long_prompt_opencode_stays_in_argv() {
     let exec = Executor::Opencode {
         model_override: None,
