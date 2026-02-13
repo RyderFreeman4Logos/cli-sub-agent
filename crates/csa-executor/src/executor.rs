@@ -1,7 +1,7 @@
 //! Executor enum for 4 AI tools.
 
 use anyhow::{bail, Result};
-use csa_core::types::ToolName;
+use csa_core::types::{prompt_transport_capabilities, PromptTransport, ToolName};
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
@@ -10,6 +10,8 @@ use std::path::Path;
 use tokio::process::Command;
 
 use crate::model_spec::{ModelSpec, ThinkingBudget};
+
+pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 
 /// Executor: Closed enum for 4 AI tools.
 ///
@@ -184,13 +186,18 @@ impl Executor {
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-    ) -> Command {
+    ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = self.build_base_command(session);
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
-        self.append_tool_args(&mut cmd, prompt, tool_state);
-        cmd
+        let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
+        if matches!(prompt_transport, PromptTransport::Argv) {
+            self.append_tool_args(&mut cmd, prompt, tool_state);
+        } else {
+            self.append_tool_args_with_transport(&mut cmd, prompt, tool_state, prompt_transport);
+        }
+        (cmd, stdin_data)
     }
 
     /// Execute a task with full session context.
@@ -201,8 +208,8 @@ impl Executor {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
     ) -> Result<ExecutionResult> {
-        let cmd = self.build_command(prompt, tool_state, session, extra_env);
-        csa_process::run_and_capture(cmd).await
+        let (cmd, stdin_data) = self.build_command(prompt, tool_state, session, extra_env);
+        csa_process::run_and_capture_with_stdin(cmd, stdin_data).await
     }
 
     /// Execute in a specific directory (for ephemeral sessions).
@@ -229,8 +236,13 @@ impl Executor {
         {
             cmd.arg("-c").arg("notify=[]");
         }
-        self.append_prompt_args(&mut cmd, prompt);
-        csa_process::run_and_capture(cmd).await
+        let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
+        if matches!(prompt_transport, PromptTransport::Argv) {
+            self.append_prompt_args(&mut cmd, prompt);
+        } else {
+            self.append_prompt_args_with_transport(&mut cmd, prompt, prompt_transport);
+        }
+        csa_process::run_and_capture_with_stdin(cmd, stdin_data).await
     }
 
     /// Build base command with session environment variables.
@@ -263,6 +275,16 @@ impl Executor {
     /// Delegates to `append_yolo_args`, `append_model_args`, `append_prompt_args`,
     /// and adds session-resume and tool-specific structural args.
     fn append_tool_args(&self, cmd: &mut Command, prompt: &str, tool_state: Option<&ToolState>) {
+        self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv);
+    }
+
+    fn append_tool_args_with_transport(
+        &self,
+        cmd: &mut Command,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        prompt_transport: PromptTransport,
+    ) {
         // Structural args (subcommand, output format, yolo) come first
         match self {
             Self::GeminiCli { .. } => {
@@ -316,12 +338,28 @@ impl Executor {
         }
 
         // Prompt (position matters per tool)
-        match self {
-            Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
-                cmd.arg("-p").arg(prompt);
-            }
-            Self::Opencode { .. } | Self::Codex { .. } => {
-                cmd.arg(prompt);
+        match prompt_transport {
+            PromptTransport::Argv => match self {
+                Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
+                    cmd.arg("-p").arg(prompt);
+                }
+                Self::Opencode { .. } | Self::Codex { .. } => {
+                    cmd.arg(prompt);
+                }
+            },
+            PromptTransport::Stdin => {
+                // When prompt is delivered via stdin, tools that use `-p` for
+                // non-interactive/pipe mode still need the flag (without the
+                // prompt argument) so they read from stdin instead of entering
+                // interactive mode.
+                match self {
+                    Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
+                        cmd.arg("-p");
+                    }
+                    Self::Opencode { .. } | Self::Codex { .. } => {
+                        // These tools read from stdin natively without extra flags.
+                    }
+                }
             }
         }
     }
@@ -400,19 +438,67 @@ impl Executor {
 
     /// Append minimal prompt args for execute_in.
     fn append_prompt_args(&self, cmd: &mut Command, prompt: &str) {
+        self.append_prompt_args_with_transport(cmd, prompt, PromptTransport::Argv);
+    }
+
+    fn append_prompt_args_with_transport(
+        &self,
+        cmd: &mut Command,
+        prompt: &str,
+        prompt_transport: PromptTransport,
+    ) {
         match self {
             Self::GeminiCli { .. } => {
-                cmd.arg("-p").arg(prompt);
+                if matches!(prompt_transport, PromptTransport::Argv) {
+                    cmd.arg("-p").arg(prompt);
+                }
             }
             Self::Opencode { .. } => {
-                cmd.arg("run").arg(prompt);
+                cmd.arg("run");
+                if matches!(prompt_transport, PromptTransport::Argv) {
+                    cmd.arg(prompt);
+                }
             }
             Self::Codex { .. } => {
-                cmd.arg("exec").arg(prompt);
+                cmd.arg("exec");
+                if matches!(prompt_transport, PromptTransport::Argv) {
+                    cmd.arg(prompt);
+                }
             }
             Self::ClaudeCode { .. } => {
-                cmd.arg("-p").arg(prompt);
+                if matches!(prompt_transport, PromptTransport::Argv) {
+                    cmd.arg("-p").arg(prompt);
+                }
             }
+        }
+    }
+
+    fn select_prompt_transport(&self, prompt: &str) -> (PromptTransport, Option<Vec<u8>>) {
+        if prompt.len() <= MAX_ARGV_PROMPT_LEN {
+            return (PromptTransport::Argv, None);
+        }
+
+        let tool = self.tool_name_enum();
+        let supports_stdin = prompt_transport_capabilities(&tool).contains(&PromptTransport::Stdin);
+        if supports_stdin {
+            return (PromptTransport::Stdin, Some(prompt.as_bytes().to_vec()));
+        }
+
+        tracing::warn!(
+            tool = self.tool_name(),
+            prompt_len = prompt.len(),
+            max_argv_prompt_len = MAX_ARGV_PROMPT_LEN,
+            "Prompt exceeds argv threshold; tool supports argv-only transport"
+        );
+        (PromptTransport::Argv, None)
+    }
+
+    fn tool_name_enum(&self) -> ToolName {
+        match self {
+            Self::GeminiCli { .. } => ToolName::GeminiCli,
+            Self::Opencode { .. } => ToolName::Opencode,
+            Self::Codex { .. } => ToolName::Codex,
+            Self::ClaudeCode { .. } => ToolName::ClaudeCode,
         }
     }
 }
@@ -424,3 +510,7 @@ mod tests;
 #[cfg(test)]
 #[path = "executor_build_cmd_tests.rs"]
 mod build_cmd_tests;
+
+#[cfg(test)]
+#[path = "executor_prompt_transport_tests.rs"]
+mod prompt_transport_tests;

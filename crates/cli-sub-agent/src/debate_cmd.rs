@@ -25,7 +25,8 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     let prompt = build_debate_instruction(&question, args.session.is_some());
 
     // 5. Determine tool (heterogeneous enforcement)
-    let parent_tool = crate::run_helpers::detect_parent_tool();
+    let detected_parent_tool = crate::run_helpers::detect_parent_tool();
+    let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
     let tool = resolve_debate_tool(
         args.tool,
         config.as_ref(),

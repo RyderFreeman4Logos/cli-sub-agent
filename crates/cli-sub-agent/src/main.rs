@@ -34,7 +34,7 @@ use csa_lock::slot::{
 use csa_session::{load_session, resolve_session_prefix};
 use run_helpers::{
     infer_task_edit_requirement, is_tool_binary_available, parse_tool_name, read_prompt,
-    resolve_tool_and_model,
+    resolve_tool, resolve_tool_and_model,
 };
 
 #[tokio::main]
@@ -328,8 +328,10 @@ async fn handle_run(
             )?
         }
         ToolSelectionStrategy::HeterogeneousStrict => {
-            // Detect parent tool (env vars → process tree fallback)
-            let parent_tool_name = run_helpers::detect_parent_tool();
+            // Resolve parent tool context:
+            // runtime detection (env/process tree) -> global defaults.tool
+            let detected_parent_tool = run_helpers::detect_parent_tool();
+            let parent_tool_name = resolve_tool(detected_parent_tool, &global_config);
 
             if let Some(parent_str) = parent_tool_name.as_deref() {
                 // Have parent context, resolve heterogeneous tool
@@ -366,8 +368,8 @@ async fn handle_run(
                     }
                 }
             } else {
-                // No parent context, fall back to AnyAvailable with warning
-                warn!("HeterogeneousStrict requested but no parent tool context found. Falling back to AnyAvailable.");
+                // No parent context/default fallback, fall back to AnyAvailable with warning
+                warn!("HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable.");
                 resolve_tool_and_model(
                     None,
                     model_spec.as_deref(),

@@ -4,7 +4,7 @@ use anyhow::Result;
 use std::io::Read;
 use std::path::Path;
 
-use csa_config::ProjectConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{Executor, ModelSpec, ThinkingBudget};
 use csa_session::TokenUsage;
@@ -307,6 +307,16 @@ pub(crate) fn detect_parent_tool() -> Option<String> {
         .or_else(crate::process_tree::detect_ancestor_tool)
 }
 
+/// Resolve parent tool context using detection result with global-config fallback.
+///
+/// Resolution order:
+/// 1. Detected parent tool from runtime context
+/// 2. `~/.config/cli-sub-agent/config.toml` `[defaults].tool`
+/// 3. None
+pub(crate) fn resolve_tool(detected: Option<String>, config: &GlobalConfig) -> Option<String> {
+    detected.or_else(|| config.defaults.tool.clone())
+}
+
 /// Infer whether a prompt requires editing existing files.
 ///
 /// Returns:
@@ -355,7 +365,8 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{build_executor, infer_task_edit_requirement, truncate_prompt};
+    use super::{build_executor, infer_task_edit_requirement, resolve_tool, truncate_prompt};
+    use csa_config::GlobalConfig;
     use csa_core::types::ToolName;
 
     #[test]
@@ -520,6 +531,31 @@ mod tests {
             parse_tool_name("claude-code").unwrap(),
             ToolName::ClaudeCode
         ));
+    }
+
+    #[test]
+    fn resolve_tool_prefers_detected_value() {
+        let mut config = GlobalConfig::default();
+        config.defaults.tool = Some("claude-code".to_string());
+
+        let resolved = resolve_tool(Some("codex".to_string()), &config);
+        assert_eq!(resolved.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn resolve_tool_uses_config_default_when_detection_missing() {
+        let mut config = GlobalConfig::default();
+        config.defaults.tool = Some("codex".to_string());
+
+        let resolved = resolve_tool(None, &config);
+        assert_eq!(resolved.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn resolve_tool_returns_none_when_both_missing() {
+        let config = GlobalConfig::default();
+        let resolved = resolve_tool(None, &config);
+        assert!(resolved.is_none());
     }
 
     #[test]

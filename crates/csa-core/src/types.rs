@@ -30,6 +30,32 @@ impl ToolName {
             Self::Opencode => ModelFamily::Other,
         }
     }
+
+    /// Returns prompt transport channels supported by this tool.
+    pub fn prompt_transport_capabilities(&self) -> &'static [PromptTransport] {
+        prompt_transport_capabilities(self)
+    }
+}
+
+/// Prompt transport channel used to send user prompts to tools.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PromptTransport {
+    Argv,
+    Stdin,
+}
+
+const PROMPT_TRANSPORT_ARGV_ONLY: &[PromptTransport] = &[PromptTransport::Argv];
+const PROMPT_TRANSPORT_ARGV_AND_STDIN: &[PromptTransport] =
+    &[PromptTransport::Argv, PromptTransport::Stdin];
+
+/// Prompt transport capabilities for each tool.
+pub fn prompt_transport_capabilities(tool: &ToolName) -> &'static [PromptTransport] {
+    match tool {
+        ToolName::Codex => PROMPT_TRANSPORT_ARGV_AND_STDIN,
+        ToolName::GeminiCli => PROMPT_TRANSPORT_ARGV_AND_STDIN,
+        ToolName::ClaudeCode => PROMPT_TRANSPORT_ARGV_AND_STDIN,
+        ToolName::Opencode => PROMPT_TRANSPORT_ARGV_ONLY,
+    }
 }
 
 impl std::fmt::Display for ToolName {
@@ -287,6 +313,26 @@ mod tests {
                 _ => panic!("Expected Explicit for {label}"),
             }
         }
+    }
+
+    #[test]
+    fn test_prompt_transport_capabilities() {
+        assert_eq!(
+            prompt_transport_capabilities(&ToolName::GeminiCli),
+            &[PromptTransport::Argv, PromptTransport::Stdin]
+        );
+        assert_eq!(
+            prompt_transport_capabilities(&ToolName::Codex),
+            &[PromptTransport::Argv, PromptTransport::Stdin]
+        );
+        assert_eq!(
+            prompt_transport_capabilities(&ToolName::ClaudeCode),
+            &[PromptTransport::Argv, PromptTransport::Stdin]
+        );
+        assert_eq!(
+            prompt_transport_capabilities(&ToolName::Opencode),
+            &[PromptTransport::Argv]
+        );
     }
 
     #[test]

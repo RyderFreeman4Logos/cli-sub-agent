@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
@@ -25,15 +25,26 @@ pub struct ExecutionResult {
 /// - Spawns the command
 /// - Captures stdout (piped)
 /// - Captures stderr (piped, tee'd to parent stderr in `wait_and_capture`)
+/// - Sets stdin mode:
+///   - `Stdio::piped()` when `stdin_data` is provided
+///   - `Stdio::null()` otherwise
 /// - Isolates child in its own process group (via setsid)
 /// - Enables kill_on_drop as safety net
 /// - Returns the child process handle for PID access and later waiting
 ///
 /// Use this when you need the PID before waiting (e.g., for resource monitoring).
 /// Call `wait_and_capture()` after starting monitoring to complete execution.
-pub async fn spawn_tool(mut cmd: Command) -> Result<tokio::process::Child> {
+pub async fn spawn_tool(
+    mut cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
+    if stdin_data.is_some() {
+        cmd.stdin(std::process::Stdio::piped());
+    } else {
+        cmd.stdin(std::process::Stdio::null());
+    }
     cmd.kill_on_drop(true);
 
     // Isolate child in its own process group to prevent signal inheritance
@@ -48,7 +59,29 @@ pub async fn spawn_tool(mut cmd: Command) -> Result<tokio::process::Child> {
         });
     }
 
-    cmd.spawn().context("Failed to spawn command")
+    let mut child = cmd.spawn().context("Failed to spawn command")?;
+
+    if let Some(data) = stdin_data {
+        if let Some(mut stdin) = child.stdin.take() {
+            tokio::spawn(async move {
+                match tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                    stdin.write_all(&data).await?;
+                    stdin.shutdown().await?;
+                    Ok::<_, std::io::Error>(())
+                })
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => warn!("stdin write error: {}", e),
+                    Err(_) => warn!("stdin write timed out after 30s"),
+                }
+            });
+        } else {
+            warn!("stdin was requested but no piped stdin handle was available");
+        }
+    }
+
+    Ok(child)
 }
 
 /// Wait for a spawned child process and capture its output.
@@ -147,7 +180,15 @@ pub async fn wait_and_capture(mut child: tokio::process::Child) -> Result<Execut
 /// This is a convenience function that combines `spawn_tool()` and `wait_and_capture()`.
 /// Use `spawn_tool()` directly if you need the PID before waiting (e.g., for monitoring).
 pub async fn run_and_capture(cmd: Command) -> Result<ExecutionResult> {
-    let child = spawn_tool(cmd).await?;
+    run_and_capture_with_stdin(cmd, None).await
+}
+
+/// Execute a command and capture output, optionally writing prompt data to stdin.
+pub async fn run_and_capture_with_stdin(
+    cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<ExecutionResult> {
+    let child = spawn_tool(cmd, stdin_data).await?;
     wait_and_capture(child).await
 }
 
@@ -304,7 +345,7 @@ mod tests {
         let mut cmd = Command::new("echo");
         cmd.arg("test");
 
-        let child = spawn_tool(cmd).await.expect("Failed to spawn tool");
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn tool");
         let pid = child.id().expect("Child process has no PID");
 
         // PID should be a positive number
@@ -316,6 +357,33 @@ mod tests {
             .expect("Failed to wait for child");
         assert_eq!(result.exit_code, 0);
         assert!(result.output.contains("test"));
+    }
+
+    #[tokio::test]
+    async fn test_spawn_tool_with_none_stdin_uses_null_stdin() {
+        let cmd = Command::new("cat");
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+        let result = wait_and_capture(child).await.expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 0);
+        assert!(
+            result.output.is_empty(),
+            "cat should receive EOF immediately with null stdin"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_spawn_tool_with_some_stdin_writes_input() {
+        let cmd = Command::new("cat");
+        let payload = b"stdin-payload\n".to_vec();
+
+        let child = spawn_tool(cmd, Some(payload.clone()))
+            .await
+            .expect("Failed to spawn");
+        let result = wait_and_capture(child).await.expect("Failed to wait");
+
+        assert_eq!(result.exit_code, 0);
+        assert_eq!(result.output, String::from_utf8(payload).unwrap());
     }
 
     #[tokio::test]
@@ -337,7 +405,7 @@ mod tests {
         let mut cmd = Command::new("bash");
         cmd.args(["-c", "echo stdout_line && echo stderr_line >&2"]);
 
-        let child = spawn_tool(cmd).await.expect("Failed to spawn");
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
         let result = wait_and_capture(child).await.expect("Failed to wait");
 
         assert_eq!(result.exit_code, 0);
@@ -391,7 +459,7 @@ mod tests {
         let mut cmd = Command::new("bash");
         cmd.args(["-c", "echo 'fatal: something went wrong' >&2; exit 1"]);
 
-        let child = spawn_tool(cmd).await.expect("Failed to spawn");
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
         let result = wait_and_capture(child).await.expect("Failed to wait");
 
         assert_eq!(result.exit_code, 1);
@@ -404,7 +472,7 @@ mod tests {
         let mut cmd = Command::new("bash");
         cmd.args(["-c", "exit 42"]);
 
-        let child = spawn_tool(cmd).await.expect("Failed to spawn");
+        let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
         let result = wait_and_capture(child).await.expect("Failed to wait");
 
         assert_eq!(result.exit_code, 42);

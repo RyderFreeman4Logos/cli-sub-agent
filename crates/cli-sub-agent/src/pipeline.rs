@@ -303,13 +303,14 @@ pub(crate) async fn execute_with_session(
 
     // Build command
     let tool_state = session.tools.get(executor.tool_name()).cloned();
-    let cmd = executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
+    let (cmd, stdin_data) =
+        executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
 
     // Record execution start time before spawning
     let execution_start_time = chrono::Utc::now();
 
     // Spawn child process
-    let child = match csa_process::spawn_tool(cmd).await {
+    let child = match csa_process::spawn_tool(cmd, stdin_data).await {
         Ok(child) => child,
         Err(e) => {
             write_pre_exec_error_result(
