@@ -2,7 +2,7 @@
 
 use crate::result::{RESULT_FILE_NAME, SessionResult};
 use crate::state::MetaSessionState;
-use crate::validate::{new_session_id, validate_session_id};
+use crate::validate::{new_session_id, resolve_session_prefix, validate_session_id};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use std::collections::HashMap;
@@ -10,6 +10,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STATE_FILE_NAME: &str = "state.toml";
+
+/// Resolved identifiers for resuming a tool session.
+#[derive(Debug, Clone)]
+pub struct ResumeSessionResolution {
+    /// Fully resolved CSA meta session ID (ULID).
+    pub meta_session_id: String,
+    /// Provider-native session ID for the requested tool, if present in state.
+    pub provider_session_id: Option<String>,
+}
 
 /// Get the session root directory for a project (`~/.local/state/csa/{project_path}`)
 pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
@@ -350,6 +359,43 @@ pub(crate) fn list_sessions_in(
     }
 }
 
+/// Resolve a user-provided session reference for resume.
+///
+/// This function accepts a full ULID or unique prefix, validates tool ownership,
+/// and returns both CSA meta session ID and provider session ID (if present)
+/// from `state.toml`.
+pub fn resolve_resume_session(
+    project_path: &Path,
+    session_ref: &str,
+    tool: &str,
+) -> Result<ResumeSessionResolution> {
+    let base_dir = get_session_root(project_path)?;
+    resolve_resume_session_in(&base_dir, session_ref, tool)
+}
+
+/// Internal implementation: resolve resume IDs from explicit base directory.
+pub(crate) fn resolve_resume_session_in(
+    base_dir: &Path,
+    session_ref: &str,
+    tool: &str,
+) -> Result<ResumeSessionResolution> {
+    let sessions_dir = base_dir.join("sessions");
+    let meta_session_id = resolve_session_prefix(&sessions_dir, session_ref)?;
+
+    validate_tool_access_in(base_dir, &meta_session_id, tool)?;
+
+    let session = load_session_in(base_dir, &meta_session_id)?;
+    let provider_session_id = session
+        .tools
+        .get(tool)
+        .and_then(|state| state.provider_session_id.clone());
+
+    Ok(ResumeSessionResolution {
+        meta_session_id,
+        provider_session_id,
+    })
+}
+
 /// Update the last_accessed timestamp and save
 pub fn update_last_accessed(state: &mut MetaSessionState) -> Result<()> {
     state.last_accessed = Utc::now();
@@ -556,6 +602,55 @@ mod tests {
         let filtered = list_sessions_in(td.path(), Some(&["codex"])).unwrap();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].meta_session_id, s1.meta_session_id);
+    }
+
+    #[test]
+    fn test_resolve_resume_session_with_provider_id() {
+        let td = tempdir().unwrap();
+        let mut state =
+            create_session_in(td.path(), td.path(), Some("Resume"), None, None).unwrap();
+        state.tools.insert(
+            "codex".to_string(),
+            crate::state::ToolState {
+                provider_session_id: Some("provider_session_123".to_string()),
+                last_action_summary: "resume".to_string(),
+                last_exit_code: 0,
+                updated_at: Utc::now(),
+                token_usage: None,
+            },
+        );
+        save_session_in(td.path(), &state).unwrap();
+
+        let prefix = &state.meta_session_id[..10];
+        let resolved = resolve_resume_session_in(td.path(), prefix, "codex").unwrap();
+
+        assert_eq!(resolved.meta_session_id, state.meta_session_id);
+        assert_eq!(
+            resolved.provider_session_id,
+            Some("provider_session_123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolve_resume_session_without_provider_id() {
+        let td = tempdir().unwrap();
+        let state = create_session_in(td.path(), td.path(), Some("Resume"), None, None).unwrap();
+
+        let resolved =
+            resolve_resume_session_in(td.path(), &state.meta_session_id, "codex").unwrap();
+        assert_eq!(resolved.meta_session_id, state.meta_session_id);
+        assert!(resolved.provider_session_id.is_none());
+    }
+
+    #[test]
+    fn test_resolve_resume_session_respects_tool_lock() {
+        let td = tempdir().unwrap();
+        let state =
+            create_session_in(td.path(), td.path(), Some("Locked"), None, Some("codex")).unwrap();
+
+        let err =
+            resolve_resume_session_in(td.path(), &state.meta_session_id, "gemini-cli").unwrap_err();
+        assert!(err.to_string().contains("locked to tool"));
     }
 
     #[test]

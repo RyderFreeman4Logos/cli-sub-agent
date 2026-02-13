@@ -6,6 +6,7 @@ use crate::run_helpers::read_prompt;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
+use csa_executor::extract_session_id;
 
 pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -56,7 +57,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         "debate: {}",
         crate::run_helpers::truncate_prompt(&question, 80)
     );
-    let result = crate::pipeline::execute_with_session(
+    let execution = crate::pipeline::execute_with_session_and_meta(
         &executor,
         &tool,
         &prompt,
@@ -71,10 +72,17 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     )
     .await?;
 
-    // 10. Print result
-    print!("{}", result.output);
+    let provider_session_id = extract_session_id(&tool, &execution.execution.output);
+    let output = render_debate_output(
+        &execution.execution.output,
+        &execution.meta_session_id,
+        provider_session_id.as_deref(),
+    );
 
-    Ok(result.exit_code)
+    // 10. Print result
+    print!("{output}");
+
+    Ok(execution.execution.exit_code)
 }
 
 fn resolve_debate_tool(
@@ -201,6 +209,24 @@ fn build_debate_instruction(question: &str, is_continuation: bool) -> String {
     } else {
         format!("Use the debate skill. question={question}")
     }
+}
+
+fn render_debate_output(
+    tool_output: &str,
+    meta_session_id: &str,
+    provider_session_id: Option<&str>,
+) -> String {
+    let mut output = match provider_session_id {
+        Some(provider_id) => tool_output.replace(provider_id, meta_session_id),
+        None => tool_output.to_string(),
+    };
+
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+
+    output.push_str(&format!("CSA Meta Session ID: {meta_session_id}\n"));
+    output
 }
 
 #[cfg(test)]
@@ -369,5 +395,23 @@ mod tests {
         assert!(prompt.contains("debate skill"));
         assert!(prompt.contains("continuation=true"));
         assert!(prompt.contains("I disagree because X"));
+    }
+
+    #[test]
+    fn render_debate_output_appends_meta_session_id() {
+        let output = render_debate_output("debate answer", "01ARZ3NDEKTSV4RRFFQ69G5FAV", None);
+        assert!(output.contains("debate answer"));
+        assert!(output.contains("CSA Meta Session ID: 01ARZ3NDEKTSV4RRFFQ69G5FAV"));
+    }
+
+    #[test]
+    fn render_debate_output_replaces_provider_id_with_meta_id() {
+        let provider = "019c5589-3c84-7f03-b9c4-9f0a164c4eb2";
+        let meta = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+        let tool_output = format!("session_id={provider}\nresult=ok");
+
+        let output = render_debate_output(&tool_output, meta, Some(provider));
+        assert!(!output.contains(provider));
+        assert!(output.contains(meta));
     }
 }
