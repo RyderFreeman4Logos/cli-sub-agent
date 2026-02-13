@@ -215,6 +215,18 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub context: Option<String>,
 
+    /// Number of reviewers to run in parallel (default: 1)
+    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
+    pub reviewers: u32,
+
+    /// Consensus strategy for multi-reviewer mode
+    #[arg(
+        long,
+        default_value = "majority",
+        value_parser = ["majority", "weighted", "unanimous"]
+    )]
+    pub consensus: String,
+
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,
