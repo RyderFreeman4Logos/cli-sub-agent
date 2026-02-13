@@ -336,7 +336,7 @@ Use AskUserQuestion to present:
 
 ### User Options
 
-- **Approve** → Update status and proceed with `mktsk` skill to execute:
+- **Approve, 使用 mktsk** → Update status and proceed with `mktsk` skill to execute:
   ```bash
   csa todo status "$TIMESTAMP" approved
   csa todo save -t "$TIMESTAMP" "approved by user"
