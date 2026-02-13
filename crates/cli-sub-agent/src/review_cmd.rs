@@ -387,6 +387,8 @@ fn build_review_instruction(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
     use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
     use std::collections::HashMap;
 
@@ -423,6 +425,14 @@ mod tests {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+        }
+    }
+
+    fn parse_review_args(argv: &[&str]) -> ReviewArgs {
+        let cli = Cli::try_parse_from(argv).expect("review CLI args should parse");
+        match cli.command {
+            Commands::Review(args) => args,
+            _ => panic!("expected review subcommand"),
         }
     }
 
@@ -662,6 +672,60 @@ mod tests {
         };
         // --range has highest priority
         assert_eq!(derive_scope(&args), "range:v1...v2");
+    }
+
+    #[test]
+    fn review_cli_parses_range_scope_with_multiple_reviewers() {
+        let args = parse_review_args(&[
+            "csa",
+            "review",
+            "--range",
+            "main...HEAD",
+            "--reviewers",
+            "3",
+        ]);
+
+        assert_eq!(args.reviewers, 3);
+        assert_eq!(derive_scope(&args), "range:main...HEAD");
+    }
+
+    #[test]
+    fn review_cli_parses_weighted_consensus_for_multi_reviewer_mode() {
+        let args = parse_review_args(&[
+            "csa",
+            "review",
+            "--diff",
+            "--reviewers",
+            "2",
+            "--consensus",
+            "weighted",
+        ]);
+
+        let strategy = parse_consensus_strategy(&args.consensus).unwrap();
+        assert_eq!(consensus_strategy_label(strategy), "weighted");
+    }
+
+    #[test]
+    fn review_cli_builds_multi_reviewer_config_from_args() {
+        let args = parse_review_args(&[
+            "csa",
+            "review",
+            "--tool",
+            "codex",
+            "--reviewers",
+            "4",
+            "--consensus",
+            "unanimous",
+        ]);
+
+        let strategy = parse_consensus_strategy(&args.consensus).unwrap();
+        let reviewers = args.reviewers as usize;
+        let reviewer_tools = build_reviewer_tools(args.tool, ToolName::Codex, None, reviewers);
+
+        assert!(reviewers > 1);
+        assert_eq!(consensus_strategy_label(strategy), "unanimous");
+        assert_eq!(reviewer_tools.len(), reviewers);
+        assert!(reviewer_tools.iter().all(|tool| *tool == ToolName::Codex));
     }
 
     // --- build_review_instruction tests ---
