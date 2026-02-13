@@ -275,4 +275,119 @@ mod tests {
         let active_again = available.transition(&PhaseEvent::Resumed).unwrap();
         assert_eq!(active_again, SessionPhase::Active);
     }
+
+    // ── Serde round-trip ───────────────────────────────────────────
+
+    /// Wrapper struct to test enum serialization (TOML can't serialize bare enums).
+    #[derive(Debug, Serialize, Deserialize, PartialEq)]
+    struct PhaseWrapper {
+        phase: SessionPhase,
+    }
+
+    #[test]
+    fn test_session_phase_serde_roundtrip() {
+        for phase in [
+            SessionPhase::Active,
+            SessionPhase::Available,
+            SessionPhase::Retired,
+        ] {
+            let wrapper = PhaseWrapper {
+                phase: phase.clone(),
+            };
+            let serialized = toml::to_string(&wrapper).expect("Serialize should succeed");
+            let deserialized: PhaseWrapper =
+                toml::from_str(&serialized).expect("Deserialize should succeed");
+            assert_eq!(deserialized.phase, phase);
+        }
+    }
+
+    #[test]
+    fn test_session_phase_serde_snake_case() {
+        // Verify rename_all = "snake_case" produces expected strings
+        let active_toml = toml::to_string(&PhaseWrapper {
+            phase: SessionPhase::Active,
+        })
+        .unwrap();
+        assert!(active_toml.contains("active"));
+
+        let available_toml = toml::to_string(&PhaseWrapper {
+            phase: SessionPhase::Available,
+        })
+        .unwrap();
+        assert!(available_toml.contains("available"));
+
+        let retired_toml = toml::to_string(&PhaseWrapper {
+            phase: SessionPhase::Retired,
+        })
+        .unwrap();
+        assert!(retired_toml.contains("retired"));
+    }
+
+    // ── Error message content ──────────────────────────────────────
+
+    #[test]
+    fn test_invalid_transition_error_contains_states() {
+        let err = SessionPhase::Retired
+            .transition(&PhaseEvent::Compressed)
+            .unwrap_err();
+        assert!(
+            err.contains("Retired"),
+            "Error should mention the current phase"
+        );
+        assert!(err.contains("Compressed"), "Error should mention the event");
+    }
+
+    // ── Default phase ──────────────────────────────────────────────
+
+    #[test]
+    fn test_default_phase_is_active() {
+        let phase: SessionPhase = Default::default();
+        assert_eq!(phase, SessionPhase::Active);
+    }
+
+    // ── MetaSessionState TOML round-trip ───────────────────────────
+
+    #[test]
+    fn test_meta_session_state_toml_roundtrip() {
+        let now = chrono::Utc::now();
+        let state = MetaSessionState {
+            meta_session_id: ulid::Ulid::new().to_string(),
+            description: Some("Round-trip test".to_string()),
+            project_path: "/tmp/test".to_string(),
+            created_at: now,
+            last_accessed: now,
+            genealogy: Genealogy {
+                parent_session_id: None,
+                depth: 0,
+            },
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: None,
+            phase: SessionPhase::Available,
+            task_context: TaskContext {
+                task_type: Some("review".to_string()),
+                tier_name: Some("quick".to_string()),
+            },
+        };
+
+        let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
+        let loaded: MetaSessionState =
+            toml::from_str(&toml_str).expect("Deserialize should succeed");
+
+        assert_eq!(loaded.meta_session_id, state.meta_session_id);
+        assert_eq!(loaded.description, state.description);
+        assert_eq!(loaded.phase, SessionPhase::Available);
+        assert_eq!(loaded.task_context.task_type, Some("review".to_string()));
+        assert_eq!(loaded.task_context.tier_name, Some("quick".to_string()));
+    }
+
+    // ── Retired is terminal ────────────────────────────────────────
+
+    #[test]
+    fn test_retired_is_terminal_for_all_events() {
+        let retired = SessionPhase::Retired;
+        assert!(retired.transition(&PhaseEvent::Compressed).is_err());
+        assert!(retired.transition(&PhaseEvent::Resumed).is_err());
+        assert!(retired.transition(&PhaseEvent::Retired).is_err());
+    }
 }
