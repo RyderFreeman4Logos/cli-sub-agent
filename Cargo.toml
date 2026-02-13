@@ -20,7 +20,7 @@ csa-resource = { path = "crates/csa-resource" }
 csa-scheduler = { path = "crates/csa-scheduler" }
 csa-todo = { path = "crates/csa-todo" }
 csa-hooks = { path = "crates/csa-hooks" }
-agent-teams = { path = "../agent-teams-rs" }
+agent-teams = { path = "../agent-teams-rs", default-features = false }
 
 # CLI & Async
 clap = { version = "4.5", features = ["derive"] }
