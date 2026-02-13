@@ -10,6 +10,12 @@ use crate::global::ReviewConfig;
 pub struct TierConfig {
     pub description: String,
     pub models: Vec<String>,
+    /// Optional token budget allocated for sessions using this tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_budget: Option<u64>,
+    /// Optional maximum number of execution turns for this tier.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_turns: Option<u32>,
 }
 
 /// Current schema version for config.toml

@@ -257,6 +257,8 @@ mod tests {
             TierConfig {
                 description: "test tier".to_string(),
                 models: models.iter().map(|s| s.to_string()).collect(),
+                token_budget: None,
+                max_turns: None,
             },
         );
 

@@ -63,6 +63,8 @@ fn build_smart_tiers(installed: &[&str]) -> HashMap<String, TierConfig> {
         TierConfig {
             description: "Quick tasks, low cost".to_string(),
             models: vec![tier1_model.to_string()],
+            token_budget: None,
+            max_turns: None,
         },
     );
 
@@ -85,6 +87,8 @@ fn build_smart_tiers(installed: &[&str]) -> HashMap<String, TierConfig> {
         TierConfig {
             description: "Standard development tasks".to_string(),
             models: vec![tier2_model.to_string()],
+            token_budget: None,
+            max_turns: None,
         },
     );
 
@@ -107,6 +111,8 @@ fn build_smart_tiers(installed: &[&str]) -> HashMap<String, TierConfig> {
         TierConfig {
             description: "Complex reasoning, architecture, deep analysis, code review".to_string(),
             models: vec![tier3_model.to_string()],
+            token_budget: None,
+            max_turns: None,
         },
     );
 

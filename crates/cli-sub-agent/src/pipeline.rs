@@ -281,6 +281,24 @@ pub(crate) async fn execute_with_session_and_meta(
             task_type: task_type.map(|s| s.to_string()),
             tier_name: tier_name.map(|s| s.to_string()),
         };
+        // Initialize token budget from tier config (if configured).
+        // TokenBudget is created when either token_budget or max_turns is set.
+        if let (Some(cfg), Some(tier)) = (config, tier_name) {
+            if let Some(tier_cfg) = cfg.tiers.get(tier) {
+                if tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some() {
+                    let allocated = tier_cfg.token_budget.unwrap_or(u64::MAX);
+                    let mut budget = csa_session::state::TokenBudget::new(allocated);
+                    budget.max_turns = tier_cfg.max_turns;
+                    new_session.token_budget = Some(budget);
+                    info!(
+                        session = %new_session.meta_session_id,
+                        allocated = ?tier_cfg.token_budget,
+                        max_turns = ?tier_cfg.max_turns,
+                        "Initialized token budget from tier config"
+                    );
+                }
+            }
+        }
         new_session
     };
 
@@ -335,6 +353,54 @@ pub(crate) async fn execute_with_session_and_meta(
                 cg.defuse();
             }
             return Err(e);
+        }
+    }
+
+    // Check token budget before execution
+    if let Some(ref budget) = session.token_budget {
+        if budget.is_hard_exceeded() {
+            let err = anyhow::anyhow!(
+                "Token budget exhausted: used {} / {} allocated ({}%)",
+                budget.used,
+                budget.allocated,
+                budget.usage_pct()
+            );
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &err,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(err);
+        }
+        if budget.is_turns_exceeded(session.turn_count) {
+            let err = anyhow::anyhow!(
+                "Max turns exceeded: {} / {} allowed",
+                session.turn_count,
+                budget.max_turns.unwrap_or(0)
+            );
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &err,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(err);
+        }
+        if budget.is_soft_exceeded() {
+            warn!(
+                session = %session.meta_session_id,
+                used = budget.used,
+                allocated = budget.allocated,
+                pct = budget.usage_pct(),
+                "Token budget soft threshold exceeded — approaching limit"
+            );
         }
     }
 
@@ -501,6 +567,9 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     }
 
+    // Increment turn count
+    session.turn_count += 1;
+
     // Update cumulative token usage if we got new tokens
     if let Some(new_usage) = token_usage {
         let cumulative = session
@@ -516,6 +585,28 @@ pub(crate) async fn execute_with_session_and_meta(
             cumulative.estimated_cost_usd.unwrap_or(0.0)
                 + new_usage.estimated_cost_usd.unwrap_or(0.0),
         );
+
+        // Update token budget tracking
+        if let Some(ref mut budget) = session.token_budget {
+            let tokens_used = new_usage.total_tokens.unwrap_or(0);
+            budget.record_usage(tokens_used);
+            if budget.is_hard_exceeded() {
+                warn!(
+                    session = %session.meta_session_id,
+                    used = budget.used,
+                    allocated = budget.allocated,
+                    "Token budget hard threshold reached — next execution will be blocked"
+                );
+            } else if budget.is_soft_exceeded() {
+                warn!(
+                    session = %session.meta_session_id,
+                    used = budget.used,
+                    allocated = budget.allocated,
+                    remaining = budget.remaining(),
+                    "Token budget soft threshold reached"
+                );
+            }
+        }
     }
 
     // Write prompt to input/ for audit trail

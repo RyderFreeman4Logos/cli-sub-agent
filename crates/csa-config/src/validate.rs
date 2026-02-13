@@ -109,6 +109,17 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
         for model_spec in &tier_config.models {
             validate_model_spec(tier_name, model_spec)?;
         }
+        // Validate budget constraints
+        if let Some(budget) = tier_config.token_budget {
+            if budget == 0 {
+                bail!("Tier '{}': token_budget must be > 0 (got 0)", tier_name);
+            }
+        }
+        if let Some(turns) = tier_config.max_turns {
+            if turns == 0 {
+                bail!("Tier '{}': max_turns must be > 0 (got 0)", tier_name);
+            }
+        }
     }
 
     // Validate tier_mapping values reference tiers that exist in the tiers map
