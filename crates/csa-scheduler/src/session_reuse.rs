@@ -141,6 +141,8 @@ mod tests {
             total_token_usage: None,
             phase: csa_session::state::SessionPhase::Available,
             task_context: Default::default(),
+            turn_count: 0,
+            token_budget: None,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");
@@ -165,6 +167,8 @@ mod tests {
                 task_type: Some("review".to_string()),
                 tier_name: None,
             },
+            turn_count: 0,
+            token_budget: None,
         };
 
         let score = compute_relevance_score(&session, "review", "gemini-cli");
@@ -189,6 +193,8 @@ mod tests {
                 task_type: Some("review".to_string()),
                 tier_name: None,
             },
+            turn_count: 0,
+            token_budget: None,
         };
 
         let score = compute_relevance_score(&session, "fix", "gemini-cli");
@@ -213,6 +219,8 @@ mod tests {
                 task_type: Some("implement".to_string()),
                 tier_name: None,
             },
+            turn_count: 0,
+            token_budget: None,
         };
 
         let score = compute_relevance_score(&session, "deploy", "gemini-cli");
@@ -235,6 +243,8 @@ mod tests {
             total_token_usage: None,
             phase: csa_session::state::SessionPhase::Available,
             task_context: Default::default(),
+            turn_count: 0,
+            token_budget: None,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");

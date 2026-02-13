@@ -283,6 +283,8 @@ fn test_resolve_tier_default_selection() {
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
                 "codex/anthropic/claude-opus/high".to_string(),
             ],
+            token_budget: None,
+            max_turns: None,
         },
     );
 
@@ -330,6 +332,8 @@ fn test_resolve_tier_fallback_to_tier3() {
         TierConfig {
             description: "Fallback tier".to_string(),
             models: vec!["codex/anthropic/claude-opus/medium".to_string()],
+            token_budget: None,
+            max_turns: None,
         },
     );
 
@@ -386,6 +390,8 @@ fn test_resolve_tier_skips_disabled_tools() {
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
                 "codex/anthropic/claude-opus/high".to_string(),
             ],
+            token_budget: None,
+            max_turns: None,
         },
     );
 

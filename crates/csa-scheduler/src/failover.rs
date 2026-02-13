@@ -206,6 +206,8 @@ mod tests {
             TierConfig {
                 description: "test".to_string(),
                 models: models.iter().map(|s| s.to_string()).collect(),
+                token_budget: None,
+                max_turns: None,
             },
         );
         let mut tier_mapping = HashMap::new();
@@ -257,6 +259,8 @@ mod tests {
             total_token_usage: None,
             phase: Default::default(),
             task_context: Default::default(),
+            turn_count: 0,
+            token_budget: None,
         }
     }
 
