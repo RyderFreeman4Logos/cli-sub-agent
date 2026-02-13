@@ -175,9 +175,16 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
                 found_any = true;
             }
         } else if let Some(pos) = line_lower.find("tokens:") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.total_tokens = Some(val);
-                found_any = true;
+            // Only match standalone "tokens:" — skip if preceded by a letter or
+            // underscore (e.g. "input_tokens:" or "output_tokens:" already
+            // handled above).
+            let prev = line_lower.as_bytes().get(pos.wrapping_sub(1)).copied();
+            let is_standalone = pos == 0 || !matches!(prev, Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'));
+            if is_standalone {
+                if let Some(val) = extract_number(&line[pos..]) {
+                    usage.total_tokens = Some(val);
+                    found_any = true;
+                }
             }
         }
 
@@ -538,17 +545,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_token_usage_input_output_with_generic_tokens_match() {
-        // "output_tokens:" also matches the generic "tokens:" branch,
-        // so total_tokens gets set to the output_tokens value via that path.
-        // The fallback calculation (input + output) is skipped since
-        // total_tokens is already populated.
+    fn parse_token_usage_input_output_sums_to_total() {
+        // When only input_tokens and output_tokens are present (no explicit total),
+        // total_tokens should be their sum. The generic "tokens:" pattern must NOT
+        // match "output_tokens:" or "input_tokens:".
         let output = "input_tokens: 200\noutput_tokens: 300";
         let usage = super::parse_token_usage(output).unwrap();
         assert_eq!(usage.input_tokens, Some(200));
         assert_eq!(usage.output_tokens, Some(300));
-        // total_tokens = 300 from the generic "tokens:" match on "output_tokens: 300"
-        assert_eq!(usage.total_tokens, Some(300));
+        assert_eq!(usage.total_tokens, Some(500));
     }
 
     #[test]
