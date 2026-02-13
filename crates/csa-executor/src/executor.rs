@@ -207,9 +207,10 @@ impl Executor {
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
+        stream_mode: csa_process::StreamMode,
     ) -> Result<ExecutionResult> {
         let (cmd, stdin_data) = self.build_command(prompt, tool_state, session, extra_env);
-        csa_process::run_and_capture_with_stdin(cmd, stdin_data).await
+        csa_process::run_and_capture_with_stdin(cmd, stdin_data, stream_mode).await
     }
 
     /// Execute in a specific directory (for ephemeral sessions).
@@ -220,6 +221,7 @@ impl Executor {
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
+        stream_mode: csa_process::StreamMode,
     ) -> Result<ExecutionResult> {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
@@ -242,7 +244,7 @@ impl Executor {
         } else {
             self.append_prompt_args_with_transport(&mut cmd, prompt, prompt_transport);
         }
-        csa_process::run_and_capture_with_stdin(cmd, stdin_data).await
+        csa_process::run_and_capture_with_stdin(cmd, stdin_data, stream_mode).await
     }
 
     /// Build base command with session environment variables.

@@ -585,6 +585,7 @@ async fn execute_task(
         extra_env_ref,
         Some("batch"),
         None, // batch does not use tier-based selection
+        csa_process::StreamMode::BufferOnly,
     )
     .await;
 
