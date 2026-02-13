@@ -431,4 +431,122 @@ mod tests {
         assert_eq!(result.chars().count(), 200);
         assert!(result.ends_with("..."));
     }
+
+    // --- check_tool_installed tests ---
+
+    #[tokio::test]
+    async fn test_check_tool_installed_with_echo() {
+        // `echo` is always available on Linux
+        let result = check_tool_installed("echo").await;
+        assert!(result.is_ok(), "echo should be found in PATH");
+    }
+
+    #[tokio::test]
+    async fn test_check_tool_installed_with_nonexistent_tool() {
+        let result = check_tool_installed("nonexistent_tool_xyz_12345").await;
+        assert!(result.is_err(), "non-existent tool should return error");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("not installed"),
+            "error should mention 'not installed', got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_check_tool_installed_with_true_command() {
+        // `true` is a standard POSIX command, always available
+        let result = check_tool_installed("true").await;
+        assert!(result.is_ok(), "true should be found in PATH");
+    }
+
+    // --- failure_summary priority chain: exhaustive combinations ---
+
+    #[test]
+    fn test_failure_summary_priority_stdout_over_stderr_over_exit_code() {
+        // All three sources present: stdout wins
+        assert_eq!(
+            failure_summary("stdout msg\n", "stderr msg\n", 1),
+            "stdout msg"
+        );
+
+        // stdout empty, stderr present: stderr wins
+        assert_eq!(failure_summary("", "stderr msg\n", 1), "stderr msg");
+
+        // Both empty: exit code fallback
+        assert_eq!(failure_summary("", "", 1), "exit code 1");
+    }
+
+    #[test]
+    fn test_failure_summary_multiline_stdout_uses_last_line() {
+        let summary = failure_summary("first\nsecond\nthird\n", "err\n", 1);
+        assert_eq!(summary, "third");
+    }
+
+    #[test]
+    fn test_failure_summary_multiline_stderr_uses_last_line() {
+        let summary = failure_summary("", "err1\nerr2\nerr3\n", 1);
+        assert_eq!(summary, "err3");
+    }
+
+    #[test]
+    fn test_failure_summary_various_exit_codes() {
+        assert_eq!(failure_summary("", "", 0), "exit code 0");
+        assert_eq!(failure_summary("", "", 1), "exit code 1");
+        assert_eq!(failure_summary("", "", 127), "exit code 127");
+        assert_eq!(failure_summary("", "", 255), "exit code 255");
+    }
+
+    // --- error / boundary path tests ---
+
+    #[tokio::test]
+    async fn test_run_and_capture_nonexistent_command() {
+        let cmd = Command::new("nonexistent_binary_xyz_99999");
+        let result = run_and_capture(cmd).await;
+        assert!(result.is_err(), "spawning a nonexistent binary should fail");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Failed to spawn"),
+            "error should mention spawn failure, got: {err_msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_run_and_capture_empty_output() {
+        // `true` produces no output and exits 0
+        let mut cmd = Command::new("true");
+        cmd.args::<[&str; 0], &str>([]);
+
+        let result = run_and_capture(cmd).await.expect("true should succeed");
+        assert_eq!(result.exit_code, 0);
+        assert!(result.output.is_empty());
+        assert_eq!(result.summary, "");
+    }
+
+    #[tokio::test]
+    async fn test_run_and_capture_false_command() {
+        // `false` exits with code 1, no output
+        let cmd = Command::new("false");
+
+        let result = run_and_capture(cmd)
+            .await
+            .expect("false should not error on spawn");
+        assert_eq!(result.exit_code, 1);
+        assert!(result.output.is_empty());
+        assert_eq!(result.summary, "exit code 1");
+    }
+
+    #[test]
+    fn test_truncate_line_boundary_at_max_plus_one() {
+        // Exactly max_chars + 1: should trigger truncation
+        let s = "b".repeat(201);
+        let result = truncate_line(&s, 200);
+        assert_eq!(result.chars().count(), 200);
+        assert!(result.ends_with("..."));
+    }
+
+    #[test]
+    fn test_last_non_empty_line_only_whitespace_lines() {
+        assert_eq!(last_non_empty_line("\n\n\n"), "");
+        assert_eq!(last_non_empty_line("   \n\t\n  \n"), "");
+    }
 }
