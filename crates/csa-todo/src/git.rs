@@ -735,4 +735,7 @@ mod tests {
             "TODO.md should still be dirty after save_file on metadata only, got: {status_str}"
         );
     }
+
+    // Extended tests in git_ext_tests.rs
+    include!("git_ext_tests.rs");
 }

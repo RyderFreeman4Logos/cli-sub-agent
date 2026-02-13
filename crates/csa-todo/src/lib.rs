@@ -769,4 +769,7 @@ mod tests {
             .unwrap();
         assert_eq!(plan.metadata.status, TodoStatus::Done);
     }
+
+    // Extended tests in lib_ext_tests.rs
+    include!("lib_ext_tests.rs");
 }
