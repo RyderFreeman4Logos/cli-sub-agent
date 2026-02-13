@@ -123,6 +123,7 @@ fn test_default_template_is_valid_comment_only() {
     // The template should contain helpful comments
     assert!(template.contains("[defaults]"));
     assert!(template.contains("max_concurrent"));
+    assert!(template.contains("# tool = \"codex\""));
 }
 
 #[test]
@@ -490,10 +491,34 @@ diff_command = "delta"
 fn test_parse_empty_toml() {
     let config: GlobalConfig = toml::from_str("").unwrap();
     assert_eq!(config.defaults.max_concurrent, 3);
+    assert!(config.defaults.tool.is_none());
     assert!(config.tools.is_empty());
     assert_eq!(config.review.tool, "auto");
     assert_eq!(config.debate.tool, "auto");
     assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
+}
+
+#[test]
+fn test_defaults_config_deserialization_with_tool() {
+    let toml_str = r#"
+[defaults]
+max_concurrent = 4
+tool = "codex"
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.defaults.max_concurrent, 4);
+    assert_eq!(config.defaults.tool.as_deref(), Some("codex"));
+}
+
+#[test]
+fn test_defaults_config_deserialization_without_tool() {
+    let toml_str = r#"
+[defaults]
+max_concurrent = 4
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.defaults.max_concurrent, 4);
+    assert!(config.defaults.tool.is_none());
 }
 
 #[test]

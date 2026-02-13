@@ -20,7 +20,7 @@ const DEFAULT_MAX_CONCURRENT: u32 = 3;
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct GlobalConfig {
     #[serde(default)]
-    pub defaults: GlobalDefaults,
+    pub defaults: DefaultsConfig,
     #[serde(default)]
     pub tools: HashMap<String, GlobalToolConfig>,
     #[serde(default)]
@@ -162,16 +162,20 @@ pub fn all_known_tools() -> &'static [ToolName] {
 
 /// Global defaults section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GlobalDefaults {
+pub struct DefaultsConfig {
     /// Default maximum concurrent instances per tool (default: 3).
     #[serde(default = "default_max_concurrent")]
     pub max_concurrent: u32,
+    /// Default parent tool context when auto-detection fails.
+    #[serde(default)]
+    pub tool: Option<String>,
 }
 
-impl Default for GlobalDefaults {
+impl Default for DefaultsConfig {
     fn default() -> Self {
         Self {
             max_concurrent: DEFAULT_MAX_CONCURRENT,
+            tool: None,
         }
     }
 }
@@ -274,6 +278,7 @@ impl GlobalConfig {
 
 [defaults]
 max_concurrent = 3  # Default max parallel instances per tool
+# tool = "codex"  # Default tool when auto-detection fails
 
 # Per-tool overrides. Uncomment and configure as needed.
 #

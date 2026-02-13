@@ -33,7 +33,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         build_review_instruction(&scope, mode, &args.security_mode, args.context.as_deref());
 
     // 5. Determine tool
-    let parent_tool = crate::run_helpers::detect_parent_tool();
+    let detected_parent_tool = crate::run_helpers::detect_parent_tool();
+    let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
     let tool = resolve_review_tool(
         args.tool,
         config.as_ref(),
