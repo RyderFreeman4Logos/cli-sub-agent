@@ -244,6 +244,13 @@ async fn main() -> Result<()> {
             } => {
                 todo_cmd::handle_status(timestamp, status, cd)?;
             }
+            TodoCommands::Dag {
+                timestamp,
+                format,
+                cd,
+            } => {
+                todo_cmd::handle_dag(timestamp, format, cd)?;
+            }
         },
         Commands::SelfUpdate { check } => {
             self_update::handle_self_update(check)?;

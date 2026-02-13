@@ -408,6 +408,7 @@ fn atomic_write(target: &Path, data: &[u8]) -> Result<()> {
     Ok(())
 }
 
+pub mod dag;
 pub mod git;
 
 // ---------------------------------------------------------------------------
