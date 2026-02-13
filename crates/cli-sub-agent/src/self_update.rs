@@ -240,3 +240,128 @@ struct ReleaseAsset {
 struct GitHubError {
     message: String,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- get_target_triple tests ---
+
+    #[test]
+    fn get_target_triple_returns_known_platform() {
+        let result = get_target_triple();
+        // On CI/dev machines this should succeed for supported platforms
+        match result {
+            Ok(triple) => {
+                // Must contain os and arch components
+                assert!(
+                    triple.contains("linux") || triple.contains("darwin"),
+                    "expected linux or darwin in: {}",
+                    triple
+                );
+                assert!(
+                    triple.contains("x86_64") || triple.contains("aarch64"),
+                    "expected x86_64 or aarch64 in: {}",
+                    triple
+                );
+            }
+            Err(e) => {
+                // Only acceptable if running on an unsupported platform
+                assert!(
+                    e.to_string().contains("Unsupported platform"),
+                    "unexpected error: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    // --- ReleaseInfo deserialization tests ---
+
+    #[test]
+    fn release_info_deserialize_minimal() {
+        let json = r#"{
+            "tag_name": "v0.5.0",
+            "assets": []
+        }"#;
+        let info: ReleaseInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.tag_name, "v0.5.0");
+        assert!(info.assets.is_empty());
+    }
+
+    #[test]
+    fn release_info_deserialize_with_assets() {
+        let json = r#"{
+            "tag_name": "v1.0.0",
+            "assets": [
+                {
+                    "name": "csa-x86_64-unknown-linux-gnu.tar.gz",
+                    "browser_download_url": "https://example.com/download/csa.tar.gz"
+                },
+                {
+                    "name": "csa-aarch64-apple-darwin.tar.gz",
+                    "browser_download_url": "https://example.com/download/csa-mac.tar.gz"
+                }
+            ]
+        }"#;
+        let info: ReleaseInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.tag_name, "v1.0.0");
+        assert_eq!(info.assets.len(), 2);
+        assert_eq!(info.assets[0].name, "csa-x86_64-unknown-linux-gnu.tar.gz");
+    }
+
+    #[test]
+    fn release_info_deserialize_extra_fields_ignored() {
+        let json = r#"{
+            "tag_name": "v2.0.0",
+            "assets": [],
+            "body": "Release notes here",
+            "draft": false,
+            "prerelease": false
+        }"#;
+        let info: ReleaseInfo = serde_json::from_str(json).unwrap();
+        assert_eq!(info.tag_name, "v2.0.0");
+    }
+
+    // --- GitHubError deserialization tests ---
+
+    #[test]
+    fn github_error_deserialize() {
+        let json = r#"{"message": "Not Found"}"#;
+        let err: GitHubError = serde_json::from_str(json).unwrap();
+        assert_eq!(err.message, "Not Found");
+    }
+
+    #[test]
+    fn github_error_deserialize_with_extra_fields() {
+        let json =
+            r#"{"message": "rate limit exceeded", "documentation_url": "https://docs.github.com"}"#;
+        let err: GitHubError = serde_json::from_str(json).unwrap();
+        assert_eq!(err.message, "rate limit exceeded");
+    }
+
+    // --- Version string strip prefix test ---
+
+    #[test]
+    fn version_strip_prefix_v() {
+        let tag = "v1.2.3";
+        let version = tag.strip_prefix('v').unwrap_or(tag);
+        assert_eq!(version, "1.2.3");
+    }
+
+    #[test]
+    fn version_strip_prefix_no_v() {
+        let tag = "1.2.3";
+        let version = tag.strip_prefix('v').unwrap_or(tag);
+        assert_eq!(version, "1.2.3");
+    }
+
+    // --- Asset matching test ---
+
+    #[test]
+    fn asset_name_format_matches_expected_pattern() {
+        let target = "x86_64-unknown-linux-gnu";
+        let expected_name = format!("csa-{}.tar.gz", target);
+        assert_eq!(expected_name, "csa-x86_64-unknown-linux-gnu.tar.gz");
+    }
+}

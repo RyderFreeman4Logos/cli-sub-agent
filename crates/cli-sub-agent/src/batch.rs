@@ -634,6 +634,10 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
     }
 }
 
+#[cfg(test)]
+#[path = "batch_tests.rs"]
+mod tests;
+
 /// Print execution summary.
 fn print_summary(results: &[TaskResult]) {
     println!();

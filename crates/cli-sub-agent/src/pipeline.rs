@@ -527,3 +527,49 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 
     Ok(path.canonicalize()?)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn determine_project_root_none_returns_cwd() {
+        let result = determine_project_root(None).unwrap();
+        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
+        assert_eq!(result, cwd);
+    }
+
+    #[test]
+    fn determine_project_root_with_valid_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = determine_project_root(Some(tmp.path().to_str().unwrap())).unwrap();
+        assert_eq!(result, tmp.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn determine_project_root_nonexistent_path_errors() {
+        let result = determine_project_root(Some("/nonexistent/path/12345"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn load_and_validate_exceeds_depth_returns_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        // With no config, max_depth defaults to 5
+        let result = load_and_validate(tmp.path(), 100).unwrap();
+        assert!(
+            result.is_none(),
+            "Should return None when depth exceeds max"
+        );
+    }
+
+    #[test]
+    fn load_and_validate_within_depth_returns_some() {
+        let tmp = tempfile::tempdir().unwrap();
+        let result = load_and_validate(tmp.path(), 0).unwrap();
+        assert!(
+            result.is_some(),
+            "Should return Some when depth is within bounds"
+        );
+    }
+}

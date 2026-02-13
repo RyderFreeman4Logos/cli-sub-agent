@@ -632,6 +632,10 @@ fn parse_tool_name(tool_str: &str) -> Result<ToolName> {
     }
 }
 
+#[cfg(test)]
+#[path = "mcp_server_tests.rs"]
+mod tests;
+
 /// Write JSON-RPC response to stdout
 fn write_response(stdout: &std::io::Stdout, response: &JsonRpcResponse) -> Result<()> {
     let mut out = stdout.lock();

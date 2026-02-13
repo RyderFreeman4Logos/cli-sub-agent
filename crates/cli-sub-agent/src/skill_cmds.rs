@@ -233,3 +233,157 @@ fn read_skill_title(skill_dir: &Path) -> Option<String> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    // --- parse_github_source tests ---
+
+    #[test]
+    fn parse_github_source_https_url() {
+        let result = parse_github_source("https://github.com/user/repo").unwrap();
+        assert_eq!(result, "user/repo");
+    }
+
+    #[test]
+    fn parse_github_source_https_url_with_trailing_path() {
+        let result = parse_github_source("https://github.com/user/repo/tree/main/skills").unwrap();
+        assert_eq!(result, "user/repo");
+    }
+
+    #[test]
+    fn parse_github_source_shorthand() {
+        let result = parse_github_source("user/repo").unwrap();
+        assert_eq!(result, "user/repo");
+    }
+
+    #[test]
+    fn parse_github_source_invalid_single_word_errors() {
+        assert!(parse_github_source("just-a-name").is_err());
+    }
+
+    #[test]
+    fn parse_github_source_empty_parts_error() {
+        assert!(parse_github_source("/repo").is_err());
+        assert!(parse_github_source("user/").is_err());
+    }
+
+    #[test]
+    fn parse_github_source_too_many_slashes_non_url() {
+        // "a/b/c" has 3 parts, only 2 allowed for shorthand
+        assert!(parse_github_source("a/b/c").is_err());
+    }
+
+    #[test]
+    fn parse_github_source_empty_string_errors() {
+        assert!(parse_github_source("").is_err());
+    }
+
+    // --- find_skills_directory tests ---
+
+    #[test]
+    fn find_skills_directory_claude_skills_preferred() {
+        let tmp = tempdir().unwrap();
+        let claude_skills = tmp.path().join(".claude").join("skills");
+        fs::create_dir_all(&claude_skills).unwrap();
+        // Also create skills/ to verify .claude/skills/ takes priority
+        fs::create_dir_all(tmp.path().join("skills")).unwrap();
+
+        let result = find_skills_directory(tmp.path()).unwrap();
+        assert_eq!(result, claude_skills);
+    }
+
+    #[test]
+    fn find_skills_directory_fallback_to_skills() {
+        let tmp = tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("skills")).unwrap();
+
+        let result = find_skills_directory(tmp.path()).unwrap();
+        assert_eq!(result, tmp.path().join("skills"));
+    }
+
+    #[test]
+    fn find_skills_directory_none_found_errors() {
+        let tmp = tempdir().unwrap();
+        let result = find_skills_directory(tmp.path());
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("No skills directory"), "{}", err_msg);
+    }
+
+    // --- determine_target_directory tests ---
+
+    #[test]
+    fn determine_target_directory_default_claude_code() {
+        let result = determine_target_directory(None);
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        assert!(
+            path.ends_with(".claude/skills"),
+            "expected .claude/skills suffix, got: {:?}",
+            path
+        );
+    }
+
+    #[test]
+    fn determine_target_directory_explicit_claude_code() {
+        let result = determine_target_directory(Some("claude-code"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn determine_target_directory_unsupported_codex_errors() {
+        let result = determine_target_directory(Some("codex"));
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("not yet supported"));
+    }
+
+    #[test]
+    fn determine_target_directory_unknown_tool_errors() {
+        let result = determine_target_directory(Some("vscode"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Unknown target"));
+    }
+
+    // --- read_skill_title tests ---
+
+    #[test]
+    fn read_skill_title_with_heading() {
+        let tmp = tempdir().unwrap();
+        fs::write(
+            tmp.path().join("SKILL.md"),
+            "# My Cool Skill\n\nDescription",
+        )
+        .unwrap();
+        let result = read_skill_title(tmp.path());
+        assert_eq!(result, Some("My Cool Skill".to_string()));
+    }
+
+    #[test]
+    fn read_skill_title_with_h2_heading() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("SKILL.md"), "## Sub Heading\n\nContent").unwrap();
+        let result = read_skill_title(tmp.path());
+        assert_eq!(result, Some("# Sub Heading".to_string()));
+    }
+
+    #[test]
+    fn read_skill_title_no_heading_returns_none() {
+        let tmp = tempdir().unwrap();
+        fs::write(tmp.path().join("SKILL.md"), "No headings here\nJust text").unwrap();
+        let result = read_skill_title(tmp.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn read_skill_title_no_file_returns_none() {
+        let tmp = tempdir().unwrap();
+        let result = read_skill_title(tmp.path());
+        assert!(result.is_none());
+    }
+}

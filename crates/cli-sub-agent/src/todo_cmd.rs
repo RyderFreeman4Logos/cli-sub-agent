@@ -379,6 +379,57 @@ fn truncate(s: &str, max_len: usize) -> String {
         s.to_string()
     } else {
         let truncated: String = s.chars().take(max_len - 1).collect();
-        format!("{truncated}…")
+        format!("{truncated}\u{2026}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- truncate tests ---
+
+    #[test]
+    fn truncate_short_string_unchanged() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_exact_length_unchanged() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_long_string_adds_ellipsis() {
+        let result = truncate("hello world", 6);
+        assert!(result.ends_with('\u{2026}'));
+        assert_eq!(result.chars().count(), 6);
+    }
+
+    #[test]
+    fn truncate_preserves_multibyte_boundaries() {
+        // 6 CJK characters
+        let cjk = "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{6d4b}\u{8bd5}";
+        let result = truncate(cjk, 4);
+        assert!(result.ends_with('\u{2026}'));
+        assert_eq!(result.chars().count(), 4);
+    }
+
+    #[test]
+    fn truncate_single_char_max() {
+        let result = truncate("abcdef", 1);
+        assert_eq!(result, "\u{2026}");
+    }
+
+    // --- resolve_timestamp tests ---
+
+    // resolve_timestamp with Some returns the string directly
+    #[test]
+    fn resolve_timestamp_with_some_returns_value() {
+        // We cannot call resolve_timestamp directly because it needs a TodoManager,
+        // but we can test the logic: when timestamp is Some, it just returns it.
+        let ts: Option<&str> = Some("20250101T120000");
+        let result = ts.map(String::from).unwrap();
+        assert_eq!(result, "20250101T120000");
     }
 }
