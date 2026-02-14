@@ -118,7 +118,7 @@ pub(crate) async fn build_and_validate_executor(
     }
 
     // Check tool is installed
-    if let Err(e) = check_tool_installed(executor.executable_name()).await {
+    if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
         error!(
             "Tool '{}' is not installed.\n\n{}\n\nOr disable it in .csa/config.toml:\n  [tools.{}]\n  enabled = false",
             executor.tool_name(),

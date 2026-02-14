@@ -498,7 +498,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     )?;
 
     // Check tool is installed
-    if csa_process::check_tool_installed(executor.executable_name())
+    if csa_process::check_tool_installed(executor.runtime_binary_name())
         .await
         .is_err()
     {

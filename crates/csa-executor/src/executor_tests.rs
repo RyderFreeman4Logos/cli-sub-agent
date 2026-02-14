@@ -99,7 +99,7 @@ fn test_install_hint() {
             thinking_budget: None,
         }
         .install_hint(),
-        "Install: npm install -g @openai/codex"
+        "Install ACP adapter: npm install -g @zed-industries/codex-acp"
     );
     assert_eq!(
         Executor::ClaudeCode {
@@ -107,7 +107,46 @@ fn test_install_hint() {
             thinking_budget: None,
         }
         .install_hint(),
-        "Install: npm install -g @anthropic-ai/claude-code"
+        "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
+    );
+}
+
+#[test]
+fn test_runtime_binary_name() {
+    // Legacy tools: runtime binary = executable name
+    assert_eq!(
+        Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        }
+        .runtime_binary_name(),
+        "gemini"
+    );
+    assert_eq!(
+        Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        }
+        .runtime_binary_name(),
+        "opencode"
+    );
+    // ACP tools: runtime binary = ACP adapter
+    assert_eq!(
+        Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+        }
+        .runtime_binary_name(),
+        "codex-acp"
+    );
+    assert_eq!(
+        Executor::ClaudeCode {
+            model_override: None,
+            thinking_budget: None,
+        }
+        .runtime_binary_name(),
+        "claude-code-acp"
     );
 }
 

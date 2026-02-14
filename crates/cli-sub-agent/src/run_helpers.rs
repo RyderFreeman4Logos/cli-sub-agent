@@ -262,12 +262,17 @@ pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
 }
 
 /// Check if a tool's binary is available on PATH (synchronous).
+///
+/// For ACP-routed tools (codex, claude-code), checks for the ACP adapter
+/// binary (`codex-acp`, `claude-code-acp`). For legacy tools, checks the
+/// native CLI binary.
 pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
     let binary = match tool_name {
         "gemini-cli" => "gemini",
         "opencode" => "opencode",
-        "codex" => "codex",
-        "claude-code" => "claude",
+        // ACP adapter binaries (npm: @zed-industries/codex-acp, @zed-industries/claude-code-acp)
+        "codex" => "codex-acp",
+        "claude-code" => "claude-code-acp",
         _ => return false,
     };
     std::process::Command::new("which")
