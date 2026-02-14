@@ -21,7 +21,7 @@ capability tiers, and sets tool-specific restrictions.
 
 - First time installing or setting up CSA
 - Updating CSA binary to a new version
-- Checking or creating global user config (`~/.config/csa/config.toml`)
+- Checking or creating global user config (`~/.config/cli-sub-agent/config.toml`)
 - First time setting up CSA in a project (project-level config)
 - Reconfiguring tool/model selection for changed requirements
 - Adding newly installed tools or models
@@ -29,7 +29,7 @@ capability tiers, and sets tool-specific restrictions.
 ## Output
 
 - CSA binary verified in PATH
-- `~/.config/csa/config.toml` — global user configuration (TOML)
+- `~/.config/cli-sub-agent/config.toml` — global user configuration (TOML)
 - `.csa/config.toml` — project configuration (TOML)
 - `.csa/` added to `.gitignore`
 
@@ -63,10 +63,10 @@ Report the version. If it looks outdated, suggest updating.
 
 ### Phase 0.5: Check Global Config
 
-Check if the global user config exists at `~/.config/csa/config.toml`:
+Check if the global user config exists at `~/.config/cli-sub-agent/config.toml`:
 
 ```bash
-ls ~/.config/csa/config.toml 2>/dev/null
+ls ~/.config/cli-sub-agent/config.toml 2>/dev/null
 ```
 
 - If **not found**:
@@ -81,7 +81,7 @@ ls ~/.config/csa/config.toml 2>/dev/null
 
 **Key settings to include in global config**:
 ```toml
-# ~/.config/csa/config.toml
+# ~/.config/cli-sub-agent/config.toml
 # Global defaults — project configs override these values.
 
 [tools.codex]
