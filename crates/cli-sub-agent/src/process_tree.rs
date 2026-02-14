@@ -344,12 +344,15 @@ mod tests {
         for executor in &executors {
             let binary = executor.runtime_binary_name();
             let result = match_tool_by_comm(binary);
-            assert!(
-                result.is_some(),
-                "Executor {:?} runtime_binary_name() '{}' is not recognized by match_tool_by_comm(). \
-                 Add it to KNOWN_TOOL_EXECUTABLES.",
+            assert_eq!(
+                result,
+                Some(executor.tool_name()),
+                "Executor '{}' runtime_binary_name() '{}' maps to {:?}, expected Some(\"{}\"). \
+                 Update KNOWN_TOOL_EXECUTABLES to match.",
                 executor.tool_name(),
                 binary,
+                result,
+                executor.tool_name(),
             );
         }
     }
