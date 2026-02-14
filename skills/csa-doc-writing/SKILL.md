@@ -1,3 +1,9 @@
+---
+name: csa-doc-writing
+description: Clear, practical documentation for APIs, README, architecture decisions, and changelogs
+allowed-tools: Bash, Read, Grep, Glob, Edit, Write
+---
+
 # Technical Documentation Writing
 
 Clear, practical documentation for APIs, README, architecture decisions, and changelogs.

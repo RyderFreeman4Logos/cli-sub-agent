@@ -1,3 +1,9 @@
+---
+name: csa-security
+description: Adversarial security analysis expertise for identifying vulnerabilities before attackers do
+allowed-tools: Bash, Read, Grep, Glob
+---
+
 # Security Audit & Code Review
 
 Adversarial security analysis expertise for identifying vulnerabilities before attackers do.

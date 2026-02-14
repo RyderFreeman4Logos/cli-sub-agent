@@ -1,3 +1,9 @@
+---
+name: csa-rust-dev
+description: Comprehensive guide for professional Rust development combining implementation expertise, architectural depth, and project standards
+allowed-tools: Bash, Read, Grep, Glob, Edit, Write
+---
+
 # Rust Development Excellence
 
 Comprehensive guide for professional Rust development combining implementation expertise, architectural depth, and project standards.

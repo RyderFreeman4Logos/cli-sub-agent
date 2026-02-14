@@ -1,3 +1,9 @@
+---
+name: csa-test-gen
+description: Comprehensive test design for Rust projects following Core-first TDD and test pyramid principles
+allowed-tools: Bash, Read, Grep, Glob, Edit, Write
+---
+
 # Test Generation & TDD Excellence
 
 Comprehensive test design for Rust projects following Core-first TDD and test pyramid principles.
