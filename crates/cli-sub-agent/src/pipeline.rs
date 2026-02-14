@@ -443,6 +443,7 @@ pub(crate) async fn execute_with_session_and_meta(
             &session,
             extra_env,
             stream_mode,
+            None,
         )
         .await
     {

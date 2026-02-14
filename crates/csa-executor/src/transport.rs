@@ -204,8 +204,15 @@ impl Transport for AcpTransport {
         _tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-        _stream_mode: StreamMode,
+        stream_mode: StreamMode,
     ) -> Result<TransportResult> {
+        if stream_mode != StreamMode::BufferOnly {
+            tracing::debug!(
+                "ACP transport does not yet support stream_mode={:?}; output will be buffered",
+                stream_mode
+            );
+        }
+
         let env = self.build_env(session, extra_env);
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
@@ -361,6 +368,30 @@ mod tests {
     }
 
     #[test]
+    fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
+        let executor = Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+        };
+        let session_config = SessionConfig {
+            no_load: vec!["skills/foo".to_string()],
+            extra_load: vec!["skills/bar".to_string()],
+            tier: Some("tier-2".to_string()),
+            models: vec!["codex/openai/o3/medium".to_string()],
+            mcp_servers: Vec::new(),
+        };
+
+        let transport = TransportFactory::create(&executor, Some(session_config.clone()));
+        let acp = transport
+            .as_ref()
+            .as_any()
+            .downcast_ref::<AcpTransport>()
+            .expect("expected AcpTransport");
+
+        assert_eq!(acp.session_config, Some(session_config));
+    }
+
+    #[test]
     fn test_legacy_transport_construction_from_executor() {
         let executor = Executor::Opencode {
             model_override: Some("model".to_string()),
@@ -394,5 +425,31 @@ mod tests {
             AcpTransport::acp_command_for_tool("gemini-cli"),
             ("gemini".to_string(), vec!["--experimental-acp".to_string()])
         );
+    }
+
+    #[test]
+    fn test_build_summary_uses_last_stdout_line_on_success() {
+        let stdout = "line1\nfinal line\n";
+        let summary = build_summary(stdout, "", 0);
+        assert_eq!(summary, "final line");
+    }
+
+    #[test]
+    fn test_build_summary_uses_stdout_on_failure_when_present() {
+        let stdout = "details\nreason from stdout\n";
+        let summary = build_summary(stdout, "stderr message", 2);
+        assert_eq!(summary, "reason from stdout");
+    }
+
+    #[test]
+    fn test_build_summary_falls_back_to_stderr_on_failure() {
+        let summary = build_summary("\n", "stderr reason\n", 3);
+        assert_eq!(summary, "stderr reason");
+    }
+
+    #[test]
+    fn test_build_summary_falls_back_to_exit_code_when_no_output() {
+        let summary = build_summary("", "   \n", -1);
+        assert_eq!(summary, "exit code -1");
     }
 }

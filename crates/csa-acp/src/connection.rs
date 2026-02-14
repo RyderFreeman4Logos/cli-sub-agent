@@ -180,6 +180,13 @@ impl AcpConnection {
         Ok(status.and_then(|s| s.code()))
     }
 
+    pub fn kill(&self) -> AcpResult<()> {
+        let mut child = self.child.borrow_mut();
+        child
+            .start_kill()
+            .map_err(|err| AcpError::ConnectionFailed(err.to_string()))
+    }
+
     pub fn stderr(&self) -> String {
         self.stderr_buf.borrow().clone()
     }

@@ -1,6 +1,7 @@
 //! Executor enum for 4 AI tools.
 
 use anyhow::{Result, bail};
+use csa_acp::SessionConfig;
 use csa_core::types::{PromptTransport, ToolName, prompt_transport_capabilities};
 use csa_process::ExecutionResult;
 use csa_session::state::{MetaSessionState, ToolState};
@@ -195,7 +196,7 @@ impl Executor {
         stream_mode: csa_process::StreamMode,
     ) -> Result<ExecutionResult> {
         Ok(self
-            .execute_with_transport(prompt, tool_state, session, extra_env, stream_mode)
+            .execute_with_transport(prompt, tool_state, session, extra_env, stream_mode, None)
             .await?
             .execution)
     }
@@ -208,8 +209,9 @@ impl Executor {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
+        session_config: Option<SessionConfig>,
     ) -> Result<TransportResult> {
-        let transport = self.transport();
+        let transport = self.transport(session_config);
         transport
             .execute(prompt, tool_state, session, extra_env, stream_mode)
             .await
@@ -293,8 +295,8 @@ impl Executor {
         cmd
     }
 
-    fn transport(&self) -> Box<dyn Transport> {
-        TransportFactory::create(self, None)
+    fn transport(&self, session_config: Option<SessionConfig>) -> Box<dyn Transport> {
+        TransportFactory::create(self, session_config)
     }
 
     /// Append tool-specific arguments for full execution.
