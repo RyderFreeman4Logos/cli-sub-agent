@@ -408,12 +408,34 @@ pub(crate) async fn execute_with_session_and_meta(
 
     // Apply restrictions if configured
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let effective_prompt = if !can_edit {
+    let mut effective_prompt = if !can_edit {
         info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
         executor.apply_restrictions(prompt, false)
     } else {
         prompt.to_string()
     };
+
+    // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
+    // Session resumes already have context loaded in the tool's conversation.
+    let is_first_turn = session
+        .tools
+        .get(executor.tool_name())
+        .is_none_or(|ts| ts.provider_session_id.is_none());
+    if is_first_turn {
+        let context_files = csa_executor::load_project_context(
+            Path::new(&session.project_path),
+            &csa_executor::ContextLoadOptions::default(),
+        );
+        if !context_files.is_empty() {
+            let context_block = csa_executor::format_context_for_prompt(&context_files);
+            info!(
+                file_count = context_files.len(),
+                bytes = context_block.len(),
+                "Injecting project context into prompt"
+            );
+            effective_prompt = format!("{context_block}{effective_prompt}");
+        }
+    }
 
     // Resolve tool state for session resume.
     let tool_state = session
