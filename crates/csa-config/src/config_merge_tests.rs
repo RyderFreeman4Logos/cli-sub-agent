@@ -188,7 +188,7 @@ fn test_user_config_path_returns_some() {
     if std::env::var("HOME").is_ok() {
         assert!(path.is_some());
         let p = path.unwrap();
-        assert!(p.to_string_lossy().contains("csa"));
+        assert!(p.to_string_lossy().contains("cli-sub-agent"));
         assert!(p.to_string_lossy().contains("config.toml"));
     }
     // In containers without HOME, it's OK to return None
@@ -202,4 +202,88 @@ fn test_user_config_template_is_valid() {
     assert!(template.contains("[resources]"));
     assert!(template.contains("suppress_notify"));
     assert!(template.contains("# [tiers."));
+    // Template location comment should point to unified path
+    assert!(template.contains("cli-sub-agent/config.toml"));
+}
+
+#[test]
+fn test_user_config_path_matches_global_config_dir() {
+    // After unification, user-level ProjectConfig and GlobalConfig share the same directory.
+    if std::env::var("HOME").is_err() {
+        return; // Skip in containers
+    }
+    let user_path = ProjectConfig::user_config_path().unwrap();
+    let global_path = crate::GlobalConfig::config_path().unwrap();
+    assert_eq!(
+        user_path.parent(),
+        global_path.parent(),
+        "User and global config should share the same directory"
+    );
+}
+
+#[test]
+fn test_load_user_tiers_without_project_config() {
+    // When only user-level config exists (no project config),
+    // load should return user-level tiers.
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp
+        .path()
+        .join("nonexistent")
+        .join(".csa")
+        .join("config.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tiers.user-tier]
+description = "User-level tier"
+models = ["codex/openai/o3/medium"]
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load from user path");
+    assert!(config.tiers.contains_key("user-tier"));
+}
+
+#[test]
+fn test_load_project_overrides_user_tiers() {
+    // When both user and project configs exist, project tiers
+    // override user tiers (deep merge).
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tiers.shared-tier]
+description = "User version"
+models = ["codex/openai/o3/medium"]
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[tiers.shared-tier]
+description = "Project version"
+models = ["codex/openai/o3/high"]
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+    let tier = config.tiers.get("shared-tier").unwrap();
+    assert_eq!(tier.description, "Project version");
+    assert_eq!(tier.models, vec!["codex/openai/o3/high"]);
 }
