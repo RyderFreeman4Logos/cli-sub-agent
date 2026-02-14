@@ -67,7 +67,6 @@ fn test_build_command_codex_sets_csa_env_vars() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        suppress_notify: false,
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("test", None, &session, None);
@@ -251,7 +250,6 @@ fn test_build_command_codex_args_structure() {
     let exec = Executor::Codex {
         model_override: Some("gpt-5".to_string()),
         thinking_budget: Some(ThinkingBudget::Low),
-        suppress_notify: true,
     };
     let session = make_test_session();
     let (cmd, stdin_data) = exec.build_command("fix bug", None, &session, None);
@@ -270,11 +268,6 @@ fn test_build_command_codex_args_structure() {
     assert!(
         args.contains(&"--dangerously-bypass-approvals-and-sandbox".to_string()),
         "Should have sandbox bypass"
-    );
-    assert!(args.contains(&"-c".to_string()), "Should have -c flag");
-    assert!(
-        args.contains(&"notify=[]".to_string()),
-        "Should have notify=[]"
     );
     assert!(args.contains(&"--model".to_string()), "Should have --model");
     assert!(args.contains(&"gpt-5".to_string()), "Should have model");
@@ -349,7 +342,6 @@ fn test_build_command_with_session_resume_codex() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        suppress_notify: false,
     };
     let session = make_test_session();
     let tool_state = ToolState {
@@ -449,7 +441,6 @@ fn test_build_command_no_resume_without_provider_session_id() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        suppress_notify: false,
     };
     let session = make_test_session();
     let tool_state = ToolState {
@@ -577,7 +568,6 @@ fn test_build_command_prompt_with_special_characters() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        suppress_notify: false,
     };
     let session = make_test_session();
     let special_prompt = "Fix the bug in `fn main()` \u{2014} use \"quotes\" & $ENV_VAR\nnewline";

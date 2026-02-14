@@ -17,7 +17,6 @@ fn test_validate_config_succeeds_on_valid() {
         ToolConfig {
             enabled: true,
             restrictions: None,
-            suppress_notify: false,
         },
     );
 
@@ -94,7 +93,6 @@ fn test_validate_config_fails_on_unknown_tool() {
         ToolConfig {
             enabled: true,
             restrictions: None,
-            suppress_notify: false,
         },
     );
 
@@ -614,7 +612,6 @@ fn test_validate_all_four_known_tools_accepted() {
             ToolConfig {
                 enabled: true,
                 restrictions: None,
-                suppress_notify: false,
             },
         );
     }

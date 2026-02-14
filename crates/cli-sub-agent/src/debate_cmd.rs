@@ -6,7 +6,6 @@ use crate::run_helpers::read_prompt;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_executor::extract_session_id;
 
 pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -73,11 +72,10 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     )
     .await?;
 
-    let provider_session_id = extract_session_id(&tool, &execution.execution.output);
     let output = render_debate_output(
         &execution.execution.output,
         &execution.meta_session_id,
-        provider_session_id.as_deref(),
+        execution.provider_session_id.as_deref(),
     );
 
     // 10. Print result
@@ -245,7 +243,6 @@ mod tests {
                 ToolConfig {
                     enabled: true,
                     restrictions: None,
-                    suppress_notify: false,
                 },
             );
         }

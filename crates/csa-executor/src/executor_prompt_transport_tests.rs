@@ -30,7 +30,6 @@ fn test_build_command_short_prompt_uses_argv_and_no_stdin_data() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        suppress_notify: false,
     };
     let session = make_test_session();
     let prompt = "short prompt";
@@ -54,7 +53,6 @@ fn test_build_command_long_prompt_uses_stdin_for_stdin_capable_tool() {
     let exec = Executor::Codex {
         model_override: None,
         thinking_budget: None,
-        suppress_notify: false,
     };
     let session = make_test_session();
     let prompt = "p".repeat(MAX_ARGV_PROMPT_LEN + 1);

@@ -1,0 +1,21 @@
+[package]
+name = "csa-acp"
+version.workspace = true
+edition = "2024"
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-client-protocol = "0.9.4"
+tokio = { version = "1.36", features = ["rt", "process", "io-util", "macros"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+[dev-dependencies]
+tempfile.workspace = true

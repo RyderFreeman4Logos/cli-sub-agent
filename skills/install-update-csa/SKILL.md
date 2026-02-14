@@ -86,7 +86,6 @@ ls ~/.config/cli-sub-agent/config.toml 2>/dev/null
 
 [tools.codex]
 enabled = true
-suppress_notify = true  # Suppress codex desktop notifications when run via CSA
 
 [tools.opencode]
 enabled = true
@@ -239,24 +238,6 @@ Users **can rename tiers, add more tiers, or move model specs between tiers** by
 
 Use `AskUserQuestion` to configure tool-specific settings. Only ask about tools that are **enabled** for this project.
 
-#### 6A: Codex `suppress_notify`
-
-If codex is enabled, ask the user:
-
-> **Suppress codex desktop notifications when running via CSA?**
->
-> Context: When CSA spawns codex as a sub-agent, codex's default desktop notifications
-> (configured in `~/.codex/config.toml`) can produce excessive noise. Enabling this
-> passes `-c 'notify=[]'` to codex at launch, overriding its notification settings.
-
-| Option | Effect |
-|--------|--------|
-| `suppress_notify = true` (Recommended) | CSA passes `-c 'notify=[]'` to codex, silencing desktop notifications |
-| `suppress_notify = false` | Codex uses its own `~/.codex/config.toml` notification settings |
-
-Default: **`true`** (recommended for most users since CSA is non-interactive).
-
-
 ### Phase 7: Generate Config
 
 Write `.csa/config.toml` with clear section comments for easy editing:
@@ -275,7 +256,6 @@ enabled = false
 
 [tools.codex]
 enabled = true
-suppress_notify = true  # Suppress codex desktop notifications when run via CSA
 
 [tools.claude-code]
 enabled = true
@@ -388,4 +368,3 @@ Two tiers (fast/heavy) are too coarse. Three tiers (quick/standard/complex) cove
 | 4+ tiers | Security-critical projects needing a dedicated audit tier |
 
 Users can always add more tiers. The TOML format makes this trivial — just add a new `[tiers.tier-N-name]` section.
-

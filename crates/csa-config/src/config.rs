@@ -95,10 +95,6 @@ pub struct ToolConfig {
     pub enabled: bool,
     #[serde(default)]
     pub restrictions: Option<ToolRestrictions>,
-    /// Suppress codex desktop notifications by overriding `notify=[]` at launch.
-    /// Only effective for the codex tool. Default: false (respect codex's own config).
-    #[serde(default)]
-    pub suppress_notify: bool,
 }
 
 fn default_true() -> bool {
@@ -366,14 +362,6 @@ impl ProjectConfig {
         None
     }
 
-    /// Check if codex notifications should be suppressed for this config.
-    pub fn should_suppress_codex_notify(&self) -> bool {
-        self.tools
-            .get("codex")
-            .map(|t| t.suppress_notify)
-            .unwrap_or(false)
-    }
-
     /// Save a user-level config template to `~/.config/cli-sub-agent/config.toml`.
     ///
     /// Creates the directory if needed. Returns the path written, or None
@@ -411,7 +399,6 @@ min_free_memory_mb = 4096
 # Tool configuration defaults.
 # [tools.codex]
 # enabled = true
-# suppress_notify = true  # Suppress codex desktop notifications
 
 # [tools.gemini-cli]
 # enabled = true

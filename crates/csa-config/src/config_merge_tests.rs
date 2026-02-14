@@ -154,34 +154,6 @@ fn test_merged_schema_version_uses_max_when_explicit() {
 }
 
 #[test]
-fn test_suppress_notify_in_tool_config() {
-    let toml_str = r#"
-        schema_version = 1
-        [tools.codex]
-        enabled = true
-        suppress_notify = true
-        [tools.gemini-cli]
-        enabled = true
-    "#;
-    let config: ProjectConfig = toml::from_str(toml_str).unwrap();
-
-    assert!(config.should_suppress_codex_notify());
-    // gemini-cli doesn't have suppress_notify set, should default to false
-    assert!(!config.tools["gemini-cli"].suppress_notify);
-}
-
-#[test]
-fn test_suppress_notify_default_false() {
-    let toml_str = r#"
-        schema_version = 1
-        [tools.codex]
-        enabled = true
-    "#;
-    let config: ProjectConfig = toml::from_str(toml_str).unwrap();
-    assert!(!config.should_suppress_codex_notify());
-}
-
-#[test]
 fn test_user_config_path_returns_some() {
     // On a normal system with HOME set, this should return Some
     let path = ProjectConfig::user_config_path();
@@ -200,7 +172,6 @@ fn test_user_config_template_is_valid() {
     // Template should contain key sections
     assert!(template.contains("schema_version"));
     assert!(template.contains("[resources]"));
-    assert!(template.contains("suppress_notify"));
     assert!(template.contains("# [tiers."));
     // Template location comment should point to unified path
     assert!(template.contains("cli-sub-agent/config.toml"));

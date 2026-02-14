@@ -23,7 +23,6 @@ fn test_tool_name() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
-            suppress_notify: false,
         }
         .tool_name(),
         "codex"
@@ -61,7 +60,6 @@ fn test_executable_name() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
-            suppress_notify: false,
         }
         .executable_name(),
         "codex"
@@ -99,7 +97,6 @@ fn test_install_hint() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
-            suppress_notify: false,
         }
         .install_hint(),
         "Install: npm install -g @openai/codex"
@@ -137,7 +134,6 @@ fn test_yolo_args() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
-            suppress_notify: false,
         }
         .yolo_args(),
         &["--dangerously-bypass-approvals-and-sandbox"]
@@ -288,7 +284,6 @@ fn test_thinking_budget_in_codex_args() {
     let exec = Executor::Codex {
         model_override: Some("gpt-5".to_string()),
         thinking_budget: Some(ThinkingBudget::Low),
-        suppress_notify: false,
     };
 
     let mut cmd = Command::new(exec.executable_name());
@@ -386,7 +381,6 @@ fn test_apply_restrictions_preserves_all_tools() {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
-            suppress_notify: false,
         },
         Executor::ClaudeCode {
             model_override: None,
@@ -478,7 +472,6 @@ fn test_execute_in_preserves_model_override() {
         Executor::Codex {
             model_override: Some("gpt-5".to_string()),
             thinking_budget: Some(ThinkingBudget::Low),
-            suppress_notify: false,
         },
         Executor::ClaudeCode {
             model_override: Some("claude-opus".to_string()),
@@ -543,84 +536,4 @@ fn test_execute_in_preserves_model_override() {
             }
         }
     }
-}
-
-#[test]
-fn test_codex_suppress_notify_flag() {
-    let exec = Executor::Codex {
-        model_override: Some("gpt-5".to_string()),
-        thinking_budget: None,
-        suppress_notify: true,
-    };
-
-    let mut cmd = Command::new(exec.executable_name());
-    exec.append_tool_args(&mut cmd, "test prompt", None);
-
-    let debug_str = format!("{:?}", cmd);
-    assert!(
-        debug_str.contains("\"-c\""),
-        "Should contain -c flag: {debug_str}"
-    );
-    assert!(
-        debug_str.contains("\"notify=[]\""),
-        "Should contain notify=[]: {debug_str}"
-    );
-}
-
-#[test]
-fn test_codex_suppress_notify_default_false() {
-    let exec = Executor::Codex {
-        model_override: None,
-        thinking_budget: None,
-        suppress_notify: false,
-    };
-
-    let mut cmd = Command::new(exec.executable_name());
-    exec.append_tool_args(&mut cmd, "test prompt", None);
-
-    let debug_str = format!("{:?}", cmd);
-    assert!(
-        !debug_str.contains("notify=[]"),
-        "Should NOT contain notify=[] when suppress_notify=false: {debug_str}"
-    );
-}
-
-#[test]
-fn test_set_suppress_notify() {
-    let mut exec = Executor::Codex {
-        model_override: None,
-        thinking_budget: None,
-        suppress_notify: false,
-    };
-
-    exec.set_suppress_notify(true);
-
-    let mut cmd = Command::new(exec.executable_name());
-    exec.append_tool_args(&mut cmd, "test", None);
-
-    let debug_str = format!("{:?}", cmd);
-    assert!(
-        debug_str.contains("notify=[]"),
-        "After set_suppress_notify(true), should contain notify=[]: {debug_str}"
-    );
-}
-
-#[test]
-fn test_set_suppress_notify_noop_for_non_codex() {
-    let mut exec = Executor::GeminiCli {
-        model_override: None,
-        thinking_budget: None,
-    };
-
-    // Should be a no-op, not panic
-    exec.set_suppress_notify(true);
-
-    let mut cmd = Command::new(exec.executable_name());
-    exec.append_tool_args(&mut cmd, "test", None);
-
-    let debug_str = format!("{:?}", cmd);
-    assert!(
-        !debug_str.contains("notify=[]"),
-        "Non-codex should never have notify=[]: {debug_str}"
-    );
 }

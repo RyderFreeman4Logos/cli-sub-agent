@@ -18,6 +18,9 @@ const MAX_ANCESTOR_DEPTH: usize = 16;
 /// Must stay in sync with `Executor::executable_name()` in csa-executor
 /// and `is_tool_binary_available()` in run_helpers.rs.
 const KNOWN_TOOL_EXECUTABLES: &[(&str, &str)] = &[
+    // ACP mode uses the same executable basenames with ACP-specific args
+    // (e.g. `claude --acp`, `codex acp`), so no separate ACP process names
+    // are required here.
     ("claude", "claude-code"),
     ("gemini", "gemini-cli"),
     ("codex", "codex"),
