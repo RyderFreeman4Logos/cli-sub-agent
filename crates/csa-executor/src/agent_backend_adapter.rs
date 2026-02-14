@@ -285,7 +285,6 @@ mod tests {
         Executor::Codex {
             model_override: None,
             thinking_budget: None,
-            suppress_notify: false,
         }
     }
 
@@ -309,7 +308,6 @@ mod tests {
             ExecutorAgentBackend::backend_type_for_executor(&Executor::Codex {
                 model_override: None,
                 thinking_budget: None,
-                suppress_notify: false,
             }),
             BackendType::Codex
         );
@@ -337,11 +335,9 @@ mod tests {
             Executor::Codex {
                 model_override,
                 thinking_budget,
-                suppress_notify,
             } => {
                 assert_eq!(model_override.as_deref(), Some("gpt-5"));
                 assert!(matches!(thinking_budget, Some(ThinkingBudget::High)));
-                assert!(!suppress_notify);
             }
             _ => panic!("expected codex executor"),
         }
