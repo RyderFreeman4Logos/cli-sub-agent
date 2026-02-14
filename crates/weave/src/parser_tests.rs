@@ -376,3 +376,46 @@ fn test_error_on_excessive_nesting_depth() {
         "unexpected error: {err}"
     );
 }
+
+// -- Input size limits ------------------------------------------------------
+
+#[test]
+fn test_parse_skill_rejects_oversized_input() {
+    let oversized = "x".repeat(super::MAX_INPUT_BYTES + 1);
+    let err = parse_skill(&oversized).unwrap_err();
+    assert!(
+        err.to_string().contains("input exceeds maximum size"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_parse_skill_accepts_input_at_limit() {
+    // Build valid content that is exactly MAX_INPUT_BYTES.
+    let header = "---\nname = \"big\"\n---\n";
+    let padding_len = super::MAX_INPUT_BYTES - header.len();
+    let input = format!("{header}{}", "a".repeat(padding_len));
+    assert_eq!(input.len(), super::MAX_INPUT_BYTES);
+    // Should not fail due to size — may still parse fine (body is raw text).
+    assert!(parse_skill(&input).is_ok());
+}
+
+#[test]
+fn test_parse_skill_config_rejects_oversized_input() {
+    let oversized = "x".repeat(super::MAX_INPUT_BYTES + 1);
+    let err = parse_skill_config(&oversized).unwrap_err();
+    assert!(
+        err.to_string().contains("input exceeds maximum size"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_parse_skill_config_accepts_input_at_limit() {
+    let toml_str = "[skill]\nname = \"big\"\n";
+    let padding_len = super::MAX_INPUT_BYTES - toml_str.len();
+    // Pad with TOML-valid whitespace (newlines).
+    let input = format!("{toml_str}{}", "\n".repeat(padding_len));
+    assert_eq!(input.len(), super::MAX_INPUT_BYTES);
+    assert!(parse_skill_config(&input).is_ok());
+}
