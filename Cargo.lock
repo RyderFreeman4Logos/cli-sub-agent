@@ -2426,8 +2426,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "directories",
  "regex",
  "serde",
+ "tempfile",
  "toml",
  "tracing",
  "tracing-subscriber",
