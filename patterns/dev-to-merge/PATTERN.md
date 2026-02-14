@@ -63,24 +63,7 @@ Run the full test suite. All tests must pass before proceeding.
 just test
 ```
 
-## Step 5: Security Scan
-
-Tool: bash
-OnFail: abort
-
-Check for hardcoded secrets, debug statements, and commented-out code
-in staged files.
-
-```bash
-git diff --cached --name-only | while read -r file; do
-  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
-    echo "FAIL: Potential secret in $file"
-    exit 1
-  fi
-done
-```
-
-## Step 6: Stage Changes
+## Step 5: Stage Changes
 
 Tool: bash
 
@@ -94,6 +77,23 @@ if git ls-files --others --exclude-standard | grep -q .; then
   git ls-files --others --exclude-standard
   exit 1
 fi
+```
+
+## Step 6: Security Scan
+
+Tool: bash
+OnFail: abort
+
+Check for hardcoded secrets, debug statements, and commented-out code
+in staged files. Runs after staging so `git diff --cached` covers all changes.
+
+```bash
+git diff --cached --name-only | while read -r file; do
+  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
+    echo "FAIL: Potential secret in $file"
+    exit 1
+  fi
+done
 ```
 
 ## Step 7: Security Audit
@@ -173,6 +173,9 @@ Tool: bash
 OnFail: abort
 
 Create the commit using the generated message: ${COMMIT_MSG}.
+NOTE: In production, this step should invoke the `/commit` skill which
+enforces security audit, test completeness, and AGENTS.md compliance.
+The raw `git commit` here demonstrates the skill-lang format only.
 
 ```bash
 git commit -m "${COMMIT_MSG}"
@@ -186,7 +189,7 @@ OnFail: retry 2
 Push the feature branch to the remote origin.
 
 ```bash
-git push -u origin ${BRANCH}
+git push -u origin "${BRANCH}"
 ```
 
 ## Step 15: Create Pull Request
@@ -194,22 +197,12 @@ git push -u origin ${BRANCH}
 Tool: bash
 OnFail: abort
 
-Create a PR targeting main via GitHub CLI.
+Create a PR targeting main via GitHub CLI. The PR body includes a summary
+of changes for ${SCOPE} and a test plan checklist covering tests, linting,
+security audit, and codex review.
 
 ```bash
-gh pr create --base main --title "${COMMIT_MSG}" --body "$(cat <<'PREOF'
-## Summary
-- ${SCOPE}: automated dev-to-merge workflow
-
-## Test plan
-- [ ] All tests pass
-- [ ] Linter clean
-- [ ] Security audit passed
-- [ ] @codex review
-
-Generated with dev-to-merge pattern (weave skill-lang)
-PREOF
-)"
+gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```
 
 ## Step 16: Trigger Codex Bot Review
@@ -218,6 +211,9 @@ Tool: bash
 
 Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
+NOTE: In production, Steps 15-24 should invoke the `/pr-codex-bot` skill
+which handles the full review-trigger-procedure, bounded polling, false-positive
+arbitration, and merge atomically. The manual flow here demonstrates skill-lang.
 
 ```bash
 PR_NUM=$(gh pr view --json number -q '.number')
@@ -286,7 +282,7 @@ Tool: bash
 Push all fix commits and trigger a new round of codex review.
 
 ```bash
-git push origin ${BRANCH}
+git push origin "${BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 

@@ -21,6 +21,9 @@ name = "COMMENT_TEXT"
 name = "COMMIT_MSG"
 
 [[plan.variables]]
+name = "PR_BODY"
+
+[[plan.variables]]
 name = "PR_NUM"
 
 [[plan.variables]]
@@ -93,24 +96,6 @@ on_fail = "abort"
 
 [[plan.steps]]
 id = 5
-title = "Security Scan"
-tool = "bash"
-prompt = """
-Check for hardcoded secrets, debug statements, and commented-out code
-in staged files.
-
-```bash
-git diff --cached --name-only | while read -r file; do
-  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
-    echo "FAIL: Potential secret in $file"
-    exit 1
-  fi
-done
-```"""
-on_fail = "abort"
-
-[[plan.steps]]
-id = 6
 title = "Stage Changes"
 tool = "bash"
 prompt = """
@@ -124,6 +109,24 @@ if git ls-files --others --exclude-standard | grep -q .; then
   git ls-files --others --exclude-standard
   exit 1
 fi
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Security Scan"
+tool = "bash"
+prompt = """
+Check for hardcoded secrets, debug statements, and commented-out code
+in staged files. Runs after staging so `git diff --cached` covers all changes.
+
+```bash
+git diff --cached --name-only | while read -r file; do
+  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
+    echo "FAIL: Potential secret in $file"
+    exit 1
+  fi
+done
 ```"""
 on_fail = "abort"
 
@@ -214,6 +217,9 @@ title = "Commit"
 tool = "bash"
 prompt = """
 Create the commit using the generated message: ${COMMIT_MSG}.
+NOTE: In production, this step should invoke the `/commit` skill which
+enforces security audit, test completeness, and AGENTS.md compliance.
+The raw `git commit` here demonstrates the skill-lang format only.
 
 ```bash
 git commit -m "${COMMIT_MSG}"
@@ -228,7 +234,7 @@ prompt = """
 Push the feature branch to the remote origin.
 
 ```bash
-git push -u origin ${BRANCH}
+git push -u origin "${BRANCH}"
 ```"""
 
 [plan.steps.on_fail]
@@ -239,40 +245,25 @@ id = 15
 title = "Create Pull Request"
 tool = "bash"
 prompt = """
-Create a PR targeting main via GitHub CLI.
+Create a PR targeting main via GitHub CLI. The PR body includes a summary
+of changes for ${SCOPE} and a test plan checklist covering tests, linting,
+security audit, and codex review.
 
 ```bash
-gh pr create --base main --title "${COMMIT_MSG}" --body "$(cat <<'PREOF'"""
-on_fail = "abort"
-
-[[plan.steps]]
-id = 16
-title = "Summary"
-prompt = "- ${SCOPE}: automated dev-to-merge workflow"
-on_fail = "abort"
-
-[[plan.steps]]
-id = 17
-title = "Test plan"
-prompt = """
-- [ ] All tests pass
-- [ ] Linter clean
-- [ ] Security audit passed
-- [ ] @codex review
-
-Generated with dev-to-merge pattern (weave skill-lang)
-PREOF
-)"
+gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
 
 [[plan.steps]]
-id = 18
+id = 16
 title = "Trigger Codex Bot Review"
 tool = "bash"
 prompt = """
 Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
+NOTE: In production, Steps 15-24 should invoke the `/pr-codex-bot` skill
+which handles the full review-trigger-procedure, bounded polling, false-positive
+arbitration, and merge atomically. The manual flow here demonstrates skill-lang.
 
 ```bash
 PR_NUM=$(gh pr view --json number -q '.number')
@@ -281,7 +272,7 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 on_fail = "abort"
 
 [[plan.steps]]
-id = 19
+id = 17
 title = "Poll for Bot Response"
 tool = "bash"
 prompt = """
@@ -290,7 +281,7 @@ If the bot does not respond, fall through to UNAVAILABLE handling."""
 on_fail = "skip"
 
 [[plan.steps]]
-id = 20
+id = 18
 title = "Evaluate Bot Comments"
 tool = "claude-code"
 prompt = """
@@ -303,7 +294,7 @@ on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
 [[plan.steps]]
-id = 21
+id = 19
 title = "Process Comment"
 prompt = """
 Evaluate this specific bot comment against the current code state.
@@ -316,7 +307,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[plan.steps]]
-id = 22
+id = 20
 title = "Arbitrate False Positive"
 tool = "csa"
 prompt = """
@@ -335,7 +326,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[plan.steps]]
-id = 23
+id = 21
 title = "Fix Real Issue"
 tool = "csa"
 prompt = "Fix the real issue identified by the bot. Commit the fix."
@@ -350,28 +341,28 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[plan.steps]]
-id = 24
+id = 22
 title = "Push Fixes and Re-trigger Review"
 tool = "bash"
 prompt = """
 Push all fix commits and trigger a new round of codex review.
 
 ```bash
-git push origin ${BRANCH}
+git push origin "${BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```"""
 on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
 [[plan.steps]]
-id = 25
+id = 23
 title = "Bot Review Clean"
 prompt = "No issues found by the codex bot. Proceed to merge."
 on_fail = "abort"
 condition = "!(${BOT_HAS_ISSUES})"
 
 [[plan.steps]]
-id = 26
+id = 24
 title = "Merge PR"
 tool = "bash"
 prompt = """

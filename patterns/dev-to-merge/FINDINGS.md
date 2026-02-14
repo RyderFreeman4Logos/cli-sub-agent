@@ -134,13 +134,32 @@ extracted variable set. Optionally support simple expressions (`==`, `!=`,
 6. **Code fence awareness**: The parser should track fenced code blocks to
    avoid misinterpreting headers inside code as structural elements.
 
+## Post-Review Fixes
+
+After local review (csa review --branch main) flagged 3 P1 and 1 P2 issues:
+
+1. **CR-001 (P1)**: Restructured Step 15 (Create PR) to avoid `##` headers
+   inside the step body. Replaced the embedded heredoc with a `${PR_BODY}`
+   variable reference. Compiled plan now has exactly 24 steps (was 26).
+
+2. **CR-002 (P1)**: Quoted all `${BRANCH}` references in shell push commands
+   (`"${BRANCH}"`) to prevent command injection via branch names with
+   shell metacharacters.
+
+3. **CR-003 (P1)**: Added explicit NOTE comments to Steps 13 and 16 stating
+   that production usage should invoke `/commit` and `/pr-codex-bot` skills
+   per AGENTS.md rule 015. The raw commands here demonstrate skill-lang only.
+
+4. **CR-004 (P2)**: Swapped Step 5 (Security Scan) and Step 6 (Stage Changes)
+   so staging occurs first, ensuring `git diff --cached` has content to scan.
+
 ## Statistics
 
 | Metric | Value |
 |--------|-------|
-| Source lines (PATTERN.md) | ~180 |
-| Compiled steps | 26 (24 intended + 2 spurious from code fence issue) |
-| Variables extracted | 10 |
+| Source lines (PATTERN.md) | ~190 |
+| Compiled steps | 24 |
+| Variables extracted | 11 |
 | IF blocks | 3 (review issues, bot issues, false positive) |
 | FOR blocks | 1 (iterate bot comments) |
 | Nested IF-in-FOR | 1 |
