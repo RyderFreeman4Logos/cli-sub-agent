@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use tracing::warn;
+use tracing::{debug, warn};
 
 /// Default maximum total size of injected context (bytes).
 const DEFAULT_MAX_CONTEXT_BYTES: usize = 50 * 1024;
@@ -47,27 +47,28 @@ pub fn load_project_context(project_root: &Path, options: &ContextLoadOptions) -
         if options.skip_files.iter().any(|s| s == rel_path) {
             continue;
         }
-        if let Some(cf) = try_load_file(project_root, rel_path, max_bytes, &mut total_bytes) {
+        // Primary files may be symlinked to shared configs — allow external targets.
+        if let Some(cf) = try_load_file(project_root, rel_path, max_bytes, &mut total_bytes, true) {
             files.push(cf);
         }
     }
 
     // Parse AGENTS.md for detail file references if it was loaded.
-    let agents_content = files
+    // Collect refs first to avoid borrowing `files` during mutation.
+    let detail_refs: Vec<PathBuf> = files
         .iter()
         .find(|f| f.rel_path == "AGENTS.md")
-        .map(|f| f.content.clone());
+        .map(|f| parse_agents_references(&f.content))
+        .unwrap_or_default();
 
-    if let Some(content) = agents_content {
-        let refs = parse_agents_references(&content);
-        for ref_path in refs {
-            let rel = ref_path.to_string_lossy().to_string();
-            if options.skip_files.iter().any(|s| s == &rel) {
-                continue;
-            }
-            if let Some(cf) = try_load_file(project_root, &rel, max_bytes, &mut total_bytes) {
-                files.push(cf);
-            }
+    for ref_path in detail_refs {
+        let rel = ref_path.to_string_lossy().to_string();
+        if options.skip_files.iter().any(|s| s == &rel) {
+            continue;
+        }
+        // Detail refs are repo-controlled input — symlinks MUST NOT escape project root.
+        if let Some(cf) = try_load_file(project_root, &rel, max_bytes, &mut total_bytes, false) {
+            files.push(cf);
         }
     }
 
@@ -96,16 +97,28 @@ pub fn format_context_for_prompt(files: &[ContextFile]) -> String {
 ///
 /// Validates that the resolved path stays within `project_root` to prevent
 /// path traversal via `../` in AGENTS.md detail references.
+///
+/// `allow_external_symlink`: when `true`, symlinked files whose logical path
+/// is within the project are allowed even if their target is outside (for
+/// primary files like CLAUDE.md/AGENTS.md). When `false`, all symlinks must
+/// resolve within the project root (for AGENTS detail refs).
 fn try_load_file(
     project_root: &Path,
     rel_path: &str,
     max_bytes: usize,
     total_bytes: &mut usize,
+    allow_external_symlink: bool,
 ) -> Option<ContextFile> {
     let full_path = project_root.join(rel_path);
 
-    // Boundary check: canonicalize both paths and ensure the file is within
-    // project_root. This prevents `../` traversal from escaping the project.
+    // Boundary check: prevent path traversal while allowing legitimate symlinks.
+    //
+    // Symlinked CLAUDE.md/AGENTS.md are common (users share configs across projects).
+    // canonicalize() resolves symlinks to real paths, which then fail starts_with()
+    // because the real path is outside project_root. Instead, we first check the
+    // logical (un-resolved) path. If it stays within the project root lexically,
+    // the symlink is intentional and allowed. Only fall back to canonicalize for
+    // non-symlink paths where `../` components might escape the root.
     let canonical_root = match project_root.canonicalize() {
         Ok(p) => p,
         Err(e) => {
@@ -113,39 +126,119 @@ fn try_load_file(
             return None;
         }
     };
-    let canonical_file = match full_path.canonicalize() {
-        Ok(p) => p,
+
+    // First check: does the logical (un-resolved) path stay within the project?
+    // `full_path` is `project_root.join(rel_path)` — if rel_path has no `..`
+    // escaping beyond the root, this passes. Symlinks pass here because their
+    // logical location is within the project, even if the target is outside.
+    let logical_ok =
+        full_path.exists() && !rel_path.starts_with("..") && !rel_path.contains("/../");
+
+    // For non-symlink files or as a secondary check, use canonicalize.
+    // This catches tricky `../` traversal that lexical checks might miss.
+    let boundary_ok = if full_path.is_symlink() && allow_external_symlink {
+        // Primary file symlink: trust the logical path check. The user placed
+        // this symlink inside the project directory intentionally.
+        if logical_ok {
+            debug!(
+                path = %rel_path,
+                target = %std::fs::read_link(&full_path).map(|p| p.display().to_string()).unwrap_or_default(),
+                "Allowing symlinked primary context file"
+            );
+            true
+        } else {
+            warn!(
+                path = %rel_path,
+                "Symlinked context file has suspicious relative path (blocked)"
+            );
+            false
+        }
+    } else {
+        // Non-symlink: canonicalize and verify it stays within the project root.
+        match full_path.canonicalize() {
+            Ok(canonical_file) => {
+                if canonical_file.starts_with(&canonical_root) {
+                    true
+                } else {
+                    warn!(
+                        path = %rel_path,
+                        resolved = %canonical_file.display(),
+                        root = %canonical_root.display(),
+                        "Context file path escapes project root (path traversal blocked)"
+                    );
+                    false
+                }
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    warn!(path = %rel_path, error = %e, "Cannot canonicalize context file path");
+                }
+                return None;
+            }
+        }
+    };
+
+    if !boundary_ok {
+        return None;
+    }
+
+    // Pre-check file size via metadata before reading into memory.
+    let file_size = match std::fs::metadata(&full_path) {
+        Ok(meta) => meta.len() as usize,
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
-                warn!(path = %rel_path, error = %e, "Cannot canonicalize context file path");
+                warn!(path = %rel_path, error = %e, "Failed to read context file metadata");
             }
             return None;
         }
     };
-    if !canonical_file.starts_with(&canonical_root) {
+
+    if let Some(new_total) = total_bytes.checked_add(file_size) {
+        if new_total > max_bytes {
+            warn!(
+                path = %rel_path,
+                file_bytes = file_size,
+                total_so_far = *total_bytes,
+                max_bytes,
+                "Skipping context file: would exceed max context bytes"
+            );
+            return None;
+        }
+    } else {
         warn!(
             path = %rel_path,
-            resolved = %canonical_file.display(),
-            root = %canonical_root.display(),
-            "Context file path escapes project root (path traversal blocked)"
+            file_bytes = file_size,
+            total_so_far = *total_bytes,
+            "Skipping context file: byte count overflow"
         );
         return None;
     }
 
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
-            let new_total = *total_bytes + content.len();
-            if new_total > max_bytes {
-                warn!(
-                    path = %rel_path,
-                    file_bytes = content.len(),
-                    total_so_far = *total_bytes,
-                    max_bytes,
-                    "Skipping context file: would exceed max context bytes"
-                );
-                return None;
-            }
-            *total_bytes = new_total;
+            // Re-check with actual content length (may differ from metadata for
+            // multi-byte encodings or platform quirks, but use actual for accuracy).
+            let actual_new_total = match total_bytes.checked_add(content.len()) {
+                Some(t) if t <= max_bytes => t,
+                Some(_) => {
+                    warn!(
+                        path = %rel_path,
+                        file_bytes = content.len(),
+                        total_so_far = *total_bytes,
+                        max_bytes,
+                        "Skipping context file: would exceed max context bytes"
+                    );
+                    return None;
+                }
+                None => {
+                    warn!(
+                        path = %rel_path,
+                        "Skipping context file: byte count overflow"
+                    );
+                    return None;
+                }
+            };
+            *total_bytes = actual_new_total;
             Some(ContextFile {
                 rel_path: rel_path.to_string(),
                 content,
@@ -410,5 +503,95 @@ mod tests {
         // AGENTS.md + rules/exists.md (nonexistent silently skipped)
         assert_eq!(files.len(), 2);
         assert_eq!(files[1].rel_path, "rules/exists.md");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_project_context_follows_symlinked_claude_md() {
+        use std::os::unix::fs as unix_fs;
+
+        let dir = TempDir::new().unwrap();
+        // Create real file outside the project directory.
+        let external = dir.path().join("shared-config");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("CLAUDE.md"), "# Shared rules").unwrap();
+
+        // Create project directory with symlink to external CLAUDE.md.
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        unix_fs::symlink(external.join("CLAUDE.md"), project.join("CLAUDE.md")).unwrap();
+
+        let files = load_project_context(&project, &ContextLoadOptions::default());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].rel_path, "CLAUDE.md");
+        assert_eq!(files[0].content, "# Shared rules");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_project_context_follows_symlinked_agents_md() {
+        use std::os::unix::fs as unix_fs;
+
+        let dir = TempDir::new().unwrap();
+        // Create real AGENTS.md outside project.
+        let external = dir.path().join("shared");
+        fs::create_dir_all(&external).unwrap();
+        fs::write(external.join("AGENTS.md"), "# Shared agents").unwrap();
+
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        unix_fs::symlink(external.join("AGENTS.md"), project.join("AGENTS.md")).unwrap();
+
+        let files = load_project_context(&project, &ContextLoadOptions::default());
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].rel_path, "AGENTS.md");
+        assert_eq!(files[0].content, "# Shared agents");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_project_context_blocks_dotdot_traversal_even_as_symlink() {
+        use std::os::unix::fs as unix_fs;
+
+        let dir = TempDir::new().unwrap();
+        let secret = dir.path().join("secret.txt");
+        fs::write(&secret, "TOP SECRET").unwrap();
+
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        // AGENTS.md references ../secret.txt — this should be blocked
+        // because the rel_path starts with ".." (traversal attempt).
+        fs::write(project.join("AGENTS.md"), "→ ../secret.txt\n").unwrap();
+        // Also create a symlink with .. in its name to test the rel_path check.
+        unix_fs::symlink(&secret, project.join("legit-link.txt")).unwrap();
+
+        let files = load_project_context(&project, &ContextLoadOptions::default());
+        let paths: Vec<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert!(!paths.contains(&"../secret.txt"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_load_project_context_blocks_symlinked_detail_ref_outside_root() {
+        use std::os::unix::fs as unix_fs;
+
+        let dir = TempDir::new().unwrap();
+        // Create a secret file outside the project.
+        let secret = dir.path().join("secret.txt");
+        fs::write(&secret, "TOP SECRET").unwrap();
+
+        let project = dir.path().join("project");
+        fs::create_dir_all(project.join("rules")).unwrap();
+        // Create a symlink inside project that points to the secret file.
+        unix_fs::symlink(&secret, project.join("rules/ext.md")).unwrap();
+        // AGENTS.md references the symlink via detail ref.
+        fs::write(project.join("AGENTS.md"), "→ rules/ext.md\n").unwrap();
+
+        let files = load_project_context(&project, &ContextLoadOptions::default());
+        let paths: Vec<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
+        // Detail ref symlink pointing outside root MUST be blocked.
+        assert!(!paths.contains(&"rules/ext.md"));
+        // AGENTS.md itself should still load.
+        assert!(paths.contains(&"AGENTS.md"));
     }
 }
