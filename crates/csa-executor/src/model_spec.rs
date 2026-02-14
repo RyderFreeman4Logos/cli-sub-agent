@@ -90,7 +90,7 @@ impl ThinkingBudget {
             Self::Low => "low",
             Self::Medium => "medium",
             Self::High => "high",
-            Self::Xhigh => "high", // codex doesn't support xhigh, fallback to high
+            Self::Xhigh => "xhigh",
             Self::Custom(_) => "high", // custom values map to high
         }
     }
@@ -232,7 +232,7 @@ mod tests {
         assert_eq!(ThinkingBudget::Low.codex_effort(), "low");
         assert_eq!(ThinkingBudget::Medium.codex_effort(), "medium");
         assert_eq!(ThinkingBudget::High.codex_effort(), "high");
-        assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "high"); // fallback to high
+        assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "xhigh");
         assert_eq!(ThinkingBudget::Custom(10000).codex_effort(), "high"); // fallback to high
     }
 }
