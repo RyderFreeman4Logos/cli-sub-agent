@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
+
+use weave::compiler::{compile, plan_to_toml};
+use weave::parser::parse_skill;
 
 /// Weave — skill language compiler and package manager.
 #[derive(Parser)]
@@ -27,12 +30,12 @@ enum Format {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Compile a weave skill file.
+    /// Compile a weave skill file into an execution plan.
     Compile {
-        /// Input file path.
+        /// Input Markdown file path.
         input: PathBuf,
 
-        /// Output file path.
+        /// Output TOML file path (stdout if omitted).
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
@@ -67,8 +70,20 @@ fn main() -> Result<()> {
 
     match cli.command {
         Commands::Compile { input, output } => {
-            let _ = (input, output);
-            eprintln!("compile: not yet implemented");
+            let content = std::fs::read_to_string(&input)
+                .with_context(|| format!("failed to read {}", input.display()))?;
+            let doc = parse_skill(&content)
+                .with_context(|| format!("failed to parse {}", input.display()))?;
+            let plan = compile(&doc).context("compilation failed")?;
+            let toml_str = plan_to_toml(&plan)?;
+
+            if let Some(out_path) = output {
+                std::fs::write(&out_path, &toml_str)
+                    .with_context(|| format!("failed to write {}", out_path.display()))?;
+                eprintln!("wrote {}", out_path.display());
+            } else {
+                print!("{toml_str}");
+            }
         }
         Commands::Install { source } => {
             let _ = source;
