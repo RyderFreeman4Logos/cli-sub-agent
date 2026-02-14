@@ -1,0 +1,375 @@
+[plan]
+name = "dev-to-merge"
+description = "Full development cycle from branch creation through commit, PR, codex-bot review, and merge"
+
+[[plan.variables]]
+name = "BOT_COMMENTS"
+
+[[plan.variables]]
+name = "BOT_HAS_ISSUES"
+
+[[plan.variables]]
+name = "BRANCH"
+
+[[plan.variables]]
+name = "COMMENT_IS_FALSE_POSITIVE"
+
+[[plan.variables]]
+name = "COMMENT_TEXT"
+
+[[plan.variables]]
+name = "COMMIT_MSG"
+
+[[plan.variables]]
+name = "PR_BODY"
+
+[[plan.variables]]
+name = "PR_NUM"
+
+[[plan.variables]]
+name = "REPO"
+
+[[plan.variables]]
+name = "REVIEW_HAS_ISSUES"
+
+[[plan.variables]]
+name = "SCOPE"
+
+[[plan.steps]]
+id = 1
+title = "Validate Branch"
+tool = "bash"
+prompt = """
+Verify the current branch is a feature branch, not a protected branch.
+If on main or dev, abort immediately.
+
+```bash
+BRANCH="${BRANCH}"
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH="main"; fi
+if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
+  echo "ERROR: Cannot work directly on $BRANCH. Create a feature branch."
+  exit 1
+fi
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Run Formatters"
+tool = "bash"
+prompt = """
+Run the project formatter to ensure consistent code style.
+
+```bash
+just fmt
+```"""
+
+[plan.steps.on_fail]
+retry = 2
+
+[[plan.steps]]
+id = 3
+title = "Run Linters"
+tool = "bash"
+prompt = """
+Run linters to catch static analysis issues.
+
+```bash
+just clippy
+```"""
+
+[plan.steps.on_fail]
+retry = 2
+
+[[plan.steps]]
+id = 4
+title = "Run Tests"
+tool = "bash"
+prompt = """
+Run the full test suite. All tests must pass before proceeding.
+
+```bash
+just test
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 5
+title = "Stage Changes"
+tool = "bash"
+prompt = """
+Stage all modified and new files relevant to ${SCOPE}.
+Verify no untracked files remain.
+
+```bash
+git add -A
+if git ls-files --others --exclude-standard | grep -q .; then
+  echo "ERROR: Untracked files detected."
+  git ls-files --others --exclude-standard
+  exit 1
+fi
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Security Scan"
+tool = "bash"
+prompt = """
+Check for hardcoded secrets, debug statements, and commented-out code
+in staged files. Runs after staging so `git diff --cached` covers all changes.
+
+```bash
+git diff --cached --name-only | while read -r file; do
+  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
+    echo "FAIL: Potential secret in $file"
+    exit 1
+  fi
+done
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 7
+title = "Security Audit"
+tool = "csa"
+prompt = """
+Run the security-audit skill: test completeness check, vulnerability scan,
+and code quality check. The audit MUST pass before commit.
+
+Phase 1: Can you propose a test case that does not exist? If yes, FAIL.
+Phase 2: Input validation, size limits, panic risks.
+Phase 3: No debug code, secrets, or commented-out code."""
+tier = "tier-2-standard"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 8
+title = "Pre-Commit Review"
+tool = "csa"
+prompt = """
+Run heterogeneous code review on all uncommitted changes versus HEAD.
+The reviewer MUST be a different model family than the code author.
+
+```bash
+csa review --diff
+```
+
+Review output includes AGENTS.md compliance checklist."""
+tier = "tier-2-standard"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 9
+title = "Fix Review Issues"
+tool = "csa"
+prompt = """
+Fix each issue identified by the pre-commit review.
+Preserve original code intent. Do NOT delete code to silence warnings."""
+tier = "tier-2-standard"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[plan.steps.on_fail]
+retry = 3
+
+[[plan.steps]]
+id = 10
+title = "Re-run Quality Gates"
+tool = "bash"
+prompt = """
+Re-run formatters, linters, and tests after fixes.
+
+```bash
+just pre-commit
+```"""
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[[plan.steps]]
+id = 11
+title = "Re-review"
+tool = "csa"
+prompt = """
+Run `csa review --diff` again to verify all issues are resolved.
+Loop back to Step 9 if issues persist (max 3 rounds)."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[[plan.steps]]
+id = 12
+title = "Generate Commit Message"
+tool = "csa"
+prompt = """
+Generate a Conventional Commits message from the staged diff.
+The message must follow the format: `type(${SCOPE}): description`.
+
+```bash
+csa run "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}"
+```"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 13
+title = "Commit"
+tool = "bash"
+prompt = """
+Create the commit using the generated message: ${COMMIT_MSG}.
+NOTE: In production, this step should invoke the `/commit` skill which
+enforces security audit, test completeness, and AGENTS.md compliance.
+The raw `git commit` here demonstrates the skill-lang format only.
+
+```bash
+git commit -m "${COMMIT_MSG}"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 14
+title = "Push to Origin"
+tool = "bash"
+prompt = """
+Push the feature branch to the remote origin.
+
+```bash
+git push -u origin "${BRANCH}"
+```"""
+
+[plan.steps.on_fail]
+retry = 2
+
+[[plan.steps]]
+id = 15
+title = "Create Pull Request"
+tool = "bash"
+prompt = """
+Create a PR targeting main via GitHub CLI. The PR body includes a summary
+of changes for ${SCOPE} and a test plan checklist covering tests, linting,
+security audit, and codex review.
+
+```bash
+gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 16
+title = "Trigger Codex Bot Review"
+tool = "bash"
+prompt = """
+Trigger the cloud codex review bot on the newly created PR.
+Capture the PR number for polling.
+NOTE: In production, Steps 15-24 should invoke the `/pr-codex-bot` skill
+which handles the full review-trigger-procedure, bounded polling, false-positive
+arbitration, and merge atomically. The manual flow here demonstrates skill-lang.
+
+```bash
+PR_NUM=$(gh pr view --json number -q '.number')
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 17
+title = "Poll for Bot Response"
+tool = "bash"
+prompt = """
+Poll for bot review response with a bounded timeout (max 10 minutes).
+If the bot does not respond, fall through to UNAVAILABLE handling."""
+on_fail = "skip"
+
+[[plan.steps]]
+id = 18
+title = "Evaluate Bot Comments"
+tool = "claude-code"
+prompt = """
+For each bot comment, classify as:
+- Category A (already fixed): react and acknowledge
+- Category B (suspected false positive): queue for arbitration
+- Category C (real issue): react and queue for fix"""
+tier = "tier-3-complex"
+on_fail = "abort"
+condition = "${BOT_HAS_ISSUES}"
+
+[[plan.steps]]
+id = 19
+title = "Process Comment"
+prompt = """
+Evaluate this specific bot comment against the current code state.
+Determine category (A/B/C) and take appropriate action."""
+on_fail = "abort"
+condition = "${BOT_HAS_ISSUES}"
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 20
+title = "Arbitrate False Positive"
+tool = "csa"
+prompt = """
+Run `csa debate` to get an independent second opinion on the suspected
+false positive. The arbiter MUST be a different model family.
+
+```bash
+csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
+```"""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${BOT_HAS_ISSUES}"
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 21
+title = "Fix Real Issue"
+tool = "csa"
+prompt = "Fix the real issue identified by the bot. Commit the fix."
+tier = "tier-2-standard"
+condition = "${BOT_HAS_ISSUES}"
+
+[plan.steps.on_fail]
+retry = 2
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 22
+title = "Push Fixes and Re-trigger Review"
+tool = "bash"
+prompt = """
+Push all fix commits and trigger a new round of codex review.
+
+```bash
+git push origin "${BRANCH}"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+```"""
+on_fail = "abort"
+condition = "${BOT_HAS_ISSUES}"
+
+[[plan.steps]]
+id = 23
+title = "Bot Review Clean"
+prompt = "No issues found by the codex bot. Proceed to merge."
+on_fail = "abort"
+condition = "!(${BOT_HAS_ISSUES})"
+
+[[plan.steps]]
+id = 24
+title = "Merge PR"
+tool = "bash"
+prompt = """
+Squash-merge the PR and update local main.
+
+```bash
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+git checkout main && git pull origin main
+```"""
+on_fail = "abort"
