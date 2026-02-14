@@ -359,3 +359,20 @@ fn test_frontmatter_only_no_trailing_newline() {
     assert_eq!(doc.meta.name, "minimal");
     assert!(doc.body.is_empty());
 }
+
+#[test]
+fn test_error_on_excessive_nesting_depth() {
+    let depth = super::MAX_NESTING_DEPTH + 1;
+    let mut input = String::from("---\nname = \"deep\"\n---\n");
+    for _ in 0..depth {
+        input.push_str("## IF cond\n");
+    }
+    for _ in 0..depth {
+        input.push_str("## ENDIF\n");
+    }
+    let err = parse_skill(&input).unwrap_err();
+    assert!(
+        err.to_string().contains("nesting depth exceeds maximum"),
+        "unexpected error: {err}"
+    );
+}

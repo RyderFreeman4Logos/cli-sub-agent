@@ -202,11 +202,19 @@ enum LineKind<'a> {
     Text(&'a str),
 }
 
+/// Helper to extract a numbered capture group, returning `Text` fallback on
+/// missing group (should never happen with correct regexes but avoids panic).
+fn cap_str<'a>(caps: &regex::Captures<'a>, group: usize) -> Option<&'a str> {
+    caps.get(group).map(|m| m.as_str())
+}
+
 fn classify_line(line: &str) -> LineKind<'_> {
     let trimmed = line.trim_end();
 
     if let Some(caps) = IF_RE.captures(trimmed) {
-        return LineKind::If(caps.get(1).unwrap().as_str());
+        if let Some(cond) = cap_str(&caps, 1) {
+            return LineKind::If(cond);
+        }
     }
     if ELSE_RE.is_match(trimmed) {
         return LineKind::Else;
@@ -215,19 +223,25 @@ fn classify_line(line: &str) -> LineKind<'_> {
         return LineKind::EndIf;
     }
     if let Some(caps) = FOR_RE.captures(trimmed) {
-        return LineKind::For {
-            var: caps.get(1).unwrap().as_str(),
-            collection: caps.get(2).unwrap().as_str(),
-        };
+        if let (Some(var), Some(col)) = (cap_str(&caps, 1), cap_str(&caps, 2)) {
+            return LineKind::For {
+                var,
+                collection: col,
+            };
+        }
     }
     if ENDFOR_RE.is_match(trimmed) {
         return LineKind::EndFor;
     }
     if let Some(caps) = INCLUDE_RE.captures(trimmed) {
-        return LineKind::Include(caps.get(1).unwrap().as_str());
+        if let Some(path) = cap_str(&caps, 1) {
+            return LineKind::Include(path);
+        }
     }
     if let Some(caps) = STEP_RE.captures(trimmed) {
-        return LineKind::Step(caps.get(1).unwrap().as_str());
+        if let Some(title) = cap_str(&caps, 1) {
+            return LineKind::Step(title);
+        }
     }
 
     LineKind::Text(line)
@@ -244,10 +258,14 @@ fn extract_variables(text: &str) -> Vec<String> {
     vars
 }
 
+/// Maximum nesting depth for IF/FOR blocks to prevent stack overflow on
+/// adversarial input.
+const MAX_NESTING_DEPTH: usize = 64;
+
 /// Parse body lines into blocks. Operates recursively for nested structures.
 fn parse_body(body: &str) -> Result<Vec<Block>> {
     let lines: Vec<&str> = body.lines().collect();
-    let (blocks, remaining) = parse_blocks(&lines, 0, &[])?;
+    let (blocks, remaining) = parse_blocks(&lines, 0, &[], 0)?;
     if !remaining.is_empty() {
         bail!(
             "unexpected closing directive: `{}`",
@@ -265,12 +283,19 @@ const STOP_ENDFOR: &str = "ENDFOR";
 /// Parse a sequence of blocks, stopping when a line matches one of `stop_on`.
 ///
 /// Returns the parsed blocks and the remaining (unconsumed) lines starting
-/// from the stop token line.
+/// from the stop token line. `depth` tracks nesting to prevent stack overflow.
 fn parse_blocks<'a>(
     lines: &[&'a str],
     mut pos: usize,
     stop_on: &[&str],
+    depth: usize,
 ) -> Result<(Vec<Block>, Vec<&'a str>)> {
+    if depth > MAX_NESTING_DEPTH {
+        bail!(
+            "nesting depth exceeds maximum ({MAX_NESTING_DEPTH}): \
+             too many nested IF/FOR blocks"
+        );
+    }
     let mut blocks: Vec<Block> = Vec::new();
     let mut raw_buf = String::new();
 
@@ -297,13 +322,14 @@ fn parse_blocks<'a>(
                 pos += 1;
 
                 // Parse then-branch (stops at ELSE or ENDIF).
-                let (then_blocks, rest) = parse_blocks(lines, pos, &[STOP_ELSE, STOP_ENDIF])?;
+                let (then_blocks, rest) =
+                    parse_blocks(lines, pos, &[STOP_ELSE, STOP_ENDIF], depth + 1)?;
 
                 let (else_blocks, rest2) =
                     if rest.first().is_some_and(|l| ELSE_RE.is_match(l.trim_end())) {
                         // Skip ELSE line, parse else-branch until ENDIF.
                         let else_start = lines.len() - rest.len() + 1;
-                        parse_blocks(lines, else_start, &[STOP_ENDIF])?
+                        parse_blocks(lines, else_start, &[STOP_ENDIF], depth + 1)?
                     } else {
                         (Vec::new(), rest)
                     };
@@ -330,7 +356,7 @@ fn parse_blocks<'a>(
                 flush_raw(&mut raw_buf, &mut blocks);
                 pos += 1;
 
-                let (body_blocks, rest) = parse_blocks(lines, pos, &[STOP_ENDFOR])?;
+                let (body_blocks, rest) = parse_blocks(lines, pos, &[STOP_ENDFOR], depth + 1)?;
 
                 if rest
                     .first()
