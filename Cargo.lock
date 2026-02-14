@@ -332,6 +332,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "weave",
  "which 7.0.3",
 ]
 
@@ -2425,8 +2426,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "directories",
  "regex",
  "serde",
+ "tempfile",
  "toml",
  "tracing",
  "tracing-subscriber",

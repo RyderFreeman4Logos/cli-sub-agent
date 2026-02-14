@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
 use weave::compiler::{compile, plan_to_toml};
+use weave::package;
 use weave::parser::parse_skill;
 
 /// Weave — skill language compiler and package manager.
@@ -86,18 +87,56 @@ fn main() -> Result<()> {
             }
         }
         Commands::Install { source } => {
-            let _ = source;
-            eprintln!("install: not yet implemented");
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let cache_root = package::default_cache_root()?;
+            let pkg = package::install(&source, &project_root, &cache_root)?;
+            eprintln!(
+                "installed {} ({}) -> .weave/deps/{}/",
+                pkg.name,
+                &pkg.commit[..pkg.commit.len().min(12)],
+                pkg.name
+            );
         }
         Commands::Lock => {
-            eprintln!("lock: not yet implemented");
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let lockfile = package::lock(&project_root)?;
+            eprintln!("locked {} package(s)", lockfile.package.len());
+            for pkg in &lockfile.package {
+                let ver = pkg.version.as_deref().unwrap_or("-");
+                let commit_short = if pkg.commit.len() > 12 {
+                    &pkg.commit[..12]
+                } else {
+                    &pkg.commit
+                };
+                eprintln!("  {} {} ({})", pkg.name, ver, commit_short);
+            }
         }
         Commands::Update { name } => {
-            let _ = name;
-            eprintln!("update: not yet implemented");
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let cache_root = package::default_cache_root()?;
+            let updated = package::update(name.as_deref(), &project_root, &cache_root)?;
+            for pkg in &updated {
+                let commit_short = if pkg.commit.len() > 12 {
+                    &pkg.commit[..12]
+                } else {
+                    &pkg.commit
+                };
+                eprintln!("updated {} -> {}", pkg.name, commit_short);
+            }
         }
         Commands::Audit => {
-            eprintln!("audit: not yet implemented");
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let results = package::audit(&project_root)?;
+            if results.is_empty() {
+                eprintln!("audit passed: no issues found");
+            } else {
+                for result in &results {
+                    for issue in &result.issues {
+                        eprintln!("  [!] {}: {}", result.name, issue);
+                    }
+                }
+                std::process::exit(1);
+            }
         }
     }
 
