@@ -19,3 +19,31 @@ pub enum AcpError {
 }
 
 pub type AcpResult<T> = std::result::Result<T, AcpError>;
+
+#[cfg(test)]
+mod tests {
+    use std::error::Error as _;
+    use std::io;
+
+    use super::AcpError;
+
+    #[test]
+    fn test_spawn_failed_display_and_source_chain() {
+        let io_error = io::Error::new(io::ErrorKind::NotFound, "binary not found");
+        let err = AcpError::from(io_error);
+
+        assert_eq!(
+            err.to_string(),
+            "ACP subprocess spawn failed: binary not found"
+        );
+        let source = err.source().expect("spawn error should have source");
+        assert_eq!(source.to_string(), "binary not found");
+    }
+
+    #[test]
+    fn test_prompt_failed_display_without_source() {
+        let err = AcpError::PromptFailed("permission denied".to_string());
+        assert_eq!(err.to_string(), "ACP prompt failed: permission denied");
+        assert!(err.source().is_none());
+    }
+}

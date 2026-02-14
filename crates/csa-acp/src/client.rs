@@ -112,3 +112,82 @@ impl Client for AcpClient {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{cell::RefCell, rc::Rc};
+
+    use agent_client_protocol::{
+        ContentBlock, ContentChunk, SessionUpdate, TextContent, ToolCall, ToolCallStatus,
+        ToolCallUpdate, ToolCallUpdateFields, ToolKind,
+    };
+
+    use super::{AcpClient, SessionEvent};
+
+    #[test]
+    fn test_update_to_event_agent_message_chunk() {
+        let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("hello")));
+        let event = AcpClient::update_to_event(SessionUpdate::AgentMessageChunk(chunk));
+
+        match event {
+            SessionEvent::AgentMessage(text) => assert_eq!(text, "hello"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_update_to_event_agent_thought_chunk() {
+        let chunk = ContentChunk::new(ContentBlock::Text(TextContent::new("thinking")));
+        let event = AcpClient::update_to_event(SessionUpdate::AgentThoughtChunk(chunk));
+
+        match event {
+            SessionEvent::AgentThought(text) => assert_eq!(text, "thinking"),
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_update_to_event_tool_call_started() {
+        let tool_call = ToolCall::new("call-1", "Run tests").kind(ToolKind::Execute);
+        let event = AcpClient::update_to_event(SessionUpdate::ToolCall(tool_call));
+
+        match event {
+            SessionEvent::ToolCallStarted { id, title, kind } => {
+                assert_eq!(id, "call-1");
+                assert_eq!(title, "Run tests");
+                assert_eq!(kind, "Execute");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_update_to_event_tool_call_completed() {
+        let fields = ToolCallUpdateFields::new().status(ToolCallStatus::Completed);
+        let update = ToolCallUpdate::new("call-2", fields);
+        let event = AcpClient::update_to_event(SessionUpdate::ToolCallUpdate(update));
+
+        match event {
+            SessionEvent::ToolCallCompleted { id, status } => {
+                assert_eq!(id, "call-2");
+                assert_eq!(status, "Completed");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_push_event_appends_to_shared_buffer() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let client = AcpClient::new(Rc::clone(&events));
+
+        client.push_event(SessionEvent::Other("payload".to_string()));
+
+        let stored = events.borrow();
+        assert_eq!(stored.len(), 1);
+        match &stored[0] {
+            SessionEvent::Other(payload) => assert_eq!(payload, "payload"),
+            other => panic!("unexpected stored event: {other:?}"),
+        }
+    }
+}

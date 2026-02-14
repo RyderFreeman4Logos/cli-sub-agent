@@ -43,6 +43,8 @@ mod tests {
 
     use tempfile::NamedTempFile;
 
+    use crate::error::AcpError;
+
     use super::{McpServerConfig, SessionConfig};
 
     fn write_temp_toml(contents: &str) -> NamedTempFile {
@@ -101,5 +103,17 @@ GITHUB_TOKEN = "token"
         let file = write_temp_toml("no_load = [\"ok\"");
         let err = SessionConfig::from_toml_file(file.path()).expect_err("should fail");
         assert!(err.to_string().contains("Configuration error"));
+    }
+
+    #[test]
+    fn test_parse_missing_file_returns_spawn_failed() {
+        let dir = tempfile::tempdir().expect("create temp dir");
+        let path = dir.path().join("nonexistent.toml");
+        let err = SessionConfig::from_toml_file(path).expect_err("should fail");
+
+        match err {
+            AcpError::SpawnFailed(inner) => assert_eq!(inner.kind(), std::io::ErrorKind::NotFound),
+            other => panic!("expected SpawnFailed, got {other:?}"),
+        }
     }
 }

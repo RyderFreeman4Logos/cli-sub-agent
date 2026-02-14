@@ -24,6 +24,9 @@ pub trait Transport: Send + Sync {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
     ) -> Result<TransportResult>;
+
+    #[cfg(test)]
+    fn as_any(&self) -> &dyn std::any::Any;
 }
 
 /// Result from transport execution, extending ExecutionResult with transport-specific data.
@@ -88,6 +91,11 @@ impl Transport for LegacyTransport {
             provider_session_id: None,
             events: Vec::new(),
         })
+    }
+
+    #[cfg(test)]
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }
 
@@ -239,6 +247,11 @@ impl Transport for AcpTransport {
             events: output.events,
         })
     }
+
+    #[cfg(test)]
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -297,4 +310,89 @@ fn last_non_empty_line(output: &str) -> &str {
 
 fn truncate_line(line: &str, max_chars: usize) -> String {
     line.chars().take(max_chars).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use csa_acp::SessionConfig;
+
+    use super::*;
+
+    #[test]
+    fn test_transport_factory_create_routes_tools_to_expected_transport() {
+        let legacy_tools = vec![
+            Executor::GeminiCli {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::Opencode {
+                model_override: None,
+                agent: None,
+                thinking_budget: None,
+            },
+        ];
+        for executor in legacy_tools {
+            let transport = TransportFactory::create(&executor, None);
+            assert!(
+                transport.as_ref().as_any().is::<LegacyTransport>(),
+                "Expected LegacyTransport for {}",
+                executor.tool_name()
+            );
+        }
+
+        let acp_tools = vec![
+            Executor::Codex {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::ClaudeCode {
+                model_override: None,
+                thinking_budget: None,
+            },
+        ];
+        for executor in acp_tools {
+            let transport = TransportFactory::create(&executor, Some(SessionConfig::default()));
+            assert!(
+                transport.as_ref().as_any().is::<AcpTransport>(),
+                "Expected AcpTransport for {}",
+                executor.tool_name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_legacy_transport_construction_from_executor() {
+        let executor = Executor::Opencode {
+            model_override: Some("model".to_string()),
+            agent: Some("coder".to_string()),
+            thinking_budget: None,
+        };
+        let transport = LegacyTransport::new(executor.clone());
+
+        assert_eq!(transport.executor.tool_name(), executor.tool_name());
+        assert_eq!(
+            transport.executor.executable_name(),
+            executor.executable_name()
+        );
+    }
+
+    #[test]
+    fn test_acp_command_for_tool_mappings() {
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("claude-code"),
+            ("claude".to_string(), vec!["--acp".to_string()])
+        );
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("codex"),
+            ("codex".to_string(), vec!["acp".to_string()])
+        );
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("opencode"),
+            ("opencode".to_string(), vec!["acp".to_string()])
+        );
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("gemini-cli"),
+            ("gemini".to_string(), vec!["--experimental-acp".to_string()])
+        );
+    }
 }
