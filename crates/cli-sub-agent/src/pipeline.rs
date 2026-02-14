@@ -436,6 +436,10 @@ pub(crate) async fn execute_with_session_and_meta(
     let execution_start_time = chrono::Utc::now();
 
     // Execute via transport abstraction.
+    // TODO(signal): Restore SIGINT/SIGTERM forwarding to child process groups.
+    // Phase C moved signal handling responsibility to the Transport layer, but
+    // AcpTransport does not yet propagate signals. LegacyTransport inherits
+    // csa-process::wait_and_capture which handles signals via process groups.
     let transport_result = match executor
         .execute_with_transport(
             &effective_prompt,

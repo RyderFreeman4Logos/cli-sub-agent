@@ -129,6 +129,9 @@ impl AcpConnection {
         Ok(())
     }
 
+    // TODO(acp-sdk): ACP v0.9.4 `NewSessionRequest` does not support system_prompt.
+    // When the SDK adds system_prompt to session/new, thread `_system_prompt` through
+    // to the request. Until then, system prompts must be prepended to the first prompt.
     pub async fn new_session(
         &self,
         _system_prompt: Option<&str>,

@@ -1,4 +1,3 @@
-use std::time::Duration;
 use std::{collections::HashMap, path::Path};
 
 use crate::{client::SessionEvent, connection::AcpConnection, error::AcpResult};
@@ -63,21 +62,10 @@ pub async fn run_prompt(
     let session = AcpSession::new(command, args, working_dir, env, system_prompt).await?;
     let result = session.prompt(prompt).await?;
 
-    let exit_code = match session.connection().exit_code().await? {
-        Some(code) => code,
-        None => {
-            // Process hasn't exited after prompt completion; give it a brief grace period.
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            match session.connection().exit_code().await? {
-                Some(code) => code,
-                None => {
-                    tracing::warn!("ACP subprocess did not exit after prompt; killing");
-                    session.connection().kill()?;
-                    -1
-                }
-            }
-        }
-    };
+    // ACP processes may stay alive across prompts. If the prompt itself succeeded
+    // (no error above), a still-running process is normal — default to exit_code=0.
+    // Only report the actual exit code when the process has already exited (e.g., crash).
+    let exit_code = session.connection().exit_code().await?.unwrap_or(0);
 
     Ok(AcpOutput {
         output: result.output,
