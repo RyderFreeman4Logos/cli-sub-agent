@@ -21,6 +21,10 @@ pub enum Commands {
         #[arg(long)]
         tool: Option<ToolArg>,
 
+        /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
+        #[arg(long)]
+        skill: Option<String>,
+
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
 

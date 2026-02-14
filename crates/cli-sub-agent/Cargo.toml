@@ -23,6 +23,7 @@ csa-resource.workspace = true
 csa-scheduler.workspace = true
 csa-todo.workspace = true
 csa-hooks.workspace = true
+weave.workspace = true
 clap.workspace = true
 tokio.workspace = true
 libc.workspace = true

@@ -332,6 +332,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "weave",
  "which 7.0.3",
 ]
 
