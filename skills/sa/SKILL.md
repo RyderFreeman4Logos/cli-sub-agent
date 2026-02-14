@@ -186,7 +186,7 @@ Tier 1 runs: just pre-commit
     +── FAIL → delegate to Tier 2
                    │
                    v
-              csa run --tool codex --prompt-file <errors>
+              csa run --tool codex < /tmp/errors.txt
                    │
                    +── Fixed → Tier 1 verifies intent preserved
                    │
@@ -262,7 +262,7 @@ PROCEDURE:
    Write the TODO to session artifacts/TODO.md.
 
 3. Run adversarial debate on the draft:
-   csa debate --prompt-file artifacts/TODO.md
+   csa debate < artifacts/TODO.md
 
 4. Revise TODO based on debate findings.
 
@@ -274,7 +274,7 @@ OUTPUT: Print ONLY the result.toml path. Do NOT print TODO content.
 INSTRUCTIONS
 } > "$PROMPT_FILE"
 
-csa run --tool claude-code --prompt-file "$PROMPT_FILE"
+csa run --tool claude-code < "$PROMPT_FILE"
 ```
 
 **Prompt safety rules**:
@@ -323,12 +323,12 @@ trap 'rm -f "$RESUME_FILE"' EXIT
 
 # APPROVE: resume for implementation
 printf '%s' "User approved the TODO. Begin implementation." > "$RESUME_FILE"
-csa run --tool claude-code --session "$SESSION_ID" --prompt-file "$RESUME_FILE"
+csa run --tool claude-code --session "$SESSION_ID" < "$RESUME_FILE"
 
 # MODIFY: write feedback to file, then resume
 printf '%s' "User feedback follows. Revise the TODO accordingly." > "$RESUME_FILE"
 cat /tmp/sa-user-feedback.txt >> "$RESUME_FILE"  # user data appended safely
-csa run --tool claude-code --session "$SESSION_ID" --prompt-file "$RESUME_FILE"
+csa run --tool claude-code --session "$SESSION_ID" < "$RESUME_FILE"
 ```
 
 ## sa-mktsk: Implementation Phase Protocol
@@ -350,7 +350,7 @@ PROCEDURE:
    a. Implement the change.
    b. Run: just pre-commit
       - If FAIL: delegate to Tier 2. Write errors to a temp file (mktemp), then:
-        csa run --tool codex --prompt-file "$ERRORS_FILE"
+        csa run --tool codex < "$ERRORS_FILE"
         (prompt content: "Fix these errors. Do NOT delete code or change semantics.")
         Verify Tier 2 fix preserves intent. If Tier 2 fails, fix it yourself.
    c. Run heterogeneous review: csa review --diff
@@ -364,7 +364,7 @@ PROCEDURE:
 OUTPUT: Print ONLY the result.toml path.
 PROMPT_EOF
 
-csa run --tool claude-code --session "$SESSION_ID" --prompt-file "$IMPL_FILE"
+csa run --tool claude-code --session "$SESSION_ID" < "$IMPL_FILE"
 ```
 
 ### Error Delegation Detail
@@ -383,7 +383,7 @@ just pre-commit
          │                             │
          v                             │
     csa run --tool codex               │
-      --prompt-file /tmp/errors.txt   │
+      < /tmp/errors.txt               │
          │                             │
          +── Fixed                     │
          │    │                        │
