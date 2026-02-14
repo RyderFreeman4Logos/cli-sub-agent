@@ -3,10 +3,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 
-mod compiler;
-mod package;
-mod parser;
-
 /// Weave — skill language compiler and package manager.
 #[derive(Parser)]
 #[command(name = "weave", version, about)]
