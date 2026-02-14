@@ -93,6 +93,9 @@ pub fn format_context_for_prompt(files: &[ContextFile]) -> String {
 }
 
 /// Try to load a single file, respecting the byte budget.
+///
+/// Validates that the resolved path stays within `project_root` to prevent
+/// path traversal via `../` in AGENTS.md detail references.
 fn try_load_file(
     project_root: &Path,
     rel_path: &str,
@@ -100,6 +103,35 @@ fn try_load_file(
     total_bytes: &mut usize,
 ) -> Option<ContextFile> {
     let full_path = project_root.join(rel_path);
+
+    // Boundary check: canonicalize both paths and ensure the file is within
+    // project_root. This prevents `../` traversal from escaping the project.
+    let canonical_root = match project_root.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            warn!(path = %project_root.display(), error = %e, "Cannot canonicalize project root");
+            return None;
+        }
+    };
+    let canonical_file = match full_path.canonicalize() {
+        Ok(p) => p,
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(path = %rel_path, error = %e, "Cannot canonicalize context file path");
+            }
+            return None;
+        }
+    };
+    if !canonical_file.starts_with(&canonical_root) {
+        warn!(
+            path = %rel_path,
+            resolved = %canonical_file.display(),
+            root = %canonical_root.display(),
+            "Context file path escapes project root (path traversal blocked)"
+        );
+        return None;
+    }
+
     match std::fs::read_to_string(&full_path) {
         Ok(content) => {
             let new_total = *total_bytes + content.len();
@@ -325,6 +357,42 @@ mod tests {
         assert!(formatted.contains("# Rules"));
         assert!(formatted.contains("</context-file>"));
         assert!(formatted.contains("<context-file path=\"AGENTS.md\">"));
+    }
+
+    #[test]
+    fn test_load_project_context_blocks_path_traversal() {
+        let dir = TempDir::new().unwrap();
+        // Create a secret file outside the project root.
+        let secret_path = dir.path().join("secret.txt");
+        fs::write(&secret_path, "TOP SECRET").unwrap();
+
+        // Create project as a subdirectory.
+        let project = dir.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(
+            project.join("AGENTS.md"),
+            "→ ../secret.txt\n→ rules/ok.md\n",
+        )
+        .unwrap();
+        fs::create_dir_all(project.join("rules")).unwrap();
+        fs::write(project.join("rules/ok.md"), "ok content").unwrap();
+
+        let files = load_project_context(&project, &ContextLoadOptions::default());
+        // AGENTS.md + rules/ok.md only; ../secret.txt blocked by boundary check.
+        assert_eq!(files.len(), 2);
+        let loaded_paths: Vec<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
+        assert!(!loaded_paths.contains(&"../secret.txt"));
+        assert!(loaded_paths.contains(&"rules/ok.md"));
+    }
+
+    #[test]
+    fn test_parse_agents_references_preserves_dotdot_for_boundary_check() {
+        // Parser should NOT filter ../paths — that's try_load_file's job.
+        let content = "→ ../escape.md\n→ rules/ok.md\n";
+        let refs = parse_agents_references(content);
+        assert_eq!(refs.len(), 2);
+        assert_eq!(refs[0], PathBuf::from("../escape.md"));
+        assert_eq!(refs[1], PathBuf::from("rules/ok.md"));
     }
 
     #[test]

@@ -191,12 +191,6 @@ impl AcpTransport {
             env.insert("CSA_PARENT_SESSION".to_string(), parent_session.clone());
         }
 
-        // Suppress notification hooks in sub-agent mode.
-        // ACP adapters can read this to skip desktop notifications
-        // (e.g., claude-code Notification hooks) that are not useful
-        // when running non-interactively under CSA.
-        env.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
-
         if let Some(extra) = extra_env {
             env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
@@ -462,8 +456,10 @@ mod tests {
         assert_eq!(summary, "exit code -1");
     }
 
+    // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not transport)
+    // based on per-tool config via extra_env. See pipeline.rs suppress_notify logic.
     #[test]
-    fn test_acp_build_env_sets_suppress_notify() {
+    fn test_acp_build_env_propagates_extra_env() {
         let transport = AcpTransport::new("claude-code", None);
         let now = chrono::Utc::now();
         let session = csa_session::state::MetaSessionState {
@@ -485,11 +481,21 @@ mod tests {
             token_budget: None,
         };
 
-        let env = transport.build_env(&session, None);
+        let mut extra = HashMap::new();
+        extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
+        let env = transport.build_env(&session, Some(&extra));
         assert_eq!(
             env.get("CSA_SUPPRESS_NOTIFY"),
             Some(&"1".to_string()),
-            "ACP transport should set CSA_SUPPRESS_NOTIFY=1"
+            "ACP transport should propagate CSA_SUPPRESS_NOTIFY from extra_env"
+        );
+
+        // Without extra_env, suppress_notify should NOT be present.
+        let env_no_extra = transport.build_env(&session, None);
+        assert_eq!(
+            env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
+            None,
+            "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
         );
     }
 }
