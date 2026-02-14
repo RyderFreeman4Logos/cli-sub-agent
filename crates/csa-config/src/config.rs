@@ -169,8 +169,8 @@ fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml::Value {
 impl ProjectConfig {
     /// Load config with fallback chain:
     ///
-    /// 1. If both `.csa/config.toml` (project) and `~/.config/csa/config.toml` (user) exist,
-    ///    deep-merge them with project settings overriding user settings.
+    /// 1. If both `.csa/config.toml` (project) and `~/.config/cli-sub-agent/config.toml` (user)
+    ///    exist, deep-merge them with project settings overriding user settings.
     /// 2. If only project config exists, use it directly.
     /// 3. If only user config exists, use it as fallback.
     /// 4. If neither exists, return None.
@@ -267,12 +267,12 @@ impl ProjectConfig {
         Ok(Some(config))
     }
 
-    /// Path to user-level config: `~/.config/csa/config.toml`.
+    /// Path to user-level config: `~/.config/cli-sub-agent/config.toml`.
     ///
     /// Returns None if the config directory cannot be determined
     /// (e.g., no HOME in containers).
     pub fn user_config_path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "csa")
+        directories::ProjectDirs::from("", "", "cli-sub-agent")
             .map(|dirs| dirs.config_dir().join("config.toml"))
     }
 
@@ -374,7 +374,7 @@ impl ProjectConfig {
             .unwrap_or(false)
     }
 
-    /// Save a user-level config template to `~/.config/csa/config.toml`.
+    /// Save a user-level config template to `~/.config/cli-sub-agent/config.toml`.
     ///
     /// Creates the directory if needed. Returns the path written, or None
     /// if the config directory cannot be determined.
@@ -396,7 +396,7 @@ impl ProjectConfig {
     /// Generate a commented template for user-level config.
     pub fn user_config_template() -> String {
         r#"# CSA User-Level Configuration
-# Location: ~/.config/csa/config.toml
+# Location: ~/.config/cli-sub-agent/config.toml
 #
 # This file provides default tiers, tool settings, and aliases
 # that apply across all CSA projects unless overridden by
