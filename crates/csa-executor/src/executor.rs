@@ -413,7 +413,8 @@ impl Executor {
                     cmd.arg("--model").arg(model);
                 }
                 if let Some(budget) = thinking_budget {
-                    cmd.arg("--reasoning-effort").arg(budget.codex_effort());
+                    cmd.arg("-c")
+                        .arg(format!("model_reasoning_effort={}", budget.codex_effort()));
                 }
             }
             Self::ClaudeCode {

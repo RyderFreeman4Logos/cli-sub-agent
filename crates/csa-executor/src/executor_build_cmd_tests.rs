@@ -279,10 +279,13 @@ fn test_build_command_codex_args_structure() {
     assert!(args.contains(&"--model".to_string()), "Should have --model");
     assert!(args.contains(&"gpt-5".to_string()), "Should have model");
     assert!(
-        args.contains(&"--reasoning-effort".to_string()),
-        "Should have --reasoning-effort"
+        args.contains(&"-c".to_string()),
+        "Should have -c flag for reasoning effort"
     );
-    assert!(args.contains(&"low".to_string()), "Low budget = low effort");
+    assert!(
+        args.contains(&"model_reasoning_effort=low".to_string()),
+        "Low budget = low effort via -c model_reasoning_effort=low"
+    );
     assert!(args.contains(&"fix bug".to_string()), "Should have prompt");
 }
 

@@ -83,7 +83,7 @@ impl ThinkingBudget {
 
     /// Returns the reasoning effort level for codex-style tools.
     ///
-    /// Maps thinking budget levels to codex's --reasoning-effort values.
+    /// Maps thinking budget levels to codex's `-c model_reasoning_effort=` values.
     pub fn codex_effort(&self) -> &'static str {
         match self {
             Self::DefaultBudget => "medium",

@@ -221,11 +221,11 @@ fn test_from_tool_name_with_model_and_thinking() {
         "Missing model in args: {debug_str}"
     );
     assert!(
-        debug_str.contains("--reasoning-effort"),
-        "Missing reasoning-effort in args: {debug_str}"
+        debug_str.contains("model_reasoning_effort="),
+        "Missing model_reasoning_effort in args: {debug_str}"
     );
     assert!(
-        debug_str.contains("\"low\""),
+        debug_str.contains("model_reasoning_effort=low"),
         "Expected low reasoning effort: {debug_str}"
     );
 }
@@ -294,10 +294,9 @@ fn test_thinking_budget_in_codex_args() {
     let mut cmd = Command::new(exec.executable_name());
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
-    // Check that the command contains --reasoning-effort low
+    // Check that the command contains -c model_reasoning_effort=low
     let debug_str = format!("{:?}", cmd);
-    assert!(debug_str.contains("--reasoning-effort"));
-    assert!(debug_str.contains("\"low\""));
+    assert!(debug_str.contains("model_reasoning_effort=low"));
 }
 
 #[test]
@@ -322,8 +321,7 @@ fn test_thinking_budget_from_spec_codex() {
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
     let debug_str = format!("{:?}", cmd);
-    assert!(debug_str.contains("--reasoning-effort"));
-    assert!(debug_str.contains("\"low\""));
+    assert!(debug_str.contains("model_reasoning_effort=low"));
 }
 
 #[test]
@@ -519,7 +517,7 @@ fn test_execute_in_preserves_model_override() {
                     "Codex missing model: {debug_str}"
                 );
                 assert!(
-                    debug_str.contains("--reasoning-effort"),
+                    debug_str.contains("model_reasoning_effort="),
                     "Codex missing thinking: {debug_str}"
                 );
             }
