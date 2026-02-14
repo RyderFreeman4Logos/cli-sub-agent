@@ -13,8 +13,8 @@ const SUMMARY_MAX_CHARS: usize = 200;
 
 /// Transport abstraction for executing prompts via different protocols.
 /// Implementations: LegacyTransport (CLI non-interactive) and AcpTransport (ACP protocol).
-#[async_trait(?Send)]
-pub trait Transport {
+#[async_trait]
+pub trait Transport: Send + Sync {
     /// Execute a prompt and return the result.
     async fn execute(
         &self,
@@ -67,7 +67,7 @@ impl LegacyTransport {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Transport for LegacyTransport {
     async fn execute(
         &self,
@@ -188,7 +188,7 @@ impl AcpTransport {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl Transport for AcpTransport {
     async fn execute(
         &self,
@@ -199,19 +199,32 @@ impl Transport for AcpTransport {
         _stream_mode: StreamMode,
     ) -> Result<TransportResult> {
         let env = self.build_env(session, extra_env);
-        let working_dir = Path::new(&session.project_path);
+        let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
+        let acp_command = self.acp_command.clone();
+        let acp_args = self.acp_args.clone();
+        let prompt = prompt.to_string();
 
-        let output = csa_acp::transport::run_prompt(
-            &self.acp_command,
-            &self.acp_args,
-            working_dir,
-            &env,
-            system_prompt.as_deref(),
-            prompt,
-        )
-        .await
-        .map_err(|e| anyhow!("ACP transport failed: {e}"))?;
+        // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
+        // dedicated current-thread runtime so callers can stay Send-safe.
+        let output =
+            tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
+                let rt = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| anyhow!("failed to build ACP runtime: {e}"))?;
+                rt.block_on(csa_acp::transport::run_prompt(
+                    &acp_command,
+                    &acp_args,
+                    &working_dir,
+                    &env,
+                    system_prompt.as_deref(),
+                    &prompt,
+                ))
+                .map_err(|e| anyhow!("ACP transport failed: {e}"))
+            })
+            .await
+            .map_err(|e| anyhow!("ACP transport join error: {e}"))??;
 
         let execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),

@@ -8,7 +8,6 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use tokio::signal::unix::{SignalKind, signal};
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
@@ -17,7 +16,7 @@ use csa_executor::{Executor, create_session_log_writer};
 use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_lock::acquire_lock;
 use csa_process::{ExecutionResult, check_tool_installed};
-use csa_resource::{MemoryMonitor, ResourceGuard, ResourceLimits};
+use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{
     SessionResult, TokenUsage, ToolState, create_session, get_session_dir, save_result,
     save_session,
@@ -192,6 +191,7 @@ fn write_pre_exec_error_result(
 pub(crate) struct SessionExecutionResult {
     pub execution: ExecutionResult,
     pub meta_session_id: String,
+    pub provider_session_id: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -415,7 +415,7 @@ pub(crate) async fn execute_with_session_and_meta(
         prompt.to_string()
     };
 
-    // Build command
+    // Resolve tool state for session resume.
     let tool_state = session
         .tools
         .get(executor.tool_name())
@@ -431,15 +431,22 @@ pub(crate) async fn execute_with_session_and_meta(
                     token_usage: None,
                 })
         });
-    let (cmd, stdin_data) =
-        executor.build_command(&effective_prompt, tool_state.as_ref(), &session, extra_env);
 
-    // Record execution start time before spawning
+    // Record execution start time before spawning.
     let execution_start_time = chrono::Utc::now();
 
-    // Spawn child process
-    let child = match csa_process::spawn_tool(cmd, stdin_data).await {
-        Ok(child) => child,
+    // Execute via transport abstraction.
+    let transport_result = match executor
+        .execute_with_transport(
+            &effective_prompt,
+            tool_state.as_ref(),
+            &session,
+            extra_env,
+            stream_mode,
+        )
+        .await
+    {
+        Ok(result) => result,
         Err(e) => {
             write_pre_exec_error_result(
                 project_root,
@@ -450,57 +457,9 @@ pub(crate) async fn execute_with_session_and_meta(
             if let Some(ref mut cg) = cleanup_guard {
                 cg.defuse();
             }
-            return Err(e).context("Failed to spawn tool process");
+            return Err(e).context("Failed to execute tool via transport");
         }
     };
-
-    // Get child PID and start memory monitor
-    let child_pid = child.id().context("Failed to get child process PID")?;
-    let monitor = MemoryMonitor::start(child_pid);
-
-    // Set up signal handlers for SIGTERM and SIGINT
-    let mut sigterm =
-        signal(SignalKind::terminate()).context("Failed to install SIGTERM handler")?;
-    let mut sigint = signal(SignalKind::interrupt()).context("Failed to install SIGINT handler")?;
-
-    // Wait for either child completion or signal
-    let wait_future = csa_process::wait_and_capture(child, stream_mode);
-    tokio::pin!(wait_future);
-
-    let result = tokio::select! {
-        result = &mut wait_future => {
-            result.context("Failed to wait for tool process")?
-        }
-        _ = sigterm.recv() => {
-            info!("Received SIGTERM, forwarding to child process group");
-            // Forward SIGTERM to the child's process group (negative PID)
-            // SAFETY: kill() is async-signal-safe. We use the negative of child_pid
-            // to target the entire process group created by setsid().
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(child_pid as i32), libc::SIGTERM);
-            }
-            // Wait for child to exit after signal
-            wait_future.await.context("Failed to wait for tool process after SIGTERM")?
-        }
-        _ = sigint.recv() => {
-            info!("Received SIGINT, forwarding to child process group");
-            // Forward SIGINT to the child's process group
-            // SAFETY: Same as SIGTERM handler above
-            #[cfg(unix)]
-            unsafe {
-                libc::kill(-(child_pid as i32), libc::SIGINT);
-            }
-            // Wait for child to exit after signal
-            wait_future.await.context("Failed to wait for tool process after SIGINT")?
-        }
-    };
-
-    // Stop memory monitor and record usage
-    let peak_memory_mb = monitor.stop().await;
-    if let Some(ref mut guard) = resource_guard {
-        guard.record_usage(executor.tool_name(), peak_memory_mb);
-    }
 
     // Tool execution completed — defuse cleanup guard now.
     // The session directory contains execution artifacts worth preserving
@@ -509,8 +468,10 @@ pub(crate) async fn execute_with_session_and_meta(
         guard.defuse();
     }
 
-    // Extract provider session ID from output
-    let provider_session_id = csa_executor::extract_session_id(tool, &result.output);
+    // Extract provider session ID from transport metadata or fallback output parsing.
+    let provider_session_id =
+        csa_executor::extract_session_id_from_transport(tool, &transport_result);
+    let result = transport_result.execution;
 
     // Parse token usage from output (best-effort)
     let token_usage = parse_token_usage(&result.output);
@@ -534,7 +495,7 @@ pub(crate) async fn execute_with_session_and_meta(
             }
         })
         .or_insert_with(|| ToolState {
-            provider_session_id,
+            provider_session_id: provider_session_id.clone(),
             last_action_summary: result.summary.clone(),
             last_exit_code: result.exit_code,
             updated_at: chrono::Utc::now(),
@@ -672,6 +633,7 @@ pub(crate) async fn execute_with_session_and_meta(
     Ok(SessionExecutionResult {
         execution: result,
         meta_session_id: session.meta_session_id.clone(),
+        provider_session_id,
     })
 }
 
