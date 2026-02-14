@@ -156,7 +156,7 @@ Each commit **must** complete the following steps:
    ↓
 9. ✅ Generate commit message → Commit
    ↓
-10. ✅ **Post-Commit: Push & PR consideration** (see below)
+10. ✅ **Post-Commit: Auto PR + `/pr-codex-bot`** (ATOMIC — see below)
    ↓
 11. Deferred issues found (in other modules)?
     ├─ YES → Invoke Task tools (TaskCreate/TaskUpdate) → Fix immediately (step 12)
@@ -214,7 +214,7 @@ Detailed audit workflow is in `security-audit/SKILL.md`, core three phases:
 
 > **Detailed reference**: See Appendix B below for three-phase detailed checklist, verdict handling rules, FORBIDDEN behaviors list.
 
-### Post-Commit: Push & PR (Git Workflow)
+### Post-Commit: Auto PR + Review (MANDATORY when complete)
 
 After commit, **evaluate whether to push and create PR**:
 
@@ -222,16 +222,21 @@ After commit, **evaluate whether to push and create PR**:
 Commit done
    ↓
 Is this a meaningful milestone (feature complete, bug fixed, refactor done)?
-   ├─ YES → Push to origin (personal fork) + consider creating PR for LLM audit
-   │        git push origin <branch>
-   │        Then: PR to upstream for review, or continue on same branch
+   ├─ YES → Auto PR workflow (ATOMIC — all 3 steps, no stopping after step 2)
+   │        1. git push -u origin <branch>
+   │        2. gh pr create --base main
+   │        3. IMMEDIATELY invoke /pr-codex-bot skill
+   │
    └─ NO (mid-feature, more commits needed) → Continue development
 ```
 
-**Remind user to consider**:
-- Earlier push = earlier problem discovery
-- No need to wait for "perfect" before pushing — draft PR is fine
-- If your project has CI/bot review pipelines, pushing triggers them automatically
+**CRITICAL**: Steps 1-3 above are an **atomic unit**. Creating a PR (step 2)
+without immediately invoking `/pr-codex-bot` (step 3) is **INCOMPLETE** and
+a workflow violation. The `/pr-codex-bot` skill handles the two-layer review:
+local review (`csa review` scope=range:main...HEAD) + cloud bot review trigger +
+false-positive arbitration + merge. Skipping it breaks the review guarantee.
+
+**Do NOT** create PRs to `upstream`. Always target `origin` (personal fork).
 
 ### Security Scan Checklist
 
@@ -597,11 +602,11 @@ TaskCreate(
 0. Branch check (not on main)
 1. Fix blocking issues → Commit → Push to origin
 2. Fix deferred issues (Task tools → Critical → High → Medium)
-3. Consider PR for LLM audit
+3. Auto PR + /pr-codex-bot (ATOMIC: push → PR → codex bot review → merge)
 4. ONLY THEN: Start new work
 ```
 
-**Related Skills**: `security-audit` (audit), Task tools (deferred issue tracking), `csa review` (code review), `csa run` (commit message generation)
+**Related Skills**: `security-audit` (audit), Task tools (deferred issue tracking), `csa review` (code review), `csa run` (commit message generation), `pr-codex-bot` (PR review loop)
 
 ---
 
