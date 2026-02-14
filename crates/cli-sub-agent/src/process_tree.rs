@@ -15,16 +15,21 @@ const MAX_ANCESTOR_DEPTH: usize = 16;
 
 /// Mapping from process comm basenames to CSA tool names.
 ///
-/// Must stay in sync with `Executor::executable_name()` in csa-executor
+/// Must stay in sync with `Executor::runtime_binary_name()` in csa-executor
 /// and `is_tool_binary_available()` in run_helpers.rs.
+///
+/// Includes both native CLI binaries and standalone ACP adapter binaries
+/// (e.g. `codex-acp`, `claude-code-acp` from the Zed ACP adapter packages).
 const KNOWN_TOOL_EXECUTABLES: &[(&str, &str)] = &[
-    // ACP mode uses the same executable basenames with ACP-specific args
-    // (e.g. `claude --acp`, `codex acp`), so no separate ACP process names
-    // are required here.
+    // Native CLI binaries
     ("claude", "claude-code"),
     ("gemini", "gemini-cli"),
     ("codex", "codex"),
     ("opencode", "opencode"),
+    // Standalone ACP adapter binaries (Zed ACP packages)
+    // NOTE: /proc/*/comm truncates to 15 chars; "claude-code-acp" is exactly 15 — OK.
+    ("codex-acp", "codex"),
+    ("claude-code-acp", "claude-code"),
 ];
 
 /// Detect the calling tool by walking the process tree.
@@ -86,8 +91,8 @@ fn read_ppid(pid: u32) -> Option<u32> {
 /// Read the command name from `/proc/<pid>/comm`.
 ///
 /// Returns the basename of the executable, truncated to 15 chars by the
-/// kernel. All known tool names are <= 8 chars, so truncation is not
-/// a concern.
+/// kernel. The longest known tool name is "claude-code-acp" at exactly
+/// 15 chars, so truncation is not a concern for current entries.
 #[cfg(target_os = "linux")]
 fn read_comm(pid: u32) -> Option<String> {
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
@@ -222,6 +227,16 @@ mod tests {
     }
 
     #[test]
+    fn test_match_tool_by_comm_codex_acp() {
+        assert_eq!(match_tool_by_comm("codex-acp"), Some("codex"));
+    }
+
+    #[test]
+    fn test_match_tool_by_comm_claude_code_acp() {
+        assert_eq!(match_tool_by_comm("claude-code-acp"), Some("claude-code"));
+    }
+
+    #[test]
     fn test_match_tool_by_comm_unknown() {
         assert_eq!(match_tool_by_comm("bash"), None);
         assert_eq!(match_tool_by_comm("zsh"), None);
@@ -297,5 +312,45 @@ mod tests {
     fn test_detect_ancestor_tool_does_not_panic() {
         // Just verify it doesn't panic. Result depends on runtime context.
         let _result = detect_ancestor_tool();
+    }
+
+    /// Verify that every `Executor::runtime_binary_name()` value is recognized
+    /// by `match_tool_by_comm()`. This catches drift between the executor crate
+    /// and the process-tree detection logic.
+    #[test]
+    fn test_all_executor_runtime_binaries_recognized() {
+        use csa_executor::Executor;
+
+        let executors = [
+            Executor::GeminiCli {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::Opencode {
+                model_override: None,
+                agent: None,
+                thinking_budget: None,
+            },
+            Executor::Codex {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::ClaudeCode {
+                model_override: None,
+                thinking_budget: None,
+            },
+        ];
+
+        for executor in &executors {
+            let binary = executor.runtime_binary_name();
+            let result = match_tool_by_comm(binary);
+            assert!(
+                result.is_some(),
+                "Executor {:?} runtime_binary_name() '{}' is not recognized by match_tool_by_comm(). \
+                 Add it to KNOWN_TOOL_EXECUTABLES.",
+                executor.tool_name(),
+                binary,
+            );
+        }
     }
 }
