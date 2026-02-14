@@ -166,6 +166,7 @@ mod tests {
                 ToolConfig {
                     enabled: false,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }
@@ -175,6 +176,7 @@ mod tests {
                 ToolConfig {
                     enabled: true,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }

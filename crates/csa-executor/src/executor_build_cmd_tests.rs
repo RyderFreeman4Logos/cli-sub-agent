@@ -647,3 +647,44 @@ fn test_build_command_current_dir() {
         "Should set current_dir to session project_path"
     );
 }
+
+// ── build_command: CSA_SUPPRESS_NOTIFY env var ──────────────────
+
+#[test]
+fn test_build_command_sets_suppress_notify_for_all_tools() {
+    let session = make_test_session();
+
+    let executors = vec![
+        Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        },
+        Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::ClaudeCode {
+            model_override: None,
+            thinking_budget: None,
+        },
+    ];
+
+    for exec in executors {
+        let (cmd, _) = exec.build_command("prompt", None, &session, None);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+            envs.into_iter().collect();
+
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new("CSA_SUPPRESS_NOTIFY")),
+            Some(&Some(std::ffi::OsStr::new("1"))),
+            "CSA_SUPPRESS_NOTIFY should be set for {}",
+            exec.tool_name()
+        );
+    }
+}

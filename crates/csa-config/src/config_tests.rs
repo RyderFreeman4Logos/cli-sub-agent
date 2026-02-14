@@ -22,6 +22,7 @@ fn test_save_and_load_roundtrip() {
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
             }),
+            suppress_notify: true,
         },
     );
 
@@ -93,6 +94,7 @@ fn test_is_tool_enabled_configured_enabled() {
         ToolConfig {
             enabled: true,
             restrictions: None,
+            suppress_notify: true,
         },
     );
 
@@ -123,6 +125,7 @@ fn test_is_tool_enabled_configured_disabled() {
         ToolConfig {
             enabled: false,
             restrictions: None,
+            suppress_notify: true,
         },
     );
 
@@ -176,6 +179,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
             }),
+            suppress_notify: true,
         },
     );
 
@@ -206,6 +210,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         ToolConfig {
             enabled: true,
             restrictions: None,
+            suppress_notify: true,
         },
     );
 
@@ -257,6 +262,7 @@ fn test_resolve_tier_default_selection() {
         ToolConfig {
             enabled: true,
             restrictions: None,
+            suppress_notify: true,
         },
     );
     tools.insert(
@@ -264,6 +270,7 @@ fn test_resolve_tier_default_selection() {
         ToolConfig {
             enabled: true,
             restrictions: None,
+            suppress_notify: true,
         },
     );
 
@@ -315,6 +322,7 @@ fn test_resolve_tier_fallback_to_tier3() {
         ToolConfig {
             enabled: true,
             restrictions: None,
+            suppress_notify: true,
         },
     );
 
@@ -361,6 +369,7 @@ fn test_resolve_tier_skips_disabled_tools() {
         ToolConfig {
             enabled: false, // Disabled
             restrictions: None,
+            suppress_notify: true,
         },
     );
     tools.insert(
@@ -368,6 +377,7 @@ fn test_resolve_tier_skips_disabled_tools() {
         ToolConfig {
             enabled: true,
             restrictions: None,
+            suppress_notify: true,
         },
     );
 

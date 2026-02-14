@@ -311,6 +311,12 @@ impl Executor {
             cmd.env("CSA_PARENT_SESSION", parent);
         }
 
+        // Suppress notification hooks in sub-agent mode.
+        // ACP adapters and CLI tools can read this to skip desktop notifications
+        // (e.g., claude-code Notification hooks, codex notify scripts) that are
+        // not useful when running non-interactively under CSA.
+        cmd.env("CSA_SUPPRESS_NOTIFY", "1");
+
         cmd
     }
 
