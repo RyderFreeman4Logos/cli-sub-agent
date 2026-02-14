@@ -519,7 +519,7 @@ fn test_codex_effort_all_variants() {
     assert_eq!(ThinkingBudget::Low.codex_effort(), "low");
     assert_eq!(ThinkingBudget::Medium.codex_effort(), "medium");
     assert_eq!(ThinkingBudget::High.codex_effort(), "high");
-    assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "high");
+    assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "xhigh");
     assert_eq!(ThinkingBudget::Custom(0).codex_effort(), "high");
     assert_eq!(ThinkingBudget::Custom(100000).codex_effort(), "high");
 }
