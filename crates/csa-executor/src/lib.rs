@@ -20,3 +20,6 @@ pub use session_id::{extract_session_id, extract_session_id_from_transport};
 pub use transport::{
     AcpTransport, LegacyTransport, Transport, TransportFactory, TransportMode, TransportResult,
 };
+
+// Re-export session config types from csa-acp for pipeline integration.
+pub use csa_acp::{McpServerConfig as AcpMcpServerConfig, SessionConfig};

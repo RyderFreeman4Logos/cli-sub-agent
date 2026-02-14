@@ -227,6 +227,7 @@ async fn execute_review(
         Some("review"),
         None,
         csa_process::StreamMode::BufferOnly,
+        Some(global_config),
     )
     .await
 }

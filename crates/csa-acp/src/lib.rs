@@ -7,5 +7,5 @@ pub mod transport;
 pub use client::SessionEvent;
 pub use connection::AcpConnection;
 pub use error::{AcpError, AcpResult};
-pub use session_config::SessionConfig;
+pub use session_config::{McpServerConfig, SessionConfig};
 pub use transport::{AcpOutput, AcpSession};

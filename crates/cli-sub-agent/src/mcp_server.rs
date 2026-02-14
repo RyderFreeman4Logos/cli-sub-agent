@@ -596,6 +596,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             Some("run"),
             None, // MCP server does not use tier-based selection
             csa_process::StreamMode::BufferOnly,
+            Some(&global_config),
         )
         .await?
     };

@@ -598,6 +598,7 @@ async fn handle_run(
                 Some("run"),
                 resolved_tier_name.as_deref(),
                 stream_mode,
+                Some(&global_config),
             )
             .await
             {

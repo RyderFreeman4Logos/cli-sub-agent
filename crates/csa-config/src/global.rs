@@ -13,6 +13,8 @@ use std::path::PathBuf;
 
 use csa_core::types::ToolName;
 
+use crate::mcp::McpServerConfig;
+
 /// Default maximum concurrent instances per tool.
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
 
@@ -31,6 +33,12 @@ pub struct GlobalConfig {
     pub fallback: FallbackConfig,
     #[serde(default)]
     pub todo: TodoDisplayConfig,
+    /// Global MCP server registry injected into all tool sessions.
+    ///
+    /// Merged with project-level `.csa/mcp.toml` servers (project takes precedence
+    /// for same-name servers).
+    #[serde(default)]
+    pub mcp: GlobalMcpConfig,
 }
 
 /// Configuration for the code review workflow.
@@ -122,6 +130,17 @@ pub struct TodoDisplayConfig {
     /// Command to pipe `csa todo diff` output through (e.g., `"delta"`).
     #[serde(default)]
     pub diff_command: Option<String>,
+}
+
+/// Global MCP server configuration.
+///
+/// Servers listed here are injected into every spawned tool session.
+/// Project-level `.csa/mcp.toml` servers override global ones with the same name.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GlobalMcpConfig {
+    /// MCP servers available to all tool sessions.
+    #[serde(default)]
+    pub servers: Vec<McpServerConfig>,
 }
 
 /// Returns the heterogeneous counterpart tool for model-diversity enforcement.
@@ -233,6 +252,11 @@ impl GlobalConfig {
             .filter(|m| !m.is_empty())
     }
 
+    /// Get globally configured MCP servers.
+    pub fn mcp_servers(&self) -> &[McpServerConfig] {
+        &self.mcp.servers
+    }
+
     /// Path to the global config file: `~/.config/cli-sub-agent/config.toml`.
     pub fn config_path() -> Result<PathBuf> {
         let dirs = directories::ProjectDirs::from("", "", "cli-sub-agent")
@@ -328,6 +352,19 @@ cloud_review_exhausted = "ask-user"
 # [todo]
 # show_command = "bat -l md"   # Pipe `csa todo show` output through bat
 # diff_command = "delta"       # Pipe `csa todo diff` output through delta
+
+# MCP (Model Context Protocol) servers injected into all tool sessions.
+# Project-level .csa/mcp.toml servers override global ones with the same name.
+#
+# [[mcp.servers]]
+# name = "repomix"
+# command = "npx"
+# args = ["-y", "repomix", "--mcp"]
+#
+# [[mcp.servers]]
+# name = "deepwiki"
+# command = "npx"
+# args = ["-y", "@anthropic/deepwiki-mcp"]
 "#
         .to_string()
     }

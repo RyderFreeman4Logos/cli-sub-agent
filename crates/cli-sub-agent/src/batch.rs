@@ -586,6 +586,7 @@ async fn execute_task(
         Some("batch"),
         None, // batch does not use tier-based selection
         csa_process::StreamMode::BufferOnly,
+        None, // batch does not inject MCP (callers don't have global_config)
     )
     .await;
 
