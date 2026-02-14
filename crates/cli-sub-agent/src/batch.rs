@@ -458,17 +458,6 @@ async fn execute_task(
         }
     };
 
-    // Check tool is installed
-    if let Err(e) = check_tool_installed(tool_name.as_str()).await {
-        error!("{} - Tool not installed: {}", task_label, e);
-        return TaskResult {
-            name: task.name.clone(),
-            exit_code: 1,
-            duration_secs: start.elapsed().as_secs_f64(),
-            error: Some(format!("Tool not installed: {}", e)),
-        };
-    }
-
     // Check tool is enabled
     if let Some(cfg) = config {
         if !cfg.is_tool_enabled(tool_name.as_str()) {
@@ -495,6 +484,17 @@ async fn execute_task(
             };
         }
     };
+
+    // Check tool is installed (using runtime binary name for ACP-aware check)
+    if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
+        error!("{} - Tool not installed: {}", task_label, e);
+        return TaskResult {
+            name: task.name.clone(),
+            exit_code: 1,
+            duration_secs: start.elapsed().as_secs_f64(),
+            error: Some(format!("Tool not installed: {}", e)),
+        };
+    }
 
     // Check resource availability
     if let Some(guard) = resource_guard {

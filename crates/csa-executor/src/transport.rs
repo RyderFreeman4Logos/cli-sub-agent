@@ -122,12 +122,13 @@ impl AcpTransport {
     }
 
     fn acp_command_for_tool(tool_name: &str) -> (String, Vec<String>) {
+        // ACP adapters are standalone binaries from Zed Industries:
+        //   npm: @zed-industries/codex-acp, @zed-industries/claude-code-acp
+        // They bridge the tool's SDK to ACP protocol over stdio.
         match tool_name {
-            "claude-code" => ("claude".into(), vec!["--acp".into()]),
-            "codex" => ("codex".into(), vec!["acp".into()]),
-            "opencode" => ("opencode".into(), vec!["acp".into()]),
-            "gemini-cli" => ("gemini".into(), vec!["--experimental-acp".into()]),
-            _ => (tool_name.into(), vec!["--acp".into()]),
+            "claude-code" => ("claude-code-acp".into(), vec![]),
+            "codex" => ("codex-acp".into(), vec![]),
+            _ => (format!("{tool_name}-acp"), vec![]),
         }
     }
 
@@ -411,19 +412,20 @@ mod tests {
     fn test_acp_command_for_tool_mappings() {
         assert_eq!(
             AcpTransport::acp_command_for_tool("claude-code"),
-            ("claude".to_string(), vec!["--acp".to_string()])
+            ("claude-code-acp".to_string(), vec![])
         );
         assert_eq!(
             AcpTransport::acp_command_for_tool("codex"),
-            ("codex".to_string(), vec!["acp".to_string()])
+            ("codex-acp".to_string(), vec![])
         );
+        // Unknown tools get "{name}-acp" convention
         assert_eq!(
             AcpTransport::acp_command_for_tool("opencode"),
-            ("opencode".to_string(), vec!["acp".to_string()])
+            ("opencode-acp".to_string(), vec![])
         );
         assert_eq!(
             AcpTransport::acp_command_for_tool("gemini-cli"),
-            ("gemini".to_string(), vec!["--experimental-acp".to_string()])
+            ("gemini-cli-acp".to_string(), vec![])
         );
     }
 

@@ -51,7 +51,10 @@ impl Executor {
         }
     }
 
-    /// Get the executable name for the tool.
+    /// Get the executable name for legacy CLI transport.
+    ///
+    /// Used only by `LegacyTransport` to build the CLI command.
+    /// For pre-flight availability checks, use `runtime_binary_name()` instead.
     pub fn executable_name(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "gemini",
@@ -61,13 +64,29 @@ impl Executor {
         }
     }
 
+    /// Get the binary name that will actually be spawned at runtime.
+    ///
+    /// ACP-routed tools use standalone adapter binaries (`codex-acp`,
+    /// `claude-code-acp`). Legacy tools use the native CLI binary.
+    /// Use this for pre-flight `check_tool_installed` calls.
+    pub fn runtime_binary_name(&self) -> &'static str {
+        match self {
+            Self::GeminiCli { .. } => "gemini",
+            Self::Opencode { .. } => "opencode",
+            Self::Codex { .. } => "codex-acp",
+            Self::ClaudeCode { .. } => "claude-code-acp",
+        }
+    }
+
     /// Get installation instructions for the tool.
     pub fn install_hint(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "Install: npm install -g @anthropic-ai/gemini-cli",
             Self::Opencode { .. } => "Install: go install github.com/anthropics/opencode@latest",
-            Self::Codex { .. } => "Install: npm install -g @openai/codex",
-            Self::ClaudeCode { .. } => "Install: npm install -g @anthropic-ai/claude-code",
+            Self::Codex { .. } => "Install ACP adapter: npm install -g @zed-industries/codex-acp",
+            Self::ClaudeCode { .. } => {
+                "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
+            }
         }
     }
 

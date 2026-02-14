@@ -20,8 +20,8 @@ fn install_hint(tool_name: &str) -> &'static str {
     match tool_name {
         "gemini-cli" => "npm install -g @google/gemini-cli",
         "opencode" => "go install github.com/sst/opencode@latest",
-        "codex" => "npm install -g @openai/codex",
-        "claude-code" => "npm install -g @anthropic-ai/claude-code",
+        "codex" => "npm install -g @zed-industries/codex-acp",
+        "claude-code" => "npm install -g @zed-industries/claude-code-acp",
         _ => "unknown tool",
     }
 }
@@ -69,8 +69,8 @@ async fn run_doctor_json() -> Result<()> {
     let tools = [
         ("gemini-cli", "gemini"),
         ("opencode", "opencode"),
-        ("codex", "codex"),
-        ("claude-code", "claude"),
+        ("codex", "codex-acp"),
+        ("claude-code", "claude-code-acp"),
     ];
 
     let tool_statuses: Vec<serde_json::Value> = tools
@@ -171,8 +171,8 @@ async fn print_tool_availability() {
     let tools = [
         ("gemini-cli", "gemini"),
         ("opencode", "opencode"),
-        ("codex", "codex"),
-        ("claude-code", "claude"),
+        ("codex", "codex-acp"),
+        ("claude-code", "claude-code-acp"),
     ];
 
     let mut installed_count = 0;
