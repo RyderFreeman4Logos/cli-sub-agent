@@ -10,6 +10,7 @@ use std::path::Path;
 use tokio::process::Command;
 
 use crate::model_spec::{ModelSpec, ThinkingBudget};
+use crate::transport::{LegacyTransport, Transport, TransportFactory, TransportResult};
 
 pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 
@@ -209,8 +210,25 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
     ) -> Result<ExecutionResult> {
-        let (cmd, stdin_data) = self.build_command(prompt, tool_state, session, extra_env);
-        csa_process::run_and_capture_with_stdin(cmd, stdin_data, stream_mode).await
+        Ok(self
+            .execute_with_transport(prompt, tool_state, session, extra_env, stream_mode)
+            .await?
+            .execution)
+    }
+
+    /// Execute and keep transport metadata (provider session ID, event stream).
+    pub async fn execute_with_transport(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
+        stream_mode: csa_process::StreamMode,
+    ) -> Result<TransportResult> {
+        let transport = self.transport();
+        transport
+            .execute(prompt, tool_state, session, extra_env, stream_mode)
+            .await
     }
 
     /// Execute in a specific directory (for ephemeral sessions).
@@ -223,6 +241,33 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
     ) -> Result<ExecutionResult> {
+        Ok(self
+            .execute_in_with_transport(prompt, work_dir, extra_env, stream_mode)
+            .await?
+            .execution)
+    }
+
+    /// Execute in a specific directory and keep transport metadata.
+    pub async fn execute_in_with_transport(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+        stream_mode: csa_process::StreamMode,
+    ) -> Result<TransportResult> {
+        let legacy = LegacyTransport::new(self.clone());
+        legacy
+            .execute_in(prompt, work_dir, extra_env, stream_mode)
+            .await
+    }
+
+    /// Build command for execute_in() legacy path.
+    pub(crate) fn build_execute_in_command(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+    ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
         if let Some(env) = extra_env {
@@ -244,7 +289,7 @@ impl Executor {
         } else {
             self.append_prompt_args_with_transport(&mut cmd, prompt, prompt_transport);
         }
-        csa_process::run_and_capture_with_stdin(cmd, stdin_data, stream_mode).await
+        (cmd, stdin_data)
     }
 
     /// Build base command with session environment variables.
@@ -270,6 +315,10 @@ impl Executor {
         }
 
         cmd
+    }
+
+    fn transport(&self) -> Box<dyn Transport> {
+        TransportFactory::create(self, None)
     }
 
     /// Append tool-specific arguments for full execution.

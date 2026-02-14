@@ -7,6 +7,8 @@ use csa_core::types::ToolName;
 use regex::Regex;
 use tracing::debug;
 
+use crate::transport::TransportResult;
+
 /// Attempt to extract the provider's native session ID from tool output.
 ///
 /// Returns None if extraction fails (graceful degradation).
@@ -17,6 +19,22 @@ pub fn extract_session_id(tool: &ToolName, output: &str) -> Option<String> {
         ToolName::Codex => extract_codex_session_id(output),
         ToolName::ClaudeCode => extract_claude_session_id(output),
     }
+}
+
+/// Extract provider session ID from transport result.
+///
+/// ACP transport provides a direct provider session ID. Legacy transport does
+/// not, so this falls back to parsing tool stdout.
+pub fn extract_session_id_from_transport(
+    tool: &ToolName,
+    transport_result: &TransportResult,
+) -> Option<String> {
+    if let Some(session_id) = &transport_result.provider_session_id {
+        debug!("Using provider session ID from transport metadata");
+        return Some(session_id.clone());
+    }
+
+    extract_session_id(tool, &transport_result.execution.output)
 }
 
 /// Extract Codex session ID from JSON output.
@@ -194,5 +212,39 @@ mod tests {
         );
 
         assert_eq!(extract_json_field(json, "nonexistent"), None);
+    }
+
+    #[test]
+    fn test_extract_session_id_from_transport_prefers_provider_session_id() {
+        let transport_result = TransportResult {
+            execution: csa_process::ExecutionResult {
+                output: r#"{"session_id":"thread_from_output"}"#.to_string(),
+                stderr_output: String::new(),
+                summary: "ok".to_string(),
+                exit_code: 0,
+            },
+            provider_session_id: Some("thread_from_transport".to_string()),
+            events: Vec::new(),
+        };
+
+        let result = extract_session_id_from_transport(&ToolName::Codex, &transport_result);
+        assert_eq!(result, Some("thread_from_transport".to_string()));
+    }
+
+    #[test]
+    fn test_extract_session_id_from_transport_falls_back_to_output_parse() {
+        let transport_result = TransportResult {
+            execution: csa_process::ExecutionResult {
+                output: r#"{"session_id":"thread_from_output"}"#.to_string(),
+                stderr_output: String::new(),
+                summary: "ok".to_string(),
+                exit_code: 0,
+            },
+            provider_session_id: None,
+            events: Vec::new(),
+        };
+
+        let result = extract_session_id_from_transport(&ToolName::Codex, &transport_result);
+        assert_eq!(result, Some("thread_from_output".to_string()));
     }
 }
