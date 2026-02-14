@@ -168,7 +168,7 @@ impl AcpTransport {
         }
     }
 
-    fn build_env(
+    pub(crate) fn build_env(
         &self,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
@@ -190,6 +190,7 @@ impl AcpTransport {
         if let Some(parent_session) = &session.genealogy.parent_session_id {
             env.insert("CSA_PARENT_SESSION".to_string(), parent_session.clone());
         }
+
         if let Some(extra) = extra_env {
             env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
@@ -453,5 +454,48 @@ mod tests {
     fn test_build_summary_falls_back_to_exit_code_when_no_output() {
         let summary = build_summary("", "   \n", -1);
         assert_eq!(summary, "exit code -1");
+    }
+
+    // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not transport)
+    // based on per-tool config via extra_env. See pipeline.rs suppress_notify logic.
+    #[test]
+    fn test_acp_build_env_propagates_extra_env() {
+        let transport = AcpTransport::new("claude-code", None);
+        let now = chrono::Utc::now();
+        let session = csa_session::state::MetaSessionState {
+            meta_session_id: "01HTEST000000000000000000".to_string(),
+            description: Some("test".to_string()),
+            project_path: "/tmp/test".to_string(),
+            created_at: now,
+            last_accessed: now,
+            genealogy: csa_session::state::Genealogy {
+                parent_session_id: None,
+                depth: 0,
+            },
+            tools: HashMap::new(),
+            context_status: csa_session::state::ContextStatus::default(),
+            total_token_usage: None,
+            phase: csa_session::state::SessionPhase::Active,
+            task_context: csa_session::state::TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+        };
+
+        let mut extra = HashMap::new();
+        extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
+        let env = transport.build_env(&session, Some(&extra));
+        assert_eq!(
+            env.get("CSA_SUPPRESS_NOTIFY"),
+            Some(&"1".to_string()),
+            "ACP transport should propagate CSA_SUPPRESS_NOTIFY from extra_env"
+        );
+
+        // Without extra_env, suppress_notify should NOT be present.
+        let env_no_extra = transport.build_env(&session, None);
+        assert_eq!(
+            env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
+            None,
+            "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
+        );
     }
 }

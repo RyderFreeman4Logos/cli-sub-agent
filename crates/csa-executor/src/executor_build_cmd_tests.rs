@@ -647,3 +647,6 @@ fn test_build_command_current_dir() {
         "Should set current_dir to session project_path"
     );
 }
+
+// NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not executor)
+// based on per-tool config. See pipeline.rs suppress_notify logic.

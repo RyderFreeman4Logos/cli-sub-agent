@@ -227,6 +227,7 @@ async fn execute_review(
         Some("review"),
         None,
         csa_process::StreamMode::BufferOnly,
+        Some(global_config),
     )
     .await
 }
@@ -401,6 +402,7 @@ mod tests {
                 ToolConfig {
                     enabled: false,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }
@@ -410,6 +412,7 @@ mod tests {
                 ToolConfig {
                     enabled: true,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }

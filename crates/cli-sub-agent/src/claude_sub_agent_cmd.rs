@@ -76,6 +76,7 @@ pub(crate) async fn handle_claude_sub_agent(
         Some("run"),
         None, // claude-sub-agent does not use tier-based selection
         csa_process::StreamMode::BufferOnly,
+        Some(&global_config),
     )
     .await?;
 
@@ -215,6 +216,7 @@ mod tests {
                 ToolConfig {
                     enabled: true,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }
@@ -262,6 +264,7 @@ mod tests {
             ToolConfig {
                 enabled: true,
                 restrictions: None,
+                suppress_notify: true,
             },
         );
         tool_map.insert(
@@ -269,6 +272,7 @@ mod tests {
             ToolConfig {
                 enabled: true,
                 restrictions: None,
+                suppress_notify: true,
             },
         );
         tool_map.insert(
@@ -276,6 +280,7 @@ mod tests {
             ToolConfig {
                 enabled: false,
                 restrictions: None,
+                suppress_notify: true,
             },
         );
         tool_map.insert(
@@ -283,6 +288,7 @@ mod tests {
             ToolConfig {
                 enabled: false,
                 restrictions: None,
+                suppress_notify: true,
             },
         );
 

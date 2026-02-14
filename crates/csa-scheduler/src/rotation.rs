@@ -246,6 +246,7 @@ mod tests {
                 ToolConfig {
                     enabled: false,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }

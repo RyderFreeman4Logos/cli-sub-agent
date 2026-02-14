@@ -69,6 +69,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         Some("debate"),
         None, // debate does not use tier-based selection
         csa_process::StreamMode::BufferOnly,
+        Some(&global_config),
     )
     .await?;
 
@@ -243,6 +244,7 @@ mod tests {
                 ToolConfig {
                     enabled: true,
                     restrictions: None,
+                    suppress_notify: true,
                 },
             );
         }

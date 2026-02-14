@@ -10,9 +10,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
 use csa_core::types::ToolName;
-use csa_executor::{Executor, create_session_log_writer};
+use csa_executor::{AcpMcpServerConfig, Executor, SessionConfig, create_session_log_writer};
 use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_lock::acquire_lock;
 use csa_process::{ExecutionResult, check_tool_installed};
@@ -90,6 +90,45 @@ pub(crate) fn load_and_validate(
 
     let global_config = GlobalConfig::load()?;
     Ok(Some((config, global_config)))
+}
+
+/// Load and merge MCP server registries from global + project config.
+///
+/// Returns a merged list of [`AcpMcpServerConfig`] ready for transport injection.
+/// Global servers are included unless overridden by a project server with the same name.
+pub(crate) fn resolve_mcp_servers(
+    project_root: &Path,
+    global_config: &GlobalConfig,
+) -> Vec<AcpMcpServerConfig> {
+    let global_servers = global_config.mcp_servers();
+
+    let project_registry = match McpRegistry::load(project_root) {
+        Ok(Some(registry)) => registry,
+        Ok(None) => {
+            // No project MCP config; use global servers only
+            return global_servers.iter().map(config_to_acp_mcp).collect();
+        }
+        Err(e) => {
+            warn!("Failed to load project MCP registry: {e}");
+            return global_servers.iter().map(config_to_acp_mcp).collect();
+        }
+    };
+
+    let merged = McpRegistry::merge(global_servers, &project_registry);
+    merged.servers.iter().map(config_to_acp_mcp).collect()
+}
+
+/// Convert `csa_config::McpServerConfig` to [`AcpMcpServerConfig`].
+///
+/// The two types have identical fields but live in separate crates to avoid
+/// coupling `csa-acp` (protocol layer) to `csa-config` (user config layer).
+fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> AcpMcpServerConfig {
+    AcpMcpServerConfig {
+        name: cfg.name.clone(),
+        command: cfg.command.clone(),
+        args: cfg.args.clone(),
+        env: cfg.env.clone(),
+    }
 }
 
 /// Build executor and validate tool is installed and enabled.
@@ -208,6 +247,7 @@ pub(crate) async fn execute_with_session(
     task_type: Option<&str>,
     tier_name: Option<&str>,
     stream_mode: csa_process::StreamMode,
+    global_config: Option<&GlobalConfig>,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -222,6 +262,7 @@ pub(crate) async fn execute_with_session(
         task_type,
         tier_name,
         stream_mode,
+        global_config,
     )
     .await?;
 
@@ -242,6 +283,7 @@ pub(crate) async fn execute_with_session_and_meta(
     task_type: Option<&str>,
     tier_name: Option<&str>,
     stream_mode: csa_process::StreamMode,
+    global_config: Option<&GlobalConfig>,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg {
@@ -408,12 +450,34 @@ pub(crate) async fn execute_with_session_and_meta(
 
     // Apply restrictions if configured
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let effective_prompt = if !can_edit {
+    let mut effective_prompt = if !can_edit {
         info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
         executor.apply_restrictions(prompt, false)
     } else {
         prompt.to_string()
     };
+
+    // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
+    // Session resumes already have context loaded in the tool's conversation.
+    let is_first_turn = session
+        .tools
+        .get(executor.tool_name())
+        .is_none_or(|ts| ts.provider_session_id.is_none());
+    if is_first_turn {
+        let context_files = csa_executor::load_project_context(
+            Path::new(&session.project_path),
+            &csa_executor::ContextLoadOptions::default(),
+        );
+        if !context_files.is_empty() {
+            let context_block = csa_executor::format_context_for_prompt(&context_files);
+            info!(
+                file_count = context_files.len(),
+                bytes = context_block.len(),
+                "Injecting project context into prompt"
+            );
+            effective_prompt = format!("{context_block}{effective_prompt}");
+        }
+    }
 
     // Resolve tool state for session resume.
     let tool_state = session
@@ -435,6 +499,39 @@ pub(crate) async fn execute_with_session_and_meta(
     // Record execution start time before spawning.
     let execution_start_time = chrono::Utc::now();
 
+    // Build session config with MCP servers (if global config provided).
+    let session_config = global_config.map(|gc| {
+        let mcp_servers = resolve_mcp_servers(project_root, gc);
+        if !mcp_servers.is_empty() {
+            info!(
+                count = mcp_servers.len(),
+                servers = %mcp_servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "),
+                "Injecting MCP servers into tool session"
+            );
+        }
+        SessionConfig {
+            mcp_servers,
+            ..Default::default()
+        }
+    });
+
+    // Inject CSA_SUPPRESS_NOTIFY based on per-tool config (default: suppress).
+    // This env var signals ACP adapters and CLI tools to skip desktop notifications
+    // that are not useful when running non-interactively under CSA.
+    let suppress = config
+        .map(|c| c.should_suppress_notify(executor.tool_name()))
+        .unwrap_or(true);
+    let mut merged_env: std::collections::HashMap<String, String> =
+        extra_env.cloned().unwrap_or_default();
+    if suppress {
+        merged_env.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
+    }
+    let merged_env_ref = if merged_env.is_empty() {
+        None
+    } else {
+        Some(&merged_env)
+    };
+
     // Execute via transport abstraction.
     // TODO(signal): Restore SIGINT/SIGTERM forwarding to child process groups.
     // Phase C moved signal handling responsibility to the Transport layer, but
@@ -445,9 +542,9 @@ pub(crate) async fn execute_with_session_and_meta(
             &effective_prompt,
             tool_state.as_ref(),
             &session,
-            extra_env,
+            merged_env_ref,
             stream_mode,
-            None,
+            session_config,
         )
         .await
     {

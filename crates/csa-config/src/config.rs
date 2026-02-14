@@ -95,6 +95,24 @@ pub struct ToolConfig {
     pub enabled: bool,
     #[serde(default)]
     pub restrictions: Option<ToolRestrictions>,
+    /// Suppress notification hooks when running as a CSA sub-agent.
+    ///
+    /// When `true` (the default), CSA injects `CSA_SUPPRESS_NOTIFY=1` into the
+    /// child process environment. ACP adapters (claude-code-acp, codex-acp) and
+    /// CLI tools can read this variable to skip desktop notification hooks that
+    /// are not useful in non-interactive sub-agent contexts.
+    #[serde(default = "default_true")]
+    pub suppress_notify: bool,
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            restrictions: None,
+            suppress_notify: true,
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -301,6 +319,17 @@ impl ProjectConfig {
     /// Check if a tool is enabled (unconfigured tools default to enabled)
     pub fn is_tool_enabled(&self, tool: &str) -> bool {
         self.tools.get(tool).map(|t| t.enabled).unwrap_or(true)
+    }
+
+    /// Check if notification hooks should be suppressed for a tool.
+    ///
+    /// Defaults to `true` (suppress) since CSA always runs tools as
+    /// non-interactive sub-agents where desktop notifications are not useful.
+    pub fn should_suppress_notify(&self, tool: &str) -> bool {
+        self.tools
+            .get(tool)
+            .map(|t| t.suppress_notify)
+            .unwrap_or(true)
     }
 
     /// Check if a tool is allowed to edit existing files

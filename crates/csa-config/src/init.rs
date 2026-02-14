@@ -149,6 +149,7 @@ pub fn init_project(
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
             }),
+            suppress_notify: true,
         };
         if !installed.contains(&"gemini-cli") {
             gemini_config.enabled = false;
@@ -163,6 +164,7 @@ pub fn init_project(
             ToolConfig {
                 enabled: installed.contains(tool_name),
                 restrictions: None,
+                suppress_notify: true,
             },
         );
     }
