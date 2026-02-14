@@ -111,41 +111,53 @@ pub enum Block {
 // Regex patterns
 // ---------------------------------------------------------------------------
 
+// Compile-time constant patterns — unwrap is infallible for known-valid regex.
 static VAR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").unwrap());
 
 static STEP_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+(?:Step\s+\d+:\s*)?(.+)$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^##\s+(?:Step\s+\d+:\s*)?(.+)$").unwrap());
 
-static IF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+IF\s+(.+)$").expect("valid regex"));
+static IF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^##\s+IF\s+(.+)$").unwrap());
 
-static ELSE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+ELSE\s*$").expect("valid regex"));
+static ELSE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^##\s+ELSE\s*$").unwrap());
 
-static ENDIF_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+ENDIF\s*$").expect("valid regex"));
+static ENDIF_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^##\s+ENDIF\s*$").unwrap());
 
 static FOR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+FOR\s+(\w+)\s+IN\s+(.+)$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^##\s+FOR\s+(\w+)\s+IN\s+(.+)$").unwrap());
 
-static ENDFOR_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+ENDFOR\s*$").expect("valid regex"));
+static ENDFOR_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^##\s+ENDFOR\s*$").unwrap());
 
 static INCLUDE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^##\s+INCLUDE\s+(.+)$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"^##\s+INCLUDE\s+(.+)$").unwrap());
 
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
+/// Maximum input size (1 MiB). Skill-lang files should never approach this.
+const MAX_INPUT_BYTES: usize = 1024 * 1024;
+
 /// Parse a `.skill.toml` sidecar file.
 pub fn parse_skill_config(toml_content: &str) -> Result<SkillConfig> {
+    if toml_content.len() > MAX_INPUT_BYTES {
+        bail!(
+            "input exceeds maximum size ({} bytes > {MAX_INPUT_BYTES})",
+            toml_content.len()
+        );
+    }
     toml::from_str(toml_content).context("failed to parse .skill.toml")
 }
 
 /// Parse a skill-lang Markdown document (SKILL.md / PATTERN.md).
 pub fn parse_skill(content: &str) -> Result<SkillDocument> {
+    if content.len() > MAX_INPUT_BYTES {
+        bail!(
+            "input exceeds maximum size ({} bytes > {MAX_INPUT_BYTES})",
+            content.len()
+        );
+    }
     let (meta, body_str) = parse_frontmatter(content)?;
     let body = parse_body(body_str)?;
     Ok(SkillDocument {
