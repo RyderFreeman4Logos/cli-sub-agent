@@ -103,22 +103,25 @@ fn ensure_gitignore(todos_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Stage and commit changes in a specific plan's directory.
+/// Stage and commit ALL pending changes in the todos repository.
 ///
-/// Only stages files under `<timestamp>/` (the plan's directory), keeping
-/// other plans' pending changes untouched. Use [`save_file`] to target a
-/// single file within the plan directory.
+/// Stages everything (`git add -A`) so that modifications across multiple
+/// plan directories, metadata updates, and any other tracked files are
+/// committed together.  The todos repo only contains TODO.md files and
+/// `metadata.toml` -- no sensitive data -- so a blanket add is safe.
+///
+/// The `timestamp` parameter identifies the plan that triggered the save
+/// (used for validation only).  Use [`save_file`] when you need to commit
+/// a single file without touching anything else.
 ///
 /// Returns the short commit hash, or `None` if there were no changes to commit.
 pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<String>> {
     crate::validate_timestamp(timestamp)?;
     ensure_git_init(todos_dir)?;
 
-    let plan_dir = format!("{}/", timestamp);
-
-    // Stage changes in this plan's directory only (additions, modifications, deletions)
+    // Stage ALL pending changes (additions, modifications, deletions)
     let output = Command::new("git")
-        .args(["add", "-A", "--", &plan_dir])
+        .args(["add", "-A"])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git add")?;
@@ -130,9 +133,9 @@ pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<S
         );
     }
 
-    // Check for staged changes in the plan directory
+    // Check for any staged changes
     let status = Command::new("git")
-        .args(["diff", "--cached", "--quiet", "--", &plan_dir])
+        .args(["diff", "--cached", "--quiet"])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git diff --cached")?;
@@ -148,9 +151,9 @@ pub fn save(todos_dir: &Path, timestamp: &str, message: &str) -> Result<Option<S
         None => anyhow::bail!("git diff --cached terminated by signal"),
     }
 
-    // Commit only the plan directory changes
+    // Commit all staged changes
     let output = Command::new("git")
-        .args(["commit", "-m", message, "--", &plan_dir])
+        .args(["commit", "-m", message])
         .current_dir(todos_dir)
         .output()
         .context("Failed to run git commit")?;
@@ -574,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn test_save_scoped_to_plan_directory() {
+    fn test_save_commits_all_pending_changes() {
         let dir = tempdir().unwrap();
         let todos = dir.path();
         let ts_a = "20260101T000000";
@@ -586,11 +589,11 @@ mod tests {
         fs::create_dir_all(&plan_b_dir).unwrap();
         fs::write(plan_b_dir.join("TODO.md"), "# Plan B\n").unwrap();
 
-        // Save plan A — should NOT commit plan B's files
-        let hash = save(todos, ts_a, "save A only").unwrap();
-        assert!(hash.is_some(), "should have committed plan A");
+        // Save via plan A — should commit ALL pending changes including plan B
+        let hash = save(todos, ts_a, "save all").unwrap();
+        assert!(hash.is_some(), "should have committed changes");
 
-        // Plan B's directory should still be untracked
+        // Git status should be completely clean
         let status = Command::new("git")
             .args(["status", "--porcelain"])
             .current_dir(todos)
@@ -598,8 +601,8 @@ mod tests {
             .unwrap();
         let status_str = String::from_utf8_lossy(&status.stdout);
         assert!(
-            status_str.contains(ts_b),
-            "plan B should still be untracked, got: {status_str}"
+            status_str.trim().is_empty(),
+            "git status should be clean after save, got: {status_str}"
         );
     }
 

@@ -437,6 +437,44 @@ fn test_validate_revision_accepts_valid_hash() {
     assert!(validate_revision("HEAD~1").is_ok());
 }
 
+// -- save commits all pending changes -------------------------------------
+
+#[test]
+fn test_save_leaves_clean_git_status() {
+    let dir = tempdir().unwrap();
+    let todos = dir.path();
+    let ts = "20260101T000000";
+
+    setup_todos_dir(todos, ts);
+    save(todos, ts, "initial").unwrap();
+
+    // Mutate both TODO.md and metadata.toml, plus create a sibling plan
+    fs::write(todos.join(ts).join("TODO.md"), "# Edited\n").unwrap();
+    fs::write(
+        todos.join(ts).join("metadata.toml"),
+        "title = \"edited\"\nstatus = \"approved\"\n",
+    )
+    .unwrap();
+    let ts_b = "20260115T120000";
+    let plan_b = todos.join(ts_b);
+    fs::create_dir_all(&plan_b).unwrap();
+    fs::write(plan_b.join("TODO.md"), "# Another plan\n").unwrap();
+
+    save(todos, ts, "second save").unwrap();
+
+    // After save, the entire todos repo must be clean
+    let status = Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(todos)
+        .output()
+        .unwrap();
+    let status_str = String::from_utf8_lossy(&status.stdout);
+    assert!(
+        status_str.trim().is_empty(),
+        "git status must be clean after save(), got: {status_str}"
+    );
+}
+
 // -- save with invalid timestamp ------------------------------------------
 
 #[test]
