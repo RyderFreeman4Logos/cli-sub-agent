@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use tracing::warn;
 
 use crate::package::AuditIssue;
 
@@ -63,13 +64,19 @@ pub fn check_symlinks(
         let entries = std::fs::read_dir(&abs_dir)
             .with_context(|| format!("failed to read {}", abs_dir.display()))?;
 
-        for entry in entries.filter_map(|e| e.ok()) {
+        for entry in entries.filter_map(|e| {
+            e.map_err(|err| warn!("failed to read directory entry: {err}"))
+                .ok()
+        }) {
             let path = entry.path();
 
             // Use symlink_metadata to inspect the link itself, not its target.
             let meta = match std::fs::symlink_metadata(&path) {
                 Ok(m) => m,
-                Err(_) => continue,
+                Err(err) => {
+                    warn!("cannot stat {}: {err}", path.display());
+                    continue;
+                }
             };
 
             if !meta.file_type().is_symlink() {
@@ -88,7 +95,10 @@ pub fn check_symlinks(
 
             let target = match std::fs::read_link(&path) {
                 Ok(t) => t,
-                Err(_) => continue,
+                Err(err) => {
+                    warn!("cannot read symlink {}: {err}", path.display());
+                    continue;
+                }
             };
 
             // Resolve relative targets against the symlink's parent directory.

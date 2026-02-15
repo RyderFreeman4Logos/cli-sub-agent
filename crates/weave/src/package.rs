@@ -385,7 +385,10 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
     Ok(pkg)
 }
 
-/// Recursively copy a directory, skipping `.git/` subdirectories.
+/// Recursively copy a directory, skipping `.git/` subdirectories and symlinks.
+///
+/// Symlinks are skipped to prevent copying sensitive files that may be linked
+/// from outside the skill directory (e.g., `secrets -> ~/.ssh/id_rsa`).
 fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     std::fs::create_dir_all(dest)
         .with_context(|| format!("failed to create {}", dest.display()))?;
@@ -404,6 +407,12 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
         }
 
         let file_type = entry.file_type()?;
+
+        // Skip symlinks — following them could copy sensitive external files.
+        if file_type.is_symlink() {
+            continue;
+        }
+
         if file_type.is_dir() {
             copy_dir_recursive(&src_path, &dest_path)?;
         } else {
