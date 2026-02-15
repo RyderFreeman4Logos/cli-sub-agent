@@ -11,7 +11,7 @@ use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
-use csa_session::{load_session, resolve_session_prefix};
+use csa_session::{MetaSessionState, SessionPhase, load_session, resolve_session_prefix};
 
 use crate::pipeline;
 use crate::run_helpers::{
@@ -19,6 +19,48 @@ use crate::run_helpers::{
     resolve_tool, resolve_tool_and_model,
 };
 use crate::skill_resolver;
+
+fn resolve_last_session_selection(
+    sessions: Vec<MetaSessionState>,
+) -> Result<(String, Option<String>)> {
+    if sessions.is_empty() {
+        anyhow::bail!("No sessions found. Run a task first to create one.");
+    }
+
+    let mut sorted_sessions = sessions;
+    sorted_sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    let selected_id = sorted_sessions[0].meta_session_id.clone();
+
+    let active_sessions: Vec<&MetaSessionState> = sorted_sessions
+        .iter()
+        .filter(|session| session.phase == SessionPhase::Active)
+        .collect();
+
+    if active_sessions.len() <= 1 {
+        return Ok((selected_id, None));
+    }
+
+    let mut warning_lines = vec![
+        format!(
+            "warning: `--last` is ambiguous in this project: found {} active sessions.",
+            active_sessions.len()
+        ),
+        format!("Resuming most recently accessed session: {}", selected_id),
+        "Active sessions (session_id | last_accessed):".to_string(),
+    ];
+
+    for session in active_sessions {
+        warning_lines.push(format!(
+            "  {} | {}",
+            session.meta_session_id,
+            session.last_accessed.to_rfc3339()
+        ));
+    }
+
+    warning_lines.push("Use `--session <session-id>` to choose explicitly.".to_string());
+
+    Ok((selected_id, Some(warning_lines.join("\n"))))
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
@@ -47,12 +89,11 @@ pub(crate) async fn handle_run(
     // 2. Resolve --last flag to session ID
     let session_arg = if last {
         let sessions = csa_session::list_sessions(&project_root, None)?;
-        if sessions.is_empty() {
-            anyhow::bail!("No sessions found. Run a task first to create one.");
+        let (selected_id, ambiguity_warning) = resolve_last_session_selection(sessions)?;
+        if let Some(warning) = ambiguity_warning {
+            eprintln!("{warning}");
         }
-        let mut sorted_sessions = sessions;
-        sorted_sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
-        Some(sorted_sessions[0].meta_session_id.clone())
+        Some(selected_id)
     } else {
         session_arg
     };
@@ -562,3 +603,7 @@ pub(crate) async fn handle_run(
 
     Ok(result.exit_code)
 }
+
+#[cfg(test)]
+#[path = "run_cmd_tests.rs"]
+mod tests;
