@@ -125,23 +125,34 @@ pub fn build_graph(plan: &ExecutionPlan) -> VizGraph {
     }
 
     if let Some(first) = plan.steps.first() {
-        graph.edges.push(VizEdge {
-            from: entry_id,
-            to: step_node_id(first.id),
-            kind: VizEdgeKind::Normal,
-            label: None,
-        });
+        // Only add a direct entry edge when the first step is unconditional.
+        // Conditional first steps are reached through their decision nodes.
+        if step_condition_atoms(first).is_empty() {
+            graph.edges.push(VizEdge {
+                from: entry_id.clone(),
+                to: step_node_id(first.id),
+                kind: VizEdgeKind::Normal,
+                label: None,
+            });
+        }
     }
     for pair in plan.steps.windows(2) {
-        graph.edges.push(VizEdge {
-            from: step_node_id(pair[0].id),
-            to: step_node_id(pair[1].id),
-            kind: VizEdgeKind::Normal,
-            label: None,
-        });
+        let left_atoms = step_condition_atoms(&pair[0]);
+        let right_atoms = step_condition_atoms(&pair[1]);
+        // Only add sequential edges between steps that share the same
+        // branching context.  Steps in different branches of the same
+        // condition must NOT be linked sequentially.
+        if left_atoms == right_atoms {
+            graph.edges.push(VizEdge {
+                from: step_node_id(pair[0].id),
+                to: step_node_id(pair[1].id),
+                kind: VizEdgeKind::Normal,
+                label: None,
+            });
+        }
     }
 
-    add_decision_edges(&mut graph, plan);
+    add_decision_edges(&mut graph, plan, &entry_id);
     add_join_nodes(&mut graph, plan);
     add_on_fail_edges(&mut graph, plan);
 
@@ -149,9 +160,28 @@ pub fn build_graph(plan: &ExecutionPlan) -> VizGraph {
     graph
 }
 
-fn add_decision_edges(graph: &mut VizGraph, plan: &ExecutionPlan) {
+fn add_decision_edges(graph: &mut VizGraph, plan: &ExecutionPlan, entry_id: &str) {
     let mut decision_map: HashMap<String, String> = HashMap::new();
     let mut decision_count = 0usize;
+
+    // Build a map from each top-level condition expression to the node that
+    // should precede its first decision diamond.  Walk the plan in order;
+    // the most recent unconditional step (or the graph entry node) is the
+    // predecessor.
+    let mut predecessor_map: HashMap<String, String> = HashMap::new();
+    let mut last_unconditional: String = entry_id.to_string();
+    for step in &plan.steps {
+        let atoms = step_condition_atoms(step);
+        if atoms.is_empty() {
+            // Unconditional step — update the running predecessor.
+            last_unconditional = step_node_id(step.id);
+        } else if let Some(first_atom) = atoms.first() {
+            let top_key = decision_key(&[], &first_atom.expr);
+            predecessor_map
+                .entry(top_key)
+                .or_insert_with(|| last_unconditional.clone());
+        }
+    }
 
     for step in &plan.steps {
         let atoms = step_condition_atoms(step);
@@ -183,8 +213,15 @@ fn add_decision_edges(graph: &mut VizGraph, plan: &ExecutionPlan) {
         }
 
         if let Some(first) = decision_chain.first() {
+            // Connect the first decision node to its actual predecessor
+            // instead of unconditionally using ROOT.
+            let top_key = decision_key(&[], &atoms[0].expr);
+            let predecessor = predecessor_map
+                .get(&top_key)
+                .cloned()
+                .unwrap_or_else(|| "ROOT".to_string());
             graph.edges.push(VizEdge {
-                from: "ROOT".to_string(),
+                from: predecessor,
                 to: first.clone(),
                 kind: VizEdgeKind::Normal,
                 label: None,
