@@ -502,9 +502,15 @@ pub(crate) async fn execute_with_session_and_meta(
         None,
     );
     // PreRun hook: fires before tool execution starts (best-effort).
+    let sessions_root = session_dir
+        .parent()
+        .unwrap_or(&session_dir)
+        .display()
+        .to_string();
     let pre_run_vars = std::collections::HashMap::from([
         ("session_id".to_string(), session.meta_session_id.clone()),
         ("session_dir".to_string(), session_dir.display().to_string()),
+        ("sessions_root".to_string(), sessions_root.clone()),
         ("tool".to_string(), executor.tool_name().to_string()),
     ]);
     if let Err(e) = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &pre_run_vars) {
@@ -679,11 +685,6 @@ pub(crate) async fn execute_with_session_and_meta(
     save_session(&session)?;
 
     // Fire PostRun and SessionComplete hooks (best-effort, reusing hooks_config from PreRun)
-    let sessions_root = session_dir
-        .parent()
-        .unwrap_or(&session_dir)
-        .display()
-        .to_string();
     let hook_vars = std::collections::HashMap::from([
         ("session_id".to_string(), session.meta_session_id.clone()),
         ("session_dir".to_string(), session_dir.display().to_string()),
