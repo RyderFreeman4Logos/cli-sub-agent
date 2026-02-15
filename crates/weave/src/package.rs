@@ -28,6 +28,17 @@ pub struct Lockfile {
     pub package: Vec<LockedPackage>,
 }
 
+/// How a dependency was installed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceKind {
+    /// Installed from a git repository (default for backward compatibility).
+    #[default]
+    Git,
+    /// Installed from a local directory path.
+    Local,
+}
+
 /// A single locked dependency.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockedPackage {
@@ -36,6 +47,10 @@ pub struct LockedPackage {
     pub commit: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// How this dependency was installed. Defaults to `Git` for backward
+    /// compatibility with lockfiles that predate this field.
+    #[serde(default)]
+    pub source_kind: SourceKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +301,7 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
         repo: src.url,
         commit,
         version,
+        source_kind: SourceKind::Git,
     };
 
     // Update the lockfile with this package.
@@ -297,6 +313,176 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
     save_lockfile(&lockfile_path, &lockfile)?;
 
     Ok(pkg)
+}
+
+// ---------------------------------------------------------------------------
+// Public API: install_from_local
+// ---------------------------------------------------------------------------
+
+/// Install a skill from a local directory path into `.weave/deps/<name>/`.
+///
+/// The source directory is recursively copied (excluding `.git/`).
+/// Returns the locked package entry with `source_kind = Local`.
+pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<LockedPackage> {
+    let canonical = source_path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve path: {}", source_path.display()))?;
+
+    if !canonical.is_dir() {
+        bail!("not a directory: {}", canonical.display());
+    }
+
+    // Extract name from the directory basename.
+    let name = canonical
+        .file_name()
+        .context("cannot extract directory name")?
+        .to_string_lossy()
+        .to_string();
+
+    // Validate name — no path separators or traversal.
+    if name.contains('/') || name.contains('\\') || name == ".." || name == "." || name.is_empty() {
+        bail!("invalid skill name: '{name}'");
+    }
+
+    // Require SKILL.md to be a regular file (not a symlink — copy skips symlinks).
+    let skill_md = canonical.join("SKILL.md");
+    match std::fs::symlink_metadata(&skill_md) {
+        Ok(m) if m.file_type().is_file() => {} // regular file — ok
+        Ok(m) if m.file_type().is_symlink() => {
+            bail!(
+                "SKILL.md in {} is a symlink — symlinks are not copied during install",
+                canonical.display()
+            );
+        }
+        _ => {
+            bail!(
+                "SKILL.md not found in {} — not a valid skill directory",
+                canonical.display()
+            );
+        }
+    }
+
+    let deps_dir = project_root.join(".weave").join("deps");
+    let dest = deps_dir.join(&name);
+
+    // Guard against source/destination overlap.
+    // Resolve dest without requiring it to exist: canonicalize the parent
+    // (deps_dir) and append the name.  Also check whether source is inside
+    // the project root to catch `weave install --path .`.
+    let project_canonical = project_root
+        .canonicalize()
+        .with_context(|| format!("cannot resolve project root: {}", project_root.display()))?;
+    {
+        let dest_approx = if deps_dir.exists() {
+            deps_dir.canonicalize()?.join(&name)
+        } else {
+            // deps/ doesn't exist yet.  Resolve .weave itself if it exists
+            // (it might be a symlink) so the overlap check uses the real path.
+            let weave_dir = project_root.join(".weave");
+            if weave_dir.exists() {
+                weave_dir.canonicalize()?.join("deps").join(&name)
+            } else {
+                project_canonical.join(".weave").join("deps").join(&name)
+            }
+        };
+        if canonical == dest_approx
+            || canonical.starts_with(&dest_approx)
+            || dest_approx.starts_with(&canonical)
+        {
+            bail!(
+                "source and destination overlap: {} vs {}",
+                canonical.display(),
+                dest_approx.display()
+            );
+        }
+    }
+
+    // Copy to a staging directory first, then swap — ensures the original
+    // is preserved if the copy fails (atomic-ish replace).
+    std::fs::create_dir_all(&deps_dir)
+        .with_context(|| format!("failed to create {}", deps_dir.display()))?;
+    let staging = deps_dir.join(format!(".{name}.staging.{}", std::process::id()));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+    copy_dir_recursive(&canonical, &staging).inspect_err(|_| {
+        // Clean up partial staging on failure.
+        let _ = std::fs::remove_dir_all(&staging);
+    })?;
+
+    // Swap: remove old, rename staging → dest.
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .with_context(|| format!("failed to remove existing {}", dest.display()))?;
+    }
+    std::fs::rename(&staging, &dest)
+        .with_context(|| format!("failed to rename staging to {}", dest.display()))?;
+
+    let version = read_version(&dest);
+
+    let pkg = LockedPackage {
+        name,
+        repo: String::new(),
+        commit: String::new(),
+        version,
+        source_kind: SourceKind::Local,
+    };
+
+    // Update the lockfile.
+    let lockfile_path = project_root.join(".weave").join("lock.toml");
+    let mut lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+        package: Vec::new(),
+    });
+    upsert_package(&mut lockfile, &pkg);
+    save_lockfile(&lockfile_path, &lockfile)?;
+
+    Ok(pkg)
+}
+
+/// Recursively copy a directory, skipping `.git/` subdirectories and symlinks.
+///
+/// Symlinks are skipped to prevent copying sensitive files that may be linked
+/// from outside the skill directory (e.g., `secrets -> ~/.ssh/id_rsa`).
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)
+        .with_context(|| format!("failed to create {}", dest.display()))?;
+
+    for entry in
+        std::fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))?
+    {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let src_path = entry.path();
+        let dest_path = dest.join(&file_name);
+
+        // Skip .git directories.
+        if file_name == ".git" {
+            continue;
+        }
+
+        let file_type = entry.file_type()?;
+
+        // Skip symlinks — following them could copy sensitive external files.
+        if file_type.is_symlink() {
+            continue;
+        }
+
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else if file_type.is_file() {
+            std::fs::copy(&src_path, &dest_path).with_context(|| {
+                format!(
+                    "failed to copy {} -> {}",
+                    src_path.display(),
+                    dest_path.display()
+                )
+            })?;
+        }
+        // Skip special files (FIFOs, sockets, device nodes) — copying them
+        // would block or fail.
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +532,7 @@ pub fn lock(project_root: &Path) -> Result<Lockfile> {
                     repo: String::new(),
                     commit: String::new(),
                     version: read_version(&entry.path()),
+                    source_kind: SourceKind::default(),
                 });
             }
         }
@@ -386,6 +573,13 @@ pub fn update(
 
     for idx in targets {
         let pkg = &lockfile.package[idx];
+        if pkg.source_kind == SourceKind::Local {
+            eprintln!(
+                "skipping {} (local source — reinstall with --path to update)",
+                pkg.name
+            );
+            continue;
+        }
         if pkg.repo.is_empty() {
             continue; // Skip entries without a known repo.
         }
@@ -432,6 +626,13 @@ pub enum AuditIssue {
     UnknownRepo,
     /// SKILL.md not found in dependency directory.
     MissingSkillMd,
+    /// Symlink target does not exist.
+    BrokenSymlink {
+        /// Path of the broken symlink.
+        path: PathBuf,
+        /// Target the symlink points to.
+        target: PathBuf,
+    },
 }
 
 impl std::fmt::Display for AuditIssue {
@@ -441,6 +642,14 @@ impl std::fmt::Display for AuditIssue {
             Self::MissingFromLockfile => write!(f, "present in deps but not in lockfile"),
             Self::UnknownRepo => write!(f, "lockfile entry has no repo URL"),
             Self::MissingSkillMd => write!(f, "no SKILL.md found"),
+            Self::BrokenSymlink { path, target } => {
+                write!(
+                    f,
+                    "broken symlink: {} -> {}",
+                    path.display(),
+                    target.display()
+                )
+            }
         }
     }
 }
@@ -473,7 +682,7 @@ pub fn audit(project_root: &Path) -> Result<Vec<AuditResult>> {
             issues.push(AuditIssue::MissingSkillMd);
         }
 
-        if pkg.repo.is_empty() {
+        if pkg.repo.is_empty() && pkg.source_kind != SourceKind::Local {
             issues.push(AuditIssue::UnknownRepo);
         }
 
