@@ -378,6 +378,26 @@ fn install_from_local_rejects_missing_skill_md() {
     assert!(err.contains("SKILL.md not found"), "error: {err}");
 }
 
+#[cfg(unix)]
+#[test]
+fn install_from_local_rejects_symlinked_skill_md() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let skill_src = tmp.path().join("symlink-skill");
+    std::fs::create_dir_all(&skill_src).unwrap();
+    // Create a real SKILL.md elsewhere and symlink to it.
+    let real_skill = tmp.path().join("real-SKILL.md");
+    std::fs::write(&real_skill, "# Real Skill").unwrap();
+    std::os::unix::fs::symlink(&real_skill, skill_src.join("SKILL.md")).unwrap();
+
+    let result = install_from_local(&skill_src, &project);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("symlink"), "error: {err}");
+}
+
 #[test]
 fn install_from_local_rejects_self_overwrite() {
     let tmp = TempDir::new().unwrap();

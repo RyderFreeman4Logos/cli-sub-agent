@@ -344,12 +344,22 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
         bail!("invalid skill name: '{name}'");
     }
 
-    // Require SKILL.md to be present.
-    if !canonical.join("SKILL.md").is_file() {
-        bail!(
-            "SKILL.md not found in {} — not a valid skill directory",
-            canonical.display()
-        );
+    // Require SKILL.md to be a regular file (not a symlink — copy skips symlinks).
+    let skill_md = canonical.join("SKILL.md");
+    match std::fs::symlink_metadata(&skill_md) {
+        Ok(m) if m.file_type().is_file() => {} // regular file — ok
+        Ok(m) if m.file_type().is_symlink() => {
+            bail!(
+                "SKILL.md in {} is a symlink — symlinks are not copied during install",
+                canonical.display()
+            );
+        }
+        _ => {
+            bail!(
+                "SKILL.md not found in {} — not a valid skill directory",
+                canonical.display()
+            );
+        }
     }
 
     let deps_dir = project_root.join(".weave").join("deps");
