@@ -1,0 +1,219 @@
+[plan]
+name = "pr-codex-bot"
+description = "Iterative PR review loop with cloud codex bot: local review, push, bot trigger, false-positive arbitration, fix, merge"
+
+[[plan.variables]]
+name = "BOT_COMMENTS"
+
+[[plan.variables]]
+name = "BOT_HAS_ISSUES"
+
+[[plan.variables]]
+name = "BOT_UNAVAILABLE"
+
+[[plan.variables]]
+name = "CLEAN_BRANCH"
+
+[[plan.variables]]
+name = "COMMENT_IS_FALSE_POSITIVE"
+
+[[plan.variables]]
+name = "LOCAL_REVIEW_HAS_ISSUES"
+
+[[plan.variables]]
+name = "PR_BODY"
+
+[[plan.variables]]
+name = "PR_NUM"
+
+[[plan.variables]]
+name = "PR_TITLE"
+
+[[plan.variables]]
+name = "REPO"
+
+[[plan.variables]]
+name = "WORKFLOW_BRANCH"
+
+[[plan.steps]]
+id = 1
+title = "Commit Changes"
+tool = "bash"
+prompt = """
+Ensure all changes committed. Set WORKFLOW_BRANCH once (persists through
+clean branch switches in Step 11).
+
+```bash
+WORKFLOW_BRANCH="$(git branch --show-current)"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"
+tool = "bash"
+prompt = """
+Run cumulative local review covering all commits since main.
+This is the FOUNDATION — without it, bot unavailability cannot safely merge.
+
+```bash
+csa review --branch main
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Fix Local Review Issues"
+tool = "csa"
+prompt = "Fix issues found by local review. Loop until clean (max 3 rounds)."
+tier = "tier-2-standard"
+condition = "${LOCAL_REVIEW_HAS_ISSUES}"
+
+[plan.steps.on_fail]
+retry = 3
+
+[[plan.steps]]
+id = 4
+title = "Push and Create PR"
+tool = "bash"
+prompt = """
+```bash
+git push -u origin "${WORKFLOW_BRANCH}"
+gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
+PR_NUM=$(gh pr view --json number -q '.number')
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 5
+title = "Trigger Cloud Bot Review"
+tool = "bash"
+prompt = """
+Trigger the cloud review bot. Capture PR number for polling.
+
+```bash
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Poll for Bot Response"
+tool = "bash"
+prompt = """
+Bounded poll (max 10 minutes). If bot unavailable, fall through —
+local review (Step 2) already covers main...HEAD."""
+on_fail = "skip"
+
+[[plan.steps]]
+id = 7
+title = "Step 6a: Merge Without Bot"
+tool = "bash"
+prompt = """
+Bot unavailable. Local review already guarantees coverage.
+Proceed to merge directly.
+
+```bash
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+git checkout main && git pull origin main
+```"""
+on_fail = "abort"
+condition = "${BOT_UNAVAILABLE}"
+
+[[plan.steps]]
+id = 8
+title = "Evaluate Each Bot Comment"
+tool = "claude-code"
+prompt = ""
+tier = "tier-3-complex"
+on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[[plan.steps]]
+id = 9
+title = "Arbitrate via Debate"
+tool = "csa"
+prompt = ""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 10
+title = "Include debate"
+tool = "weave"
+prompt = "debate"
+on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 11
+title = "Fix Real Issue"
+tool = "csa"
+prompt = "Fix the real issue. Commit the fix."
+tier = "tier-2-standard"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[plan.steps.on_fail]
+retry = 2
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 12
+title = "Push Fixes and Re-trigger"
+tool = "bash"
+prompt = """
+```bash
+git push origin "${WORKFLOW_BRANCH}"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+```
+
+Loop back to Step 6 (poll). Max 10 total iterations."""
+on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[[plan.steps]]
+id = 13
+title = "Step 10a: Bot Review Clean"
+prompt = "No issues found by bot. Proceed to merge."
+on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[[plan.steps]]
+id = 14
+title = "Clean Resubmission (if needed)"
+tool = "bash"
+prompt = """
+If fixes accumulated, create clean branch for final review.
+
+```bash
+CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
+git checkout -b "${CLEAN_BRANCH}"
+git push -u origin "${CLEAN_BRANCH}"
+gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 15
+title = "Final Merge"
+tool = "bash"
+prompt = """
+Squash-merge and update local main.
+
+```bash
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+git checkout main && git pull origin main
+```"""
+on_fail = "abort"

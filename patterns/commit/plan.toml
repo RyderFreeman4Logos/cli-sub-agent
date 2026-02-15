@@ -1,0 +1,243 @@
+[plan]
+name = "commit"
+description = "Strict commit discipline with Conventional Commits, mandatory security audit, test verification, and pre-commit review"
+
+[[plan.variables]]
+name = "AUDIT_FAIL"
+
+[[plan.variables]]
+name = "AUDIT_PASS_DEFERRED"
+
+[[plan.variables]]
+name = "BRANCH"
+
+[[plan.variables]]
+name = "COMMIT_MSG"
+
+[[plan.variables]]
+name = "FILES"
+
+[[plan.variables]]
+name = "HAS_DEFERRED_ISSUES"
+
+[[plan.variables]]
+name = "IS_MILESTONE"
+
+[[plan.variables]]
+name = "PR_BODY"
+
+[[plan.variables]]
+name = "REVIEW_HAS_ISSUES"
+
+[[plan.variables]]
+name = "SCOPE"
+
+[[plan.steps]]
+id = 1
+title = "Branch Check"
+tool = "bash"
+prompt = """
+Verify not on protected branch. Must be on feature branch.
+
+```bash
+default_branch=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$default_branch" ]; then default_branch="main"; fi
+branch=$(git branch --show-current)
+if [ "$branch" = "$default_branch" ] || [ "$branch" = "dev" ]; then
+  echo "ERROR: Cannot commit directly to $branch. Create a feature branch."
+  exit 1
+fi
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Run Formatters"
+tool = "bash"
+prompt = """
+```bash
+just fmt
+```"""
+
+[plan.steps.on_fail]
+retry = 2
+
+[[plan.steps]]
+id = 3
+title = "Run Linters"
+tool = "bash"
+prompt = """
+```bash
+just clippy
+```"""
+
+[plan.steps.on_fail]
+retry = 2
+
+[[plan.steps]]
+id = 4
+title = "Run Tests"
+tool = "bash"
+prompt = """
+```bash
+just test
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 5
+title = "Stage Changes"
+tool = "bash"
+prompt = """
+Stage all relevant files. Verify no untracked files remain.
+
+```bash
+git add ${FILES}
+if git ls-files --others --exclude-standard | grep -q .; then
+  echo "ERROR: Untracked files detected."
+  git ls-files --others --exclude-standard
+  exit 1
+fi
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Security Scan"
+tool = "bash"
+prompt = """
+Check staged files for hardcoded secrets, debug statements.
+
+```bash
+git diff --cached --name-only | while read -r file; do
+  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
+    echo "FAIL: Potential secret in $file"
+    exit 1
+  fi
+done
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 7
+title = "Security Audit"
+tool = "csa"
+prompt = ""
+tier = "tier-2-standard"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 8
+title = "Include security-audit"
+tool = "weave"
+prompt = "security-audit"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 9
+title = "Step 7a: Fix Audit Issues"
+prompt = "Fix blocking issues and re-run from Step 2."
+on_fail = "abort"
+condition = "${AUDIT_FAIL}"
+
+[[plan.steps]]
+id = 10
+title = "Step 7b: Record Deferred Issues"
+prompt = """
+Record deferred issues (other modules) via TaskCreate for
+immediate post-commit fixing."""
+on_fail = "abort"
+condition = "${AUDIT_PASS_DEFERRED}"
+
+[[plan.steps]]
+id = 11
+title = "Pre-Commit Review"
+tool = "csa"
+prompt = ""
+tier = "tier-2-standard"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 12
+title = "Include ai-reviewed-commit"
+tool = "weave"
+prompt = "ai-reviewed-commit"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 13
+title = "Fix Review Issues"
+tool = "csa"
+prompt = """
+Fix issues, re-run quality gates, re-review.
+
+```bash
+just pre-commit
+```"""
+tier = "tier-2-standard"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[plan.steps.on_fail]
+retry = 3
+
+[[plan.steps]]
+id = 14
+title = "Generate Commit Message"
+tool = "csa"
+prompt = """
+Delegate message generation to cheaper tool.
+
+```bash
+csa run "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}"
+```"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 15
+title = "Commit"
+tool = "bash"
+prompt = """
+```bash
+git commit -m "${COMMIT_MSG}"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 16
+title = "Auto PR"
+tool = "bash"
+prompt = """
+Push and create PR when feature complete, bug fixed, or refactor done.
+Steps 12-14 are ATOMIC — do not stop after PR creation.
+
+```bash
+git push -u origin "${BRANCH}"
+gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
+```"""
+on_fail = "abort"
+condition = "${IS_MILESTONE}"
+
+[[plan.steps]]
+id = 17
+title = "Invoke PR Codex Bot"
+prompt = ""
+on_fail = "abort"
+condition = "${IS_MILESTONE}"
+
+[[plan.steps]]
+id = 18
+title = "Include pr-codex-bot"
+tool = "weave"
+prompt = "pr-codex-bot"
+on_fail = "abort"
+condition = "${IS_MILESTONE}"
+
+[[plan.steps]]
+id = 19
+title = "Fix Deferred Issues"
+prompt = """
+Fix deferred issues by priority (Critical > High > Medium).
+Each fix goes through full commit workflow (Steps 1-11)."""
+on_fail = "abort"
+condition = "${HAS_DEFERRED_ISSUES}"

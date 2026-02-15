@@ -1,0 +1,108 @@
+[plan]
+name = "mktd"
+description = "Make TODO: CSA-powered reconnaissance, adversarial debate, and structured TODO plan generation"
+
+[[plan.variables]]
+name = "CWD"
+
+[[plan.variables]]
+name = "FEATURE"
+
+[[plan.steps]]
+id = 1
+title = "Phase 1 — RECON Dimension 1 (Structure)"
+tool = "csa"
+prompt = """
+Explore codebase structure relevant to the feature.
+Main agent MUST NOT use Read/Glob/Grep/Bash for exploration in Phase 1.
+
+```bash
+csa run "Analyze codebase structure relevant to ${FEATURE}.
+Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
+Working directory: ${CWD}"
+```"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Phase 1 — RECON Dimension 2 (Patterns)"
+tool = "csa"
+prompt = """
+Find existing patterns similar to the feature.
+
+```bash
+csa run "Find existing patterns or similar features to ${FEATURE} in this codebase.
+Report: file paths with approach, reusable components, conventions to follow.
+Working directory: ${CWD}"
+```"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Phase 1 — RECON Dimension 3 (Constraints)"
+tool = "csa"
+prompt = """
+Identify constraints and risks.
+
+```bash
+csa run "Identify constraints and risks for implementing ${FEATURE}.
+Report: potential breaking changes, security considerations, performance, compatibility.
+Working directory: ${CWD}"
+```"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 4
+title = "Phase 2 — DRAFT TODO"
+prompt = """
+Synthesize CSA findings into a structured TODO plan.
+Each item is a [ ] checkbox with executor tag.
+Descriptions in user's preferred language.
+Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool]."""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 5
+title = "Phase 3 — Adversarial Debate"
+tool = "csa"
+prompt = ""
+tier = "tier-2-standard"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Include debate"
+tool = "weave"
+prompt = "debate"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 7
+title = "Revise TODO"
+prompt = """
+Incorporate debate feedback. Update plan based on valid criticisms.
+Concede valid points, defend sound decisions with evidence."""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 8
+title = "Save TODO"
+tool = "bash"
+prompt = """
+Save finalized TODO using csa todo for git-tracked lifecycle.
+
+```bash
+csa todo save --branch "$(git branch --show-current)" artifacts/TODO.md
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 9
+title = "Phase 4 — User Approval"
+prompt = """
+Present TODO to user for review.
+User chooses: APPROVE → proceed to mktsk, MODIFY → revise, REJECT → abandon."""
+on_fail = "abort"

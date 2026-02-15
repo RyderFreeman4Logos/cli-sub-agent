@@ -1,0 +1,127 @@
+[plan]
+name = "file-audit"
+description = "Per-file AGENTS.md compliance audit with Chinese reports and tech blog"
+
+[[plan.variables]]
+name = "AUDIT_SCOPE"
+
+[[plan.variables]]
+name = "FILE_PATH"
+
+[[plan.variables]]
+name = "HAS_VIOLATIONS"
+
+[[plan.variables]]
+name = "PROJECT_ROOT"
+
+[[plan.variables]]
+name = "RELATIVE_PATH"
+
+[[plan.variables]]
+name = "TARGET_FILES"
+
+[[plan.steps]]
+id = 1
+title = "Discover AGENTS.md Chain"
+tool = "bash"
+prompt = """
+Discover all AGENTS.md files from repository root to source directories.
+Build the rule chain (root -> leaf, deepest wins on conflict).
+
+```bash
+find "${PROJECT_ROOT}" -name "AGENTS.md" -not -path "*/node_modules/*" -not -path "*/target/*" | sort
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Collect Target Files"
+tool = "bash"
+prompt = """
+List the source files to audit. Focus on ${AUDIT_SCOPE} (e.g., a specific
+crate or directory). Output one file path per line.
+
+```bash
+find "${AUDIT_SCOPE}" -name "*.rs" -not -name "*test*" | sort
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Prepare Output Directory"
+tool = "bash"
+prompt = """
+Create the mirrored directory structure under `./drafts/audit/` for each
+target file. The mirror preserves the relative path from project root.
+
+```bash
+mkdir -p "./drafts/audit/$(dirname "${RELATIVE_PATH}")"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 4
+title = "Audit Single File"
+tool = "csa"
+prompt = """
+Read the file at ${FILE_PATH} and audit it against the AGENTS.md rules.
+Check each applicable rule and record pass/fail with evidence.
+
+You MUST output a Chinese Markdown report with this structure:
+
+1. File header (path, line count, crate)
+2. Applicable AGENTS.md rules checklist (checkbox format)
+3. Findings (violations with line numbers and evidence)
+4. Summary verdict (PASS / PASS_WITH_NOTES / FAIL)
+
+Example checkbox format:
+- [x] Rust-002 error-handling: no unwrap/expect in library code
+- [ ] Rust-004 modules: default pub(crate) -> VIOLATION at line 42"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[plan.steps.loop_var]
+variable = "file"
+collection = "${TARGET_FILES}"
+
+[[plan.steps]]
+id = 5
+title = "Write Audit Report"
+tool = "bash"
+prompt = """
+Write the audit report to `./drafts/audit/${RELATIVE_PATH}.audit.md`.
+The report is in Chinese with AGENTS.md compliance checkboxes."""
+on_fail = "abort"
+
+[plan.steps.loop_var]
+variable = "file"
+collection = "${TARGET_FILES}"
+
+[[plan.steps]]
+id = 6
+title = "Generate Violation Summary"
+tool = "csa"
+prompt = """
+Aggregate all per-file violations into a single summary table.
+Group by rule ID, count occurrences, list affected files.
+Output in Chinese Markdown."""
+tier = "tier-1-quick"
+on_fail = "abort"
+condition = "${HAS_VIOLATIONS}"
+
+[[plan.steps]]
+id = 7
+title = "Write Tech Blog"
+tool = "csa"
+prompt = """
+Write a Chinese tech blog post summarizing the audit process and findings.
+Save to `./drafts/audit/blog.zh.md`.
+
+The blog should cover:
+1. Why per-file AGENTS.md compliance matters
+2. The audit methodology (rule chain discovery, per-file checking)
+3. Key findings and patterns
+4. Lessons learned about maintaining coding standards with AI agents
+5. How skill-lang patterns enable reproducible audit workflows"""
+tier = "tier-1-quick"
+on_fail = "abort"

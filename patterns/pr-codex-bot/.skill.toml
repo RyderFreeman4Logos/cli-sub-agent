@@ -1,0 +1,8 @@
+[skill]
+name = "pr-codex-bot"
+version = "0.1.0"
+
+[agent]
+tier = "tier-3-complex"
+max_turns = 40
+tools = [{ tool = "auto" }]

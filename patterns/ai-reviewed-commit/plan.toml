@@ -1,0 +1,141 @@
+[plan]
+name = "ai-reviewed-commit"
+description = "Pre-commit code review loop: stage → size check → csa review → fix → re-review → commit"
+
+[[plan.variables]]
+name = "COMMIT_MSG"
+
+[[plan.variables]]
+name = "FILES"
+
+[[plan.variables]]
+name = "FIXED_FILES"
+
+[[plan.variables]]
+name = "REVIEW_HAS_ISSUES"
+
+[[plan.variables]]
+name = "SELF_AUTHORED"
+
+[[plan.steps]]
+id = 1
+title = "Stage Changes"
+tool = "bash"
+prompt = """
+```bash
+git add ${FILES}
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Size Check"
+tool = "bash"
+prompt = """
+Check staged diff size. If >= 500 lines, consider splitting.
+
+```bash
+git diff --stat --staged
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Authorship-Aware Review Strategy"
+prompt = """
+Determine who authored the staged code:
+- Self-authored (generated in this session) → use csa debate
+- Other tool/human authored → use csa review --diff"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 4
+title = "Step 4a: Run Debate Review"
+tool = "bash"
+prompt = """
+```bash
+csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch."
+```"""
+on_fail = "abort"
+condition = "${SELF_AUTHORED}"
+
+[[plan.steps]]
+id = 5
+title = "Step 4b: Run CSA Review"
+tool = "bash"
+prompt = """
+```bash
+csa review --diff
+```"""
+on_fail = "abort"
+condition = "!(${SELF_AUTHORED})"
+
+[[plan.steps]]
+id = 6
+title = "Dispatch Fix Sub-Agent"
+tool = "claude-code"
+prompt = """
+Dispatch sub-agent to fix issues found in review.
+Preserve original code intent. Do NOT delete code to silence warnings."""
+tier = "tier-2-standard"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[plan.steps.on_fail]
+retry = 3
+
+[[plan.steps]]
+id = 7
+title = "Re-stage Fixed Files"
+tool = "bash"
+prompt = """
+```bash
+git add ${FIXED_FILES}
+```"""
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[[plan.steps]]
+id = 8
+title = "Re-review"
+tool = "bash"
+prompt = """
+Loop back to review. Maximum 3 review-fix cycles.
+
+```bash
+csa review --diff
+```"""
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[[plan.steps]]
+id = 9
+title = "AGENTS.md Compliance Check"
+prompt = """
+The review MUST include AGENTS.md compliance checklist:
+- Discover AGENTS.md chain (root-to-leaf) for each staged file
+- Check every applicable rule
+- Zero unchecked items before proceeding to commit"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 10
+title = "Generate Commit Message"
+tool = "csa"
+prompt = """
+Delegate commit message generation to cheaper tool.
+
+```bash
+csa run "Run 'git diff --staged' and generate a Conventional Commits message"
+```"""
+tier = "tier-1-quick"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 11
+title = "Commit"
+tool = "bash"
+prompt = """
+```bash
+git commit -m "${COMMIT_MSG}"
+```"""
+on_fail = "abort"

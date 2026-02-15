@@ -1,0 +1,8 @@
+[skill]
+name = "csa-issue-reporter"
+version = "0.1.0"
+
+[agent]
+tier = "tier-1-quick"
+max_turns = 10
+tools = [{ tool = "auto" }]
