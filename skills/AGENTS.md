@@ -1,8 +1,10 @@
 # Skills & Patterns
 
-> Global persona skills and compiled workflow patterns for this repository.
+> Global persona skills, compatibility workflow shims, and compiled workflow patterns.
 
-Note: Workflow skills have been migrated to compiled patterns in `./patterns/`.
+Note: Workflow logic is defined in `./patterns/`. `skills/csa-review` and
+`skills/debate` are kept as compatibility shims so `csa skill install` still
+installs the workflow entrypoints required by `csa review` and `csa debate`.
 
 ## Global Persona Skills (6)
 
@@ -14,6 +16,13 @@ Note: Workflow skills have been migrated to compiled patterns in `./patterns/`.
 | `csa-rust-dev` | Comprehensive Rust development guidance for architecture, implementation, and standards. |
 | `csa-security` | Adversarial security analysis to identify vulnerabilities before release. |
 | `csa-test-gen` | Core-first test design and TDD guidance following the test pyramid. |
+
+## Compatibility Workflow Skills (2)
+
+| Skill | Description |
+|---|---|
+| `csa-review` | Compatibility shim for review command scaffolding; delegates behavior to workflow protocol. |
+| `debate` | Compatibility shim for debate command scaffolding and continuation protocol. |
 
 ## Compiled Patterns (13)
 
