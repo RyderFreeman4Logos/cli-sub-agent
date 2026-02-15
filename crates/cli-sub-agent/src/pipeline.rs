@@ -369,8 +369,22 @@ pub(crate) async fn execute_with_session_and_meta(
     };
 
     // Create session log writer
-    let (_log_writer, _log_guard) =
-        create_session_log_writer(&session_dir).context("Failed to create session log writer")?;
+    let (_log_writer, _log_guard) = match create_session_log_writer(&session_dir) {
+        Ok(pair) => pair,
+        Err(e) => {
+            let err = anyhow::anyhow!(e).context("Failed to create session log writer");
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &err,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(err);
+        }
+    };
 
     // Acquire lock with truncated prompt as reason
     let lock_reason = truncate_prompt(prompt, 80);
