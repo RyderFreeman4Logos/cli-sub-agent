@@ -87,7 +87,10 @@ Tool: bash
 Save finalized TODO using csa todo for git-tracked lifecycle.
 
 ```bash
-csa todo save --branch "$(git branch --show-current)" artifacts/TODO.md
+TODO_TS=$(csa todo create --branch "$(git branch --show-current)" "${FEATURE}")
+TODO_PATH=$(csa todo show -t "${TODO_TS}" --path)
+printf '%s\n' "${FINALIZED_TODO_CONTENT}" > "${TODO_PATH}"
+csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 ```
 
 ## Step 8: Phase 4 — User Approval
