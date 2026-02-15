@@ -610,12 +610,24 @@ idle_timeout_seconds = 300
     /// Check if a model name appears in any tier spec for the given tool.
     ///
     /// Model specs have format `tool/provider/model/thinking_budget`.
-    /// This extracts the 3rd component (model) and compares against `model_name`.
+    /// Supports two model name formats:
+    /// - Bare model: `gemini-2.5-pro` → matches spec's 3rd component
+    /// - Provider/model: `google/gemini-2.5-pro` → matches spec's 2nd+3rd components
     pub fn is_model_name_in_tiers_for_tool(&self, tool: &str, model_name: &str) -> bool {
+        let name_parts: Vec<&str> = model_name.splitn(2, '/').collect();
         self.tiers.values().any(|tier| {
             tier.models.iter().any(|spec| {
                 let parts: Vec<&str> = spec.splitn(4, '/').collect();
-                parts.len() >= 3 && parts[0] == tool && parts[2] == model_name
+                if parts.len() < 3 || parts[0] != tool {
+                    return false;
+                }
+                if name_parts.len() == 2 {
+                    // Provider/model format: match provider + model components
+                    parts[1] == name_parts[0] && parts[2] == name_parts[1]
+                } else {
+                    // Bare model name: match model component only
+                    parts[2] == model_name
+                }
             })
         })
     }
@@ -634,17 +646,26 @@ idle_timeout_seconds = 300
         let Some(name) = model_name else {
             return Ok(());
         };
-        // If the "model name" is actually a full model spec (contains '/'),
+        // If the "model name" is actually a full model spec (4-part: tool/provider/model/budget),
         // delegate to the spec-level check instead. This handles aliases that
         // resolve to full specs like "codex/openai/gpt-5.3-codex/high".
-        if name.contains('/') {
+        // Only match exactly 4 parts — provider/model formats like "google/gemini-2.5-pro"
+        // (2 parts) should fall through to the model-name check below.
+        if name.split('/').count() == 4 {
             return self.enforce_tier_whitelist(tool, Some(name));
         }
         if !self.is_model_name_in_tiers_for_tool(tool, name) {
             let allowed_specs = self.allowed_model_specs_for_tool(tool);
-            let allowed_models: Vec<&str> = allowed_specs
+            let allowed_models: Vec<String> = allowed_specs
                 .iter()
-                .filter_map(|spec| spec.split('/').nth(2))
+                .filter_map(|spec| {
+                    let parts: Vec<&str> = spec.splitn(4, '/').collect();
+                    if parts.len() >= 3 {
+                        Some(format!("{} (or {}/{})", parts[2], parts[1], parts[2]))
+                    } else {
+                        None
+                    }
+                })
                 .collect();
             anyhow::bail!(
                 "Model '{}' for tool '{}' is not configured in any tier. \

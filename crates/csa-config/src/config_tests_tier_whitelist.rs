@@ -217,3 +217,56 @@ fn enforce_tier_model_name_cross_tool_full_spec_rejected() {
         .unwrap_err();
     assert!(err.to_string().contains("belongs to tool"));
 }
+
+#[test]
+fn is_model_name_in_tiers_for_tool_provider_model_format() {
+    let cfg = config_with_tiers(&["opencode/google/gemini-2.5-pro/medium"]);
+    // Provider/model format should match
+    assert!(cfg.is_model_name_in_tiers_for_tool("opencode", "google/gemini-2.5-pro"));
+    // Wrong provider should not match
+    assert!(!cfg.is_model_name_in_tiers_for_tool("opencode", "anthropic/gemini-2.5-pro"));
+    // Wrong tool should not match
+    assert!(!cfg.is_model_name_in_tiers_for_tool("codex", "google/gemini-2.5-pro"));
+    // Bare model name should still match
+    assert!(cfg.is_model_name_in_tiers_for_tool("opencode", "gemini-2.5-pro"));
+}
+
+#[test]
+fn enforce_tier_model_name_provider_model_format_ok() {
+    let cfg = config_with_tiers(&["opencode/google/gemini-2.5-pro/medium"]);
+    assert!(
+        cfg.enforce_tier_model_name("opencode", Some("google/gemini-2.5-pro"))
+            .is_ok()
+    );
+}
+
+#[test]
+fn enforce_tier_model_name_provider_model_format_wrong_provider_rejected() {
+    let cfg = config_with_tiers(&["opencode/google/gemini-2.5-pro/medium"]);
+    let err = cfg
+        .enforce_tier_model_name("opencode", Some("anthropic/gemini-2.5-pro"))
+        .unwrap_err();
+    assert!(err.to_string().contains("not configured in any tier"));
+}
+
+#[test]
+fn enforce_tier_model_name_two_part_not_treated_as_full_spec() {
+    // provider/model format (2 parts) should NOT be delegated to spec-level check
+    let cfg = config_with_tiers(&["opencode/google/gemini-2.5-pro/medium"]);
+    // This should pass via model-name matching, not fail as a "spec with wrong tool"
+    assert!(
+        cfg.enforce_tier_model_name("opencode", Some("google/gemini-2.5-pro"))
+            .is_ok()
+    );
+}
+
+#[test]
+fn enforce_tier_model_name_three_part_rejected_as_model_name() {
+    // 3-part value like "provider/model/extra" is not a valid 4-part spec,
+    // so it falls through to model-name check and gets rejected.
+    let cfg = config_with_tiers(&["codex/openai/gpt-5.3-codex/high"]);
+    let err = cfg
+        .enforce_tier_model_name("codex", Some("openai/gpt-5.3-codex/high"))
+        .unwrap_err();
+    assert!(err.to_string().contains("not configured in any tier"));
+}
