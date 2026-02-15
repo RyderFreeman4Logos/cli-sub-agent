@@ -1,11 +1,12 @@
 use anyhow::Result;
 use std::fs;
+use std::path::Path;
 use tracing::info;
 
 use csa_core::types::OutputFormat;
 use csa_session::{
-    delete_session, get_session_dir, list_artifacts, list_sessions, list_sessions_tree,
-    load_result, load_session, resolve_session_prefix,
+    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_artifacts,
+    list_sessions, list_sessions_tree, load_result, load_session, resolve_session_prefix,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
@@ -25,6 +26,52 @@ fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
         .unwrap_or(input.len());
 
     format!("{}...", &input[..end])
+}
+
+fn phase_label(phase: &SessionPhase) -> &'static str {
+    match phase {
+        SessionPhase::Active => "Active",
+        SessionPhase::Available => "Available",
+        SessionPhase::Retired => "Retired",
+    }
+}
+
+fn status_from_phase_and_result(
+    phase: &SessionPhase,
+    result: Option<&SessionResult>,
+) -> &'static str {
+    // Retired is terminal lifecycle state and takes precedence over execution result.
+    if matches!(phase, SessionPhase::Retired) {
+        return "Retired";
+    }
+
+    let Some(result) = result else {
+        return phase_label(phase);
+    };
+
+    let normalized_status = result.status.trim().to_ascii_lowercase();
+    match normalized_status.as_str() {
+        "success" if result.exit_code == 0 => phase_label(phase),
+        "success" => "Failed",
+        "failure" | "timeout" | "signal" => "Failed",
+        "error" => "Error",
+        _ if result.exit_code != 0 => "Failed",
+        _ => "Error",
+    }
+}
+
+fn resolve_session_status(project_root: &Path, session: &MetaSessionState) -> String {
+    match load_result(project_root, &session.meta_session_id) {
+        Ok(result) => status_from_phase_and_result(&session.phase, result.as_ref()).to_string(),
+        Err(err) => {
+            tracing::warn!(
+                session_id = %session.meta_session_id,
+                error = %err,
+                "Failed to load result.toml while listing sessions"
+            );
+            "Error".to_string()
+        }
+    }
 }
 
 pub(crate) fn handle_session_list(
@@ -64,6 +111,7 @@ pub(crate) fn handle_session_list(
                             "last_accessed": s.last_accessed,
                             "description": s.description.as_deref().unwrap_or(""),
                             "tools": s.tools.keys().collect::<Vec<_>>(),
+                            "status": resolve_session_status(&project_root, s),
                             "phase": format!("{:?}", s.phase),
                             "total_token_usage": s.total_token_usage,
                         })
@@ -75,14 +123,14 @@ pub(crate) fn handle_session_list(
                 // Print table header
                 println!(
                     "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  TOKENS",
-                    "SESSION", "LAST ACCESSED", "PHASE", "DESCRIPTION", "TOOLS"
+                    "SESSION", "LAST ACCESSED", "STATUS", "DESCRIPTION", "TOOLS"
                 );
                 println!("{}", "-".repeat(110));
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
                     let short_id =
                         &session.meta_session_id[..11.min(session.meta_session_id.len())];
-                    let phase_str = format!("{:?}", session.phase);
+                    let status_str = resolve_session_status(&project_root, &session);
                     let desc = session
                         .description
                         .as_deref()
@@ -129,7 +177,7 @@ pub(crate) fn handle_session_list(
                         "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {}",
                         short_id,
                         session.last_accessed.format("%Y-%m-%d %H:%M"),
-                        phase_str,
+                        status_str,
                         desc_display,
                         tools_str,
                         tokens_str,
@@ -393,7 +441,9 @@ pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::truncate_with_ellipsis;
+    use super::{status_from_phase_and_result, truncate_with_ellipsis};
+    use chrono::Utc;
+    use csa_session::{SessionPhase, SessionResult};
 
     #[test]
     fn truncate_with_ellipsis_preserves_ascii_short_input() {
@@ -412,5 +462,68 @@ mod tests {
     fn truncate_with_ellipsis_handles_emoji_without_panic() {
         let input = "session 😀😃😄😁 description";
         assert_eq!(truncate_with_ellipsis(input, 12), "session 😀...");
+    }
+
+    fn make_result(status: &str, exit_code: i32) -> SessionResult {
+        let now = Utc::now();
+        SessionResult {
+            status: status.to_string(),
+            exit_code,
+            summary: "summary".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            artifacts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn session_status_uses_phase_when_no_result() {
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Active, None),
+            "Active"
+        );
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Available, None),
+            "Available"
+        );
+    }
+
+    #[test]
+    fn session_status_marks_non_zero_as_failed() {
+        let failure = make_result("failure", 1);
+        let signal = make_result("signal", 137);
+        let inconsistent_success = make_result("success", 2);
+
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Active, Some(&failure)),
+            "Failed"
+        );
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Active, Some(&signal)),
+            "Failed"
+        );
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Active, Some(&inconsistent_success)),
+            "Failed"
+        );
+    }
+
+    #[test]
+    fn session_status_marks_unknown_result_as_error() {
+        let unknown = make_result("mystery", 0);
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Active, Some(&unknown)),
+            "Error"
+        );
+    }
+
+    #[test]
+    fn retired_phase_takes_precedence_over_failure_result() {
+        let failure = make_result("failure", 1);
+        assert_eq!(
+            status_from_phase_and_result(&SessionPhase::Retired, Some(&failure)),
+            "Retired"
+        );
     }
 }
