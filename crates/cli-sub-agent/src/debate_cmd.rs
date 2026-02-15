@@ -117,6 +117,24 @@ fn resolve_debate_tool(
         });
     }
 
+    // When global [debate].tool is "auto", try priority-aware selection first
+    if global_config.debate.tool == "auto" {
+        let has_known_priority =
+            csa_config::global::effective_tool_priority(project_config, global_config)
+                .iter()
+                .any(|entry| {
+                    csa_config::global::all_known_tools()
+                        .iter()
+                        .any(|tool| tool.as_str() == entry)
+                });
+        if has_known_priority {
+            if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config)
+            {
+                return Ok(tool);
+            }
+        }
+    }
+
     // Global config [debate] section
     match global_config.resolve_debate_tool(parent_tool) {
         Ok(tool_name) => crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
