@@ -2,30 +2,28 @@
 
 /// Hook events that trigger hook execution.
 ///
-/// Currently wired trigger points:
-/// - `PostRun` — fired after every tool execution in `pipeline::execute_with_session`
-/// - `SessionComplete` — fired after session save in `pipeline::execute_with_session`
-///
-/// Future trigger points (defined but not yet wired):
-/// - `PreRun` — will be wired before tool spawn in pipeline
-/// - `TodoCreate` — will be wired in `csa-todo` crate on plan creation
-/// - `TodoSave` — will be wired in `csa-todo` crate on plan save/update
+/// All trigger points are wired:
+/// - `PreRun` — fired before tool spawn in `pipeline::execute_with_session_and_meta`
+/// - `PostRun` — fired after every tool execution in `pipeline::execute_with_session_and_meta`
+/// - `SessionComplete` — fired after session save in `pipeline::execute_with_session_and_meta`
+/// - `TodoCreate` — fired after plan creation + git commit in `todo_cmd::handle_create`
+/// - `TodoSave` — fired after plan save + git commit in `todo_cmd::handle_save`
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
     /// After a session execution completes (success or failure).
     /// Triggered in `pipeline::execute_with_session` after session save.
     SessionComplete,
     /// After a new TODO plan is created.
-    /// Not yet wired — will integrate with `csa-todo` crate.
+    /// Triggered in `todo_cmd::handle_create` after git commit.
     TodoCreate,
     /// After a TODO plan is saved/updated.
-    /// Not yet wired — will integrate with `csa-todo` crate.
+    /// Triggered in `todo_cmd::handle_save` after git commit.
     TodoSave,
     /// Before a tool execution starts.
-    /// Not yet wired — will integrate with pipeline pre-spawn.
+    /// Triggered in `pipeline::execute_with_session_and_meta` before `execute_with_transport`.
     PreRun,
     /// After a tool execution finishes.
-    /// Triggered in `pipeline::execute_with_session` after session save.
+    /// Triggered in `pipeline::execute_with_session_and_meta` after session save.
     PostRun,
 }
 

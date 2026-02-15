@@ -23,6 +23,7 @@ use csa_session::{
 };
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
+use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 300;
 
@@ -33,67 +34,6 @@ pub(crate) fn resolve_idle_timeout_seconds(
     cli_override
         .or_else(|| config.map(|cfg| cfg.resources.idle_timeout_seconds))
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECONDS)
-}
-
-/// RAII guard that cleans up a newly created session directory on failure.
-///
-/// When `execute_with_session` creates a new session but the tool fails to spawn
-/// (or any pre-execution step errors out), the session directory would remain on
-/// disk as an orphan. This guard deletes it automatically on drop unless
-/// `defuse()` is called after successful tool execution. Once the tool has
-/// produced output, the session directory is preserved even if later persistence
-/// steps (save_session, hooks) fail.
-///
-/// ## Cleanup flow in `execute_with_session_and_meta`
-///
-/// The guard is armed for new sessions only (not resumed ones). The following
-/// pre-execution failure paths each write a `result.toml` via
-/// [`write_pre_exec_error_result`] then **defuse** the guard so the session
-/// directory is preserved with a failure record:
-///
-/// 1. `create_session_log_writer` fails
-/// 2. `acquire_lock` fails
-/// 3. `ResourceGuard::check_availability` fails
-/// 4. `executor.execute_with_transport` fails (spawn error)
-///
-/// If none of these fail, the guard is defused after successful tool execution
-/// (line after `execute_with_transport` returns `Ok`). Later failures (e.g.,
-/// `save_session`, hooks) do NOT re-arm the guard — the session directory is
-/// preserved because it contains execution output worth keeping.
-///
-/// If the guard is **not** defused (e.g., a future pre-execution step is added
-/// without a corresponding `write_pre_exec_error_result` + `defuse()`), the
-/// `Drop` impl will remove the orphan directory entirely.
-struct SessionCleanupGuard {
-    session_dir: PathBuf,
-    defused: bool,
-}
-
-impl SessionCleanupGuard {
-    fn new(session_dir: PathBuf) -> Self {
-        Self {
-            session_dir,
-            defused: false,
-        }
-    }
-
-    fn defuse(&mut self) {
-        self.defused = true;
-    }
-}
-
-impl Drop for SessionCleanupGuard {
-    fn drop(&mut self) {
-        if !self.defused {
-            info!(
-                dir = %self.session_dir.display(),
-                "Cleaning up orphan session directory"
-            );
-            if let Err(e) = fs::remove_dir_all(&self.session_dir) {
-                warn!("Failed to clean up orphan session: {}", e);
-            }
-        }
-    }
 }
 
 /// Load ProjectConfig and GlobalConfig, validate recursion depth.
@@ -229,32 +169,6 @@ pub(crate) fn acquire_slot(
             executor.tool_name(),
             e
         ),
-    }
-}
-
-/// Write an error result.toml for pre-execution failures.
-///
-/// Called when the session directory exists but the tool never executed
-/// (e.g., spawn failure, resource exhaustion). Preserves the session directory
-/// so downstream tools can see the failure instead of an orphan with no result.
-fn write_pre_exec_error_result(
-    project_root: &Path,
-    session_id: &str,
-    tool_name: &str,
-    error: &anyhow::Error,
-) {
-    let now = chrono::Utc::now();
-    let result = SessionResult {
-        status: "failure".to_string(),
-        exit_code: 1,
-        summary: format!("pre-exec: {error}"),
-        tool: tool_name.to_string(),
-        started_at: now,
-        completed_at: now,
-        artifacts: Vec::new(),
-    };
-    if let Err(e) = save_result(project_root, session_id, &result) {
-        warn!("Failed to save pre-execution error result: {}", e);
     }
 }
 
@@ -575,6 +489,25 @@ pub(crate) async fn execute_with_session_and_meta(
         Some(&merged_env)
     };
 
+    // Load hooks config once, reused by PreRun, PostRun, and SessionComplete hooks.
+    let hooks_config = load_hooks_config(
+        csa_session::get_session_root(project_root)
+            .ok()
+            .map(|r| r.join("hooks.toml"))
+            .as_deref(),
+        global_hooks_path().as_deref(),
+        None,
+    );
+    // PreRun hook: fires before tool execution starts (best-effort).
+    let pre_run_vars = std::collections::HashMap::from([
+        ("session_id".to_string(), session.meta_session_id.clone()),
+        ("session_dir".to_string(), session_dir.display().to_string()),
+        ("tool".to_string(), executor.tool_name().to_string()),
+    ]);
+    if let Err(e) = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &pre_run_vars) {
+        warn!("PreRun hook failed: {}", e);
+    }
+
     // Execute via transport abstraction.
     // TODO(signal): Restore SIGINT/SIGTERM forwarding to child process groups.
     // Phase C moved signal handling responsibility to the Transport layer, but
@@ -742,29 +675,19 @@ pub(crate) async fn execute_with_session_and_meta(
     // Save session
     save_session(&session)?;
 
-    // Fire PostRun and SessionComplete hooks (best-effort)
-    let project_hooks_path = csa_session::get_session_root(project_root)
-        .ok()
-        .map(|root| root.join("hooks.toml"));
-    let hooks_config = load_hooks_config(
-        project_hooks_path.as_deref(),
-        global_hooks_path().as_deref(),
-        None,
-    );
-    let mut hook_vars = std::collections::HashMap::new();
-    hook_vars.insert("session_id".to_string(), session.meta_session_id.clone());
-    hook_vars.insert("session_dir".to_string(), session_dir.display().to_string());
-    hook_vars.insert(
-        "sessions_root".to_string(),
-        session_dir
-            .parent()
-            .unwrap_or(&session_dir)
-            .display()
-            .to_string(),
-    );
-    hook_vars.insert("tool".to_string(), executor.tool_name().to_string());
-    hook_vars.insert("exit_code".to_string(), result.exit_code.to_string());
-
+    // Fire PostRun and SessionComplete hooks (best-effort, reusing hooks_config from PreRun)
+    let sessions_root = session_dir
+        .parent()
+        .unwrap_or(&session_dir)
+        .display()
+        .to_string();
+    let hook_vars = std::collections::HashMap::from([
+        ("session_id".to_string(), session.meta_session_id.clone()),
+        ("session_dir".to_string(), session_dir.display().to_string()),
+        ("sessions_root".to_string(), sessions_root),
+        ("tool".to_string(), executor.tool_name().to_string()),
+        ("exit_code".to_string(), result.exit_code.to_string()),
+    ]);
     // PostRun hook: fires after every tool execution
     if let Err(e) = run_hooks_for_event(HookEvent::PostRun, &hooks_config, &hook_vars) {
         warn!("PostRun hook failed: {}", e);
