@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
-use weave::compiler::{compile, plan_to_toml};
+use weave::compiler::{compile, plan_from_toml, plan_to_toml};
 use weave::package;
 use weave::parser::parse_skill;
+use weave::visualize;
 
 /// Weave — skill language compiler and package manager.
 #[derive(Parser)]
@@ -58,6 +59,20 @@ enum Commands {
 
     /// Audit installed skills for issues.
     Audit,
+
+    /// Visualize a compiled plan.toml as ASCII (default), Mermaid, or PNG.
+    Visualize {
+        /// Input plan.toml file path.
+        plan: PathBuf,
+
+        /// Write PNG output to file.
+        #[arg(long, value_name = "FILE", conflicts_with = "mermaid")]
+        png: Option<PathBuf>,
+
+        /// Print Mermaid flowchart to stdout.
+        #[arg(long, conflicts_with = "png")]
+        mermaid: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -136,6 +151,21 @@ fn main() -> Result<()> {
                     }
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Visualize { plan, png, mermaid } => {
+            let content = std::fs::read_to_string(&plan)
+                .with_context(|| format!("failed to read {}", plan.display()))?;
+            let execution_plan = plan_from_toml(&content)
+                .with_context(|| format!("failed to parse {}", plan.display()))?;
+
+            if mermaid {
+                print!("{}", visualize::render_mermaid(&execution_plan));
+            } else if let Some(output) = png {
+                visualize::render_png(&execution_plan, &output)?;
+                eprintln!("wrote {}", output.display());
+            } else {
+                print!("{}", visualize::render_ascii(&execution_plan));
             }
         }
     }
