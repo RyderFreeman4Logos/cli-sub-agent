@@ -399,6 +399,28 @@ fn install_from_local_rejects_self_overwrite() {
     assert!(dest.join("SKILL.md").is_file());
 }
 
+#[test]
+fn install_from_local_rejects_overlap_when_dest_not_exists() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Source is inside project but dest (.weave/deps/project) does NOT exist yet.
+    // This must still be caught: source contains the would-be destination.
+    let skill_src = tmp.path().join("new-skill");
+    std::fs::create_dir_all(&skill_src).unwrap();
+    std::fs::write(skill_src.join("SKILL.md"), "# New Skill").unwrap();
+
+    // Name the skill the same as its own dest to force overlap when dest
+    // doesn't exist yet — craft source as .weave/deps/new-skill inside a
+    // fresh project where .weave/deps doesn't exist.
+    let nested_project = skill_src.clone(); // project root == skill_src
+    let result = install_from_local(&skill_src, &nested_project);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("overlap"), "error: {err}");
+}
+
 // ---------------------------------------------------------------------------
 // SourceKind serialization tests
 // ---------------------------------------------------------------------------
