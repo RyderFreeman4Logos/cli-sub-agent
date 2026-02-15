@@ -198,3 +198,39 @@ fn resolve_idle_timeout_uses_config_then_default() {
         DEFAULT_IDLE_TIMEOUT_SECONDS
     );
 }
+
+/// Verify that `write_pre_exec_error_result` produces a result.toml with
+/// status = "failure" and a summary prefixed with "pre-exec:".
+#[test]
+fn pre_exec_error_writes_failure_result() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_root = tmp.path();
+
+    // Create a real session so the directory structure exists
+    let session = csa_session::create_session(project_root, Some("test"), None, Some("codex"))
+        .expect("session creation must succeed");
+
+    // Simulate a pre-execution failure (e.g., resource exhaustion)
+    let error = anyhow::anyhow!("tool binary not found in PATH");
+    write_pre_exec_error_result(project_root, &session.meta_session_id, "codex", &error);
+
+    // Load and verify
+    let loaded = csa_session::load_result(project_root, &session.meta_session_id)
+        .expect("load_result must not error")
+        .expect("result.toml must exist");
+
+    assert_eq!(loaded.status, "failure", "status must be failure");
+    assert_eq!(loaded.exit_code, 1, "exit_code must be 1");
+    assert!(
+        loaded.summary.starts_with("pre-exec:"),
+        "summary must start with 'pre-exec:', got: {}",
+        loaded.summary
+    );
+    assert!(
+        loaded.summary.contains("tool binary not found"),
+        "summary must contain the error message, got: {}",
+        loaded.summary
+    );
+    assert_eq!(loaded.tool, "codex");
+    assert!(loaded.artifacts.is_empty());
+}
