@@ -180,6 +180,28 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
     assert!(matches!(tool, ToolName::Opencode));
 }
 
+#[test]
+fn resolve_review_tool_ignores_unknown_priority_entries() {
+    let mut global = GlobalConfig::default();
+    global.preferences.tool_priority = vec!["codexx".to_string()];
+
+    let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
+    cfg.review = Some(csa_config::global::ReviewConfig {
+        tool: "auto".to_string(),
+    });
+    cfg.debate = None;
+
+    let tool = resolve_review_tool(
+        None,
+        Some(&cfg),
+        &global,
+        Some("codex"),
+        std::path::Path::new("/tmp/test-project"),
+    )
+    .unwrap();
+    assert!(matches!(tool, ToolName::ClaudeCode));
+}
+
 // --- derive_scope tests ---
 
 #[test]
