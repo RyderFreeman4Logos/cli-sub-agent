@@ -18,6 +18,9 @@ name = "CLEAN_BRANCH"
 name = "COMMENT_IS_FALSE_POSITIVE"
 
 [[plan.variables]]
+name = "FIXES_ACCUMULATED"
+
+[[plan.variables]]
 name = "LOCAL_REVIEW_HAS_ISSUES"
 
 [[plan.variables]]
@@ -204,7 +207,7 @@ git push -u origin "${CLEAN_BRANCH}"
 gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[plan.steps]]
 id = 15
@@ -218,4 +221,18 @@ gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
+
+[[plan.steps]]
+id = 16
+title = "Step 12b: Final Merge (Direct)"
+tool = "bash"
+prompt = """
+First-pass clean review: merge the existing PR directly.
+
+```bash
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+git checkout main && git pull origin main
+```"""
+on_fail = "abort"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED}))"
