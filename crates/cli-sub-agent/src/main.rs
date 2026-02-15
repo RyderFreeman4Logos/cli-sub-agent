@@ -19,6 +19,7 @@ mod run_cmd;
 mod run_helpers;
 mod self_update;
 mod session_cmds;
+mod session_guard;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_resolver;

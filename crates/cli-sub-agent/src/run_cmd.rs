@@ -149,6 +149,58 @@ pub(crate) async fn handle_run(
             config.as_ref(),
             &project_root,
         )?,
+        ToolSelectionStrategy::HeterogeneousPreferred => {
+            let detected_parent_tool = crate::run_helpers::detect_parent_tool();
+            let parent_tool_name = resolve_tool(detected_parent_tool, &global_config);
+
+            if let Some(parent_str) = parent_tool_name.as_deref() {
+                let parent_tool = parse_tool_name(parent_str)?;
+                let enabled_tools = if let Some(ref cfg) = config {
+                    csa_config::global::all_known_tools()
+                        .iter()
+                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .copied()
+                        .collect::<Vec<_>>()
+                } else {
+                    csa_config::global::all_known_tools().to_vec()
+                };
+
+                match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
+                    Some(tool) => resolve_tool_and_model(
+                        Some(tool),
+                        model_spec.as_deref(),
+                        model.as_deref(),
+                        config.as_ref(),
+                        &project_root,
+                    )?,
+                    None => {
+                        warn!(
+                            "No heterogeneous tool available (parent: {}, family: {}). Falling back to any available tool.",
+                            parent_tool.as_str(),
+                            parent_tool.model_family()
+                        );
+                        resolve_tool_and_model(
+                            None,
+                            model_spec.as_deref(),
+                            model.as_deref(),
+                            config.as_ref(),
+                            &project_root,
+                        )?
+                    }
+                }
+            } else {
+                warn!(
+                    "HeterogeneousPreferred requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
+                );
+                resolve_tool_and_model(
+                    None,
+                    model_spec.as_deref(),
+                    model.as_deref(),
+                    config.as_ref(),
+                    &project_root,
+                )?
+            }
+        }
         ToolSelectionStrategy::HeterogeneousStrict => {
             let detected_parent_tool = crate::run_helpers::detect_parent_tool();
             let parent_tool_name = resolve_tool(detected_parent_tool, &global_config);

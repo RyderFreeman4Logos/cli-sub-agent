@@ -244,6 +244,7 @@ impl Executor {
     }
 
     /// Execute and keep transport metadata (provider session ID, event stream).
+    #[tracing::instrument(skip_all, fields(tool = %self.tool_name()))]
     pub async fn execute_with_transport(
         &self,
         prompt: &str,

@@ -2,8 +2,10 @@ use crate::cli::TodoDagFormat;
 use anyhow::Result;
 use csa_config::global::GlobalConfig;
 use csa_core::types::OutputFormat;
+use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_todo::dag::DependencyGraph;
 use csa_todo::{TodoManager, TodoStatus};
+use tracing::warn;
 
 pub(crate) fn handle_create(
     title: String,
@@ -23,6 +25,28 @@ pub(crate) fn handle_create(
     let commit_msg = format!("create: {}", title);
     csa_todo::git::save(manager.todos_dir(), &plan.timestamp, &commit_msg)?
         .ok_or_else(|| anyhow::anyhow!("BUG: newly created plan had no changes to commit"))?;
+
+    // TodoCreate hook: fires after successful plan creation (best-effort)
+    {
+        let hooks_config = load_hooks_config(
+            csa_session::get_session_root(&project_root)
+                .ok()
+                .map(|r| r.join("hooks.toml"))
+                .as_deref(),
+            global_hooks_path().as_deref(),
+            None,
+        );
+        let mut hook_vars = std::collections::HashMap::new();
+        hook_vars.insert("plan_id".to_string(), plan.timestamp.clone());
+        hook_vars.insert("plan_dir".to_string(), plan.todo_dir.display().to_string());
+        hook_vars.insert(
+            "todo_root".to_string(),
+            manager.todos_dir().display().to_string(),
+        );
+        if let Err(e) = run_hooks_for_event(HookEvent::TodoCreate, &hooks_config, &hook_vars) {
+            warn!("TodoCreate hook failed: {}", e);
+        }
+    }
 
     match format {
         OutputFormat::Json => {
@@ -60,7 +84,37 @@ pub(crate) fn handle_save(
 
     let commit_msg = message.unwrap_or_else(|| format!("update: {}", plan.metadata.title));
     match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
-        Some(hash) => eprintln!("Saved {} ({})", ts, hash),
+        Some(hash) => {
+            eprintln!("Saved {} ({})", ts, hash);
+
+            // TodoSave hook: fires after successful save (best-effort)
+            let hooks_config = load_hooks_config(
+                csa_session::get_session_root(&project_root)
+                    .ok()
+                    .map(|r| r.join("hooks.toml"))
+                    .as_deref(),
+                global_hooks_path().as_deref(),
+                None,
+            );
+            let version = csa_todo::git::list_versions(manager.todos_dir(), &ts)
+                .map(|v| v.len())
+                .unwrap_or(1);
+            let mut hook_vars = std::collections::HashMap::new();
+            hook_vars.insert("plan_id".to_string(), ts.clone());
+            hook_vars.insert(
+                "plan_dir".to_string(),
+                manager.todos_dir().join(&ts).display().to_string(),
+            );
+            hook_vars.insert(
+                "todo_root".to_string(),
+                manager.todos_dir().display().to_string(),
+            );
+            hook_vars.insert("version".to_string(), version.to_string());
+            hook_vars.insert("message".to_string(), commit_msg);
+            if let Err(e) = run_hooks_for_event(HookEvent::TodoSave, &hooks_config, &hook_vars) {
+                warn!("TodoSave hook failed: {}", e);
+            }
+        }
         None => eprintln!("No changes to save for plan '{ts}'."),
     }
 
