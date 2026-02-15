@@ -114,14 +114,14 @@ RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
 csa run --tool claude-code --session "${SESSION_ID}" < "${RESUME_FILE}"
 ```"""
 on_fail = "abort"
-condition = "!(${USER_APPROVES})"
+condition = "(!(${USER_APPROVES})) && (${USER_MODIFIES})"
 
 [[plan.steps]]
 id = 8
 title = "Step 6b: Abandon Plan"
 prompt = "User rejected. Stop and ask for new direction."
 on_fail = "abort"
-condition = "!(${USER_APPROVES})"
+condition = "(!(${USER_APPROVES})) && (!(${USER_MODIFIES}))"
 
 [[plan.steps]]
 id = 9

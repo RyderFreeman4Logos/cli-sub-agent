@@ -166,6 +166,80 @@ Print debug info.
     assert_eq!(step.condition.as_deref(), Some("debug_mode"));
 }
 
+#[test]
+fn test_compile_nested_if_in_else_conjoins_parent_condition() {
+    let input = r#"---
+name = "nested-else-if"
+---
+## IF ${USER_APPROVES}
+## Apply Plan
+Proceed with implementation.
+## ELSE
+## IF ${USER_MODIFIES}
+## Resume with Feedback
+Resume with revised input.
+## ELSE
+## Abandon Plan
+Stop and ask for new direction.
+## ENDIF
+## ENDIF
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    assert_eq!(plan.steps.len(), 3);
+    assert_eq!(plan.steps[0].condition.as_deref(), Some("${USER_APPROVES}"));
+    assert_eq!(
+        plan.steps[1].condition.as_deref(),
+        Some("(!(${USER_APPROVES})) && (${USER_MODIFIES})")
+    );
+    assert_eq!(
+        plan.steps[2].condition.as_deref(),
+        Some("(!(${USER_APPROVES})) && (!(${USER_MODIFIES}))")
+    );
+}
+
+#[test]
+fn test_compile_if_inside_for_preserves_outer_gate() {
+    let input = r#"---
+name = "loop-conditional"
+---
+## IF !(${BOT_UNAVAILABLE})
+## FOR comment IN ${BOT_COMMENTS}
+## IF ${COMMENT_IS_FALSE_POSITIVE}
+## Arbitrate via Debate
+Run independent arbitration.
+## ELSE
+## Fix Real Issue
+Apply a real fix.
+## ENDIF
+## ENDFOR
+## ENDIF
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    assert_eq!(plan.steps.len(), 2);
+    assert_eq!(
+        plan.steps[0].condition.as_deref(),
+        Some("(!(${BOT_UNAVAILABLE})) && (${COMMENT_IS_FALSE_POSITIVE})")
+    );
+    assert_eq!(
+        plan.steps[1].condition.as_deref(),
+        Some("(!(${BOT_UNAVAILABLE})) && (!(${COMMENT_IS_FALSE_POSITIVE}))")
+    );
+    assert_eq!(plan.steps[0].loop_var.as_ref().unwrap().variable, "comment");
+    assert_eq!(
+        plan.steps[0].loop_var.as_ref().unwrap().collection,
+        "${BOT_COMMENTS}"
+    );
+    assert_eq!(plan.steps[1].loop_var.as_ref().unwrap().variable, "comment");
+    assert_eq!(
+        plan.steps[1].loop_var.as_ref().unwrap().collection,
+        "${BOT_COMMENTS}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // FOR → loop steps
 // ---------------------------------------------------------------------------

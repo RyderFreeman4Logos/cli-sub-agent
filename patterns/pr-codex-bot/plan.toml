@@ -127,7 +127,7 @@ tool = "claude-code"
 prompt = ""
 tier = "tier-3-complex"
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[plan.steps]]
 id = 9
@@ -136,7 +136,7 @@ tool = "csa"
 prompt = ""
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE}))"
 
 [plan.steps.loop_var]
 variable = "comment"
@@ -148,7 +148,7 @@ title = "Include debate"
 tool = "weave"
 prompt = "debate"
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE}))"
 
 [plan.steps.loop_var]
 variable = "comment"
@@ -160,7 +160,7 @@ title = "Fix Real Issue"
 tool = "csa"
 prompt = "Fix the real issue. Commit the fix."
 tier = "tier-2-standard"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE})))"
 
 [plan.steps.on_fail]
 retry = 2
@@ -181,14 +181,14 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 
 Loop back to Step 6 (poll). Max 10 total iterations."""
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[plan.steps]]
 id = 13
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to merge."
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))"
 
 [[plan.steps]]
 id = 14

@@ -284,7 +284,7 @@ fn compile_if(
 
     // Tag all then-branch steps with the condition.
     for step in &mut ctx.steps[then_start..then_end] {
-        step.condition = Some(condition.to_string());
+        step.condition = Some(conjoin_condition(step.condition.as_deref(), condition));
     }
 
     if then_start == then_end {
@@ -311,11 +311,18 @@ fn compile_if(
         let else_end = ctx.steps.len();
 
         for step in &mut ctx.steps[else_start..else_end] {
-            step.condition = Some(negated.clone());
+            step.condition = Some(conjoin_condition(step.condition.as_deref(), &negated));
         }
     }
 
     Ok(())
+}
+
+fn conjoin_condition(existing: Option<&str>, new_condition: &str) -> String {
+    match existing {
+        Some(prev) => format!("({new_condition}) && ({prev})"),
+        None => new_condition.to_string(),
+    }
 }
 
 fn compile_for(
