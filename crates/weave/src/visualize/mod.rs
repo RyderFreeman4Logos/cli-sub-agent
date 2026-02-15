@@ -1,13 +1,26 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use crate::compiler::{ExecutionPlan, FailAction, PlanStep};
+use crate::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
 pub mod ascii;
 pub mod dot;
 pub mod mermaid;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisualizeTarget {
+    Ascii,
+    Mermaid,
+    Png(PathBuf),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VisualizeResult {
+    Stdout(String),
+    FileWritten(PathBuf),
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizGraph {
@@ -441,6 +454,23 @@ pub fn render_png(plan: &ExecutionPlan, output: &Path) -> Result<()> {
         anyhow::bail!(
             "PNG output requires the `visualize-png-dot` feature and Graphviz `dot` in PATH"
         )
+    }
+}
+
+/// Load a plan TOML file and render it to the requested target.
+pub fn visualize_plan_file(plan_path: &Path, target: VisualizeTarget) -> Result<VisualizeResult> {
+    let content = std::fs::read_to_string(plan_path)
+        .with_context(|| format!("failed to read {}", plan_path.display()))?;
+    let plan = plan_from_toml(&content)
+        .with_context(|| format!("failed to parse {}", plan_path.display()))?;
+
+    match target {
+        VisualizeTarget::Ascii => Ok(VisualizeResult::Stdout(render_ascii(&plan))),
+        VisualizeTarget::Mermaid => Ok(VisualizeResult::Stdout(render_mermaid(&plan))),
+        VisualizeTarget::Png(output) => {
+            render_png(&plan, &output)?;
+            Ok(VisualizeResult::FileWritten(output))
+        }
     }
 }
 

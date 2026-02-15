@@ -3,10 +3,10 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 
-use weave::compiler::{compile, plan_from_toml, plan_to_toml};
+use weave::compiler::{compile, plan_to_toml};
 use weave::package;
 use weave::parser::parse_skill;
-use weave::visualize;
+use weave::visualize::{self, VisualizeResult, VisualizeTarget};
 
 /// Weave — skill language compiler and package manager.
 #[derive(Parser)]
@@ -154,18 +154,21 @@ fn main() -> Result<()> {
             }
         }
         Commands::Visualize { plan, png, mermaid } => {
-            let content = std::fs::read_to_string(&plan)
-                .with_context(|| format!("failed to read {}", plan.display()))?;
-            let execution_plan = plan_from_toml(&content)
-                .with_context(|| format!("failed to parse {}", plan.display()))?;
-
-            if mermaid {
-                print!("{}", visualize::render_mermaid(&execution_plan));
+            let target = if mermaid {
+                VisualizeTarget::Mermaid
             } else if let Some(output) = png {
-                visualize::render_png(&execution_plan, &output)?;
-                eprintln!("wrote {}", output.display());
+                VisualizeTarget::Png(output)
             } else {
-                print!("{}", visualize::render_ascii(&execution_plan));
+                VisualizeTarget::Ascii
+            };
+
+            match visualize::visualize_plan_file(&plan, target)? {
+                VisualizeResult::Stdout(rendered) => {
+                    print!("{rendered}");
+                }
+                VisualizeResult::FileWritten(path) => {
+                    eprintln!("wrote {}", path.display());
+                }
             }
         }
     }
