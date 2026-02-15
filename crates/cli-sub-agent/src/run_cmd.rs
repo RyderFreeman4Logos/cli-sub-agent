@@ -302,6 +302,8 @@ pub(crate) async fn handle_run(
                 })
             })
         });
+    let context_load_options = skill_agent
+        .and_then(|agent| pipeline::context_load_options_with_skips(&agent.skip_context));
 
     // Resolve slots directory
     let slots_dir = GlobalConfig::slots_dir()?;
@@ -433,6 +435,7 @@ pub(crate) async fn handle_run(
                 extra_env.as_ref(),
                 Some("run"),
                 resolved_tier_name.as_deref(),
+                context_load_options.as_ref(),
                 stream_mode,
                 idle_timeout_seconds,
                 Some(&global_config),

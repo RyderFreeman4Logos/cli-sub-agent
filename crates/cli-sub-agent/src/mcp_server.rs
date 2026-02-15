@@ -597,6 +597,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             extra_env_ref,
             Some("run"),
             None, // MCP server does not use tier-based selection
+            None, // MCP server does not override context loading options
             csa_process::StreamMode::BufferOnly,
             idle_timeout_seconds,
             Some(&global_config),

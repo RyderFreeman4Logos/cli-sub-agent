@@ -227,6 +227,7 @@ async fn execute_review(
         extra_env,
         Some("review"),
         None,
+        None,
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
         Some(global_config),

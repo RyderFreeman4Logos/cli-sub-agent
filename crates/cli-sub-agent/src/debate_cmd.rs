@@ -69,6 +69,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         extra_env,
         Some("debate"),
         None, // debate does not use tier-based selection
+        None, // debate does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
         Some(&global_config),

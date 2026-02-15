@@ -36,6 +36,19 @@ pub(crate) fn resolve_idle_timeout_seconds(
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECONDS)
 }
 
+pub(crate) fn context_load_options_with_skips(
+    skip_files: &[String],
+) -> Option<csa_executor::ContextLoadOptions> {
+    if skip_files.is_empty() {
+        None
+    } else {
+        Some(csa_executor::ContextLoadOptions {
+            skip_files: skip_files.to_vec(),
+            ..Default::default()
+        })
+    }
+}
+
 /// Load ProjectConfig and GlobalConfig, validate recursion depth.
 ///
 /// Returns `Some((project_config, global_config))` on success.
@@ -194,6 +207,7 @@ pub(crate) async fn execute_with_session(
     extra_env: Option<&std::collections::HashMap<String, String>>,
     task_type: Option<&str>,
     tier_name: Option<&str>,
+    context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
     global_config: Option<&GlobalConfig>,
@@ -210,6 +224,7 @@ pub(crate) async fn execute_with_session(
         extra_env,
         task_type,
         tier_name,
+        context_load_options,
         stream_mode,
         idle_timeout_seconds,
         global_config,
@@ -233,6 +248,7 @@ pub(crate) async fn execute_with_session_and_meta(
     extra_env: Option<&std::collections::HashMap<String, String>>,
     task_type: Option<&str>,
     tier_name: Option<&str>,
+    context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
     global_config: Option<&GlobalConfig>,
@@ -424,9 +440,10 @@ pub(crate) async fn execute_with_session_and_meta(
         .get(executor.tool_name())
         .is_none_or(|ts| ts.provider_session_id.is_none());
     if is_first_turn {
+        let context_load_options = context_load_options.cloned().unwrap_or_default();
         let context_files = csa_executor::load_project_context(
             Path::new(&session.project_path),
-            &csa_executor::ContextLoadOptions::default(),
+            &context_load_options,
         );
         if !context_files.is_empty() {
             let context_block = csa_executor::format_context_for_prompt(&context_files);

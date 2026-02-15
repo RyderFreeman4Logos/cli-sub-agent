@@ -586,6 +586,7 @@ async fn execute_task(
         extra_env_ref,
         Some("batch"),
         None, // batch does not use tier-based selection
+        None, // batch does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
         None, // batch does not inject MCP (callers don't have global_config)
