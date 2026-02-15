@@ -136,8 +136,8 @@ fn resolve_auto_tool(
     project_config: Option<&ProjectConfig>,
     project_root: &Path,
 ) -> Result<ToolName> {
-    // Build the set of tools that are both enabled in config AND have binaries installed
-    let available_tools: Vec<ToolName> = get_enabled_tools(project_config, project_root)
+    // Build the set of tools that are configured for auto selection and installed.
+    let available_tools: Vec<ToolName> = get_auto_selectable_tools(project_config, project_root)
         .into_iter()
         .filter(|t| crate::run_helpers::is_tool_binary_available(t.as_str()))
         .collect();
@@ -163,19 +163,19 @@ fn resolve_auto_tool(
     anyhow::bail!("No suitable tool found for claude-sub-agent. Install codex or claude-code.")
 }
 
-/// Get enabled tools from project config
-fn get_enabled_tools(
+/// Get tools eligible for auto/heterogeneous selection from project config.
+fn get_auto_selectable_tools(
     project_config: Option<&ProjectConfig>,
     _project_root: &Path,
 ) -> Vec<ToolName> {
     if let Some(cfg) = project_config {
         csa_config::global::all_known_tools()
             .iter()
-            .filter(|t| cfg.is_tool_enabled(t.as_str()))
+            .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
             .copied()
             .collect()
     } else {
-        csa_config::global::all_known_tools().to_vec()
+        Vec::new()
     }
 }
 
@@ -192,7 +192,7 @@ fn select_any_available_tool(
     project_config: Option<&ProjectConfig>,
     project_root: &Path,
 ) -> Result<ToolName> {
-    let enabled_tools = get_enabled_tools(project_config, project_root);
+    let enabled_tools = get_auto_selectable_tools(project_config, project_root);
 
     for tool in enabled_tools {
         if crate::run_helpers::is_tool_binary_available(tool.as_str()) {
@@ -208,11 +208,12 @@ fn select_any_available_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+    use csa_config::{ProjectMeta, ResourcesConfig, TierConfig, ToolConfig};
     use std::collections::HashMap;
 
     fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         let mut tool_map = HashMap::new();
+        let mut tier_models = Vec::new();
         for tool in tools {
             tool_map.insert(
                 (*tool).to_string(),
@@ -222,6 +223,22 @@ mod tests {
                     suppress_notify: true,
                 },
             );
+            tier_models.push(format!("{tool}/provider/model/medium"));
+        }
+
+        let mut tiers = HashMap::new();
+        let mut tier_mapping = HashMap::new();
+        if !tier_models.is_empty() {
+            tiers.insert(
+                "tier3".to_string(),
+                TierConfig {
+                    description: "test".to_string(),
+                    models: tier_models,
+                    token_budget: None,
+                    max_turns: None,
+                },
+            );
+            tier_mapping.insert("default".to_string(), "tier3".to_string());
         }
 
         ProjectConfig {
@@ -231,8 +248,8 @@ mod tests {
             tools: tool_map,
             review: None,
             debate: None,
-            tiers: HashMap::new(),
-            tier_mapping: HashMap::new(),
+            tiers,
+            tier_mapping,
             aliases: HashMap::new(),
         }
     }
@@ -253,13 +270,13 @@ mod tests {
     }
 
     #[test]
-    fn get_enabled_tools_returns_all_when_no_config() {
-        let tools = get_enabled_tools(None, std::path::Path::new("/tmp"));
-        assert_eq!(tools.len(), csa_config::global::all_known_tools().len());
+    fn get_auto_selectable_tools_returns_empty_when_no_config() {
+        let tools = get_auto_selectable_tools(None, std::path::Path::new("/tmp"));
+        assert!(tools.is_empty());
     }
 
     #[test]
-    fn get_enabled_tools_filters_by_project_config() {
+    fn get_auto_selectable_tools_filters_by_project_config() {
         // Create config with only codex and claude-code enabled, others disabled
         let mut tool_map = HashMap::new();
         tool_map.insert(
@@ -302,12 +319,25 @@ mod tests {
             tools: tool_map,
             review: None,
             debate: None,
-            tiers: HashMap::new(),
-            tier_mapping: HashMap::new(),
+            tiers: HashMap::from([(
+                "tier3".to_string(),
+                TierConfig {
+                    description: "test".to_string(),
+                    models: vec![
+                        "codex/provider/model/medium".to_string(),
+                        "claude-code/provider/model/medium".to_string(),
+                        "gemini-cli/provider/model/medium".to_string(),
+                        "opencode/provider/model/medium".to_string(),
+                    ],
+                    token_budget: None,
+                    max_turns: None,
+                },
+            )]),
+            tier_mapping: HashMap::from([("default".to_string(), "tier3".to_string())]),
             aliases: HashMap::new(),
         };
 
-        let tools = get_enabled_tools(Some(&cfg), std::path::Path::new("/tmp"));
+        let tools = get_auto_selectable_tools(Some(&cfg), std::path::Path::new("/tmp"));
         assert_eq!(tools.len(), 2);
         assert!(tools.contains(&ToolName::Codex));
         assert!(tools.contains(&ToolName::ClaudeCode));

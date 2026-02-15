@@ -330,6 +330,27 @@ impl ProjectConfig {
         self.tools.get(tool).map(|t| t.enabled).unwrap_or(true)
     }
 
+    /// Check whether a tool appears in at least one tier model spec.
+    pub fn is_tool_configured_in_tiers(&self, tool: &str) -> bool {
+        self.tiers.values().any(|tier| {
+            tier.models.iter().any(|model_spec| {
+                model_spec
+                    .split('/')
+                    .next()
+                    .is_some_and(|model_tool| model_tool == tool)
+            })
+        })
+    }
+
+    /// Check whether a tool is eligible for auto/heterogeneous selection.
+    ///
+    /// Rules:
+    /// - Tool must be enabled (or unconfigured in `[tools]`, which defaults to enabled)
+    /// - Tool must be explicitly referenced by at least one tier model spec
+    pub fn is_tool_auto_selectable(&self, tool: &str) -> bool {
+        self.is_tool_enabled(tool) && self.is_tool_configured_in_tiers(tool)
+    }
+
     /// Check if notification hooks should be suppressed for a tool.
     ///
     /// Defaults to `true` (suppress) since CSA always runs tools as
