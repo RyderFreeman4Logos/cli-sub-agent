@@ -1,5 +1,6 @@
 use std::fs;
-use std::process::Command;
+use std::io::Write;
+use std::process::{Command, Stdio};
 
 fn weave_cmd() -> Command {
     Command::new(env!("CARGO_BIN_EXE_weave"))
@@ -65,6 +66,60 @@ fn visualize_malformed_toml_reports_parse_error() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("failed to parse"));
     assert!(stderr.contains("bad.plan.toml"));
+}
+
+#[test]
+fn visualize_reads_plan_from_stdin_when_dash_is_used() {
+    use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_to_toml};
+
+    let plan = ExecutionPlan {
+        name: "stdin-plan".to_string(),
+        description: String::new(),
+        variables: Vec::new(),
+        steps: vec![PlanStep {
+            id: 1,
+            title: "Build".to_string(),
+            tool: Some("codex".to_string()),
+            prompt: "Build project".to_string(),
+            tier: None,
+            depends_on: Vec::new(),
+            on_fail: FailAction::Abort,
+            condition: None,
+            loop_var: None,
+        }],
+    };
+    let plan_toml = plan_to_toml(&plan).expect("serialize plan toml");
+
+    let mut child = weave_cmd()
+        .arg("visualize")
+        .arg("-")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn weave visualize -");
+
+    {
+        let stdin = child.stdin.as_mut().expect("stdin pipe should exist");
+        stdin
+            .write_all(plan_toml.as_bytes())
+            .expect("write plan toml to stdin");
+    }
+
+    let output = child
+        .wait_with_output()
+        .expect("wait for weave visualize -");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "visualize from stdin should succeed: {stderr}"
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Build"),
+        "ascii output should include step title, got: {stdout}"
+    );
 }
 
 #[cfg(feature = "visualize-png-dot")]

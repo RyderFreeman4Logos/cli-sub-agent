@@ -498,8 +498,17 @@ pub fn render_png(plan: &ExecutionPlan, output: &Path) -> Result<()> {
 pub fn visualize_plan_file(plan_path: &Path, target: VisualizeTarget) -> Result<VisualizeResult> {
     let content = std::fs::read_to_string(plan_path)
         .with_context(|| format!("failed to read {}", plan_path.display()))?;
-    let plan = plan_from_toml(&content)
-        .with_context(|| format!("failed to parse {}", plan_path.display()))?;
+    visualize_plan_toml(&content, &plan_path.display().to_string(), target)
+}
+
+/// Parse plan TOML content and render it to the requested target.
+pub fn visualize_plan_toml(
+    content: &str,
+    source_label: &str,
+    target: VisualizeTarget,
+) -> Result<VisualizeResult> {
+    let plan =
+        plan_from_toml(content).with_context(|| format!("failed to parse {source_label}"))?;
 
     match target {
         VisualizeTarget::Ascii => Ok(VisualizeResult::Stdout(render_ascii(&plan))),
