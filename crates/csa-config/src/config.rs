@@ -592,6 +592,52 @@ idle_timeout_seconds = 300
 
         Ok(())
     }
+
+    /// Check if a model name appears in any tier spec for the given tool.
+    ///
+    /// Model specs have format `tool/provider/model/thinking_budget`.
+    /// This extracts the 3rd component (model) and compares against `model_name`.
+    pub fn is_model_name_in_tiers_for_tool(&self, tool: &str, model_name: &str) -> bool {
+        self.tiers.values().any(|tier| {
+            tier.models.iter().any(|spec| {
+                let parts: Vec<&str> = spec.splitn(4, '/').collect();
+                parts.len() >= 3 && parts[0] == tool && parts[2] == model_name
+            })
+        })
+    }
+
+    /// Enforce that a model name (from `--model`) is configured in tiers for the tool.
+    ///
+    /// Only enforced when tiers are non-empty. Skips check when model_name is None.
+    pub fn enforce_tier_model_name(
+        &self,
+        tool: &str,
+        model_name: Option<&str>,
+    ) -> anyhow::Result<()> {
+        if self.tiers.is_empty() {
+            return Ok(());
+        }
+        let Some(name) = model_name else {
+            return Ok(());
+        };
+        if !self.is_model_name_in_tiers_for_tool(tool, name) {
+            let allowed_specs = self.allowed_model_specs_for_tool(tool);
+            let allowed_models: Vec<&str> = allowed_specs
+                .iter()
+                .filter_map(|spec| spec.split('/').nth(2))
+                .collect();
+            anyhow::bail!(
+                "Model '{}' for tool '{}' is not configured in any tier. \
+                 Allowed models for '{}': [{}]. \
+                 Add it to a [tiers.*] section or use a configured model.",
+                name,
+                tool,
+                tool,
+                allowed_models.join(", ")
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -42,9 +42,10 @@ pub(crate) fn resolve_tool_and_model(
                 .map(|cfg| cfg.resolve_alias(m))
                 .unwrap_or_else(|| m.to_string())
         });
-        // Enforce tier whitelist: tool must be in tiers
+        // Enforce tier whitelist: tool must be in tiers; model name must match if provided
         if let Some(cfg) = config {
             cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
+            cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
         }
         return Ok((tool_name, None, resolved_model));
     }

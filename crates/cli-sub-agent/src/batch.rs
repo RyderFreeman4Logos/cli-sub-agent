@@ -470,8 +470,17 @@ async fn execute_task(
             };
         }
 
-        // Enforce tier whitelist
+        // Enforce tier whitelist: tool + model name
         if let Err(e) = cfg.enforce_tier_whitelist(tool_name.as_str(), None) {
+            error!("{} - {}", task_label, e);
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("{}", e)),
+            };
+        }
+        if let Err(e) = cfg.enforce_tier_model_name(tool_name.as_str(), task.model.as_deref()) {
             error!("{} - {}", task_label, e);
             return TaskResult {
                 name: task.name.clone(),
