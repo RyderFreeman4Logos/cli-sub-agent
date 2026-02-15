@@ -76,6 +76,7 @@ pub(crate) async fn handle_claude_sub_agent(
         extra_env,
         Some("run"),
         None, // claude-sub-agent does not use tier-based selection
+        None, // claude-sub-agent does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
         Some(&global_config),

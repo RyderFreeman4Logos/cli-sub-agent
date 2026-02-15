@@ -200,6 +200,21 @@ fn resolve_idle_timeout_uses_config_then_default() {
     );
 }
 
+#[test]
+fn context_load_options_with_skips_empty_returns_none() {
+    let skip_files: Vec<String> = Vec::new();
+    let options = context_load_options_with_skips(&skip_files);
+    assert!(options.is_none());
+}
+
+#[test]
+fn context_load_options_with_skips_propagates_files() {
+    let skip_files = vec!["AGENTS.md".to_string(), "rules/private.md".to_string()];
+    let options = context_load_options_with_skips(&skip_files).expect("must return options");
+    assert_eq!(options.skip_files, skip_files);
+    assert_eq!(options.max_bytes, None);
+}
+
 /// Verify that `SessionCleanupGuard` removes the directory on drop when not defused.
 #[test]
 fn cleanup_guard_removes_orphan_dir_on_drop() {
