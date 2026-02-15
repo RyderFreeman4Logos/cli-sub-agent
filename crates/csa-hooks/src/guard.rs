@@ -31,6 +31,10 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+/// Maximum bytes to capture from a single guard's stdout.
+/// Prevents prompt inflation and cost spiraling from runaway scripts.
+const MAX_GUARD_OUTPUT_BYTES: usize = 32_768; // 32 KB
+
 /// Configuration entry for a single prompt guard script.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PromptGuardEntry {
@@ -117,6 +121,10 @@ pub fn run_prompt_guards(
 }
 
 /// Execute a single guard script, passing context JSON on stdin and capturing stdout.
+///
+/// Stdout is drained in a background thread to prevent pipe-buffer deadlock
+/// when the guard produces more output than the OS pipe capacity (~64 KB).
+/// Output is capped at [`MAX_GUARD_OUTPUT_BYTES`] to prevent prompt inflation.
 fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Result<String> {
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
@@ -143,21 +151,42 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
         // stdin is dropped here, closing the pipe.
     }
 
+    // Drain stdout in a background thread to avoid pipe-buffer deadlock.
+    // Without this, a guard producing >64 KB would block on write while
+    // the parent blocks on try_wait — a classic pipe deadlock.
+    let stdout_handle = child.stdout.take();
+    let reader = std::thread::spawn(move || -> String {
+        use std::io::Read;
+        let Some(mut stdout) = stdout_handle else {
+            return String::new();
+        };
+        let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES + 1];
+        let mut total = 0;
+        loop {
+            match stdout.read(&mut buf[total..]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total += n;
+                    if total > MAX_GUARD_OUTPUT_BYTES {
+                        total = MAX_GUARD_OUTPUT_BYTES;
+                        break;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        buf.truncate(total);
+        String::from_utf8_lossy(&buf).trim().to_string()
+    });
+
     let timeout = Duration::from_secs(guard.timeout_secs);
     let start = Instant::now();
 
     loop {
         match child.try_wait()? {
             Some(status) => {
+                let output = reader.join().unwrap_or_default();
                 if status.success() {
-                    let output = if let Some(mut stdout) = child.stdout.take() {
-                        use std::io::Read;
-                        let mut buf = String::new();
-                        stdout.read_to_string(&mut buf)?;
-                        buf.trim().to_string()
-                    } else {
-                        String::new()
-                    };
                     return Ok(output);
                 } else {
                     let code = status.code().unwrap_or(-1);
@@ -180,6 +209,7 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                         let _ = child.kill();
                     }
                     let _ = child.wait(); // Reap zombie
+                    let _ = reader.join(); // Clean up reader thread
                     anyhow::bail!(
                         "Guard '{}' timed out after {}s",
                         guard.name,

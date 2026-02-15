@@ -259,8 +259,13 @@ mod unix_tests {
     fn test_run_guards_stdin_receives_json_context() {
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("echo_context.sh");
-        // Script reads stdin and echoes the tool field
-        std::fs::write(&script, "#!/bin/sh\ncat | jq -r '.tool' 2>/dev/null || cat").unwrap();
+        // Script reads stdin and extracts the "tool" field using pure shell (no jq dependency).
+        // Matches `"tool":"<value>"` and prints <value>.
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nINPUT=$(cat)\necho \"$INPUT\" | sed -n 's/.*\"tool\":\"\\([^\"]*\\)\".*/\\1/p'",
+        )
+        .unwrap();
         make_executable(&script);
 
         let guards = vec![PromptGuardEntry {
@@ -350,6 +355,67 @@ mod unix_tests {
         let results = run_prompt_guards(&guards, &test_context());
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].output, "trimmed");
+    }
+
+    #[test]
+    fn test_run_guards_output_capped_at_max_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("large_output.sh");
+        // Generate output larger than MAX_GUARD_OUTPUT_BYTES (32 KB).
+        // `dd` writes 40 KB of 'A' characters.
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ndd if=/dev/zero bs=1024 count=40 2>/dev/null | tr '\\0' 'A'",
+        )
+        .unwrap();
+        make_executable(&script);
+
+        let guards = vec![PromptGuardEntry {
+            name: "large-guard".to_string(),
+            command: script.display().to_string(),
+            timeout_secs: 5,
+        }];
+
+        let results = run_prompt_guards(&guards, &test_context());
+        assert_eq!(results.len(), 1);
+        assert!(
+            results[0].output.len() <= super::MAX_GUARD_OUTPUT_BYTES,
+            "Output should be capped at {} bytes, got {}",
+            super::MAX_GUARD_OUTPUT_BYTES,
+            results[0].output.len()
+        );
+    }
+
+    #[test]
+    fn test_run_guards_large_output_no_deadlock() {
+        // Produces 128 KB — exceeds typical 64 KB pipe buffer.
+        // Without the concurrent reader, this would deadlock until timeout.
+        // The child may get SIGPIPE after the reader caps at MAX_GUARD_OUTPUT_BYTES,
+        // causing non-zero exit (filtered out). The key assertion is that it
+        // completes quickly without hanging to the full timeout.
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("pipe_stress.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\ndd if=/dev/zero bs=1024 count=128 2>/dev/null | tr '\\0' 'B'",
+        )
+        .unwrap();
+        make_executable(&script);
+
+        let guards = vec![PromptGuardEntry {
+            name: "pipe-stress".to_string(),
+            command: script.display().to_string(),
+            timeout_secs: 5,
+        }];
+
+        let start = std::time::Instant::now();
+        let _results = run_prompt_guards(&guards, &test_context());
+        // Must complete well before timeout — proves no pipe deadlock.
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "Guard should complete quickly without pipe deadlock, took {:?}",
+            start.elapsed()
+        );
     }
 }
 
