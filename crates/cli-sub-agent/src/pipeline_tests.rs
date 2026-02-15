@@ -70,6 +70,106 @@ fn resolve_idle_timeout_prefers_cli_override() {
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), Some(42)), 42);
 }
 
+/// Verify that a new session without `--description` gets an auto-generated
+/// description derived from `truncate_prompt(prompt, 80)`.
+#[test]
+fn auto_description_from_prompt_when_none_provided() {
+    use crate::run_helpers::truncate_prompt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project_root = tmp.path();
+
+    let prompt = "Analyze the authentication module and fix the login bug";
+    let description: Option<String> = None;
+
+    // Replicate the pipeline logic: when description is None, derive from prompt
+    let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
+
+    assert!(
+        effective_description.is_some(),
+        "auto-generated description must be Some"
+    );
+    assert_eq!(
+        effective_description.as_deref().unwrap(),
+        prompt,
+        "short prompt should be used as-is (no truncation needed)"
+    );
+
+    // Verify the session is persisted with the auto-generated description
+    let session = csa_session::create_session(
+        project_root,
+        effective_description.as_deref(),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    assert_eq!(
+        session.description.as_deref(),
+        Some(prompt),
+        "session state must carry the auto-generated description"
+    );
+
+    // Reload from disk and confirm persistence
+    let reloaded = csa_session::load_session(project_root, &session.meta_session_id).unwrap();
+    assert_eq!(
+        reloaded.description.as_deref(),
+        Some(prompt),
+        "description must survive save/load round-trip"
+    );
+}
+
+/// Verify that a long prompt is truncated to 80 chars for auto-description.
+#[test]
+fn auto_description_truncates_long_prompt() {
+    use crate::run_helpers::truncate_prompt;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let project_root = tmp.path();
+
+    let long_prompt = "Please analyze the entire authentication module including OAuth2 flows, JWT token validation, session management, RBAC permissions, and the password reset workflow to identify all security vulnerabilities";
+    let description: Option<String> = None;
+
+    let effective_description = description.or_else(|| Some(truncate_prompt(long_prompt, 80)));
+    let desc = effective_description.as_deref().unwrap();
+
+    assert!(
+        desc.chars().count() <= 80,
+        "auto-generated description must be at most 80 chars, got {}",
+        desc.chars().count()
+    );
+    assert!(
+        desc.ends_with("..."),
+        "truncated description must end with '...'"
+    );
+
+    // Verify it persists correctly in the session
+    let session =
+        csa_session::create_session(project_root, Some(desc), None, Some("codex")).unwrap();
+    assert_eq!(session.description.as_deref(), Some(desc));
+}
+
+/// Verify that resumed sessions preserve their existing description.
+#[test]
+fn resumed_session_keeps_existing_description() {
+    let tmp = tempfile::tempdir().unwrap();
+    let project_root = tmp.path();
+
+    // Create a session with an explicit description
+    let original_desc = "original task description";
+    let session =
+        csa_session::create_session(project_root, Some(original_desc), None, Some("codex"))
+            .unwrap();
+
+    // Simulate resuming: load the existing session (as the pipeline does for --session)
+    let loaded = csa_session::load_session(project_root, &session.meta_session_id).unwrap();
+
+    assert_eq!(
+        loaded.description.as_deref(),
+        Some(original_desc),
+        "resumed session must keep its original description"
+    );
+}
+
 #[test]
 fn resolve_idle_timeout_uses_config_then_default() {
     let cfg = ProjectConfig {
