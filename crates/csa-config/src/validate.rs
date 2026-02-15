@@ -28,6 +28,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     };
 
     validate_project_meta(&config)?;
+    validate_resources(&config)?;
     validate_tools(&config)?;
     validate_review(&config)?;
     validate_debate(&config)?;
@@ -45,6 +46,13 @@ fn validate_project_meta(config: &ProjectConfig) -> Result<()> {
             "project.max_recursion_depth ({}) seems too high (max recommended: 20)",
             config.project.max_recursion_depth
         );
+    }
+    Ok(())
+}
+
+fn validate_resources(config: &ProjectConfig) -> Result<()> {
+    if config.resources.idle_timeout_seconds == 0 {
+        bail!("resources.idle_timeout_seconds must be > 0 (got 0)");
     }
     Ok(())
 }

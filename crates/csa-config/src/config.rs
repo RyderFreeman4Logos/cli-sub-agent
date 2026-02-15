@@ -132,6 +132,10 @@ pub struct ResourcesConfig {
     /// would drop below this after accounting for tool usage.
     #[serde(default = "default_min_mem")]
     pub min_free_memory_mb: u64,
+    /// Kill a running child process only if there is no streamed output
+    /// (stdout/stderr/ACP events) for this many consecutive seconds.
+    #[serde(default = "default_idle_timeout_seconds")]
+    pub idle_timeout_seconds: u64,
     #[serde(default)]
     pub initial_estimates: HashMap<String, u64>,
 }
@@ -140,10 +144,15 @@ fn default_min_mem() -> u64 {
     4096
 }
 
+fn default_idle_timeout_seconds() -> u64 {
+    300
+}
+
 impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
             min_free_memory_mb: default_min_mem(),
+            idle_timeout_seconds: default_idle_timeout_seconds(),
             initial_estimates: HashMap::new(),
         }
     }
@@ -424,6 +433,8 @@ schema_version = 1
 [resources]
 # Minimum combined free memory (physical + swap) in MB.
 min_free_memory_mb = 4096
+# Kill child processes only when no streamed output appears for N seconds.
+idle_timeout_seconds = 300
 
 # Tool configuration defaults.
 # [tools.codex]

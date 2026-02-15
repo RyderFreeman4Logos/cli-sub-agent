@@ -63,8 +63,10 @@ pub struct AgentConfig {
     pub extra_context: Vec<String>,
     #[serde(default)]
     pub tier: Option<String>,
+    /// Advisory metadata only; execution must not terminate based on this field.
     #[serde(default)]
     pub max_turns: Option<u32>,
+    /// Advisory metadata only; execution must not terminate based on this field.
     #[serde(default)]
     pub token_budget: Option<u64>,
     #[serde(default)]

@@ -72,6 +72,10 @@ pub enum Commands {
         #[arg(long)]
         wait: bool,
 
+        /// Kill child only when no streamed output appears for N seconds
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        idle_timeout: Option<u64>,
+
         /// Force stdout streaming to stderr even in non-TTY/non-Text contexts
         #[arg(long, conflicts_with = "no_stream_stdout")]
         stream_stdout: bool,

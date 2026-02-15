@@ -13,7 +13,7 @@ pub use context_loader::{
     ContextFile, ContextLoadOptions, format_context_for_prompt, load_project_context,
 };
 pub use csa_process::ExecutionResult;
-pub use executor::Executor;
+pub use executor::{ExecuteOptions, Executor};
 pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
 pub use session_id::{extract_session_id, extract_session_id_from_transport};

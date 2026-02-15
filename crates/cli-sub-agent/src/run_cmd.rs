@@ -36,6 +36,7 @@ pub(crate) async fn handle_run(
     thinking: Option<String>,
     no_failover: bool,
     wait: bool,
+    idle_timeout: Option<u64>,
     current_depth: u32,
     output_format: OutputFormat,
     stream_mode: csa_process::StreamMode,
@@ -129,6 +130,8 @@ pub(crate) async fn handle_run(
     };
 
     let strategy = tool.unwrap_or(ToolArg::Auto).into_strategy();
+    let idle_timeout_seconds =
+        pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout);
 
     // 7. Resolve initial tool based on strategy
     let (initial_tool, resolved_model_spec, resolved_model) = match &strategy {
@@ -362,6 +365,7 @@ pub(crate) async fn handle_run(
                     temp_dir.path(),
                     extra_env.as_ref(),
                     stream_mode,
+                    idle_timeout_seconds,
                 )
                 .await?
         } else {
@@ -378,6 +382,7 @@ pub(crate) async fn handle_run(
                 Some("run"),
                 resolved_tier_name.as_deref(),
                 stream_mode,
+                idle_timeout_seconds,
                 Some(&global_config),
             )
             .await

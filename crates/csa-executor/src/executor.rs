@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use csa_acp::SessionConfig;
 use csa_core::types::{PromptTransport, ToolName, prompt_transport_capabilities};
-use csa_process::ExecutionResult;
+use csa_process::{ExecutionResult, StreamMode};
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -14,6 +14,21 @@ use crate::model_spec::{ModelSpec, ThinkingBudget};
 use crate::transport::{LegacyTransport, Transport, TransportFactory, TransportResult};
 
 pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+pub struct ExecuteOptions {
+    pub stream_mode: StreamMode,
+    pub idle_timeout_seconds: u64,
+}
+
+impl ExecuteOptions {
+    pub fn new(stream_mode: StreamMode, idle_timeout_seconds: u64) -> Self {
+        Self {
+            stream_mode,
+            idle_timeout_seconds,
+        }
+    }
+}
 
 /// Executor: Closed enum for 4 AI tools.
 ///
@@ -213,9 +228,17 @@ impl Executor {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<ExecutionResult> {
         Ok(self
-            .execute_with_transport(prompt, tool_state, session, extra_env, stream_mode, None)
+            .execute_with_transport(
+                prompt,
+                tool_state,
+                session,
+                extra_env,
+                ExecuteOptions::new(stream_mode, idle_timeout_seconds),
+                None,
+            )
             .await?
             .execution)
     }
@@ -227,12 +250,19 @@ impl Executor {
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-        stream_mode: csa_process::StreamMode,
+        options: ExecuteOptions,
         session_config: Option<SessionConfig>,
     ) -> Result<TransportResult> {
         let transport = self.transport(session_config);
         transport
-            .execute(prompt, tool_state, session, extra_env, stream_mode)
+            .execute(
+                prompt,
+                tool_state,
+                session,
+                extra_env,
+                options.stream_mode,
+                options.idle_timeout_seconds,
+            )
             .await
     }
 
@@ -245,9 +275,16 @@ impl Executor {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<ExecutionResult> {
         Ok(self
-            .execute_in_with_transport(prompt, work_dir, extra_env, stream_mode)
+            .execute_in_with_transport(
+                prompt,
+                work_dir,
+                extra_env,
+                stream_mode,
+                idle_timeout_seconds,
+            )
             .await?
             .execution)
     }
@@ -259,10 +296,17 @@ impl Executor {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: csa_process::StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         let legacy = LegacyTransport::new(self.clone());
         legacy
-            .execute_in(prompt, work_dir, extra_env, stream_mode)
+            .execute_in(
+                prompt,
+                work_dir,
+                extra_env,
+                stream_mode,
+                idle_timeout_seconds,
+            )
             .await
     }
 

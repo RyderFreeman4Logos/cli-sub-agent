@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::Stdio,
     rc::Rc,
+    time::{Duration, Instant},
 };
 
 use agent_client_protocol::{
@@ -19,7 +20,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::warn;
 
 use crate::{
-    client::{AcpClient, SessionEvent, SharedEvents},
+    client::{AcpClient, SessionEvent, SharedActivity, SharedEvents},
     error::{AcpError, AcpResult},
 };
 
@@ -28,6 +29,7 @@ pub struct PromptResult {
     pub output: String,
     pub events: Vec<SessionEvent>,
     pub exit_reason: Option<String>,
+    pub timed_out: bool,
 }
 
 pub struct AcpConnection {
@@ -35,6 +37,7 @@ pub struct AcpConnection {
     connection: ClientSideConnection,
     child: Rc<RefCell<Child>>,
     events: SharedEvents,
+    last_activity: SharedActivity,
     stderr_buf: Rc<RefCell<String>>,
     default_working_dir: PathBuf,
 }
@@ -52,6 +55,17 @@ impl AcpConnection {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // Isolate ACP child in its own process group so timeout kill can
+        // terminate the full subtree.
+        // SAFETY: setsid() runs in pre-exec before Rust runtime exists in child.
+        #[cfg(unix)]
+        unsafe {
+            cmd.pre_exec(|| {
+                libc::setsid();
+                Ok(())
+            });
+        }
 
         for (key, value) in env {
             cmd.env(key, value);
@@ -71,7 +85,8 @@ impl AcpConnection {
 
         let local_set = LocalSet::new();
         let events = Rc::new(RefCell::new(Vec::new()));
-        let client = AcpClient::new(events.clone());
+        let last_activity = Rc::new(RefCell::new(Instant::now()));
+        let client = AcpClient::new(events.clone(), last_activity.clone());
         let stderr_buf = Rc::new(RefCell::new(String::new()));
 
         let connection = local_set
@@ -90,16 +105,23 @@ impl AcpConnection {
                 });
 
                 let stderr_buf_clone = stderr_buf.clone();
+                let activity_clone = last_activity.clone();
                 tokio::task::spawn_local(async move {
                     let mut reader = stderr;
-                    let mut bytes = Vec::new();
-                    if let Err(err) = reader.read_to_end(&mut bytes).await {
-                        warn!(error = %err, "failed to read ACP stderr stream");
-                        return;
-                    }
-                    if !bytes.is_empty() {
-                        let text = String::from_utf8_lossy(&bytes);
-                        stderr_buf_clone.borrow_mut().push_str(&text);
+                    let mut buf = vec![0_u8; 4096];
+                    loop {
+                        match reader.read(&mut buf).await {
+                            Ok(0) => break,
+                            Ok(n) => {
+                                *activity_clone.borrow_mut() = Instant::now();
+                                let text = String::from_utf8_lossy(&buf[..n]);
+                                stderr_buf_clone.borrow_mut().push_str(&text);
+                            }
+                            Err(err) => {
+                                warn!(error = %err, "failed to read ACP stderr stream");
+                                break;
+                            }
+                        }
                     }
                 });
 
@@ -112,6 +134,7 @@ impl AcpConnection {
             connection,
             child: Rc::new(RefCell::new(child)),
             events,
+            last_activity,
             stderr_buf,
             default_working_dir: working_dir.to_path_buf(),
         })
@@ -151,28 +174,64 @@ impl AcpConnection {
         Ok(response.session_id.0.to_string())
     }
 
-    pub async fn prompt(&self, session_id: &str, text: &str) -> AcpResult<PromptResult> {
+    pub async fn prompt(
+        &self,
+        session_id: &str,
+        text: &str,
+        idle_timeout: Duration,
+    ) -> AcpResult<PromptResult> {
         self.ensure_process_running()?;
 
         // Clear stale events before dispatching this prompt turn.
         self.events.borrow_mut().clear();
+        *self.last_activity.borrow_mut() = Instant::now();
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
 
-        let response = self
+        enum PromptOutcome<T> {
+            Completed(T),
+            IdleTimeout,
+        }
+        let outcome = self
             .local_set
-            .run_until(async { self.connection.prompt(request).await })
-            .await
-            .map_err(|err| AcpError::PromptFailed(err.to_string()))?;
+            .run_until(async {
+                let prompt_future = self.connection.prompt(request);
+                tokio::pin!(prompt_future);
+                loop {
+                    tokio::select! {
+                        response = &mut prompt_future => {
+                            break PromptOutcome::Completed(response);
+                        }
+                        _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                            if self.last_activity.borrow().elapsed() >= idle_timeout {
+                                break PromptOutcome::IdleTimeout;
+                            }
+                        }
+                    }
+                }
+            })
+            .await;
 
         let events = std::mem::take(&mut *self.events.borrow_mut());
         let output = collect_agent_output(&events);
-
-        Ok(PromptResult {
-            output,
-            events,
-            exit_reason: Some(stop_reason_to_string(response.stop_reason)),
-        })
+        match outcome {
+            PromptOutcome::Completed(Ok(response)) => Ok(PromptResult {
+                output,
+                events,
+                exit_reason: Some(stop_reason_to_string(response.stop_reason)),
+                timed_out: false,
+            }),
+            PromptOutcome::Completed(Err(err)) => Err(AcpError::PromptFailed(err.to_string())),
+            PromptOutcome::IdleTimeout => {
+                let _ = self.kill();
+                Ok(PromptResult {
+                    output,
+                    events,
+                    exit_reason: Some("idle_timeout".to_string()),
+                    timed_out: true,
+                })
+            }
+        }
     }
 
     pub async fn exit_code(&self) -> AcpResult<Option<i32>> {
@@ -185,6 +244,15 @@ impl AcpConnection {
 
     pub fn kill(&self) -> AcpResult<()> {
         let mut child = self.child.borrow_mut();
+        #[cfg(unix)]
+        if let Some(pid) = child.id() {
+            // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGKILL);
+            }
+            return Ok(());
+        }
+
         child
             .start_kill()
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))

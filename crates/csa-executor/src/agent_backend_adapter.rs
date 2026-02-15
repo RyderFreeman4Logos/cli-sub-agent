@@ -224,6 +224,7 @@ impl AgentSession for ExecutorAgentSession {
                 &self.cwd,
                 extra_env,
                 csa_process::StreamMode::BufferOnly,
+                csa_process::DEFAULT_IDLE_TIMEOUT_SECS,
             )
             .await
         {
