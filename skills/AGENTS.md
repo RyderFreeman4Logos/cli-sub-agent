@@ -98,7 +98,10 @@ csa (core runtime)
 
 ## Pattern Migration Status
 
-11 skills have been converted to skill-lang patterns in `drafts/patterns/`.
+11 skills have been converted to skill-lang patterns (draft status).
+Pattern files live in the external `drafts/` directory (symlink to
+`../drafts/cli-sub-agent`, outside git tracking). To access them, set up
+the drafts symlink: `ln -s ../drafts/cli-sub-agent drafts`.
 All 11 compile successfully with the weave compiler.
 
 | Pattern | Source Skill | Weave Compile | Key Features |
