@@ -620,6 +620,12 @@ idle_timeout_seconds = 300
         let Some(name) = model_name else {
             return Ok(());
         };
+        // If the "model name" is actually a full model spec (contains '/'),
+        // delegate to the spec-level check instead. This handles aliases that
+        // resolve to full specs like "codex/openai/gpt-5.3-codex/high".
+        if name.contains('/') {
+            return self.enforce_tier_whitelist(tool, Some(name));
+        }
         if !self.is_model_name_in_tiers_for_tool(tool, name) {
             let allowed_specs = self.allowed_model_specs_for_tool(tool);
             let allowed_models: Vec<&str> = allowed_specs

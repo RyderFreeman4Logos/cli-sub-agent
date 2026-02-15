@@ -171,3 +171,22 @@ fn enforce_tier_model_name_unconfigured_model_rejected() {
     assert!(err.to_string().contains("gpt-4o"));
     assert!(err.to_string().contains("Allowed models for 'codex'"));
 }
+
+#[test]
+fn enforce_tier_model_name_full_spec_delegates_to_spec_check() {
+    let cfg = config_with_tiers(&["codex/openai/gpt-5.3-codex/high"]);
+    // Alias-resolved full spec should be accepted via spec-level check
+    assert!(
+        cfg.enforce_tier_model_name("codex", Some("codex/openai/gpt-5.3-codex/high"))
+            .is_ok()
+    );
+}
+
+#[test]
+fn enforce_tier_model_name_full_spec_unconfigured_rejected() {
+    let cfg = config_with_tiers(&["codex/openai/gpt-5.3-codex/high"]);
+    let err = cfg
+        .enforce_tier_model_name("codex", Some("codex/openai/gpt-4o/high"))
+        .unwrap_err();
+    assert!(err.to_string().contains("not configured in any tier"));
+}
