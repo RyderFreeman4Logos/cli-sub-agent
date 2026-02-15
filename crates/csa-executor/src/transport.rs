@@ -217,7 +217,7 @@ impl Transport for AcpTransport {
     async fn execute(
         &self,
         prompt: &str,
-        _tool_state: Option<&ToolState>,
+        tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
@@ -236,6 +236,10 @@ impl Transport for AcpTransport {
         let acp_command = self.acp_command.clone();
         let acp_args = self.acp_args.clone();
         let prompt = prompt.to_string();
+        let resume_session_id = tool_state.and_then(|s| s.provider_session_id.clone());
+        if let Some(session_id) = resume_session_id.as_deref() {
+            tracing::debug!(session_id, "resuming ACP session from tool state");
+        }
 
         // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
         // dedicated current-thread runtime so callers can stay Send-safe.
@@ -250,7 +254,10 @@ impl Transport for AcpTransport {
                     &acp_args,
                     &working_dir,
                     &env,
-                    system_prompt.as_deref(),
+                    csa_acp::transport::AcpSessionStart {
+                        system_prompt: system_prompt.as_deref(),
+                        resume_session_id: resume_session_id.as_deref(),
+                    },
                     &prompt,
                     std::time::Duration::from_secs(idle_timeout_seconds),
                 ))
@@ -513,5 +520,33 @@ mod tests {
             None,
             "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
         );
+    }
+
+    #[test]
+    fn test_resume_session_id_extraction() {
+        let now = chrono::Utc::now();
+        let tool_state = ToolState {
+            provider_session_id: Some("test-session-123".to_string()),
+            last_action_summary: String::new(),
+            last_exit_code: 0,
+            updated_at: now,
+            token_usage: None,
+        };
+        let resume_id = tool_state.provider_session_id.as_deref();
+        assert_eq!(resume_id, Some("test-session-123"));
+    }
+
+    #[test]
+    fn test_resume_session_id_none_when_absent() {
+        let now = chrono::Utc::now();
+        let tool_state = ToolState {
+            provider_session_id: None,
+            last_action_summary: String::new(),
+            last_exit_code: 0,
+            updated_at: now,
+            token_usage: None,
+        };
+        let resume_id = tool_state.provider_session_id.as_deref();
+        assert!(resume_id.is_none());
     }
 }

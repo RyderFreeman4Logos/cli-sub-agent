@@ -8,8 +8,8 @@ use std::{
 };
 
 use agent_client_protocol::{
-    Agent, ClientSideConnection, InitializeRequest, NewSessionRequest, PromptRequest,
-    ProtocolVersion, SessionId, StopReason,
+    Agent, ClientSideConnection, InitializeRequest, LoadSessionRequest, NewSessionRequest,
+    PromptRequest, ProtocolVersion, SessionId, StopReason,
 };
 use tokio::{
     io::AsyncReadExt,
@@ -172,6 +172,25 @@ impl AcpConnection {
             .map_err(|err| AcpError::SessionFailed(err.to_string()))?;
 
         Ok(response.session_id.0.to_string())
+    }
+
+    pub async fn load_session(
+        &self,
+        session_id: &str,
+        working_dir: Option<&Path>,
+    ) -> AcpResult<String> {
+        self.ensure_process_running()?;
+
+        let session_working_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
+        let request =
+            LoadSessionRequest::new(SessionId::new(session_id.to_string()), session_working_dir);
+
+        self.local_set
+            .run_until(async { self.connection.load_session(request).await })
+            .await
+            .map_err(|err| AcpError::SessionFailed(err.to_string()))?;
+
+        Ok(session_id.to_string())
     }
 
     pub async fn prompt(
