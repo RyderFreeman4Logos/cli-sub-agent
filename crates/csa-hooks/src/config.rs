@@ -1,6 +1,7 @@
 //! Hook configuration loading with 4-tier priority.
 
 use crate::event::HookEvent;
+use crate::guard::PromptGuardEntry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -27,9 +28,18 @@ fn default_timeout() -> u64 {
     30
 }
 
-/// All hooks configuration, keyed by event name
+/// All hooks configuration, keyed by event name.
+///
+/// The `prompt_guard` field is an independent typed array that does NOT go
+/// through the `flatten` HashMap. This allows `[[prompt_guard]]` TOML arrays
+/// to be deserialized as structured entries alongside the flat hook map.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksConfig {
+    /// User-configurable prompt guard scripts. Each entry is a shell script
+    /// that receives JSON context on stdin and outputs injection text on stdout.
+    #[serde(default)]
+    pub prompt_guard: Vec<PromptGuardEntry>,
+
     #[serde(flatten)]
     pub hooks: HashMap<String, HookConfig>,
 }
@@ -57,9 +67,17 @@ impl HooksConfig {
     }
 
     /// Merge another config into self, with other taking priority.
+    ///
+    /// For hooks: higher-priority entries override by key.
+    /// For prompt_guard: higher-priority entries replace the entire array
+    /// (non-empty array wins; empty array means "no override from this layer").
     fn merge_with(&mut self, other: Self) {
         for (key, value) in other.hooks {
             self.hooks.insert(key, value);
+        }
+        // prompt_guard: non-empty higher-priority array replaces lower
+        if !other.prompt_guard.is_empty() {
+            self.prompt_guard = other.prompt_guard;
         }
     }
 
@@ -118,6 +136,7 @@ pub fn load_hooks_config(
     // Layer 1 (highest): runtime overrides
     if let Some(overrides) = runtime_overrides {
         let runtime_config = HooksConfig {
+            prompt_guard: Vec::new(),
             hooks: overrides.clone(),
         };
         config.merge_with(runtime_config);
