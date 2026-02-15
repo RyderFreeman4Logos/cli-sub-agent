@@ -181,3 +181,61 @@ install:
 changelog:
     git cliff --output CHANGELOG.md
     @echo "CHANGELOG.md updated"
+
+# Install pattern skills by creating symlinks to target directory
+# Usage: just install-skills [target=".claude/skills"]
+install-skills target=".claude/skills":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	mkdir -p "{{target}}"
+	repo_root="$(git rev-parse --show-toplevel)"
+	count=0
+	for pattern_dir in "${repo_root}"/patterns/*/; do
+		skills_dir="${pattern_dir}skills/"
+		[ -d "$skills_dir" ] || continue
+		for skill_dir in "$skills_dir"*/; do
+			[ -d "$skill_dir" ] || continue
+			skill_name=$(basename "$skill_dir")
+			target_path="{{target}}/${skill_name}"
+			if [ -L "$target_path" ]; then
+				echo "  skip (symlink exists): ${skill_name}"
+			elif [ -e "$target_path" ]; then
+				echo "  WARN (non-symlink exists, skipping): ${skill_name}"
+			else
+				ln -sv "$(realpath "$skill_dir")" "$target_path"
+				count=$((count + 1))
+			fi
+		done
+	done
+	# Also install independent skills from skills/ directory
+	for skill_dir in "${repo_root}"/skills/*/; do
+		[ -d "$skill_dir" ] || continue
+		skill_name=$(basename "$skill_dir")
+		target_path="{{target}}/${skill_name}"
+		if [ -L "$target_path" ]; then
+			echo "  skip (symlink exists): ${skill_name}"
+		elif [ -e "$target_path" ]; then
+			echo "  WARN (non-symlink exists, skipping): ${skill_name}"
+		else
+			ln -sv "$(realpath "$skill_dir")" "$target_path"
+			count=$((count + 1))
+		fi
+	done
+	echo "Installed ${count} skill(s) to {{target}}"
+
+# Remove skill symlinks from target directory
+# Usage: just uninstall-skills [target=".claude/skills"]
+uninstall-skills target=".claude/skills":
+	#!/usr/bin/env bash
+	set -euo pipefail
+	repo_root="$(git rev-parse --show-toplevel)"
+	count=0
+	for link in "{{target}}"/*/; do
+		[ -L "${link%/}" ] || continue
+		real=$(realpath "${link%/}" 2>/dev/null || true)
+		if [[ "$real" == "${repo_root}/"* ]]; then
+			rm -v "${link%/}"
+			count=$((count + 1))
+		fi
+	done
+	echo "Removed ${count} skill symlink(s) from {{target}}"
