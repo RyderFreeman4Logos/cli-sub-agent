@@ -50,6 +50,7 @@ fn test_validate_multiple_tiers_all_valid() {
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -89,6 +90,7 @@ fn test_validate_tier_with_multiple_models_all_valid() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -128,6 +130,7 @@ fn test_validate_tier_with_one_bad_model_in_list() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -170,6 +173,7 @@ fn test_validate_tier_token_budget_zero_rejected() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -207,6 +211,7 @@ fn test_validate_tier_max_turns_zero_rejected() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -244,6 +249,7 @@ fn test_validate_tier_with_valid_budget_and_turns() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();

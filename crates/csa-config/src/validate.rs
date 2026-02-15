@@ -33,6 +33,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
     validate_review(&config)?;
     validate_debate(&config)?;
     validate_tiers(&config)?;
+    warn_unknown_tool_priority(&config);
 
     Ok(())
 }
@@ -142,6 +143,23 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Warn (non-fatal) if `preferences.tool_priority` contains unrecognized tool names.
+/// Unknown entries are harmless (sorted to end) but likely indicate a typo.
+fn warn_unknown_tool_priority(config: &ProjectConfig) {
+    let known_tools = ["gemini-cli", "opencode", "codex", "claude-code"];
+    if let Some(prefs) = &config.preferences {
+        for name in &prefs.tool_priority {
+            if !known_tools.contains(&name.as_str()) {
+                eprintln!(
+                    "warning: Unrecognized tool in [preferences].tool_priority: '{}'. \
+                     Known tools: {:?}. Entry will be ignored for sorting.",
+                    name, known_tools
+                );
+            }
+        }
+    }
 }
 
 fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {

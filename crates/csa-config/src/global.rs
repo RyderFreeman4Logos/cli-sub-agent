@@ -24,6 +24,8 @@ pub struct GlobalConfig {
     #[serde(default)]
     pub defaults: DefaultsConfig,
     #[serde(default)]
+    pub preferences: PreferencesConfig,
+    #[serde(default)]
     pub tools: HashMap<String, GlobalToolConfig>,
     #[serde(default)]
     pub review: ReviewConfig,
@@ -39,6 +41,21 @@ pub struct GlobalConfig {
     /// for same-name servers).
     #[serde(default)]
     pub mcp: GlobalMcpConfig,
+}
+
+/// User preferences for tool selection and routing.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreferencesConfig {
+    /// Tool priority order for auto-selection. First = most preferred.
+    ///
+    /// Affects: heterogeneous candidate ordering, reviewer allocation,
+    /// any-available fallback. Does NOT affect explicit `--tool` overrides
+    /// or tier model declaration order.
+    ///
+    /// Tools not listed are appended in their default order.
+    /// Empty list (default) preserves existing behavior.
+    #[serde(default)]
+    pub tool_priority: Vec<String>,
 }
 
 /// Configuration for the code review workflow.
@@ -179,6 +196,48 @@ pub fn all_known_tools() -> &'static [ToolName] {
     ]
 }
 
+/// Sort tools by a priority list. Listed tools appear first (in priority order).
+/// Unlisted tools retain their original relative order, appended after listed ones.
+///
+/// Returns the input unchanged when `priority` is empty (backward compatible).
+pub fn sort_tools_by_priority(tools: &[ToolName], priority: &[String]) -> Vec<ToolName> {
+    if priority.is_empty() {
+        return tools.to_vec();
+    }
+    let mut result = tools.to_vec();
+    result.sort_by_key(|tool| {
+        priority
+            .iter()
+            .position(|p| p == tool.as_str())
+            .unwrap_or(priority.len())
+    });
+    result
+}
+
+/// Resolve effective tool priority: project-level overrides global when present.
+pub fn effective_tool_priority<'a>(
+    project_config: Option<&'a crate::ProjectConfig>,
+    global_config: &'a GlobalConfig,
+) -> &'a [String] {
+    project_config
+        .and_then(|p| p.preferences.as_ref())
+        .map(|p| p.tool_priority.as_slice())
+        .filter(|p| !p.is_empty())
+        .unwrap_or(&global_config.preferences.tool_priority)
+}
+
+/// Sort tools using effective priority from project (if set) or global config.
+pub fn sort_tools_by_effective_priority(
+    tools: &[ToolName],
+    project_config: Option<&crate::ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Vec<ToolName> {
+    sort_tools_by_priority(
+        tools,
+        effective_tool_priority(project_config, global_config),
+    )
+}
+
 /// Global defaults section.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DefaultsConfig {
@@ -242,6 +301,15 @@ impl GlobalConfig {
             .get(tool)
             .and_then(|t| t.max_concurrent)
             .unwrap_or(self.defaults.max_concurrent)
+    }
+
+    /// Sort tools by user-configured priority order.
+    ///
+    /// Tools in `preferences.tool_priority` appear first (in priority order).
+    /// Tools NOT in the priority list retain their original relative order.
+    /// Returns unchanged when no priority is configured.
+    pub fn sort_by_priority(&self, tools: &[ToolName]) -> Vec<ToolName> {
+        sort_tools_by_priority(tools, &self.preferences.tool_priority)
     }
 
     /// Get environment variables to inject for a tool.
@@ -325,6 +393,12 @@ max_concurrent = 3  # Default max parallel instances per tool
 # max_concurrent = 2
 # [tools.opencode.env]
 # ANTHROPIC_API_KEY = "sk-ant-..."
+
+# Tool priority for auto-selection (heterogeneous routing, review, debate).
+# First = most preferred. Tools not listed keep their default order.
+# Example: prefer Claude Code for worker tasks, then Codex.
+# [preferences]
+# tool_priority = ["claude-code", "codex", "gemini-cli", "opencode"]
 
 # Review workflow: which tool to use for code review.
 # "auto" selects the heterogeneous counterpart of the parent tool:

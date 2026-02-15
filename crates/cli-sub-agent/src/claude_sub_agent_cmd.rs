@@ -251,6 +251,7 @@ mod tests {
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
+            preferences: None,
         }
     }
 
@@ -335,6 +336,7 @@ mod tests {
             )]),
             tier_mapping: HashMap::from([("default".to_string(), "tier3".to_string())]),
             aliases: HashMap::new(),
+            preferences: None,
         };
 
         let tools = get_auto_selectable_tools(Some(&cfg), std::path::Path::new("/tmp"));

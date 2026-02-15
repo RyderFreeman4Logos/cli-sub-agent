@@ -228,14 +228,19 @@ pub(crate) async fn handle_run(
             if let Some(parent_str) = parent_tool_name.as_deref() {
                 let parent_tool = parse_tool_name(parent_str)?;
                 let enabled_tools = if let Some(ref cfg) = config {
-                    csa_config::global::all_known_tools()
+                    let tools: Vec<_> = csa_config::global::all_known_tools()
                         .iter()
                         .filter(|t| {
                             cfg.is_tool_auto_selectable(t.as_str())
                                 && is_tool_binary_available(t.as_str())
                         })
                         .copied()
-                        .collect::<Vec<_>>()
+                        .collect();
+                    csa_config::global::sort_tools_by_effective_priority(
+                        &tools,
+                        config.as_ref(),
+                        &global_config,
+                    )
                 } else {
                     Vec::new()
                 };
@@ -289,14 +294,19 @@ pub(crate) async fn handle_run(
             if let Some(parent_str) = parent_tool_name.as_deref() {
                 let parent_tool = parse_tool_name(parent_str)?;
                 let enabled_tools = if let Some(ref cfg) = config {
-                    csa_config::global::all_known_tools()
+                    let tools: Vec<_> = csa_config::global::all_known_tools()
                         .iter()
                         .filter(|t| {
                             cfg.is_tool_auto_selectable(t.as_str())
                                 && is_tool_binary_available(t.as_str())
                         })
                         .copied()
-                        .collect::<Vec<_>>()
+                        .collect();
+                    csa_config::global::sort_tools_by_effective_priority(
+                        &tools,
+                        config.as_ref(),
+                        &global_config,
+                    )
                 } else {
                     Vec::new()
                 };

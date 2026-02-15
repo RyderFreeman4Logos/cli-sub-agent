@@ -227,6 +227,7 @@ mod tests {
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
+            preferences: None,
         }
     }
 

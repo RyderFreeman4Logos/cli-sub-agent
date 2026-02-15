@@ -279,6 +279,7 @@ mod tests {
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
+            preferences: None,
         }
     }
 
@@ -578,6 +579,7 @@ mod tests {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            preferences: None,
         };
         assert_eq!(resolve_tier_name(&config, "anything"), None);
     }

@@ -185,6 +185,7 @@ pub fn init_project(
             tiers: build_smart_tiers(&installed),
             tier_mapping: default_tier_mapping(),
             aliases: HashMap::new(),
+            preferences: None,
         }
     } else {
         let mut initial_estimates = HashMap::new();
@@ -211,6 +212,7 @@ pub fn init_project(
             tiers: build_smart_tiers(&installed),
             tier_mapping: default_tier_mapping(),
             aliases: HashMap::new(),
+            preferences: None,
         }
     };
 

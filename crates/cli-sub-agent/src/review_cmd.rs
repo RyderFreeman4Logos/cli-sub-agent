@@ -88,7 +88,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     let reviewers = args.reviewers as usize;
     let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
-    let reviewer_tools = build_reviewer_tools(args.tool, tool, config.as_ref(), reviewers);
+    let reviewer_tools = build_reviewer_tools(
+        args.tool,
+        tool,
+        config.as_ref(),
+        Some(&global_config),
+        reviewers,
+    );
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
@@ -251,6 +257,7 @@ fn resolve_review_tool(
             &project_review.tool,
             parent_tool,
             project_config,
+            global_config,
             project_root,
         )
         .with_context(|| {
@@ -276,6 +283,7 @@ fn resolve_review_tool_from_value(
     tool_value: &str,
     parent_tool: Option<&str>,
     project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
     project_root: &Path,
 ) -> Result<ToolName> {
     if tool_value == "auto" {
@@ -293,13 +301,22 @@ fn resolve_review_tool_from_value(
         if let Some(parent_str) = parent_tool {
             if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent_str) {
                 let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
-                    csa_config::global::all_known_tools()
+                    let tools: Vec<_> = csa_config::global::all_known_tools()
                         .iter()
                         .filter(|t| cfg.is_tool_enabled(t.as_str()))
                         .copied()
-                        .collect()
+                        .collect();
+                    csa_config::global::sort_tools_by_effective_priority(
+                        &tools,
+                        project_config,
+                        global_config,
+                    )
                 } else {
-                    csa_config::global::all_known_tools().to_vec()
+                    csa_config::global::sort_tools_by_effective_priority(
+                        csa_config::global::all_known_tools(),
+                        project_config,
+                        global_config,
+                    )
                 };
                 if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
                     return Ok(tool);
@@ -430,6 +447,7 @@ mod tests {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            preferences: None,
         }
     }
 
@@ -725,7 +743,8 @@ mod tests {
 
         let strategy = parse_consensus_strategy(&args.consensus).unwrap();
         let reviewers = args.reviewers as usize;
-        let reviewer_tools = build_reviewer_tools(args.tool, ToolName::Codex, None, reviewers);
+        let reviewer_tools =
+            build_reviewer_tools(args.tool, ToolName::Codex, None, None, reviewers);
 
         assert!(reviewers > 1);
         assert_eq!(consensus_strategy_label(strategy), "unanimous");
