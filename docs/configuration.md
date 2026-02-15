@@ -457,7 +457,7 @@ csa run --model-spec "codex/openai/gpt-5.3-codex/xhigh" "Review PR #123"
 # Use alias
 csa run --model fast "Check for errors"
 
-# Use full model spec (bypasses tiers)
+# Use full model spec (must be configured in tiers)
 csa run --model "codex/anthropic/claude-opus/xhigh" "Complex task"
 ```
 

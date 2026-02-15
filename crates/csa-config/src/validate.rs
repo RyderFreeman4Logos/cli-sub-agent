@@ -171,6 +171,24 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
             model_spec
         );
     }
+
+    // Validate tool name is a known tool
+    let tool_part = parts[0];
+    let known_tools: Vec<&str> = crate::global::all_known_tools()
+        .iter()
+        .map(|t| t.as_str())
+        .collect();
+    if !known_tools.contains(&tool_part) {
+        bail!(
+            "Tier '{}' has model spec '{}' with unknown tool '{}'. \
+             Known tools: [{}].",
+            tier_name,
+            model_spec,
+            tool_part,
+            known_tools.join(", ")
+        );
+    }
+
     Ok(())
 }
 
