@@ -28,7 +28,9 @@ pub(crate) fn handle_create(
 
     // TodoCreate hook: fires after successful plan creation (best-effort)
     {
-        let hooks_config = load_hooks_config(None, global_hooks_path().as_deref(), None);
+        let project_hooks = project_root.join(".csa").join("hooks.toml");
+        let hooks_config =
+            load_hooks_config(Some(&project_hooks), global_hooks_path().as_deref(), None);
         let mut hook_vars = std::collections::HashMap::new();
         hook_vars.insert("plan_id".to_string(), plan.timestamp.clone());
         hook_vars.insert("plan_dir".to_string(), plan.todo_dir.display().to_string());
@@ -81,7 +83,9 @@ pub(crate) fn handle_save(
             eprintln!("Saved {} ({})", ts, hash);
 
             // TodoSave hook: fires after successful save (best-effort)
-            let hooks_config = load_hooks_config(None, global_hooks_path().as_deref(), None);
+            let project_hooks = project_root.join(".csa").join("hooks.toml");
+            let hooks_config =
+                load_hooks_config(Some(&project_hooks), global_hooks_path().as_deref(), None);
             let version = csa_todo::git::list_versions(manager.todos_dir(), &ts)
                 .map(|v| v.len())
                 .unwrap_or(1);

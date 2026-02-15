@@ -279,13 +279,14 @@ timeout_secs = 20
         assert!(session.enabled);
         assert!(session.command.is_none()); // resolved lazily
 
+        // Events without built-in commands default to disabled
+        // (TodoCreate/TodoSave have no builtins — git::save() already commits)
         let todo_create = config.get_for_event(HookEvent::TodoCreate);
-        assert!(todo_create.enabled);
+        assert!(!todo_create.enabled);
 
         let todo_save = config.get_for_event(HookEvent::TodoSave);
-        assert!(todo_save.enabled);
+        assert!(!todo_save.enabled);
 
-        // Events without built-in commands default to disabled
         let pre_run = config.get_for_event(HookEvent::PreRun);
         assert!(!pre_run.enabled);
 

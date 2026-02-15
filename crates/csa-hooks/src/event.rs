@@ -6,8 +6,8 @@
 /// - `PreRun` — fired before tool spawn in `pipeline::execute_with_session_and_meta`
 /// - `PostRun` — fired after every tool execution in `pipeline::execute_with_session_and_meta`
 /// - `SessionComplete` — fired after session save in `pipeline::execute_with_session_and_meta`
-/// - `TodoCreate` — fired after plan creation + git commit in `todo_cmd::handle_create`
-/// - `TodoSave` — fired after plan save + git commit in `todo_cmd::handle_save`
+/// - `TodoCreate` — fired after plan creation + git commit in `todo_cmd::handle_create` (no builtin; git already committed)
+/// - `TodoSave` — fired after plan save + git commit in `todo_cmd::handle_save` (no builtin; git already committed)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
     /// After a session execution completes (success or failure).
@@ -51,19 +51,20 @@ impl HookEvent {
     /// Built-in commands use template variables wrapped in `{braces}` that are
     /// substituted at runtime with actual values.
     ///
-    /// Returns `None` for events that have no built-in default (PreRun, PostRun).
+    /// Returns `None` for events that have no built-in default.
+    ///
+    /// `TodoCreate` and `TodoSave` have no builtins because `csa_todo::git::save()`
+    /// already commits changes before hooks fire; a default `git commit` would fail
+    /// on a clean index. Users can still configure custom commands via `hooks.toml`.
     pub fn builtin_command(&self) -> Option<&str> {
         match self {
             HookEvent::SessionComplete => Some(
                 "cd {sessions_root} && git add {session_id}/ && git commit -m 'session {session_id} complete' -q --allow-empty",
             ),
-            HookEvent::TodoCreate => Some(
-                "cd {todo_root} && git add {plan_dir}/ && git commit -m 'v1: {plan_id} initial' -q",
-            ),
-            HookEvent::TodoSave => Some(
-                "cd {todo_root} && git add {plan_dir}/ && git commit -m 'v{version}: {message}' -q",
-            ),
-            HookEvent::PreRun | HookEvent::PostRun => None,
+            HookEvent::TodoCreate
+            | HookEvent::TodoSave
+            | HookEvent::PreRun
+            | HookEvent::PostRun => None,
         }
     }
 }
@@ -88,10 +89,11 @@ mod tests {
     fn test_builtin_command() {
         // Events with built-in commands
         assert!(HookEvent::SessionComplete.builtin_command().is_some());
-        assert!(HookEvent::TodoCreate.builtin_command().is_some());
-        assert!(HookEvent::TodoSave.builtin_command().is_some());
 
-        // Events without built-in commands
+        // Events without built-in commands (TodoCreate/TodoSave have no builtins
+        // because git::save() already commits before hooks fire)
+        assert!(HookEvent::TodoCreate.builtin_command().is_none());
+        assert!(HookEvent::TodoSave.builtin_command().is_none());
         assert!(HookEvent::PreRun.builtin_command().is_none());
         assert!(HookEvent::PostRun.builtin_command().is_none());
     }
@@ -102,13 +104,7 @@ mod tests {
         assert!(cmd.contains("{session_id}"));
         assert!(cmd.contains("git commit"));
 
-        let cmd = HookEvent::TodoCreate.builtin_command().unwrap();
-        assert!(cmd.contains("{plan_id}"));
-        assert!(cmd.contains("v1:"));
-
-        let cmd = HookEvent::TodoSave.builtin_command().unwrap();
-        assert!(cmd.contains("{version}"));
-        assert!(cmd.contains("{message}"));
+        // TodoCreate and TodoSave have no builtins (covered by test_builtin_command)
     }
 
     /// Exhaustive test: all variants return distinct, non-empty config keys.
@@ -159,11 +155,7 @@ mod tests {
     /// at least one template variable placeholder.
     #[test]
     fn test_builtin_commands_contain_template_vars() {
-        let events_with_builtins = [
-            HookEvent::SessionComplete,
-            HookEvent::TodoCreate,
-            HookEvent::TodoSave,
-        ];
+        let events_with_builtins = [HookEvent::SessionComplete];
 
         for event in &events_with_builtins {
             let cmd = event
@@ -187,46 +179,6 @@ mod tests {
         assert!(
             cmd.contains("{session_id}"),
             "SessionComplete builtin must reference session_id"
-        );
-    }
-
-    /// Verify TodoCreate builtin contains all required variables.
-    #[test]
-    fn test_todo_create_builtin_has_required_vars() {
-        let cmd = HookEvent::TodoCreate.builtin_command().unwrap();
-        assert!(
-            cmd.contains("{todo_root}"),
-            "TodoCreate builtin must reference todo_root"
-        );
-        assert!(
-            cmd.contains("{plan_dir}"),
-            "TodoCreate builtin must reference plan_dir"
-        );
-        assert!(
-            cmd.contains("{plan_id}"),
-            "TodoCreate builtin must reference plan_id"
-        );
-    }
-
-    /// Verify TodoSave builtin contains all required variables.
-    #[test]
-    fn test_todo_save_builtin_has_required_vars() {
-        let cmd = HookEvent::TodoSave.builtin_command().unwrap();
-        assert!(
-            cmd.contains("{todo_root}"),
-            "TodoSave builtin must reference todo_root"
-        );
-        assert!(
-            cmd.contains("{plan_dir}"),
-            "TodoSave builtin must reference plan_dir"
-        );
-        assert!(
-            cmd.contains("{version}"),
-            "TodoSave builtin must reference version"
-        );
-        assert!(
-            cmd.contains("{message}"),
-            "TodoSave builtin must reference message"
         );
     }
 
