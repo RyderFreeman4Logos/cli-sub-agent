@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use weave::compiler::{compile, plan_to_toml};
 use weave::package;
 use weave::parser::parse_skill;
+use weave::visualize::{self, VisualizeResult, VisualizeTarget};
 
 /// Weave — skill language compiler and package manager.
 #[derive(Parser)]
@@ -58,6 +59,20 @@ enum Commands {
 
     /// Audit installed skills for issues.
     Audit,
+
+    /// Visualize a compiled plan.toml as ASCII (default), Mermaid, or PNG.
+    Visualize {
+        /// Input plan.toml file path.
+        plan: PathBuf,
+
+        /// Write PNG output to file.
+        #[arg(long, value_name = "FILE", conflicts_with = "mermaid")]
+        png: Option<PathBuf>,
+
+        /// Print Mermaid flowchart to stdout.
+        #[arg(long, conflicts_with = "png")]
+        mermaid: bool,
+    },
 }
 
 fn main() -> Result<()> {
@@ -136,6 +151,24 @@ fn main() -> Result<()> {
                     }
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Visualize { plan, png, mermaid } => {
+            let target = if mermaid {
+                VisualizeTarget::Mermaid
+            } else if let Some(output) = png {
+                VisualizeTarget::Png(output)
+            } else {
+                VisualizeTarget::Ascii
+            };
+
+            match visualize::visualize_plan_file(&plan, target)? {
+                VisualizeResult::Stdout(rendered) => {
+                    print!("{rendered}");
+                }
+                VisualizeResult::FileWritten(path) => {
+                    eprintln!("wrote {}", path.display());
+                }
             }
         }
     }
