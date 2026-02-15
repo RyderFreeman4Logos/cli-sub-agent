@@ -244,6 +244,10 @@ csa config edit                  # Edit project config
 csa config validate              # Validate config
 ```
 
+### Hooks
+
+Hook event timing and per-event template variables are documented in [`docs/hooks.md`](docs/hooks.md).
+
 ## Command Reference
 
 ### Core commands
