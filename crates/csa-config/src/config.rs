@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::global::ReviewConfig;
+use crate::global::{PreferencesConfig, ReviewConfig};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierConfig {
@@ -51,6 +51,10 @@ pub struct ProjectConfig {
     pub tier_mapping: HashMap<String, String>,
     #[serde(default)]
     pub aliases: HashMap<String, String>,
+    /// Optional per-project tool priority override.
+    /// When set, overrides the global `[preferences].tool_priority`.
+    #[serde(default)]
+    pub preferences: Option<PreferencesConfig>,
 }
 
 fn default_schema_version() -> u32 {

@@ -66,6 +66,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), Some(42)), 42);
@@ -191,6 +192,7 @@ fn resolve_idle_timeout_uses_config_then_default() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), None), 222);

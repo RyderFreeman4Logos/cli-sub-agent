@@ -40,6 +40,7 @@ fn test_save_and_load_roundtrip() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -74,6 +75,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -112,6 +114,7 @@ fn test_is_tool_enabled_configured_enabled() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.is_tool_enabled("codex"));
@@ -143,6 +146,7 @@ fn test_is_tool_enabled_configured_disabled() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(!config.is_tool_enabled("codex"));
@@ -164,6 +168,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.is_tool_enabled("codex"));
@@ -199,6 +204,7 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.is_tool_configured_in_tiers("codex"));
@@ -254,6 +260,7 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.is_tool_auto_selectable("codex"));
@@ -289,6 +296,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(!config.can_tool_edit_existing("gemini-cli"));
@@ -320,6 +328,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.can_tool_edit_existing("codex"));
@@ -341,6 +350,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.can_tool_edit_existing("codex"));
@@ -397,6 +407,7 @@ fn test_resolve_tier_default_selection() {
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     let result = config.resolve_tier_tool("default");
@@ -443,6 +454,7 @@ fn test_resolve_tier_fallback_to_tier3() {
         tiers,
         tier_mapping: HashMap::new(), // No mapping for "unknown_task"
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     // Should fallback to tier3
@@ -504,6 +516,7 @@ fn test_resolve_tier_skips_disabled_tools() {
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     // Should skip disabled gemini-cli and select codex
@@ -539,6 +552,7 @@ fn test_resolve_alias() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases,
+        preferences: None,
     };
 
     // Resolve alias
@@ -577,6 +591,7 @@ fn test_max_recursion_depth_override() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -702,6 +717,7 @@ fn test_schema_version_current_is_ok() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.check_schema_version().is_ok());
@@ -724,6 +740,7 @@ fn test_schema_version_older_is_ok() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     assert!(config.check_schema_version().is_ok());
@@ -745,6 +762,7 @@ fn test_schema_version_newer_fails() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     let result = config.check_schema_version();

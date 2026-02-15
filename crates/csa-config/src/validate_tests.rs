@@ -49,6 +49,7 @@ fn test_validate_config_succeeds_on_valid() {
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -75,6 +76,7 @@ fn test_validate_config_fails_on_empty_name() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -112,6 +114,7 @@ fn test_validate_config_fails_on_unknown_tool() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -143,6 +146,7 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -177,6 +181,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -220,6 +225,7 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -266,6 +272,7 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -321,6 +328,7 @@ fn test_validate_config_fails_on_empty_models() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -367,6 +375,7 @@ fn test_validate_config_accepts_custom_tier_names() {
         tiers,
         tier_mapping,
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -395,6 +404,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -427,6 +437,7 @@ fn test_validate_max_recursion_depth_boundary_20() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -452,6 +463,7 @@ fn test_validate_max_recursion_depth_boundary_21() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -489,6 +501,7 @@ fn test_validate_model_spec_two_parts() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -531,6 +544,7 @@ fn test_validate_model_spec_five_parts() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -564,6 +578,7 @@ fn test_validate_review_tool_auto_accepted() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -593,6 +608,7 @@ fn test_validate_all_known_review_tools_accepted() {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            preferences: None,
         };
 
         config.save(dir.path()).unwrap();
@@ -627,6 +643,7 @@ fn test_validate_all_known_debate_tools_accepted() {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            preferences: None,
         };
 
         config.save(dir.path()).unwrap();
@@ -669,6 +686,7 @@ fn test_validate_all_four_known_tools_accepted() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -694,6 +712,7 @@ fn test_validate_no_review_no_debate_is_ok() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
@@ -719,12 +738,56 @@ fn test_validate_max_recursion_depth_zero() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        preferences: None,
     };
 
     config.save(dir.path()).unwrap();
     let result = validate_config(dir.path());
     // 0 is <= 20, so should pass validation
     assert!(result.is_ok(), "max_recursion_depth 0 should be valid");
+}
+
+#[test]
+fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: true,
+            restrictions: None,
+            suppress_notify: true,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test-project".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: Some(crate::global::PreferencesConfig {
+            tool_priority: vec!["codexx".into(), "codex".into()],
+        }),
+    };
+
+    config.save(dir.path()).unwrap();
+    // Should pass validation (warn is non-fatal)
+    let result = validate_config(dir.path());
+    assert!(
+        result.is_ok(),
+        "unknown tool_priority entry should warn, not fail: {:?}",
+        result
+    );
 }
 
 include!("validate_tests_tiers.rs");

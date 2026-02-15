@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::collections::HashMap;
 
 use csa_config::ProjectConfig;
+use csa_config::global::GlobalConfig;
 use csa_core::consensus::{
     AgentResponse, ConsensusResult, ConsensusStrategy, resolve_majority, resolve_unanimous,
     resolve_weighted,
@@ -15,6 +16,7 @@ pub(crate) fn build_reviewer_tools(
     explicit_tool: Option<ToolName>,
     primary_tool: ToolName,
     project_config: Option<&ProjectConfig>,
+    global_config: Option<&GlobalConfig>,
     reviewer_count: usize,
 ) -> Vec<ToolName> {
     if reviewer_count == 0 {
@@ -25,11 +27,22 @@ pub(crate) fn build_reviewer_tools(
     }
 
     let enabled_tools: Vec<ToolName> = if let Some(cfg) = project_config {
-        csa_config::global::all_known_tools()
+        let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_enabled(t.as_str()))
             .copied()
-            .collect()
+            .collect();
+        if let Some(gc) = global_config {
+            csa_config::global::sort_tools_by_effective_priority(&tools, project_config, gc)
+        } else {
+            tools
+        }
+    } else if let Some(gc) = global_config {
+        csa_config::global::sort_tools_by_effective_priority(
+            csa_config::global::all_known_tools(),
+            project_config,
+            gc,
+        )
     } else {
         csa_config::global::all_known_tools().to_vec()
     };
@@ -191,6 +204,7 @@ mod tests {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            preferences: None,
         }
     }
 
@@ -210,14 +224,14 @@ mod tests {
     #[test]
     fn build_reviewer_tools_returns_empty_when_reviewer_count_is_zero() {
         let cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
-        let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), 0);
+        let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, 0);
         assert!(tools.is_empty());
     }
 
     #[test]
     fn build_reviewer_tools_round_robin_across_enabled_tools() {
         let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
-        let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), 5);
+        let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, 5);
         assert_eq!(
             tools,
             vec![
@@ -233,7 +247,8 @@ mod tests {
     #[test]
     fn build_reviewer_tools_respects_explicit_tool_override() {
         let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
-        let tools = build_reviewer_tools(Some(ToolName::Codex), ToolName::Codex, Some(&cfg), 3);
+        let tools =
+            build_reviewer_tools(Some(ToolName::Codex), ToolName::Codex, Some(&cfg), None, 3);
         assert_eq!(
             tools,
             vec![ToolName::Codex, ToolName::Codex, ToolName::Codex]
