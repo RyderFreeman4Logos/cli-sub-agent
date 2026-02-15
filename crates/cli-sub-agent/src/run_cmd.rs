@@ -7,7 +7,7 @@ use tempfile::TempDir;
 use tracing::{info, warn};
 
 use csa_config::GlobalConfig;
-use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
+use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
@@ -60,6 +60,36 @@ fn resolve_last_session_selection(
     warning_lines.push("Use `--session <session-id>` to choose explicitly.".to_string());
 
     Ok((selected_id, Some(warning_lines.join("\n"))))
+}
+
+fn resolve_heterogeneous_candidates(
+    parent_tool: &ToolName,
+    enabled_tools: &[ToolName],
+) -> Vec<ToolName> {
+    let parent_family = parent_tool.model_family();
+    enabled_tools
+        .iter()
+        .copied()
+        .filter(|tool| tool.model_family() != parent_family)
+        .collect()
+}
+
+fn take_next_runtime_fallback_tool(
+    candidates: &mut Vec<ToolName>,
+    current_tool: ToolName,
+    tried_tools: &[String],
+) -> Option<ToolName> {
+    while let Some(candidate) = candidates.first().copied() {
+        candidates.remove(0);
+        if candidate == current_tool {
+            continue;
+        }
+        if tried_tools.iter().any(|tried| tried == candidate.as_str()) {
+            continue;
+        }
+        return Some(candidate);
+    }
+    None
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -175,6 +205,7 @@ pub(crate) async fn handle_run(
         pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout);
 
     // 7. Resolve initial tool based on strategy
+    let mut heterogeneous_runtime_fallback_candidates: Vec<ToolName> = Vec::new();
     let (initial_tool, resolved_model_spec, resolved_model) = match &strategy {
         ToolSelectionStrategy::Explicit(t) => resolve_tool_and_model(
             Some(*t),
@@ -209,14 +240,20 @@ pub(crate) async fn handle_run(
                     Vec::new()
                 };
 
-                match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
-                    Some(tool) => resolve_tool_and_model(
-                        Some(tool),
-                        model_spec.as_deref(),
-                        model.as_deref(),
-                        config.as_ref(),
-                        &project_root,
-                    )?,
+                let heterogeneous_candidates =
+                    resolve_heterogeneous_candidates(&parent_tool, &enabled_tools);
+                match heterogeneous_candidates.first().copied() {
+                    Some(tool) => {
+                        heterogeneous_runtime_fallback_candidates =
+                            heterogeneous_candidates.into_iter().skip(1).collect();
+                        resolve_tool_and_model(
+                            Some(tool),
+                            model_spec.as_deref(),
+                            model.as_deref(),
+                            config.as_ref(),
+                            &project_root,
+                        )?
+                    }
                     None => {
                         warn!(
                             "No heterogeneous tool available (parent: {}, family: {}). Falling back to any available tool.",
@@ -361,6 +398,10 @@ pub(crate) async fn handle_run(
     let mut current_model = resolved_model;
     let mut tried_tools: Vec<String> = Vec::new();
     let mut attempts = 0;
+    let runtime_fallback_enabled =
+        matches!(strategy, ToolSelectionStrategy::HeterogeneousPreferred) && !no_failover;
+    let mut runtime_fallback_attempts = 0u8;
+    let max_runtime_fallback_attempts = 1u8;
 
     let result = loop {
         attempts += 1;
@@ -468,7 +509,7 @@ pub(crate) async fn handle_run(
                     stream_mode,
                     idle_timeout_seconds,
                 )
-                .await?
+                .await
         } else {
             match pipeline::execute_with_session(
                 &executor,
@@ -489,7 +530,7 @@ pub(crate) async fn handle_run(
             )
             .await
             {
-                Ok(result) => result,
+                Ok(result) => Ok(result),
                 Err(e) => {
                     let error_msg = e.to_string();
                     if error_msg.contains("Session locked by PID")
@@ -504,10 +545,69 @@ pub(crate) async fn handle_run(
                         println!("{}", serde_json::to_string_pretty(&json_error)?);
                         return Ok(1);
                     }
-                    return Err(e);
+                    Err(e)
                 }
             }
         };
+
+        let exec_result = match exec_result {
+            Ok(result) => result,
+            Err(e) => {
+                if runtime_fallback_enabled
+                    && runtime_fallback_attempts < max_runtime_fallback_attempts
+                {
+                    if let Some(next_tool) = take_next_runtime_fallback_tool(
+                        &mut heterogeneous_runtime_fallback_candidates,
+                        current_tool,
+                        &tried_tools,
+                    ) {
+                        runtime_fallback_attempts += 1;
+                        warn!(
+                            from = %tool_name_str,
+                            to = %next_tool.as_str(),
+                            attempt = runtime_fallback_attempts,
+                            max_attempts = max_runtime_fallback_attempts,
+                            error = %e,
+                            "HeterogeneousPreferred runtime fallback: retrying with next heterogeneous tool"
+                        );
+                        tried_tools.push(tool_name_str.to_string());
+                        current_tool = next_tool;
+                        current_model_spec = None;
+                        current_model = None;
+                        continue;
+                    }
+                }
+                return Err(e);
+            }
+        };
+
+        // Runtime failure fallback for HeterogeneousPreferred:
+        // one retry using the next heterogeneous candidate on non-zero exit.
+        if exec_result.exit_code != 0
+            && runtime_fallback_enabled
+            && runtime_fallback_attempts < max_runtime_fallback_attempts
+        {
+            if let Some(next_tool) = take_next_runtime_fallback_tool(
+                &mut heterogeneous_runtime_fallback_candidates,
+                current_tool,
+                &tried_tools,
+            ) {
+                runtime_fallback_attempts += 1;
+                warn!(
+                    from = %tool_name_str,
+                    to = %next_tool.as_str(),
+                    exit_code = exec_result.exit_code,
+                    attempt = runtime_fallback_attempts,
+                    max_attempts = max_runtime_fallback_attempts,
+                    "HeterogeneousPreferred runtime fallback: retrying with next heterogeneous tool"
+                );
+                tried_tools.push(tool_name_str.to_string());
+                current_tool = next_tool;
+                current_model_spec = None;
+                current_model = None;
+                continue;
+            }
+        }
 
         // Check for 429 rate limit and attempt failover
         if let Some(rate_limit) = csa_scheduler::detect_rate_limit(
