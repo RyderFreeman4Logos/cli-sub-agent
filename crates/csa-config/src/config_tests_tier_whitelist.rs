@@ -190,3 +190,30 @@ fn enforce_tier_model_name_full_spec_unconfigured_rejected() {
         .unwrap_err();
     assert!(err.to_string().contains("not configured in any tier"));
 }
+
+#[test]
+fn enforce_tier_whitelist_cross_tool_spec_rejected() {
+    let cfg = config_with_tiers(&[
+        "codex/openai/gpt-5.3-codex/high",
+        "claude-code/anthropic/sonnet-4.5/xhigh",
+    ]);
+    // Spec belongs to claude-code, but tool is codex — must reject
+    let err = cfg
+        .enforce_tier_whitelist("codex", Some("claude-code/anthropic/sonnet-4.5/xhigh"))
+        .unwrap_err();
+    assert!(err.to_string().contains("belongs to tool"));
+    assert!(err.to_string().contains("claude-code"));
+}
+
+#[test]
+fn enforce_tier_model_name_cross_tool_full_spec_rejected() {
+    let cfg = config_with_tiers(&[
+        "codex/openai/gpt-5.3-codex/high",
+        "claude-code/anthropic/sonnet-4.5/xhigh",
+    ]);
+    // Full spec for claude-code passed with tool=codex — must reject
+    let err = cfg
+        .enforce_tier_model_name("codex", Some("claude-code/anthropic/sonnet-4.5/xhigh"))
+        .unwrap_err();
+    assert!(err.to_string().contains("belongs to tool"));
+}

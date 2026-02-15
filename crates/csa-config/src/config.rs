@@ -575,8 +575,22 @@ idle_timeout_seconds = 300
             );
         }
 
-        // If model_spec provided, it must match exactly
+        // If model_spec provided, verify tool/spec consistency and tier membership
         if let Some(spec) = model_spec {
+            // Cross-field consistency: spec's tool component must match selected tool
+            if let Some(spec_tool) = spec.split('/').next() {
+                if spec_tool != tool {
+                    anyhow::bail!(
+                        "Model spec '{}' belongs to tool '{}', not '{}'. \
+                         Use --tool {} or select a spec for '{}'.",
+                        spec,
+                        spec_tool,
+                        tool,
+                        spec_tool,
+                        tool
+                    );
+                }
+            }
             if !self.is_model_spec_in_tiers(spec) {
                 let allowed = self.allowed_model_specs_for_tool(tool);
                 anyhow::bail!(
