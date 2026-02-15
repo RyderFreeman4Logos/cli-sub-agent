@@ -10,7 +10,7 @@
 //! - `update [name]` — fetch latest and re-lock
 //! - `audit` — verify lockfile consistency
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -28,6 +28,17 @@ pub struct Lockfile {
     pub package: Vec<LockedPackage>,
 }
 
+/// How a dependency was installed.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SourceKind {
+    /// Installed from a git repository (default for backward compatibility).
+    #[default]
+    Git,
+    /// Installed from a local directory path.
+    Local,
+}
+
 /// A single locked dependency.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct LockedPackage {
@@ -36,6 +47,10 @@ pub struct LockedPackage {
     pub commit: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
+    /// How this dependency was installed. Defaults to `Git` for backward
+    /// compatibility with lockfiles that predate this field.
+    #[serde(default)]
+    pub source_kind: SourceKind,
 }
 
 // ---------------------------------------------------------------------------
@@ -286,6 +301,7 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
         repo: src.url,
         commit,
         version,
+        source_kind: SourceKind::Git,
     };
 
     // Update the lockfile with this package.
@@ -297,6 +313,111 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
     save_lockfile(&lockfile_path, &lockfile)?;
 
     Ok(pkg)
+}
+
+// ---------------------------------------------------------------------------
+// Public API: install_from_local
+// ---------------------------------------------------------------------------
+
+/// Install a skill from a local directory path into `.weave/deps/<name>/`.
+///
+/// The source directory is recursively copied (excluding `.git/`).
+/// Returns the locked package entry with `source_kind = Local`.
+pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<LockedPackage> {
+    let canonical = source_path
+        .canonicalize()
+        .with_context(|| format!("cannot resolve path: {}", source_path.display()))?;
+
+    if !canonical.is_dir() {
+        bail!("not a directory: {}", canonical.display());
+    }
+
+    // Extract name from the directory basename.
+    let name = canonical
+        .file_name()
+        .context("cannot extract directory name")?
+        .to_string_lossy()
+        .to_string();
+
+    // Validate name — no path separators or traversal.
+    if name.contains('/') || name.contains('\\') || name == ".." || name == "." || name.is_empty() {
+        bail!("invalid skill name: '{name}'");
+    }
+
+    // Require SKILL.md to be present.
+    if !canonical.join("SKILL.md").is_file() {
+        bail!(
+            "SKILL.md not found in {} — not a valid skill directory",
+            canonical.display()
+        );
+    }
+
+    let deps_dir = project_root.join(".weave").join("deps");
+    let dest = deps_dir.join(&name);
+
+    // Remove existing directory if present.
+    if dest.exists() {
+        std::fs::remove_dir_all(&dest)
+            .with_context(|| format!("failed to remove existing {}", dest.display()))?;
+    }
+
+    // Recursive copy, excluding .git/.
+    copy_dir_recursive(&canonical, &dest)?;
+
+    let version = read_version(&dest);
+
+    let pkg = LockedPackage {
+        name,
+        repo: String::new(),
+        commit: String::new(),
+        version,
+        source_kind: SourceKind::Local,
+    };
+
+    // Update the lockfile.
+    let lockfile_path = project_root.join(".weave").join("lock.toml");
+    let mut lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+        package: Vec::new(),
+    });
+    upsert_package(&mut lockfile, &pkg);
+    save_lockfile(&lockfile_path, &lockfile)?;
+
+    Ok(pkg)
+}
+
+/// Recursively copy a directory, skipping `.git/` subdirectories.
+fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest)
+        .with_context(|| format!("failed to create {}", dest.display()))?;
+
+    for entry in
+        std::fs::read_dir(src).with_context(|| format!("failed to read {}", src.display()))?
+    {
+        let entry = entry?;
+        let file_name = entry.file_name();
+        let src_path = entry.path();
+        let dest_path = dest.join(&file_name);
+
+        // Skip .git directories.
+        if file_name == ".git" {
+            continue;
+        }
+
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&src_path, &dest_path)?;
+        } else {
+            std::fs::copy(&src_path, &dest_path).with_context(|| {
+                format!(
+                    "failed to copy {} -> {}",
+                    src_path.display(),
+                    dest_path.display()
+                )
+            })?;
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +467,7 @@ pub fn lock(project_root: &Path) -> Result<Lockfile> {
                     repo: String::new(),
                     commit: String::new(),
                     version: read_version(&entry.path()),
+                    source_kind: SourceKind::default(),
                 });
             }
         }
@@ -386,6 +508,13 @@ pub fn update(
 
     for idx in targets {
         let pkg = &lockfile.package[idx];
+        if pkg.source_kind == SourceKind::Local {
+            eprintln!(
+                "skipping {} (local source — reinstall with --path to update)",
+                pkg.name
+            );
+            continue;
+        }
         if pkg.repo.is_empty() {
             continue; // Skip entries without a known repo.
         }
@@ -488,7 +617,7 @@ pub fn audit(project_root: &Path) -> Result<Vec<AuditResult>> {
             issues.push(AuditIssue::MissingSkillMd);
         }
 
-        if pkg.repo.is_empty() {
+        if pkg.repo.is_empty() && pkg.source_kind != SourceKind::Local {
             issues.push(AuditIssue::UnknownRepo);
         }
 
@@ -514,132 +643,6 @@ pub fn audit(project_root: &Path) -> Result<Vec<AuditResult>> {
                     }
                 }
             }
-        }
-    }
-
-    Ok(results)
-}
-
-// ---------------------------------------------------------------------------
-// Public API: check (symlink health)
-// ---------------------------------------------------------------------------
-
-/// Default directories to scan for broken symlinks.
-pub const DEFAULT_CHECK_DIRS: &[&str] = &[
-    ".claude/skills",
-    ".codex/skills",
-    ".agents/skills",
-    ".gemini/skills",
-];
-
-/// Result of checking a single directory for broken symlinks.
-#[derive(Debug)]
-pub struct CheckResult {
-    /// Directory that was scanned.
-    pub dir: PathBuf,
-    /// Broken symlinks found.
-    pub issues: Vec<AuditIssue>,
-    /// Number of symlinks that were removed (when fix=true).
-    pub fixed: usize,
-    /// Number of symlinks that could not be removed (permission errors, etc.).
-    pub fix_failures: usize,
-}
-
-/// Scan directories for broken symlinks.
-///
-/// When `fix` is true, broken symlinks are removed and the count is returned
-/// in `CheckResult::fixed`. Only actual symlinks are removed — regular files
-/// and directories are never touched.
-pub fn check_symlinks(
-    project_root: &Path,
-    dirs: &[PathBuf],
-    fix: bool,
-) -> Result<Vec<CheckResult>> {
-    let mut results = Vec::new();
-
-    for dir in dirs {
-        let abs_dir = if dir.is_absolute() {
-            dir.clone()
-        } else {
-            project_root.join(dir)
-        };
-
-        if !abs_dir.is_dir() {
-            continue;
-        }
-
-        let mut issues = Vec::new();
-        let mut fixed = 0;
-        let mut fix_failures = 0;
-        // Track visited inodes to detect symlink cycles.
-        let mut visited = HashSet::new();
-
-        let entries = std::fs::read_dir(&abs_dir)
-            .with_context(|| format!("failed to read {}", abs_dir.display()))?;
-
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-
-            // Use symlink_metadata to inspect the link itself, not its target.
-            let meta = match std::fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            if !meta.file_type().is_symlink() {
-                continue;
-            }
-
-            // Cycle detection via inode.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::MetadataExt;
-                let inode = meta.ino();
-                if !visited.insert(inode) {
-                    continue; // Already seen this inode.
-                }
-            }
-
-            let target = match std::fs::read_link(&path) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
-
-            // Resolve relative targets against the symlink's parent directory.
-            let resolved = if target.is_absolute() {
-                target.clone()
-            } else {
-                abs_dir.join(&target)
-            };
-
-            // Check if target exists (without following further symlinks).
-            if !resolved.exists() {
-                issues.push(AuditIssue::BrokenSymlink {
-                    path: path.clone(),
-                    target: target.clone(),
-                });
-
-                if fix {
-                    // Only remove the symlink itself, never follow it.
-                    if let Ok(m) = std::fs::symlink_metadata(&path) {
-                        if m.file_type().is_symlink() {
-                            match std::fs::remove_file(&path) {
-                                Ok(()) => fixed += 1,
-                                Err(_) => fix_failures += 1,
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if !issues.is_empty() || fixed > 0 || fix_failures > 0 {
-            results.push(CheckResult {
-                dir: abs_dir,
-                issues,
-                fixed,
-                fix_failures,
-            });
         }
     }
 

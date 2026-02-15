@@ -1,9 +1,10 @@
 use std::io::Read;
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
+use weave::check;
 use weave::compiler::{compile, plan_to_toml};
 use weave::package;
 use weave::parser::parse_skill;
@@ -43,10 +44,14 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
-    /// Install a skill from a git repository.
+    /// Install a skill from a git repository or local path.
     Install {
-        /// Git URL or user/repo shorthand.
-        source: String,
+        /// Git URL or user/repo shorthand (mutually exclusive with --path).
+        source: Option<String>,
+
+        /// Install from a local directory instead of git.
+        #[arg(long, value_name = "DIR", conflicts_with = "source")]
+        path: Option<PathBuf>,
     },
 
     /// Lock current skill dependencies.
@@ -113,16 +118,27 @@ fn main() -> Result<()> {
                 print!("{toml_str}");
             }
         }
-        Commands::Install { source } => {
+        Commands::Install { source, path } => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
-            let cache_root = package::default_cache_root()?;
-            let pkg = package::install(&source, &project_root, &cache_root)?;
-            eprintln!(
-                "installed {} ({}) -> .weave/deps/{}/",
-                pkg.name,
-                &pkg.commit[..pkg.commit.len().min(12)],
-                pkg.name
-            );
+
+            if let Some(local_path) = path {
+                let pkg = package::install_from_local(&local_path, &project_root)?;
+                eprintln!(
+                    "installed {} (local) -> .weave/deps/{}/",
+                    pkg.name, pkg.name
+                );
+            } else if let Some(git_source) = source {
+                let cache_root = package::default_cache_root()?;
+                let pkg = package::install(&git_source, &project_root, &cache_root)?;
+                eprintln!(
+                    "installed {} ({}) -> .weave/deps/{}/",
+                    pkg.name,
+                    &pkg.commit[..pkg.commit.len().min(12)],
+                    pkg.name
+                );
+            } else {
+                bail!("either <SOURCE> or --path <DIR> is required");
+            }
         }
         Commands::Lock => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
@@ -168,14 +184,14 @@ fn main() -> Result<()> {
         Commands::Check { dirs, fix } => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
             let scan_dirs = if dirs.is_empty() {
-                package::DEFAULT_CHECK_DIRS
+                check::DEFAULT_CHECK_DIRS
                     .iter()
                     .map(PathBuf::from)
                     .collect()
             } else {
                 dirs
             };
-            let results = package::check_symlinks(&project_root, &scan_dirs, fix)?;
+            let results = check::check_symlinks(&project_root, &scan_dirs, fix)?;
             let total_broken: usize = results.iter().map(|r| r.issues.len()).sum();
             let total_fixed: usize = results.iter().map(|r| r.fixed).sum();
             let total_failures: usize = results.iter().map(|r| r.fix_failures).sum();

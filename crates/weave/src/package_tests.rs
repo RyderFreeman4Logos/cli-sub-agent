@@ -1,106 +1,6 @@
-use std::path::Path;
-
 use tempfile::TempDir;
 
 use super::*;
-
-// ---------------------------------------------------------------------------
-// check_symlinks tests
-// ---------------------------------------------------------------------------
-
-#[cfg(unix)]
-fn make_symlink(link: &Path, target: &Path) {
-    std::os::unix::fs::symlink(target, link).unwrap();
-}
-
-#[cfg(unix)]
-#[test]
-fn check_finds_broken_symlinks() {
-    let tmp = TempDir::new().unwrap();
-    let skill_dir = tmp.path().join("skills");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-
-    // Create a broken symlink (target doesn't exist).
-    let link = skill_dir.join("broken-skill");
-    make_symlink(&link, Path::new("/nonexistent/path/to/skill"));
-
-    let results = check_symlinks(tmp.path(), &[PathBuf::from("skills")], false).unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].issues.len(), 1);
-    assert!(matches!(
-        &results[0].issues[0],
-        AuditIssue::BrokenSymlink { path, .. } if path == &link
-    ));
-    assert_eq!(results[0].fixed, 0);
-}
-
-#[cfg(unix)]
-#[test]
-fn check_preserves_valid_symlinks() {
-    let tmp = TempDir::new().unwrap();
-    let skill_dir = tmp.path().join("skills");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-
-    // Create a valid target and symlink.
-    let target = tmp.path().join("real-skill");
-    std::fs::create_dir_all(&target).unwrap();
-    let link = skill_dir.join("good-skill");
-    make_symlink(&link, &target);
-
-    let results = check_symlinks(tmp.path(), &[PathBuf::from("skills")], false).unwrap();
-    // No issues found — result list is empty (only populated when issues exist).
-    assert!(results.is_empty());
-    // Symlink still exists.
-    assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
-}
-
-#[cfg(unix)]
-#[test]
-fn check_fix_removes_broken_symlinks() {
-    let tmp = TempDir::new().unwrap();
-    let skill_dir = tmp.path().join("skills");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-
-    // Create broken and valid symlinks.
-    let broken = skill_dir.join("broken");
-    make_symlink(&broken, Path::new("/nonexistent"));
-
-    let target = tmp.path().join("real");
-    std::fs::create_dir_all(&target).unwrap();
-    let valid = skill_dir.join("valid");
-    make_symlink(&valid, &target);
-
-    let results = check_symlinks(tmp.path(), &[PathBuf::from("skills")], true).unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].fixed, 1);
-
-    // Broken symlink removed, valid symlink preserved.
-    assert!(!broken.exists() && broken.symlink_metadata().is_err());
-    assert!(valid.symlink_metadata().unwrap().file_type().is_symlink());
-}
-
-#[cfg(unix)]
-#[test]
-fn check_skips_nonexistent_directories() {
-    let tmp = TempDir::new().unwrap();
-    let results = check_symlinks(tmp.path(), &[PathBuf::from("does-not-exist")], false).unwrap();
-    assert!(results.is_empty());
-}
-
-#[cfg(unix)]
-#[test]
-fn check_ignores_regular_files() {
-    let tmp = TempDir::new().unwrap();
-    let skill_dir = tmp.path().join("skills");
-    std::fs::create_dir_all(&skill_dir).unwrap();
-
-    // Regular file — should not be touched.
-    std::fs::write(skill_dir.join("not-a-link"), "content").unwrap();
-
-    let results = check_symlinks(tmp.path(), &[PathBuf::from("skills")], true).unwrap();
-    assert!(results.is_empty());
-    assert!(skill_dir.join("not-a-link").exists());
-}
 
 #[test]
 fn parse_source_user_repo() {
@@ -160,12 +60,14 @@ fn lockfile_round_trip() {
                 repo: "https://github.com/org/audit.git".to_string(),
                 commit: "abc123def456".to_string(),
                 version: Some("1.0.0".to_string()),
+                source_kind: SourceKind::default(),
             },
             LockedPackage {
                 name: "review".to_string(),
                 repo: "https://github.com/org/review.git".to_string(),
                 commit: "789abc".to_string(),
                 version: None,
+                source_kind: SourceKind::default(),
             },
         ],
     };
@@ -186,6 +88,7 @@ fn upsert_adds_new_package() {
             repo: "https://example.com/existing.git".to_string(),
             commit: "aaa".to_string(),
             version: None,
+            source_kind: SourceKind::default(),
         }],
     };
 
@@ -194,6 +97,7 @@ fn upsert_adds_new_package() {
         repo: "https://example.com/new.git".to_string(),
         commit: "bbb".to_string(),
         version: Some("2.0".to_string()),
+        source_kind: SourceKind::default(),
     };
 
     upsert_package(&mut lockfile, &new_pkg);
@@ -209,6 +113,7 @@ fn upsert_updates_existing_package() {
             repo: "https://example.com/pkg.git".to_string(),
             commit: "old-commit".to_string(),
             version: None,
+            source_kind: SourceKind::default(),
         }],
     };
 
@@ -217,6 +122,7 @@ fn upsert_updates_existing_package() {
         repo: "https://example.com/pkg.git".to_string(),
         commit: "new-commit".to_string(),
         version: Some("3.0".to_string()),
+        source_kind: SourceKind::default(),
     };
 
     upsert_package(&mut lockfile, &updated);
@@ -277,6 +183,7 @@ fn lock_preserves_existing_lockfile_entries() {
             repo: "https://github.com/org/audit.git".to_string(),
             commit: "abc123".to_string(),
             version: Some("1.0".to_string()),
+            source_kind: SourceKind::default(),
         }],
     };
     let lock_path = tmp.path().join(".weave").join("lock.toml");
@@ -307,6 +214,7 @@ fn audit_detects_missing_dep() {
             repo: "https://example.com/ghost.git".to_string(),
             commit: "abc".to_string(),
             version: None,
+            source_kind: SourceKind::default(),
         }],
     };
     let lock_path = tmp.path().join(".weave").join("lock.toml");
@@ -357,6 +265,7 @@ fn audit_detects_missing_skill_md() {
             repo: "https://example.com/broken.git".to_string(),
             commit: "abc".to_string(),
             version: None,
+            source_kind: SourceKind::default(),
         }],
     };
     let lock_path = tmp.path().join(".weave").join("lock.toml");
@@ -386,6 +295,7 @@ fn audit_detects_unknown_repo() {
             repo: String::new(),
             commit: String::new(),
             version: None,
+            source_kind: SourceKind::Git, // Git source with empty repo → UnknownRepo
         }],
     };
     let lock_path = tmp.path().join(".weave").join("lock.toml");
@@ -399,4 +309,180 @@ fn audit_detects_unknown_repo() {
             .iter()
             .any(|i| matches!(i, AuditIssue::UnknownRepo))
     );
+}
+
+// ---------------------------------------------------------------------------
+// install_from_local tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn install_from_local_succeeds() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Create a local skill directory.
+    let skill_src = tmp.path().join("my-skill");
+    std::fs::create_dir_all(&skill_src).unwrap();
+    std::fs::write(skill_src.join("SKILL.md"), "# My Skill").unwrap();
+    std::fs::write(skill_src.join("helper.txt"), "data").unwrap();
+
+    let pkg = install_from_local(&skill_src, &project).unwrap();
+    assert_eq!(pkg.name, "my-skill");
+    assert_eq!(pkg.source_kind, SourceKind::Local);
+    assert!(pkg.repo.is_empty());
+    assert!(pkg.commit.is_empty());
+
+    // Files were copied to deps.
+    let dest = project.join(".weave").join("deps").join("my-skill");
+    assert!(dest.join("SKILL.md").is_file());
+    assert!(dest.join("helper.txt").is_file());
+
+    // Lockfile was written.
+    let lockfile = load_lockfile(&project.join(".weave").join("lock.toml")).unwrap();
+    assert_eq!(lockfile.package.len(), 1);
+    assert_eq!(lockfile.package[0].source_kind, SourceKind::Local);
+}
+
+#[test]
+fn install_from_local_excludes_git_dir() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let skill_src = tmp.path().join("git-skill");
+    std::fs::create_dir_all(skill_src.join(".git")).unwrap();
+    std::fs::write(skill_src.join("SKILL.md"), "# Git Skill").unwrap();
+    std::fs::write(skill_src.join(".git").join("config"), "core").unwrap();
+
+    install_from_local(&skill_src, &project).unwrap();
+
+    let dest = project.join(".weave").join("deps").join("git-skill");
+    assert!(dest.join("SKILL.md").is_file());
+    assert!(!dest.join(".git").exists());
+}
+
+#[test]
+fn install_from_local_rejects_missing_skill_md() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let skill_src = tmp.path().join("no-skill");
+    std::fs::create_dir_all(&skill_src).unwrap();
+    std::fs::write(skill_src.join("README.md"), "# No Skill").unwrap();
+
+    let result = install_from_local(&skill_src, &project);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("SKILL.md not found"), "error: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// SourceKind serialization tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn source_kind_serde_roundtrip() {
+    let lockfile = Lockfile {
+        package: vec![
+            LockedPackage {
+                name: "from-git".to_string(),
+                repo: "https://github.com/org/from-git.git".to_string(),
+                commit: "abc123".to_string(),
+                version: None,
+                source_kind: SourceKind::Git,
+            },
+            LockedPackage {
+                name: "from-local".to_string(),
+                repo: String::new(),
+                commit: String::new(),
+                version: Some("1.0".to_string()),
+                source_kind: SourceKind::Local,
+            },
+        ],
+    };
+
+    let tmp = TempDir::new().unwrap();
+    let lock_path = tmp.path().join("lock.toml");
+
+    save_lockfile(&lock_path, &lockfile).unwrap();
+    let loaded = load_lockfile(&lock_path).unwrap();
+    assert_eq!(lockfile, loaded);
+    assert_eq!(loaded.package[0].source_kind, SourceKind::Git);
+    assert_eq!(loaded.package[1].source_kind, SourceKind::Local);
+}
+
+#[test]
+fn source_kind_defaults_to_git_for_old_lockfiles() {
+    // Simulate an old lockfile without source_kind field.
+    let toml_str = r#"
+[[package]]
+name = "legacy"
+repo = "https://github.com/org/legacy.git"
+commit = "abc"
+"#;
+    let lockfile: Lockfile = toml::from_str(toml_str).unwrap();
+    assert_eq!(lockfile.package[0].source_kind, SourceKind::Git);
+}
+
+// ---------------------------------------------------------------------------
+// audit + Local source tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn audit_skips_unknown_repo_for_local_source() {
+    let tmp = TempDir::new().unwrap();
+
+    let deps = tmp.path().join(".weave").join("deps").join("local-skill");
+    std::fs::create_dir_all(&deps).unwrap();
+    std::fs::write(deps.join("SKILL.md"), "# Local Skill").unwrap();
+
+    let lockfile = Lockfile {
+        package: vec![LockedPackage {
+            name: "local-skill".to_string(),
+            repo: String::new(),
+            commit: String::new(),
+            version: None,
+            source_kind: SourceKind::Local,
+        }],
+    };
+    let lock_path = tmp.path().join(".weave").join("lock.toml");
+    save_lockfile(&lock_path, &lockfile).unwrap();
+
+    let results = audit(tmp.path()).unwrap();
+    // No issues — empty repo is expected for Local sources.
+    assert!(results.is_empty(), "expected no issues, got: {results:?}");
+}
+
+// ---------------------------------------------------------------------------
+// lock preserves source_kind tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lock_preserves_source_kind_from_existing_lockfile() {
+    let tmp = TempDir::new().unwrap();
+
+    // Create dep directory.
+    let deps = tmp.path().join(".weave").join("deps").join("local-dep");
+    std::fs::create_dir_all(&deps).unwrap();
+    std::fs::write(deps.join("SKILL.md"), "# Local").unwrap();
+
+    // Create lockfile with Local source_kind.
+    let initial = Lockfile {
+        package: vec![LockedPackage {
+            name: "local-dep".to_string(),
+            repo: String::new(),
+            commit: String::new(),
+            version: None,
+            source_kind: SourceKind::Local,
+        }],
+    };
+    let lock_path = tmp.path().join(".weave").join("lock.toml");
+    save_lockfile(&lock_path, &initial).unwrap();
+
+    // Re-lock — should preserve source_kind.
+    let result = lock(tmp.path()).unwrap();
+    assert_eq!(result.package.len(), 1);
+    assert_eq!(result.package[0].source_kind, SourceKind::Local);
 }
