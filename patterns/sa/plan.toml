@@ -76,13 +76,15 @@ Validate result and TODO paths stay inside CSA state directories.
 
 ```bash
 RESULT_PATH="${LAST_LINE}"
-RESULT_REAL=$(realpath -e "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml not found: ${RESULT_PATH}" >&2; exit 1; }
+RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path invalid: ${RESULT_PATH}" >&2; exit 1; }
+[ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
 SESSION_ID=$(grep -- 'session_id = ' "$RESULT_REAL" | cut -d'"' -f2)
 STATUS=$(grep -- 'status = ' "$RESULT_REAL" | head -1 | cut -d'"' -f2)
 TODO_PATH=$(grep -- 'todo_path = ' "$RESULT_REAL" | cut -d'"' -f2)
-TODO_REAL=$(realpath -e "${TODO_PATH}" 2>/dev/null) || { echo "TODO path not found: ${TODO_PATH}" >&2; exit 1; }
+TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: ${TODO_PATH}" >&2; exit 1; }
+[ -f "${TODO_REAL}" ] || { echo "TODO not found: ${TODO_REAL}" >&2; exit 1; }
 [[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
 ```"""
 on_fail = "abort"
@@ -138,7 +140,8 @@ Extract commit_hash, review_result, tasks_completed from CSA session `result.tom
 
 ```bash
 RESULT_PATH="${LAST_LINE}"
-RESULT_REAL=$(realpath -e "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml not found: ${RESULT_PATH}" >&2; exit 1; }
+RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path invalid: ${RESULT_PATH}" >&2; exit 1; }
+[ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
 COMMIT=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
