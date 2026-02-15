@@ -350,9 +350,11 @@ impl ProjectConfig {
     ///
     /// Rules:
     /// - Tool must be enabled (or unconfigured in `[tools]`, which defaults to enabled)
-    /// - Tool must be explicitly referenced by at least one tier model spec
+    /// - If tiers are configured, tool must appear in at least one tier model spec
+    /// - If no tiers are configured (empty), all enabled tools are eligible
     pub fn is_tool_auto_selectable(&self, tool: &str) -> bool {
-        self.is_tool_enabled(tool) && self.is_tool_configured_in_tiers(tool)
+        self.is_tool_enabled(tool)
+            && (self.tiers.is_empty() || self.is_tool_configured_in_tiers(tool))
     }
 
     /// Check if notification hooks should be suppressed for a tool.
@@ -514,6 +516,81 @@ idle_timeout_seconds = 300
             .get(input)
             .cloned()
             .unwrap_or_else(|| input.to_string())
+    }
+
+    /// Check whether a full model spec string appears in any tier's models list.
+    ///
+    /// Performs exact string match against all tier model specs.
+    pub fn is_model_spec_in_tiers(&self, spec: &str) -> bool {
+        self.tiers
+            .values()
+            .any(|tier| tier.models.iter().any(|m| m == spec))
+    }
+
+    /// Return all model specs from tiers that use the given tool.
+    ///
+    /// Useful for error messages showing which specs are allowed.
+    pub fn allowed_model_specs_for_tool(&self, tool: &str) -> Vec<String> {
+        self.tiers
+            .values()
+            .flat_map(|tier| tier.models.iter())
+            .filter(|spec| spec.split('/').next().is_some_and(|t| t == tool))
+            .cloned()
+            .collect()
+    }
+
+    /// Enforce tier whitelist: reject tool/model combinations not in tiers.
+    ///
+    /// When tiers are configured (non-empty), any explicit tool or model-spec
+    /// must appear in at least one tier. This prevents accidental use of
+    /// unplanned tools that could exhaust subscription quotas.
+    ///
+    /// Returns `Ok(())` when:
+    /// - tiers is empty (no restriction — backward compatible)
+    /// - tool appears in at least one tier model spec
+    /// - model_spec (if provided) exactly matches a tier model spec
+    pub fn enforce_tier_whitelist(
+        &self,
+        tool: &str,
+        model_spec: Option<&str>,
+    ) -> anyhow::Result<()> {
+        // Empty tiers = no restriction (backward compatible)
+        if self.tiers.is_empty() {
+            return Ok(());
+        }
+
+        // Tool must appear in at least one tier
+        if !self.is_tool_configured_in_tiers(tool) {
+            let configured_tools: Vec<String> = crate::global::all_known_tools()
+                .iter()
+                .filter(|t| self.is_tool_configured_in_tiers(t.as_str()))
+                .map(|t| t.as_str().to_string())
+                .collect();
+            anyhow::bail!(
+                "Tool '{}' is not configured in any tier. \
+                 Configured tools: [{}]. \
+                 Add it to a [tiers.*] section or use a configured tool.",
+                tool,
+                configured_tools.join(", ")
+            );
+        }
+
+        // If model_spec provided, it must match exactly
+        if let Some(spec) = model_spec {
+            if !self.is_model_spec_in_tiers(spec) {
+                let allowed = self.allowed_model_specs_for_tool(tool);
+                anyhow::bail!(
+                    "Model spec '{}' is not configured in any tier. \
+                     Allowed specs for '{}': [{}]. \
+                     Add it to a [tiers.*] section or use a configured spec.",
+                    spec,
+                    tool,
+                    allowed.join(", ")
+                );
+            }
+        }
+
+        Ok(())
     }
 }
 

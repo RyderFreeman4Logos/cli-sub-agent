@@ -469,6 +469,17 @@ async fn execute_task(
                 error: Some("Tool disabled in config".to_string()),
             };
         }
+
+        // Enforce tier whitelist
+        if let Err(e) = cfg.enforce_tier_whitelist(tool_name.as_str(), None) {
+            error!("{} - {}", task_label, e);
+            return TaskResult {
+                name: task.name.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                error: Some(format!("{}", e)),
+            };
+        }
     }
 
     // Build executor
