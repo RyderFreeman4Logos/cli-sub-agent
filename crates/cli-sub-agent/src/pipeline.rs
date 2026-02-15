@@ -43,6 +43,27 @@ pub(crate) fn resolve_idle_timeout_seconds(
 /// `defuse()` is called after successful tool execution. Once the tool has
 /// produced output, the session directory is preserved even if later persistence
 /// steps (save_session, hooks) fail.
+///
+/// ## Cleanup flow in `execute_with_session_and_meta`
+///
+/// The guard is armed for new sessions only (not resumed ones). The following
+/// pre-execution failure paths each write a `result.toml` via
+/// [`write_pre_exec_error_result`] then **defuse** the guard so the session
+/// directory is preserved with a failure record:
+///
+/// 1. `create_session_log_writer` fails
+/// 2. `acquire_lock` fails
+/// 3. `ResourceGuard::check_availability` fails
+/// 4. `executor.execute_with_transport` fails (spawn error)
+///
+/// If none of these fail, the guard is defused after successful tool execution
+/// (line after `execute_with_transport` returns `Ok`). Later failures (e.g.,
+/// `save_session`, hooks) do NOT re-arm the guard — the session directory is
+/// preserved because it contains execution output worth keeping.
+///
+/// If the guard is **not** defused (e.g., a future pre-execution step is added
+/// without a corresponding `write_pre_exec_error_result` + `defuse()`), the
+/// `Drop` impl will remove the orphan directory entirely.
 struct SessionCleanupGuard {
     session_dir: PathBuf,
     defused: bool,
@@ -388,13 +409,25 @@ pub(crate) async fn execute_with_session_and_meta(
 
     // Acquire lock with truncated prompt as reason
     let lock_reason = truncate_prompt(prompt, 80);
-    let _lock =
-        acquire_lock(&session_dir, executor.tool_name(), &lock_reason).with_context(|| {
-            format!(
+    let _lock = match acquire_lock(&session_dir, executor.tool_name(), &lock_reason) {
+        Ok(lock) => lock,
+        Err(e) => {
+            let err = anyhow::anyhow!(e).context(format!(
                 "Failed to acquire lock for session {}",
                 session.meta_session_id
-            )
-        })?;
+            ));
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &err,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(err);
+        }
+    };
 
     // Resource guard
     let mut resource_guard = if let Some(cfg) = config {
