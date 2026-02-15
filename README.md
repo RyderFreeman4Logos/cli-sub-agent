@@ -40,6 +40,8 @@ csa --version
 #### Build from source
 
 ```bash
+# Clone both repositories (agent-teams-rs is a workspace dependency)
+git clone https://github.com/RyderFreeman4Logos/agent-teams-rs.git
 git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git
 cd cli-sub-agent
 cargo install --path crates/cli-sub-agent   # Install csa
