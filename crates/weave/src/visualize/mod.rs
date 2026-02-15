@@ -5,6 +5,8 @@ use anyhow::{Result, bail};
 
 use crate::compiler::{ExecutionPlan, FailAction, PlanStep};
 
+pub mod ascii;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizGraph {
     pub nodes: Vec<VizNode>,
@@ -391,21 +393,21 @@ fn parse_condition_atoms(condition: &str) -> Vec<ConditionAtom> {
         .collect()
 }
 
-fn step_condition_atoms(step: &PlanStep) -> Vec<ConditionAtom> {
+pub(crate) fn step_condition_atoms(step: &PlanStep) -> Vec<ConditionAtom> {
     step.condition
         .as_deref()
         .map(parse_condition_atoms)
         .unwrap_or_default()
 }
 
-fn common_prefix_len(left: &[ConditionAtom], right: &[ConditionAtom]) -> usize {
+pub(crate) fn common_prefix_len(left: &[ConditionAtom], right: &[ConditionAtom]) -> usize {
     left.iter()
         .zip(right.iter())
         .take_while(|(l, r)| l == r)
         .count()
 }
 
-fn format_fail_action(action: &FailAction) -> String {
+pub(crate) fn format_fail_action(action: &FailAction) -> String {
     match action {
         FailAction::Abort => "abort".to_string(),
         FailAction::Retry(n) => format!("retry:{n}"),
@@ -416,12 +418,7 @@ fn format_fail_action(action: &FailAction) -> String {
 
 /// Render an execution plan as a minimal ASCII representation.
 pub fn render_ascii(plan: &ExecutionPlan) -> String {
-    let mut lines = vec![format!("Plan: {}", plan.name)];
-    for step in &plan.steps {
-        let tool = step.tool.as_deref().unwrap_or("none");
-        lines.push(format!("- {}. {} [{tool}]", step.id, step.title));
-    }
-    lines.join("\n")
+    ascii::render_ascii(plan)
 }
 
 /// Render an execution plan as Mermaid flowchart text.
