@@ -162,6 +162,8 @@ No issues found by bot. Proceed to merge.
 
 ## IF !(${BOT_UNAVAILABLE})
 
+## IF ${FIXES_ACCUMULATED}
+
 ## Step 11: Clean Resubmission (if needed)
 
 Tool: bash
@@ -186,5 +188,21 @@ Squash-merge and update local main.
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
+
+## ELSE
+
+## Step 12b: Final Merge (Direct)
+
+Tool: bash
+OnFail: abort
+
+First-pass clean review: merge the existing PR directly.
+
+```bash
+gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+git checkout main && git pull origin main
+```
+
+## ENDIF
 
 ## ENDIF
