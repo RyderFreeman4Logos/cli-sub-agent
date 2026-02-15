@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use crate::compiler::{ExecutionPlan, FailAction, PlanStep};
 
 pub mod ascii;
+pub mod mermaid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VizGraph {
@@ -423,15 +424,7 @@ pub fn render_ascii(plan: &ExecutionPlan) -> String {
 
 /// Render an execution plan as Mermaid flowchart text.
 pub fn render_mermaid(plan: &ExecutionPlan) -> String {
-    let mut out = String::from("flowchart TD\n");
-    for step in &plan.steps {
-        let title = step.title.replace('"', "\\\"");
-        out.push_str(&format!("  S{}[\"{}. {}\"]\n", step.id, step.id, title));
-    }
-    for pair in plan.steps.windows(2) {
-        out.push_str(&format!("  S{} --> S{}\n", pair[0].id, pair[1].id));
-    }
-    out
+    mermaid::render_mermaid(plan)
 }
 
 /// Render an execution plan as PNG.
