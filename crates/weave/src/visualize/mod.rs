@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 
 use crate::compiler::{ExecutionPlan, FailAction, PlanStep};
 
 pub mod ascii;
+pub mod dot;
 pub mod mermaid;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -428,8 +429,19 @@ pub fn render_mermaid(plan: &ExecutionPlan) -> String {
 }
 
 /// Render an execution plan as PNG.
-pub fn render_png(_plan: &ExecutionPlan, _output: &Path) -> Result<()> {
-    bail!("PNG rendering is not available yet")
+pub fn render_png(plan: &ExecutionPlan, output: &Path) -> Result<()> {
+    #[cfg(feature = "visualize-png-dot")]
+    {
+        dot::render_png_with_dot(plan, output)
+    }
+
+    #[cfg(not(feature = "visualize-png-dot"))]
+    {
+        let _ = (plan, output);
+        anyhow::bail!(
+            "PNG output requires the `visualize-png-dot` feature and Graphviz `dot` in PATH"
+        )
+    }
 }
 
 #[cfg(test)]
