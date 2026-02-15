@@ -249,7 +249,7 @@ csa config validate              # Validate config
 ```bash
 # Run tasks
 csa run --tool <tool> [--session <id>|--last] [--no-stream-stdout] "prompt"
-csa run --model codex/openai/gpt-5.3-codex/high "prompt"   # Specify model
+csa run --model-spec codex/openai/gpt-5.3-codex/high "prompt"  # Full model spec
 
 # Code review
 csa review --diff                                # Review uncommitted changes
