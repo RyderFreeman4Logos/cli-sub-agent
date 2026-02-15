@@ -170,6 +170,98 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
 }
 
 #[test]
+fn test_is_tool_configured_in_tiers_detects_presence() {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier3".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec![
+                "codex/provider/model/medium".to_string(),
+                "claude-code/provider/model/high".to_string(),
+            ],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+    };
+
+    assert!(config.is_tool_configured_in_tiers("codex"));
+    assert!(config.is_tool_configured_in_tiers("claude-code"));
+    assert!(!config.is_tool_configured_in_tiers("gemini-cli"));
+}
+
+#[test]
+fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: true,
+            restrictions: None,
+            suppress_notify: true,
+        },
+    );
+    tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enabled: false,
+            restrictions: None,
+            suppress_notify: true,
+        },
+    );
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier3".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec![
+                "codex/provider/model/medium".to_string(),
+                "claude-code/provider/model/high".to_string(),
+            ],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+    };
+
+    assert!(config.is_tool_auto_selectable("codex"));
+    assert!(!config.is_tool_auto_selectable("claude-code")); // disabled
+    assert!(!config.is_tool_auto_selectable("gemini-cli")); // not in tiers
+}
+
+#[test]
 fn test_can_tool_edit_existing_with_restrictions_false() {
     let mut tools = HashMap::new();
     tools.insert(

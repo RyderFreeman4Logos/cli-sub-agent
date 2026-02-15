@@ -199,11 +199,14 @@ pub(crate) async fn handle_run(
                 let enabled_tools = if let Some(ref cfg) = config {
                     csa_config::global::all_known_tools()
                         .iter()
-                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .filter(|t| {
+                            cfg.is_tool_auto_selectable(t.as_str())
+                                && is_tool_binary_available(t.as_str())
+                        })
                         .copied()
                         .collect::<Vec<_>>()
                 } else {
-                    csa_config::global::all_known_tools().to_vec()
+                    Vec::new()
                 };
 
                 match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
@@ -251,11 +254,14 @@ pub(crate) async fn handle_run(
                 let enabled_tools = if let Some(ref cfg) = config {
                     csa_config::global::all_known_tools()
                         .iter()
-                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
+                        .filter(|t| {
+                            cfg.is_tool_auto_selectable(t.as_str())
+                                && is_tool_binary_available(t.as_str())
+                        })
                         .copied()
                         .collect::<Vec<_>>()
                 } else {
-                    csa_config::global::all_known_tools().to_vec()
+                    Vec::new()
                 };
 
                 match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
@@ -402,8 +408,8 @@ pub(crate) async fn handle_run(
                             && !tried_tools.contains(&s.tool_name)
                             && config
                                 .as_ref()
-                                .map(|c| c.is_tool_enabled(&s.tool_name))
-                                .unwrap_or(true)
+                                .map(|c| c.is_tool_auto_selectable(&s.tool_name))
+                                .unwrap_or(false)
                             && is_tool_binary_available(&s.tool_name)
                     });
 
