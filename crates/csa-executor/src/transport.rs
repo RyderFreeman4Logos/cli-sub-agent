@@ -217,7 +217,7 @@ impl Transport for AcpTransport {
     async fn execute(
         &self,
         prompt: &str,
-        _tool_state: Option<&ToolState>,
+        tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
@@ -236,6 +236,10 @@ impl Transport for AcpTransport {
         let acp_command = self.acp_command.clone();
         let acp_args = self.acp_args.clone();
         let prompt = prompt.to_string();
+        let resume_session_id = tool_state.and_then(|s| s.provider_session_id.clone());
+        if let Some(session_id) = resume_session_id.as_deref() {
+            tracing::debug!(session_id, "resuming ACP session from tool state");
+        }
 
         // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
         // dedicated current-thread runtime so callers can stay Send-safe.
@@ -250,7 +254,10 @@ impl Transport for AcpTransport {
                     &acp_args,
                     &working_dir,
                     &env,
-                    system_prompt.as_deref(),
+                    csa_acp::transport::AcpSessionStart {
+                        system_prompt: system_prompt.as_deref(),
+                        resume_session_id: resume_session_id.as_deref(),
+                    },
                     &prompt,
                     std::time::Duration::from_secs(idle_timeout_seconds),
                 ))

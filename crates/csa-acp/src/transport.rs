@@ -5,6 +5,12 @@ use crate::{client::SessionEvent, connection::AcpConnection, error::AcpResult};
 
 pub use crate::connection::PromptResult;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AcpSessionStart<'a> {
+    pub system_prompt: Option<&'a str>,
+    pub resume_session_id: Option<&'a str>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct AcpOutput {
     pub output: String,
@@ -26,12 +32,21 @@ impl AcpSession {
         working_dir: &Path,
         env: &HashMap<String, String>,
         system_prompt: Option<&str>,
+        resume_session_id: Option<&str>,
     ) -> AcpResult<Self> {
         let connection = AcpConnection::spawn(command, args, working_dir, env).await?;
         connection.initialize().await?;
-        let session_id = connection
-            .new_session(system_prompt, Some(working_dir))
-            .await?;
+        let session_id = if let Some(session_id) = resume_session_id {
+            tracing::debug!(session_id, "loading ACP session");
+            connection
+                .load_session(session_id, Some(working_dir))
+                .await?
+        } else {
+            tracing::debug!("creating new ACP session");
+            connection
+                .new_session(system_prompt, Some(working_dir))
+                .await?
+        };
 
         Ok(Self {
             connection,
@@ -69,11 +84,19 @@ pub async fn run_prompt(
     args: &[String],
     working_dir: &Path,
     env: &HashMap<String, String>,
-    system_prompt: Option<&str>,
+    session_start: AcpSessionStart<'_>,
     prompt: &str,
     idle_timeout: Duration,
 ) -> AcpResult<AcpOutput> {
-    let session = AcpSession::new(command, args, working_dir, env, system_prompt).await?;
+    let session = AcpSession::new(
+        command,
+        args,
+        working_dir,
+        env,
+        session_start.system_prompt,
+        session_start.resume_session_id,
+    )
+    .await?;
     let result = session
         .prompt_with_idle_timeout(prompt, idle_timeout)
         .await?;
