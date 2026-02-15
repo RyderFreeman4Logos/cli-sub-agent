@@ -1,3 +1,4 @@
+use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -162,7 +163,17 @@ fn main() -> Result<()> {
                 VisualizeTarget::Ascii
             };
 
-            match visualize::visualize_plan_file(&plan, target)? {
+            let result = if plan.as_os_str() == "-" {
+                let mut content = String::new();
+                std::io::stdin()
+                    .read_to_string(&mut content)
+                    .context("failed to read stdin")?;
+                visualize::visualize_plan_toml(&content, "stdin", target)?
+            } else {
+                visualize::visualize_plan_file(&plan, target)?
+            };
+
+            match result {
                 VisualizeResult::Stdout(rendered) => {
                     print!("{rendered}");
                 }
