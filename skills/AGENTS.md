@@ -70,8 +70,8 @@ secrets/credentials:
 | Skill | Status | Migration |
 |-------|--------|-----------|
 | ~~`install-update-csa`~~ | **DELETED** | Manual `cargo install` or project Justfile |
-| ~~`csa-cc`~~ | **DEPRECATED** | Use CSA's built-in tool routing + patterns |
-| ~~`csa-analyze`~~ | **DEPRECATED** | Use `mktd` RECON or direct `csa run` |
+| ~~`csa-cc`~~ | **DELETED** | Use CSA's built-in tool routing + patterns |
+| ~~`csa-analyze`~~ | **DELETED** | Use `mktd` RECON or direct `csa run` |
 
 ## Skill Dependency Graph
 
