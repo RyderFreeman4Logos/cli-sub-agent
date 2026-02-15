@@ -368,7 +368,7 @@ Security assessment...
 | Skill | Integration |
 |-------|-------------|
 | `csa-review` | CSA-driven code review with session isolation and backend routing |
-| `csa-analyze` | Delegate large diff analysis via CSA to appropriate backend |
+| `mktd` RECON | Delegate large diff analysis via CSA parallel exploration |
 | `security-audit` | Pre-commit security audit with test completeness verification |
 | `ai-reviewed-commit` | Enforces review before commit with fix-and-retry loop |
 | `debate` | Use for adversarial review when you authored the code under review |
