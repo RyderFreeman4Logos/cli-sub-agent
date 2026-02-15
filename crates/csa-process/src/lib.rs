@@ -305,6 +305,7 @@ pub async fn run_and_capture(cmd: Command) -> Result<ExecutionResult> {
 }
 
 /// Execute a command and capture output, optionally writing prompt data to stdin.
+#[tracing::instrument(skip_all)]
 pub async fn run_and_capture_with_stdin(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,

@@ -146,6 +146,7 @@ pub(crate) async fn build_and_validate_executor(
 ///
 /// Returns ToolSlot guard on success.
 /// Returns error if all slots occupied (no failover here).
+#[tracing::instrument(skip_all, fields(tool = %executor.tool_name()))]
 pub(crate) fn acquire_slot(
     executor: &Executor,
     global_config: &GlobalConfig,
@@ -180,6 +181,7 @@ pub(crate) struct SessionExecutionResult {
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
 pub(crate) async fn execute_with_session(
     executor: &Executor,
     tool: &ToolName,
@@ -218,6 +220,7 @@ pub(crate) async fn execute_with_session(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(tool = %tool))]
 pub(crate) async fn execute_with_session_and_meta(
     executor: &Executor,
     tool: &ToolName,

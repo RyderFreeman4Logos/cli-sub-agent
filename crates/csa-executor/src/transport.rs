@@ -213,6 +213,7 @@ impl AcpTransport {
 
 #[async_trait]
 impl Transport for AcpTransport {
+    #[tracing::instrument(skip_all, fields(tool = %self.tool_name))]
     async fn execute(
         &self,
         prompt: &str,
