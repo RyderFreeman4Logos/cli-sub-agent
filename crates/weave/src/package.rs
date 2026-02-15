@@ -355,6 +355,23 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
     let deps_dir = project_root.join(".weave").join("deps");
     let dest = deps_dir.join(&name);
 
+    // Guard against source/destination overlap (e.g. installing from .weave/deps/<name>).
+    if dest.exists() {
+        let dest_canonical = dest
+            .canonicalize()
+            .with_context(|| format!("cannot resolve dest: {}", dest.display()))?;
+        if canonical == dest_canonical
+            || canonical.starts_with(&dest_canonical)
+            || dest_canonical.starts_with(&canonical)
+        {
+            bail!(
+                "source and destination overlap: {} vs {}",
+                canonical.display(),
+                dest_canonical.display()
+            );
+        }
+    }
+
     // Remove existing directory if present.
     if dest.exists() {
         std::fs::remove_dir_all(&dest)

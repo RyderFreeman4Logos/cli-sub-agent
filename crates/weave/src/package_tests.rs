@@ -378,6 +378,27 @@ fn install_from_local_rejects_missing_skill_md() {
     assert!(err.contains("SKILL.md not found"), "error: {err}");
 }
 
+#[test]
+fn install_from_local_rejects_self_overwrite() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Pre-populate .weave/deps/overlap-skill as if it was already installed.
+    let dest = project.join(".weave").join("deps").join("overlap-skill");
+    std::fs::create_dir_all(&dest).unwrap();
+    std::fs::write(dest.join("SKILL.md"), "# Overlap Skill").unwrap();
+
+    // Try installing from the destination itself — must fail.
+    let result = install_from_local(&dest, &project);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(err.contains("overlap"), "error: {err}");
+
+    // Original content must survive.
+    assert!(dest.join("SKILL.md").is_file());
+}
+
 // ---------------------------------------------------------------------------
 // SourceKind serialization tests
 // ---------------------------------------------------------------------------
