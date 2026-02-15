@@ -1,293 +1,402 @@
-# CSA — CLI Sub-Agent
+# CSA (CLI Sub-Agent)
 
-> Recursive Agent Container: Standardized, composable Unix processes for LLM CLI tools.
+> **Recursive Agent Container**: A standardized, composable Unix process management system for LLM CLI tools
 
-CSA provides a unified CLI interface for executing coding tasks across multiple AI tools with persistent sessions, recursive agent spawning, and resource-aware scheduling.
+CSA provides a unified command-line interface for multiple AI coding tools (claude-code, codex, gemini-cli, opencode), enabling Agents to safely spawn sub-Agents recursively and perform adversarial code review through model-heterogeneous strategies.
 
-## When to Use CSA
+## Core Features
 
-CSA is most valuable when you need capabilities **beyond** what a single AI CLI tool provides:
-
-| Scenario | Without CSA | With CSA |
-|----------|-------------|----------|
-| **Multi-tool workflows** | Manually switch between gemini-cli, codex, claude-code | `csa run --tool X` with unified interface |
-| **Recursive agents** | No safe way for an agent to spawn sub-agents | Depth-limited spawning with `CSA_DEPTH` |
-| **Session continuity** | Each tool manages sessions differently | Unified ULID sessions with genealogy trees |
-| **Resource safety** | No OOM prevention when running parallel agents | P95 memory estimation blocks unsafe launches |
-| **Audit trail** | Scattered logs across tools | Session tree with logs, locks, and state |
-
-**Example: Multi-step code review pipeline**
-
-```bash
-# Step 1: Analyze with gemini-cli (2M context, read-only)
-csa run --tool gemini-cli "Analyze the auth module for security issues"
-
-# Step 2: Fix issues with codex (in the same session tree)
-csa run --tool codex --parent $CSA_SESSION_ID "Fix the XSS vulnerability found"
-
-# Step 3: Review the fix
-csa review --diff
-```
-
-If you only use a single AI tool for simple tasks, the tool's native CLI may suffice. CSA shines when orchestrating multiple tools or managing complex agent hierarchies.
-
-## Features
-
-- **Multi-tool support** — Seamlessly switch between gemini-cli, opencode, codex, and claude-code
-- **Recursive agents** — Agents spawn sub-agents forming execution trees with depth limiting
-- **Resource guard** — P95 memory estimation prevents OOM when launching parallel agents
-- **Session management** — Persistent sessions with ULID IDs, genealogy tracking, and tree visualization
-- **Unified model spec** — `tool/provider/model/thinking_budget` format across all tools
-- **Safety controls** — Tool-level file locking, edit restrictions, signal propagation to child processes
-
-## Installation
-
-## Prerequisites
-
-Requires [Rust toolchain](https://rustup.rs/) and a sibling checkout for the local path crate dependency:
-
-```toml
-agent-teams = { path = "../agent-teams-rs" }
-```
-
-Expected directory layout:
-
-```text
-<parent>/
-  cli-sub-agent/
-  agent-teams-rs/
-```
-
-### Quick Install (macOS / Linux)
-
-```bash
-curl -sSf https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/main/install.sh | bash
-```
-
-### Manual Install
-
-Clone both repositories into the same parent directory, then install from source:
-
-```bash
-git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git
-git clone https://github.com/RyderFreeman4Logos/agent-teams-rs.git
-cd cli-sub-agent
-cargo install --all-features --path crates/cli-sub-agent
-```
-
-### From Source
-
-```bash
-cd cli-sub-agent
-cargo install --all-features --path crates/cli-sub-agent
-```
+- **Recursive Agent Container** -- Any Agent running inside CSA can invoke `csa` again to spawn sub-Agents, with recursion depth limited by the `CSA_DEPTH` environment variable (default: 5)
+- **Model-Heterogeneous Strategy** -- Review/Debate always use different model families (for example, main Agent on Claude, review Agent auto-switched to Codex), eliminating self-review blind spots from single-model workflows
+- **ACP Transport Layer** -- Uses ACP (Agent Communication Protocol) for precise context window control, replacing the 60K+ token full-load behavior of CLI non-interactive mode
+- **Resource-Aware Scheduling** -- P95 memory estimation, global concurrency slots (`flock`), and automatic failover for 429/rate-limit scenarios
+- **Git-Tracked TODO** -- Deep integration between planning and version control, with DAG visualization and multi-version traceability
+- **Skill-as-Agent** -- 17 Skills package complete Agent definitions (prompt + tools + protocol), so the main Agent only needs to orchestrate
+- **skill-lang and weave** -- Built-in skill-lang compiler; 11 workflow patterns are already compiled into deterministic execution plans
 
 ## Quick Start
 
-### 1. Initialize Project
+### Installation
+
+#### Recommended: use mise (cross-platform tool version manager)
+
+[mise](https://mise.jdx.dev/) can install both `csa` and `weave` with one command and automatically manage version upgrades:
 
 ```bash
-cd your-project
-csa init
-# Creates .csa/config.toml with detected tools
+# Install mise (if not already installed)
+curl https://mise.run | sh
+
+# Install csa and weave
+mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=csa]
+mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=weave]
+
+# Verify
+csa --version
+weave --version
 ```
 
-### 2. Run Tasks
+> **Why mise?** Through the [ubi](https://github.com/houseabsolute/ubi) backend, mise downloads prebuilt binaries directly from GitHub Releases, with no local Rust toolchain required. Upgrade with a single `mise upgrade`.
+
+#### Build from source
 
 ```bash
-# Analysis (read-only, uses gemini-cli)
-csa run --tool gemini-cli "Analyze the authentication flow"
-
-# Implementation (uses opencode/codex/claude-code)
-csa run --tool opencode --session my-task "Fix the login bug"
-
-# Resume an existing session
-csa run --tool opencode --session 01JK... "Continue the refactor"
-
-# Override model
-csa run --tool opencode --model "provider/model-name" "Implement feature X"
-
-# Ephemeral session (no project state, auto-cleanup)
-csa run --tool gemini-cli --ephemeral "What is the CAP theorem?"
+git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git
+cd cli-sub-agent
+cargo install --path crates/cli-sub-agent   # Install csa
+cargo install --path crates/weave           # Install weave compiler
 ```
 
-### 3. Manage Sessions
+### Initialize a project
 
 ```bash
-csa session list                          # List all sessions
-csa session list --tree                   # Show parent-child tree
-csa session list --tool opencode          # Filter by tool
-csa session compress --session 01JK...    # Compress context window
-csa session delete --session 01JK...      # Delete a session
+cd my-project
+csa init                    # Initialize .csa/ config directory
+csa doctor                  # Check all tools availability
+weave compile               # Compile skill-lang patterns
 ```
 
-### 4. Housekeeping
+### Basic usage
 
 ```bash
-csa gc                # Garbage-collect orphaned sessions
-csa config show       # Display current config
-csa config validate   # Validate config file
+# Run a task (specify tool)
+csa run --tool codex "implement user auth module"
+
+# Run a task (auto-select tool)
+csa run --tool auto "fix login page bug"
+
+# Resume last session
+csa run --last "continue the implementation"
+
+# Output streams to stderr by default (auto-enabled on TTY)
+# Use --no-stream-stdout to suppress
+csa run --tool claude-code "refactor error handling"
 ```
+
+### Code review (heterogeneous models)
+
+```bash
+# Review uncommitted changes (auto-selects heterogeneous model)
+csa review --diff
+
+# Review an entire PR
+csa review --range main...HEAD
+
+# Multi-reviewer consensus
+csa review --diff --reviewers 3 --consensus majority
+```
+
+### Adversarial debate
+
+```bash
+# Technical design decisions
+csa debate "Should we use anyhow or thiserror for error handling?"
+
+# Continue debate (resume session)
+csa debate --last "re-evaluate considering performance impact"
+```
+
+## Architecture Overview
+
+### Recursive Agent tree
+
+CSA is built around a **fractal architecture**: each Agent is an independent Unix process that can recursively spawn sub-Agents:
+
+```
+Main Agent (depth=0, claude-code)
+  |-- Sub-Agent-1 (depth=1, codex)        # review
+  |   |-- Sub-Agent-1.1 (depth=2, gemini) # deep analysis
+  |   +-- Sub-Agent-1.2 (depth=2, codex)  # fix implementation
+  +-- Sub-Agent-2 (depth=1, codex)        # debate
+      +-- Sub-Agent-2.1 (depth=2, claude) # adversary
+```
+
+Each Agent layer automatically inherits environment variables: `CSA_SESSION_ID`, `CSA_DEPTH`, `CSA_PROJECT_ROOT`, `CSA_TOOL`, `CSA_PARENT_TOOL`.
+
+### Process tree detection
+
+CSA automatically detects the parent tool via the `/proc` filesystem. In `--tool auto` mode, it selects a tool from a **different model family** than the parent for review/debate to guarantee heterogeneity. If no heterogeneous tool is available, CSA fails with an explicit error and never silently degrades to the same model.
+
+### Crate architecture
+
+```
+workspace.members:
+|-- csa-core          # Core types (ToolName, ULID, OutputFormat)
+|-- csa-session       # Session management (create, load, state persistence)
+|-- csa-lock          # Locking (session locks, slot locks)
+|-- csa-executor      # Tool executor (enum dispatch, Transport trait)
+|-- csa-process       # Process management (spawn, signals, process tree)
+|-- csa-config        # Configuration (global + project-level merging)
+|-- csa-resource      # Resource management (memory estimation, scheduling)
+|-- csa-scheduler     # Scheduler (resource checks, concurrency control)
+|-- csa-todo          # TODO system (git-tracked plan management)
+|-- csa-hooks         # Hooks system (session.complete, etc.)
+|-- csa-acp           # ACP transport layer (merged in PR #75)
++-- weave             # skill-lang compiler (parse, compile, execute)
+```
+
+## ACP Transport Layer
+
+> ✅ **Epic 1 Complete**: All five phases (infrastructure → transport abstraction → pipeline integration → suppress_notify cleanup → testing) are implemented and merged (PR #75).
+
+### Why ACP?
+
+CSA previously launched tools through CLI non-interactive mode. Each launch in that mode auto-loaded CLAUDE.md + AGENTS.md + all skills + all MCP servers (60K+ tokens), significantly reducing available context for sub-Agents.
+
+**ACP (Agent Communication Protocol)** uses `session/new` to control initialization context precisely, injecting only task-relevant skills/rules and loading progressively on demand. This saves tokens and, more importantly, protects scarce context window capacity.
+
+### Transport routing
+
+| Tool | Default Transport | ACP Command |
+|------|---------------|----------|
+| claude-code | ACP | `claude-code-acp` |
+| codex | ACP | `codex-acp` |
+| gemini-cli | Legacy | `gemini --experimental-acp` (not enabled by default) |
+| opencode | Legacy | `opencode acp` |
+
+The Transport trait abstracts both ACP and Legacy execution modes. `TransportFactory` routes automatically based on tool type and config. ACP fallback to Legacy is allowed only during connection initialization. During prompt execution, automatic fallback is forbidden.
+
+### Context window control
+
+```toml
+# .skill.toml -- Control sub-agent context loading
+[context]
+no_load = ["CLAUDE.md", "AGENTS.md"]  # Skip default files
+extra_load = ["./rules/security.md"]   # Load additional files
+```
+
+CSA’s MCP registry (`.csa/mcp.toml`) supports step-level MCP server injection, instead of loading every MCP server from the tool’s global configuration.
 
 ## Supported Tools
 
-| Tool | Yolo Flag | Context Compress | Edit Existing Files |
-|------|-----------|-----------------|---------------------|
-| gemini-cli | `--sandbox=false` | `/compress` | Restricted by default* |
-| opencode | — | `/compact` | Yes |
-| codex | `--full-auto` | `/compact` | Yes |
-| claude-code | `--dangerously-skip-permissions` | `/compact` | Yes |
+| Tool | Provider | Highlights | Session Resume | File Editing | Context |
+|------|--------|------|---------|---------|--------|
+| **claude-code** | Anthropic | Strong reasoning | ✅ | ✅ | 200K |
+| **codex** | OpenAI | Lightweight and fast (Rust implementation) | ✅ | ✅ | 200K |
+| **gemini-cli** | Google | Extremely large context | -- | -- | 2M |
+| **opencode** | OpenRouter | Multi-model aggregation | ✅ | ✅ | 200K |
 
-\* gemini-cli defaults to read-only for existing files to prevent accidental code/comment deletion. Override in `.csa/config.toml`.
+### Heterogeneous routing (Auto mode)
 
-## Architecture
+| Parent Tool | Review Tool | Reason |
+|--------|------------|------|
+| claude-code | codex or gemini-cli | Different model family |
+| codex | claude-code or gemini-cli | Different model family |
+| gemini-cli | claude-code or codex | Different model family |
 
-CSA is a **Recursive Agent Container** built as a Rust workspace with 9 crates:
+### Tier system
 
-```
-crates/
-  cli-sub-agent/   # Binary crate — CLI entry point (clap)
-  csa-config/      # Project configuration (.csa/config.toml)
-  csa-core/        # Shared types, errors, validation
-  csa-executor/    # Tool execution and model spec parsing
-  csa-lock/        # File locking and global slot coordination
-  csa-process/     # Process execution and output capture
-  csa-resource/    # Memory monitoring, usage stats, resource guard
-  csa-scheduler/   # Tier rotation and 429 failover decisions
-  csa-session/     # Session CRUD, genealogy, locking
-```
-
-Key concepts:
-
-| Concept | Description |
-|---------|-------------|
-| **Meta-Session** | Persistent workspace in `~/.local/state/csa/`, identified by ULID |
-| **Genealogy** | Sessions track parent-child relationships, forming execution trees |
-| **Resource Guard** | Pre-flight memory check using P95 historical estimates |
-| **Tool Isolation** | File-level `flock` locks prevent concurrent tool conflicts |
-| **Model Spec** | Unified `tool/provider/model/thinking_budget` addressing |
-
-See [docs/architecture.md](docs/architecture.md) for the full design.
+| Tier | Use Case | Default Model |
+|------|------|---------|
+| tier-1-quick | Documentation, Q&A | codex/gGPT-5.3-Codex-Spark |
+| tier-2-standard | Feature implementation, bug fixes | codex/claude-sonnet-4-5 |
+| tier-3-complex | Architecture design, security audit | claude-code/claude-opus-4-6 |
 
 ## Configuration
 
-Project config lives at `.csa/config.toml`:
+### Configuration precedence
+
+```
+Global config (~/.config/cli-sub-agent/config.toml)
+    | lowest priority
+Project config ({PROJECT_ROOT}/.csa/config.toml)
+    | higher priority
+CLI arguments (--tool, --model, etc.)
+    | highest priority
+Final merged config
+```
+
+### Example global config
 
 ```toml
-[project]
-name = "my-project"
-max_recursion_depth = 5
+# ~/.config/cli-sub-agent/config.toml
 
-[tools.gemini-cli]
-enabled = true
-[tools.gemini-cli.restrictions]
-allow_edit_existing_files = false   # Safe default
-
-[tools.opencode]
-enabled = true
+[defaults]
+max_concurrent = 3
+tool = "claude-code"             # Final fallback for --tool auto
 
 [review]
-tool = "auto"  # Requires parent tool context; otherwise set an explicit tool or use --tool
+tool = "auto"                    # Enforce heterogeneous
 
-[tiers.tier-1-quick]
-description = "Quick lookups"
-models = ["gemini-cli/google/gemini-2.5-flash/low"]
+[debate]
+tool = "auto"                    # Enforce heterogeneous
 
-[tiers.tier-2-standard]
-description = "Standard development"
-models = ["opencode/anthropic/claude-sonnet-4-5/medium"]
+[tools.codex]
+max_concurrent = 5
+[tools.codex.env]
+OPENAI_API_KEY = "sk-..."
 
-[resources]
-min_free_memory_mb = 512
+[tools.claude-code]
+max_concurrent = 3
+
+[todo]
+show_command = "bat -l md --paging=always"
+diff_command = "delta"
 ```
 
-### Tier-Based Auto-Selection
-
-When `--tool` is omitted, CSA uses the `tier_mapping.default` entry from config to select a tool automatically:
-
-```toml
-[tier_mapping]
-default = "tier-2-standard"       # Used when --tool is omitted
-analysis = "tier-1-quick"         # For future keyword-based selection
-```
-
-The `default` tier resolves to the first model in the tier's `models` list, which determines both the tool and the model. To override, use `--tool` explicitly or `--model-spec tool/provider/model/thinking`.
-
-### Skill-Friendly Config Access
-
-Skills and agents can query CSA configuration at runtime via `csa config get`, enabling behavior adaptation without code changes:
+### Configuration commands
 
 ```bash
-# Read a key (project config takes precedence over global)
-csa config get review.tool            # → "auto"
-csa config get tools.codex.enabled    # → "true"
-
-# Scope to project or global explicitly
-csa config get review.tool --project
-csa config get review.tool --global
-
-# Provide a fallback default
-csa config get fallback.cloud_review_exhausted --default ask-user
+csa config show                  # Show effective config
+csa config get review.tool       # Query a single key
+csa config edit                  # Edit project config
+csa config validate              # Validate config
 ```
 
-This makes CSA configuration a shared contract: project-level `.csa/config.toml` holds project-specific values, global `~/.config/cli-sub-agent/config.toml` holds user-wide defaults, and `csa config get` resolves them with a deterministic priority chain (project > global > `--default`).
+## Command Reference
 
-See [docs/configuration.md](docs/configuration.md) for the full reference.
-
-## Advanced Usage
-
-### Recursive Agent Spawning
-
-Any tool running inside CSA can call `csa` again to spawn sub-agents:
+### Core commands
 
 ```bash
-# Inside an agent session:
-csa run --tool opencode --parent $CSA_SESSION_ID \
-  "Research PostgreSQL extensions"
+# Run tasks
+csa run --tool <tool> [--session <id>|--last] [--no-stream-stdout] "prompt"
+csa run --model codex/openai/gpt-5.3-codex/high "prompt"   # Specify model
+
+# Code review
+csa review --diff                                # Review uncommitted changes
+csa review --range main...HEAD                   # Review commit range
+csa review --diff --reviewers 3 --consensus majority  # Multi-reviewer
+
+# Adversarial debate
+csa debate "technical question"
+csa debate --last "continue debate"
+
+# Session management
+csa session list [--tree]                        # List sessions (tree view)
+csa session compress --session <id>              # Compress session context
+csa session result --session <id>                # View execution result
+csa session checkpoint --session <id>            # Write audit checkpoint
+csa session checkpoints                          # List all checkpoints
 ```
 
-Recursion depth is tracked via `CSA_DEPTH` and limited (default: 5).
-
-### Parallel Execution
+### Plan management
 
 ```bash
-# Safe: parallel reads
-csa run --tool gemini-cli --session research-1 "Research topic A" &
-csa run --tool gemini-cli --session research-2 "Research topic B" &
-wait
-
-# Then: serial writes
-csa run --tool opencode --session impl "Implement based on research"
+csa todo create "plan name"                       # Create a TODO
+csa todo show -t <timestamp>                     # View details
+csa todo diff -t <timestamp> --from 2 --to 1     # Compare versions
+csa todo dag --format mermaid                    # DAG visualization
+csa todo list --status implementing              # Filter by status
+csa todo status <timestamp> done                 # Update status
 ```
 
-**Rules**:
-- Parallel reads (analysis, search): **Safe**
-- Parallel writes to isolated directories: Proceed with caution
-- Parallel writes to shared files: **Forbidden**
+### Operations commands
 
-See [docs/architecture.md](docs/architecture.md) and [docs/sessions.md](docs/sessions.md) for recursion and genealogy patterns.
+```bash
+csa init                                         # Initialize project
+csa doctor                                       # Diagnose tool availability
+csa gc [--dry-run] [--global]                    # Clean up expired sessions
+csa tiers list                                   # View tier definitions
+csa skill install <source>                       # Install skills
+csa self-update --check                          # Check for updates
+```
 
-### Environment Variables
+## Session Management
 
-CSA injects these into child processes:
+CSA uses **ULID** session identifiers and supports prefix matching (similar to git hashes):
 
-| Variable | Description |
-|----------|-------------|
-| `CSA_SESSION_ID` | Current session ULID |
-| `CSA_DEPTH` | Current recursion depth (0 = root) |
-| `CSA_PROJECT_ROOT` | Absolute path to project root |
-| `CSA_PARENT_SESSION` | Parent session ULID (if sub-agent) |
+```bash
+csa session list                   # List all sessions
+csa session result -s 01JK         # Prefix matching
+csa run --session 01JKABC "..."    # Resume a specific session
+```
+
+**Storage location**: `~/.local/state/csa/{project_path}/sessions/`
+
+Sessions use flat physical storage with a logical tree structure. Parent-child relationships are maintained via the `parent_id` field in `state.toml`. Session state machine: `Active` → `Available` (after compression) → `Retired` (after GC).
+
+## Security and Resource Controls
+
+| Mechanism | Description |
+|------|------|
+| **Yolo Mode** | Automatically adds non-interactive approval flags to all sub-Agents |
+| **Recursion depth limit** | `CSA_DEPTH` environment variable, default max depth is 5 |
+| **Signal propagation** | Forwards SIGTERM/SIGINT to child process groups to prevent zombie processes |
+| **`flock` file locks** | Session-level locks + global slot locks |
+| **P95 memory estimation** | Checks system available memory against tool historical P95 before spawn |
+| **Global concurrency slots** | Limits concurrency per tool (for example, codex max 5) |
+| **StreamMode** | Streams output to stderr by default (auto-enabled on TTY); suppressed with `--no-stream-stdout` |
+| **TokenBudget** | Tier-level token budgets (soft threshold 75%, hard threshold 100%) |
+
+## Roadmap
+
+### ✅ Completed: ACP Transport (Epic 1, PR #75)
+
+The `csa-acp` crate and Transport trait abstraction are fully implemented and merged. All five phases are complete: Phase A (`csa-acp` crate), Phase B (Transport trait / LegacyTransport / AcpTransport / TransportFactory), Phase C (pipeline integration), Phase D (full suppress_notify cleanup), and Phase E (tests passing `just pre-commit`). MVP covers claude-code + codex.
+
+### Near-term: deferred epics
+
+| Epic | Scope |
+|------|------|
+| **Epic 2: Dynamic Tools** | Stringify `ToolName` enum and support custom tool registration |
+| **Epic 3: Session Resume** | ACP `session/load`, historical replay deduplication |
+| **Pre-Release: Security** | Secure validation for token-like values, hardened egress policy |
+
+### ✅ Completed: skill-lang and weave compiler (PR #80 ~ #83, #89)
+
+The weave compiler and skill-lang workflow engine are implemented:
+
+- **skill-lang = Markdown with structured conventions**; the compiler is the LLM (`weave compile`), and the runtime is CSA
+- Two-layer representation: `PATTERN.md` (natural language source) → `plan.toml` (deterministic execution plan)
+- Naming system: **skill** (atomic unit) → **pattern** (composed workflow) → **loom** (git repository)
+- 11 workflow skills converted to skill-lang patterns and successfully compiled
+- Syntax support: `## Step N`, `IF/ELSE/ENDIF`, `FOR/IN/ENDFOR`, `INCLUDE`, `${VAR}`, and Hint lines (`Tool:/Tier:/OnFail:`)
+
+### In progress: weave ecosystem expansion
+
+- No centralized registry; publish with git push
+- Target users: skill developers building by conversation through openclaw
 
 ## Development
 
+### Requirements
+
+- Rust edition 2024 (`rustc` ≥ 1.85)
+- `just` (command runner)
+- At least one supported AI tool (recommended: claude-code + codex)
+- Optional: `mise` (recommended for managing csa/weave binary versions)
+
+### Development commands
+
 ```bash
-just fmt          # Format code
-just clippy       # Lint (strict: -D warnings)
-just test         # Run tests (cargo nextest)
-just test-e2e     # E2E tests only
-just pre-commit   # Full check suite
+just clippy                      # Build + lint
+just test                        # Run tests
+just fmt                         # Format
+just pre-commit                  # Full pre-commit check (fmt + clippy + test)
+cargo run -- <args>              # Run directly
+```
+
+### Coding conventions
+
+- Error handling: `anyhow` (application layer) + `thiserror` (library layer)
+- Async: `tokio` (`LocalSet` is used in the ACP layer for handling `!Send` futures)
+- Tool abstraction: closed Enum (4 tool types), not Trait/Dynamic Dispatch
+- Serialization: TOML for config/state, with `serde`
+- Logging: `tracing`, isolated by session
+- Commits: Conventional Commits, with scope aligned to crate names
+
+### Project structure
+
+```
+cli-sub-agent/
+|-- crates/                        # 13 Rust crates
+|   |-- cli-sub-agent/             # Main CLI entry (binary: csa)
+|   |-- csa-core/                  # Core types
+|   |-- csa-session/               # Session management
+|   |-- csa-executor/              # Tool executor (Transport trait)
+|   |-- csa-acp/                   # ACP transport layer
+|   |-- weave/                     # skill-lang compiler (binary: weave)
+|   +-- ...
+|-- skills/                        # 17 Agent Skills
+|-- drafts/patterns/               # 11 skill-lang workflow patterns
+|-- .csa/                          # Project-level config
+|-- drafts/                        # Design docs (external symlink)
++-- Cargo.toml                     # Workspace config
 ```
 
 ## License
 
-MIT OR Apache-2.0
+Apache-2.0
+
+---
+
+**Document version**: v1.2 | **Last updated**: 2026-02-14 | **Aligned PRs**: #57 ~ #89 (Epic 1 + weave + skills migration)

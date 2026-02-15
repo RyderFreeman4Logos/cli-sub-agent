@@ -172,8 +172,10 @@ git-push-all:
 # Install latest local build to /usr/local/bin (requires cargo-auditable).
 install:
     CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/cli-sub-agent
+    CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/weave
     @echo "Verifying installation..."
     @csa --version
+    @weave --version
 
 # Generate CHANGELOG.md from Conventional Commits (requires git-cliff).
 changelog:
