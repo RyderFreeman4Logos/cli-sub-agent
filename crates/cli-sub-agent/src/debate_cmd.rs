@@ -137,6 +137,15 @@ fn resolve_debate_tool_from_value(
     project_root: &Path,
 ) -> Result<ToolName> {
     if tool_value == "auto" {
+        let has_effective_priority =
+            !csa_config::global::effective_tool_priority(project_config, global_config).is_empty();
+        if has_effective_priority {
+            if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config)
+            {
+                return Ok(tool);
+            }
+        }
+
         // Try old heterogeneous_counterpart first for backward compatibility
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
             return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
@@ -147,31 +156,9 @@ fn resolve_debate_tool_from_value(
             });
         }
 
-        // Fallback to new ModelFamily-based selection (filtered by enabled tools)
-        if let Some(parent_str) = parent_tool {
-            if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent_str) {
-                let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
-                    let tools: Vec<_> = csa_config::global::all_known_tools()
-                        .iter()
-                        .filter(|t| cfg.is_tool_enabled(t.as_str()))
-                        .copied()
-                        .collect();
-                    csa_config::global::sort_tools_by_effective_priority(
-                        &tools,
-                        project_config,
-                        global_config,
-                    )
-                } else {
-                    csa_config::global::sort_tools_by_effective_priority(
-                        csa_config::global::all_known_tools(),
-                        project_config,
-                        global_config,
-                    )
-                };
-                if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &enabled_tools) {
-                    return Ok(tool);
-                }
-            }
+        // Fallback to ModelFamily-based selection (filtered by enabled tools)
+        if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config) {
+            return Ok(tool);
         }
 
         // Both methods failed
@@ -184,6 +171,31 @@ fn resolve_debate_tool_from_value(
             tool_value
         )
     })
+}
+
+fn select_auto_debate_tool(
+    parent_tool: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Option<ToolName> {
+    let parent_str = parent_tool?;
+    let parent_tool_name = crate::run_helpers::parse_tool_name(parent_str).ok()?;
+    let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
+        let tools: Vec<_> = csa_config::global::all_known_tools()
+            .iter()
+            .filter(|t| cfg.is_tool_enabled(t.as_str()))
+            .copied()
+            .collect();
+        csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
+    } else {
+        csa_config::global::sort_tools_by_effective_priority(
+            csa_config::global::all_known_tools(),
+            project_config,
+            global_config,
+        )
+    };
+
+    select_heterogeneous_tool(&parent_tool_name, &enabled_tools)
 }
 
 fn debate_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) -> anyhow::Error {
@@ -394,6 +406,27 @@ mod tests {
         )
         .unwrap();
         assert!(matches!(tool, ToolName::Codex));
+    }
+
+    #[test]
+    fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
+        let mut global = GlobalConfig::default();
+        global.preferences.tool_priority = vec!["opencode".to_string(), "claude-code".to_string()];
+
+        let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
+        cfg.debate = Some(ReviewConfig {
+            tool: "auto".to_string(),
+        });
+
+        let tool = resolve_debate_tool(
+            None,
+            Some(&cfg),
+            &global,
+            Some("codex"),
+            std::path::Path::new("/tmp/test-project"),
+        )
+        .unwrap();
+        assert!(matches!(tool, ToolName::Opencode));
     }
 
     #[test]
