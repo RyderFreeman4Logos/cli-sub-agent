@@ -139,6 +139,10 @@ pub(crate) async fn build_and_validate_executor(
             );
             anyhow::bail!("Tool disabled in config");
         }
+
+        // Defense-in-depth: enforce tier whitelist at execution boundary
+        cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
+        cfg.enforce_tier_model_name(executor.tool_name(), model)?;
     }
 
     // Check tool is installed

@@ -789,3 +789,6 @@ created_at = "2024-01-01T00:00:00Z"
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert!(loaded.check_schema_version().is_ok());
 }
+
+#[path = "config_tests_tier_whitelist.rs"]
+mod tier_whitelist;

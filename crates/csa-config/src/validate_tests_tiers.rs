@@ -256,3 +256,82 @@ fn test_validate_tier_with_valid_budget_and_turns() {
     let result = validate_config(dir.path());
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_validate_tier_model_spec_unknown_tool_rejected() {
+    let dir = tempdir().unwrap();
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "bad-tool-tier".to_string(),
+        TierConfig {
+            description: "Unknown tool in spec".to_string(),
+            models: vec!["unknown-tool/provider/model/high".to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("unknown tool"),
+        "Expected 'unknown tool' in error, got: {err_msg}"
+    );
+}
+
+#[test]
+fn test_validate_tier_model_spec_known_tool_accepted() {
+    let dir = tempdir().unwrap();
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "known-tool-tier".to_string(),
+        TierConfig {
+            description: "Known tool in spec".to_string(),
+            models: vec!["codex/openai/gpt-5.3-codex/high".to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_ok());
+}
