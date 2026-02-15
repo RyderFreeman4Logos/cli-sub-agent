@@ -61,6 +61,17 @@ enum Commands {
     /// Audit installed skills for issues.
     Audit,
 
+    /// Check for broken symlinks in skill directories.
+    Check {
+        /// Directories to scan (default: .claude/skills, .codex/skills, .agents/skills, .gemini/skills).
+        #[arg(long = "dir", value_name = "DIR")]
+        dirs: Vec<PathBuf>,
+
+        /// Remove broken symlinks.
+        #[arg(long)]
+        fix: bool,
+    },
+
     /// Visualize a compiled plan.toml as ASCII (default), Mermaid, or PNG.
     Visualize {
         /// Input plan.toml file path.
@@ -152,6 +163,43 @@ fn main() -> Result<()> {
                     }
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Check { dirs, fix } => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let scan_dirs = if dirs.is_empty() {
+                package::DEFAULT_CHECK_DIRS
+                    .iter()
+                    .map(PathBuf::from)
+                    .collect()
+            } else {
+                dirs
+            };
+            let results = package::check_symlinks(&project_root, &scan_dirs, fix)?;
+            let total_broken: usize = results.iter().map(|r| r.issues.len()).sum();
+            let total_fixed: usize = results.iter().map(|r| r.fixed).sum();
+            let total_failures: usize = results.iter().map(|r| r.fix_failures).sum();
+
+            if total_broken == 0 {
+                eprintln!("check passed: no broken symlinks found");
+            } else {
+                for result in &results {
+                    for issue in &result.issues {
+                        eprintln!("  [!] {issue}");
+                    }
+                }
+                if fix {
+                    eprintln!("fixed {total_fixed} broken symlink(s)");
+                    if total_failures > 0 {
+                        eprintln!(
+                            "warning: failed to remove {total_failures} symlink(s) (permission denied?)"
+                        );
+                        std::process::exit(1);
+                    }
+                } else {
+                    eprintln!("found {total_broken} broken symlink(s) — run with --fix to remove");
+                    std::process::exit(1);
+                }
             }
         }
         Commands::Visualize { plan, png, mermaid } => {
