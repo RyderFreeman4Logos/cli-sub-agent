@@ -24,6 +24,17 @@ use csa_session::{
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
 
+pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 300;
+
+pub(crate) fn resolve_idle_timeout_seconds(
+    config: Option<&ProjectConfig>,
+    cli_override: Option<u64>,
+) -> u64 {
+    cli_override
+        .or_else(|| config.map(|cfg| cfg.resources.idle_timeout_seconds))
+        .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECONDS)
+}
+
 /// RAII guard that cleans up a newly created session directory on failure.
 ///
 /// When `execute_with_session` creates a new session but the tool fails to spawn
@@ -247,6 +258,7 @@ pub(crate) async fn execute_with_session(
     task_type: Option<&str>,
     tier_name: Option<&str>,
     stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
     global_config: Option<&GlobalConfig>,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
@@ -262,6 +274,7 @@ pub(crate) async fn execute_with_session(
         task_type,
         tier_name,
         stream_mode,
+        idle_timeout_seconds,
         global_config,
     )
     .await?;
@@ -283,6 +296,7 @@ pub(crate) async fn execute_with_session_and_meta(
     task_type: Option<&str>,
     tier_name: Option<&str>,
     stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
     global_config: Option<&GlobalConfig>,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
@@ -398,42 +412,24 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     }
 
-    // Check token budget before execution
+    // Token budget is observability-only (never a kill gate).
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {
-            let err = anyhow::anyhow!(
-                "Token budget exhausted: used {} / {} allocated ({}%)",
-                budget.used,
-                budget.allocated,
-                budget.usage_pct()
+            warn!(
+                session = %session.meta_session_id,
+                used = budget.used,
+                allocated = budget.allocated,
+                pct = budget.usage_pct(),
+                "Token budget hard threshold already exceeded — advisory only, execution continues"
             );
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
         }
         if budget.is_turns_exceeded(session.turn_count) {
-            let err = anyhow::anyhow!(
-                "Max turns exceeded: {} / {} allowed",
-                session.turn_count,
-                budget.max_turns.unwrap_or(0)
+            warn!(
+                session = %session.meta_session_id,
+                turn_count = session.turn_count,
+                max_turns = budget.max_turns.unwrap_or(0),
+                "Max turns already exceeded — advisory only, execution continues"
             );
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
         }
         if budget.is_soft_exceeded() {
             warn!(
@@ -543,7 +539,7 @@ pub(crate) async fn execute_with_session_and_meta(
             tool_state.as_ref(),
             &session,
             merged_env_ref,
-            stream_mode,
+            csa_executor::ExecuteOptions::new(stream_mode, idle_timeout_seconds),
             session_config,
         )
         .await
@@ -658,7 +654,7 @@ pub(crate) async fn execute_with_session_and_meta(
                     session = %session.meta_session_id,
                     used = budget.used,
                     allocated = budget.allocated,
-                    "Token budget hard threshold reached — next execution will be blocked"
+                    "Token budget hard threshold reached — advisory only"
                 );
             } else if budget.is_soft_exceeded() {
                 warn!(
@@ -750,47 +746,5 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn determine_project_root_none_returns_cwd() {
-        let result = determine_project_root(None).unwrap();
-        let cwd = std::env::current_dir().unwrap().canonicalize().unwrap();
-        assert_eq!(result, cwd);
-    }
-
-    #[test]
-    fn determine_project_root_with_valid_path() {
-        let tmp = tempfile::tempdir().unwrap();
-        let result = determine_project_root(Some(tmp.path().to_str().unwrap())).unwrap();
-        assert_eq!(result, tmp.path().canonicalize().unwrap());
-    }
-
-    #[test]
-    fn determine_project_root_nonexistent_path_errors() {
-        let result = determine_project_root(Some("/nonexistent/path/12345"));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn load_and_validate_exceeds_depth_returns_none() {
-        let tmp = tempfile::tempdir().unwrap();
-        // With no config, max_depth defaults to 5
-        let result = load_and_validate(tmp.path(), 100).unwrap();
-        assert!(
-            result.is_none(),
-            "Should return None when depth exceeds max"
-        );
-    }
-
-    #[test]
-    fn load_and_validate_within_depth_returns_some() {
-        let tmp = tempfile::tempdir().unwrap();
-        let result = load_and_validate(tmp.path(), 0).unwrap();
-        assert!(
-            result.is_some(),
-            "Should return Some when depth is within bounds"
-        );
-    }
-}
+#[path = "pipeline_tests.rs"]
+mod tests;

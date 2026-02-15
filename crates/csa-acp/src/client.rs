@@ -1,3 +1,4 @@
+use std::time::Instant;
 use std::{cell::RefCell, rc::Rc};
 
 use agent_client_protocol::{
@@ -24,18 +25,24 @@ pub enum SessionEvent {
 }
 
 pub(crate) type SharedEvents = Rc<RefCell<Vec<SessionEvent>>>;
+pub(crate) type SharedActivity = Rc<RefCell<Instant>>;
 
 #[derive(Debug, Clone)]
 pub(crate) struct AcpClient {
     events: SharedEvents,
+    last_activity: SharedActivity,
 }
 
 impl AcpClient {
-    pub(crate) fn new(events: SharedEvents) -> Self {
-        Self { events }
+    pub(crate) fn new(events: SharedEvents, last_activity: SharedActivity) -> Self {
+        Self {
+            events,
+            last_activity,
+        }
     }
 
     pub(crate) fn push_event(&self, event: SessionEvent) {
+        *self.last_activity.borrow_mut() = Instant::now();
         self.events.borrow_mut().push(event);
     }
 
@@ -115,7 +122,7 @@ impl Client for AcpClient {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
+    use std::{cell::RefCell, rc::Rc, time::Instant};
 
     use agent_client_protocol::{
         ContentBlock, ContentChunk, SessionUpdate, TextContent, ToolCall, ToolCallStatus,
@@ -179,7 +186,7 @@ mod tests {
     #[test]
     fn test_push_event_appends_to_shared_buffer() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let client = AcpClient::new(Rc::clone(&events));
+        let client = AcpClient::new(Rc::clone(&events), Rc::new(RefCell::new(Instant::now())));
 
         client.push_event(SessionEvent::Other("payload".to_string()));
 

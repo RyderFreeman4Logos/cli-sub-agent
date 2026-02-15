@@ -1,3 +1,4 @@
+use std::time::Duration;
 use std::{collections::HashMap, path::Path};
 
 use crate::{client::SessionEvent, connection::AcpConnection, error::AcpResult};
@@ -47,7 +48,19 @@ impl AcpSession {
     }
 
     pub async fn prompt(&self, prompt: &str) -> AcpResult<PromptResult> {
-        self.connection.prompt(&self.session_id, prompt).await
+        self.connection
+            .prompt(&self.session_id, prompt, Duration::from_secs(300))
+            .await
+    }
+
+    pub async fn prompt_with_idle_timeout(
+        &self,
+        prompt: &str,
+        idle_timeout: Duration,
+    ) -> AcpResult<PromptResult> {
+        self.connection
+            .prompt(&self.session_id, prompt, idle_timeout)
+            .await
     }
 }
 
@@ -58,18 +71,33 @@ pub async fn run_prompt(
     env: &HashMap<String, String>,
     system_prompt: Option<&str>,
     prompt: &str,
+    idle_timeout: Duration,
 ) -> AcpResult<AcpOutput> {
     let session = AcpSession::new(command, args, working_dir, env, system_prompt).await?;
-    let result = session.prompt(prompt).await?;
+    let result = session
+        .prompt_with_idle_timeout(prompt, idle_timeout)
+        .await?;
 
     // ACP processes may stay alive across prompts. If the prompt itself succeeded
     // (no error above), a still-running process is normal — default to exit_code=0.
     // Only report the actual exit code when the process has already exited (e.g., crash).
-    let exit_code = session.connection().exit_code().await?.unwrap_or(0);
+    let mut exit_code = session.connection().exit_code().await?.unwrap_or(0);
+    let mut stderr = session.connection().stderr();
+    if result.timed_out {
+        exit_code = 137;
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(&format!(
+            "idle timeout: no ACP events/stderr for {}s; process killed",
+            idle_timeout.as_secs()
+        ));
+        stderr.push('\n');
+    }
 
     Ok(AcpOutput {
         output: result.output,
-        stderr: session.connection().stderr(),
+        stderr,
         events: result.events,
         session_id: session.session_id().to_string(),
         exit_code,

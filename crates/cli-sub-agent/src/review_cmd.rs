@@ -213,6 +213,7 @@ async fn execute_review(
 
     let extra_env = global_config.env_vars(executor.tool_name());
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
+    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(project_config, None);
 
     crate::pipeline::execute_with_session(
         &executor,
@@ -227,6 +228,7 @@ async fn execute_review(
         Some("review"),
         None,
         csa_process::StreamMode::BufferOnly,
+        idle_timeout_seconds,
         Some(global_config),
     )
     .await

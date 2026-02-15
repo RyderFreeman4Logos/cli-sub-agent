@@ -58,6 +58,7 @@ pub(crate) async fn handle_claude_sub_agent(
 
     // 10. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
+    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
 
     // 11. Session description (no longer derived from --skill)
     let description: Option<String> = None;
@@ -76,6 +77,7 @@ pub(crate) async fn handle_claude_sub_agent(
         Some("run"),
         None, // claude-sub-agent does not use tier-based selection
         csa_process::StreamMode::BufferOnly,
+        idle_timeout_seconds,
         Some(&global_config),
     )
     .await?;

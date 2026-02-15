@@ -202,6 +202,7 @@ pub fn init_project(
             },
             resources: ResourcesConfig {
                 min_free_memory_mb: 4096,
+                idle_timeout_seconds: 300,
                 initial_estimates,
             },
             tools,
@@ -276,6 +277,7 @@ mod tests {
         assert!(!config.project.name.is_empty());
         assert_eq!(config.project.max_recursion_depth, 5);
         assert!(config.resources.min_free_memory_mb > 0);
+        assert!(config.resources.idle_timeout_seconds > 0);
 
         // Config file should exist
         let config_path = ProjectConfig::config_path(dir.path());

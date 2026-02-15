@@ -47,6 +47,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
 
     // 7. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
+    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
 
     // 8. Acquire global slot to enforce concurrency limit
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
@@ -69,6 +70,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         Some("debate"),
         None, // debate does not use tier-based selection
         csa_process::StreamMode::BufferOnly,
+        idle_timeout_seconds,
         Some(&global_config),
     )
     .await?;

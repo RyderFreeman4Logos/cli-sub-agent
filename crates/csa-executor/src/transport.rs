@@ -4,7 +4,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use csa_acp::{SessionConfig, SessionEvent};
-use csa_process::{ExecutionResult, StreamMode, spawn_tool, wait_and_capture};
+use csa_process::{ExecutionResult, StreamMode, spawn_tool, wait_and_capture_with_idle_timeout};
 use csa_session::state::{MetaSessionState, ToolState};
 
 use crate::executor::Executor;
@@ -23,6 +23,7 @@ pub trait Transport: Send + Sync {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<TransportResult>;
 
     #[cfg(test)]
@@ -55,12 +56,18 @@ impl LegacyTransport {
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         let (cmd, stdin_data) = self
             .executor
             .build_execute_in_command(prompt, work_dir, extra_env);
         let child = spawn_tool(cmd, stdin_data).await?;
-        let execution = wait_and_capture(child, stream_mode).await?;
+        let execution = wait_and_capture_with_idle_timeout(
+            child,
+            stream_mode,
+            std::time::Duration::from_secs(idle_timeout_seconds),
+        )
+        .await?;
 
         Ok(TransportResult {
             execution,
@@ -79,12 +86,18 @@ impl Transport for LegacyTransport {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         let (cmd, stdin_data) = self
             .executor
             .build_command(prompt, tool_state, session, extra_env);
         let child = spawn_tool(cmd, stdin_data).await?;
-        let execution = wait_and_capture(child, stream_mode).await?;
+        let execution = wait_and_capture_with_idle_timeout(
+            child,
+            stream_mode,
+            std::time::Duration::from_secs(idle_timeout_seconds),
+        )
+        .await?;
 
         Ok(TransportResult {
             execution,
@@ -207,6 +220,7 @@ impl Transport for AcpTransport {
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
+        idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         if stream_mode != StreamMode::BufferOnly {
             tracing::debug!(
@@ -237,6 +251,7 @@ impl Transport for AcpTransport {
                     &env,
                     system_prompt.as_deref(),
                     &prompt,
+                    std::time::Duration::from_secs(idle_timeout_seconds),
                 ))
                 .map_err(|e| anyhow!("ACP transport failed: {e}"))
             })

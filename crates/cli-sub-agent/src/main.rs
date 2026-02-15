@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
             thinking,
             no_failover,
             wait,
+            idle_timeout,
             stream_stdout,
             no_stream_stdout,
         } => {
@@ -95,6 +96,7 @@ async fn main() -> Result<()> {
                 thinking,
                 no_failover,
                 wait,
+                idle_timeout,
                 current_depth,
                 output_format,
                 stream_mode,

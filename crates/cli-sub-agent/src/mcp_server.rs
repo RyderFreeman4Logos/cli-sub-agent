@@ -535,6 +535,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
 
     // Load global config for env injection and slot control
     let global_config = csa_config::GlobalConfig::load()?;
+    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
     let extra_env = global_config.env_vars(executor.tool_name()).cloned();
     let extra_env_ref = extra_env.as_ref();
 
@@ -579,6 +580,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
                 temp_dir.path(),
                 extra_env_ref,
                 csa_process::StreamMode::BufferOnly,
+                idle_timeout_seconds,
             )
             .await?
     } else {
@@ -596,6 +598,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             Some("run"),
             None, // MCP server does not use tier-based selection
             csa_process::StreamMode::BufferOnly,
+            idle_timeout_seconds,
             Some(&global_config),
         )
         .await?

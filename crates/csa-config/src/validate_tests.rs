@@ -122,6 +122,42 @@ fn test_validate_config_fails_on_unknown_tool() {
 }
 
 #[test]
+fn test_validate_config_fails_on_zero_idle_timeout() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            min_free_memory_mb: 4096,
+            idle_timeout_seconds: 0,
+            initial_estimates: HashMap::new(),
+        },
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+    };
+
+    config.save(dir.path()).unwrap();
+
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("resources.idle_timeout_seconds must be > 0")
+    );
+}
+
+#[test]
 fn test_validate_config_fails_on_invalid_review_tool() {
     let dir = tempdir().unwrap();
 
