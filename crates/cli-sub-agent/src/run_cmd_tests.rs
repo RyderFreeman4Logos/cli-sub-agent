@@ -1,5 +1,6 @@
 use super::*;
 use chrono::{TimeZone, Utc};
+use csa_core::types::ToolName;
 use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};
 use std::collections::HashMap;
 
@@ -88,4 +89,32 @@ fn test_resolve_last_session_selection_has_no_warning_with_single_active_session
     let (selected_id, warning) = resolve_last_session_selection(sessions).unwrap();
     assert_eq!(selected_id, "01ARZ3NDEKTSV4RRFFQ69G5FAW");
     assert!(warning.is_none());
+}
+
+#[test]
+fn test_resolve_heterogeneous_candidates_preserves_order() {
+    let enabled = vec![
+        ToolName::GeminiCli,
+        ToolName::Opencode,
+        ToolName::Codex,
+        ToolName::ClaudeCode,
+    ];
+    let candidates = resolve_heterogeneous_candidates(&ToolName::ClaudeCode, &enabled);
+    assert_eq!(
+        candidates,
+        vec![ToolName::GeminiCli, ToolName::Opencode, ToolName::Codex]
+    );
+}
+
+#[test]
+fn test_take_next_runtime_fallback_tool_skips_current_and_tried() {
+    let mut candidates = vec![ToolName::GeminiCli, ToolName::Codex, ToolName::Opencode];
+    let tried_tools = vec!["gemini-cli".to_string()];
+
+    let selected =
+        take_next_runtime_fallback_tool(&mut candidates, ToolName::GeminiCli, &tried_tools)
+            .expect("expected a fallback tool");
+
+    assert_eq!(selected, ToolName::Codex);
+    assert_eq!(candidates, vec![ToolName::Opencode]);
 }
