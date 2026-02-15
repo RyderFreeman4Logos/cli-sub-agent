@@ -144,7 +144,7 @@ csa debate "evaluate whether this bot comment is a false positive: ..."
 | Run pr-codex-bot workflow | Tier 1's job |
 | Pre-fetch data for CSA | CSA reads files natively |
 
-**The ONLY Bash Tier 0 may run**: `csa run`, `csa session show`, reading
+**The ONLY Bash Tier 0 may run**: `csa run`, `csa session result`, reading
 result.toml. Nothing else.
 
 ## Tier 1: End-to-End Executor
