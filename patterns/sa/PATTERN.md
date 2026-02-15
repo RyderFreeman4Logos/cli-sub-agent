@@ -11,7 +11,8 @@ version = "0.1.0"
 Tier 0 (main agent) dispatches. Tier 1 (claude-code) plans and implements.
 Tier 2 (codex) explores and fixes errors. Each tier has its own context window.
 
-Tier 0 NEVER reads source files — only reads result.toml for metadata.
+Tier 0 NEVER reads source files — only reads session metadata from
+the CSA session `result.toml` (path returned by CSA as last output line).
 Heterogeneous review mandatory: author and reviewer must be different tools.
 
 ## Step 1: Validate Task Scope
@@ -41,7 +42,7 @@ Tier 1 (claude-code) will:
 1. Spawn up to 3 parallel Tier 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
-4. Write result.toml with todo_path
+4. Write `result.toml` (with `todo_path`) in CSA session state dir
 
 ```bash
 csa run --tool claude-code < "${PROMPT_FILE}"
@@ -51,13 +52,21 @@ csa run --tool claude-code < "${PROMPT_FILE}"
 
 Tool: bash
 
-Extract session_id, status, and todo_path from result.toml.
-Validate artifact paths don't escape session directory.
+Extract session_id, status, and todo_path from CSA session `result.toml`.
+Validate result and TODO paths stay inside CSA state directories.
 
 ```bash
+# RESULT_PATH comes from CSA structured output (trusted: we invoked csa run)
 RESULT_PATH="${LAST_LINE}"
-SESSION_ID=$(grep 'session_id = ' "$RESULT_PATH" | cut -d'"' -f2)
-STATUS=$(grep 'status = ' "$RESULT_PATH" | head -1 | cut -d'"' -f2)
+RESULT_REAL=$(realpath -e "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml not found: ${RESULT_PATH}" >&2; exit 1; }
+# Derive CSA state root: strip /sessions/<id>/result.toml suffix
+CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
+[[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
+SESSION_ID=$(grep -- 'session_id = ' "$RESULT_REAL" | cut -d'"' -f2)
+STATUS=$(grep -- 'status = ' "$RESULT_REAL" | head -1 | cut -d'"' -f2)
+TODO_PATH=$(grep -- 'todo_path = ' "$RESULT_REAL" | cut -d'"' -f2)
+TODO_REAL=$(realpath -e "${TODO_PATH}" 2>/dev/null) || { echo "TODO path not found: ${TODO_PATH}" >&2; exit 1; }
+[[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
 ```
 
 ## Step 5: Present TODO to User
@@ -108,12 +117,15 @@ User rejected. Stop and ask for new direction.
 
 Tool: bash
 
-Extract commit_hash, review_result, tasks_completed from result.toml.
+Extract commit_hash, review_result, tasks_completed from CSA session `result.toml`.
 
 ```bash
 RESULT_PATH="${LAST_LINE}"
-COMMIT=$(grep 'commit_hash = ' "$RESULT_PATH" | cut -d'"' -f2)
-REVIEW=$(grep 'review_result = ' "$RESULT_PATH" | cut -d'"' -f2)
+RESULT_REAL=$(realpath -e "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml not found: ${RESULT_PATH}" >&2; exit 1; }
+CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
+[[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
+COMMIT=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
+REVIEW=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
 ```
 
 ## Step 8: Report to User
