@@ -390,9 +390,8 @@ mod unix_tests {
     fn test_run_guards_large_output_no_deadlock() {
         // Produces 128 KB — exceeds typical 64 KB pipe buffer.
         // Without the concurrent reader, this would deadlock until timeout.
-        // The child may get SIGPIPE after the reader caps at MAX_GUARD_OUTPUT_BYTES,
-        // causing non-zero exit (filtered out). The key assertion is that it
-        // completes quickly without hanging to the full timeout.
+        // The reader drains excess output to prevent SIGPIPE, so the child
+        // exits cleanly and the guard succeeds with capped output.
         let dir = tempfile::tempdir().unwrap();
         let script = dir.path().join("pipe_stress.sh");
         std::fs::write(
@@ -409,12 +408,24 @@ mod unix_tests {
         }];
 
         let start = std::time::Instant::now();
-        let _results = run_prompt_guards(&guards, &test_context());
+        let results = run_prompt_guards(&guards, &test_context());
         // Must complete well before timeout — proves no pipe deadlock.
         assert!(
             start.elapsed() < std::time::Duration::from_secs(3),
             "Guard should complete quickly without pipe deadlock, took {:?}",
             start.elapsed()
+        );
+        // With drain, child exits cleanly → guard succeeds with capped output.
+        assert_eq!(
+            results.len(),
+            1,
+            "Guard should succeed (drain prevents SIGPIPE)"
+        );
+        assert!(
+            results[0].output.len() <= super::MAX_GUARD_OUTPUT_BYTES,
+            "Output capped at {} bytes, got {}",
+            super::MAX_GUARD_OUTPUT_BYTES,
+            results[0].output.len()
         );
     }
 }

@@ -154,29 +154,44 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     // Drain stdout in a background thread to avoid pipe-buffer deadlock.
     // Without this, a guard producing >64 KB would block on write while
     // the parent blocks on try_wait — a classic pipe deadlock.
+    //
+    // Two-phase read:
+    //   Phase 1: Capture up to MAX_GUARD_OUTPUT_BYTES into buffer.
+    //   Phase 2: Drain any remaining output to /dev/null to prevent SIGPIPE.
+    //            This ensures the child exits cleanly even if it produces
+    //            far more output than the cap.
     let stdout_handle = child.stdout.take();
     let reader = std::thread::spawn(move || -> String {
         use std::io::Read;
         let Some(mut stdout) = stdout_handle else {
             return String::new();
         };
-        let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES + 1];
+
+        // Phase 1: capture up to MAX_GUARD_OUTPUT_BYTES.
+        let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES];
         let mut total = 0;
-        loop {
+        while total < MAX_GUARD_OUTPUT_BYTES {
             match stdout.read(&mut buf[total..]) {
-                Ok(0) => break,
-                Ok(n) => {
-                    total += n;
-                    if total > MAX_GUARD_OUTPUT_BYTES {
-                        total = MAX_GUARD_OUTPUT_BYTES;
-                        break;
-                    }
+                Ok(0) => {
+                    return String::from_utf8_lossy(&buf[..total]).trim().to_string();
                 }
-                Err(_) => break,
+                Ok(n) => total += n,
+                Err(_) => {
+                    return String::from_utf8_lossy(&buf[..total]).trim().to_string();
+                }
             }
         }
-        buf.truncate(total);
-        String::from_utf8_lossy(&buf).trim().to_string()
+
+        // Phase 2: drain excess to prevent child SIGPIPE.
+        let mut discard = [0u8; 8192];
+        loop {
+            match stdout.read(&mut discard) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+
+        String::from_utf8_lossy(&buf[..total]).trim().to_string()
     });
 
     let timeout = Duration::from_secs(guard.timeout_secs);
