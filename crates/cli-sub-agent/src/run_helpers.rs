@@ -400,6 +400,11 @@ mod tests {
     }
 
     #[test]
+    fn truncate_prompt_empty_string() {
+        assert_eq!(truncate_prompt("", 10), "");
+    }
+
+    #[test]
     fn truncate_prompt_mixed_multibyte() {
         // Mix of ASCII, CJK, emoji
         let mixed = "Fix \u{4fee}\u{590d} bug \u{1f41b} in auth";
