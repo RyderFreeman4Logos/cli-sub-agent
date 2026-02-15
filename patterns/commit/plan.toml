@@ -186,7 +186,7 @@ title = "Generate Commit Message"
 tool = "csa"
 prompt = """
 Delegate message generation to a cheaper tool with low thinking budget.
-Priority: (1) Resume prior review session with --thinking low (reuses cached context).
+Priority: (1) Resume prior review session with --tool codex --thinking low (MUST specify --tool to match session; reuses cached context).
 (2) Explicit --tool codex --thinking low (cheapest for mechanical tasks).
 NEVER --tool auto (may waste round-trip on broken auth).
 NEVER --tool any-available (may select same model family).

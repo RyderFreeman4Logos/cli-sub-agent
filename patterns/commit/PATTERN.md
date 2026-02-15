@@ -154,10 +154,12 @@ Delegate message generation to a cheaper tool. Commit messages are mechanical
 
 1. **Resume prior review session** (PREFERRED): If a review session already ran
    in this workflow (e.g., `csa review --diff` produced a session ID), resume it
-   with low thinking budget. This reuses the cached diff context — the model
-   already "saw" the changes, so generating a message costs near-zero new tokens.
+   with the same tool and low thinking budget. Sessions are tool-locked — you MUST
+   specify `--tool` matching the session's tool to avoid mismatch errors. This
+   reuses the cached diff context — the model already "saw" the changes, so
+   generating a message costs near-zero new tokens.
    ```bash
-   csa run --session <REVIEW_SESSION_ID> --thinking low \
+   csa run --tool codex --session <REVIEW_SESSION_ID> --thinking low \
      "Generate a Conventional Commits message for the staged changes. Output ONLY the message."
    ```
 
