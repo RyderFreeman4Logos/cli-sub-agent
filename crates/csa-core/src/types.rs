@@ -87,7 +87,7 @@ impl std::fmt::Display for ModelFamily {
 /// CLI-level tool argument parsed from `--tool`.
 #[derive(Clone, Debug)]
 pub enum ToolArg {
-    /// Auto-select (HeterogeneousStrict). Default when --tool omitted.
+    /// Auto-select (HeterogeneousPreferred). Default when --tool omitted.
     Auto,
     /// First available tool in built-in preference order, no heterogeneity requirement.
     AnyAvailable,
@@ -124,7 +124,7 @@ impl ToolArg {
     /// Convert to execution strategy based on command context.
     pub fn into_strategy(self) -> ToolSelectionStrategy {
         match self {
-            Self::Auto => ToolSelectionStrategy::HeterogeneousStrict,
+            Self::Auto => ToolSelectionStrategy::HeterogeneousPreferred,
             Self::AnyAvailable => ToolSelectionStrategy::AnyAvailable,
             Self::Specific(t) => ToolSelectionStrategy::Explicit(t),
         }
@@ -146,6 +146,8 @@ impl std::fmt::Display for ToolArg {
 pub enum ToolSelectionStrategy {
     /// Must use a different model family than the parent. Fails with reverse prompt if impossible.
     HeterogeneousStrict,
+    /// Try heterogeneous (different family), fall back to any available if impossible.
+    HeterogeneousPreferred,
     /// Any available tool, no heterogeneity constraint.
     AnyAvailable,
     /// Explicitly specified tool.
@@ -210,7 +212,7 @@ mod tests {
         let strategy = ToolArg::Auto.into_strategy();
         assert!(matches!(
             strategy,
-            ToolSelectionStrategy::HeterogeneousStrict
+            ToolSelectionStrategy::HeterogeneousPreferred
         ));
     }
 
