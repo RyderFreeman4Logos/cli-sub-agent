@@ -521,4 +521,32 @@ mod tests {
             "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
         );
     }
+
+    #[test]
+    fn test_resume_session_id_extraction() {
+        let now = chrono::Utc::now();
+        let tool_state = ToolState {
+            provider_session_id: Some("test-session-123".to_string()),
+            last_action_summary: String::new(),
+            last_exit_code: 0,
+            updated_at: now,
+            token_usage: None,
+        };
+        let resume_id = tool_state.provider_session_id.as_deref();
+        assert_eq!(resume_id, Some("test-session-123"));
+    }
+
+    #[test]
+    fn test_resume_session_id_none_when_absent() {
+        let now = chrono::Utc::now();
+        let tool_state = ToolState {
+            provider_session_id: None,
+            last_action_summary: String::new(),
+            last_exit_code: 0,
+            updated_at: now,
+            token_usage: None,
+        };
+        let resume_id = tool_state.provider_session_id.as_deref();
+        assert!(resume_id.is_none());
+    }
 }

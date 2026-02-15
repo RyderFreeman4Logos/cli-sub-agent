@@ -36,11 +36,24 @@ impl AcpSession {
     ) -> AcpResult<Self> {
         let connection = AcpConnection::spawn(command, args, working_dir, env).await?;
         connection.initialize().await?;
-        let session_id = if let Some(session_id) = resume_session_id {
-            tracing::debug!(session_id, "loading ACP session");
-            connection
-                .load_session(session_id, Some(working_dir))
-                .await?
+        let session_id = if let Some(resume_id) = resume_session_id {
+            tracing::debug!(resume_session_id = resume_id, "loading ACP session");
+            match connection.load_session(resume_id, Some(working_dir)).await {
+                Ok(id) => {
+                    tracing::debug!(session_id = %id, "Resumed ACP session");
+                    id
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        resume_session_id = resume_id,
+                        error = %error,
+                        "Failed to resume ACP session, creating new session"
+                    );
+                    connection
+                        .new_session(system_prompt, Some(working_dir))
+                        .await?
+                }
+            }
         } else {
             tracing::debug!("creating new ACP session");
             connection
