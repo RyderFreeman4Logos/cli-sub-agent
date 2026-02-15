@@ -201,9 +201,10 @@ If fixes accumulated, create clean branch for final review.
 CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
 git push -u origin "${CLEAN_BRANCH}"
-gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
+gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
 
 [[plan.steps]]
 id = 15
@@ -213,7 +214,8 @@ prompt = """
 Squash-merge and update local main.
 
 ```bash
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"

@@ -160,6 +160,8 @@ No issues found by bot. Proceed to merge.
 
 ## ENDIF
 
+## IF !(${BOT_UNAVAILABLE})
+
 ## Step 11: Clean Resubmission (if needed)
 
 Tool: bash
@@ -170,7 +172,7 @@ If fixes accumulated, create clean branch for final review.
 CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
 git push -u origin "${CLEAN_BRANCH}"
-gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
+gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```
 
 ## Step 12: Final Merge
@@ -181,6 +183,8 @@ OnFail: abort
 Squash-merge and update local main.
 
 ```bash
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
+
+## ENDIF
