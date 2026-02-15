@@ -20,22 +20,22 @@ CSA provides a unified command-line interface for multiple AI coding tools (clau
 
 #### Recommended: use mise (cross-platform tool version manager)
 
-[mise](https://mise.jdx.dev/) can install both `csa` and `weave` with one command and automatically manage version upgrades:
+[mise](https://mise.jdx.dev/) can install `csa` with one command and automatically manage version upgrades:
 
 ```bash
 # Install mise (if not already installed)
 curl https://mise.run | sh
 
-# Install csa and weave
+# Install csa
 mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=csa]
-mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=weave]
 
 # Verify
 csa --version
-weave --version
 ```
 
 > **Why mise?** Through the [ubi](https://github.com/houseabsolute/ubi) backend, mise downloads prebuilt binaries directly from GitHub Releases, with no local Rust toolchain required. Upgrade with a single `mise upgrade`.
+>
+> **Note**: `weave` is not yet included in GitHub Releases. Install it via [Build from source](#build-from-source) below.
 
 #### Build from source
 
@@ -91,8 +91,8 @@ csa review --diff --reviewers 3 --consensus majority
 # Technical design decisions
 csa debate "Should we use anyhow or thiserror for error handling?"
 
-# Continue debate (resume session)
-csa debate --last "re-evaluate considering performance impact"
+# Continue debate (resume session by ULID prefix)
+csa debate --session 01JK "re-evaluate considering performance impact"
 ```
 
 ## Architecture Overview
@@ -258,7 +258,7 @@ csa review --diff --reviewers 3 --consensus majority  # Multi-reviewer
 
 # Adversarial debate
 csa debate "technical question"
-csa debate --last "continue debate"
+csa debate --session 01JK "continue debate"
 
 # Session management
 csa session list [--tree]                        # List sessions (tree view)
