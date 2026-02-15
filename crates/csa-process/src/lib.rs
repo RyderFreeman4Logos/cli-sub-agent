@@ -8,15 +8,15 @@ use tracing::warn;
 
 /// Controls whether stdout is forwarded to stderr in real-time.
 ///
-/// By default, stdout is only buffered and returned in `ExecutionResult::output`.
-/// When set to `TeeToStderr`, each stdout line is also printed to stderr with
-/// a `[stdout] ` prefix, allowing callers to distinguish "thinking" from "hung".
+/// By default, stdout is both buffered and forwarded to stderr with a
+/// `[stdout] ` prefix, allowing callers to distinguish "thinking" from "hung".
+/// Set to `BufferOnly` to suppress real-time streaming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StreamMode {
-    /// Only buffer stdout; do not forward (default).
-    #[default]
+    /// Only buffer stdout; do not forward.
     BufferOnly,
-    /// Buffer stdout AND forward each line to stderr with `[stdout] ` prefix.
+    /// Buffer stdout AND forward each line to stderr with `[stdout] ` prefix (default).
+    #[default]
     TeeToStderr,
 }
 
@@ -657,9 +657,9 @@ mod tests {
     // --- StreamMode tests ---
 
     #[test]
-    fn test_stream_mode_default_is_buffer_only() {
+    fn test_stream_mode_default_is_tee_to_stderr() {
         let mode: StreamMode = Default::default();
-        assert_eq!(mode, StreamMode::BufferOnly);
+        assert_eq!(mode, StreamMode::TeeToStderr);
     }
 
     #[test]

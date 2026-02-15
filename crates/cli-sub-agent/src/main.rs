@@ -66,9 +66,13 @@ async fn main() -> Result<()> {
             no_failover,
             wait,
             stream_stdout,
+            no_stream_stdout,
         } => {
-            // Determine stream mode: explicit flag > auto-detect (text format + stderr is TTY)
-            let stream_mode = if stream_stdout
+            // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
+            // default: stream when stderr is TTY and output format is Text.
+            let stream_mode = if no_stream_stdout {
+                csa_process::StreamMode::BufferOnly
+            } else if stream_stdout
                 || (matches!(output_format, OutputFormat::Text) && std::io::stderr().is_terminal())
             {
                 csa_process::StreamMode::TeeToStderr

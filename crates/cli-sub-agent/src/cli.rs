@@ -72,9 +72,13 @@ pub enum Commands {
         #[arg(long)]
         wait: bool,
 
-        /// Stream child stdout to stderr in real-time (prefix: [stdout])
-        #[arg(long)]
+        /// Force stdout streaming to stderr even in non-TTY/non-Text contexts
+        #[arg(long, conflicts_with = "no_stream_stdout")]
         stream_stdout: bool,
+
+        /// Suppress real-time stdout streaming to stderr (streams by default when TTY)
+        #[arg(long)]
+        no_stream_stdout: bool,
     },
 
     /// Manage sessions
