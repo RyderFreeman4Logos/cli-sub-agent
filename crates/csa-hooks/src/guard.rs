@@ -240,3 +240,7 @@ fn xml_escape_text(s: &str) -> String {
         .replace('<', "&lt;")
         .replace('>', "&gt;")
 }
+
+#[cfg(test)]
+#[path = "guard_tests.rs"]
+mod tests;
