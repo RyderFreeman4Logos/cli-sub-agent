@@ -147,11 +147,36 @@ just pre-commit
 Tool: csa
 Tier: tier-1-quick
 
-Delegate message generation to cheaper tool.
+Delegate message generation to a cheaper tool. Commit messages are mechanical
+(read diff → format) — no deep reasoning needed, so minimize thinking budget.
 
-```bash
-csa run "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}"
-```
+**Tool selection rules (in priority order):**
+
+1. **Resume prior review session** (PREFERRED): If a review session already ran
+   in this workflow (e.g., `csa review --diff` produced a session ID), resume it
+   with low thinking budget. This reuses the cached diff context — the model
+   already "saw" the changes, so generating a message costs near-zero new tokens.
+   ```bash
+   csa run --session <REVIEW_SESSION_ID> --thinking low \
+     "Generate a Conventional Commits message for the staged changes. Output ONLY the message."
+   ```
+
+2. **Explicit tool** (when no session available): Use `--tool codex` with low
+   thinking budget. Codex is cheapest for mechanical tasks.
+   ```bash
+   csa run --tool codex --thinking low \
+     "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}. Output ONLY the commit message."
+   ```
+
+3. **NEVER use `--tool auto`** for commit messages — auto may attempt tools with
+   broken auth (e.g., gemini-cli OAuth), wasting a round-trip before fallback.
+
+4. **NEVER use `--tool any-available`** — may select the same model family as
+   the caller, adding no value.
+
+5. **NEVER switch models on a resumed session** — changing the model invalidates
+   the prompt cache and forces a full context rebuild, making resume MORE expensive
+   than a fresh session. If resuming, keep the same model; reduce `--thinking` instead.
 
 ## Step 11: Commit
 

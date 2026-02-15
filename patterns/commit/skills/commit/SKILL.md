@@ -50,7 +50,7 @@ csa run --skill commit "Commit the current changes with scope: <scope>"
 4. **Security scan**: Grep staged files for hardcoded secrets (API_KEY, SECRET, PASSWORD, PRIVATE_KEY).
 5. **Security audit**: Invoke the `security-audit` pattern via CSA -- three-phase audit (test completeness, vulnerability scan, code quality).
 6. **Pre-commit review**: Invoke the `ai-reviewed-commit` pattern via CSA -- authorship-aware review (debate for self-authored, csa review for others). Fix-and-retry up to 3 rounds.
-7. **Generate commit message**: Delegate to CSA (`csa run` with tier-1) for Conventional Commits message.
+7. **Generate commit message**: Delegate to CSA with low thinking budget. Prefer `--session <review-session-id> --thinking low` (reuses cached context); fallback to `--tool codex --thinking low`. NEVER `--tool auto` (broken auth waste), NEVER `--tool any-available` (same family), NEVER switch models on resumed session (invalidates cache).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 9. **Auto PR** (if milestone): Push branch, create PR targeting main, invoke `/pr-codex-bot`.
 
