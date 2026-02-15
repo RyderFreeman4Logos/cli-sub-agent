@@ -108,8 +108,19 @@ pub fn check_symlinks(
                 abs_dir.join(&target)
             };
 
-            // Check if target exists (without following further symlinks).
-            if !resolved.exists() {
+            // Check if target exists.  Use try_exists() to distinguish
+            // "not found" from "permission denied" — only treat NotFound as
+            // broken, not EACCES/EPERM.
+            let target_exists = match resolved.try_exists() {
+                Ok(exists) => exists,
+                Err(err) => {
+                    // I/O error (e.g. permission denied) — not a broken symlink,
+                    // just inaccessible.  Warn and skip.
+                    warn!("cannot check symlink target {}: {err}", resolved.display());
+                    continue;
+                }
+            };
+            if !target_exists {
                 issues.push(AuditIssue::BrokenSymlink {
                     path: path.clone(),
                     target: target.clone(),

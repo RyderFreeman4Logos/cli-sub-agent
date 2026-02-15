@@ -390,14 +390,26 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
         }
     }
 
-    // Remove existing directory if present.
+    // Copy to a staging directory first, then swap — ensures the original
+    // is preserved if the copy fails (atomic-ish replace).
+    std::fs::create_dir_all(&deps_dir)
+        .with_context(|| format!("failed to create {}", deps_dir.display()))?;
+    let staging = deps_dir.join(format!(".{name}.staging"));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+    copy_dir_recursive(&canonical, &staging).inspect_err(|_| {
+        // Clean up partial staging on failure.
+        let _ = std::fs::remove_dir_all(&staging);
+    })?;
+
+    // Swap: remove old, rename staging → dest.
     if dest.exists() {
         std::fs::remove_dir_all(&dest)
             .with_context(|| format!("failed to remove existing {}", dest.display()))?;
     }
-
-    // Recursive copy, excluding .git/.
-    copy_dir_recursive(&canonical, &dest)?;
+    std::fs::rename(&staging, &dest)
+        .with_context(|| format!("failed to rename staging to {}", dest.display()))?;
 
     let version = read_version(&dest);
 
