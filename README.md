@@ -52,7 +52,7 @@ cargo install --path crates/weave           # Install weave compiler
 cd my-project
 csa init                    # Initialize .csa/ config directory
 csa doctor                  # Check all tools availability
-weave compile               # Compile skill-lang patterns
+weave compile PATTERN.md    # Compile a skill-lang pattern
 ```
 
 ### Basic usage
