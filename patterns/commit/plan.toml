@@ -185,10 +185,15 @@ id = 14
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
-Delegate message generation to cheaper tool.
+Delegate message generation to a cheaper tool with low thinking budget.
+Priority: (1) Resume prior review session with --tool codex --thinking low (MUST specify --tool to match session; reuses cached context).
+(2) Explicit --tool codex --thinking low (cheapest for mechanical tasks).
+NEVER --tool auto (may waste round-trip on broken auth).
+NEVER --tool any-available (may select same model family).
+NEVER switch models on resumed session (invalidates prompt cache).
 
 ```bash
-csa run "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}"
+csa run --tool codex --thinking low "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}. Output ONLY the commit message, nothing else."
 ```"""
 tier = "tier-1-quick"
 on_fail = "abort"
