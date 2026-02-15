@@ -178,6 +178,33 @@ async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
 }
 
 #[tokio::test]
+async fn test_idle_timeout_detects_partial_output_without_newlines() {
+    // Subprocess outputs dots without newlines (like a progress bar).
+    // This must NOT trigger idle timeout — any bytes should reset the timer.
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        r#"for _ in 1 2 3 4; do printf "."; sleep 0.3; done; echo done"#,
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let result =
+        wait_and_capture_with_idle_timeout(child, StreamMode::BufferOnly, Duration::from_secs(1))
+            .await
+            .expect("Failed to wait");
+
+    assert_eq!(
+        result.exit_code, 0,
+        "Process should NOT be killed by idle timeout when producing partial output"
+    );
+    assert!(
+        result.output.contains("....done"),
+        "Output should contain dots followed by 'done', got: {:?}",
+        result.output
+    );
+}
+
+#[tokio::test]
 async fn test_stderr_capture() {
     // Use bash -c to write to both stdout and stderr
     let mut cmd = Command::new("bash");

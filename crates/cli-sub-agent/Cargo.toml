@@ -9,9 +9,6 @@ license.workspace = true
 name = "csa"
 path = "src/main.rs"
 
-[features]
-cc-sdk = ["csa-executor/cc-sdk"]
-
 [dependencies]
 csa-core.workspace = true
 csa-session.workspace = true

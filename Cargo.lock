@@ -36,6 +36,7 @@ dependencies = [
 [[package]]
 name = "agent-teams"
 version = "0.1.0"
+source = "git+https://github.com/ZhangHanDong/agent-teams-rs.git#e163c0aa50e05d21cf6deae10dcec8263bed0a04"
 dependencies = [
  "async-trait",
  "cc-sdk",

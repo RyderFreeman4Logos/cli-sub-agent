@@ -22,7 +22,6 @@ chrono.workspace = true
 regex.workspace = true
 
 [features]
-cc-sdk = ["agent-teams/cc-sdk"]
 
 [dev-dependencies]
 tempfile.workspace = true

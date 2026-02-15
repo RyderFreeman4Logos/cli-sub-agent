@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use serde::Serialize;
 use std::time::{Duration, Instant};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
 use tracing::warn;
 
@@ -137,9 +137,14 @@ pub async fn wait_and_capture_with_idle_timeout(
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let stderr = child.stderr.take();
 
+    // Use byte-level reads instead of read_line() to detect partial output
+    // (e.g., progress bars with \r, streaming dots without \n). This prevents
+    // false idle-timeout kills when the subprocess actively produces data that
+    // never forms a complete line.
+    const READ_BUF_SIZE: usize = 4096;
     let mut stdout_reader = BufReader::new(stdout);
     let mut output = String::new();
-    let mut stdout_line = String::new();
+    let mut stdout_line_buf = String::new();
 
     let mut stderr_output = String::new();
     let mut last_activity = Instant::now();
@@ -150,40 +155,59 @@ pub async fn wait_and_capture_with_idle_timeout(
     );
 
     if let Some(stderr_handle) = stderr {
-        // Tee mode: read stdout and stderr concurrently
+        // Tee mode: read stdout and stderr concurrently via byte-level reads
         let mut stderr_reader = BufReader::new(stderr_handle);
-        let mut stderr_line = String::new();
+        let mut stderr_line_buf = String::new();
 
         let mut stdout_done = false;
         let mut stderr_done = false;
+        let mut stdout_buf = [0u8; READ_BUF_SIZE];
+        let mut stderr_buf = [0u8; READ_BUF_SIZE];
 
         while !stdout_done || !stderr_done {
             tokio::select! {
-                result = stdout_reader.read_line(&mut stdout_line), if !stdout_done => {
+                result = stdout_reader.read(&mut stdout_buf), if !stdout_done => {
                     match result {
-                        Ok(0) => stdout_done = true,
-                        Ok(_) => {
-                            last_activity = Instant::now();
-                            if stream_mode == StreamMode::TeeToStderr {
-                                eprint!("[stdout] {}", stdout_line);
-                            }
-                            output.push_str(&stdout_line);
-                            stdout_line.clear();
+                        Ok(0) => {
+                            // EOF — flush any remaining partial line
+                            flush_line_buf(&mut stdout_line_buf, &mut output, stream_mode);
+                            stdout_done = true;
                         }
-                        Err(_) => stdout_done = true,
+                        Ok(n) => {
+                            last_activity = Instant::now();
+                            let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
+                            accumulate_and_flush_lines(
+                                &chunk,
+                                &mut stdout_line_buf,
+                                &mut output,
+                                stream_mode,
+                            );
+                        }
+                        Err(_) => {
+                            flush_line_buf(&mut stdout_line_buf, &mut output, stream_mode);
+                            stdout_done = true;
+                        }
                     }
                 }
-                result = stderr_reader.read_line(&mut stderr_line), if !stderr_done => {
+                result = stderr_reader.read(&mut stderr_buf), if !stderr_done => {
                     match result {
-                        Ok(0) => stderr_done = true,
-                        Ok(_) => {
-                            last_activity = Instant::now();
-                            // Tee: forward to parent stderr in real-time
-                            eprint!("{}", stderr_line);
-                            stderr_output.push_str(&stderr_line);
-                            stderr_line.clear();
+                        Ok(0) => {
+                            flush_stderr_buf(&mut stderr_line_buf, &mut stderr_output);
+                            stderr_done = true;
                         }
-                        Err(_) => stderr_done = true,
+                        Ok(n) => {
+                            last_activity = Instant::now();
+                            let chunk = String::from_utf8_lossy(&stderr_buf[..n]);
+                            accumulate_and_flush_stderr(
+                                &chunk,
+                                &mut stderr_line_buf,
+                                &mut stderr_output,
+                            );
+                        }
+                        Err(_) => {
+                            flush_stderr_buf(&mut stderr_line_buf, &mut stderr_output);
+                            stderr_done = true;
+                        }
                     }
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
@@ -198,22 +222,30 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
     } else {
         // No stderr handle (shouldn't happen with spawn_tool, but handle gracefully)
+        let mut stdout_buf = [0u8; READ_BUF_SIZE];
         loop {
             tokio::select! {
-                result = stdout_reader.read_line(&mut stdout_line) => {
-                    let n = match result {
-                        Ok(v) => v,
-                        Err(_) => break,
-                    };
-                    if n == 0 {
-                        break;
+                result = stdout_reader.read(&mut stdout_buf) => {
+                    match result {
+                        Ok(0) => {
+                            flush_line_buf(&mut stdout_line_buf, &mut output, stream_mode);
+                            break;
+                        }
+                        Ok(n) => {
+                            last_activity = Instant::now();
+                            let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
+                            accumulate_and_flush_lines(
+                                &chunk,
+                                &mut stdout_line_buf,
+                                &mut output,
+                                stream_mode,
+                            );
+                        }
+                        Err(_) => {
+                            flush_line_buf(&mut stdout_line_buf, &mut output, stream_mode);
+                            break;
+                        }
                     }
-                    last_activity = Instant::now();
-                    if stream_mode == StreamMode::TeeToStderr {
-                        eprint!("[stdout] {}", stdout_line);
-                    }
-                    output.push_str(&stdout_line);
-                    stdout_line.clear();
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
                     if last_activity.elapsed() >= idle_timeout {
@@ -285,6 +317,57 @@ pub async fn run_and_capture_with_stdin(
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
     )
     .await
+}
+
+/// Accumulate a chunk of bytes into a line buffer, flushing complete lines to output.
+///
+/// When a `\n` is found, the complete line (including `\n`) is appended to `output`
+/// and optionally tee'd to stderr. Partial data remains in `line_buf` until more
+/// data arrives or EOF triggers `flush_line_buf`.
+fn accumulate_and_flush_lines(
+    chunk: &str,
+    line_buf: &mut String,
+    output: &mut String,
+    stream_mode: StreamMode,
+) {
+    line_buf.push_str(chunk);
+    while let Some(newline_pos) = line_buf.find('\n') {
+        let line: String = line_buf.drain(..=newline_pos).collect();
+        if stream_mode == StreamMode::TeeToStderr {
+            eprint!("[stdout] {line}");
+        }
+        output.push_str(&line);
+    }
+}
+
+/// Flush any remaining partial line from the stdout line buffer on EOF.
+fn flush_line_buf(line_buf: &mut String, output: &mut String, stream_mode: StreamMode) {
+    if !line_buf.is_empty() {
+        if stream_mode == StreamMode::TeeToStderr {
+            eprint!("[stdout] {line_buf}");
+        }
+        output.push_str(line_buf);
+        line_buf.clear();
+    }
+}
+
+/// Accumulate stderr chunk, flushing complete lines in real-time.
+fn accumulate_and_flush_stderr(chunk: &str, line_buf: &mut String, stderr_output: &mut String) {
+    line_buf.push_str(chunk);
+    while let Some(newline_pos) = line_buf.find('\n') {
+        let line: String = line_buf.drain(..=newline_pos).collect();
+        eprint!("{line}");
+        stderr_output.push_str(&line);
+    }
+}
+
+/// Flush any remaining partial stderr line on EOF.
+fn flush_stderr_buf(line_buf: &mut String, stderr_output: &mut String) {
+    if !line_buf.is_empty() {
+        eprint!("{line_buf}");
+        stderr_output.push_str(line_buf);
+        line_buf.clear();
+    }
 }
 
 fn kill_child_process_group(child: &mut tokio::process::Child) {
