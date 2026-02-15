@@ -59,7 +59,7 @@ Tier 1 (claude-code) will:
 1. Spawn up to 3 parallel Tier 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
-4. Write result.toml with todo_path
+4. Write `result.toml` (with `todo_path`) in CSA session state dir
 
 ```bash
 csa run --tool claude-code < "${PROMPT_FILE}"
@@ -71,13 +71,21 @@ id = 4
 title = "Parse Planning Result"
 tool = "bash"
 prompt = """
-Extract session_id, status, and todo_path from result.toml.
-Validate artifact paths don't escape session directory.
+Extract session_id, status, and todo_path from CSA session `result.toml`.
+Validate result and TODO paths stay inside CSA state directories.
 
 ```bash
 RESULT_PATH="${LAST_LINE}"
-SESSION_ID=$(grep 'session_id = ' "$RESULT_PATH" | cut -d'"' -f2)
-STATUS=$(grep 'status = ' "$RESULT_PATH" | head -1 | cut -d'"' -f2)
+RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path invalid: ${RESULT_PATH}" >&2; exit 1; }
+[ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
+CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
+[[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
+SESSION_ID=$(grep -- 'session_id = ' "$RESULT_REAL" | cut -d'"' -f2)
+STATUS=$(grep -- 'status = ' "$RESULT_REAL" | head -1 | cut -d'"' -f2)
+TODO_PATH=$(grep -- 'todo_path = ' "$RESULT_REAL" | cut -d'"' -f2)
+TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: ${TODO_PATH}" >&2; exit 1; }
+[ -f "${TODO_REAL}" ] || { echo "TODO not found: ${TODO_REAL}" >&2; exit 1; }
+[[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
 ```"""
 on_fail = "abort"
 
@@ -128,12 +136,16 @@ id = 9
 title = "Parse Implementation Result"
 tool = "bash"
 prompt = """
-Extract commit_hash, review_result, tasks_completed from result.toml.
+Extract commit_hash, review_result, tasks_completed from CSA session `result.toml`.
 
 ```bash
 RESULT_PATH="${LAST_LINE}"
-COMMIT=$(grep 'commit_hash = ' "$RESULT_PATH" | cut -d'"' -f2)
-REVIEW=$(grep 'review_result = ' "$RESULT_PATH" | cut -d'"' -f2)
+RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path invalid: ${RESULT_PATH}" >&2; exit 1; }
+[ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
+CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
+[[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
+COMMIT=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
+REVIEW=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
 ```"""
 on_fail = "abort"
 
