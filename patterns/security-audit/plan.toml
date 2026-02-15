@@ -1,0 +1,157 @@
+[plan]
+name = "security-audit"
+description = "Pre-commit security audit with test completeness verification and adversarial vulnerability scan"
+
+[[plan.variables]]
+name = "NEEDS_CSA_DELEGATION"
+
+[[plan.variables]]
+name = "VERDICT_IS_FAIL"
+
+[[plan.variables]]
+name = "VERDICT_IS_PASS_DEFERRED"
+
+[[plan.variables]]
+name = "base"
+
+[[plan.variables]]
+name = "dir"
+
+[[plan.steps]]
+id = 1
+title = "Discover Changed Files"
+tool = "bash"
+prompt = """
+Identify all files modified in the current changeset.
+
+```bash
+git diff --cached --name-only || git diff HEAD --name-only
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Assess Module Size"
+tool = "bash"
+prompt = """
+Count tokens to decide whether to audit locally or delegate to CSA.
+If > 19200 lines total, delegate to CSA for analysis.
+
+```bash
+git diff --cached --name-only | xargs wc -l 2>/dev/null | tail -1
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Step 3a: Delegate Audit to CSA"
+tool = "csa"
+prompt = """
+Module too large for local audit. Delegate entire audit to CSA.
+
+```bash
+csa run "Perform security audit following security-audit skill protocol.
+         Review changed files and associated tests.
+         Three phases: test completeness, vulnerability scan, code quality.
+         Output structured audit report."
+```"""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${NEEDS_CSA_DELEGATION}"
+
+[[plan.steps]]
+id = 4
+title = "Step 3b: Discover Tests"
+tool = "bash"
+prompt = '''
+For each changed source file, locate associated test files.
+Search same file (#[cfg(test)]), same directory (*_test.rs, test_*.rs),
+and tests/ directory.
+
+```bash
+git diff --cached --name-only | while read -r f; do
+  dir=$(dirname "$f")
+  base=$(basename "$f" .rs)
+  echo "=== Tests for $f ==="
+  grep -l "mod tests" "$f" 2>/dev/null
+  ls "${dir}/${base}_test"* "${dir}/test_${base}"* 2>/dev/null
+  find tests/ -name "*.rs" -exec grep -l "$base" {} \; 2>/dev/null
+done
+```'''
+on_fail = "abort"
+condition = "!(${NEEDS_CSA_DELEGATION})"
+
+[[plan.steps]]
+id = 5
+title = "Phase 1 — Test Completeness Check"
+tool = "claude-code"
+prompt = """
+For each public function in changed files:
+- Does it have tests for normal path?
+- Does it have tests for edge cases (empty, max, boundary)?
+- Does it have tests for error conditions?
+- Key question: "Can you propose a test case that doesn't exist?"
+  YES → FAIL. NO → PASS."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "!(${NEEDS_CSA_DELEGATION})"
+
+[[plan.steps]]
+id = 6
+title = "Phase 2 — Security Vulnerability Scan"
+tool = "claude-code"
+prompt = """
+For each function handling external input:
+- Input validation present?
+- Size/length limits enforced?
+- Can malformed input cause panic? (unwrap, expect, index access)
+- Can crafted input cause resource exhaustion?
+- Timing attack vectors (constant-time comparison for secrets)?
+- Integer overflow (checked/saturating arithmetic)?"""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "!(${NEEDS_CSA_DELEGATION})"
+
+[[plan.steps]]
+id = 7
+title = "Phase 3 — Code Quality Check"
+tool = "claude-code"
+prompt = """
+Check for:
+- No debug code (println!, dbg!, console.log)
+- No hardcoded secrets (API_KEY, PASSWORD, PRIVATE_KEY)
+- No commented-out code
+- No TODO/FIXME security items
+- Error handling complete (no unwrap on untrusted input)"""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "!(${NEEDS_CSA_DELEGATION})"
+
+[[plan.steps]]
+id = 8
+title = "Generate Audit Report"
+tool = "claude-code"
+prompt = """
+Produce structured report with tables for each phase:
+- Phase 1: Function | Normal | Edge | Error | Missing Tests
+- Phase 2: Severity | Location | Issue | Recommendation
+- Phase 3: Issue | Location | Fix
+
+Final verdict: PASS | PASS_DEFERRED | FAIL"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 9
+title = "Report Blocking Issues"
+prompt = "List all blocking issues. Commit is rejected until resolved."
+on_fail = "abort"
+condition = "${VERDICT_IS_FAIL}"
+
+[[plan.steps]]
+id = 10
+title = "Record Deferred Issues"
+prompt = """
+Record deferred issues (in other modules) via Task tools for
+immediate post-commit fixing. Priority: Critical > High > Medium."""
+on_fail = "abort"
+condition = "${VERDICT_IS_PASS_DEFERRED}"

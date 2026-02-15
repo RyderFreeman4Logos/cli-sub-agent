@@ -1,0 +1,151 @@
+[plan]
+name = "mktsk"
+description = "Convert TODO plans into Task tool entries for persistent serial execution across auto-compaction"
+
+[[plan.variables]]
+name = "CONTEXT_ABOVE_80_PERCENT"
+
+[[plan.variables]]
+name = "TASK_IS_IMPLEMENTATION"
+
+[[plan.variables]]
+name = "TASK_LIST"
+
+[[plan.variables]]
+name = "TODO_ITEMS"
+
+[[plan.steps]]
+id = 1
+title = "Parse TODO Plan"
+prompt = """
+Read the TODO plan file (from mktd output or user-provided plan).
+Extract each [ ] item with its executor tag and description."""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Create Task Entries"
+prompt = ""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Step 2a: Create TaskCreate Entry"
+prompt = """
+Create a TaskCreate entry for this TODO item.
+Each task MUST include:
+- Subject with executor tag: [Sub:developer], [Skill:commit], [CSA:tool]
+- Description with clear scope
+- DONE WHEN condition (mechanically verifiable)"""
+on_fail = "abort"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TODO_ITEMS}"
+
+[[plan.steps]]
+id = 4
+title = "Step 2b: Append Commit Task"
+prompt = """
+For implementation tasks, append a corresponding commit task:
+[Skill:commit] → runs full commit workflow (fmt → lint → test → audit → review → commit)"""
+on_fail = "abort"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TODO_ITEMS}"
+
+[[plan.steps]]
+id = 5
+title = "Execute Tasks Serially"
+prompt = ""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Step 4a: Implement"
+prompt = "Write code for the current task."
+on_fail = "abort"
+condition = "${TASK_IS_IMPLEMENTATION}"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TASK_LIST}"
+
+[[plan.steps]]
+id = 7
+title = "Step 4b: Quality Gates"
+tool = "bash"
+prompt = """
+```bash
+just pre-commit
+```"""
+condition = "${TASK_IS_IMPLEMENTATION}"
+
+[plan.steps.on_fail]
+retry = 2
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TASK_LIST}"
+
+[[plan.steps]]
+id = 8
+title = "Step 4c: Review"
+tool = "bash"
+prompt = """
+```bash
+csa review --diff
+```"""
+on_fail = "abort"
+condition = "${TASK_IS_IMPLEMENTATION}"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TASK_LIST}"
+
+[[plan.steps]]
+id = 9
+title = "Step 4d: Commit"
+prompt = ""
+on_fail = "abort"
+condition = "${TASK_IS_IMPLEMENTATION}"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TASK_LIST}"
+
+[[plan.steps]]
+id = 10
+title = "Include commit"
+tool = "weave"
+prompt = "commit"
+on_fail = "abort"
+condition = "${TASK_IS_IMPLEMENTATION}"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TASK_LIST}"
+
+[[plan.steps]]
+id = 11
+title = "Step 4e: Compact Context"
+prompt = "Preserve task list and decisions. Compact process details."
+on_fail = "abort"
+condition = "${CONTEXT_ABOVE_80_PERCENT}"
+
+[plan.steps.loop_var]
+variable = "task"
+collection = "${TASK_LIST}"
+
+[[plan.steps]]
+id = 12
+title = "Verify Completion"
+prompt = """
+Check all tasks completed. Run final quality gates.
+
+```bash
+just pre-commit
+git status
+```"""
+on_fail = "abort"

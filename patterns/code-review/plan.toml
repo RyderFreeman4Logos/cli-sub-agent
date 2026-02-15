@@ -1,0 +1,123 @@
+[plan]
+name = "code-review"
+description = "GitHub PR code review via gh CLI with scale-adaptive strategy and AGENTS.md compliance"
+
+[[plan.variables]]
+name = "PR_IS_LARGE"
+
+[[plan.variables]]
+name = "PR_NUM"
+
+[[plan.variables]]
+name = "REVIEW_BODY"
+
+[[plan.variables]]
+name = "USER_REQUESTS_POSTING"
+
+[[plan.steps]]
+id = 1
+title = "Fetch PR Context"
+tool = "bash"
+prompt = """
+Get PR metadata and diff statistics to assess scale.
+
+```bash
+gh pr view ${PR_NUM} --json title,body,author,files,additions,deletions,reviewDecision
+gh pr diff ${PR_NUM} --stat
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Assess PR Scale"
+prompt = """
+Determine review strategy based on lines changed:
+- Small (< 200 lines): direct review in main agent
+- Medium (200-800 lines): direct review with progress tracking
+- Large (> 800 lines): delegate to csa review"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Authorship Check"
+prompt = """
+Check git log for commits in scope. If Co-Authored-By matches
+caller model family → use csa debate for review (self-authored code).
+If commits by different tool/human → review directly."""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 4
+title = "Step 4a: Delegate Large PR to CSA"
+tool = "bash"
+prompt = """
+Checkout PR branch locally, then delegate to CSA review.
+Do NOT pre-read diff into main agent context.
+
+```bash
+gh pr checkout ${PR_NUM}
+csa review --branch $(gh pr view --json baseRefName -q .baseRefName)
+```"""
+on_fail = "abort"
+condition = "${PR_IS_LARGE}"
+
+[[plan.steps]]
+id = 5
+title = "Step 4b: Fetch Full Diff"
+tool = "bash"
+prompt = """
+Read full diff for direct review.
+
+```bash
+gh pr diff ${PR_NUM}
+```"""
+on_fail = "abort"
+condition = "!(${PR_IS_LARGE})"
+
+[[plan.steps]]
+id = 6
+title = "Analyze Changes"
+prompt = """
+Review each file for:
+- Code quality (naming, organization, DRY)
+- Security (input validation, SQL injection, XSS, secrets)
+- Performance (N+1 queries, unnecessary allocations, blocking in async)
+- Language-specific (ownership, lifetimes, unsafe for Rust)"""
+on_fail = "abort"
+condition = "!(${PR_IS_LARGE})"
+
+[[plan.steps]]
+id = 7
+title = "AGENTS.md Compliance Check"
+prompt = """
+For each changed file, discover AGENTS.md chain (root-to-leaf).
+Check every applicable rule. Violations are at least P2, MUST/CRITICAL → P1.
+Produce checklist with every rule checked."""
+on_fail = "abort"
+condition = "!(${PR_IS_LARGE})"
+
+[[plan.steps]]
+id = 8
+title = "Generate Review"
+prompt = """
+Produce structured review with:
+- Summary (overall assessment)
+- Critical Issues (must-fix before merge)
+- Suggestions (recommended improvements)
+- Nitpicks (optional style improvements)
+- Questions (clarifications needed)
+- AGENTS.md checklist (all rules checked)"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 9
+title = "Submit Review to GitHub"
+tool = "bash"
+prompt = """
+Post review comment to PR. Only when user explicitly requests.
+
+```bash
+gh pr comment ${PR_NUM} --body "${REVIEW_BODY}"
+```"""
+on_fail = "abort"
+condition = "${USER_REQUESTS_POSTING}"

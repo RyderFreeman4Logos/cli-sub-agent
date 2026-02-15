@@ -1,0 +1,123 @@
+[plan]
+name = "csa-review"
+description = "CSA-driven code review with independent model selection, session isolation, and structured outputs"
+
+[[plan.variables]]
+name = "FIX_PROMPT"
+
+[[plan.variables]]
+name = "MODE_IS_REVIEW_AND_FIX"
+
+[[plan.variables]]
+name = "REVIEW_PROMPT"
+
+[[plan.variables]]
+name = "REVIEW_TOOL"
+
+[[plan.variables]]
+name = "SCOPE"
+
+[[plan.variables]]
+name = "SCOPE_IS_PRE_PR"
+
+[[plan.variables]]
+name = "SESSION_ID"
+
+[[plan.steps]]
+id = 1
+title = "Role Detection"
+prompt = """
+Check initial prompt for "Use the csa-review skill" literal string.
+If present → review agent mode (skip orchestration, execute review directly).
+If invoked by user → orchestrator mode (follow steps below).
+Review agents MUST NOT run csa commands (prevents recursion)."""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 2
+title = "Determine Review Tool"
+tool = "bash"
+prompt = """
+Read review tool from config. Auto mode: claude-code caller → codex reviewer,
+codex caller → claude-code reviewer.
+
+```bash
+csa config get review.tool 2>/dev/null || echo "auto"
+```"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 3
+title = "Auto-Detect TODO Plan"
+tool = "bash"
+prompt = """
+For pre-PR reviews (scope main...HEAD), auto-detect the associated TODO plan.
+FATAL if no TODO found — pre-PR reviews require alignment checking.
+
+```bash
+csa todo find --branch "$(git branch --show-current)"
+```"""
+on_fail = "abort"
+condition = "${SCOPE_IS_PRE_PR}"
+
+[[plan.steps]]
+id = 4
+title = "Build Review Prompt"
+prompt = """
+Construct comprehensive review prompt. The review agent reads CLAUDE.md
+and AGENTS.md autonomously — do NOT pre-read them here.
+
+Review prompt instructs agent to:
+1. Read project context (CLAUDE.md + AGENTS.md)
+2. Collect diff for given scope
+3. Three-pass review (discovery, evidence filtering, adversarial security)
+4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules)
+5. Generate review-findings.json and review-report.md"""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 5
+title = "Execute Review via CSA"
+tool = "csa"
+prompt = """
+```bash
+csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
+```"""
+tier = "tier-2-standard"
+on_fail = "abort"
+
+[[plan.steps]]
+id = 6
+title = "Present Results"
+prompt = """
+Read and display review-report.md, review-findings.json summary,
+AGENTS.md checklist summary. Report CSA session ID for follow-up."""
+on_fail = "abort"
+
+[[plan.steps]]
+id = 7
+title = "Fix Mode"
+tool = "csa"
+prompt = """
+Resume same CSA session to fix all P0 and P1 issues.
+Generate fix-summary.md and post-fix-review-findings.json.
+Mark remaining P0/P1 as incomplete.
+
+```bash
+csa run --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}"
+```"""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${MODE_IS_REVIEW_AND_FIX}"
+
+[[plan.steps]]
+id = 8
+title = "Verification"
+tool = "bash"
+prompt = """
+Optionally verify fixes pass quality gates.
+
+```bash
+just pre-commit
+```"""
+on_fail = "skip"
