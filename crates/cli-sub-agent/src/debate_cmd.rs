@@ -42,6 +42,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         args.model.as_deref(),
         None,
         config.as_ref(),
+        false, // skip tier whitelist for debate tool selection
     )
     .await?;
 
@@ -97,10 +98,6 @@ fn resolve_debate_tool(
 ) -> Result<ToolName> {
     // CLI --tool override always wins
     if let Some(tool) = arg_tool {
-        // Enforce tier whitelist for explicit --tool
-        if let Some(cfg) = project_config {
-            cfg.enforce_tier_whitelist(tool.as_str(), None)?;
-        }
         return Ok(tool);
     }
 

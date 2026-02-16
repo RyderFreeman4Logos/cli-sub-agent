@@ -50,6 +50,7 @@ pub(crate) async fn handle_claude_sub_agent(
         resolved_model.as_deref(),
         None, // thinking budget
         config.as_ref(),
+        true, // enforce tier whitelist for sub-agent execution
     )
     .await?;
 
