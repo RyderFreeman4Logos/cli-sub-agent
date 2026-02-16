@@ -29,7 +29,7 @@ pub(crate) fn build_reviewer_tools(
     let enabled_tools: Vec<ToolName> = if let Some(cfg) = project_config {
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
-            .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| cfg.is_tool_enabled(t.as_str()))
             .copied()
             .collect();
         if let Some(gc) = global_config {

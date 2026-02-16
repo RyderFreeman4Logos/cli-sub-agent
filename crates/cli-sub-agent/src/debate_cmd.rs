@@ -42,6 +42,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         args.model.as_deref(),
         None,
         config.as_ref(),
+        false, // skip tier whitelist for debate tool selection
     )
     .await?;
 
@@ -97,10 +98,6 @@ fn resolve_debate_tool(
 ) -> Result<ToolName> {
     // CLI --tool override always wins
     if let Some(tool) = arg_tool {
-        // Enforce tier whitelist for explicit --tool
-        if let Some(cfg) = project_config {
-            cfg.enforce_tier_whitelist(tool.as_str(), None)?;
-        }
         return Ok(tool);
     }
 
@@ -211,7 +208,7 @@ fn select_auto_debate_tool(
     let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
-            .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| cfg.is_tool_enabled(t.as_str()))
             .copied()
             .collect();
         csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
