@@ -200,11 +200,13 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                         anyhow::bail!("Guard '{}' exited with code {code}", guard.name);
                     }
 
-                    // Timeout path: kill child directly, then clean up
-                    // descendants that may have escaped via setsid.
-                    let _ = child.kill(); // Platform-portable child kill
-                    let _ = child.wait(); // Reap zombie
-                    kill_descendants_for_timeout(pgid); // Best-effort setsid escape cleanup (Linux)
+                    // Timeout path: kill child, collect descendants, reap, then kill descendants.
+                    // Order matters: child.kill() puts child in zombie state but /proc/{pid}
+                    // still exists. We must collect descendants BEFORE child.wait() (reap),
+                    // because reaping removes /proc/{pid} and breaks descendant discovery.
+                    let _ = child.kill(); // Platform-portable child kill (zombie state)
+                    kill_descendants_for_timeout(pgid); // Collect+kill while /proc still exists
+                    let _ = child.wait(); // Reap zombie (removes /proc entry)
                     anyhow::bail!(
                         "Guard '{}' timed out after {}s",
                         guard.name,

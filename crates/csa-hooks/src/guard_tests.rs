@@ -399,6 +399,58 @@ mod unix_tests {
         );
     }
 
+    /// Regression test: timeout cleanup must kill escaped descendants.
+    /// The guard spawns a setsid child that escapes the process group, then
+    /// sleeps past the timeout. After the guard returns, verify no orphan
+    /// processes remain from the guard's process tree.
+    #[test]
+    fn test_run_guards_timeout_kills_escaped_descendants() {
+        // Use a unique marker so we can identify our descendant.
+        let marker = format!("csa_guard_test_marker_{}", std::process::id());
+
+        // Guard spawns a setsid child (escapes process group) that sleeps.
+        // The guard itself also sleeps past the 1s timeout.
+        let guards = vec![PromptGuardEntry {
+            name: "timeout-cleanup".to_string(),
+            command: format!("setsid sh -c 'exec -a {marker} sleep 300' </dev/null & sleep 10"),
+            timeout_secs: 1,
+        }];
+
+        let results = run_prompt_guards(&guards, &test_context());
+        assert!(
+            results.is_empty(),
+            "Timed-out guard should produce no results"
+        );
+
+        // Give the OS a moment to clean up
+        std::thread::sleep(std::time::Duration::from_millis(200));
+
+        // Check that no process with our marker name is still running.
+        // `pgrep -f` searches command lines for the marker string.
+        let check = std::process::Command::new("pgrep")
+            .args(["-f", &marker])
+            .output();
+
+        match check {
+            Ok(output) => {
+                let pids = String::from_utf8_lossy(&output.stdout);
+                // Filter out our own PID (pgrep may match its own cmdline)
+                let live_pids: Vec<&str> = pids
+                    .lines()
+                    .filter(|p| p.trim().parse::<u32>().ok() != Some(std::process::id()))
+                    .collect();
+                assert!(
+                    live_pids.is_empty(),
+                    "Escaped descendant should be killed after timeout, found PIDs: {:?}",
+                    live_pids
+                );
+            }
+            Err(_) => {
+                // pgrep not available — skip check (best-effort test)
+            }
+        }
+    }
+
     /// Regression test: fragmented output (many small writes) must be captured
     /// correctly. The tempfile approach reads all output after child exit, so
     /// fragmentation does not affect correctness.
