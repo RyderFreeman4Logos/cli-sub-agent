@@ -194,12 +194,20 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
         String::from_utf8_lossy(&buf[..total]).trim().to_string()
     });
 
+    // Save the process group ID before the wait loop. On Unix, process_group(0)
+    // makes the child the group leader (PGID == child PID).
+    let pgid = child.id();
     let timeout = Duration::from_secs(guard.timeout_secs);
     let start = Instant::now();
 
     loop {
         match child.try_wait()? {
             Some(status) => {
+                // Kill the entire process group to clean up any background
+                // descendants that may keep stdout open. Without this, a
+                // script like `sleep 300 & echo ok` would cause reader.join()
+                // to block indefinitely waiting for EOF on the pipe.
+                kill_process_group(pgid);
                 let output = reader.join().unwrap_or_default();
                 if status.success() {
                     return Ok(output);
@@ -210,19 +218,8 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
             }
             None => {
                 if start.elapsed() >= timeout {
-                    // Kill the entire process group on timeout.
-                    #[cfg(unix)]
-                    {
-                        // SAFETY: kill() is async-signal-safe. Negative PID targets
-                        // the entire process group created by process_group(0).
-                        unsafe {
-                            libc::kill(-(child.id() as i32), libc::SIGKILL);
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    {
-                        let _ = child.kill();
-                    }
+                    let _ = child.kill(); // Platform-portable child kill
+                    kill_process_group(pgid); // Also kill descendants (Unix only)
                     let _ = child.wait(); // Reap zombie
                     let _ = reader.join(); // Clean up reader thread
                     anyhow::bail!(
@@ -234,6 +231,23 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
+    }
+}
+
+/// Kill an entire process group by PGID. On non-Unix, this is a no-op
+/// (the child kill is handled by `Child::kill()`).
+fn kill_process_group(pgid: u32) {
+    #[cfg(unix)]
+    {
+        // SAFETY: kill() is async-signal-safe. Negative PID targets
+        // the entire process group created by process_group(0).
+        unsafe {
+            libc::kill(-(pgid as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid; // suppress unused warning
     }
 }
 

@@ -387,6 +387,33 @@ mod unix_tests {
     }
 
     #[test]
+    fn test_run_guards_background_process_no_hang() {
+        // A guard that backgrounds a long-running process inheriting stdout.
+        // Without process group cleanup, reader.join() would block forever
+        // waiting for EOF on the pipe held by the background process.
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("bg_process.sh");
+        std::fs::write(&script, "#!/bin/sh\nsleep 300 &\necho 'guard output'").unwrap();
+        make_executable(&script);
+
+        let guards = vec![PromptGuardEntry {
+            name: "bg-test".to_string(),
+            command: script.display().to_string(),
+            timeout_secs: 5,
+        }];
+
+        let start = std::time::Instant::now();
+        let results = run_prompt_guards(&guards, &test_context());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(3),
+            "Must not hang waiting for background process, took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].output, "guard output");
+    }
+
+    #[test]
     fn test_run_guards_large_output_no_deadlock() {
         // Produces 128 KB — exceeds typical 64 KB pipe buffer.
         // Without the concurrent reader, this would deadlock until timeout.
