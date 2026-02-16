@@ -205,6 +205,7 @@ async fn execute_review(
         model.as_deref(),
         None,
         project_config,
+        false, // skip tier whitelist for review tool selection
     )
     .await?;
 
@@ -249,10 +250,6 @@ fn resolve_review_tool(
     project_root: &Path,
 ) -> Result<ToolName> {
     if let Some(tool) = arg_tool {
-        // Enforce tier whitelist for explicit --tool
-        if let Some(cfg) = project_config {
-            cfg.enforce_tier_whitelist(tool.as_str(), None)?;
-        }
         return Ok(tool);
     }
 

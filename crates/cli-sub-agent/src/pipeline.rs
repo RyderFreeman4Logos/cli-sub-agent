@@ -123,12 +123,17 @@ fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> AcpMcpServerConfig {
 ///
 /// Returns Executor on success.
 /// Returns error if tool not installed or disabled in config.
+///
+/// When `enforce_tier` is `false`, tier whitelist and model-name checks are
+/// skipped. Review and debate commands use this because they select tools for
+/// heterogeneous evaluation, not for tier-controlled execution.
 pub(crate) async fn build_and_validate_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
     model: Option<&str>,
     thinking_budget: Option<&str>,
     config: Option<&ProjectConfig>,
+    enforce_tier: bool,
 ) -> Result<Executor> {
     let executor =
         crate::run_helpers::build_executor(tool, model_spec, model, thinking_budget, config)?;
@@ -143,9 +148,11 @@ pub(crate) async fn build_and_validate_executor(
             anyhow::bail!("Tool disabled in config");
         }
 
-        // Defense-in-depth: enforce tier whitelist at execution boundary
-        cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
-        cfg.enforce_tier_model_name(executor.tool_name(), model)?;
+        if enforce_tier {
+            // Defense-in-depth: enforce tier whitelist at execution boundary
+            cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
+            cfg.enforce_tier_model_name(executor.tool_name(), model)?;
+        }
     }
 
     // Check tool is installed

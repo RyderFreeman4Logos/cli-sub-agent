@@ -422,6 +422,7 @@ pub(crate) async fn handle_run(
             current_model.as_deref(),
             thinking.as_deref(),
             config.as_ref(),
+            true, // enforce tier whitelist for run commands
         )
         .await?;
 
