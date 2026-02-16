@@ -1,7 +1,7 @@
 use super::*;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 use chrono::Utc;
-use csa_config::config::CURRENT_SCHEMA_VERSION;
+use csa_config::config::{CURRENT_SCHEMA_VERSION, TierConfig};
 use csa_config::{ProjectMeta, ResourcesConfig};
 use std::collections::HashMap;
 
@@ -331,4 +331,199 @@ fn pre_exec_error_writes_failure_result() {
     );
     assert_eq!(loaded.tool, "codex");
     assert!(loaded.artifacts.is_empty());
+}
+
+// --- enforce_tier regression tests ---
+
+fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectConfig {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-2-standard".to_string(),
+        TierConfig {
+            description: "test tier".to_string(),
+            models: vec![model_spec.to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    }
+}
+
+/// When `enforce_tier=true`, passing a model spec not in the tier whitelist
+/// must produce a tier-related error.
+#[tokio::test]
+async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_spec() {
+    let cfg = config_with_tier_for_tool("codex", "codex/openai/gpt-5.3-codex/high");
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        Some("codex/openai/gpt-4o/low"), // not whitelisted
+        None,
+        None,
+        Some(&cfg),
+        true,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "enforce_tier=true must reject non-whitelisted spec"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("tier") || err_msg.contains("whitelist"),
+        "error must mention tier/whitelist, got: {err_msg}"
+    );
+}
+
+/// When `enforce_tier=false`, the same non-whitelisted model spec must NOT
+/// produce a tier-related error. It may fail for other reasons (e.g., tool
+/// not installed), but the tier check is skipped.
+#[tokio::test]
+async fn build_and_validate_executor_enforce_tier_false_skips_whitelist_check() {
+    let cfg = config_with_tier_for_tool("codex", "codex/openai/gpt-5.3-codex/high");
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        Some("codex/openai/gpt-4o/low"), // not whitelisted, but won't be checked
+        None,
+        None,
+        Some(&cfg),
+        false,
+    )
+    .await;
+
+    // May succeed or fail (e.g., tool not installed), but must NOT fail
+    // with a tier whitelist error.
+    // Actual error fragments from enforce_tier_whitelist (config.rs):
+    //   "not configured in any tier"
+    //   "belongs to tool"
+    if let Err(e) = &result {
+        let msg = e.to_string();
+        assert!(
+            !msg.contains("not configured in any tier") && !msg.contains("belongs to tool"),
+            "enforce_tier=false must skip tier whitelist check, but got: {msg}"
+        );
+    }
+}
+
+/// When `enforce_tier=true`, a model name not matching any tier entry for the
+/// tool must be rejected.
+#[tokio::test]
+async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_model_name() {
+    let cfg = config_with_tier_for_tool("codex", "codex/openai/gpt-5.3-codex/high");
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        None,
+        Some("unknown-model-xyz"), // model name not in tier
+        None,
+        Some(&cfg),
+        true,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "enforce_tier=true must reject non-whitelisted model name"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("tier") || err_msg.contains("model"),
+        "error must mention tier/model, got: {err_msg}"
+    );
+}
+
+/// When `enforce_tier=false`, a non-whitelisted model name must NOT produce
+/// a tier-related error.
+#[tokio::test]
+async fn build_and_validate_executor_enforce_tier_false_skips_model_name_check() {
+    let cfg = config_with_tier_for_tool("codex", "codex/openai/gpt-5.3-codex/high");
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        None,
+        Some("unknown-model-xyz"), // not in tier, but won't be checked
+        None,
+        Some(&cfg),
+        false,
+    )
+    .await;
+
+    // Actual error fragment from enforce_tier_model_name (config.rs):
+    //   "is not configured in any tier"
+    if let Err(e) = &result {
+        let msg = e.to_string();
+        assert!(
+            !msg.contains("not configured in any tier"),
+            "enforce_tier=false must skip model name check, but got: {msg}"
+        );
+    }
+}
+
+/// When config has no tiers, both enforce_tier values must behave identically:
+/// no tier-related errors regardless of the flag.
+#[tokio::test]
+async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(), // no tiers
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    let result_true = build_and_validate_executor(
+        &ToolName::Codex,
+        Some("codex/openai/gpt-4o/low"),
+        None,
+        None,
+        Some(&cfg),
+        true,
+    )
+    .await;
+
+    let result_false = build_and_validate_executor(
+        &ToolName::Codex,
+        Some("codex/openai/gpt-4o/low"),
+        None,
+        None,
+        Some(&cfg),
+        false,
+    )
+    .await;
+
+    // Neither should fail with tier errors (tiers are empty).
+    // Both should produce the same outcome (success or same non-tier error).
+    for (label, result) in [("true", &result_true), ("false", &result_false)] {
+        if let Err(e) = result {
+            let msg = e.to_string();
+            assert!(
+                !msg.contains("not configured in any tier") && !msg.contains("belongs to tool"),
+                "enforce_tier={label} with no tiers must not produce tier error, got: {msg}"
+            );
+        }
+    }
+    // Both must have the same Ok/Err status (empty tiers = no behavioral difference)
+    assert_eq!(
+        result_true.is_ok(),
+        result_false.is_ok(),
+        "enforce_tier=true and false must behave identically with empty tiers"
+    );
 }
