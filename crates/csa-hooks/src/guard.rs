@@ -167,7 +167,11 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     // keeps stdout open after the guard shell exits.
     let stdout_handle = child.stdout.take();
     let (reader_tx, reader_rx) = std::sync::mpsc::channel::<String>();
-    let _reader_handle = std::thread::spawn(move || {
+    // Intentionally detached: in the setsid case the reader may block on
+    // read() beyond the guard's lifetime. The parent retrieves output via
+    // the channel and the thread is cleaned up on process exit. This is
+    // acceptable for a CLI tool (bounded at 1 leaked thread per guard).
+    std::thread::spawn(move || {
         use std::io::Read;
         let Some(mut stdout) = stdout_handle else {
             let _ = reader_tx.send(String::new());
@@ -227,6 +231,12 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                 let mut output = reader_rx
                     .recv_timeout(Duration::from_secs(2))
                     .unwrap_or_default();
+                while let Ok(update) = reader_rx.try_recv() {
+                    output = update;
+                }
+                // Yield to let the reader finish any in-progress send,
+                // then drain once more to catch late updates.
+                std::thread::yield_now();
                 while let Ok(update) = reader_rx.try_recv() {
                     output = update;
                 }
