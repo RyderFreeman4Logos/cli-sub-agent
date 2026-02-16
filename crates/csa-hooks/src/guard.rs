@@ -184,11 +184,22 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     let mut last_desc_scan = Instant::now();
 
     loop {
+        // Refresh descendant cache BEFORE checking exit status. When the child
+        // exits, do_exit() reparents descendants to init — so the parent-PID
+        // chain is broken by the time try_wait() returns Some. Scanning here
+        // (while child is alive) ensures we have a recent snapshot.
+        //
+        // First iteration always scans (empty cache); subsequent scans are
+        // throttled to ~2/second to avoid excessive /proc walks.
+        #[cfg(target_os = "linux")]
+        if cached_descendants.is_empty() || last_desc_scan.elapsed() >= Duration::from_millis(500) {
+            cached_descendants = collect_descendant_pids(pgid);
+            last_desc_scan = Instant::now();
+        }
+
         match child.try_wait()? {
             Some(status) => {
-                // Kill cached descendants before reading output. After child
-                // exit, these PIDs are reparented to init and unreachable via
-                // /proc parent chain, so we rely on the pre-cached snapshot.
+                // Kill cached descendants before reading output.
                 #[cfg(target_os = "linux")]
                 for pid in &cached_descendants {
                     // SAFETY: kill() is async-signal-safe. Positive PID targets one process.
@@ -270,15 +281,6 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                             MAX_GUARD_OUTPUT_BYTES
                         );
                     }
-                }
-
-                // Periodically cache descendant PIDs while child is alive.
-                // Used for cleanup on success/failure exit (where /proc parent
-                // chain is broken by reparenting). Throttled to ~2 scans/second.
-                #[cfg(target_os = "linux")]
-                if last_desc_scan.elapsed() >= Duration::from_millis(500) {
-                    cached_descendants = collect_descendant_pids(pgid);
-                    last_desc_scan = Instant::now();
                 }
 
                 std::thread::sleep(Duration::from_millis(50));
