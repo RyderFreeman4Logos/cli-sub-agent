@@ -269,20 +269,6 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                         guard.timeout_secs
                     );
                 }
-                // Enforce output cap during execution. The tempfile is unbounded
-                // while the child runs; a noisy guard (e.g. `yes`) could fill /tmp.
-                if let Ok(meta) = stdout_file.metadata() {
-                    if meta.len() > MAX_GUARD_OUTPUT_BYTES as u64 {
-                        let _ = child.kill();
-                        let _ = child.wait();
-                        anyhow::bail!(
-                            "Guard '{}' output exceeded {}B cap",
-                            guard.name,
-                            MAX_GUARD_OUTPUT_BYTES
-                        );
-                    }
-                }
-
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
