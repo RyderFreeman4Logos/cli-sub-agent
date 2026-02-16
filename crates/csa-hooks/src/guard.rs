@@ -200,13 +200,39 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                         anyhow::bail!("Guard '{}' exited with code {code}", guard.name);
                     }
 
-                    // Timeout path: kill child, collect descendants, reap, then kill descendants.
-                    // Order matters: child.kill() puts child in zombie state but /proc/{pid}
-                    // still exists. We must collect descendants BEFORE child.wait() (reap),
-                    // because reaping removes /proc/{pid} and breaks descendant discovery.
-                    let _ = child.kill(); // Platform-portable child kill (zombie state)
-                    kill_descendants_for_timeout(pgid); // Collect+kill while /proc still exists
-                    let _ = child.wait(); // Reap zombie (removes /proc entry)
+                    // Timeout path: collect descendants BEFORE kill, then kill all.
+                    //
+                    // Order is critical on Linux: child.kill() triggers do_exit() which
+                    // reparents descendants to init BEFORE the process reaches zombie state.
+                    // So collect_descendant_pids() must run while the child is still alive
+                    // and the parent-PID chain is intact.
+                    //
+                    // On non-Linux Unix: fall back to process group kill since /proc is
+                    // unavailable. This is safe on the timeout path (unlike the success
+                    // path) because PGID reuse within the timeout window is negligible.
+                    #[cfg(target_os = "linux")]
+                    let descendant_pids = collect_descendant_pids(pgid);
+
+                    let _ = child.kill();
+
+                    #[cfg(target_os = "linux")]
+                    for pid in &descendant_pids {
+                        // SAFETY: kill() is async-signal-safe. Positive PID targets one process.
+                        unsafe {
+                            libc::kill(*pid as i32, libc::SIGKILL);
+                        }
+                    }
+
+                    #[cfg(all(unix, not(target_os = "linux")))]
+                    {
+                        // No /proc on macOS/BSD — use process group kill as fallback.
+                        // SAFETY: Negative PID targets the process group.
+                        unsafe {
+                            libc::kill(-(pgid as i32), libc::SIGKILL);
+                        }
+                    }
+
+                    let _ = child.wait();
                     anyhow::bail!(
                         "Guard '{}' timed out after {}s",
                         guard.name,
@@ -241,28 +267,6 @@ fn read_guard_output(mut file: std::fs::File) -> String {
     }
 
     String::from_utf8_lossy(&buf[..total]).trim().to_string()
-}
-
-/// Kill descendants that escaped the guard process group (e.g. via `setsid`).
-///
-/// Best-effort and Linux-only (`/proc` walk). On other platforms, no-op.
-/// This is called only on timeout to preserve the PGID race-condition fix
-/// (never kill process group on success path).
-fn kill_descendants_for_timeout(root_pid: u32) {
-    #[cfg(target_os = "linux")]
-    {
-        for pid in collect_descendant_pids(root_pid) {
-            // SAFETY: kill() is async-signal-safe. Positive PID targets one process.
-            unsafe {
-                libc::kill(pid as i32, libc::SIGKILL);
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = root_pid; // suppress unused warning
-    }
 }
 
 #[cfg(target_os = "linux")]
