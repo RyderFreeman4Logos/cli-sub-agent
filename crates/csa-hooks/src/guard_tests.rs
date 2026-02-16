@@ -414,6 +414,37 @@ mod unix_tests {
     }
 
     #[test]
+    fn test_run_guards_setsid_detached_no_hang() {
+        // A guard that spawns a detached child via setsid, which escapes the
+        // process group and keeps stdout inherited. Without bounded recv_timeout,
+        // reader.join() would block until the detached process exits.
+        let dir = tempfile::tempdir().unwrap();
+        let script = dir.path().join("setsid_detach.sh");
+        std::fs::write(
+            &script,
+            "#!/bin/sh\nsetsid sh -c 'sleep 300' </dev/null &\necho 'setsid guard output'",
+        )
+        .unwrap();
+        make_executable(&script);
+
+        let guards = vec![PromptGuardEntry {
+            name: "setsid-test".to_string(),
+            command: script.display().to_string(),
+            timeout_secs: 5,
+        }];
+
+        let start = std::time::Instant::now();
+        let results = run_prompt_guards(&guards, &test_context());
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(4),
+            "Must not hang on setsid-detached process, took {:?}",
+            start.elapsed()
+        );
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].output, "setsid guard output");
+    }
+
+    #[test]
     fn test_run_guards_large_output_no_deadlock() {
         // Produces 128 KB — exceeds typical 64 KB pipe buffer.
         // Without the concurrent reader, this would deadlock until timeout.

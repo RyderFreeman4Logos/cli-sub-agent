@@ -160,27 +160,39 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     //   Phase 2: Drain any remaining output to /dev/null to prevent SIGPIPE.
     //            This ensures the child exits cleanly even if it produces
     //            far more output than the cap.
+    //
+    // The reader sends output via a bounded channel so the parent can use
+    // recv_timeout instead of an unbounded join. This prevents hangs when
+    // a detached child (e.g., via setsid) escapes the process group and
+    // keeps stdout open after the guard shell exits.
     let stdout_handle = child.stdout.take();
-    let reader = std::thread::spawn(move || -> String {
+    let (reader_tx, reader_rx) = std::sync::mpsc::channel::<String>();
+    let _reader_handle = std::thread::spawn(move || {
         use std::io::Read;
         let Some(mut stdout) = stdout_handle else {
-            return String::new();
+            let _ = reader_tx.send(String::new());
+            return;
         };
 
         // Phase 1: capture up to MAX_GUARD_OUTPUT_BYTES.
+        // Send a progressive update after each successful read so the parent
+        // can retrieve captured data even if the next read blocks (e.g., a
+        // setsid-detached child keeping the pipe open).
         let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES];
         let mut total = 0;
         while total < MAX_GUARD_OUTPUT_BYTES {
             match stdout.read(&mut buf[total..]) {
-                Ok(0) => {
-                    return String::from_utf8_lossy(&buf[..total]).trim().to_string();
+                Ok(0) => break,
+                Ok(n) => {
+                    total += n;
+                    let _ =
+                        reader_tx.send(String::from_utf8_lossy(&buf[..total]).trim().to_string());
                 }
-                Ok(n) => total += n,
-                Err(_) => {
-                    return String::from_utf8_lossy(&buf[..total]).trim().to_string();
-                }
+                Err(_) => break,
             }
         }
+        // Final send (covers the break cases above).
+        let _ = reader_tx.send(String::from_utf8_lossy(&buf[..total]).trim().to_string());
 
         // Phase 2: drain excess to prevent child SIGPIPE.
         let mut discard = [0u8; 8192];
@@ -190,8 +202,6 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                 Ok(_) => {}
             }
         }
-
-        String::from_utf8_lossy(&buf[..total]).trim().to_string()
     });
 
     // Save the process group ID before the wait loop. On Unix, process_group(0)
@@ -208,7 +218,19 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                 // script like `sleep 300 & echo ok` would cause reader.join()
                 // to block indefinitely waiting for EOF on the pipe.
                 kill_process_group(pgid);
-                let output = reader.join().unwrap_or_default();
+
+                // Drain progressive updates from the reader. The reader sends
+                // after each successful read(), so data is available even if
+                // a setsid-detached child keeps the pipe open and blocks the
+                // next read. First recv waits up to 2s (safety net), then
+                // try_recv drains any remaining updates to get the latest.
+                let mut output = reader_rx
+                    .recv_timeout(Duration::from_secs(2))
+                    .unwrap_or_default();
+                while let Ok(update) = reader_rx.try_recv() {
+                    output = update;
+                }
+
                 if status.success() {
                     return Ok(output);
                 } else {
@@ -221,7 +243,8 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                     let _ = child.kill(); // Platform-portable child kill
                     kill_process_group(pgid); // Also kill descendants (Unix only)
                     let _ = child.wait(); // Reap zombie
-                    let _ = reader.join(); // Clean up reader thread
+                    // Bounded recv for reader cleanup
+                    let _ = reader_rx.recv_timeout(Duration::from_secs(1));
                     anyhow::bail!(
                         "Guard '{}' timed out after {}s",
                         guard.name,
