@@ -13,7 +13,10 @@ use tracing::{error, info, warn};
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_executor::{AcpMcpServerConfig, Executor, SessionConfig, create_session_log_writer};
-use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
+use csa_hooks::{
+    GuardContext, HookEvent, format_guard_output, global_hooks_path, load_hooks_config,
+    run_hooks_for_event, run_prompt_guards,
+};
 use csa_lock::acquire_lock;
 use csa_process::{ExecutionResult, check_tool_installed};
 use csa_resource::{ResourceGuard, ResourceLimits};
@@ -538,6 +541,31 @@ pub(crate) async fn execute_with_session_and_meta(
         warn!("PreRun hook failed: {}", e);
     }
 
+    // Run prompt guards (every session-based turn, including resume).
+    // Ephemeral runs bypass this function entirely (no session context for guards).
+    // Guard output is appended to effective_prompt so reminders appear at the end,
+    // where they have the strongest influence on tool behavior.
+    if !hooks_config.prompt_guard.is_empty() {
+        let guard_context = GuardContext {
+            project_root: session.project_path.clone(),
+            session_id: session.meta_session_id.clone(),
+            tool: executor.tool_name().to_string(),
+            is_resume: session_arg.is_some(),
+            cwd: std::env::current_dir()
+                .map(|p| p.display().to_string())
+                .unwrap_or_default(),
+        };
+        let guard_results = run_prompt_guards(&hooks_config.prompt_guard, &guard_context);
+        if let Some(guard_block) = format_guard_output(&guard_results) {
+            info!(
+                guard_count = guard_results.len(),
+                bytes = guard_block.len(),
+                "Injecting prompt guard output into effective prompt"
+            );
+            effective_prompt = format!("{effective_prompt}\n\n{guard_block}");
+        }
+    }
+
     // Execute via transport abstraction.
     // TODO(signal): Restore SIGINT/SIGTERM forwarding to child process groups.
     // Phase C moved signal handling responsibility to the Transport layer, but
@@ -678,11 +706,13 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     }
 
-    // Write prompt to input/ for audit trail
+    // Write effective_prompt (with guard + context injections) to input/ for audit trail.
+    // This ensures prompt.txt captures the full prompt sent to the tool, not just the
+    // raw user input, making guard injections auditable.
     let input_dir = session_dir.join("input");
     if input_dir.exists() {
         let prompt_path = input_dir.join("prompt.txt");
-        if let Err(e) = fs::write(&prompt_path, prompt) {
+        if let Err(e) = fs::write(&prompt_path, &effective_prompt) {
             warn!("Failed to write prompt to input/: {}", e);
         }
     }

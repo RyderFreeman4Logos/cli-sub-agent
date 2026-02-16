@@ -1,0 +1,372 @@
+//! Prompt Guard: user-configurable shell scripts that inject text into prompts.
+//!
+//! Guards run before tool execution and their stdout is injected into the
+//! `effective_prompt`. This enables "reverse prompt injection" — reminding
+//! tools (including those without native hook systems) to follow AGENTS.md
+//! rules like branch protection, timely commits, etc.
+//!
+//! ## Protocol
+//!
+//! Each guard script receives a JSON [`GuardContext`] on stdin and writes
+//! injection text to stdout. Empty stdout means "nothing to inject".
+//! Non-zero exit or timeout results in a warning and skip (never blocks).
+//!
+//! ## Configuration
+//!
+//! ```toml
+//! [[prompt_guard]]
+//! name = "branch-protection"
+//! command = "/path/to/guard-branch.sh"
+//! timeout_secs = 5
+//!
+//! [[prompt_guard]]
+//! name = "commit-reminder"
+//! command = "/path/to/remind-commit.sh"
+//! timeout_secs = 10
+//! ```
+
+use std::io::Write;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+use serde::{Deserialize, Serialize};
+
+/// Maximum bytes to capture from a single guard's stdout.
+/// Prevents prompt inflation and cost spiraling from runaway scripts.
+const MAX_GUARD_OUTPUT_BYTES: usize = 32_768; // 32 KB
+
+/// Configuration entry for a single prompt guard script.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptGuardEntry {
+    /// Human-readable name for this guard (used in XML tag and logs).
+    pub name: String,
+    /// Shell command to execute (run via `sh -c`).
+    pub command: String,
+    /// Maximum execution time in seconds (default: 10).
+    #[serde(default = "default_guard_timeout")]
+    pub timeout_secs: u64,
+}
+
+fn default_guard_timeout() -> u64 {
+    10
+}
+
+/// Result from executing a single prompt guard.
+#[derive(Debug, Clone)]
+pub struct PromptGuardResult {
+    /// Guard name (from config).
+    pub name: String,
+    /// Captured stdout (injection text). Empty means no injection.
+    pub output: String,
+}
+
+/// Context passed to guard scripts via stdin as JSON.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GuardContext {
+    /// Absolute path to the project root directory.
+    pub project_root: String,
+    /// Current session ID (ULID).
+    pub session_id: String,
+    /// Tool name being executed (e.g., "codex", "claude-code").
+    pub tool: String,
+    /// Whether this is a resumed session (`--session` / `--last`).
+    pub is_resume: bool,
+    /// Current working directory.
+    pub cwd: String,
+}
+
+/// Execute prompt guard scripts sequentially and collect results.
+///
+/// Each guard receives [`GuardContext`] as JSON on stdin. Stdout is captured
+/// as injection text. Guards that fail (non-zero exit, timeout, spawn error)
+/// are warned and skipped — they never block execution.
+///
+/// Returns results only for guards that produced non-empty output.
+pub fn run_prompt_guards(
+    guards: &[PromptGuardEntry],
+    context: &GuardContext,
+) -> Vec<PromptGuardResult> {
+    if guards.is_empty() {
+        return Vec::new();
+    }
+
+    let context_json = match serde_json::to_string(context) {
+        Ok(json) => json,
+        Err(e) => {
+            tracing::warn!("Failed to serialize GuardContext: {e}");
+            return Vec::new();
+        }
+    };
+
+    let mut results = Vec::new();
+
+    for guard in guards {
+        match run_single_guard(guard, &context_json) {
+            Ok(output) if !output.is_empty() => {
+                results.push(PromptGuardResult {
+                    name: guard.name.clone(),
+                    output,
+                });
+            }
+            Ok(_) => {
+                tracing::debug!(guard = %guard.name, "Guard produced empty output, skipping");
+            }
+            Err(e) => {
+                tracing::warn!(guard = %guard.name, "Guard failed, skipping: {e}");
+            }
+        }
+    }
+
+    results
+}
+
+/// Execute a single guard script, passing context JSON on stdin and capturing stdout.
+///
+/// Stdout is drained in a background thread to prevent pipe-buffer deadlock
+/// when the guard produces more output than the OS pipe capacity (~64 KB).
+/// Output is capped at [`MAX_GUARD_OUTPUT_BYTES`] to prevent prompt inflation.
+fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Result<String> {
+    let mut cmd = Command::new("sh");
+    cmd.arg("-c")
+        .arg(&guard.command)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+
+    // Create new process group for clean timeout kill.
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
+
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| anyhow::anyhow!("Failed to spawn guard '{}': {e}", guard.name))?;
+
+    // Write context JSON to stdin, then close it.
+    if let Some(mut stdin) = child.stdin.take() {
+        // Ignore write errors — script may have exited early.
+        let _ = stdin.write_all(context_json.as_bytes());
+        // stdin is dropped here, closing the pipe.
+    }
+
+    // Drain stdout in a background thread to avoid pipe-buffer deadlock.
+    // Without this, a guard producing >64 KB would block on write while
+    // the parent blocks on try_wait — a classic pipe deadlock.
+    //
+    // Two-phase read:
+    //   Phase 1: Capture up to MAX_GUARD_OUTPUT_BYTES into buffer.
+    //   Phase 2: Drain any remaining output to /dev/null to prevent SIGPIPE.
+    //            This ensures the child exits cleanly even if it produces
+    //            far more output than the cap.
+    //
+    // Shared output uses Arc<Mutex<String>> with latest-value semantics:
+    // the reader overwrites the shared string after each read, so memory
+    // is bounded to a single MAX_GUARD_OUTPUT_BYTES string regardless of
+    // how many read() calls occur. This avoids the unbounded memory growth
+    // that an mpsc channel with progressive snapshots would cause under
+    // high-fragmentation output (e.g., 32K single-byte reads).
+    //
+    // The parent retrieves output by locking the mutex after child exit,
+    // using a brief sleep as a grace period for the reader to finish.
+    // In the setsid case (reader blocked on read beyond guard lifetime),
+    // the parent gets whatever was captured before the block.
+    let stdout_handle = child.stdout.take();
+    let shared_output = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let reader_output = std::sync::Arc::clone(&shared_output);
+    // Signals that the reader's Phase 1 loop has exited (EOF, error, or cap
+    // reached). In the setsid case, the loop may block on read() indefinitely,
+    // so this flag never fires — the parent falls back to a 2s timeout.
+    let reader_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let reader_done_signal = std::sync::Arc::clone(&reader_done);
+    // Intentionally detached: in the setsid case the reader may block on
+    // read() beyond the guard's lifetime. The parent retrieves output via
+    // the shared mutex and the thread is cleaned up on process exit. This
+    // is acceptable for short-lived CLI processes (bounded at 1 leaked
+    // thread per guard).
+    //
+    // TODO: For long-lived processes (e.g., mcp-server mode), stuck reader
+    // threads can accumulate across requests. Consider non-blocking I/O or
+    // pipe-to-tempfile to avoid permanent thread leaks in server contexts.
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let Some(mut stdout) = stdout_handle else {
+            reader_done_signal.store(true, std::sync::atomic::Ordering::Release);
+            return;
+        };
+
+        // Phase 1: capture up to MAX_GUARD_OUTPUT_BYTES.
+        // Update shared output after each successful read so the parent
+        // can retrieve captured data even if the next read blocks (e.g., a
+        // setsid-detached child keeping the pipe open).
+        let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES];
+        let mut total = 0;
+        while total < MAX_GUARD_OUTPUT_BYTES {
+            match stdout.read(&mut buf[total..]) {
+                Ok(0) => break,
+                Ok(n) => {
+                    total += n;
+                    if let Ok(mut out) = reader_output.lock() {
+                        *out = String::from_utf8_lossy(&buf[..total]).trim().to_string();
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        // Final update (covers the break cases above).
+        if let Ok(mut out) = reader_output.lock() {
+            *out = String::from_utf8_lossy(&buf[..total]).trim().to_string();
+        }
+        // Signal that Phase 1 is complete before starting Phase 2 drain.
+        reader_done_signal.store(true, std::sync::atomic::Ordering::Release);
+
+        // Phase 2: drain excess to prevent child SIGPIPE.
+        let mut discard = [0u8; 8192];
+        loop {
+            match stdout.read(&mut discard) {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {}
+            }
+        }
+    });
+
+    // Save the process group ID before the wait loop. On Unix, process_group(0)
+    // makes the child the group leader (PGID == child PID).
+    let pgid = child.id();
+    let timeout = Duration::from_secs(guard.timeout_secs);
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                // Kill the entire process group to clean up any background
+                // descendants that may keep stdout open. Without this, a
+                // script like `sleep 300 & echo ok` would cause reader.join()
+                // to block indefinitely waiting for EOF on the pipe.
+                kill_process_group(pgid);
+
+                // Wait for the reader to signal Phase 1 completion (up to
+                // 2s). In the setsid case, the reader may be blocked on
+                // read() and never signal — the timeout ensures we don't
+                // hang. After timeout, we read whatever was captured.
+                let wait_start = Instant::now();
+                while !reader_done.load(std::sync::atomic::Ordering::Acquire) {
+                    if wait_start.elapsed() >= Duration::from_secs(2) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+
+                let output = shared_output
+                    .lock()
+                    .map(|guard| guard.clone())
+                    .unwrap_or_default();
+
+                if status.success() {
+                    return Ok(output);
+                } else {
+                    let code = status.code().unwrap_or(-1);
+                    anyhow::bail!("Guard '{}' exited with code {code}", guard.name);
+                }
+            }
+            None => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill(); // Platform-portable child kill
+                    kill_process_group(pgid); // Also kill descendants (Unix only)
+                    let _ = child.wait(); // Reap zombie
+                    anyhow::bail!(
+                        "Guard '{}' timed out after {}s",
+                        guard.name,
+                        guard.timeout_secs
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
+    }
+}
+
+/// Kill an entire process group by PGID. On non-Unix, this is a no-op
+/// (the child kill is handled by `Child::kill()`).
+fn kill_process_group(pgid: u32) {
+    #[cfg(unix)]
+    {
+        // SAFETY: kill() is async-signal-safe. Negative PID targets
+        // the entire process group created by process_group(0).
+        unsafe {
+            libc::kill(-(pgid as i32), libc::SIGKILL);
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pgid; // suppress unused warning
+    }
+}
+
+/// Format guard results into XML blocks for prompt injection.
+///
+/// Returns `None` if all results are empty. Output values are XML-escaped.
+///
+/// Example output:
+/// ```text
+/// <prompt-guard name="branch-protection">
+/// You are on branch main. Do NOT commit directly.
+/// </prompt-guard>
+/// <prompt-guard name="commit-reminder">
+/// You have uncommitted changes. Commit before stopping.
+/// </prompt-guard>
+/// ```
+pub fn format_guard_output(results: &[PromptGuardResult]) -> Option<String> {
+    let non_empty: Vec<_> = results.iter().filter(|r| !r.output.is_empty()).collect();
+    if non_empty.is_empty() {
+        return None;
+    }
+
+    let mut buf = String::new();
+    for (i, result) in non_empty.iter().enumerate() {
+        if i > 0 {
+            buf.push('\n');
+        }
+        // Truncate escaped text to MAX_GUARD_OUTPUT_BYTES to bound the
+        // final prompt size. XML escaping can expand characters (e.g.,
+        // & → &amp;), so the raw byte cap alone is not sufficient.
+        let escaped = xml_escape_text(&result.output);
+        let capped = if escaped.len() > MAX_GUARD_OUTPUT_BYTES {
+            // Truncate at a char boundary to avoid splitting UTF-8
+            let mut end = MAX_GUARD_OUTPUT_BYTES;
+            while end > 0 && !escaped.is_char_boundary(end) {
+                end -= 1;
+            }
+            &escaped[..end]
+        } else {
+            &escaped
+        };
+        buf.push_str(&format!(
+            "<prompt-guard name=\"{}\">\n{}\n</prompt-guard>",
+            xml_escape_attr(&result.name),
+            capped,
+        ));
+    }
+
+    Some(buf)
+}
+
+/// Escape a string for use in an XML attribute value (inside double quotes).
+fn xml_escape_attr(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('"', "&quot;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// Escape a string for use as XML text content.
+fn xml_escape_text(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+#[cfg(test)]
+#[path = "guard_tests.rs"]
+mod tests;
