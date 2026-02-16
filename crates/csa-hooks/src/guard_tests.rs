@@ -134,12 +134,15 @@ fn test_xml_escape_no_double_escape() {
 
 // ---------------------------------------------------------------------------
 // run_prompt_guards tests (require shell execution)
+//
+// Guards run via `sh -c <command>`, so tests use inline shell commands
+// instead of writing temporary script files. This eliminates filesystem
+// races (ETXTBSY / exit code 126) under heavy parallel execution.
 // ---------------------------------------------------------------------------
 
 #[cfg(unix)]
 mod unix_tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn test_context() -> GuardContext {
         GuardContext {
@@ -151,22 +154,11 @@ mod unix_tests {
         }
     }
 
-    fn make_executable(path: &std::path::Path) {
-        let mut perms = std::fs::metadata(path).unwrap().permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms).unwrap();
-    }
-
     #[test]
     fn test_run_guards_stdout_capture() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("guard.sh");
-        std::fs::write(&script, "#!/bin/sh\necho 'Hello from guard'").unwrap();
-        make_executable(&script);
-
         let guards = vec![PromptGuardEntry {
             name: "test-guard".to_string(),
-            command: script.display().to_string(),
+            command: "echo 'Hello from guard'".to_string(),
             timeout_secs: 5,
         }];
 
@@ -178,14 +170,9 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_empty_stdout_skipped() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("empty.sh");
-        std::fs::write(&script, "#!/bin/sh\n# produces no output").unwrap();
-        make_executable(&script);
-
         let guards = vec![PromptGuardEntry {
             name: "empty-guard".to_string(),
-            command: script.display().to_string(),
+            command: "true".to_string(),
             timeout_secs: 5,
         }];
 
@@ -195,14 +182,9 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_nonzero_exit_skipped() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("fail.sh");
-        std::fs::write(&script, "#!/bin/sh\necho 'should not appear'\nexit 1").unwrap();
-        make_executable(&script);
-
         let guards = vec![PromptGuardEntry {
             name: "fail-guard".to_string(),
-            command: script.display().to_string(),
+            command: "echo 'should not appear'; exit 1".to_string(),
             timeout_secs: 5,
         }];
 
@@ -224,25 +206,15 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_multiple_merge() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let script1 = dir.path().join("guard1.sh");
-        std::fs::write(&script1, "#!/bin/sh\necho 'Guard 1 output'").unwrap();
-        make_executable(&script1);
-
-        let script2 = dir.path().join("guard2.sh");
-        std::fs::write(&script2, "#!/bin/sh\necho 'Guard 2 output'").unwrap();
-        make_executable(&script2);
-
         let guards = vec![
             PromptGuardEntry {
                 name: "first".to_string(),
-                command: script1.display().to_string(),
+                command: "echo 'Guard 1 output'".to_string(),
                 timeout_secs: 5,
             },
             PromptGuardEntry {
                 name: "second".to_string(),
-                command: script2.display().to_string(),
+                command: "echo 'Guard 2 output'".to_string(),
                 timeout_secs: 5,
             },
         ];
@@ -257,20 +229,11 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_stdin_receives_json_context() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("echo_context.sh");
-        // Script reads stdin and extracts the "tool" field using pure shell (no jq dependency).
-        // Matches `"tool":"<value>"` and prints <value>.
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nINPUT=$(cat)\necho \"$INPUT\" | sed -n 's/.*\"tool\":\"\\([^\"]*\\)\".*/\\1/p'",
-        )
-        .unwrap();
-        make_executable(&script);
-
+        // Read stdin and extract the "tool" field using pure shell (no jq).
         let guards = vec![PromptGuardEntry {
             name: "context-check".to_string(),
-            command: script.display().to_string(),
+            command: r#"INPUT=$(cat); echo "$INPUT" | sed -n 's/.*"tool":"\([^"]*\)".*/\1/p'"#
+                .to_string(),
             timeout_secs: 5,
         }];
 
@@ -301,34 +264,20 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_mixed_success_and_failure() {
-        let dir = tempfile::tempdir().unwrap();
-
-        let good_script = dir.path().join("good.sh");
-        std::fs::write(&good_script, "#!/bin/sh\necho 'good output'").unwrap();
-        make_executable(&good_script);
-
-        let bad_script = dir.path().join("bad.sh");
-        std::fs::write(&bad_script, "#!/bin/sh\nexit 1").unwrap();
-        make_executable(&bad_script);
-
-        let good2_script = dir.path().join("good2.sh");
-        std::fs::write(&good2_script, "#!/bin/sh\necho 'also good'").unwrap();
-        make_executable(&good2_script);
-
         let guards = vec![
             PromptGuardEntry {
                 name: "good".to_string(),
-                command: good_script.display().to_string(),
+                command: "echo 'good output'".to_string(),
                 timeout_secs: 5,
             },
             PromptGuardEntry {
                 name: "bad".to_string(),
-                command: bad_script.display().to_string(),
+                command: "exit 1".to_string(),
                 timeout_secs: 5,
             },
             PromptGuardEntry {
                 name: "good2".to_string(),
-                command: good2_script.display().to_string(),
+                command: "echo 'also good'".to_string(),
                 timeout_secs: 5,
             },
         ];
@@ -341,14 +290,9 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_stdout_trimmed() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("whitespace.sh");
-        std::fs::write(&script, "#!/bin/sh\necho '  trimmed  '\necho ''").unwrap();
-        make_executable(&script);
-
         let guards = vec![PromptGuardEntry {
             name: "trim-test".to_string(),
-            command: script.display().to_string(),
+            command: "echo '  trimmed  '; echo ''".to_string(),
             timeout_secs: 5,
         }];
 
@@ -359,20 +303,11 @@ mod unix_tests {
 
     #[test]
     fn test_run_guards_output_capped_at_max_size() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("large_output.sh");
         // Generate output larger than MAX_GUARD_OUTPUT_BYTES (32 KB).
         // `dd` writes 40 KB of 'A' characters.
-        std::fs::write(
-            &script,
-            "#!/bin/sh\ndd if=/dev/zero bs=1024 count=40 2>/dev/null | tr '\\0' 'A'",
-        )
-        .unwrap();
-        make_executable(&script);
-
         let guards = vec![PromptGuardEntry {
             name: "large-guard".to_string(),
-            command: script.display().to_string(),
+            command: "dd if=/dev/zero bs=1024 count=40 2>/dev/null | tr '\\0' 'A'".to_string(),
             timeout_secs: 5,
         }];
 
@@ -389,16 +324,12 @@ mod unix_tests {
     #[test]
     fn test_run_guards_background_process_no_hang() {
         // A guard that backgrounds a long-running process inheriting stdout.
-        // Without process group cleanup, reader.join() would block forever
-        // waiting for EOF on the pipe held by the background process.
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("bg_process.sh");
-        std::fs::write(&script, "#!/bin/sh\nsleep 300 &\necho 'guard output'").unwrap();
-        make_executable(&script);
-
+        // With tempfile stdout, the background process holds a file descriptor
+        // (not a pipe), so the parent reads the tempfile after the main child
+        // exits without blocking.
         let guards = vec![PromptGuardEntry {
             name: "bg-test".to_string(),
-            command: script.display().to_string(),
+            command: "sleep 300 & echo 'guard output'".to_string(),
             timeout_secs: 5,
         }];
 
@@ -416,20 +347,11 @@ mod unix_tests {
     #[test]
     fn test_run_guards_setsid_detached_no_hang() {
         // A guard that spawns a detached child via setsid, which escapes the
-        // process group and keeps stdout inherited. Without bounded recv_timeout,
-        // reader.join() would block until the detached process exits.
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("setsid_detach.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\nsetsid sh -c 'sleep 300' </dev/null &\necho 'setsid guard output'",
-        )
-        .unwrap();
-        make_executable(&script);
-
+        // process group. With tempfile stdout, neither pipes nor process groups
+        // can cause the parent to block.
         let guards = vec![PromptGuardEntry {
             name: "setsid-test".to_string(),
-            command: script.display().to_string(),
+            command: "setsid sh -c 'sleep 300' </dev/null & echo 'setsid guard output'".to_string(),
             timeout_secs: 5,
         }];
 
@@ -447,21 +369,11 @@ mod unix_tests {
     #[test]
     fn test_run_guards_large_output_no_deadlock() {
         // Produces 128 KB — exceeds typical 64 KB pipe buffer.
-        // Without the concurrent reader, this would deadlock until timeout.
-        // The reader drains excess output to prevent SIGPIPE, so the child
-        // exits cleanly and the guard succeeds with capped output.
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("pipe_stress.sh");
-        std::fs::write(
-            &script,
-            "#!/bin/sh\ndd if=/dev/zero bs=1024 count=128 2>/dev/null | tr '\\0' 'B'",
-        )
-        .unwrap();
-        make_executable(&script);
-
+        // With tempfile stdout, there is no pipe buffer limit, so the child
+        // writes freely and exits cleanly. Output is capped at read time.
         let guards = vec![PromptGuardEntry {
             name: "pipe-stress".to_string(),
-            command: script.display().to_string(),
+            command: "dd if=/dev/zero bs=1024 count=128 2>/dev/null | tr '\\0' 'B'".to_string(),
             timeout_secs: 5,
         }];
 
@@ -473,11 +385,11 @@ mod unix_tests {
             "Guard should complete quickly without pipe deadlock, took {:?}",
             start.elapsed()
         );
-        // With drain, child exits cleanly → guard succeeds with capped output.
+        // With tempfile, child exits cleanly → guard succeeds with capped output.
         assert_eq!(
             results.len(),
             1,
-            "Guard should succeed (drain prevents SIGPIPE)"
+            "Guard should succeed (tempfile prevents backpressure)"
         );
         assert!(
             results[0].output.len() <= super::MAX_GUARD_OUTPUT_BYTES,
@@ -487,30 +399,14 @@ mod unix_tests {
         );
     }
 
-    /// Regression test for P1 memory safety: high-fragmentation output must not
-    /// cause unbounded memory growth. Under the old mpsc-channel approach, a
-    /// guard producing N single-byte outputs would accumulate O(N^2) memory in
-    /// the channel (N progressively larger snapshot strings). The Arc<Mutex>
-    /// latest-value approach bounds memory to a single output string.
-    ///
-    /// This test writes 1024 single-byte lines to verify the reader handles
-    /// fragmented output correctly without excessive memory consumption.
+    /// Regression test: fragmented output (many small writes) must be captured
+    /// correctly. The tempfile approach reads all output after child exit, so
+    /// fragmentation does not affect correctness.
     #[test]
     fn test_run_guards_fragmented_output_no_memory_bloat() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = dir.path().join("fragmented.sh");
-        // Write 1024 single-character lines ('a' repeated) to stdout.
-        // Each write() from the shell should produce a small fragment.
-        std::fs::write(
-            &script,
-            "#!/bin/sh\ni=0\nwhile [ $i -lt 1024 ]; do\n  printf 'a\\n'\n  i=$((i + 1))\ndone",
-        )
-        .unwrap();
-        make_executable(&script);
-
         let guards = vec![PromptGuardEntry {
             name: "fragmented-test".to_string(),
-            command: script.display().to_string(),
+            command: "i=0; while [ $i -lt 1024 ]; do printf 'a\\n'; i=$((i + 1)); done".to_string(),
             timeout_secs: 10,
         }];
 

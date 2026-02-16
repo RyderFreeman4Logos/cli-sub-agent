@@ -122,15 +122,33 @@ pub fn run_prompt_guards(
 
 /// Execute a single guard script, passing context JSON on stdin and capturing stdout.
 ///
-/// Stdout is drained in a background thread to prevent pipe-buffer deadlock
-/// when the guard produces more output than the OS pipe capacity (~64 KB).
+/// Stdout is redirected to a tempfile to avoid pipe-buffer deadlock. Unlike a
+/// pipe (which has ~64 KB kernel buffer), a tempfile has no write-side backpressure,
+/// so the child never blocks on stdout regardless of output volume. The parent
+/// reads the tempfile after the child exits — no background threads needed.
+///
 /// Output is capped at [`MAX_GUARD_OUTPUT_BYTES`] to prevent prompt inflation.
 fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Result<String> {
+    // Use a tempfile for stdout to avoid pipe-buffer deadlock.
+    // The child writes freely (no 64 KB limit); we read after exit.
+    let stdout_file = tempfile::tempfile().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to create stdout tempfile for guard '{}': {e}",
+            guard.name
+        )
+    })?;
+    let stdout_for_child = stdout_file.try_clone().map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to clone stdout tempfile for guard '{}': {e}",
+            guard.name
+        )
+    })?;
+
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(&guard.command)
         .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::from(stdout_for_child))
         .stderr(Stdio::null());
 
     // Create new process group for clean timeout kill.
@@ -151,86 +169,6 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
         // stdin is dropped here, closing the pipe.
     }
 
-    // Drain stdout in a background thread to avoid pipe-buffer deadlock.
-    // Without this, a guard producing >64 KB would block on write while
-    // the parent blocks on try_wait — a classic pipe deadlock.
-    //
-    // Two-phase read:
-    //   Phase 1: Capture up to MAX_GUARD_OUTPUT_BYTES into buffer.
-    //   Phase 2: Drain any remaining output to /dev/null to prevent SIGPIPE.
-    //            This ensures the child exits cleanly even if it produces
-    //            far more output than the cap.
-    //
-    // Shared output uses Arc<Mutex<String>> with latest-value semantics:
-    // the reader overwrites the shared string after each read, so memory
-    // is bounded to a single MAX_GUARD_OUTPUT_BYTES string regardless of
-    // how many read() calls occur. This avoids the unbounded memory growth
-    // that an mpsc channel with progressive snapshots would cause under
-    // high-fragmentation output (e.g., 32K single-byte reads).
-    //
-    // The parent retrieves output by locking the mutex after child exit,
-    // using a brief sleep as a grace period for the reader to finish.
-    // In the setsid case (reader blocked on read beyond guard lifetime),
-    // the parent gets whatever was captured before the block.
-    let stdout_handle = child.stdout.take();
-    let shared_output = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-    let reader_output = std::sync::Arc::clone(&shared_output);
-    // Signals that the reader's Phase 1 loop has exited (EOF, error, or cap
-    // reached). In the setsid case, the loop may block on read() indefinitely,
-    // so this flag never fires — the parent falls back to a 2s timeout.
-    let reader_done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let reader_done_signal = std::sync::Arc::clone(&reader_done);
-    // Intentionally detached: in the setsid case the reader may block on
-    // read() beyond the guard's lifetime. The parent retrieves output via
-    // the shared mutex and the thread is cleaned up on process exit. This
-    // is acceptable for short-lived CLI processes (bounded at 1 leaked
-    // thread per guard).
-    //
-    // TODO: For long-lived processes (e.g., mcp-server mode), stuck reader
-    // threads can accumulate across requests. Consider non-blocking I/O or
-    // pipe-to-tempfile to avoid permanent thread leaks in server contexts.
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let Some(mut stdout) = stdout_handle else {
-            reader_done_signal.store(true, std::sync::atomic::Ordering::Release);
-            return;
-        };
-
-        // Phase 1: capture up to MAX_GUARD_OUTPUT_BYTES.
-        // Update shared output after each successful read so the parent
-        // can retrieve captured data even if the next read blocks (e.g., a
-        // setsid-detached child keeping the pipe open).
-        let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES];
-        let mut total = 0;
-        while total < MAX_GUARD_OUTPUT_BYTES {
-            match stdout.read(&mut buf[total..]) {
-                Ok(0) => break,
-                Ok(n) => {
-                    total += n;
-                    if let Ok(mut out) = reader_output.lock() {
-                        *out = String::from_utf8_lossy(&buf[..total]).trim().to_string();
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-        // Final update (covers the break cases above).
-        if let Ok(mut out) = reader_output.lock() {
-            *out = String::from_utf8_lossy(&buf[..total]).trim().to_string();
-        }
-        // Signal that Phase 1 is complete before starting Phase 2 drain.
-        reader_done_signal.store(true, std::sync::atomic::Ordering::Release);
-
-        // Phase 2: drain excess to prevent child SIGPIPE.
-        let mut discard = [0u8; 8192];
-        loop {
-            match stdout.read(&mut discard) {
-                Ok(0) | Err(_) => break,
-                Ok(_) => {}
-            }
-        }
-    });
-
     // Save the process group ID before the wait loop. On Unix, process_group(0)
     // makes the child the group leader (PGID == child PID).
     let pgid = child.id();
@@ -240,28 +178,7 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     loop {
         match child.try_wait()? {
             Some(status) => {
-                // Kill the entire process group to clean up any background
-                // descendants that may keep stdout open. Without this, a
-                // script like `sleep 300 & echo ok` would cause reader.join()
-                // to block indefinitely waiting for EOF on the pipe.
-                kill_process_group(pgid);
-
-                // Wait for the reader to signal Phase 1 completion (up to
-                // 2s). In the setsid case, the reader may be blocked on
-                // read() and never signal — the timeout ensures we don't
-                // hang. After timeout, we read whatever was captured.
-                let wait_start = Instant::now();
-                while !reader_done.load(std::sync::atomic::Ordering::Acquire) {
-                    if wait_start.elapsed() >= Duration::from_secs(2) {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(10));
-                }
-
-                let output = shared_output
-                    .lock()
-                    .map(|guard| guard.clone())
-                    .unwrap_or_default();
+                let output = read_guard_output(stdout_file);
 
                 if status.success() {
                     return Ok(output);
@@ -272,9 +189,22 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
             }
             None => {
                 if start.elapsed() >= timeout {
+                    // Re-check exit state at timeout boundary. The process may
+                    // have exited between the previous poll and timeout check.
+                    if let Some(status) = child.try_wait()? {
+                        let output = read_guard_output(stdout_file);
+                        if status.success() {
+                            return Ok(output);
+                        }
+                        let code = status.code().unwrap_or(-1);
+                        anyhow::bail!("Guard '{}' exited with code {code}", guard.name);
+                    }
+
+                    // Timeout path: kill child directly, then clean up
+                    // descendants that may have escaped via setsid.
                     let _ = child.kill(); // Platform-portable child kill
-                    kill_process_group(pgid); // Also kill descendants (Unix only)
                     let _ = child.wait(); // Reap zombie
+                    kill_descendants_for_timeout(pgid); // Best-effort setsid escape cleanup (Linux)
                     anyhow::bail!(
                         "Guard '{}' timed out after {}s",
                         guard.name,
@@ -287,21 +217,99 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     }
 }
 
-/// Kill an entire process group by PGID. On non-Unix, this is a no-op
-/// (the child kill is handled by `Child::kill()`).
-fn kill_process_group(pgid: u32) {
-    #[cfg(unix)]
-    {
-        // SAFETY: kill() is async-signal-safe. Negative PID targets
-        // the entire process group created by process_group(0).
-        unsafe {
-            libc::kill(-(pgid as i32), libc::SIGKILL);
+/// Read guard output from the stdout tempfile, capped at [`MAX_GUARD_OUTPUT_BYTES`].
+///
+/// Seeks to the start of the file and reads up to the cap. The tempfile is
+/// automatically cleaned up when the `File` handle is dropped.
+fn read_guard_output(mut file: std::fs::File) -> String {
+    use std::io::{Read, Seek, SeekFrom};
+
+    if file.seek(SeekFrom::Start(0)).is_err() {
+        return String::new();
+    }
+
+    let mut buf = vec![0u8; MAX_GUARD_OUTPUT_BYTES];
+    let mut total = 0;
+    while total < MAX_GUARD_OUTPUT_BYTES {
+        match file.read(&mut buf[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(_) => break,
         }
     }
-    #[cfg(not(unix))]
+
+    String::from_utf8_lossy(&buf[..total]).trim().to_string()
+}
+
+/// Kill descendants that escaped the guard process group (e.g. via `setsid`).
+///
+/// Best-effort and Linux-only (`/proc` walk). On other platforms, no-op.
+/// This is called only on timeout to preserve the PGID race-condition fix
+/// (never kill process group on success path).
+fn kill_descendants_for_timeout(root_pid: u32) {
+    #[cfg(target_os = "linux")]
     {
-        let _ = pgid; // suppress unused warning
+        for pid in collect_descendant_pids(root_pid) {
+            // SAFETY: kill() is async-signal-safe. Positive PID targets one process.
+            unsafe {
+                libc::kill(pid as i32, libc::SIGKILL);
+            }
+        }
     }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = root_pid; // suppress unused warning
+    }
+}
+
+#[cfg(target_os = "linux")]
+fn collect_descendant_pids(root_pid: u32) -> Vec<u32> {
+    use std::collections::{HashMap, VecDeque};
+
+    // Guard against PID reuse: only proceed if root_pid is still our direct child.
+    if read_parent_pid(root_pid) != Some(std::process::id()) {
+        return Vec::new();
+    }
+
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    let mut children_by_parent: HashMap<u32, Vec<u32>> = HashMap::new();
+    for entry in entries.flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        if let Some(ppid) = read_parent_pid(pid) {
+            children_by_parent.entry(ppid).or_default().push(pid);
+        }
+    }
+
+    let mut queue = VecDeque::from([root_pid]);
+    let mut descendants = Vec::new();
+
+    while let Some(parent) = queue.pop_front() {
+        if let Some(children) = children_by_parent.get(&parent) {
+            for &child in children {
+                descendants.push(child);
+                queue.push_back(child);
+            }
+        }
+    }
+
+    // Kill deeper descendants first to reduce re-parenting windows.
+    descendants.reverse();
+    descendants
+}
+
+#[cfg(target_os = "linux")]
+fn read_parent_pid(pid: u32) -> Option<u32> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let idx = stat.rfind(')')?;
+    let after_comm = stat.get(idx + 2..)?; // skip ") "
+    // Fields after comm: state ppid ...
+    after_comm.split_whitespace().nth(1)?.parse().ok()
 }
 
 /// Format guard results into XML blocks for prompt injection.
