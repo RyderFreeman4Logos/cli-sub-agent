@@ -175,9 +175,28 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
     let timeout = Duration::from_secs(guard.timeout_secs);
     let start = Instant::now();
 
+    // Cache descendant PIDs periodically while child is alive. When the child
+    // exits (success/failure), descendants are reparented to init and the
+    // parent-PID chain breaks — so we use the last cached snapshot to clean up.
+    #[cfg(target_os = "linux")]
+    let mut cached_descendants: Vec<u32> = Vec::new();
+    #[cfg(target_os = "linux")]
+    let mut last_desc_scan = Instant::now();
+
     loop {
         match child.try_wait()? {
             Some(status) => {
+                // Kill cached descendants before reading output. After child
+                // exit, these PIDs are reparented to init and unreachable via
+                // /proc parent chain, so we rely on the pre-cached snapshot.
+                #[cfg(target_os = "linux")]
+                for pid in &cached_descendants {
+                    // SAFETY: kill() is async-signal-safe. Positive PID targets one process.
+                    unsafe {
+                        libc::kill(*pid as i32, libc::SIGKILL);
+                    }
+                }
+
                 let output = read_guard_output(stdout_file);
 
                 if status.success() {
@@ -239,6 +258,29 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
                         guard.timeout_secs
                     );
                 }
+                // Enforce output cap during execution. The tempfile is unbounded
+                // while the child runs; a noisy guard (e.g. `yes`) could fill /tmp.
+                if let Ok(meta) = stdout_file.metadata() {
+                    if meta.len() > MAX_GUARD_OUTPUT_BYTES as u64 {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        anyhow::bail!(
+                            "Guard '{}' output exceeded {}B cap",
+                            guard.name,
+                            MAX_GUARD_OUTPUT_BYTES
+                        );
+                    }
+                }
+
+                // Periodically cache descendant PIDs while child is alive.
+                // Used for cleanup on success/failure exit (where /proc parent
+                // chain is broken by reparenting). Throttled to ~2 scans/second.
+                #[cfg(target_os = "linux")]
+                if last_desc_scan.elapsed() >= Duration::from_millis(500) {
+                    cached_descendants = collect_descendant_pids(pgid);
+                    last_desc_scan = Instant::now();
+                }
+
                 std::thread::sleep(Duration::from_millis(50));
             }
         }
