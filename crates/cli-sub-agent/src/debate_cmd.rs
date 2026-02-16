@@ -208,7 +208,7 @@ fn select_auto_debate_tool(
     let enabled_tools: Vec<_> = if let Some(cfg) = project_config {
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
-            .filter(|t| cfg.is_tool_enabled(t.as_str()))
+            .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
             .copied()
             .collect();
         csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
