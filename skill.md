@@ -35,15 +35,17 @@ mise --version         # Cross-platform tool version manager
 gh --version           # GitHub CLI (for PR workflows)
 ```
 
-If `mise` is not installed:
+If `mise` is not installed (see [mise.jdx.dev/installing](https://mise.jdx.dev/installing-mise.html) for alternatives):
 
 ```bash
+# Verify domain before piping to shell
 curl https://mise.run | sh
 ```
 
-If `cargo` is not installed (needed only for weave):
+If `cargo` is not installed (see [rustup.rs](https://rustup.rs/) for alternatives):
 
 ```bash
+# Official Rust installer — verify TLS and domain
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 
@@ -169,6 +171,7 @@ patterns to install. Use checkboxes or a numbered menu.
 ```bash
 # Patterns are already in .weave/deps/ from Step 4.
 # Compile them for your project:
+mkdir -p .csa/plans
 for pattern in commit ai-reviewed-commit code-review pr-codex-bot; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
@@ -190,6 +193,7 @@ done
 **Install**:
 
 ```bash
+mkdir -p .csa/plans
 for pattern in security-audit file-audit csa-review; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
@@ -211,6 +215,7 @@ done
 **Install**:
 
 ```bash
+mkdir -p .csa/plans
 for pattern in mktd mktsk debate; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
@@ -232,6 +237,7 @@ done
 **Install**:
 
 ```bash
+mkdir -p .csa/plans
 for pattern in sa dev-to-merge csa-issue-reporter; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
