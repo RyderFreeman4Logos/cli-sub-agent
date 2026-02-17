@@ -146,11 +146,11 @@ mod unix_tests {
 
     fn test_context() -> GuardContext {
         GuardContext {
-            project_root: "/tmp/test-project".to_string(),
+            project_root: std::env::temp_dir().to_string_lossy().to_string(),
             session_id: "01TEST000000000000000000000".to_string(),
             tool: "codex".to_string(),
             is_resume: false,
-            cwd: "/tmp".to_string(),
+            cwd: std::env::temp_dir().to_string_lossy().to_string(),
         }
     }
 
@@ -471,6 +471,42 @@ mod unix_tests {
         assert_eq!(
             a_count, 1024,
             "Expected 1024 'a' chars in fragmented output, got {a_count}"
+        );
+    }
+
+    #[test]
+    fn test_builtin_prompt_guards_returns_two_entries() {
+        let guards = builtin_prompt_guards();
+        assert_eq!(guards.len(), 2);
+        assert_eq!(guards[0].name, "branch-protection");
+        assert_eq!(guards[1].name, "dirty-tree-reminder");
+        assert_eq!(guards[0].timeout_secs, 5);
+        assert_eq!(guards[1].timeout_secs, 5);
+    }
+
+    #[test]
+    fn test_builtin_branch_protection_executes_successfully() {
+        // Verify the guard runs without error regardless of current branch.
+        // On protected branches (main/dev) it produces a warning; on feature
+        // branches it produces empty output. Both are valid outcomes.
+        let guards = builtin_prompt_guards();
+        let branch_guard = &guards[0];
+        let _results = run_prompt_guards(std::slice::from_ref(branch_guard), &test_context());
+        // No assertion on output content — just verify no panic/timeout.
+    }
+
+    #[test]
+    fn test_builtin_dirty_tree_reminder_executes_successfully() {
+        // Verify the guard runs without error. On clean trees the guard
+        // produces no output (0 results); on dirty trees it produces a
+        // reminder (1 result). Both are valid.
+        let guards = builtin_prompt_guards();
+        let dirty_guard = &guards[1];
+        let results = run_prompt_guards(std::slice::from_ref(dirty_guard), &test_context());
+        assert!(
+            results.len() <= 1,
+            "dirty-tree-reminder should produce at most one result, got {}",
+            results.len()
         );
     }
 }

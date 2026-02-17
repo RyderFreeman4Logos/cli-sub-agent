@@ -106,7 +106,7 @@ pub fn run_prompt_guards(
     let mut results = Vec::new();
 
     for guard in guards {
-        match run_single_guard(guard, &context_json) {
+        match run_single_guard(guard, &context_json, &context.project_root) {
             Ok(output) if !output.is_empty() => {
                 results.push(PromptGuardResult {
                     name: guard.name.clone(),
@@ -133,7 +133,11 @@ pub fn run_prompt_guards(
 /// reads the tempfile after the child exits — no background threads needed.
 ///
 /// Output is capped at [`MAX_GUARD_OUTPUT_BYTES`] to prevent prompt inflation.
-fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Result<String> {
+fn run_single_guard(
+    guard: &PromptGuardEntry,
+    context_json: &str,
+    project_root: &str,
+) -> anyhow::Result<String> {
     // Use a tempfile for stdout to avoid pipe-buffer deadlock.
     // The child writes freely (no 64 KB limit); we read after exit.
     let stdout_file = tempfile::tempfile().map_err(|e| {
@@ -154,7 +158,8 @@ fn run_single_guard(guard: &PromptGuardEntry, context_json: &str) -> anyhow::Res
         .arg(&guard.command)
         .stdin(Stdio::piped())
         .stdout(Stdio::from(stdout_for_child))
-        .stderr(Stdio::null());
+        .stderr(Stdio::null())
+        .current_dir(project_root);
 
     // Create new process group for clean timeout kill.
     #[cfg(unix)]
@@ -333,6 +338,37 @@ fn kill_cached_descendants(#[cfg(target_os = "linux")] cached: &[u32], pgid: u32
             libc::kill(-(pgid as i32), libc::SIGKILL);
         }
     }
+}
+
+/// Returns built-in prompt guards that inject branch safety reminders.
+///
+/// These guards are shell snippets executed before tool runs:
+/// - `branch-protection`: warns when running on protected branches.
+/// - `dirty-tree-reminder`: reminds when uncommitted changes exist.
+pub fn builtin_prompt_guards() -> Vec<PromptGuardEntry> {
+    vec![
+        PromptGuardEntry {
+            name: "branch-protection".to_string(),
+            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+case "$branch" in
+  main|master|dev|develop|release/*)
+    echo "WARNING: You are on protected branch '$branch'. Do NOT commit directly. Create a feature branch first."
+    ;;
+esac"#
+                .to_string(),
+            timeout_secs: 5,
+        },
+        PromptGuardEntry {
+            name: "dirty-tree-reminder".to_string(),
+            command: r#"status=$(git status --porcelain 2>/dev/null) || exit 0
+if [ -n "$status" ]; then
+  count=$(echo "$status" | wc -l | tr -d ' ')
+  echo "REMINDER: Working tree has $count uncommitted change(s). Consider committing or stashing before starting new work."
+fi"#
+                .to_string(),
+            timeout_secs: 5,
+        },
+    ]
 }
 
 /// Read guard output from the stdout tempfile, capped at [`MAX_GUARD_OUTPUT_BYTES`].

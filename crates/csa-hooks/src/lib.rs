@@ -50,6 +50,7 @@ pub mod runner;
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
 pub use event::HookEvent;
 pub use guard::{
-    GuardContext, PromptGuardEntry, PromptGuardResult, format_guard_output, run_prompt_guards,
+    GuardContext, PromptGuardEntry, PromptGuardResult, builtin_prompt_guards, format_guard_output,
+    run_prompt_guards,
 };
 pub use runner::{run_hook, run_hooks_for_event};
