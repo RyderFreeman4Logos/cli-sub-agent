@@ -300,7 +300,64 @@ max_concurrent = 3
 
 ---
 
-## Step 7: Verify Everything
+## Step 7: Configure Hooks (Optional)
+
+CSA has a hook system that runs shell scripts at key lifecycle events. Two
+**built-in prompt guards** are enabled by default — no configuration needed:
+
+| Guard | What it does |
+|-------|--------------|
+| `branch-protection` | Warns when running on protected branches (main, dev, release/*) |
+| `dirty-tree-reminder` | Reminds about uncommitted changes in the working tree |
+
+### Adding custom guards
+
+Custom guards **stack on top of built-ins**. Create or edit
+`~/.config/cli-sub-agent/hooks.toml` (global) or
+`~/.local/state/csa/{project}/hooks.toml` (project-level):
+
+```toml
+[[prompt_guard]]
+name = "pr-reminder"
+command = "/path/to/remind-pr.sh"
+timeout_secs = 5
+```
+
+Guard scripts receive a JSON context on stdin (`project_root`, `session_id`,
+`tool`, `is_resume`, `cwd`) and write injection text to stdout. Empty stdout
+means no injection. Non-zero exit or timeout is warned and skipped.
+
+### Disabling built-in guards
+
+```toml
+builtin_guards = false
+```
+
+### Hook events
+
+Beyond prompt guards, CSA supports lifecycle hooks:
+
+```toml
+[pre_run]
+enabled = true
+command = "echo pre-run: {session_id} {tool}"
+timeout_secs = 30
+
+[post_run]
+enabled = true
+command = "echo post-run: {session_id} exit={exit_code}"
+timeout_secs = 30
+
+[session_complete]
+enabled = true
+# Built-in default auto-commits session data (active when command is not set)
+```
+
+See `docs/hooks.md` in the CSA repository for full reference.
+
+---
+
+## Step 8: Verify Everything
 
 ```bash
 # Check CSA is working

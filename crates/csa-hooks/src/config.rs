@@ -36,9 +36,9 @@ fn default_timeout() -> u64 {
 /// to be deserialized as structured entries alongside the flat hook map.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksConfig {
-    /// Whether to include built-in prompt guards when no user guards are configured.
+    /// Whether to prepend built-in prompt guards before user-defined guards.
     /// `None` = not specified (inherit from lower-priority layer; defaults to `true`).
-    /// `Some(false)` = explicitly disable. `Some(true)` = explicitly enable.
+    /// `Some(false)` = explicitly disable builtins. `Some(true)` = explicitly enable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin_guards: Option<bool>,
 
@@ -154,9 +154,12 @@ pub fn load_hooks_config(
         config.merge_with(runtime_config);
     }
 
-    // Layer 0 (lowest): built-in prompt guards, active when no user guards configured
-    if config.builtin_guards.unwrap_or(true) && config.prompt_guard.is_empty() {
-        config.prompt_guard = builtin_prompt_guards();
+    // Layer 0 (lowest): built-in prompt guards prepended to user guards.
+    // Builtins run first, then user-defined guards. `builtin_guards = false` disables.
+    if config.builtin_guards.unwrap_or(true) {
+        let mut combined = builtin_prompt_guards();
+        combined.extend(config.prompt_guard);
+        config.prompt_guard = combined;
     }
 
     config
@@ -438,7 +441,7 @@ command = "echo project-pre"
     }
 
     #[test]
-    fn test_builtin_guards_replaced_by_user_config() {
+    fn test_builtin_guards_prepended_to_user_config() {
         let dir = tempfile::tempdir().unwrap();
         let hooks_path = dir.path().join("hooks.toml");
         std::fs::write(
@@ -453,6 +456,32 @@ timeout_secs = 10
         .unwrap();
 
         let config = load_hooks_config(Some(&hooks_path), None, None);
+        // Builtins (2) prepended + user guard (1) = 3 total
+        assert_eq!(config.prompt_guard.len(), 3);
+        assert_eq!(config.prompt_guard[0].name, "branch-protection");
+        assert_eq!(config.prompt_guard[1].name, "dirty-tree-reminder");
+        assert_eq!(config.prompt_guard[2].name, "custom-guard");
+    }
+
+    #[test]
+    fn test_builtin_guards_disabled_with_user_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(
+            &hooks_path,
+            r#"
+builtin_guards = false
+
+[[prompt_guard]]
+name = "custom-guard"
+command = "echo custom"
+timeout_secs = 10
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+        // Builtins disabled, only user guard remains
         assert_eq!(config.prompt_guard.len(), 1);
         assert_eq!(config.prompt_guard[0].name, "custom-guard");
     }
