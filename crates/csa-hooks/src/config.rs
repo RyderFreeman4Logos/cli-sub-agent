@@ -154,9 +154,12 @@ pub fn load_hooks_config(
         config.merge_with(runtime_config);
     }
 
-    // Layer 0 (lowest): built-in prompt guards, active when no user guards configured
-    if config.builtin_guards.unwrap_or(true) && config.prompt_guard.is_empty() {
-        config.prompt_guard = builtin_prompt_guards();
+    // Layer 0 (lowest): built-in prompt guards prepended to user guards.
+    // Builtins run first, then user-defined guards. `builtin_guards = false` disables.
+    if config.builtin_guards.unwrap_or(true) {
+        let mut combined = builtin_prompt_guards();
+        combined.extend(config.prompt_guard);
+        config.prompt_guard = combined;
     }
 
     config
@@ -438,7 +441,7 @@ command = "echo project-pre"
     }
 
     #[test]
-    fn test_builtin_guards_replaced_by_user_config() {
+    fn test_builtin_guards_prepended_to_user_config() {
         let dir = tempfile::tempdir().unwrap();
         let hooks_path = dir.path().join("hooks.toml");
         std::fs::write(
@@ -453,6 +456,32 @@ timeout_secs = 10
         .unwrap();
 
         let config = load_hooks_config(Some(&hooks_path), None, None);
+        // Builtins (2) prepended + user guard (1) = 3 total
+        assert_eq!(config.prompt_guard.len(), 3);
+        assert_eq!(config.prompt_guard[0].name, "branch-protection");
+        assert_eq!(config.prompt_guard[1].name, "dirty-tree-reminder");
+        assert_eq!(config.prompt_guard[2].name, "custom-guard");
+    }
+
+    #[test]
+    fn test_builtin_guards_disabled_with_user_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(
+            &hooks_path,
+            r#"
+builtin_guards = false
+
+[[prompt_guard]]
+name = "custom-guard"
+command = "echo custom"
+timeout_secs = 10
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+        // Builtins disabled, only user guard remains
         assert_eq!(config.prompt_guard.len(), 1);
         assert_eq!(config.prompt_guard[0].name, "custom-guard");
     }
