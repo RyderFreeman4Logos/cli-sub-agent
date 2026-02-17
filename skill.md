@@ -279,9 +279,13 @@ tool = "auto"
 [debate]
 tool = "auto"
 
-# Concurrency limits
-[concurrency]
-max_global_slots = 4
+# Concurrency limits (default: 3 per tool)
+[defaults]
+max_concurrent = 3
+
+# Per-tool overrides (uncomment as needed)
+# [tools.codex]
+# max_concurrent = 5
 ```
 
 **ASK THE USER**: Which AI tools do they have access to? Adjust
@@ -292,7 +296,7 @@ max_global_slots = 4
 | Claude Code + Codex | `["claude-code", "codex"]` |
 | Codex + Gemini CLI | `["codex", "gemini-cli"]` |
 | All tools available | `["claude-code", "codex", "gemini-cli", "opencode"]` |
-| Single tool only | Set `[review] tool = "<tool>"` explicitly |
+| Single tool only | Set `[review] tool = "<tool>"` and `[debate] tool = "<tool>"` explicitly |
 
 ---
 
