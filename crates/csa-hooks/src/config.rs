@@ -36,9 +36,9 @@ fn default_timeout() -> u64 {
 /// to be deserialized as structured entries alongside the flat hook map.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksConfig {
-    /// Whether to include built-in prompt guards when no user guards are configured.
+    /// Whether to prepend built-in prompt guards before user-defined guards.
     /// `None` = not specified (inherit from lower-priority layer; defaults to `true`).
-    /// `Some(false)` = explicitly disable. `Some(true)` = explicitly enable.
+    /// `Some(false)` = explicitly disable builtins. `Some(true)` = explicitly enable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builtin_guards: Option<bool>,
 

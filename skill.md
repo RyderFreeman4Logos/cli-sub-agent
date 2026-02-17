@@ -308,7 +308,7 @@ CSA has a hook system that runs shell scripts at key lifecycle events. Two
 | Guard | What it does |
 |-------|--------------|
 | `branch-protection` | Warns when running on protected branches (main, dev, release/*) |
-| `dirty-tree-reminder` | Reminds about uncommitted changes when resuming a session |
+| `dirty-tree-reminder` | Reminds about uncommitted changes in the working tree |
 
 ### Adding custom guards
 
