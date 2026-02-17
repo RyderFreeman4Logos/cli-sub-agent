@@ -2,6 +2,7 @@
 
 use crate::event::HookEvent;
 use crate::guard::PromptGuardEntry;
+use crate::guard::builtin_prompt_guards;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -35,6 +36,12 @@ fn default_timeout() -> u64 {
 /// to be deserialized as structured entries alongside the flat hook map.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HooksConfig {
+    /// Whether to include built-in prompt guards when no user guards are configured.
+    /// `None` = not specified (inherit from lower-priority layer; defaults to `true`).
+    /// `Some(false)` = explicitly disable. `Some(true)` = explicitly enable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin_guards: Option<bool>,
+
     /// User-configurable prompt guard scripts. Each entry is a shell script
     /// that receives JSON context on stdin and outputs injection text on stdout.
     #[serde(default)]
@@ -72,6 +79,10 @@ impl HooksConfig {
     /// For prompt_guard: higher-priority entries replace the entire array
     /// (non-empty array wins; empty array means "no override from this layer").
     fn merge_with(&mut self, other: Self) {
+        // builtin_guards: only override when explicitly set (Some); None = no opinion
+        if other.builtin_guards.is_some() {
+            self.builtin_guards = other.builtin_guards;
+        }
         for (key, value) in other.hooks {
             self.hooks.insert(key, value);
         }
@@ -136,10 +147,16 @@ pub fn load_hooks_config(
     // Layer 1 (highest): runtime overrides
     if let Some(overrides) = runtime_overrides {
         let runtime_config = HooksConfig {
+            builtin_guards: None, // runtime overrides don't change guard enablement
             prompt_guard: Vec::new(),
             hooks: overrides.clone(),
         };
         config.merge_with(runtime_config);
+    }
+
+    // Layer 0 (lowest): built-in prompt guards, active when no user guards configured
+    if config.builtin_guards.unwrap_or(true) && config.prompt_guard.is_empty() {
+        config.prompt_guard = builtin_prompt_guards();
     }
 
     config
@@ -409,5 +426,84 @@ command = "echo project-pre"
 
         let config = load_hooks_config(Some(&hooks_path), None, None);
         assert!(config.hooks.is_empty());
+    }
+
+    #[test]
+    fn test_builtin_guards_loaded_by_default() {
+        let config = load_hooks_config(None, None, None);
+        assert_eq!(config.prompt_guard.len(), 2);
+        assert_eq!(config.prompt_guard[0].name, "branch-protection");
+        assert_eq!(config.prompt_guard[1].name, "dirty-tree-reminder");
+        assert_eq!(config.builtin_guards, None); // None = default to true
+    }
+
+    #[test]
+    fn test_builtin_guards_replaced_by_user_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(
+            &hooks_path,
+            r#"
+[[prompt_guard]]
+name = "custom-guard"
+command = "echo custom"
+timeout_secs = 10
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+        assert_eq!(config.prompt_guard.len(), 1);
+        assert_eq!(config.prompt_guard[0].name, "custom-guard");
+    }
+
+    #[test]
+    fn test_builtin_guards_disabled_explicitly() {
+        let dir = tempfile::tempdir().unwrap();
+        let hooks_path = dir.path().join("hooks.toml");
+        std::fs::write(
+            &hooks_path,
+            r#"
+builtin_guards = false
+"#,
+        )
+        .unwrap();
+
+        let config = load_hooks_config(Some(&hooks_path), None, None);
+        assert!(config.prompt_guard.is_empty());
+        assert_eq!(config.builtin_guards, Some(false));
+    }
+
+    #[test]
+    fn test_builtin_guards_global_disable_project_reenable() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let global_path = dir.path().join("global_hooks.toml");
+        std::fs::write(&global_path, "builtin_guards = false\n").unwrap();
+
+        let project_path = dir.path().join("project_hooks.toml");
+        std::fs::write(&project_path, "builtin_guards = true\n").unwrap();
+
+        // Project explicitly re-enables after global disable
+        let config = load_hooks_config(Some(&project_path), Some(&global_path), None);
+        assert_eq!(config.prompt_guard.len(), 2);
+        assert_eq!(config.builtin_guards, Some(true));
+    }
+
+    #[test]
+    fn test_builtin_guards_global_disable_project_omit_inherits() {
+        let dir = tempfile::tempdir().unwrap();
+
+        let global_path = dir.path().join("global_hooks.toml");
+        std::fs::write(&global_path, "builtin_guards = false\n").unwrap();
+
+        let project_path = dir.path().join("project_hooks.toml");
+        // Omit builtin_guards entirely
+        std::fs::write(&project_path, "[pre_run]\nenabled = true\n").unwrap();
+
+        // Project doesn't mention builtin_guards → inherits global false
+        let config = load_hooks_config(Some(&project_path), Some(&global_path), None);
+        assert!(config.prompt_guard.is_empty());
+        assert_eq!(config.builtin_guards, Some(false));
     }
 }
