@@ -109,6 +109,12 @@ pub(crate) fn resolve_pattern(name: &str, project_root: &Path) -> Result<Resolve
 
 /// Build the ordered list of directories to search for a pattern.
 fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
+    // Warn if legacy .weave/deps/ directory still exists.
+    let legacy_deps = project_root.join(".weave").join("deps");
+    if legacy_deps.is_dir() {
+        tracing::warn!(".weave/deps/ detected \u{2014} run `weave migrate` to use global store");
+    }
+
     search_paths_with_store(
         name,
         project_root,

@@ -199,6 +199,7 @@ fn legacy_lockfile_path(project_root: &Path) -> PathBuf {
 /// Find the lockfile, preferring the new path over the legacy one.
 ///
 /// Returns `Some(path)` if a lockfile exists at either location, `None` otherwise.
+/// Emits a deprecation warning when falling back to the legacy path.
 pub fn find_lockfile(project_root: &Path) -> Option<PathBuf> {
     let new_path = lockfile_path(project_root);
     if new_path.is_file() {
@@ -206,6 +207,9 @@ pub fn find_lockfile(project_root: &Path) -> Option<PathBuf> {
     }
     let old_path = legacy_lockfile_path(project_root);
     if old_path.is_file() {
+        tracing::warn!(
+            "Using legacy .weave/lock.toml \u{2014} run `weave migrate` to upgrade to weave.lock"
+        );
         return Some(old_path);
     }
     None
