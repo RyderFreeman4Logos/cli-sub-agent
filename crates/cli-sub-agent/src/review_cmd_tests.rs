@@ -537,3 +537,50 @@ fn stream_mode_explicit_no_stream() {
     let mode = resolve_review_stream_mode(false, true);
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
 }
+
+// --- verify_review_skill_available tests ---
+
+#[test]
+fn verify_review_skill_missing_returns_actionable_error() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let err = verify_review_skill_available(tmp.path()).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Review skill not found"),
+        "should mention missing skill: {msg}"
+    );
+    assert!(
+        msg.contains("csa skill install"),
+        "should include install guidance: {msg}"
+    );
+    assert!(
+        msg.contains(".csa/skills/csa-review"),
+        "should list searched paths: {msg}"
+    );
+}
+
+#[test]
+fn verify_review_skill_present_succeeds() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let skill_dir = tmp.path().join(".csa").join("skills").join("csa-review");
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(
+        skill_dir.join("SKILL.md"),
+        "# CSA Review Skill\nStructured code review.",
+    )
+    .unwrap();
+
+    assert!(verify_review_skill_available(tmp.path()).is_ok());
+}
+
+#[test]
+fn verify_review_skill_no_fallback_without_skill() {
+    // Ensure no execution path silently downgrades when skill is missing.
+    // The verify function must return Err — it must NOT return Ok with a warning.
+    let tmp = tempfile::TempDir::new().unwrap();
+    let result = verify_review_skill_available(tmp.path());
+    assert!(
+        result.is_err(),
+        "missing skill must be a hard error, not a warning"
+    );
+}

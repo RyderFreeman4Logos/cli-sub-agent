@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result};
 use std::path::Path;
 use tracing::{debug, error};
@@ -96,7 +98,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
                 );
                 anyhow::bail!(
                     "Debate aborted: --timeout {timeout_secs}s exceeded. \
-                     Use --idle-timeout for output-based timeout or increase --timeout."
+                     Increase --timeout for longer runs, or use --idle-timeout to kill only when output stalls."
                 );
             }
         }
@@ -300,15 +302,19 @@ fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
     }
 }
 
-/// Resolve stream mode from CLI flags for debate command.
+/// Resolve stream mode for debate command.
 ///
-/// Default is BufferOnly (debate output collected then printed).
-/// `--stream-stdout` forces TeeToStderr, `--no-stream-stdout` forces BufferOnly.
+/// - `--stream-stdout` forces TeeToStderr (progressive output)
+/// - `--no-stream-stdout` forces BufferOnly (silent until complete)
+/// - Default: auto-detect TTY on stderr -> TeeToStderr if interactive,
+///   BufferOnly otherwise. Symmetric with review's behavior (#139).
 fn resolve_debate_stream_mode(
     stream_stdout: bool,
-    _no_stream_stdout: bool,
+    no_stream_stdout: bool,
 ) -> csa_process::StreamMode {
-    if stream_stdout {
+    if no_stream_stdout {
+        csa_process::StreamMode::BufferOnly
+    } else if stream_stdout || std::io::stderr().is_terminal() {
         csa_process::StreamMode::TeeToStderr
     } else {
         csa_process::StreamMode::BufferOnly
@@ -655,7 +661,9 @@ mod tests {
     // --- resolve_debate_stream_mode tests ---
 
     #[test]
-    fn debate_stream_mode_default_is_buffer_only() {
+    fn debate_stream_mode_default_non_tty_is_buffer_only() {
+        // In test environment (non-TTY stderr), default should be BufferOnly.
+        // Note: in interactive TTY, default would be TeeToStderr (symmetric with review, #139)
         let mode = resolve_debate_stream_mode(false, false);
         assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
     }
