@@ -221,6 +221,10 @@ fn derive_scope_uncommitted() {
         reviewers: 1,
         consensus: "majority".to_string(),
         cd: None,
+        timeout: None,
+        idle_timeout: None,
+        stream_stdout: false,
+        no_stream_stdout: false,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -242,6 +246,10 @@ fn derive_scope_commit() {
         reviewers: 1,
         consensus: "majority".to_string(),
         cd: None,
+        timeout: None,
+        idle_timeout: None,
+        stream_stdout: false,
+        no_stream_stdout: false,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -263,6 +271,10 @@ fn derive_scope_range() {
         reviewers: 1,
         consensus: "majority".to_string(),
         cd: None,
+        timeout: None,
+        idle_timeout: None,
+        stream_stdout: false,
+        no_stream_stdout: false,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -284,6 +296,10 @@ fn derive_scope_files() {
         reviewers: 1,
         consensus: "majority".to_string(),
         cd: None,
+        timeout: None,
+        idle_timeout: None,
+        stream_stdout: false,
+        no_stream_stdout: false,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -305,6 +321,10 @@ fn derive_scope_default_branch() {
         reviewers: 1,
         consensus: "majority".to_string(),
         cd: None,
+        timeout: None,
+        idle_timeout: None,
+        stream_stdout: false,
+        no_stream_stdout: false,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }
@@ -326,6 +346,10 @@ fn derive_scope_range_takes_priority_over_commit() {
         reviewers: 1,
         consensus: "majority".to_string(),
         cd: None,
+        timeout: None,
+        idle_timeout: None,
+        stream_stdout: false,
+        no_stream_stdout: false,
     };
     // --range has highest priority
     assert_eq!(derive_scope(&args), "range:v1...v2");
@@ -426,4 +450,90 @@ fn test_build_review_instruction_no_diff_content() {
         "Instruction should be concise, got {} chars",
         result.len()
     );
+}
+
+// --- CLI parse tests for timeout/stream flags (#146) ---
+
+#[test]
+fn review_cli_parses_timeout_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--timeout", "120"]);
+    assert_eq!(args.timeout, Some(120));
+}
+
+#[test]
+fn review_cli_parses_idle_timeout_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--idle-timeout", "60"]);
+    assert_eq!(args.idle_timeout, Some(60));
+}
+
+#[test]
+fn review_cli_parses_both_timeouts() {
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--diff",
+        "--timeout",
+        "300",
+        "--idle-timeout",
+        "30",
+    ]);
+    assert_eq!(args.timeout, Some(300));
+    assert_eq!(args.idle_timeout, Some(30));
+}
+
+#[test]
+fn review_cli_parses_stream_stdout_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--stream-stdout"]);
+    assert!(args.stream_stdout);
+    assert!(!args.no_stream_stdout);
+}
+
+#[test]
+fn review_cli_parses_no_stream_stdout_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--no-stream-stdout"]);
+    assert!(!args.stream_stdout);
+    assert!(args.no_stream_stdout);
+}
+
+#[test]
+fn review_cli_defaults_no_timeout() {
+    let args = parse_review_args(&["csa", "review", "--diff"]);
+    assert_eq!(args.timeout, None);
+    assert_eq!(args.idle_timeout, None);
+    assert!(!args.stream_stdout);
+    assert!(!args.no_stream_stdout);
+}
+
+#[test]
+fn review_cli_rejects_zero_timeout() {
+    let result = Cli::try_parse_from(["csa", "review", "--diff", "--timeout", "0"]);
+    assert!(result.is_err(), "timeout=0 should be rejected");
+}
+
+#[test]
+fn review_cli_rejects_zero_idle_timeout() {
+    let result = Cli::try_parse_from(["csa", "review", "--diff", "--idle-timeout", "0"]);
+    assert!(result.is_err(), "idle_timeout=0 should be rejected");
+}
+
+// --- resolve_review_stream_mode tests ---
+
+#[test]
+fn stream_mode_default_non_tty_is_buffer_only() {
+    // In test environment (non-TTY stderr), default should be BufferOnly
+    let mode = resolve_review_stream_mode(false, false);
+    // Note: in interactive TTY, default would be TeeToStderr (fixes #139)
+    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+#[test]
+fn stream_mode_explicit_stream() {
+    let mode = resolve_review_stream_mode(true, false);
+    assert!(matches!(mode, csa_process::StreamMode::TeeToStderr));
+}
+
+#[test]
+fn stream_mode_explicit_no_stream() {
+    let mode = resolve_review_stream_mode(false, true);
+    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
 }

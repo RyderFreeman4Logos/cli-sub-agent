@@ -243,6 +243,22 @@ pub struct ReviewArgs {
     )]
     pub consensus: String,
 
+    /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout: Option<u64>,
+
+    /// Kill sub-agent when no output appears for N seconds (overrides config default)
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub idle_timeout: Option<u64>,
+
+    /// Force stdout streaming to stderr even in non-TTY contexts
+    #[arg(long, conflicts_with = "no_stream_stdout")]
+    pub stream_stdout: bool,
+
+    /// Suppress real-time stdout streaming to stderr
+    #[arg(long)]
+    pub no_stream_stdout: bool,
+
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,
@@ -264,6 +280,22 @@ pub struct DebateArgs {
     /// Override model
     #[arg(short, long)]
     pub model: Option<String>,
+
+    /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub timeout: Option<u64>,
+
+    /// Kill sub-agent when no output appears for N seconds (overrides config default)
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub idle_timeout: Option<u64>,
+
+    /// Force stdout streaming to stderr even in non-TTY contexts
+    #[arg(long, conflicts_with = "no_stream_stdout")]
+    pub stream_stdout: bool,
+
+    /// Suppress real-time stdout streaming to stderr
+    #[arg(long)]
+    pub no_stream_stdout: bool,
 
     /// Working directory
     #[arg(long)]
