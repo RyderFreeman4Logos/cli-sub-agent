@@ -377,7 +377,8 @@ remote_ref="origin/${branch}"
 if git rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
   unpushed=$(git rev-list "${remote_ref}..HEAD" --count 2>/dev/null) || exit 0
 else
-  unpushed=$(git rev-list "main..HEAD" --count 2>/dev/null) || exit 0
+  unpushed=$(git rev-list "main..HEAD" --count 2>/dev/null \
+    || git rev-list "master..HEAD" --count 2>/dev/null) || exit 0
 fi
 [ "$unpushed" -gt 0 ] && echo "WORKFLOW: ${unpushed} unpushed commit(s) on '${branch}'. Push when ready: git push -u origin ${branch}"
 exit 0"#

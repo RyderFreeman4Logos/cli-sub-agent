@@ -511,6 +511,21 @@ mod unix_tests {
             results.len()
         );
     }
+
+    #[test]
+    fn test_builtin_commit_workflow_executes_successfully() {
+        // Verify the guard runs without error. On protected branches it
+        // exits early (0 results); on feature branches it may report
+        // unpushed commits (0 or 1 result). Both are valid.
+        let guards = builtin_prompt_guards();
+        let workflow_guard = &guards[2];
+        let results = run_prompt_guards(std::slice::from_ref(workflow_guard), &test_context());
+        assert!(
+            results.len() <= 1,
+            "commit-workflow should produce at most one result, got {}",
+            results.len()
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
