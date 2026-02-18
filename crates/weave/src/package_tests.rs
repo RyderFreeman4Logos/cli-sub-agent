@@ -344,6 +344,18 @@ fn audit_detects_case_mismatch_skill_md() {
     std::fs::create_dir_all(&deps).unwrap();
     std::fs::write(deps.join("skill.md"), "# Wrong Case").unwrap();
 
+    // Skip on case-insensitive filesystems (e.g. macOS HFS+/APFS default).
+    // On such systems `SKILL.md` resolves to the same inode as `skill.md`,
+    // so the audit detection logic cannot trigger the case-mismatch path.
+    let probe = deps.join("_CaSe_PrObE_");
+    std::fs::write(&probe, "").unwrap();
+    if deps.join("_case_probe_").exists() {
+        std::fs::remove_file(&probe).unwrap();
+        // Case-insensitive FS: detection cannot work, skip test.
+        return;
+    }
+    std::fs::remove_file(&probe).unwrap();
+
     let lockfile = Lockfile {
         package: vec![LockedPackage {
             name: "bad-case".to_string(),
