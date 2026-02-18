@@ -48,7 +48,20 @@ cargo install --path crates/cli-sub-agent   # Install csa
 cargo install --path crates/weave           # Install weave compiler
 ```
 
-### Initialize a project
+### Setup via AI Agent (recommended)
+
+If you use an AI coding agent (Claude Code, Codex, etc.), paste this prompt
+into a new session to run the full setup automatically:
+
+```
+Read https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/main/skill.md and follow the steps to configure CSA and programming workflow patterns for this project.
+```
+
+The agent will install CSA, Weave, core skills, and interactively select
+workflow patterns (commit/review, security audit, planning, etc.) — all
+guided by [`skill.md`](skill.md).
+
+### Initialize a project (manual)
 
 ```bash
 cd my-project
@@ -405,4 +418,4 @@ Apache-2.0
 
 ---
 
-**Document version**: v1.2 | **Last updated**: 2026-02-14 | **Aligned PRs**: #57 ~ #89 (Epic 1 + weave + skills migration)
+**Document version**: v1.3 | **Last updated**: 2026-02-17 | **Aligned PRs**: #57 ~ #136
