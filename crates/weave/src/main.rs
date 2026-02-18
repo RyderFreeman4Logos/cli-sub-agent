@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand, ValueEnum};
 
+use weave::batch;
 use weave::check;
 use weave::compiler::{compile, plan_to_toml};
 use weave::package;
@@ -81,6 +82,13 @@ enum Commands {
         fix: bool,
     },
 
+    /// Batch-compile all plan.toml files in a directory tree.
+    CompileAll {
+        /// Root directory to scan for plan.toml files (default: patterns/).
+        #[arg(long, default_value = "patterns")]
+        dir: PathBuf,
+    },
+
     /// Visualize a compiled plan.toml as ASCII (default), Mermaid, or PNG.
     Visualize {
         /// Input plan.toml file path.
@@ -120,6 +128,19 @@ fn main() -> Result<()> {
                 eprintln!("wrote {}", out_path.display());
             } else {
                 print!("{toml_str}");
+            }
+        }
+        Commands::CompileAll { dir } => {
+            let summary = batch::compile_all(&dir)?;
+            let total = summary.ok + summary.failed;
+            if summary.failed > 0 {
+                eprintln!(
+                    "{total} pattern(s) compiled: {} OK, {} FAILED",
+                    summary.ok, summary.failed
+                );
+                std::process::exit(1);
+            } else {
+                eprintln!("{total} pattern(s) compiled: {} OK, 0 FAILED", summary.ok);
             }
         }
         Commands::Install { source, path } => {
