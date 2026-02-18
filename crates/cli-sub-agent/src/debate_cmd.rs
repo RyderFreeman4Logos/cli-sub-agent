@@ -28,7 +28,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     let question = read_prompt(args.question)?;
 
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
-    let prompt = build_debate_instruction(&question, args.session.is_some());
+    let prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
 
     // 5. Determine tool (heterogeneous enforcement)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
@@ -325,11 +325,11 @@ fn resolve_debate_stream_mode(
 ///
 /// The debate tool loads the debate skill from the project's `.claude/skills/`
 /// directory and follows its instructions autonomously. We only pass parameters.
-fn build_debate_instruction(question: &str, is_continuation: bool) -> String {
+fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) -> String {
     if is_continuation {
-        format!("Use the debate skill. continuation=true. question={question}")
+        format!("Use the debate skill. continuation=true. rounds={rounds}. question={question}")
     } else {
-        format!("Use the debate skill. question={question}")
+        format!("Use the debate skill. rounds={rounds}. question={question}")
     }
 }
 
@@ -548,18 +548,26 @@ mod tests {
 
     #[test]
     fn build_debate_instruction_new_debate() {
-        let prompt = build_debate_instruction("Should we use gRPC or REST?", false);
+        let prompt = build_debate_instruction("Should we use gRPC or REST?", false, 3);
         assert!(prompt.contains("debate skill"));
         assert!(prompt.contains("Should we use gRPC or REST?"));
         assert!(!prompt.contains("continuation=true"));
+        assert!(prompt.contains("rounds=3"));
     }
 
     #[test]
     fn build_debate_instruction_continuation() {
-        let prompt = build_debate_instruction("I disagree because X", true);
+        let prompt = build_debate_instruction("I disagree because X", true, 3);
         assert!(prompt.contains("debate skill"));
         assert!(prompt.contains("continuation=true"));
         assert!(prompt.contains("I disagree because X"));
+        assert!(prompt.contains("rounds=3"));
+    }
+
+    #[test]
+    fn build_debate_instruction_custom_rounds() {
+        let prompt = build_debate_instruction("topic", false, 5);
+        assert!(prompt.contains("rounds=5"));
     }
 
     #[test]
@@ -656,6 +664,28 @@ mod tests {
         let result =
             crate::cli::Cli::try_parse_from(["csa", "debate", "--idle-timeout", "0", "question"]);
         assert!(result.is_err(), "idle_timeout=0 should be rejected");
+    }
+
+    // --- CLI parse tests for --rounds flag (#138) ---
+
+    #[test]
+    fn debate_cli_parses_rounds_flag() {
+        let args = parse_debate_args(&["csa", "debate", "--rounds", "5", "question"]);
+        assert_eq!(args.rounds, 5);
+    }
+
+    #[test]
+    fn debate_cli_rounds_defaults_to_3() {
+        let args = parse_debate_args(&["csa", "debate", "question"]);
+        assert_eq!(args.rounds, 3);
+    }
+
+    #[test]
+    fn debate_cli_rejects_zero_rounds() {
+        use clap::Parser;
+        let result =
+            crate::cli::Cli::try_parse_from(["csa", "debate", "--rounds", "0", "question"]);
+        assert!(result.is_err(), "rounds=0 should be rejected");
     }
 
     // --- resolve_debate_stream_mode tests ---
