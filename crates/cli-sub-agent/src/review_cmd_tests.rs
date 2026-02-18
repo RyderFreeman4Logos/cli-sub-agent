@@ -546,15 +546,15 @@ fn verify_review_skill_missing_returns_actionable_error() {
     let err = verify_review_skill_available(tmp.path()).unwrap_err();
     let msg = err.to_string();
     assert!(
-        msg.contains("Review skill not found"),
-        "should mention missing skill: {msg}"
+        msg.contains("Review pattern not found"),
+        "should mention missing pattern: {msg}"
     );
     assert!(
         msg.contains("csa skill install"),
         "should include install guidance: {msg}"
     );
     assert!(
-        msg.contains(".csa/skills/csa-review"),
+        msg.contains("patterns/csa-review"),
         "should list searched paths: {msg}"
     );
 }
@@ -562,7 +562,14 @@ fn verify_review_skill_missing_returns_actionable_error() {
 #[test]
 fn verify_review_skill_present_succeeds() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let skill_dir = tmp.path().join(".csa").join("skills").join("csa-review");
+    // Pattern layout: .csa/patterns/csa-review/skills/csa-review/SKILL.md
+    let skill_dir = tmp
+        .path()
+        .join(".csa")
+        .join("patterns")
+        .join("csa-review")
+        .join("skills")
+        .join("csa-review");
     std::fs::create_dir_all(&skill_dir).unwrap();
     std::fs::write(
         skill_dir.join("SKILL.md"),

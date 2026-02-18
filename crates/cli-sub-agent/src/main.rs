@@ -11,6 +11,7 @@ mod debate_cmd;
 mod doctor;
 mod gc;
 mod mcp_server;
+mod pattern_resolver;
 mod pipeline;
 mod process_tree;
 mod review_cmd;

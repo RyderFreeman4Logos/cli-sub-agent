@@ -300,24 +300,30 @@ async fn execute_review(
     .await
 }
 
-/// Verify the review skill is installed before attempting execution.
+/// Verify the review pattern is installed before attempting execution.
 ///
-/// Fails fast with actionable install guidance if the skill is missing,
+/// Fails fast with actionable install guidance if the pattern is missing,
 /// preventing silent degradation where the tool runs without skill context.
 fn verify_review_skill_available(project_root: &Path) -> Result<()> {
-    match crate::skill_resolver::resolve_skill("csa-review", project_root) {
+    match crate::pattern_resolver::resolve_pattern("csa-review", project_root) {
         Ok(resolved) => {
-            debug!(skill_dir = %resolved.dir.display(), "Review skill resolved");
+            debug!(
+                pattern_dir = %resolved.dir.display(),
+                has_config = resolved.config.is_some(),
+                has_agent = resolved.agent_config().is_some(),
+                skill_md_len = resolved.skill_md.len(),
+                "Review pattern resolved"
+            );
             Ok(())
         }
         Err(resolve_err) => {
             anyhow::bail!(
-                "Review skill not found — `csa review` requires the 'csa-review' skill.\n\n\
+                "Review pattern not found — `csa review` requires the 'csa-review' pattern.\n\n\
                  {resolve_err}\n\n\
-                 Install the review skill with one of:\n\
+                 Install the review pattern with one of:\n\
                  1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place SKILL.md in .csa/skills/csa-review/ or .weave/deps/csa-review/\n\n\
-                 Without the skill, the review tool cannot follow the structured review protocol."
+                 2) Manually place skills/csa-review/SKILL.md inside .csa/patterns/csa-review/ or patterns/csa-review/\n\n\
+                 Without the pattern, the review tool cannot follow the structured review protocol."
             )
         }
     }

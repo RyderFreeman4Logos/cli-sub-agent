@@ -279,24 +279,29 @@ Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
 }
 
-/// Verify the debate skill is installed before attempting execution.
+/// Verify the debate pattern is installed before attempting execution.
 ///
-/// Fails fast with actionable install guidance if the skill is missing,
+/// Fails fast with actionable install guidance if the pattern is missing,
 /// preventing silent degradation where the tool runs without skill context.
 fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
-    match crate::skill_resolver::resolve_skill("debate", project_root) {
+    match crate::pattern_resolver::resolve_pattern("debate", project_root) {
         Ok(resolved) => {
-            debug!(skill_dir = %resolved.dir.display(), "Debate skill resolved");
+            debug!(
+                pattern_dir = %resolved.dir.display(),
+                has_config = resolved.config.is_some(),
+                skill_md_len = resolved.skill_md.len(),
+                "Debate pattern resolved"
+            );
             Ok(())
         }
         Err(resolve_err) => {
             anyhow::bail!(
-                "Debate skill not found — `csa debate` requires the 'debate' skill.\n\n\
+                "Debate pattern not found — `csa debate` requires the 'debate' pattern.\n\n\
                  {resolve_err}\n\n\
-                 Install the debate skill with one of:\n\
+                 Install the debate pattern with one of:\n\
                  1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place SKILL.md in .csa/skills/debate/ or .weave/deps/debate/\n\n\
-                 Without the skill, the debate tool cannot follow the structured debate protocol."
+                 2) Manually place skills/debate/SKILL.md inside .csa/patterns/debate/ or patterns/debate/\n\n\
+                 Without the pattern, the debate tool cannot follow the structured debate protocol."
             )
         }
     }
@@ -718,15 +723,15 @@ mod tests {
         let err = verify_debate_skill_available(tmp.path()).unwrap_err();
         let msg = err.to_string();
         assert!(
-            msg.contains("Debate skill not found"),
-            "should mention missing skill: {msg}"
+            msg.contains("Debate pattern not found"),
+            "should mention missing pattern: {msg}"
         );
         assert!(
             msg.contains("csa skill install"),
             "should include install guidance: {msg}"
         );
         assert!(
-            msg.contains(".csa/skills/debate"),
+            msg.contains("patterns/debate"),
             "should list searched paths: {msg}"
         );
     }
@@ -734,7 +739,14 @@ mod tests {
     #[test]
     fn verify_debate_skill_present_succeeds() {
         let tmp = tempfile::TempDir::new().unwrap();
-        let skill_dir = tmp.path().join(".csa").join("skills").join("debate");
+        // Pattern layout: .csa/patterns/debate/skills/debate/SKILL.md
+        let skill_dir = tmp
+            .path()
+            .join(".csa")
+            .join("patterns")
+            .join("debate")
+            .join("skills")
+            .join("debate");
         std::fs::create_dir_all(&skill_dir).unwrap();
         std::fs::write(
             skill_dir.join("SKILL.md"),
