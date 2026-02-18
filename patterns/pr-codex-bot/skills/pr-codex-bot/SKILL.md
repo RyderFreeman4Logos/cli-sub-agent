@@ -30,6 +30,73 @@ triggers:
 
 Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops up to 10 iterations. FORBIDDEN: self-dismissing bot comments or skipping debate for arbitration.
 
+## Dispatcher Model
+
+pr-codex-bot follows a 3-tier dispatcher architecture. The main agent never
+performs implementation work directly -- it orchestrates sub-agents that do the
+actual review, fixing, and merging.
+
+### Tier 0 -- Orchestrator (Main Agent)
+
+The main agent (Claude Code / human user) acts as a **pure dispatcher**:
+
+- Reads SKILL.md and PATTERN.md to understand the workflow
+- Dispatches each step to the appropriate sub-agent or tool
+- Evaluates sub-agent results and decides next action (fix, retry, merge, abort)
+- **NEVER reads or writes code directly** -- all code-touching work is delegated
+- **NEVER runs `csa review` / `csa debate` itself** -- spawns a Tier 1 executor
+
+### Tier 1 -- Executor Sub-Agents (CSA / Task Tool)
+
+Tier 1 agents perform the actual work dispatched by Tier 0:
+
+| Step | Tier 1 Agent | Work Performed |
+|------|-------------|----------------|
+| Step 2 | `csa review --branch main` | Cumulative local review |
+| Step 3 | `csa` (executor) | Fix local review issues |
+| Step 7 | claude-code (Task tool) | Classify bot comments |
+| Step 8 | `csa debate` | False-positive arbitration |
+| Step 9 | `csa` (executor) | Fix real issues |
+
+Tier 1 agents have full file system access and can read/write code, run tests,
+and interact with git. They receive a scoped task from Tier 0 and return
+results.
+
+### Tier 2 -- Sub-Sub-Agents (Spawned by Tier 1)
+
+Tier 1 agents may spawn their own sub-agents for specific sub-tasks:
+
+- `csa review` internally spawns reviewer model(s) for independent analysis
+- `csa debate` spawns two independent models for adversarial evaluation
+- Task tool sub-agents may use Grep/Glob for targeted code search
+
+Tier 2 agents are invisible to Tier 0 -- the orchestrator only sees Tier 1
+results.
+
+### Flow Diagram
+
+```
+Tier 0 (Orchestrator)
+  |
+  +-- dispatch --> Tier 1: csa review --branch main
+  |                  |
+  |                  +-- spawn --> Tier 2: reviewer model(s)
+  |
+  +-- evaluate result, decide next step
+  |
+  +-- dispatch --> Tier 1: csa (fix issues)
+  |
+  +-- dispatch --> Tier 1: bash (push, create PR, trigger bot)
+  |
+  +-- dispatch --> Tier 1: claude-code (classify comments)
+  |
+  +-- dispatch --> Tier 1: csa debate (arbitrate false positives)
+  |                  |
+  |                  +-- spawn --> Tier 2: independent models
+  |
+  +-- dispatch --> Tier 1: bash (merge)
+```
+
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
 ### Prerequisites
