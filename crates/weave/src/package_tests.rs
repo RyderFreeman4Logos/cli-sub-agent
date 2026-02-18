@@ -243,6 +243,53 @@ fn lock_reads_from_legacy_and_writes_to_new() {
     assert!(tmp.path().join("weave.lock").is_file());
 }
 
+// ---------------------------------------------------------------------------
+// Global package store tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn global_store_root_returns_expected_path() {
+    let root = global_store_root().unwrap();
+    // Must end with weave/packages under some data directory.
+    assert!(root.ends_with("weave/packages"), "got: {}", root.display());
+}
+
+#[test]
+fn package_dir_uses_commit_prefix() {
+    let store = Path::new("/store");
+    let dir = package_dir(store, "my-skill", "abcdef1234567890");
+    assert_eq!(dir, Path::new("/store/my-skill/abcdef12"));
+}
+
+#[test]
+fn package_dir_short_commit_uses_full_hash() {
+    let store = Path::new("/store");
+    let dir = package_dir(store, "skill", "abc");
+    assert_eq!(dir, Path::new("/store/skill/abc"));
+}
+
+#[test]
+fn is_checkout_valid_empty_dir_is_invalid() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("empty");
+    std::fs::create_dir_all(&dir).unwrap();
+    assert!(!is_checkout_valid(&dir));
+}
+
+#[test]
+fn is_checkout_valid_nonempty_dir_is_valid() {
+    let tmp = TempDir::new().unwrap();
+    let dir = tmp.path().join("valid");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("SKILL.md"), "# Skill").unwrap();
+    assert!(is_checkout_valid(&dir));
+}
+
+#[test]
+fn is_checkout_valid_missing_dir_is_invalid() {
+    assert!(!is_checkout_valid(Path::new("/nonexistent/path")));
+}
+
 #[test]
 fn lock_picks_up_existing_deps() {
     let tmp = TempDir::new().unwrap();

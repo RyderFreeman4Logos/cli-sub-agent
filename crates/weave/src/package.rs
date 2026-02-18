@@ -220,6 +220,37 @@ pub fn load_project_lockfile(project_root: &Path) -> Result<Lockfile> {
 }
 
 // ---------------------------------------------------------------------------
+// Global package store
+// ---------------------------------------------------------------------------
+
+/// Return the global store root: `~/.local/share/weave/packages/`.
+pub fn global_store_root() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new().context("cannot determine home directory")?;
+    Ok(base.data_local_dir().join("weave").join("packages"))
+}
+
+/// Compute the checkout directory for a package in the global store.
+///
+/// Layout: `<store_root>/<name>/<commit_prefix>/` where commit_prefix is
+/// the first 8 characters of the commit hash.
+pub fn package_dir(store_root: &Path, name: &str, commit: &str) -> PathBuf {
+    let prefix_len = commit.len().min(8);
+    store_root.join(name).join(&commit[..prefix_len])
+}
+
+/// Check whether a checkout directory is valid (exists and contains at
+/// least one file).
+pub fn is_checkout_valid(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    match std::fs::read_dir(dir) {
+        Ok(mut entries) => entries.any(|e| e.is_ok()),
+        Err(_) => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Git operations
 // ---------------------------------------------------------------------------
 
