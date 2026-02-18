@@ -23,14 +23,17 @@ pub(crate) fn resolve_tool_and_model(
     model: Option<&str>,
     config: Option<&ProjectConfig>,
     project_root: &Path,
+    force: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
         // Enforce tier whitelist: model-spec must appear in tiers
-        if let Some(cfg) = config {
-            cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
+        if !force {
+            if let Some(cfg) = config {
+                cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
+            }
         }
         return Ok((tool_name, Some(spec.to_string()), None));
     }
@@ -43,14 +46,32 @@ pub(crate) fn resolve_tool_and_model(
                 .unwrap_or_else(|| m.to_string())
         });
         // Enforce tier whitelist: tool must be in tiers; model name must match if provided
-        if let Some(cfg) = config {
-            cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
-            cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
+        if !force {
+            if let Some(cfg) = config {
+                cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
+                cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
+            }
         }
         return Ok((tool_name, None, resolved_model));
     }
 
-    // Case 3: neither tool nor model_spec → use round-robin tier-based selection
+    // Case 3: neither tool nor model_spec → use round-robin tier-based selection.
+    // When --force is active, bypass tiers and pick any installed+enabled tool.
+    if force {
+        for tool in csa_config::global::all_known_tools() {
+            let name = tool.as_str();
+            let enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(name));
+            if enabled && is_tool_binary_available(name) {
+                let tool_name = parse_tool_name(name)?;
+                return Ok((tool_name, None, None));
+            }
+        }
+        anyhow::bail!(
+            "No installed and enabled tools found. Install at least one tool \
+             (gemini-cli, opencode, codex, claude-code) or check enabled status."
+        );
+    }
+
     if let Some(cfg) = config {
         // Try round-robin rotation first (needs project root to persist state)
         if let Ok(Some((tool_name_str, tier_model_spec))) =
@@ -66,10 +87,24 @@ pub(crate) fn resolve_tool_and_model(
         }
     }
 
-    // Case 4: no config or no tier mapping → error
+    // Fallback: minimal-init configs with empty tiers — pick any auto-selectable installed tool.
+    // Only activates when tiers are empty to avoid silently bypassing configured tier mappings.
+    if let Some(cfg) = config {
+        if cfg.tiers.is_empty() {
+            for tool in csa_config::global::all_known_tools() {
+                let name = tool.as_str();
+                if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
+                    let tool_name = parse_tool_name(name)?;
+                    return Ok((tool_name, None, None));
+                }
+            }
+        }
+    }
+
+    // Case 4: no config, no tier, and no auto-selectable installed tool → error
     anyhow::bail!(
-        "No tool specified and no tier-based selection available. \
-         Use --tool or run 'csa init' to configure tiers."
+        "No tool specified and no tier-based or auto-selectable tool available. \
+         Use --tool, run 'csa init --full' to configure tiers, or install a tool."
     )
 }
 

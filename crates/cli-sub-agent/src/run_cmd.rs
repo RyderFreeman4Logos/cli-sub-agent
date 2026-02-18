@@ -106,6 +106,7 @@ pub(crate) async fn handle_run(
     model_spec: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
+    force: bool,
     no_failover: bool,
     wait: bool,
     idle_timeout: Option<u64>,
@@ -213,6 +214,7 @@ pub(crate) async fn handle_run(
             model.as_deref(),
             config.as_ref(),
             &project_root,
+            force,
         )?,
         ToolSelectionStrategy::AnyAvailable => resolve_tool_and_model(
             None,
@@ -220,6 +222,7 @@ pub(crate) async fn handle_run(
             model.as_deref(),
             config.as_ref(),
             &project_root,
+            force,
         )?,
         ToolSelectionStrategy::HeterogeneousPreferred => {
             let detected_parent_tool = crate::run_helpers::detect_parent_tool();
@@ -257,6 +260,7 @@ pub(crate) async fn handle_run(
                             model.as_deref(),
                             config.as_ref(),
                             &project_root,
+                            force,
                         )?
                     }
                     None => {
@@ -271,6 +275,7 @@ pub(crate) async fn handle_run(
                             model.as_deref(),
                             config.as_ref(),
                             &project_root,
+                            force,
                         )?
                     }
                 }
@@ -284,6 +289,7 @@ pub(crate) async fn handle_run(
                     model.as_deref(),
                     config.as_ref(),
                     &project_root,
+                    force,
                 )?
             }
         }
@@ -318,6 +324,7 @@ pub(crate) async fn handle_run(
                         model.as_deref(),
                         config.as_ref(),
                         &project_root,
+                        force,
                     )?,
                     None => {
                         anyhow::bail!(
@@ -339,6 +346,7 @@ pub(crate) async fn handle_run(
                     model.as_deref(),
                     config.as_ref(),
                     &project_root,
+                    force,
                 )?
             }
         }
@@ -422,7 +430,7 @@ pub(crate) async fn handle_run(
             current_model.as_deref(),
             thinking.as_deref(),
             config.as_ref(),
-            true, // enforce tier whitelist for run commands
+            !force, // enforce tier whitelist unless --force
         )
         .await?;
 

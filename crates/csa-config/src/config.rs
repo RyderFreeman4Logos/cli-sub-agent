@@ -204,6 +204,36 @@ fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml::Value {
     }
 }
 
+/// Re-apply `tools.*.enabled = false` from the global config into a merged
+/// TOML value.  This ensures that global disablement is a hard override:
+/// project configs cannot set a globally-disabled tool back to `enabled = true`.
+fn enforce_global_tool_disables(global: &toml::Value, merged: &mut toml::Value) {
+    let global_tools = match global.get("tools").and_then(|t| t.as_table()) {
+        Some(t) => t,
+        None => return,
+    };
+    let merged_tools = match merged.get_mut("tools").and_then(|t| t.as_table_mut()) {
+        Some(t) => t,
+        None => return,
+    };
+
+    for (tool_name, global_tool_val) in global_tools {
+        let globally_disabled =
+            global_tool_val.get("enabled").and_then(|v| v.as_bool()) == Some(false);
+        if !globally_disabled {
+            continue;
+        }
+        // Force `enabled = false` in the merged config for this tool.
+        if let Some(merged_tool) = merged_tools.get_mut(tool_name) {
+            if let Some(table) = merged_tool.as_table_mut() {
+                table.insert("enabled".to_string(), toml::Value::Boolean(false));
+            }
+        } else {
+            // Tool only in global config (already disabled via base merge), nothing to fix.
+        }
+    }
+}
+
 impl ProjectConfig {
     /// Load config with fallback chain:
     ///
@@ -286,7 +316,7 @@ impl ProjectConfig {
             .get("schema_version")
             .and_then(|v| v.as_integer());
 
-        let mut merged = merge_toml_values(base_val, overlay_val);
+        let mut merged = merge_toml_values(base_val.clone(), overlay_val);
         // Set schema_version to max of both sources (only when at least one is explicit)
         if let Some(max_ver) = match (base_schema, overlay_schema) {
             (Some(b), Some(o)) => Some(b.max(o)),
@@ -297,6 +327,12 @@ impl ProjectConfig {
                 table.insert("schema_version".to_string(), toml::Value::Integer(max_ver));
             }
         }
+
+        // Global-disable-wins: re-apply `enabled = false` from the global (base)
+        // config.  Global disablement is a hard override that project configs
+        // cannot reverse — this prevents stale project configs from resurrecting
+        // tools the user explicitly disabled at the global level.
+        enforce_global_tool_disables(&base_val, &mut merged);
 
         // Roundtrip through string for reliable deserialization
         let merged_str = toml::to_string(&merged).context("Failed to serialize merged config")?;

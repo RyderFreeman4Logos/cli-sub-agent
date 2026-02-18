@@ -64,6 +64,10 @@ pub enum Commands {
         #[arg(long)]
         thinking: Option<String>,
 
+        /// Bypass tier whitelist enforcement (allow any tool/model)
+        #[arg(long)]
+        force: bool,
+
         /// Disable automatic 429 failover to alternative tools
         #[arg(long)]
         no_failover: bool,
@@ -92,14 +96,23 @@ pub enum Commands {
     },
 
     /// Initialize project configuration (.csa/config.toml)
+    ///
+    /// By default, creates a minimal config with only [project] metadata.
+    /// Tools, tiers, and resources inherit from the global config or built-in
+    /// defaults.  Use --full to auto-detect tools and generate tier configs.
+    /// Use --template to write a fully-commented reference config.
     Init {
         /// Non-interactive mode
         #[arg(long)]
         non_interactive: bool,
 
-        /// Generate minimal config (only [project] + detected [tools], no tiers/resources)
-        #[arg(long)]
-        minimal: bool,
+        /// Auto-detect tools and generate full tier configuration
+        #[arg(long, conflicts_with = "template")]
+        full: bool,
+
+        /// Generate a fully-commented TOML template showing all options
+        #[arg(long, conflicts_with = "full")]
+        template: bool,
     },
 
     /// Garbage collect expired locks and empty sessions
