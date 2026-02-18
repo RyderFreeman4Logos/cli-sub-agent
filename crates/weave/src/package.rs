@@ -294,6 +294,12 @@ fn read_version(dep_dir: &Path) -> Option<String> {
 /// Search `dir` for a file whose name matches `SKILL.md` case-insensitively
 /// but is **not** the canonical `SKILL.md`. Returns the first such filename
 /// found, or `None` if there is no mismatch.
+///
+/// **Note**: On case-insensitive filesystems (e.g. macOS HFS+/APFS default),
+/// the caller (`install_from_local`) resolves `SKILL.md` successfully even
+/// when the on-disk name is `skill.md`, so this function is never reached.
+/// Detection is therefore best-effort and only effective on case-sensitive
+/// filesystems.
 pub(crate) fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.filter_map(|e| e.ok()) {
