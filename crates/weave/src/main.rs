@@ -234,9 +234,22 @@ fn main() -> Result<()> {
                 package::MigrateResult::NothingToMigrate => {
                     eprintln!("nothing to migrate — no .weave/lock.toml found");
                 }
-                package::MigrateResult::Migrated { count, .. } => {
+                package::MigrateResult::Migrated {
+                    count,
+                    local_skipped,
+                    ..
+                } => {
                     eprintln!("Migrated {count} package(s) to global store");
-                    eprintln!("You can now safely remove .weave/deps/ with: rm -rf .weave/deps/");
+                    if local_skipped > 0 {
+                        eprintln!(
+                            "WARNING: {local_skipped} local-source package(s) were not migrated. \
+                             DO NOT remove .weave/deps/ until they are reinstalled."
+                        );
+                    } else {
+                        eprintln!(
+                            "You can now safely remove .weave/deps/ with: rm -rf .weave/deps/"
+                        );
+                    }
                 }
             }
         }

@@ -7,7 +7,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use super::{Lockfile, SourceKind, load_project_lockfile};
+use super::{SourceKind, find_lockfile, load_lockfile};
 
 /// Result of a `weave gc` operation.
 #[derive(Debug, PartialEq)]
@@ -97,10 +97,16 @@ pub fn gc(project_root: &Path, store_root: &Path, dry_run: bool) -> Result<GcRes
 }
 
 /// Build the set of `name/prefix` keys that are referenced by the lockfile.
+///
+/// Returns an error if a lockfile exists but cannot be parsed (fail-closed:
+/// never treat a corrupt lockfile as "no references" to avoid deleting
+/// valid checkouts). If no lockfile exists at all, returns an empty set.
 fn build_reference_set(project_root: &Path) -> Result<HashSet<String>> {
-    let lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
+    let lockfile = match find_lockfile(project_root) {
+        Some(path) => load_lockfile(&path)
+            .with_context(|| format!("refusing to gc: corrupt lockfile at {}", path.display()))?,
+        None => return Ok(HashSet::new()),
+    };
 
     let mut refs = HashSet::new();
     for pkg in &lockfile.package {
@@ -312,5 +318,30 @@ mod tests {
         assert_eq!(result.removed, vec!["orphan/aabbccdd"]);
         // Parent directory should be cleaned up.
         assert!(!store.join("orphan").exists());
+    }
+
+    #[test]
+    fn test_gc_corrupt_lockfile_returns_error_no_deletions() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let store = tmp.path().join("store");
+        std::fs::create_dir_all(&project).unwrap();
+
+        // Write an invalid/corrupt lockfile.
+        std::fs::write(project.join("weave.lock"), "THIS IS NOT VALID TOML {{{{").unwrap();
+
+        // Create a checkout that should NOT be deleted.
+        create_checkout(&store, "important", "aabbccdd");
+
+        let result = gc(&project, &store, false);
+        assert!(result.is_err(), "gc must fail on corrupt lockfile");
+        let err = result.unwrap_err().to_string();
+        assert!(
+            err.contains("corrupt lockfile") || err.contains("failed to parse"),
+            "unhelpful error: {err}"
+        );
+
+        // Checkout must survive — nothing deleted.
+        assert!(store.join("important").join("aabbccdd").exists());
     }
 }

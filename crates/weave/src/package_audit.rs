@@ -98,7 +98,7 @@ pub fn audit(project_root: &Path, store_root: &Path) -> Result<Vec<AuditResult>>
             }
             issues.push(AuditIssue::MissingFromDeps);
         } else {
-            let dep_path = package_dir(store_root, &pkg.name, commit_key);
+            let dep_path = package_dir(store_root, &pkg.name, commit_key)?;
 
             if !dep_path.is_dir() {
                 issues.push(AuditIssue::MissingFromDeps);

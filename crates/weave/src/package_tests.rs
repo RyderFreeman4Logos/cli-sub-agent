@@ -217,7 +217,7 @@ fn lock_reads_from_legacy_and_writes_to_new() {
     let store = tmp.path().join("store");
 
     // Create package checkout in global store.
-    let checkout = package_dir(&store, "migrated", "abc123");
+    let checkout = package_dir(&store, "migrated", "abc123").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Migrated").unwrap();
 
@@ -263,14 +263,14 @@ fn global_store_root_returns_expected_path() {
 #[test]
 fn package_dir_uses_commit_prefix() {
     let store = Path::new("/store");
-    let dir = package_dir(store, "my-skill", "abcdef1234567890");
+    let dir = package_dir(store, "my-skill", "abcdef1234567890").unwrap();
     assert_eq!(dir, Path::new("/store/my-skill/abcdef12"));
 }
 
 #[test]
 fn package_dir_short_commit_uses_full_hash() {
     let store = Path::new("/store");
-    let dir = package_dir(store, "skill", "abc");
+    let dir = package_dir(store, "skill", "abc").unwrap();
     assert_eq!(dir, Path::new("/store/skill/abc"));
 }
 
@@ -302,7 +302,7 @@ fn lock_preserves_existing_lockfile_entries() {
     let store = tmp.path().join("store");
 
     // Create package checkout in global store.
-    let checkout = package_dir(&store, "audit", "abc123");
+    let checkout = package_dir(&store, "audit", "abc123").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Audit").unwrap();
 
@@ -373,7 +373,7 @@ fn audit_detects_missing_skill_md() {
     let store = tmp.path().join("store");
 
     // Create checkout dir in store but without SKILL.md.
-    let checkout = package_dir(&store, "broken", "abc12345");
+    let checkout = package_dir(&store, "broken", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
 
     let lockfile = Lockfile {
@@ -405,7 +405,7 @@ fn audit_detects_unknown_repo() {
     let tmp = TempDir::new().unwrap();
     let store = tmp.path().join("store");
 
-    let checkout = package_dir(&store, "local", "abc12345");
+    let checkout = package_dir(&store, "local", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Local").unwrap();
 
@@ -443,7 +443,7 @@ fn audit_detects_case_mismatch_skill_md() {
     let store = tmp.path().join("store");
 
     // Checkout in store with lowercase `skill.md` instead of `SKILL.md`.
-    let checkout = package_dir(&store, "bad-case", "abc12345");
+    let checkout = package_dir(&store, "bad-case", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("skill.md"), "# Wrong Case").unwrap();
 
@@ -494,7 +494,7 @@ fn audit_correct_skill_md_no_case_issue() {
     let store = tmp.path().join("store");
 
     // Checkout with the correct `SKILL.md`.
-    let checkout = package_dir(&store, "good", "abc12345");
+    let checkout = package_dir(&store, "good", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Good Skill").unwrap();
 
@@ -522,7 +522,7 @@ fn audit_neither_skill_md_variant_is_missing() {
     let store = tmp.path().join("store");
 
     // Checkout exists but has NO skill.md variant at all.
-    let checkout = package_dir(&store, "empty", "abc12345");
+    let checkout = package_dir(&store, "empty", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
 
     let lockfile = Lockfile {
@@ -585,7 +585,7 @@ fn migrate_creates_weave_lock_from_legacy() {
     let store = tmp.path().join("store");
 
     // Create checkout that already exists in global store (skip git ops).
-    let checkout = package_dir(&store, "test-skill", "abc12345");
+    let checkout = package_dir(&store, "test-skill", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Test").unwrap();
 
@@ -628,7 +628,7 @@ fn migrate_skips_valid_checkout_in_global_store() {
     let store = tmp.path().join("store");
 
     // Pre-create a valid checkout in global store.
-    let checkout = package_dir(&store, "pre-existing", "deadbeef");
+    let checkout = package_dir(&store, "pre-existing", "deadbeef").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Pre-existing").unwrap();
 
@@ -656,7 +656,8 @@ fn migrate_skips_valid_checkout_in_global_store() {
             result,
             MigrateResult::Migrated {
                 count: 1,
-                checkouts: 0
+                checkouts: 0,
+                ..
             }
         ),
         "expected Migrated(count=1, checkouts=0) since checkout valid, got: {result:?}"
@@ -728,7 +729,7 @@ fn audit_skips_unknown_repo_for_local_source() {
     let store = tmp.path().join("store");
 
     // Create local source checkout in global store.
-    let checkout = package_dir(&store, "local-skill", "local");
+    let checkout = package_dir(&store, "local-skill", "local").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Local Skill").unwrap();
 
@@ -761,7 +762,7 @@ fn lock_preserves_source_kind_from_existing_lockfile() {
     let store = tmp.path().join("store");
 
     // Create local-source checkout in global store.
-    let checkout = package_dir(&store, "local-dep", "local");
+    let checkout = package_dir(&store, "local-dep", "local").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Local").unwrap();
 

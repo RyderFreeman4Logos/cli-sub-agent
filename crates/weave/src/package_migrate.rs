@@ -18,8 +18,12 @@ pub enum MigrateResult {
     AlreadyMigrated,
     /// No legacy `.weave/lock.toml` found.
     NothingToMigrate,
-    /// Successfully migrated N packages (M new checkouts).
-    Migrated { count: usize, checkouts: usize },
+    /// Successfully migrated N packages (M new checkouts, S local-source skips).
+    Migrated {
+        count: usize,
+        checkouts: usize,
+        local_skipped: usize,
+    },
 }
 
 /// Migrate from legacy `.weave/lock.toml` to the new `weave.lock` format,
@@ -42,16 +46,18 @@ pub fn migrate(project_root: &Path, cache_root: &Path, store_root: &Path) -> Res
         .with_context(|| format!("failed to read legacy lockfile at {}", old_path.display()))?;
 
     let mut migrated_count: usize = 0;
+    let mut local_skipped: usize = 0;
 
     for pkg in &lockfile.package {
         if pkg.source_kind != SourceKind::Git {
+            local_skipped += 1;
             continue;
         }
         if pkg.repo.is_empty() || pkg.commit.is_empty() {
             continue;
         }
 
-        let dest = package_dir(store_root, &pkg.name, &pkg.commit);
+        let dest = package_dir(store_root, &pkg.name, &pkg.commit)?;
         if is_checkout_valid(&dest) {
             continue;
         }
@@ -66,5 +72,6 @@ pub fn migrate(project_root: &Path, cache_root: &Path, store_root: &Path) -> Res
     Ok(MigrateResult::Migrated {
         count: lockfile.package.len(),
         checkouts: migrated_count,
+        local_skipped,
     })
 }

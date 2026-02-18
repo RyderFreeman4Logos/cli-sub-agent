@@ -64,7 +64,7 @@ fn install_from_local_succeeds() {
     assert!(pkg.commit.is_empty());
 
     // Files were copied to global store.
-    let dest = package_dir(&store, "my-skill", "local");
+    let dest = package_dir(&store, "my-skill", "local").unwrap();
     assert!(dest.join("SKILL.md").is_file());
     assert!(dest.join("helper.txt").is_file());
 
@@ -88,7 +88,7 @@ fn install_from_local_excludes_git_dir() {
 
     install_from_local(&skill_src, &project, &store).unwrap();
 
-    let dest = package_dir(&store, "git-skill", "local");
+    let dest = package_dir(&store, "git-skill", "local").unwrap();
     assert!(dest.join("SKILL.md").is_file());
     assert!(!dest.join(".git").exists());
 }
@@ -142,7 +142,7 @@ fn install_from_local_rejects_self_overwrite() {
     // we need: source == package_dir(store, name, "local").
     // package_dir(store, "local", "local") = store/local/local
     // So create source at store/local/local and install from it.
-    let dest = package_dir(&store, "local", "local");
+    let dest = package_dir(&store, "local", "local").unwrap();
     std::fs::create_dir_all(&dest).unwrap();
     std::fs::write(dest.join("SKILL.md"), "# Self Overwrite").unwrap();
 
@@ -176,7 +176,7 @@ fn install_from_local_rejects_overlap_when_dest_not_exists() {
     // and source = store/tricky/local, there is no overlap.
     // Test the case where source IS the dest.
     let real_store = tmp.path().join("real-store");
-    let real_dest = package_dir(&real_store, "local", "local");
+    let real_dest = package_dir(&real_store, "local", "local").unwrap();
     std::fs::create_dir_all(&real_dest).unwrap();
     std::fs::write(real_dest.join("SKILL.md"), "# Self").unwrap();
 
@@ -371,7 +371,7 @@ fn lock_preserves_requested_version_from_existing_lockfile() {
     let store = tmp.path().join("store");
 
     // Create package checkout in global store.
-    let checkout = package_dir(&store, "pinned-dep", "abc123");
+    let checkout = package_dir(&store, "pinned-dep", "abc123").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Pinned").unwrap();
 

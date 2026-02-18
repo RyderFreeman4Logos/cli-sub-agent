@@ -146,8 +146,9 @@ fn search_paths_with_store(
                         SourceKind::Git if pkg.commit.is_empty() => continue,
                         SourceKind::Git => &pkg.commit,
                     };
-                    let pkg_dir = package::package_dir(store, &pkg.name, commit_key);
-                    paths.push(pkg_dir.join("patterns").join(name));
+                    if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
+                        paths.push(pkg_dir.join("patterns").join(name));
+                    }
                 }
             }
         }

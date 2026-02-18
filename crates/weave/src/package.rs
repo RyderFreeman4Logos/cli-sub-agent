@@ -17,10 +17,6 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// Lockfile types
-// ---------------------------------------------------------------------------
-
 /// Root structure of the lockfile (`weave.lock`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Lockfile {
@@ -237,13 +233,39 @@ pub fn global_store_root() -> Result<PathBuf> {
     Ok(base.data_local_dir().join("weave").join("packages"))
 }
 
-/// Compute the checkout directory for a package in the global store.
+/// Validate that a package name contains only `[a-zA-Z0-9_-]`.
+pub fn validate_package_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("package name must not be empty");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        bail!("invalid package name '{name}': only [a-zA-Z0-9_-] allowed");
+    }
+    Ok(())
+}
+
+/// Validate that a commit string is hex-only or the literal `"local"`.
+fn validate_commit_prefix(commit: &str) -> Result<()> {
+    if commit == "local" {
+        return Ok(());
+    }
+    if commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("invalid commit '{commit}': only hex characters [0-9a-f] allowed");
+    }
+    Ok(())
+}
+
+/// Compute the checkout directory: `<store_root>/<name>/<commit_prefix>/`.
 ///
-/// Layout: `<store_root>/<name>/<commit_prefix>/` where commit_prefix is
-/// the first 8 characters of the commit hash.
-pub fn package_dir(store_root: &Path, name: &str, commit: &str) -> PathBuf {
+/// Returns an error if `name` or `commit` contain path-traversal characters.
+pub fn package_dir(store_root: &Path, name: &str, commit: &str) -> Result<PathBuf> {
+    validate_package_name(name)?;
     let prefix_len = commit.len().min(8);
-    store_root.join(name).join(&commit[..prefix_len])
+    validate_commit_prefix(&commit[..prefix_len])?;
+    Ok(store_root.join(name).join(&commit[..prefix_len]))
 }
 
 /// Check whether a checkout directory is valid (exists and contains at
@@ -388,10 +410,6 @@ pub(crate) fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// Public API: install
-// ---------------------------------------------------------------------------
-
 /// Install a skill from a git source into the global package store.
 ///
 /// Checkout goes to `<store_root>/<name>/<commit-prefix>/`.
@@ -409,7 +427,7 @@ pub fn install(
     let cas = ensure_cached(cache_root, &src.url)?;
     let commit = resolve_commit(&cas, src.git_ref.as_deref())?;
 
-    let dest = package_dir(store_root, &src.name, &commit);
+    let dest = package_dir(store_root, &src.name, &commit)?;
     if !is_checkout_valid(&dest) {
         checkout_to(&cas, &commit, &dest)?;
     }
@@ -436,10 +454,6 @@ pub fn install(
 
     Ok(pkg)
 }
-
-// ---------------------------------------------------------------------------
-// Public API: install_from_local
-// ---------------------------------------------------------------------------
 
 /// Install a skill from a local directory path into the global package store.
 ///
@@ -504,7 +518,7 @@ pub fn install_from_local(
         store_root.to_path_buf()
     };
     // Local sources use "local" as the commit prefix in the global store.
-    let dest = package_dir(&resolved_store, &name, "local");
+    let dest = package_dir(&resolved_store, &name, "local")?;
 
     // Guard against source/destination overlap.
     {
@@ -619,10 +633,6 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Public API: lock
-// ---------------------------------------------------------------------------
-
 /// Regenerate the lockfile from the current lockfile state and global store.
 ///
 /// For each existing lockfile entry, verify the checkout exists in the
@@ -648,7 +658,7 @@ pub fn lock(project_root: &Path, store_root: &Path) -> Result<Lockfile> {
             &pkg.commit
         };
         if !commit_key.is_empty() {
-            let checkout = package_dir(store_root, &pkg.name, commit_key);
+            let checkout = package_dir(store_root, &pkg.name, commit_key)?;
             if checkout.is_dir() {
                 updated.version = read_version(&checkout);
             }
@@ -661,10 +671,6 @@ pub fn lock(project_root: &Path, store_root: &Path) -> Result<Lockfile> {
 
     Ok(lockfile)
 }
-
-// ---------------------------------------------------------------------------
-// Public API: update
-// ---------------------------------------------------------------------------
 
 /// Update one or all locked dependencies to their latest commit.
 ///
@@ -726,7 +732,7 @@ pub fn update(
         let new_commit = resolve_commit(&cas, resolve_ref)?;
 
         if new_commit != pkg.commit {
-            let dest = package_dir(store_root, &pkg.name, &new_commit);
+            let dest = package_dir(store_root, &pkg.name, &new_commit)?;
             if !is_checkout_valid(&dest) {
                 checkout_to(&cas, &new_commit, &dest)?;
             }
@@ -743,10 +749,6 @@ pub fn update(
     Ok(updated)
 }
 
-// ---------------------------------------------------------------------------
-// Sub-module re-exports: migrate, audit, gc
-// ---------------------------------------------------------------------------
-
 #[path = "package_migrate.rs"]
 mod package_migrate;
 pub use package_migrate::{MigrateResult, migrate};
@@ -758,10 +760,6 @@ pub use package_audit::{AuditIssue, AuditResult, audit};
 #[path = "package_gc.rs"]
 mod package_gc;
 pub use package_gc::{GcResult, gc};
-
-// ---------------------------------------------------------------------------
-// Lockfile I/O
-// ---------------------------------------------------------------------------
 
 /// Load a lockfile from disk.
 pub fn load_lockfile(path: &Path) -> Result<Lockfile> {
@@ -796,3 +794,7 @@ mod tests;
 #[cfg(test)]
 #[path = "package_install_tests.rs"]
 mod install_tests;
+
+#[cfg(test)]
+#[path = "package_security_tests.rs"]
+mod security_tests;

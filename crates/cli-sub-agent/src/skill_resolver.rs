@@ -109,7 +109,9 @@ fn search_paths_with_store(
                         SourceKind::Git if pkg.commit.is_empty() => continue,
                         SourceKind::Git => &pkg.commit,
                     };
-                    paths.push(package::package_dir(store, &pkg.name, commit_key));
+                    if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
+                        paths.push(pkg_dir);
+                    }
                 }
             }
         }
@@ -190,7 +192,7 @@ commit = "{commit}"
         let commit = "abcdef1234567890";
 
         // Create skill in global store at <store>/audit/<prefix>/
-        let pkg_dir = package::package_dir(store.path(), "audit", commit);
+        let pkg_dir = package::package_dir(store.path(), "audit", commit).unwrap();
         make_skill_dir(
             &pkg_dir,
             ".",
@@ -233,7 +235,7 @@ tool = "claude-code"
 
         make_skill_dir(tmp.path(), ".csa/skills/review", "# CSA Review", None);
 
-        let pkg_dir = package::package_dir(store.path(), "review", commit);
+        let pkg_dir = package::package_dir(store.path(), "review", commit).unwrap();
         make_skill_dir(&pkg_dir, ".", "# Global Store Review", None);
         write_lockfile(tmp.path(), "review", commit);
 

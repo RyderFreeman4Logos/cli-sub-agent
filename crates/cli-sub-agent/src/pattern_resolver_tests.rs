@@ -101,7 +101,7 @@ fn resolve_pattern_from_global_store() {
     let store = TempDir::new().unwrap();
     let commit = "abcdef1234567890";
 
-    let pkg_dir = package::package_dir(store.path(), "some-pkg", commit);
+    let pkg_dir = package::package_dir(store.path(), "some-pkg", commit).unwrap();
     make_pattern_dir(
         &pkg_dir,
         "patterns/csa-review",
@@ -160,7 +160,7 @@ fn resolve_pattern_repo_takes_priority_over_global_store() {
         None,
     );
 
-    let pkg_dir = package::package_dir(store.path(), "pkg", commit);
+    let pkg_dir = package::package_dir(store.path(), "pkg", commit).unwrap();
     make_pattern_dir(
         &pkg_dir,
         "patterns/debate",
