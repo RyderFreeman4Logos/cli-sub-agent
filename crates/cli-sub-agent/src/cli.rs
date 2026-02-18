@@ -281,6 +281,10 @@ pub struct DebateArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Number of debate rounds (default: 3)
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
+    pub rounds: u32,
+
     /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: Option<u64>,

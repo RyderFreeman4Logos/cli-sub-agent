@@ -20,7 +20,18 @@ FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration,
 running Step 2 in background, creating PR without Step 2 completion,
 debating stale comments without staleness check.
 
+## Dispatcher Model Note
+
+This pattern follows a 3-tier dispatcher architecture:
+- **Tier 0 (Orchestrator)**: The main agent dispatches steps -- never touches code directly.
+- **Tier 1 (Executors)**: CSA sub-agents and Task tool agents perform actual work.
+- **Tier 2 (Sub-sub-agents)**: Spawned by Tier 1 for specific sub-tasks (invisible to Tier 0).
+
+Each step below is annotated with its execution tier.
+
 ## Step 1: Commit Changes
+
+> **Tier**: 0 (Orchestrator) -- lightweight shell command, no code reading.
 
 Tool: bash
 
@@ -32,6 +43,9 @@ WORKFLOW_BRANCH="$(git branch --show-current)"
 ```
 
 ## Step 2: Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)
+
+> **Tier**: 1 (CSA executor) -- Tier 0 dispatches `csa review`, which spawns
+> Tier 2 reviewer model(s) internally. Orchestrator waits for result.
 
 Tool: bash
 OnFail: abort
@@ -47,6 +61,9 @@ csa review --branch main
 
 ## Step 3: Fix Local Review Issues
 
+> **Tier**: 1 (CSA executor) -- Tier 0 dispatches fix task to CSA. CSA reads
+> code, applies fixes, and returns results. Orchestrator reviews outcome.
+
 Tool: csa
 Tier: tier-2-standard
 OnFail: retry 3
@@ -56,6 +73,8 @@ Fix issues found by local review. Loop until clean (max 3 rounds).
 ## ENDIF
 
 ## Step 4: Push and Create PR
+
+> **Tier**: 0 (Orchestrator) -- shell commands only, no code reading/writing.
 
 Tool: bash
 OnFail: abort
@@ -68,6 +87,8 @@ PR_NUM=$(gh pr view --json number -q '.number')
 
 ## Step 5: Trigger Cloud Bot Review
 
+> **Tier**: 0 (Orchestrator) -- shell command to trigger external bot.
+
 Tool: bash
 
 Trigger the cloud review bot. Capture PR number for polling.
@@ -78,6 +99,8 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 
 ## Step 6: Poll for Bot Response
 
+> **Tier**: 0 (Orchestrator) -- polling loop, no code analysis.
+
 Tool: bash
 OnFail: skip
 
@@ -87,6 +110,8 @@ local review (Step 2) already covers main...HEAD.
 ## IF ${BOT_UNAVAILABLE}
 
 ## Step 6a: Merge Without Bot
+
+> **Tier**: 0 (Orchestrator) -- merge command, no code analysis.
 
 Tool: bash
 
@@ -103,6 +128,11 @@ git checkout main && git pull origin main
 ## IF ${BOT_HAS_ISSUES}
 
 ## Step 7: Evaluate Each Bot Comment
+
+> **Tier**: 1 (claude-code / Task tool) -- Tier 0 dispatches comment
+> classification to a sub-agent. The sub-agent reads PR comments and code
+> context to classify each one. Orchestrator uses classifications to route
+> to Step 8 (debate) or Step 9 (fix).
 
 Tool: claude-code
 Tier: tier-3-complex
@@ -141,6 +171,10 @@ arbitration step, preventing wasted cycles debating already-fixed issues.
 
 ## Step 8: Arbitrate via Debate
 
+> **Tier**: 1 (CSA debate) -- Tier 0 dispatches to `csa debate`, which
+> internally spawns Tier 2 independent models for adversarial evaluation.
+> Orchestrator receives the verdict and posts audit trail to PR.
+
 Tool: csa
 Tier: tier-2-standard
 
@@ -160,6 +194,9 @@ csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
 
 ## Step 9: Fix Real Issue
 
+> **Tier**: 1 (CSA executor) -- Tier 0 dispatches fix to CSA sub-agent.
+> CSA reads code, applies fix, commits. Orchestrator verifies result.
+
 Tool: csa
 Tier: tier-2-standard
 OnFail: retry 2
@@ -171,6 +208,8 @@ Fix the real issue (non-stale, non-false-positive). Commit the fix.
 ## ENDFOR
 
 ## Step 10: Push Fixes and Re-trigger
+
+> **Tier**: 0 (Orchestrator) -- shell commands to push and re-trigger bot.
 
 Tool: bash
 
@@ -197,6 +236,8 @@ No issues found by bot. Proceed to merge.
 
 ## Step 11: Clean Resubmission (if needed)
 
+> **Tier**: 0 (Orchestrator) -- git branch management, no code reading.
+
 Tool: bash
 
 If fixes accumulated, create clean branch for final review.
@@ -209,6 +250,8 @@ gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "
 ```
 
 ## Step 12: Final Merge
+
+> **Tier**: 0 (Orchestrator) -- final merge command, no code analysis.
 
 Tool: bash
 OnFail: abort
@@ -223,6 +266,8 @@ git checkout main && git pull origin main
 ## ELSE
 
 ## Step 12b: Final Merge (Direct)
+
+> **Tier**: 0 (Orchestrator) -- direct merge, no code analysis needed.
 
 Tool: bash
 OnFail: abort

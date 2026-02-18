@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod check;
 pub mod compiler;
 pub mod package;
