@@ -14,7 +14,9 @@ use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
 use crate::check::DEFAULT_CHECK_DIRS;
-use crate::package::{Lockfile, SourceKind, global_store_root, load_project_lockfile, package_dir};
+use crate::package::{
+    Lockfile, SourceKind, find_lockfile, global_store_root, load_lockfile, package_dir,
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -159,9 +161,12 @@ impl LinkReport {
 /// `patterns/*/skills/*/SKILL.md`.
 pub fn discover_skills(project_root: &Path) -> Result<Vec<DiscoveredSkill>> {
     let store_root = global_store_root()?;
-    let lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
+    let lockfile = match find_lockfile(project_root) {
+        Some(path) => load_lockfile(&path)?,
+        None => Lockfile {
+            package: Vec::new(),
+        },
+    };
 
     let mut skills = Vec::new();
 
@@ -481,8 +486,12 @@ fn create_skill_link(
 // Sync (reconcile)
 // ---------------------------------------------------------------------------
 
-/// Detect stale symlinks that point into the weave store but whose skill name
-/// is no longer in the lockfile. Returns paths without modifying the filesystem.
+/// Detect stale symlinks that point into the weave store but whose skill
+/// is no longer tracked by any installed package. A link is NOT stale if:
+/// - Its basename matches a known skill name, OR
+/// - Its target resolves to a known skill source directory (handles renames).
+///
+/// Returns paths without modifying the filesystem.
 pub fn detect_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<PathBuf>> {
     if scope == LinkScope::None {
         return Ok(Vec::new());
@@ -492,6 +501,11 @@ pub fn detect_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<P
     let skills = discover_skills(project_root)?;
     let skill_names: std::collections::HashSet<&str> =
         skills.iter().map(|s| s.name.as_str()).collect();
+    // Collect canonicalized source dirs so renamed symlinks are preserved.
+    let skill_source_dirs: std::collections::HashSet<PathBuf> = skills
+        .iter()
+        .filter_map(|s| s.source_dir.canonicalize().ok())
+        .collect();
 
     let base_dir = scope_base_dir(project_root, scope)?;
 
@@ -510,7 +524,7 @@ pub fn detect_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<P
 
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            if is_stale_link(&path, &store_root, &skill_names) {
+            if is_stale_link(&path, &store_root, &skill_names, &skill_source_dirs) {
                 stale.push(path);
             }
         }
@@ -553,12 +567,17 @@ fn scope_base_dir(project_root: &Path, scope: LinkScope) -> Result<PathBuf> {
     }
 }
 
-/// Check if a symlink is stale (points into weave store but skill name no
-/// longer in the current skill set).
+/// Check if a symlink is stale (points into weave store but is no longer
+/// associated with any installed skill — by name or by target path).
+///
+/// A link is NOT stale if:
+/// - Its basename matches a known skill name, OR
+/// - Its resolved target matches a known skill source directory (renamed link).
 fn is_stale_link(
     path: &Path,
     store_root: &Path,
     skill_names: &std::collections::HashSet<&str>,
+    skill_source_dirs: &std::collections::HashSet<PathBuf>,
 ) -> bool {
     let meta = match std::fs::symlink_metadata(path) {
         Ok(m) => m,
@@ -585,12 +604,23 @@ fn is_stale_link(
         return false;
     }
 
+    // Check 1: basename matches a known skill name.
     let link_name = match path.file_name() {
         Some(n) => n.to_string_lossy().to_string(),
         None => return false,
     };
+    if skill_names.contains(link_name.as_str()) {
+        return false;
+    }
 
-    !skill_names.contains(link_name.as_str())
+    // Check 2: target resolves to a known skill source directory (renamed link).
+    if let Ok(canonical) = resolved.canonicalize() {
+        if skill_source_dirs.contains(&canonical) {
+            return false;
+        }
+    }
+
+    true
 }
 
 // ---------------------------------------------------------------------------

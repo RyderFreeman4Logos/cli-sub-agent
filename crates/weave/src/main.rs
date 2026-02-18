@@ -279,8 +279,14 @@ fn main() -> Result<()> {
                     }
                 }
 
-                for err in &report.errors {
-                    eprintln!("warning: {err}");
+                if report.has_errors() {
+                    for err in &report.errors {
+                        eprintln!("error: {err}");
+                    }
+                    bail!(
+                        "{} link error(s) after install — companion skills were NOT linked",
+                        report.errors.len()
+                    );
                 }
             }
         }

@@ -380,14 +380,58 @@ fn is_stale_link_detects_stale() {
     let relative = pathdiff::diff_paths(&source, &skills_dir).unwrap();
     std::os::unix::fs::symlink(&relative, &link_path).unwrap();
 
-    // When the skill name is NOT in the set, it should be detected as stale.
-    let empty_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    assert!(is_stale_link(&link_path, &store_root, &empty_set));
+    let empty_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_dirs: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+
+    // When the skill name is NOT in the set and source not in dirs, it IS stale.
+    assert!(is_stale_link(
+        &link_path,
+        &store_root,
+        &empty_names,
+        &empty_dirs
+    ));
 
     // When the skill name IS in the set, it should NOT be stale.
     let mut active_set = std::collections::HashSet::new();
     active_set.insert("skill-a");
-    assert!(!is_stale_link(&link_path, &store_root, &active_set));
+    assert!(!is_stale_link(
+        &link_path,
+        &store_root,
+        &active_set,
+        &empty_dirs
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn is_stale_link_preserves_renamed_link() {
+    let tmp = tempdir().unwrap();
+    let store_root = tmp.path().join("store");
+    let skills_dir = tmp.path().join("skills");
+    std::fs::create_dir_all(&skills_dir).unwrap();
+
+    // Create a source dir inside the store.
+    let source = store_root.join("pkg").join("abc12345").join("commit");
+    std::fs::create_dir_all(&source).unwrap();
+
+    // Create a RENAMED symlink (user renamed "commit" to "my-commit").
+    let link_path = skills_dir.join("my-commit");
+    let relative = pathdiff::diff_paths(&source, &skills_dir).unwrap();
+    std::os::unix::fs::symlink(&relative, &link_path).unwrap();
+
+    let empty_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut source_dirs = std::collections::HashSet::new();
+    source_dirs.insert(source.canonicalize().unwrap());
+
+    // Name "my-commit" is not in skill_names, but target IS in source_dirs.
+    // Should NOT be considered stale (renamed link is preserved).
+    assert!(!is_stale_link(
+        &link_path,
+        &store_root,
+        &empty_names,
+        &source_dirs
+    ));
 }
 
 #[cfg(unix)]
@@ -405,9 +449,16 @@ fn is_stale_link_ignores_non_weave_symlink() {
     let link_path = skills_dir.join("foreign-skill");
     std::os::unix::fs::symlink(&foreign, &link_path).unwrap();
 
-    let empty_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_dirs: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
     // Not weave-managed, so not stale.
-    assert!(!is_stale_link(&link_path, &store_root, &empty_set));
+    assert!(!is_stale_link(
+        &link_path,
+        &store_root,
+        &empty_names,
+        &empty_dirs
+    ));
 }
 
 #[test]
@@ -419,8 +470,15 @@ fn is_stale_link_returns_false_for_non_symlink() {
     let regular_dir = tmp.path().join("regular");
     std::fs::create_dir_all(&regular_dir).unwrap();
 
-    let empty_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    assert!(!is_stale_link(&regular_dir, &store_root, &empty_set));
+    let empty_names: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let empty_dirs: std::collections::HashSet<std::path::PathBuf> =
+        std::collections::HashSet::new();
+    assert!(!is_stale_link(
+        &regular_dir,
+        &store_root,
+        &empty_names,
+        &empty_dirs
+    ));
 }
 
 // ---------------------------------------------------------------------------
