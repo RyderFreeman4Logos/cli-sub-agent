@@ -170,7 +170,7 @@ pub fn init_project(
     }
 
     let config = if minimal {
-        // Minimal config: only project + tools, use built-in defaults for everything else
+        // Minimal config: only [project] section, rely on global config / defaults for the rest
         ProjectConfig {
             schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
@@ -179,11 +179,11 @@ pub fn init_project(
                 max_recursion_depth: 5,
             },
             resources: ResourcesConfig::default(),
-            tools,
+            tools: HashMap::new(),
             review: None,
             debate: None,
-            tiers: build_smart_tiers(&installed),
-            tier_mapping: default_tier_mapping(),
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
             preferences: None,
         }
@@ -699,16 +699,34 @@ mod tests {
         // Minimal mode should still have project name
         assert!(!config.project.name.is_empty());
 
-        // Should have tiers (built from smart tiers)
-        assert!(!config.tiers.is_empty());
+        // Minimal mode: empty tools/tiers/tier_mapping (rely on global config / defaults)
+        assert!(config.tools.is_empty(), "minimal should have no tools");
+        assert!(config.tiers.is_empty(), "minimal should have no tiers");
+        assert!(
+            config.tier_mapping.is_empty(),
+            "minimal should have no tier_mapping"
+        );
 
-        // Should have tier_mapping
-        assert!(config.tier_mapping.contains_key("default"));
-
-        // Minimal mode uses ResourcesConfig::default()
-        // (initial_estimates may be empty)
+        // Verify the serialized TOML only contains [project] section
         let config_path = ProjectConfig::config_path(dir.path());
         assert!(config_path.exists());
+        let content = std::fs::read_to_string(&config_path).unwrap();
+        assert!(
+            !content.contains("[tools."),
+            "minimal config should not contain [tools.*] sections"
+        );
+        assert!(
+            !content.contains("[[tiers"),
+            "minimal config should not contain tiers"
+        );
+        assert!(
+            !content.contains("[tier_mapping]"),
+            "minimal config should not contain [tier_mapping]"
+        );
+        assert!(
+            !content.contains("[resources]"),
+            "minimal config should not contain [resources]"
+        );
     }
 
     #[test]
