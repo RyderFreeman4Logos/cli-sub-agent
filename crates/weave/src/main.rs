@@ -61,6 +61,10 @@ enum Commands {
     Update {
         /// Dependency name to update (all if omitted).
         name: Option<String>,
+
+        /// Force update even for version-pinned dependencies.
+        #[arg(long)]
+        force: bool,
     },
 
     /// Audit installed skills for issues.
@@ -154,10 +158,10 @@ fn main() -> Result<()> {
                 eprintln!("  {} {} ({})", pkg.name, ver, commit_short);
             }
         }
-        Commands::Update { name } => {
+        Commands::Update { name, force } => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
             let cache_root = package::default_cache_root()?;
-            let updated = package::update(name.as_deref(), &project_root, &cache_root)?;
+            let updated = package::update(name.as_deref(), &project_root, &cache_root, force)?;
             for pkg in &updated {
                 let commit_short = if pkg.commit.len() > 12 {
                     &pkg.commit[..12]

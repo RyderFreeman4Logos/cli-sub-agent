@@ -51,6 +51,15 @@ pub struct LockedPackage {
     /// compatibility with lockfiles that predate this field.
     #[serde(default)]
     pub source_kind: SourceKind,
+    /// User-requested version specifier (e.g. `v1.2.0`, `main`, `abc123`).
+    /// When set, the dependency is considered "pinned" and `update` will skip
+    /// it unless `--force` is passed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub requested_version: Option<String>,
+    /// The git ref that was resolved during install (branch, tag, or commit
+    /// hash before full resolution). Absent means HEAD was used.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resolved_ref: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -285,7 +294,7 @@ fn read_version(dep_dir: &Path) -> Option<String> {
 /// Search `dir` for a file whose name matches `SKILL.md` case-insensitively
 /// but is **not** the canonical `SKILL.md`. Returns the first such filename
 /// found, or `None` if there is no mismatch.
-fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
+pub(crate) fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
     let entries = std::fs::read_dir(dir).ok()?;
     for entry in entries.filter_map(|e| e.ok()) {
         let name = entry.file_name();
@@ -321,6 +330,8 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
         commit,
         version,
         source_kind: SourceKind::Git,
+        requested_version: src.git_ref.clone(),
+        resolved_ref: src.git_ref,
     };
 
     // Update the lockfile with this package.
@@ -453,6 +464,8 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
         commit: String::new(),
         version,
         source_kind: SourceKind::Local,
+        requested_version: None,
+        resolved_ref: None,
     };
 
     // Update the lockfile.
@@ -560,6 +573,8 @@ pub fn lock(project_root: &Path) -> Result<Lockfile> {
                     commit: String::new(),
                     version: read_version(&entry.path()),
                     source_kind: SourceKind::default(),
+                    requested_version: None,
+                    resolved_ref: None,
                 });
             }
         }
@@ -576,10 +591,15 @@ pub fn lock(project_root: &Path) -> Result<Lockfile> {
 // ---------------------------------------------------------------------------
 
 /// Update one or all locked dependencies to their latest commit.
+///
+/// When `force` is false, dependencies with a `requested_version` (pinned)
+/// are skipped. When `force` is true, pinned dependencies are re-fetched
+/// and re-resolved from their pinned ref (not HEAD).
 pub fn update(
     name: Option<&str>,
     project_root: &Path,
     cache_root: &Path,
+    force: bool,
 ) -> Result<Vec<LockedPackage>> {
     let lockfile_path = project_root.join(".weave").join("lock.toml");
     let mut lockfile =
@@ -611,8 +631,22 @@ pub fn update(
             continue; // Skip entries without a known repo.
         }
 
+        // Skip pinned dependencies unless --force is used.
+        if pkg.requested_version.is_some() && !force {
+            eprintln!(
+                "skipping {} (pinned to {} — use --force to override)",
+                pkg.name,
+                pkg.requested_version.as_deref().unwrap_or("?")
+            );
+            continue;
+        }
+
         let cas = ensure_cached(cache_root, &pkg.repo)?;
-        let new_commit = resolve_commit(&cas, None)?;
+
+        // For pinned deps (with --force), re-resolve from the pinned ref.
+        // For unpinned deps, resolve from HEAD.
+        let resolve_ref = pkg.resolved_ref.as_deref();
+        let new_commit = resolve_commit(&cas, resolve_ref)?;
 
         if new_commit != pkg.commit {
             let deps_dir = project_root.join(".weave").join("deps");
@@ -632,131 +666,12 @@ pub fn update(
 }
 
 // ---------------------------------------------------------------------------
-// Public API: audit
+// Public API: audit (in package_audit.rs)
 // ---------------------------------------------------------------------------
 
-/// Audit result for a single package.
-#[derive(Debug)]
-pub struct AuditResult {
-    pub name: String,
-    pub issues: Vec<AuditIssue>,
-}
-
-/// A single audit issue.
-#[derive(Debug)]
-pub enum AuditIssue {
-    /// Dependency in lockfile but missing from `.weave/deps/`.
-    MissingFromDeps,
-    /// Dependency in `.weave/deps/` but not in lockfile.
-    MissingFromLockfile,
-    /// Empty repo URL in lockfile — not installed via weave.
-    UnknownRepo,
-    /// SKILL.md not found in dependency directory.
-    MissingSkillMd,
-    /// A case-variant of `SKILL.md` exists (e.g. `skill.md`, `Skill.md`)
-    /// but the canonical `SKILL.md` is missing.
-    CaseMismatchSkillMd {
-        /// The actual filename found on disk.
-        found: String,
-    },
-    /// Symlink target does not exist.
-    BrokenSymlink {
-        /// Path of the broken symlink.
-        path: PathBuf,
-        /// Target the symlink points to.
-        target: PathBuf,
-    },
-}
-
-impl std::fmt::Display for AuditIssue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::MissingFromDeps => write!(f, "locked but missing from .weave/deps/"),
-            Self::MissingFromLockfile => write!(f, "present in deps but not in lockfile"),
-            Self::UnknownRepo => write!(f, "lockfile entry has no repo URL"),
-            Self::MissingSkillMd => write!(f, "no SKILL.md found"),
-            Self::CaseMismatchSkillMd { found } => {
-                write!(
-                    f,
-                    "expected 'SKILL.md' but found '{found}' (wrong case). Rename to 'SKILL.md' to fix."
-                )
-            }
-            Self::BrokenSymlink { path, target } => {
-                write!(
-                    f,
-                    "broken symlink: {} -> {}",
-                    path.display(),
-                    target.display()
-                )
-            }
-        }
-    }
-}
-
-/// Audit installed skills for consistency issues.
-pub fn audit(project_root: &Path) -> Result<Vec<AuditResult>> {
-    let deps_dir = project_root.join(".weave").join("deps");
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
-
-    let lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
-
-    let locked_names: BTreeMap<String, &LockedPackage> = lockfile
-        .package
-        .iter()
-        .map(|p| (p.name.clone(), p))
-        .collect();
-
-    let mut results = Vec::new();
-
-    // Check each locked package.
-    for pkg in &lockfile.package {
-        let mut issues = Vec::new();
-        let dep_path = deps_dir.join(&pkg.name);
-
-        if !dep_path.is_dir() {
-            issues.push(AuditIssue::MissingFromDeps);
-        } else if !dep_path.join("SKILL.md").is_file() {
-            // Distinguish case-mismatch from truly missing.
-            if let Some(found) = detect_skill_md_case_mismatch(&dep_path) {
-                issues.push(AuditIssue::CaseMismatchSkillMd { found });
-            } else {
-                issues.push(AuditIssue::MissingSkillMd);
-            }
-        }
-
-        if pkg.repo.is_empty() && pkg.source_kind != SourceKind::Local {
-            issues.push(AuditIssue::UnknownRepo);
-        }
-
-        if !issues.is_empty() {
-            results.push(AuditResult {
-                name: pkg.name.clone(),
-                issues,
-            });
-        }
-    }
-
-    // Check for deps not in lockfile.
-    if deps_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&deps_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                if entry.path().is_dir() {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    if !locked_names.contains_key(&name) {
-                        results.push(AuditResult {
-                            name,
-                            issues: vec![AuditIssue::MissingFromLockfile],
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(results)
-}
+#[path = "package_audit.rs"]
+mod package_audit;
+pub use package_audit::{AuditIssue, AuditResult, audit};
 
 // ---------------------------------------------------------------------------
 // Lockfile I/O
@@ -791,3 +706,7 @@ fn upsert_package(lockfile: &mut Lockfile, pkg: &LockedPackage) {
 #[cfg(test)]
 #[path = "package_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "package_install_tests.rs"]
+mod install_tests;
