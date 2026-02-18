@@ -312,6 +312,126 @@ fn audit_detects_unknown_repo() {
 }
 
 // ---------------------------------------------------------------------------
+// SKILL.md case-mismatch detection tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn audit_detects_case_mismatch_skill_md() {
+    let tmp = TempDir::new().unwrap();
+
+    // Dep directory exists with lowercase `skill.md` instead of `SKILL.md`.
+    let deps = tmp.path().join(".weave").join("deps").join("bad-case");
+    std::fs::create_dir_all(&deps).unwrap();
+    std::fs::write(deps.join("skill.md"), "# Wrong Case").unwrap();
+
+    let lockfile = Lockfile {
+        package: vec![LockedPackage {
+            name: "bad-case".to_string(),
+            repo: "https://example.com/bad-case.git".to_string(),
+            commit: "abc".to_string(),
+            version: None,
+            source_kind: SourceKind::default(),
+        }],
+    };
+    let lock_path = tmp.path().join(".weave").join("lock.toml");
+    save_lockfile(&lock_path, &lockfile).unwrap();
+
+    let results = audit(tmp.path()).unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0]
+            .issues
+            .iter()
+            .any(|i| matches!(i, AuditIssue::CaseMismatchSkillMd { found } if found == "skill.md")),
+        "expected CaseMismatchSkillMd, got: {:?}",
+        results[0].issues
+    );
+    // Verify the display message is helpful.
+    let msg = results[0].issues[0].to_string();
+    assert!(
+        msg.contains("skill.md") && msg.contains("SKILL.md") && msg.contains("Rename"),
+        "unhelpful message: {msg}"
+    );
+}
+
+#[test]
+fn audit_correct_skill_md_no_case_issue() {
+    let tmp = TempDir::new().unwrap();
+
+    // Dep directory has the correct `SKILL.md`.
+    let deps = tmp.path().join(".weave").join("deps").join("good");
+    std::fs::create_dir_all(&deps).unwrap();
+    std::fs::write(deps.join("SKILL.md"), "# Good Skill").unwrap();
+
+    let lockfile = Lockfile {
+        package: vec![LockedPackage {
+            name: "good".to_string(),
+            repo: "https://example.com/good.git".to_string(),
+            commit: "abc".to_string(),
+            version: None,
+            source_kind: SourceKind::default(),
+        }],
+    };
+    let lock_path = tmp.path().join(".weave").join("lock.toml");
+    save_lockfile(&lock_path, &lockfile).unwrap();
+
+    let results = audit(tmp.path()).unwrap();
+    assert!(results.is_empty(), "expected no issues, got: {results:?}");
+}
+
+#[test]
+fn audit_neither_skill_md_variant_is_missing() {
+    let tmp = TempDir::new().unwrap();
+
+    // Dep directory exists but has NO skill.md variant at all.
+    let deps = tmp.path().join(".weave").join("deps").join("empty");
+    std::fs::create_dir_all(&deps).unwrap();
+
+    let lockfile = Lockfile {
+        package: vec![LockedPackage {
+            name: "empty".to_string(),
+            repo: "https://example.com/empty.git".to_string(),
+            commit: "abc".to_string(),
+            version: None,
+            source_kind: SourceKind::default(),
+        }],
+    };
+    let lock_path = tmp.path().join(".weave").join("lock.toml");
+    save_lockfile(&lock_path, &lockfile).unwrap();
+
+    let results = audit(tmp.path()).unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(
+        results[0]
+            .issues
+            .iter()
+            .any(|i| matches!(i, AuditIssue::MissingSkillMd)),
+        "expected MissingSkillMd, got: {:?}",
+        results[0].issues
+    );
+}
+
+#[test]
+fn install_from_local_detects_case_mismatch_skill_md() {
+    let tmp = TempDir::new().unwrap();
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    // Create a skill directory with lowercase `skill.md`.
+    let skill_src = tmp.path().join("bad-case-skill");
+    std::fs::create_dir_all(&skill_src).unwrap();
+    std::fs::write(skill_src.join("skill.md"), "# Wrong Case").unwrap();
+
+    let result = install_from_local(&skill_src, &project);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("skill.md") && err.contains("SKILL.md") && err.contains("Rename"),
+        "unhelpful error: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // install_from_local tests
 // ---------------------------------------------------------------------------
 

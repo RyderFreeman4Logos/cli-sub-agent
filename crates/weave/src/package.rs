@@ -279,6 +279,25 @@ fn read_version(dep_dir: &Path) -> Option<String> {
 }
 
 // ---------------------------------------------------------------------------
+// SKILL.md case-mismatch detection
+// ---------------------------------------------------------------------------
+
+/// Search `dir` for a file whose name matches `SKILL.md` case-insensitively
+/// but is **not** the canonical `SKILL.md`. Returns the first such filename
+/// found, or `None` if there is no mismatch.
+fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name();
+        let name_str = name.to_string_lossy();
+        if name_str.eq_ignore_ascii_case("SKILL.md") && name_str != "SKILL.md" {
+            return Some(name_str.into_owned());
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Public API: install
 // ---------------------------------------------------------------------------
 
@@ -355,6 +374,14 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
             );
         }
         _ => {
+            // Check for a case-mismatched variant before reporting "not found".
+            if let Some(found) = detect_skill_md_case_mismatch(&canonical) {
+                bail!(
+                    "expected 'SKILL.md' but found '{found}' in {} (wrong case). \
+                     Rename to 'SKILL.md' to fix.",
+                    canonical.display()
+                );
+            }
             bail!(
                 "SKILL.md not found in {} — not a valid skill directory",
                 canonical.display()
@@ -626,6 +653,12 @@ pub enum AuditIssue {
     UnknownRepo,
     /// SKILL.md not found in dependency directory.
     MissingSkillMd,
+    /// A case-variant of `SKILL.md` exists (e.g. `skill.md`, `Skill.md`)
+    /// but the canonical `SKILL.md` is missing.
+    CaseMismatchSkillMd {
+        /// The actual filename found on disk.
+        found: String,
+    },
     /// Symlink target does not exist.
     BrokenSymlink {
         /// Path of the broken symlink.
@@ -642,6 +675,12 @@ impl std::fmt::Display for AuditIssue {
             Self::MissingFromLockfile => write!(f, "present in deps but not in lockfile"),
             Self::UnknownRepo => write!(f, "lockfile entry has no repo URL"),
             Self::MissingSkillMd => write!(f, "no SKILL.md found"),
+            Self::CaseMismatchSkillMd { found } => {
+                write!(
+                    f,
+                    "expected 'SKILL.md' but found '{found}' (wrong case). Rename to 'SKILL.md' to fix."
+                )
+            }
             Self::BrokenSymlink { path, target } => {
                 write!(
                     f,
@@ -679,7 +718,12 @@ pub fn audit(project_root: &Path) -> Result<Vec<AuditResult>> {
         if !dep_path.is_dir() {
             issues.push(AuditIssue::MissingFromDeps);
         } else if !dep_path.join("SKILL.md").is_file() {
-            issues.push(AuditIssue::MissingSkillMd);
+            // Distinguish case-mismatch from truly missing.
+            if let Some(found) = detect_skill_md_case_mismatch(&dep_path) {
+                issues.push(AuditIssue::CaseMismatchSkillMd { found });
+            } else {
+                issues.push(AuditIssue::MissingSkillMd);
+            }
         }
 
         if pkg.repo.is_empty() && pkg.source_kind != SourceKind::Local {
