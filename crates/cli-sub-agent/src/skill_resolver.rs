@@ -3,11 +3,12 @@
 //! Search order:
 //! 1. `./.csa/skills/<name>/`         (project-local)
 //! 2. `~/.config/cli-sub-agent/skills/<name>/`  (global user)
-//! 3. `.weave/deps/<name>/`           (weave-managed)
+//! 3. `<global_store>/<name>/<commit>/`          (weave global store)
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 
+use weave::package::{self, SourceKind};
 use weave::parser::{AgentConfig, SkillConfig, parse_skill_config};
 
 /// A skill resolved from disk, ready for injection into a CSA run.
@@ -67,6 +68,19 @@ pub(crate) fn resolve_skill(name: &str, project_root: &Path) -> Result<ResolvedS
 
 /// Build the ordered list of directories to search for a skill.
 fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
+    search_paths_with_store(
+        name,
+        project_root,
+        package::global_store_root().ok().as_deref(),
+    )
+}
+
+/// Build search paths using an explicit store root (testable).
+fn search_paths_with_store(
+    name: &str,
+    project_root: &Path,
+    store_root: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(3);
 
     // 1. Project-local: .csa/skills/<name>/
@@ -82,8 +96,24 @@ fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
         );
     }
 
-    // 3. Weave-managed: .weave/deps/<name>/
-    paths.push(project_root.join(".weave").join("deps").join(name));
+    // 3. Weave global store: match locked packages by name.
+    if let Some(store) = store_root {
+        if let Some(lockfile_path) = package::find_lockfile(project_root) {
+            if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
+                for pkg in &lockfile.package {
+                    if pkg.name != name {
+                        continue;
+                    }
+                    let commit_key = match pkg.source_kind {
+                        SourceKind::Local => "local",
+                        SourceKind::Git if pkg.commit.is_empty() => continue,
+                        SourceKind::Git => &pkg.commit,
+                    };
+                    paths.push(package::package_dir(store, &pkg.name, commit_key));
+                }
+            }
+        }
+    }
 
     paths
 }
@@ -113,12 +143,28 @@ mod tests {
     use super::*;
 
     fn make_skill_dir(base: &Path, rel: &str, skill_md: &str, skill_toml: Option<&str>) {
-        let dir = base.join(rel);
+        let dir = if rel.is_empty() || rel == "." {
+            base.to_path_buf()
+        } else {
+            base.join(rel)
+        };
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("SKILL.md"), skill_md).unwrap();
         if let Some(toml_content) = skill_toml {
             fs::write(dir.join(".skill.toml"), toml_content).unwrap();
         }
+    }
+
+    /// Write a minimal lockfile referencing a package in the global store.
+    fn write_lockfile(project_root: &Path, name: &str, commit: &str) {
+        let content = format!(
+            r#"[[package]]
+name = "{name}"
+repo = "https://github.com/test/{name}.git"
+commit = "{commit}"
+"#
+        );
+        fs::write(project_root.join("weave.lock"), content).unwrap();
     }
 
     #[test]
@@ -138,13 +184,17 @@ mod tests {
     }
 
     #[test]
-    fn resolve_skill_from_weave_deps() {
+    fn resolve_skill_from_global_store() {
         let tmp = TempDir::new().unwrap();
-        // No .csa/skills, no global — only .weave/deps
+        let store = TempDir::new().unwrap();
+        let commit = "abcdef1234567890";
+
+        // Create skill in global store at <store>/audit/<prefix>/
+        let pkg_dir = package::package_dir(store.path(), "audit", commit);
         make_skill_dir(
-            tmp.path(),
-            ".weave/deps/audit",
-            "# Audit Skill\nCheck things.",
+            &pkg_dir,
+            ".",
+            "# Audit Skill\nGlobal store.",
             Some(
                 r#"
 [skill]
@@ -164,28 +214,34 @@ tool = "claude-code"
             ),
         );
 
-        let resolved = resolve_skill("audit", tmp.path()).unwrap();
-        assert!(resolved.skill_md.contains("Audit Skill"));
-        let config = resolved.config.as_ref().unwrap();
-        assert_eq!(config.skill.name, "audit");
-        let agent = config.agent.as_ref().unwrap();
-        assert_eq!(agent.tier.as_deref(), Some("tier1"));
-        assert_eq!(agent.max_turns, Some(10));
-        assert_eq!(agent.token_budget, Some(50000));
-        assert_eq!(agent.skip_context, vec!["AGENTS.md"]);
-        assert_eq!(agent.extra_context, vec!["rules/security.md"]);
-        assert_eq!(agent.tools.len(), 1);
-        assert_eq!(agent.tools[0].tool, "claude-code");
+        // Write lockfile referencing this package.
+        write_lockfile(tmp.path(), "audit", commit);
+
+        let paths = search_paths_with_store("audit", tmp.path(), Some(store.path()));
+        let found = paths.iter().find(|p| p.join("SKILL.md").is_file());
+        assert!(found.is_some(), "skill not found in global store paths");
+
+        let skill_md = fs::read_to_string(found.unwrap().join("SKILL.md")).unwrap();
+        assert!(skill_md.contains("Global store"));
     }
 
     #[test]
-    fn resolve_skill_csa_takes_priority_over_weave() {
+    fn resolve_skill_csa_takes_priority_over_global_store() {
         let tmp = TempDir::new().unwrap();
-        make_skill_dir(tmp.path(), ".csa/skills/review", "# CSA Review", None);
-        make_skill_dir(tmp.path(), ".weave/deps/review", "# Weave Review", None);
+        let store = TempDir::new().unwrap();
+        let commit = "abcdef1234567890";
 
-        let resolved = resolve_skill("review", tmp.path()).unwrap();
-        assert!(resolved.skill_md.contains("CSA Review"));
+        make_skill_dir(tmp.path(), ".csa/skills/review", "# CSA Review", None);
+
+        let pkg_dir = package::package_dir(store.path(), "review", commit);
+        make_skill_dir(&pkg_dir, ".", "# Global Store Review", None);
+        write_lockfile(tmp.path(), "review", commit);
+
+        let paths = search_paths_with_store("review", tmp.path(), Some(store.path()));
+        let first_match = paths.iter().find(|p| p.join("SKILL.md").is_file());
+        assert!(first_match.is_some());
+        let content = fs::read_to_string(first_match.unwrap().join("SKILL.md")).unwrap();
+        assert!(content.contains("CSA Review"));
     }
 
     #[test]

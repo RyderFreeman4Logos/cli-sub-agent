@@ -7,12 +7,13 @@
 //! Search order (first match wins):
 //! 1. `.csa/patterns/<name>/`               (project-local fork)
 //! 2. `patterns/<name>/`                    (repo-shipped patterns)
-//! 3. `.weave/deps/*/patterns/<name>/`      (weave-installed packages)
+//! 3. `<global_store>/<pkg>/<commit>/patterns/<name>/`  (weave global store)
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+use weave::package::{self, SourceKind};
 use weave::parser::{AgentConfig, SkillConfig, parse_skill_config};
 
 /// A pattern resolved from disk, with its embedded skill content.
@@ -73,6 +74,19 @@ pub(crate) fn resolve_pattern(name: &str, project_root: &Path) -> Result<Resolve
 
 /// Build the ordered list of directories to search for a pattern.
 fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
+    search_paths_with_store(
+        name,
+        project_root,
+        package::global_store_root().ok().as_deref(),
+    )
+}
+
+/// Build search paths using an explicit store root (testable).
+fn search_paths_with_store(
+    name: &str,
+    project_root: &Path,
+    store_root: Option<&Path>,
+) -> Vec<PathBuf> {
     let mut paths = Vec::with_capacity(4);
 
     // 1. Project-local fork: .csa/patterns/<name>/
@@ -81,12 +95,19 @@ fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
     // 2. Repo-shipped: patterns/<name>/
     paths.push(project_root.join("patterns").join(name));
 
-    // 3. Weave-installed packages: .weave/deps/*/patterns/<name>/
-    let weave_deps = project_root.join(".weave").join("deps");
-    if let Ok(entries) = std::fs::read_dir(&weave_deps) {
-        for entry in entries.flatten() {
-            if entry.path().is_dir() {
-                paths.push(entry.path().join("patterns").join(name));
+    // 3. Weave global store: <store_root>/<pkg>/<commit>/patterns/<name>/
+    if let Some(store) = store_root {
+        if let Some(lockfile_path) = package::find_lockfile(project_root) {
+            if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
+                for pkg in &lockfile.package {
+                    let commit_key = match pkg.source_kind {
+                        SourceKind::Local => "local",
+                        SourceKind::Git if pkg.commit.is_empty() => continue,
+                        SourceKind::Git => &pkg.commit,
+                    };
+                    let pkg_dir = package::package_dir(store, &pkg.name, commit_key);
+                    paths.push(pkg_dir.join("patterns").join(name));
+                }
             }
         }
     }
@@ -134,6 +155,18 @@ mod tests {
         if let Some(toml_content) = skill_toml {
             fs::write(pattern_dir.join(".skill.toml"), toml_content).unwrap();
         }
+    }
+
+    /// Write a minimal lockfile referencing a package in the global store.
+    fn write_lockfile(project_root: &Path, name: &str, commit: &str) {
+        let content = format!(
+            r#"[[package]]
+name = "{name}"
+repo = "https://github.com/test/{name}.git"
+commit = "{commit}"
+"#
+        );
+        fs::write(project_root.join("weave.lock"), content).unwrap();
     }
 
     #[test]
@@ -185,26 +218,35 @@ tools = [{ tool = "auto" }]
     }
 
     #[test]
-    fn resolve_pattern_from_weave_deps() {
+    fn resolve_pattern_from_global_store() {
         let tmp = TempDir::new().unwrap();
-        // Simulate a weave package: .weave/deps/some-pkg/patterns/csa-review/skills/csa-review/SKILL.md
+        let store = TempDir::new().unwrap();
+        let commit = "abcdef1234567890";
+
+        // Create pattern in global store at <store>/<pkg>/<prefix>/patterns/<name>/
+        let pkg_dir = package::package_dir(store.path(), "some-pkg", commit);
         make_pattern_dir(
-            tmp.path(),
-            ".weave/deps/some-pkg/patterns/csa-review",
+            &pkg_dir,
+            "patterns/csa-review",
             "csa-review",
-            "# CSA Review\nWeave-installed.",
+            "# CSA Review\nGlobal store.",
             None,
         );
 
-        let resolved = resolve_pattern("csa-review", tmp.path()).unwrap();
-        assert!(resolved.skill_md.contains("Weave-installed"));
-        assert!(
-            resolved
-                .dir
-                .to_str()
-                .unwrap()
-                .contains(".weave/deps/some-pkg/patterns/csa-review")
-        );
+        // Write lockfile referencing this package.
+        write_lockfile(tmp.path(), "some-pkg", commit);
+
+        let paths = search_paths_with_store("csa-review", tmp.path(), Some(store.path()));
+        let found = paths.iter().find(|p| {
+            p.join("skills")
+                .join("csa-review")
+                .join("SKILL.md")
+                .is_file()
+        });
+        assert!(found.is_some(), "pattern not found in global store paths");
+        let skill_md =
+            fs::read_to_string(found.unwrap().join("skills/csa-review/SKILL.md")).unwrap();
+        assert!(skill_md.contains("Global store"));
     }
 
     #[test]
@@ -230,8 +272,11 @@ tools = [{ tool = "auto" }]
     }
 
     #[test]
-    fn resolve_pattern_repo_takes_priority_over_weave() {
+    fn resolve_pattern_repo_takes_priority_over_global_store() {
         let tmp = TempDir::new().unwrap();
+        let store = TempDir::new().unwrap();
+        let commit = "abcdef1234567890";
+
         make_pattern_dir(
             tmp.path(),
             "patterns/debate",
@@ -239,16 +284,28 @@ tools = [{ tool = "auto" }]
             "# Repo Debate",
             None,
         );
+
+        // Also place it in global store.
+        let pkg_dir = package::package_dir(store.path(), "pkg", commit);
         make_pattern_dir(
-            tmp.path(),
-            ".weave/deps/pkg/patterns/debate",
+            &pkg_dir,
+            "patterns/debate",
             "debate",
-            "# Weave Debate",
+            "# Global Store Debate",
             None,
         );
+        write_lockfile(tmp.path(), "pkg", commit);
 
-        let resolved = resolve_pattern("debate", tmp.path()).unwrap();
-        assert!(resolved.skill_md.contains("Repo Debate"));
+        // Use search_paths_with_store to verify ordering.
+        let paths = search_paths_with_store("debate", tmp.path(), Some(store.path()));
+        // First matching candidate should be the repo pattern.
+        let first_match = paths
+            .iter()
+            .find(|p| p.join("skills").join("debate").join("SKILL.md").is_file());
+        assert!(first_match.is_some());
+        let content =
+            fs::read_to_string(first_match.unwrap().join("skills/debate/SKILL.md")).unwrap();
+        assert!(content.contains("Repo Debate"));
     }
 
     #[test]
