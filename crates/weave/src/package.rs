@@ -6,7 +6,7 @@
 //!
 //! Commands:
 //! - `install <source>` — clone/fetch + checkout into deps
-//! - `lock` — snapshot current deps into `.weave/lock.toml`
+//! - `lock` — snapshot current deps into `weave.lock`
 //! - `update [name]` — fetch latest and re-lock
 //! - `audit` — verify lockfile consistency
 
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 // Lockfile types
 // ---------------------------------------------------------------------------
 
-/// Root structure of `.weave/lock.toml`.
+/// Root structure of the lockfile (`weave.lock`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Lockfile {
     #[serde(default)]
@@ -183,6 +183,43 @@ pub fn default_cache_root() -> Result<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
+// Lockfile path helpers
+// ---------------------------------------------------------------------------
+
+/// Canonical lockfile path: `<project_root>/weave.lock`.
+pub fn lockfile_path(project_root: &Path) -> PathBuf {
+    project_root.join("weave.lock")
+}
+
+/// Legacy lockfile path: `<project_root>/.weave/lock.toml`.
+fn legacy_lockfile_path(project_root: &Path) -> PathBuf {
+    project_root.join(".weave").join("lock.toml")
+}
+
+/// Find the lockfile, preferring the new path over the legacy one.
+///
+/// Returns `Some(path)` if a lockfile exists at either location, `None` otherwise.
+pub fn find_lockfile(project_root: &Path) -> Option<PathBuf> {
+    let new_path = lockfile_path(project_root);
+    if new_path.is_file() {
+        return Some(new_path);
+    }
+    let old_path = legacy_lockfile_path(project_root);
+    if old_path.is_file() {
+        return Some(old_path);
+    }
+    None
+}
+
+/// Load the project lockfile, searching both new and legacy paths.
+pub fn load_project_lockfile(project_root: &Path) -> Result<Lockfile> {
+    match find_lockfile(project_root) {
+        Some(path) => load_lockfile(&path),
+        None => bail!("no lockfile found at {} or {}", lockfile_path(project_root).display(), legacy_lockfile_path(project_root).display()),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Git operations
 // ---------------------------------------------------------------------------
 
@@ -341,12 +378,12 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
     };
 
     // Update the lockfile with this package.
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
-    let mut lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let lock_path = lockfile_path(project_root);
+    let mut lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
     upsert_package(&mut lockfile, &pkg);
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
 
     Ok(pkg)
 }
@@ -475,12 +512,12 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
     };
 
     // Update the lockfile.
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
-    let mut lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let lock_path = lockfile_path(project_root);
+    let mut lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
     upsert_package(&mut lockfile, &pkg);
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
 
     Ok(pkg)
 }
@@ -541,9 +578,9 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 /// For new deps (no lockfile entry), attempt to discover the git remote.
 pub fn lock(project_root: &Path) -> Result<Lockfile> {
     let deps_dir = project_root.join(".weave").join("deps");
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
+    let lock_path = lockfile_path(project_root);
 
-    let existing = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let existing = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
 
@@ -587,7 +624,7 @@ pub fn lock(project_root: &Path) -> Result<Lockfile> {
     }
 
     let lockfile = Lockfile { package: packages };
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
 
     Ok(lockfile)
 }
@@ -607,9 +644,9 @@ pub fn update(
     cache_root: &Path,
     force: bool,
 ) -> Result<Vec<LockedPackage>> {
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
+    let lock_path = lockfile_path(project_root);
     let mut lockfile =
-        load_lockfile(&lockfile_path).context("no lockfile found — run `weave lock` first")?;
+        load_project_lockfile(project_root).context("no lockfile found — run `weave lock` first")?;
 
     let targets: Vec<usize> = if let Some(n) = name {
         let idx = lockfile
@@ -667,7 +704,7 @@ pub fn update(
         updated.push(lockfile.package[idx].clone());
     }
 
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
     Ok(updated)
 }
 

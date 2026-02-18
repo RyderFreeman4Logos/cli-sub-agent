@@ -164,6 +164,83 @@ fn lock_empty_project() {
     let tmp = TempDir::new().unwrap();
     let lockfile = lock(tmp.path()).unwrap();
     assert!(lockfile.package.is_empty());
+    // Lockfile written to new path.
+    assert!(tmp.path().join("weave.lock").is_file());
+}
+
+// ---------------------------------------------------------------------------
+// Lockfile path migration tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lockfile_path_returns_weave_lock() {
+    let root = Path::new("/tmp/project");
+    assert_eq!(lockfile_path(root), Path::new("/tmp/project/weave.lock"));
+}
+
+#[test]
+fn find_lockfile_prefers_new_path() {
+    let tmp = TempDir::new().unwrap();
+    // Create both old and new lockfiles.
+    let old = tmp.path().join(".weave").join("lock.toml");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "[[package]]").unwrap();
+    let new = tmp.path().join("weave.lock");
+    std::fs::write(&new, "[[package]]").unwrap();
+
+    let found = find_lockfile(tmp.path()).unwrap();
+    assert_eq!(found, new, "should prefer weave.lock over .weave/lock.toml");
+}
+
+#[test]
+fn find_lockfile_falls_back_to_legacy() {
+    let tmp = TempDir::new().unwrap();
+    // Only legacy lockfile exists.
+    let old = tmp.path().join(".weave").join("lock.toml");
+    std::fs::create_dir_all(old.parent().unwrap()).unwrap();
+    std::fs::write(&old, "[[package]]").unwrap();
+
+    let found = find_lockfile(tmp.path()).unwrap();
+    assert_eq!(found, old, "should fall back to .weave/lock.toml");
+}
+
+#[test]
+fn find_lockfile_returns_none_when_missing() {
+    let tmp = TempDir::new().unwrap();
+    assert!(find_lockfile(tmp.path()).is_none());
+}
+
+#[test]
+fn lock_reads_from_legacy_and_writes_to_new() {
+    let tmp = TempDir::new().unwrap();
+
+    // Create dep directory.
+    let deps = tmp.path().join(".weave").join("deps").join("migrated");
+    std::fs::create_dir_all(&deps).unwrap();
+    std::fs::write(deps.join("SKILL.md"), "# Migrated").unwrap();
+
+    // Write lockfile only at the legacy path.
+    let legacy = tmp.path().join(".weave").join("lock.toml");
+    let initial = Lockfile {
+        package: vec![LockedPackage {
+            name: "migrated".to_string(),
+            repo: "https://github.com/org/migrated.git".to_string(),
+            commit: "abc123".to_string(),
+            version: None,
+            source_kind: SourceKind::Git,
+            requested_version: None,
+            resolved_ref: None,
+        }],
+    };
+    save_lockfile(&legacy, &initial).unwrap();
+
+    // Re-lock reads from legacy, writes to new.
+    let result = lock(tmp.path()).unwrap();
+    assert_eq!(result.package.len(), 1);
+    assert_eq!(result.package[0].repo, "https://github.com/org/migrated.git");
+
+    // New lockfile was created.
+    assert!(tmp.path().join("weave.lock").is_file());
 }
 
 #[test]
@@ -177,6 +254,8 @@ fn lock_picks_up_existing_deps() {
     assert_eq!(lockfile.package.len(), 1);
     assert_eq!(lockfile.package[0].name, "my-skill");
     assert!(lockfile.package[0].repo.is_empty()); // Not installed via weave.
+    // Written to new location.
+    assert!(tmp.path().join("weave.lock").is_file());
 }
 
 #[test]
@@ -188,7 +267,7 @@ fn lock_preserves_existing_lockfile_entries() {
     std::fs::create_dir_all(&deps).unwrap();
     std::fs::write(deps.join("SKILL.md"), "# Audit").unwrap();
 
-    // Create initial lockfile with repo info.
+    // Create initial lockfile at the new path.
     let initial = Lockfile {
         package: vec![LockedPackage {
             name: "audit".to_string(),
@@ -200,8 +279,8 @@ fn lock_preserves_existing_lockfile_entries() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &initial).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &initial).unwrap();
 
     // Re-lock — should preserve the repo/commit info.
     let result = lock(tmp.path()).unwrap();
@@ -233,8 +312,8 @@ fn audit_detects_missing_dep() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     assert_eq!(results.len(), 1);
@@ -286,8 +365,8 @@ fn audit_detects_missing_skill_md() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     assert_eq!(results.len(), 1);
@@ -318,8 +397,8 @@ fn audit_detects_unknown_repo() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     assert_eq!(results.len(), 1);
@@ -367,8 +446,8 @@ fn audit_detects_case_mismatch_skill_md() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     assert_eq!(results.len(), 1);
@@ -408,8 +487,8 @@ fn audit_correct_skill_md_no_case_issue() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     assert!(results.is_empty(), "expected no issues, got: {results:?}");
@@ -434,8 +513,8 @@ fn audit_neither_skill_md_variant_is_missing() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     assert_eq!(results.len(), 1);
@@ -524,8 +603,8 @@ fn audit_skips_unknown_repo_for_local_source() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &lockfile).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &lockfile).unwrap();
 
     let results = audit(tmp.path()).unwrap();
     // No issues — empty repo is expected for Local sources.
@@ -557,8 +636,8 @@ fn lock_preserves_source_kind_from_existing_lockfile() {
             resolved_ref: None,
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &initial).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &initial).unwrap();
 
     // Re-lock — should preserve source_kind.
     let result = lock(tmp.path()).unwrap();

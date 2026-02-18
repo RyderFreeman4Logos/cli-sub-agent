@@ -66,8 +66,8 @@ fn install_from_local_succeeds() {
     assert!(dest.join("SKILL.md").is_file());
     assert!(dest.join("helper.txt").is_file());
 
-    // Lockfile was written.
-    let lockfile = load_lockfile(&project.join(".weave").join("lock.toml")).unwrap();
+    // Lockfile was written to new path.
+    let lockfile = load_lockfile(&lockfile_path(&project)).unwrap();
     assert_eq!(lockfile.package.len(), 1);
     assert_eq!(lockfile.package[0].source_kind, SourceKind::Local);
 }
@@ -369,8 +369,8 @@ fn lock_preserves_requested_version_from_existing_lockfile() {
             resolved_ref: Some("v1.0".to_string()),
         }],
     };
-    let lock_path = tmp.path().join(".weave").join("lock.toml");
-    save_lockfile(&lock_path, &initial).unwrap();
+    let lp = lockfile_path(tmp.path());
+    save_lockfile(&lp, &initial).unwrap();
 
     // Re-lock — should preserve requested_version and resolved_ref.
     let result = lock(tmp.path()).unwrap();

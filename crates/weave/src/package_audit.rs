@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::{LockedPackage, Lockfile, SourceKind, detect_skill_md_case_mismatch, load_lockfile};
+use super::{LockedPackage, Lockfile, SourceKind, detect_skill_md_case_mismatch, load_project_lockfile};
 
 /// Audit result for a single package.
 #[derive(Debug)]
@@ -70,9 +70,8 @@ impl std::fmt::Display for AuditIssue {
 /// Audit installed skills for consistency issues.
 pub fn audit(project_root: &Path) -> Result<Vec<AuditResult>> {
     let deps_dir = project_root.join(".weave").join("deps");
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
 
-    let lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
 
