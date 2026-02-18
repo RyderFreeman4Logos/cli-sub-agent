@@ -60,7 +60,7 @@ pub(crate) fn resolve_tool_and_model(
     if force {
         for tool in csa_config::global::all_known_tools() {
             let name = tool.as_str();
-            let enabled = config.map_or(true, |cfg| cfg.is_tool_enabled(name));
+            let enabled = config.is_none_or(|cfg| cfg.is_tool_enabled(name));
             if enabled && is_tool_binary_available(name) {
                 let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
