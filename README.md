@@ -6,7 +6,22 @@ CSA provides a unified command-line interface for multiple AI coding tools (clau
 
 ## What is CSA?
 
-CSA takes the same idea as Cursor and Zed — structured, protocol-driven communication with AI coding tools — and exposes it as composable Unix processes. Think of it as a headless IDE runtime for AI agents: no GUI, multi-provider, focused on orchestration rather than editing.
+CSA takes the same idea as Cursor and Zed — structured, protocol-driven communication with AI coding tools — and exposes it as composable Unix processes. Think of it as a **headless IDE runtime for AI agents**: no GUI, multi-provider, focused on orchestration rather than editing.
+
+**CSA's goal is to fully replace the built-in agent mechanisms of individual AI coding tools**, providing a unified, tool-agnostic orchestration layer:
+
+| Built-in feature | CSA replacement | Key advantage |
+|---|---|---|
+| Claude Code sub-agents (Task tool) | `csa run` recursive agent tree | Multi-provider + heterogeneous models |
+| Claude Code plan mode | `csa mktd` + mktsk-codex pattern | Git-tracked TODO with DAG visualization |
+| Claude Code agent-teams | CSA recursive agent tree + Skills | Nested teams, multi-provider, ACP context control |
+| Codex review / `/review` | `csa review --diff` | Enforced heterogeneous model (never self-review) |
+
+### Why replace built-in mechanisms?
+
+Built-in sub-agents and agent-teams are **homogeneous** — they only use the same model family (e.g., Claude Code's agent-teams spawn only Claude instances). This means reviews and debates suffer from same-model blind spots. CSA enforces **heterogeneous execution**: if the parent agent is Claude, the review agent is automatically switched to Codex or Gemini, and vice versa.
+
+### Compared to GUI IDEs
 
 | | Cursor | Zed | CSA |
 |---|---|---|---|
@@ -15,6 +30,17 @@ CSA takes the same idea as Cursor and Zed — structured, protocol-driven commun
 | **Multi-provider** | One active at a time | One active at a time | Simultaneous (e.g., Claude writes code while Codex reviews it) |
 | **Primary focus** | Code completion + inline chat | Code completion + inline chat | Agent recursive orchestration + heterogeneous review |
 | **Composability** | GUI-bound | GUI-bound | Unix composable (pipes, scripts, sub-processes) |
+
+### Compared to built-in agent-teams
+
+| | Claude Code agent-teams | CSA |
+|---|---|---|
+| **Model diversity** | Homogeneous (Claude only) | Heterogeneous (Claude + Codex + Gemini + OpenRouter) |
+| **Nesting** | No nested teams | Recursive to depth 5 (configurable) |
+| **Context control** | Full project context auto-loaded | ACP precise injection (only task-relevant skills) |
+| **Workflow definition** | Natural language prompts | skill-lang patterns compiled to deterministic plans |
+| **Persistence** | Session-bound, no resumption | ULID sessions with git-notes checkpoints |
+| **Resource control** | None | P95 memory estimation + global concurrency slots |
 
 ## Core Features
 
