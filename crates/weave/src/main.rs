@@ -7,6 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use weave::batch;
 use weave::check;
 use weave::compiler::{compile, plan_to_toml};
+use weave::link::{self, LinkOutcome, LinkScope};
 use weave::package;
 use weave::parser::parse_skill;
 use weave::visualize::{self, VisualizeResult, VisualizeTarget};
@@ -33,6 +34,27 @@ enum Format {
     Json,
 }
 
+/// Where to create skill symlinks after install.
+#[derive(Clone, ValueEnum)]
+enum LinkScopeArg {
+    /// `.claude/skills/` etc. relative to project root.
+    Project,
+    /// `~/.claude/skills/` etc. relative to home directory.
+    User,
+    /// Do not create any symlinks.
+    None,
+}
+
+impl From<LinkScopeArg> for LinkScope {
+    fn from(arg: LinkScopeArg) -> Self {
+        match arg {
+            LinkScopeArg::Project => LinkScope::Project,
+            LinkScopeArg::User => LinkScope::User,
+            LinkScopeArg::None => LinkScope::None,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Compile a weave skill file into an execution plan.
@@ -53,6 +75,19 @@ enum Commands {
         /// Install from a local directory instead of git.
         #[arg(long, value_name = "DIR", conflicts_with = "source")]
         path: Option<PathBuf>,
+
+        /// Where to create skill symlinks: project (.claude/skills/), user
+        /// (~/.claude/skills/), or none (skip linking).
+        #[arg(long, default_value = "project")]
+        link_scope: LinkScopeArg,
+
+        /// Skip automatic skill symlink creation (alias for --link-scope none).
+        #[arg(long, conflicts_with = "link_scope")]
+        no_link: bool,
+
+        /// Overwrite existing non-weave symlinks when linking.
+        #[arg(long)]
+        force_link: bool,
     },
 
     /// Lock current skill dependencies.
@@ -80,6 +115,12 @@ enum Commands {
         /// Remove broken symlinks.
         #[arg(long)]
         fix: bool,
+    },
+
+    /// Reconcile skill symlinks: create missing, remove stale, fix broken.
+    Link {
+        #[command(subcommand)]
+        action: LinkAction,
     },
 
     /// Migrate from legacy .weave/lock.toml to weave.lock and global store.
@@ -111,6 +152,24 @@ enum Commands {
         /// Print Mermaid flowchart to stdout.
         #[arg(long, conflicts_with = "png")]
         mermaid: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum LinkAction {
+    /// Reconcile symlinks: create missing, remove stale, fix broken.
+    Sync {
+        /// Where to manage symlinks: project or user.
+        #[arg(long, default_value = "project")]
+        scope: LinkScopeArg,
+
+        /// Overwrite existing non-weave symlinks.
+        #[arg(long)]
+        force: bool,
+
+        /// Show what would be done without making changes.
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -153,8 +212,37 @@ fn main() -> Result<()> {
                 eprintln!("{total} pattern(s) compiled: {} OK, 0 FAILED", summary.ok);
             }
         }
-        Commands::Install { source, path } => {
+        Commands::Install {
+            source,
+            path,
+            link_scope,
+            no_link,
+            force_link,
+        } => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
+
+            let scope: LinkScope = if no_link {
+                LinkScope::None
+            } else {
+                link_scope.into()
+            };
+
+            // Pre-check for link conflicts before installing.
+            if scope != LinkScope::None {
+                let skills = link::discover_skills(&project_root)?;
+                let conflicts = link::precheck_conflicts(&skills);
+                if !conflicts.is_empty() {
+                    for err in &conflicts {
+                        eprintln!("error: {err}");
+                    }
+                    bail!(
+                        "{} skill name conflict(s) detected. \
+                         Use --no-link to install without linking, \
+                         then create renamed symlinks manually.",
+                        conflicts.len()
+                    );
+                }
+            }
 
             if let Some(local_path) = path {
                 let store_root = package::global_store_root()?;
@@ -171,6 +259,35 @@ fn main() -> Result<()> {
                 );
             } else {
                 bail!("either <SOURCE> or --path <DIR> is required");
+            }
+
+            // Auto-link companion skills.
+            if scope != LinkScope::None {
+                let report = link::link_skills(&project_root, scope, force_link)?;
+                let created = report.created_count();
+                let skipped = report.skipped_count();
+
+                if created > 0 || skipped > 0 {
+                    eprintln!("linked {created} skill(s) ({skipped} already up-to-date)");
+                }
+
+                for outcome in &report.outcomes {
+                    if let LinkOutcome::Created { name, .. } | LinkOutcome::Replaced { name, .. } =
+                        outcome
+                    {
+                        eprintln!("  + {name}");
+                    }
+                }
+
+                if report.has_errors() {
+                    for err in &report.errors {
+                        eprintln!("error: {err}");
+                    }
+                    bail!(
+                        "{} link error(s) after install — companion skills were NOT linked",
+                        report.errors.len()
+                    );
+                }
             }
         }
         Commands::Lock => {
@@ -341,6 +458,70 @@ fn main() -> Result<()> {
                 }
                 VisualizeResult::FileWritten(path) => {
                     eprintln!("wrote {}", path.display());
+                }
+            }
+        }
+        Commands::Link { action } => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+
+            match action {
+                LinkAction::Sync {
+                    scope,
+                    force,
+                    dry_run,
+                } => {
+                    let scope: LinkScope = scope.into();
+
+                    if scope == LinkScope::None {
+                        bail!("--scope none is not valid for 'link sync'");
+                    }
+
+                    if dry_run {
+                        // Dry-run: show what would be done without modifying anything.
+                        let skills = link::discover_skills(&project_root)?;
+                        eprintln!("would link {} skill(s):", skills.len());
+                        for skill in &skills {
+                            eprintln!("  {} (from {})", skill.name, skill.package_name);
+                        }
+
+                        let stale = link::detect_stale_links(&project_root, scope)?;
+                        if stale.is_empty() {
+                            eprintln!("no stale links detected");
+                        } else {
+                            eprintln!("would remove {} stale link(s):", stale.len());
+                            for p in &stale {
+                                eprintln!("  - {}", p.display());
+                            }
+                        }
+                        eprintln!("(dry-run: no changes made)");
+                        return Ok(());
+                    }
+
+                    // Remove stale links first.
+                    let removed = link::remove_stale_links(&project_root, scope)?;
+                    if !removed.is_empty() {
+                        eprintln!("removed {} stale symlink(s)", removed.len());
+                        for p in &removed {
+                            eprintln!("  - {}", p.display());
+                        }
+                    }
+
+                    // Create/update links.
+                    let report = link::link_skills(&project_root, scope, force)?;
+
+                    if report.has_errors() {
+                        for err in &report.errors {
+                            eprintln!("error: {err}");
+                        }
+                        bail!("{} error(s) during link sync", report.errors.len());
+                    }
+
+                    let created = report.created_count();
+                    let skipped = report.skipped_count();
+                    eprintln!(
+                        "link sync: {created} created, {skipped} up-to-date, {} stale removed",
+                        removed.len()
+                    );
                 }
             }
         }

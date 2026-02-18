@@ -25,6 +25,7 @@ regex.workspace = true
 directories.workspace = true
 tempfile.workspace = true
 which.workspace = true
+pathdiff = "0.2.3"
 
 [dev-dependencies]
 serde_json.workspace = true

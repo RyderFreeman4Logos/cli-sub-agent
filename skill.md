@@ -204,26 +204,14 @@ weave check --fix
 
 ## Step 4b: Install Pattern Skills
 
-Each pattern ships a companion skill that serves as its entry point. These
+Each pattern ships a **companion skill** that serves as its entry point. These
 skills tell the orchestrator (Claude Code, etc.) how to invoke the pattern.
-Install them by creating symlinks into the project's `.claude/skills/` directory:
+The companion skill is NOT executed by the pattern workflow (that would cause
+infinite recursion) — it is a facade for tool discovery.
 
-```bash
-mkdir -p .claude/skills
-for skill_dir in .weave/deps/cli-sub-agent/patterns/*/skills/*/; do
-  skill_name=$(basename "$skill_dir")
-  target=".claude/skills/$skill_name"
-  if [ -L "$target" ] || [ -d "$target" ]; then
-    echo "skip: $skill_name (already exists)"
-  else
-    # Compute relative path from .claude/skills/ to the skill directory
-    ln -s "$(realpath --relative-to=.claude/skills "$skill_dir")" "$target"
-    echo "installed: $skill_name → $skill_dir"
-  fi
-done
-```
-
-This is idempotent — existing symlinks or directories are preserved.
+`weave install` automatically creates symlinks from `.claude/skills/` (and
+other tool-specific directories) into the global package store. No manual
+setup is needed.
 
 ### Verify
 
@@ -232,6 +220,36 @@ ls -la .claude/skills/
 ```
 
 You should see symlinks for each pattern skill (e.g., `commit`, `mktd`, `sa`).
+
+### Maintenance
+
+If symlinks become stale or broken (e.g., after updating packages):
+
+```bash
+weave link sync          # Reconcile: create missing, remove stale, fix broken
+weave check --fix        # Remove broken symlinks only
+```
+
+### Conflict resolution
+
+If two packages expose the same skill name, `weave install` will report a
+conflict. To resolve, install with `--no-link` and create renamed symlinks:
+
+```bash
+weave install user/repo --no-link
+cd .claude/skills
+ln -s ../../.weave/store/repo/.../patterns/commit/skills/commit/ my-commit
+```
+
+The renamed symlink still points to the canonical companion skill directory.
+
+### Scope control
+
+```bash
+weave install user/repo                          # Default: project-level (.claude/skills/)
+weave install user/repo --link-scope user        # User-level (~/.claude/skills/)
+weave install user/repo --no-link                # Skip linking entirely
+```
 
 ---
 
