@@ -1,7 +1,9 @@
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::task::JoinSet;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
@@ -34,6 +36,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         return Ok(1);
     };
 
+    // 2b. Verify review skill is available (fail fast before any execution)
+    verify_review_skill_available(&project_root)?;
+
     // 3. Derive scope and mode from CLI args
     let scope = derive_scope(&args);
     let mode = if args.fix {
@@ -59,9 +64,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
     )?;
 
+    // Resolve stream mode from CLI flags (default: BufferOnly for review)
+    let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
+    let idle_timeout_seconds =
+        crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
+
     if args.reviewers == 1 {
         // Keep single-reviewer behavior unchanged.
-        let result = execute_review(
+        let review_future = execute_review(
             tool,
             prompt,
             args.session,
@@ -73,8 +83,30 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &project_root,
             config.as_ref(),
             &global_config,
-        )
-        .await?;
+            stream_mode,
+            idle_timeout_seconds,
+        );
+
+        let result = if let Some(timeout_secs) = args.timeout {
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), review_future)
+                .await
+            {
+                Ok(inner) => inner?,
+                Err(_) => {
+                    error!(
+                        timeout_secs = timeout_secs,
+                        "Review aborted: wall-clock timeout exceeded"
+                    );
+                    anyhow::bail!(
+                        "Review aborted: --timeout {timeout_secs}s exceeded. \
+                         Increase --timeout for longer runs, or use --idle-timeout to kill only when output stalls."
+                    );
+                }
+            }
+        } else {
+            review_future.await?
+        };
+
         print!("{}", result.output);
         return Ok(result.exit_code);
     }
@@ -120,6 +152,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &reviewer_project_root,
                 reviewer_config.as_ref(),
                 &reviewer_global,
+                stream_mode,
+                idle_timeout_seconds,
             )
             .await?;
             Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
@@ -133,9 +167,32 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     }
 
     let mut outcomes = Vec::with_capacity(reviewers);
-    while let Some(joined) = join_set.join_next().await {
-        let outcome = joined.context("reviewer task join failure")??;
-        outcomes.push(outcome);
+    let collect_future = async {
+        while let Some(joined) = join_set.join_next().await {
+            let outcome = joined.context("reviewer task join failure")??;
+            outcomes.push(outcome);
+        }
+        Ok::<_, anyhow::Error>(())
+    };
+
+    if let Some(timeout_secs) = args.timeout {
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), collect_future)
+            .await
+        {
+            Ok(inner) => inner?,
+            Err(_) => {
+                error!(
+                    timeout_secs = timeout_secs,
+                    "Multi-reviewer review aborted: wall-clock timeout exceeded"
+                );
+                anyhow::bail!(
+                    "Review aborted: --timeout {timeout_secs}s exceeded. \
+                     Increase --timeout for longer runs, or use --idle-timeout to kill only when output stalls."
+                );
+            }
+        }
+    } else {
+        collect_future.await?;
     }
     outcomes.sort_by_key(|o| o.reviewer_index);
 
@@ -198,6 +255,8 @@ async fn execute_review(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
 ) -> Result<csa_process::ExecutionResult> {
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
@@ -220,7 +279,6 @@ async fn execute_review(
 
     let extra_env = global_config.env_vars(executor.tool_name());
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
-    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(project_config, None);
 
     crate::pipeline::execute_with_session(
         &executor,
@@ -235,11 +293,54 @@ async fn execute_review(
         Some("review"),
         None,
         None,
-        csa_process::StreamMode::BufferOnly,
+        stream_mode,
         idle_timeout_seconds,
         Some(global_config),
     )
     .await
+}
+
+/// Verify the review skill is installed before attempting execution.
+///
+/// Fails fast with actionable install guidance if the skill is missing,
+/// preventing silent degradation where the tool runs without skill context.
+fn verify_review_skill_available(project_root: &Path) -> Result<()> {
+    match crate::skill_resolver::resolve_skill("csa-review", project_root) {
+        Ok(resolved) => {
+            debug!(skill_dir = %resolved.dir.display(), "Review skill resolved");
+            Ok(())
+        }
+        Err(resolve_err) => {
+            anyhow::bail!(
+                "Review skill not found — `csa review` requires the 'csa-review' skill.\n\n\
+                 {resolve_err}\n\n\
+                 Install the review skill with one of:\n\
+                 1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
+                 2) Manually place SKILL.md in .csa/skills/csa-review/ or .weave/deps/csa-review/\n\n\
+                 Without the skill, the review tool cannot follow the structured review protocol."
+            )
+        }
+    }
+}
+
+/// Resolve stream mode for review command.
+///
+/// - `--stream-stdout` forces TeeToStderr (progressive output)
+/// - `--no-stream-stdout` forces BufferOnly (silent until complete)
+/// - Default: auto-detect TTY on stderr → TeeToStderr if interactive,
+///   BufferOnly otherwise. This prevents the "appears hung" UX issue (#139)
+///   by showing progress when running interactively.
+fn resolve_review_stream_mode(
+    stream_stdout: bool,
+    no_stream_stdout: bool,
+) -> csa_process::StreamMode {
+    if no_stream_stdout {
+        csa_process::StreamMode::BufferOnly
+    } else if stream_stdout || std::io::stderr().is_terminal() {
+        csa_process::StreamMode::TeeToStderr
+    } else {
+        csa_process::StreamMode::BufferOnly
+    }
 }
 
 fn resolve_review_tool(

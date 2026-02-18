@@ -1,5 +1,8 @@
+use std::io::IsTerminal;
+
 use anyhow::{Context, Result};
 use std::path::Path;
+use tracing::{debug, error};
 
 use crate::cli::DebateArgs;
 use crate::run_helpers::read_prompt;
@@ -17,6 +20,9 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     else {
         return Ok(1);
     };
+
+    // 2b. Verify debate skill is available (fail fast before any execution)
+    verify_debate_skill_available(&project_root)?;
 
     // 3. Read question (from arg or stdin)
     let question = read_prompt(args.question)?;
@@ -48,17 +54,21 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
 
     // 7. Get env injection from global config
     let extra_env = global_config.env_vars(executor.tool_name());
-    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
+    let idle_timeout_seconds =
+        crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
+
+    // Resolve stream mode from CLI flags (default: BufferOnly for debate)
+    let stream_mode = resolve_debate_stream_mode(args.stream_stdout, args.no_stream_stdout);
 
     // 8. Acquire global slot to enforce concurrency limit
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
-    // 9. Execute with session
+    // 9. Execute with session (with optional absolute timeout)
     let description = format!(
         "debate: {}",
         crate::run_helpers::truncate_prompt(&question, 80)
     );
-    let execution = crate::pipeline::execute_with_session_and_meta(
+    let execute_future = crate::pipeline::execute_with_session_and_meta(
         &executor,
         &tool,
         &prompt,
@@ -71,11 +81,30 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         Some("debate"),
         None, // debate does not use tier-based selection
         None, // debate does not override context loading options
-        csa_process::StreamMode::BufferOnly,
+        stream_mode,
         idle_timeout_seconds,
         Some(&global_config),
-    )
-    .await?;
+    );
+
+    let execution = if let Some(timeout_secs) = args.timeout {
+        match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), execute_future)
+            .await
+        {
+            Ok(inner) => inner?,
+            Err(_) => {
+                error!(
+                    timeout_secs = timeout_secs,
+                    "Debate aborted: wall-clock timeout exceeded"
+                );
+                anyhow::bail!(
+                    "Debate aborted: --timeout {timeout_secs}s exceeded. \
+                     Increase --timeout for longer runs, or use --idle-timeout to kill only when output stalls."
+                );
+            }
+        }
+    } else {
+        execute_future.await?
+    };
 
     let output = render_debate_output(
         &execution.execution.output,
@@ -248,6 +277,48 @@ Choose one:\n\
 3) CLI override: csa debate --tool codex\n\n\
 Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
+}
+
+/// Verify the debate skill is installed before attempting execution.
+///
+/// Fails fast with actionable install guidance if the skill is missing,
+/// preventing silent degradation where the tool runs without skill context.
+fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
+    match crate::skill_resolver::resolve_skill("debate", project_root) {
+        Ok(resolved) => {
+            debug!(skill_dir = %resolved.dir.display(), "Debate skill resolved");
+            Ok(())
+        }
+        Err(resolve_err) => {
+            anyhow::bail!(
+                "Debate skill not found — `csa debate` requires the 'debate' skill.\n\n\
+                 {resolve_err}\n\n\
+                 Install the debate skill with one of:\n\
+                 1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
+                 2) Manually place SKILL.md in .csa/skills/debate/ or .weave/deps/debate/\n\n\
+                 Without the skill, the debate tool cannot follow the structured debate protocol."
+            )
+        }
+    }
+}
+
+/// Resolve stream mode for debate command.
+///
+/// - `--stream-stdout` forces TeeToStderr (progressive output)
+/// - `--no-stream-stdout` forces BufferOnly (silent until complete)
+/// - Default: auto-detect TTY on stderr -> TeeToStderr if interactive,
+///   BufferOnly otherwise. Symmetric with review's behavior (#139).
+fn resolve_debate_stream_mode(
+    stream_stdout: bool,
+    no_stream_stdout: bool,
+) -> csa_process::StreamMode {
+    if no_stream_stdout {
+        csa_process::StreamMode::BufferOnly
+    } else if stream_stdout || std::io::stderr().is_terminal() {
+        csa_process::StreamMode::TeeToStderr
+    } else {
+        csa_process::StreamMode::BufferOnly
+    }
 }
 
 /// Build a debate instruction that passes parameters to the debate skill.
@@ -507,5 +578,152 @@ mod tests {
         let output = render_debate_output(&tool_output, meta, Some(provider));
         assert!(!output.contains(provider));
         assert!(output.contains(meta));
+    }
+
+    // --- CLI parse tests for timeout/stream flags (#146) ---
+
+    fn parse_debate_args(argv: &[&str]) -> crate::cli::DebateArgs {
+        use crate::cli::{Cli, Commands};
+        use clap::Parser;
+        let cli = Cli::try_parse_from(argv).expect("debate CLI args should parse");
+        match cli.command {
+            Commands::Debate(args) => args,
+            _ => panic!("expected debate subcommand"),
+        }
+    }
+
+    #[test]
+    fn debate_cli_parses_timeout_flag() {
+        let args = parse_debate_args(&["csa", "debate", "--timeout", "120", "question"]);
+        assert_eq!(args.timeout, Some(120));
+    }
+
+    #[test]
+    fn debate_cli_parses_idle_timeout_flag() {
+        let args = parse_debate_args(&["csa", "debate", "--idle-timeout", "60", "question"]);
+        assert_eq!(args.idle_timeout, Some(60));
+    }
+
+    #[test]
+    fn debate_cli_parses_both_timeouts() {
+        let args = parse_debate_args(&[
+            "csa",
+            "debate",
+            "--timeout",
+            "300",
+            "--idle-timeout",
+            "30",
+            "question",
+        ]);
+        assert_eq!(args.timeout, Some(300));
+        assert_eq!(args.idle_timeout, Some(30));
+    }
+
+    #[test]
+    fn debate_cli_parses_stream_stdout_flag() {
+        let args = parse_debate_args(&["csa", "debate", "--stream-stdout", "question"]);
+        assert!(args.stream_stdout);
+        assert!(!args.no_stream_stdout);
+    }
+
+    #[test]
+    fn debate_cli_parses_no_stream_stdout_flag() {
+        let args = parse_debate_args(&["csa", "debate", "--no-stream-stdout", "question"]);
+        assert!(!args.stream_stdout);
+        assert!(args.no_stream_stdout);
+    }
+
+    #[test]
+    fn debate_cli_defaults_no_timeout() {
+        let args = parse_debate_args(&["csa", "debate", "question"]);
+        assert_eq!(args.timeout, None);
+        assert_eq!(args.idle_timeout, None);
+        assert!(!args.stream_stdout);
+        assert!(!args.no_stream_stdout);
+    }
+
+    #[test]
+    fn debate_cli_rejects_zero_timeout() {
+        use clap::Parser;
+        let result =
+            crate::cli::Cli::try_parse_from(["csa", "debate", "--timeout", "0", "question"]);
+        assert!(result.is_err(), "timeout=0 should be rejected");
+    }
+
+    #[test]
+    fn debate_cli_rejects_zero_idle_timeout() {
+        use clap::Parser;
+        let result =
+            crate::cli::Cli::try_parse_from(["csa", "debate", "--idle-timeout", "0", "question"]);
+        assert!(result.is_err(), "idle_timeout=0 should be rejected");
+    }
+
+    // --- resolve_debate_stream_mode tests ---
+
+    #[test]
+    fn debate_stream_mode_default_non_tty_is_buffer_only() {
+        // In test environment (non-TTY stderr), default should be BufferOnly.
+        // Note: in interactive TTY, default would be TeeToStderr (symmetric with review, #139)
+        let mode = resolve_debate_stream_mode(false, false);
+        assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+    }
+
+    #[test]
+    fn debate_stream_mode_explicit_stream() {
+        let mode = resolve_debate_stream_mode(true, false);
+        assert!(matches!(mode, csa_process::StreamMode::TeeToStderr));
+    }
+
+    #[test]
+    fn debate_stream_mode_explicit_no_stream() {
+        let mode = resolve_debate_stream_mode(false, true);
+        assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+    }
+
+    // --- verify_debate_skill_available tests (#140) ---
+
+    #[test]
+    fn verify_debate_skill_missing_returns_actionable_error() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let err = verify_debate_skill_available(tmp.path()).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("Debate skill not found"),
+            "should mention missing skill: {msg}"
+        );
+        assert!(
+            msg.contains("csa skill install"),
+            "should include install guidance: {msg}"
+        );
+        assert!(
+            msg.contains(".csa/skills/debate"),
+            "should list searched paths: {msg}"
+        );
+    }
+
+    #[test]
+    fn verify_debate_skill_present_succeeds() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let skill_dir = tmp.path().join(".csa").join("skills").join("debate");
+        std::fs::create_dir_all(&skill_dir).unwrap();
+        std::fs::write(
+            skill_dir.join("SKILL.md"),
+            "# Debate Skill\nStructured debate.",
+        )
+        .unwrap();
+
+        assert!(verify_debate_skill_available(tmp.path()).is_ok());
+    }
+
+    #[test]
+    fn verify_debate_skill_no_fallback_without_skill() {
+        // Ensure no execution path silently downgrades when skill is missing.
+        // The verify function must return Err — it must NOT return Ok with a warning.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let result = verify_debate_skill_available(tmp.path());
+        assert!(
+            result.is_err(),
+            "missing skill must be a hard error, not a warning"
+        );
     }
 }
