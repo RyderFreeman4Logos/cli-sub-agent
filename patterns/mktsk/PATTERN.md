@@ -45,9 +45,34 @@ Only read-only/analysis tasks may run in parallel.
 
 ## IF ${TASK_IS_IMPLEMENTATION}
 
-## Step 4a: Implement
+## Step 4a: Dispatch by Executor Tag
 
-Write code for the current task.
+Route execution based on the task's executor tag:
+
+### IF tag matches `[CSA:tool]` (e.g., `[CSA:gemini]`, `[CSA:codex]`, `[CSA:auto]`)
+
+Execute via CSA sub-agent:
+
+```bash
+csa run --tool <tool> "prompt with task description and DONE WHEN condition"
+```
+
+### ELIF tag matches `[Sub:developer]` (e.g., `[Sub:rust-sonnet-developer]`, `[Sub:developer]`)
+
+Execute via Claude Code Sub-Agent (Task tool):
+- Spawn a Task with appropriate `subagent_type` matching the developer role
+- Pass full task description including files to modify, scope, and DONE WHEN
+
+### ELIF tag matches `[Skill:xxx]` (e.g., `[Skill:commit]`, `[Skill:mktsk]`)
+
+Execute via Skill tool:
+- Invoke `Skill(xxx)` with the task arguments
+- Wait for skill completion before proceeding
+
+### ELSE (no tag or trivial task)
+
+Write code directly — ONLY for trivial tasks (< 5 lines, single clear operation).
+If the task is non-trivial and has no tag, default to `[Sub:developer]` dispatch.
 
 ## Step 4b: Quality Gates
 
