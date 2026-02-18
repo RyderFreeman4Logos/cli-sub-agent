@@ -508,3 +508,184 @@ Check deployment health.
     assert!(var_names.contains(&"ENVIRONMENT"));
     assert!(var_names.contains(&"svc"));
 }
+
+// ---------------------------------------------------------------------------
+// Loop safety: max_iterations default
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_for_loop_gets_default_max_iterations() {
+    let input = r#"---
+name = "loop-default"
+---
+## FOR file IN source_files
+## Process
+Handle ${file}.
+## ENDFOR
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    assert_eq!(plan.steps.len(), 1);
+    let lv = plan.steps[0].loop_var.as_ref().unwrap();
+    assert_eq!(lv.max_iterations, 10, "default max_iterations should be 10");
+}
+
+// ---------------------------------------------------------------------------
+// Loop safety: explicit MaxIterations hint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_for_loop_with_explicit_max_iterations() {
+    let input = r#"---
+name = "loop-explicit"
+---
+## FOR file IN source_files
+## Process
+MaxIterations: 25
+Handle ${file}.
+## ENDFOR
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    let lv = plan.steps[0].loop_var.as_ref().unwrap();
+    assert_eq!(lv.max_iterations, 25);
+}
+
+// ---------------------------------------------------------------------------
+// Loop safety: max_iterations > 50 produces warning
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_for_loop_high_max_iterations_warns() {
+    let input = r#"---
+name = "loop-warn"
+---
+## FOR file IN source_files
+## Process
+MaxIterations: 100
+Handle ${file}.
+## ENDFOR
+"#;
+    let doc = parse_skill(input).unwrap();
+    let output = compile_with_warnings(&doc).unwrap();
+
+    assert_eq!(output.warnings.len(), 1);
+    assert!(
+        output.warnings[0].message.contains("100"),
+        "warning should mention the limit: {}",
+        output.warnings[0].message
+    );
+    assert!(output.warnings[0].message.contains("50"));
+
+    // The plan should still compile successfully.
+    let lv = output.plan.steps[0].loop_var.as_ref().unwrap();
+    assert_eq!(lv.max_iterations, 100);
+}
+
+// ---------------------------------------------------------------------------
+// Loop safety: max_iterations = 0 is rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_for_loop_zero_max_iterations_rejected() {
+    let input = r#"---
+name = "loop-zero"
+---
+## FOR file IN source_files
+## Process
+MaxIterations: 0
+Handle ${file}.
+## ENDFOR
+"#;
+    let doc = parse_skill(input).unwrap();
+    let result = compile(&doc);
+    assert!(result.is_err());
+    let err = result.unwrap_err().to_string();
+    assert!(
+        err.contains("max_iterations must be >= 1"),
+        "error should explain: {err}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Loop safety: no warning at threshold boundary (50)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_for_loop_at_threshold_no_warning() {
+    let input = r#"---
+name = "loop-boundary"
+---
+## FOR file IN source_files
+## Process
+MaxIterations: 50
+Handle ${file}.
+## ENDFOR
+"#;
+    let doc = parse_skill(input).unwrap();
+    let output = compile_with_warnings(&doc).unwrap();
+
+    assert!(
+        output.warnings.is_empty(),
+        "max_iterations=50 should not trigger a warning"
+    );
+    let lv = output.plan.steps[0].loop_var.as_ref().unwrap();
+    assert_eq!(lv.max_iterations, 50);
+}
+
+// ---------------------------------------------------------------------------
+// Loop safety: TOML round-trip preserves max_iterations
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_max_iterations_toml_round_trip() {
+    let input = r#"---
+name = "loop-toml"
+---
+## FOR mod IN modules
+## Lint Module
+MaxIterations: 20
+Lint ${mod}.
+## ENDFOR
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    let toml_str = plan_to_toml(&plan).unwrap();
+    let restored = plan_from_toml(&toml_str).unwrap();
+
+    let orig_lv = plan.steps[0].loop_var.as_ref().unwrap();
+    let rest_lv = restored.steps[0].loop_var.as_ref().unwrap();
+    assert_eq!(orig_lv.max_iterations, rest_lv.max_iterations);
+    assert_eq!(rest_lv.max_iterations, 20);
+}
+
+// ---------------------------------------------------------------------------
+// Loop safety: TOML deserialization defaults max_iterations for legacy plans
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_max_iterations_toml_backward_compat() {
+    // Simulate a legacy plan.toml that has no max_iterations field.
+    let legacy_toml = r#"
+[plan]
+name = "legacy"
+
+[[plan.steps]]
+id = 1
+title = "Process"
+prompt = "Do something"
+
+[plan.steps.loop_var]
+variable = "item"
+collection = "items"
+"#;
+    let plan = plan_from_toml(legacy_toml).unwrap();
+    let lv = plan.steps[0].loop_var.as_ref().unwrap();
+    assert_eq!(
+        lv.max_iterations, 10,
+        "legacy plans without max_iterations should default to 10"
+    );
+}

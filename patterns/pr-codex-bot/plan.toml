@@ -18,6 +18,9 @@ name = "CLEAN_BRANCH"
 name = "COMMENT_IS_FALSE_POSITIVE"
 
 [[plan.variables]]
+name = "COMMENT_IS_STALE"
+
+[[plan.variables]]
 name = "FIXES_ACCUMULATED"
 
 [[plan.variables]]
@@ -134,12 +137,23 @@ condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[plan.steps]]
 id = 9
-title = "Arbitrate via Debate"
-tool = "csa"
-prompt = ""
-tier = "tier-2-standard"
-on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE}))"
+title = "Staleness Filter"
+tool = "bash"
+prompt = """
+For each bot comment, check if the referenced code has been modified since the
+comment was posted. Compare comment file paths and line ranges against the latest
+HEAD diff (git diff main...HEAD). Comments that reference lines/hunks modified
+after the comment timestamp are marked as COMMENT_IS_STALE. Stale comments are
+skipped before arbitration — they do not enter the debate step.
+
+```bash
+# For each comment: extract file path and line range from bot comment body.
+# Compare against: git log --since="${COMMENT_TIMESTAMP}" --oneline -- "${FILE}"
+# If file/lines changed after comment: mark COMMENT_IS_STALE=true
+# Stale comments are reclassified as Category A (already addressed).
+```"""
+on_fail = "skip"
+condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [plan.steps.loop_var]
 variable = "comment"
@@ -147,11 +161,12 @@ collection = "${BOT_COMMENTS}"
 
 [[plan.steps]]
 id = 10
-title = "Include debate"
-tool = "weave"
-prompt = "debate"
+title = "Arbitrate via Debate"
+tool = "csa"
+prompt = ""
+tier = "tier-2-standard"
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE}))"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
 
 [plan.steps.loop_var]
 variable = "comment"
@@ -159,11 +174,23 @@ collection = "${BOT_COMMENTS}"
 
 [[plan.steps]]
 id = 11
+title = "Include debate"
+tool = "weave"
+prompt = "debate"
+on_fail = "abort"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
+
+[plan.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[plan.steps]]
+id = 12
 title = "Fix Real Issue"
 tool = "csa"
 prompt = "Fix the real issue. Commit the fix."
 tier = "tier-2-standard"
-condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE})))"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE})) && (!(${COMMENT_IS_STALE})))"
 
 [plan.steps.on_fail]
 retry = 2
@@ -173,7 +200,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[plan.steps]]
-id = 12
+id = 13
 title = "Push Fixes and Re-trigger"
 tool = "bash"
 prompt = """
@@ -187,14 +214,14 @@ on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[plan.steps]]
-id = 13
+id = 14
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to merge."
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))"
 
 [[plan.steps]]
-id = 14
+id = 15
 title = "Clean Resubmission (if needed)"
 tool = "bash"
 prompt = """
@@ -210,7 +237,7 @@ on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[plan.steps]]
-id = 15
+id = 16
 title = "Final Merge"
 tool = "bash"
 prompt = """
@@ -224,7 +251,7 @@ on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[plan.steps]]
-id = 16
+id = 17
 title = "Step 12b: Final Merge (Direct)"
 tool = "bash"
 prompt = """
