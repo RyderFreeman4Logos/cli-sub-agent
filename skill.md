@@ -115,14 +115,34 @@ weave --help
 
 ## Step 3: Initialize Project
 
-Navigate to the target project and initialize CSA:
+Navigate to the target project:
 
 ```bash
 cd /path/to/your-project
-csa init
 ```
 
-This creates `.csa/config.toml` with default settings.
+### Decide whether to create a project config
+
+Check if a global config already exists:
+
+```bash
+ls ~/.config/cli-sub-agent/config.toml 2>/dev/null && echo "GLOBAL_EXISTS" || echo "NO_GLOBAL"
+```
+
+- **If `GLOBAL_EXISTS`**: Project config is usually unnecessary — CSA falls back to
+  global config automatically. **Skip `csa init` by default.** Only run it if
+  the user explicitly requests project-specific overrides.
+
+- **If `NO_GLOBAL`**: **ASK THE USER** which mode to use:
+  - **`csa init --minimal`** (Recommended): Creates only `[project]` metadata.
+    Tools, tiers, and resources inherit from built-in defaults. Best for most
+    projects.
+  - **`csa init`** (Full): Creates a complete config with tool detection, smart
+    tiers, and resource estimates. Use when the project needs custom tool
+    configuration.
+
+**CRITICAL**: Do NOT run `csa init` without user consent. Running it
+unconditionally overrides global settings with project-local defaults.
 
 ### Install git branch protection (recommended)
 
@@ -179,6 +199,39 @@ This installs all skills and patterns into `.weave/deps/cli-sub-agent/`.
 weave audit
 weave check --fix
 ```
+
+---
+
+## Step 4b: Install Pattern Skills
+
+Each pattern ships a companion skill that serves as its entry point. These
+skills tell the orchestrator (Claude Code, etc.) how to invoke the pattern.
+Install them by creating symlinks into the project's `.claude/skills/` directory:
+
+```bash
+mkdir -p .claude/skills
+for skill_dir in .weave/deps/cli-sub-agent/patterns/*/skills/*/; do
+  skill_name=$(basename "$skill_dir")
+  target=".claude/skills/$skill_name"
+  if [ -L "$target" ] || [ -d "$target" ]; then
+    echo "skip: $skill_name (already exists)"
+  else
+    # Compute relative path from .claude/skills/ to the skill directory
+    ln -s "$(realpath --relative-to=.claude/skills "$skill_dir")" "$target"
+    echo "installed: $skill_name → $skill_dir"
+  fi
+done
+```
+
+This is idempotent — existing symlinks or directories are preserved.
+
+### Verify
+
+```bash
+ls -la .claude/skills/
+```
+
+You should see symlinks for each pattern skill (e.g., `commit`, `mktd`, `sa`).
 
 ---
 
@@ -284,9 +337,13 @@ done
 
 ---
 
-### Install All (skip interactive selection)
+### Install All (ONLY on explicit user request)
 
-If the user wants everything:
+**CRITICAL**: Do NOT run this automatically. Only execute when the user
+**explicitly says** they want all patterns installed (e.g., "install everything",
+"install all patterns"). Most projects only need Category A (Commit & Review).
+
+If the user explicitly requests all patterns:
 
 ```bash
 mkdir -p .csa/plans
