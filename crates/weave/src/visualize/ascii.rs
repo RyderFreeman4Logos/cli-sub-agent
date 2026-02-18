@@ -171,6 +171,7 @@ mod tests {
                     loop_var: Some(LoopSpec {
                         variable: "region".to_string(),
                         collection: "${REGIONS}".to_string(),
+                        max_iterations: 10,
                     }),
                 },
             ],

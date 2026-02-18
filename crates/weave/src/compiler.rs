@@ -61,6 +61,27 @@ pub enum FailAction {
 pub struct LoopSpec {
     pub variable: String,
     pub collection: String,
+    /// Maximum iterations allowed before forced termination (default: 10).
+    #[serde(default = "default_max_iterations")]
+    pub max_iterations: u32,
+}
+
+fn default_max_iterations() -> u32 {
+    10
+}
+
+/// Why a loop exited — always available after loop execution completes.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoopTermination {
+    /// Loop output stabilised (current == previous iteration output).
+    Converged { iterations: u32 },
+    /// Hit the `max_iterations` cap without convergence.
+    MaxIterationsReached { limit: u32 },
+    /// An explicit success condition evaluated to true.
+    SuccessCondition { iterations: u32 },
+    /// Collection was exhausted (normal FOR-each completion).
+    CollectionExhausted { iterations: u32 },
 }
 
 /// A variable declaration collected from the plan.
@@ -70,6 +91,22 @@ pub struct VariableDecl {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
 }
+
+/// A non-fatal warning produced during compilation.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompileWarning {
+    pub message: String,
+}
+
+/// Result of compilation: the plan plus any warnings.
+#[derive(Debug, Clone)]
+pub struct CompileOutput {
+    pub plan: ExecutionPlan,
+    pub warnings: Vec<CompileWarning>,
+}
+
+/// Maximum safe value for `max_iterations`; above this triggers a warning.
+const MAX_ITERATIONS_WARN_THRESHOLD: u32 = 50;
 
 // ---------------------------------------------------------------------------
 // Regex for tool-hint extraction
@@ -87,6 +124,10 @@ static TIER_HINT_RE: LazyLock<Regex> =
 static ONFAIL_HINT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^OnFail:\s*(.+)\s*$").expect("valid regex"));
 
+/// Matches a `MaxIterations: <n>` line at the start of a step body (FOR loops).
+static MAXITER_HINT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^MaxIterations:\s*(\d+)\s*$").expect("valid regex"));
+
 /// Matches `${VAR_NAME}` placeholders.
 static VAR_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}").expect("valid regex"));
@@ -97,6 +138,13 @@ static VAR_RE: LazyLock<Regex> =
 
 /// Compile a parsed skill document into an execution plan.
 pub fn compile(doc: &SkillDocument) -> Result<ExecutionPlan> {
+    let output = compile_with_warnings(doc)?;
+    Ok(output.plan)
+}
+
+/// Compile a parsed skill document, returning the plan together with any
+/// non-fatal warnings (e.g. suspiciously high `max_iterations`).
+pub fn compile_with_warnings(doc: &SkillDocument) -> Result<CompileOutput> {
     let mut ctx = CompileCtx::new();
     compile_blocks(&doc.body, &mut ctx)?;
 
@@ -112,11 +160,16 @@ pub fn compile(doc: &SkillDocument) -> Result<ExecutionPlan> {
         })
         .collect();
 
-    Ok(ExecutionPlan {
+    let plan = ExecutionPlan {
         name: doc.meta.name.clone(),
         description: doc.meta.description.clone().unwrap_or_default(),
         variables,
         steps: ctx.steps,
+    };
+
+    Ok(CompileOutput {
+        plan,
+        warnings: ctx.warnings,
     })
 }
 
@@ -127,7 +180,11 @@ pub fn compile(doc: &SkillDocument) -> Result<ExecutionPlan> {
 struct CompileCtx {
     steps: Vec<PlanStep>,
     variables: Vec<String>,
+    warnings: Vec<CompileWarning>,
     next_id: usize,
+    /// Temporary storage for a MaxIterations hint found in a step body,
+    /// consumed by `compile_for` when building the loop spec.
+    pending_max_iterations: Option<u32>,
 }
 
 impl CompileCtx {
@@ -135,7 +192,9 @@ impl CompileCtx {
         Self {
             steps: Vec::new(),
             variables: Vec::new(),
+            warnings: Vec::new(),
             next_id: 1,
+            pending_max_iterations: None,
         }
     }
 
@@ -188,12 +247,22 @@ fn compile_blocks(blocks: &[Block], ctx: &mut CompileCtx) -> Result<()> {
     Ok(())
 }
 
-/// Extract metadata hints (Tool, Tier, OnFail) from the first lines of a step
-/// body and return the remaining prompt text.
-fn extract_hints(body: &str) -> (Option<String>, Option<String>, FailAction, String) {
+/// Extracted step hints from the leading lines of a step body.
+struct StepHints {
+    tool: Option<String>,
+    tier: Option<String>,
+    on_fail: FailAction,
+    max_iterations: Option<u32>,
+    prompt: String,
+}
+
+/// Extract metadata hints (Tool, Tier, OnFail, MaxIterations) from the first
+/// lines of a step body and return the remaining prompt text.
+fn extract_hints(body: &str) -> StepHints {
     let mut tool = None;
     let mut tier = None;
     let mut on_fail = FailAction::Abort;
+    let mut max_iterations = None;
     let mut prompt_lines = Vec::new();
     let mut in_hints = true;
 
@@ -211,6 +280,10 @@ fn extract_hints(body: &str) -> (Option<String>, Option<String>, FailAction, Str
                 on_fail = parse_fail_action(caps[1].trim());
                 continue;
             }
+            if let Some(caps) = MAXITER_HINT_RE.captures(line) {
+                max_iterations = caps[1].parse().ok();
+                continue;
+            }
             // First non-hint line ends hint extraction.
             if !line.trim().is_empty() {
                 in_hints = false;
@@ -220,7 +293,13 @@ fn extract_hints(body: &str) -> (Option<String>, Option<String>, FailAction, Str
     }
 
     let prompt = prompt_lines.join("\n").trim().to_string();
-    (tool, tier, on_fail, prompt)
+    StepHints {
+        tool,
+        tier,
+        on_fail,
+        max_iterations,
+        prompt,
+    }
 }
 
 /// Parse a fail action string.
@@ -249,20 +328,24 @@ fn parse_fail_action(s: &str) -> FailAction {
 
 fn compile_step(title: &str, body: &str, variables: &[String], ctx: &mut CompileCtx) -> Result<()> {
     let id = ctx.alloc_id();
-    let (tool, tier, on_fail, prompt) = extract_hints(body);
+    let hints = extract_hints(body);
 
     for var in variables {
         ctx.variables.push(var.clone());
     }
 
+    // Stash max_iterations hint — will be applied to the LoopSpec by
+    // compile_for if this step ends up inside a FOR block.
+    ctx.pending_max_iterations = hints.max_iterations;
+
     ctx.steps.push(PlanStep {
         id,
         title: title.to_string(),
-        tool,
-        prompt,
-        tier,
+        tool: hints.tool,
+        prompt: hints.prompt,
+        tier: hints.tier,
         depends_on: Vec::new(),
-        on_fail,
+        on_fail: hints.on_fail,
         condition: None,
         loop_var: None,
     });
@@ -333,6 +416,10 @@ fn compile_for(
 ) -> Result<()> {
     ctx.collect_vars(collection);
 
+    // Reset pending max_iterations before compiling body steps so we can
+    // detect if any body step set it via a `MaxIterations:` hint.
+    ctx.pending_max_iterations = None;
+
     let for_start = ctx.steps.len();
     compile_blocks(body, ctx)?;
     let for_end = ctx.steps.len();
@@ -341,9 +428,29 @@ fn compile_for(
         bail!("FOR block over `{collection}` has no compilable steps");
     }
 
+    // Determine max_iterations: use hint from body step, or default.
+    let max_iterations = ctx
+        .pending_max_iterations
+        .take()
+        .unwrap_or(default_max_iterations());
+
+    // Validate max_iterations.
+    if max_iterations == 0 {
+        bail!("FOR block over `{collection}`: max_iterations must be >= 1, got 0");
+    }
+    if max_iterations > MAX_ITERATIONS_WARN_THRESHOLD {
+        ctx.warnings.push(CompileWarning {
+            message: format!(
+                "FOR block over `{collection}`: max_iterations={max_iterations} exceeds \
+                 recommended threshold of {MAX_ITERATIONS_WARN_THRESHOLD} — possible misconfiguration"
+            ),
+        });
+    }
+
     let loop_spec = LoopSpec {
         variable: variable.to_string(),
         collection: collection.to_string(),
+        max_iterations,
     };
 
     // Tag all loop body steps with the loop spec.
