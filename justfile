@@ -169,6 +169,21 @@ git-push-all:
 # 📦 Installation
 # ==============================================================================
 
+# Install git hooks for branch protection (blocks commits on main/dev/master).
+# Safe to run multiple times. Works in any project with .githooks/ directory.
+install-hooks:
+    @if [ -f .githooks/pre-commit ]; then \
+        git config core.hooksPath .githooks; \
+        echo "Git hooks installed (core.hooksPath → .githooks)"; \
+    else \
+        echo "No .githooks/pre-commit found. Creating from template..."; \
+        mkdir -p .githooks; \
+        printf '#!/usr/bin/env bash\nset -euo pipefail\nbranch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0\n[ -z "$branch" ] && exit 0\nfor pb in main dev master; do\n  if [ "$branch" = "$pb" ]; then\n    echo "BLOCKED: Cannot commit directly to '"'"'$branch'"'"'. Create a feature branch first."\n    exit 1\n  fi\ndone\n' > .githooks/pre-commit; \
+        chmod +x .githooks/pre-commit; \
+        git config core.hooksPath .githooks; \
+        echo "Git hooks created and installed (core.hooksPath → .githooks)"; \
+    fi
+
 # Install latest local build to /usr/local/bin (requires cargo-auditable).
 install:
     CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/cli-sub-agent

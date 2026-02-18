@@ -475,13 +475,15 @@ mod unix_tests {
     }
 
     #[test]
-    fn test_builtin_prompt_guards_returns_two_entries() {
+    fn test_builtin_prompt_guards_returns_three_entries() {
         let guards = builtin_prompt_guards();
-        assert_eq!(guards.len(), 2);
+        assert_eq!(guards.len(), 3);
         assert_eq!(guards[0].name, "branch-protection");
         assert_eq!(guards[1].name, "dirty-tree-reminder");
+        assert_eq!(guards[2].name, "commit-workflow");
         assert_eq!(guards[0].timeout_secs, 5);
         assert_eq!(guards[1].timeout_secs, 5);
+        assert_eq!(guards[2].timeout_secs, 5);
     }
 
     #[test]
