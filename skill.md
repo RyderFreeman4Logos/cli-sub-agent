@@ -28,7 +28,7 @@ Before starting, verify these tools are available:
 ```bash
 # Required
 git --version          # Git 2.30+
-cargo --version        # Rust toolchain (for weave only; csa uses prebuilt binary)
+cargo --version        # Rust toolchain (only needed for building from source)
 
 # Optional but recommended
 mise --version         # Cross-platform tool version manager
@@ -53,19 +53,27 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 ## Step 1: Install CSA
 
-### Option A: via mise (recommended)
+### Option A: Quick install (prebuilt binaries)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/main/install.sh | sh
+```
+
+This installs both `csa` and `weave` from prebuilt binaries.
+
+### Option B: via mise (recommended for version management)
 
 ```bash
 mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=csa]
+mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=weave]
 csa --version
 ```
 
 Upgrade later with `mise upgrade`.
 
-### Option B: from source
+### Option C: from source
 
 ```bash
-git clone https://github.com/RyderFreeman4Logos/agent-teams-rs.git
 git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git
 cd cli-sub-agent
 cargo install --path crates/cli-sub-agent
@@ -82,12 +90,15 @@ csa --version
 
 ## Step 2: Install Weave
 
-Weave is the skill-lang compiler and package manager. It is not yet in GitHub
-Releases, so it must be built from source.
+Weave is the skill-lang compiler and package manager.
+
+If you used Option A (install.sh) in Step 1, weave is already installed. Otherwise:
 
 ```bash
-# If you already cloned in Step 1 Option B, skip the clone
-git clone https://github.com/RyderFreeman4Logos/agent-teams-rs.git
+# Via mise
+mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=weave]
+
+# Or from source (if you already cloned in Step 1 Option C, skip the clone)
 git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git
 cd cli-sub-agent
 cargo install --path crates/weave
@@ -418,7 +429,7 @@ weave visualize plan.toml --mermaid     # Mermaid flowchart
 | Problem | Solution |
 |---------|----------|
 | `csa: command not found` | Run `mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=csa]` |
-| `weave: command not found` | Build from source: `cargo install --path crates/weave` |
+| `weave: command not found` | Run `curl -fsSL https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/main/install.sh \| sh` or build from source: `cargo install --path crates/weave` |
 | `csa doctor` shows tool unavailable | Install the missing tool or remove from `tool_priority` |
 | `weave audit` reports missing deps | Run `weave install RyderFreeman4Logos/cli-sub-agent` |
 | Broken symlinks after update | Run `weave check --fix` |
