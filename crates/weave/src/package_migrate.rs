@@ -27,11 +27,7 @@ pub enum MigrateResult {
 ///
 /// Returns the migration outcome. Prints nothing to migrate if the
 /// legacy lockfile does not exist or the new lockfile already exists.
-pub fn migrate(
-    project_root: &Path,
-    cache_root: &Path,
-    store_root: &Path,
-) -> Result<MigrateResult> {
+pub fn migrate(project_root: &Path, cache_root: &Path, store_root: &Path) -> Result<MigrateResult> {
     let new_path = lockfile_path(project_root);
     if new_path.is_file() {
         return Ok(MigrateResult::AlreadyMigrated);

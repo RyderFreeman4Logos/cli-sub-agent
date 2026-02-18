@@ -85,6 +85,13 @@ enum Commands {
     /// Migrate from legacy .weave/lock.toml to weave.lock and global store.
     Migrate,
 
+    /// Garbage-collect unreferenced checkouts from the global package store.
+    Gc {
+        /// Print what would be removed without actually deleting.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Batch-compile all plan.toml files in a directory tree.
     CompileAll {
         /// Root directory to scan for plan.toml files (default: patterns/).
@@ -229,10 +236,34 @@ fn main() -> Result<()> {
                 }
                 package::MigrateResult::Migrated { count, .. } => {
                     eprintln!("Migrated {count} package(s) to global store");
-                    eprintln!(
-                        "You can now safely remove .weave/deps/ with: rm -rf .weave/deps/"
-                    );
+                    eprintln!("You can now safely remove .weave/deps/ with: rm -rf .weave/deps/");
                 }
+            }
+        }
+        Commands::Gc { dry_run } => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let store_root = package::global_store_root()?;
+            let result = package::gc(&project_root, &store_root, dry_run)?;
+            if result.removed.is_empty() {
+                eprintln!("nothing to collect — all checkouts are referenced");
+            } else if dry_run {
+                for entry in &result.removed {
+                    eprintln!("  would remove {entry}");
+                }
+                eprintln!(
+                    "would remove {} unreferenced checkout(s), freeing ~{} bytes",
+                    result.removed.len(),
+                    result.freed_bytes
+                );
+            } else {
+                for entry in &result.removed {
+                    eprintln!("  removed {entry}");
+                }
+                eprintln!(
+                    "removed {} unreferenced checkout(s), freed ~{} bytes",
+                    result.removed.len(),
+                    result.freed_bytes
+                );
             }
         }
         Commands::Check { dirs, fix } => {

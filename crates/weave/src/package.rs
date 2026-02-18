@@ -744,20 +744,20 @@ pub fn update(
 }
 
 // ---------------------------------------------------------------------------
-// Public API: migrate (in package_migrate.rs)
+// Sub-module re-exports: migrate, audit, gc
 // ---------------------------------------------------------------------------
 
 #[path = "package_migrate.rs"]
 mod package_migrate;
 pub use package_migrate::{MigrateResult, migrate};
 
-// ---------------------------------------------------------------------------
-// Public API: audit (in package_audit.rs)
-// ---------------------------------------------------------------------------
-
 #[path = "package_audit.rs"]
 mod package_audit;
 pub use package_audit::{AuditIssue, AuditResult, audit};
+
+#[path = "package_gc.rs"]
+mod package_gc;
+pub use package_gc::{GcResult, gc};
 
 // ---------------------------------------------------------------------------
 // Lockfile I/O
