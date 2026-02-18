@@ -2,26 +2,22 @@
 //!
 //! Skills are distributed as git repositories. Weave clones them into a
 //! content-addressable cache (`~/.cache/weave/git/<url-hash>/`) and checks
-//! out the requested revision into `.weave/deps/<name>/`.
+//! out the requested revision into the global package store at
+//! `~/.local/share/weave/packages/<name>/<commit-prefix>/`.
 //!
 //! Commands:
-//! - `install <source>` — clone/fetch + checkout into deps
-//! - `lock` — snapshot current deps into `.weave/lock.toml`
+//! - `install <source>` — clone/fetch + checkout into global store
+//! - `lock` — snapshot current deps into `weave.lock`
 //! - `update [name]` — fetch latest and re-lock
 //! - `audit` — verify lockfile consistency
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-// ---------------------------------------------------------------------------
-// Lockfile types
-// ---------------------------------------------------------------------------
-
-/// Root structure of `.weave/lock.toml`.
+/// Root structure of the lockfile (`weave.lock`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Lockfile {
     #[serde(default)]
@@ -183,6 +179,108 @@ pub fn default_cache_root() -> Result<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
+// Lockfile path helpers
+// ---------------------------------------------------------------------------
+
+/// Canonical lockfile path: `<project_root>/weave.lock`.
+pub fn lockfile_path(project_root: &Path) -> PathBuf {
+    project_root.join("weave.lock")
+}
+
+/// Legacy lockfile path: `<project_root>/.weave/lock.toml`.
+fn legacy_lockfile_path(project_root: &Path) -> PathBuf {
+    project_root.join(".weave").join("lock.toml")
+}
+
+/// Find the lockfile, preferring the new path over the legacy one.
+///
+/// Returns `Some(path)` if a lockfile exists at either location, `None` otherwise.
+/// Emits a deprecation warning when falling back to the legacy path.
+pub fn find_lockfile(project_root: &Path) -> Option<PathBuf> {
+    let new_path = lockfile_path(project_root);
+    if new_path.is_file() {
+        return Some(new_path);
+    }
+    let old_path = legacy_lockfile_path(project_root);
+    if old_path.is_file() {
+        tracing::warn!(
+            "Using legacy .weave/lock.toml \u{2014} run `weave migrate` to upgrade to weave.lock"
+        );
+        return Some(old_path);
+    }
+    None
+}
+
+/// Load the project lockfile, searching both new and legacy paths.
+pub fn load_project_lockfile(project_root: &Path) -> Result<Lockfile> {
+    match find_lockfile(project_root) {
+        Some(path) => load_lockfile(&path),
+        None => bail!(
+            "no lockfile found at {} or {}",
+            lockfile_path(project_root).display(),
+            legacy_lockfile_path(project_root).display()
+        ),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Global package store
+// ---------------------------------------------------------------------------
+
+/// Return the global store root: `~/.local/share/weave/packages/`.
+pub fn global_store_root() -> Result<PathBuf> {
+    let base = directories::BaseDirs::new().context("cannot determine home directory")?;
+    Ok(base.data_local_dir().join("weave").join("packages"))
+}
+
+/// Validate that a package name contains only `[a-zA-Z0-9_-]`.
+pub fn validate_package_name(name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("package name must not be empty");
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+    {
+        bail!("invalid package name '{name}': only [a-zA-Z0-9_-] allowed");
+    }
+    Ok(())
+}
+
+/// Validate that a commit string is hex-only or the literal `"local"`.
+fn validate_commit_prefix(commit: &str) -> Result<()> {
+    if commit == "local" {
+        return Ok(());
+    }
+    if commit.is_empty() || !commit.chars().all(|c| c.is_ascii_hexdigit()) {
+        bail!("invalid commit '{commit}': only hex characters [0-9a-f] allowed");
+    }
+    Ok(())
+}
+
+/// Compute the checkout directory: `<store_root>/<name>/<commit_prefix>/`.
+///
+/// Returns an error if `name` or `commit` contain path-traversal characters.
+pub fn package_dir(store_root: &Path, name: &str, commit: &str) -> Result<PathBuf> {
+    validate_package_name(name)?;
+    let prefix_len = commit.len().min(8);
+    validate_commit_prefix(&commit[..prefix_len])?;
+    Ok(store_root.join(name).join(&commit[..prefix_len]))
+}
+
+/// Check whether a checkout directory is valid (exists and contains at
+/// least one file).
+pub fn is_checkout_valid(dir: &Path) -> bool {
+    if !dir.is_dir() {
+        return false;
+    }
+    match std::fs::read_dir(dir) {
+        Ok(mut entries) => entries.any(|e| e.is_ok()),
+        Err(_) => false,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Git operations
 // ---------------------------------------------------------------------------
 
@@ -312,21 +410,27 @@ pub(crate) fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
     None
 }
 
-// ---------------------------------------------------------------------------
-// Public API: install
-// ---------------------------------------------------------------------------
-
-/// Install a skill from a git source into `.weave/deps/<name>/`.
+/// Install a skill from a git source into the global package store.
+///
+/// Checkout goes to `<store_root>/<name>/<commit-prefix>/`.
+/// Skips checkout when the destination already contains a valid checkout
+/// (content-addressed idempotency).
 ///
 /// Returns the locked package entry.
-pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<LockedPackage> {
+pub fn install(
+    source: &str,
+    project_root: &Path,
+    cache_root: &Path,
+    store_root: &Path,
+) -> Result<LockedPackage> {
     let src = parse_source(source)?;
     let cas = ensure_cached(cache_root, &src.url)?;
     let commit = resolve_commit(&cas, src.git_ref.as_deref())?;
 
-    let deps_dir = project_root.join(".weave").join("deps");
-    let dest = deps_dir.join(&src.name);
-    checkout_to(&cas, &commit, &dest)?;
+    let dest = package_dir(store_root, &src.name, &commit)?;
+    if !is_checkout_valid(&dest) {
+        checkout_to(&cas, &commit, &dest)?;
+    }
 
     let version = read_version(&dest);
 
@@ -341,25 +445,25 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
     };
 
     // Update the lockfile with this package.
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
-    let mut lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let lock_path = lockfile_path(project_root);
+    let mut lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
     upsert_package(&mut lockfile, &pkg);
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
 
     Ok(pkg)
 }
 
-// ---------------------------------------------------------------------------
-// Public API: install_from_local
-// ---------------------------------------------------------------------------
-
-/// Install a skill from a local directory path into `.weave/deps/<name>/`.
+/// Install a skill from a local directory path into the global package store.
 ///
 /// The source directory is recursively copied (excluding `.git/`).
 /// Returns the locked package entry with `source_kind = Local`.
-pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<LockedPackage> {
+pub fn install_from_local(
+    source_path: &Path,
+    project_root: &Path,
+    store_root: &Path,
+) -> Result<LockedPackage> {
     let canonical = source_path
         .canonicalize()
         .with_context(|| format!("cannot resolve path: {}", source_path.display()))?;
@@ -406,28 +510,25 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
         }
     }
 
-    let deps_dir = project_root.join(".weave").join("deps");
-    let dest = deps_dir.join(&name);
+    // Resolve the store root through any symlinks so overlap detection
+    // works correctly even when the store path contains symlinks.
+    let resolved_store = if store_root.exists() {
+        store_root.canonicalize()?
+    } else {
+        store_root.to_path_buf()
+    };
+    // Local sources use "local" as the commit prefix in the global store.
+    let dest = package_dir(&resolved_store, &name, "local")?;
 
     // Guard against source/destination overlap.
-    // Resolve dest without requiring it to exist: canonicalize the parent
-    // (deps_dir) and append the name.  Also check whether source is inside
-    // the project root to catch `weave install --path .`.
-    let project_canonical = project_root
-        .canonicalize()
-        .with_context(|| format!("cannot resolve project root: {}", project_root.display()))?;
     {
-        let dest_approx = if deps_dir.exists() {
-            deps_dir.canonicalize()?.join(&name)
+        let dest_approx = if dest.parent().is_some_and(|p| p.exists()) {
+            dest.parent()
+                .unwrap()
+                .canonicalize()?
+                .join(dest.file_name().unwrap_or_default())
         } else {
-            // deps/ doesn't exist yet.  Resolve .weave itself if it exists
-            // (it might be a symlink) so the overlap check uses the real path.
-            let weave_dir = project_root.join(".weave");
-            if weave_dir.exists() {
-                weave_dir.canonicalize()?.join("deps").join(&name)
-            } else {
-                project_canonical.join(".weave").join("deps").join(&name)
-            }
+            dest.clone()
         };
         if canonical == dest_approx
             || canonical.starts_with(&dest_approx)
@@ -443,9 +544,10 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
 
     // Copy to a staging directory first, then swap — ensures the original
     // is preserved if the copy fails (atomic-ish replace).
-    std::fs::create_dir_all(&deps_dir)
-        .with_context(|| format!("failed to create {}", deps_dir.display()))?;
-    let staging = deps_dir.join(format!(".{name}.staging.{}", std::process::id()));
+    let parent = dest.parent().context("invalid global store path")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    let staging = parent.join(format!(".local.staging.{}", std::process::id()));
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
     }
@@ -475,12 +577,12 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
     };
 
     // Update the lockfile.
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
-    let mut lockfile = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let lock_path = lockfile_path(project_root);
+    let mut lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
     upsert_package(&mut lockfile, &pkg);
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
 
     Ok(pkg)
 }
@@ -531,70 +633,44 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Public API: lock
-// ---------------------------------------------------------------------------
-
-/// Generate or regenerate the lockfile from the current `.weave/deps/` state.
+/// Regenerate the lockfile from the current lockfile state and global store.
 ///
-/// For each dep directory that has a matching lockfile entry, keep it.
-/// For new deps (no lockfile entry), attempt to discover the git remote.
-pub fn lock(project_root: &Path) -> Result<Lockfile> {
-    let deps_dir = project_root.join(".weave").join("deps");
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
+/// For each existing lockfile entry, verify the checkout exists in the
+/// global store and update the version if changed. Entries whose checkouts
+/// are missing from the store are retained (audit will flag them).
+pub fn lock(project_root: &Path, store_root: &Path) -> Result<Lockfile> {
+    let lock_path = lockfile_path(project_root);
 
-    let existing = load_lockfile(&lockfile_path).unwrap_or(Lockfile {
+    let existing = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
 
-    // Index existing entries by name.
-    let existing_map: BTreeMap<String, LockedPackage> = existing
-        .package
-        .into_iter()
-        .map(|p| (p.name.clone(), p))
-        .collect();
-
     let mut packages = Vec::new();
 
-    if deps_dir.is_dir() {
-        let mut entries: Vec<_> = std::fs::read_dir(&deps_dir)
-            .with_context(|| format!("failed to read {}", deps_dir.display()))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-
-        for entry in entries {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if let Some(existing_pkg) = existing_map.get(&name) {
-                // Keep existing lockfile entry, update version if changed.
-                let mut pkg = existing_pkg.clone();
-                pkg.version = read_version(&entry.path());
-                packages.push(pkg);
-            } else {
-                // New dep without lockfile entry — record with unknown repo/commit.
-                packages.push(LockedPackage {
-                    name,
-                    repo: String::new(),
-                    commit: String::new(),
-                    version: read_version(&entry.path()),
-                    source_kind: SourceKind::default(),
-                    requested_version: None,
-                    resolved_ref: None,
-                });
+    for pkg in existing.package {
+        let mut updated = pkg.clone();
+        // Determine the checkout directory in the global store.
+        let commit_key = if pkg.source_kind == SourceKind::Local {
+            "local"
+        } else if pkg.commit.is_empty() {
+            ""
+        } else {
+            &pkg.commit
+        };
+        if !commit_key.is_empty() {
+            let checkout = package_dir(store_root, &pkg.name, commit_key)?;
+            if checkout.is_dir() {
+                updated.version = read_version(&checkout);
             }
         }
+        packages.push(updated);
     }
 
     let lockfile = Lockfile { package: packages };
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
 
     Ok(lockfile)
 }
-
-// ---------------------------------------------------------------------------
-// Public API: update
-// ---------------------------------------------------------------------------
 
 /// Update one or all locked dependencies to their latest commit.
 ///
@@ -605,11 +681,12 @@ pub fn update(
     name: Option<&str>,
     project_root: &Path,
     cache_root: &Path,
+    store_root: &Path,
     force: bool,
 ) -> Result<Vec<LockedPackage>> {
-    let lockfile_path = project_root.join(".weave").join("lock.toml");
-    let mut lockfile =
-        load_lockfile(&lockfile_path).context("no lockfile found — run `weave lock` first")?;
+    let lock_path = lockfile_path(project_root);
+    let mut lockfile = load_project_lockfile(project_root)
+        .context("no lockfile found — run `weave lock` first")?;
 
     let targets: Vec<usize> = if let Some(n) = name {
         let idx = lockfile
@@ -655,9 +732,10 @@ pub fn update(
         let new_commit = resolve_commit(&cas, resolve_ref)?;
 
         if new_commit != pkg.commit {
-            let deps_dir = project_root.join(".weave").join("deps");
-            let dest = deps_dir.join(&pkg.name);
-            checkout_to(&cas, &new_commit, &dest)?;
+            let dest = package_dir(store_root, &pkg.name, &new_commit)?;
+            if !is_checkout_valid(&dest) {
+                checkout_to(&cas, &new_commit, &dest)?;
+            }
 
             let version = read_version(&dest);
             lockfile.package[idx].commit = new_commit;
@@ -667,21 +745,21 @@ pub fn update(
         updated.push(lockfile.package[idx].clone());
     }
 
-    save_lockfile(&lockfile_path, &lockfile)?;
+    save_lockfile(&lock_path, &lockfile)?;
     Ok(updated)
 }
 
-// ---------------------------------------------------------------------------
-// Public API: audit (in package_audit.rs)
-// ---------------------------------------------------------------------------
+#[path = "package_migrate.rs"]
+mod package_migrate;
+pub use package_migrate::{MigrateResult, migrate};
 
 #[path = "package_audit.rs"]
 mod package_audit;
 pub use package_audit::{AuditIssue, AuditResult, audit};
 
-// ---------------------------------------------------------------------------
-// Lockfile I/O
-// ---------------------------------------------------------------------------
+#[path = "package_gc.rs"]
+mod package_gc;
+pub use package_gc::{GcResult, gc};
 
 /// Load a lockfile from disk.
 pub fn load_lockfile(path: &Path) -> Result<Lockfile> {
@@ -716,3 +794,7 @@ mod tests;
 #[cfg(test)]
 #[path = "package_install_tests.rs"]
 mod install_tests;
+
+#[cfg(test)]
+#[path = "package_security_tests.rs"]
+mod security_tests;

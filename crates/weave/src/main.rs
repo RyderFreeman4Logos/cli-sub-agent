@@ -82,6 +82,16 @@ enum Commands {
         fix: bool,
     },
 
+    /// Migrate from legacy .weave/lock.toml to weave.lock and global store.
+    Migrate,
+
+    /// Garbage-collect unreferenced checkouts from the global package store.
+    Gc {
+        /// Print what would be removed without actually deleting.
+        #[arg(long)]
+        dry_run: bool,
+    },
+
     /// Batch-compile all plan.toml files in a directory tree.
     CompileAll {
         /// Root directory to scan for plan.toml files (default: patterns/).
@@ -147,19 +157,17 @@ fn main() -> Result<()> {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
 
             if let Some(local_path) = path {
-                let pkg = package::install_from_local(&local_path, &project_root)?;
-                eprintln!(
-                    "installed {} (local) -> .weave/deps/{}/",
-                    pkg.name, pkg.name
-                );
+                let store_root = package::global_store_root()?;
+                let pkg = package::install_from_local(&local_path, &project_root, &store_root)?;
+                eprintln!("installed {} (local) -> {}/", pkg.name, pkg.name);
             } else if let Some(git_source) = source {
                 let cache_root = package::default_cache_root()?;
-                let pkg = package::install(&git_source, &project_root, &cache_root)?;
+                let store_root = package::global_store_root()?;
+                let pkg = package::install(&git_source, &project_root, &cache_root, &store_root)?;
+                let commit_short = &pkg.commit[..pkg.commit.len().min(8)];
                 eprintln!(
-                    "installed {} ({}) -> .weave/deps/{}/",
-                    pkg.name,
-                    &pkg.commit[..pkg.commit.len().min(12)],
-                    pkg.name
+                    "installed {} ({}) -> {}/{}/",
+                    pkg.name, commit_short, pkg.name, commit_short
                 );
             } else {
                 bail!("either <SOURCE> or --path <DIR> is required");
@@ -167,7 +175,8 @@ fn main() -> Result<()> {
         }
         Commands::Lock => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
-            let lockfile = package::lock(&project_root)?;
+            let store_root = package::global_store_root()?;
+            let lockfile = package::lock(&project_root, &store_root)?;
             eprintln!("locked {} package(s)", lockfile.package.len());
             for pkg in &lockfile.package {
                 let ver = pkg.version.as_deref().unwrap_or("-");
@@ -182,7 +191,14 @@ fn main() -> Result<()> {
         Commands::Update { name, force } => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
             let cache_root = package::default_cache_root()?;
-            let updated = package::update(name.as_deref(), &project_root, &cache_root, force)?;
+            let store_root = package::global_store_root()?;
+            let updated = package::update(
+                name.as_deref(),
+                &project_root,
+                &cache_root,
+                &store_root,
+                force,
+            )?;
             for pkg in &updated {
                 let commit_short = if pkg.commit.len() > 12 {
                     &pkg.commit[..12]
@@ -194,7 +210,8 @@ fn main() -> Result<()> {
         }
         Commands::Audit => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
-            let results = package::audit(&project_root)?;
+            let store_root = package::global_store_root()?;
+            let results = package::audit(&project_root, &store_root)?;
             if results.is_empty() {
                 eprintln!("audit passed: no issues found");
             } else {
@@ -204,6 +221,62 @@ fn main() -> Result<()> {
                     }
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Migrate => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let cache_root = package::default_cache_root()?;
+            let store_root = package::global_store_root()?;
+            match package::migrate(&project_root, &cache_root, &store_root)? {
+                package::MigrateResult::AlreadyMigrated => {
+                    eprintln!("already migrated — weave.lock exists");
+                }
+                package::MigrateResult::NothingToMigrate => {
+                    eprintln!("nothing to migrate — no .weave/lock.toml found");
+                }
+                package::MigrateResult::Migrated {
+                    count,
+                    local_skipped,
+                    ..
+                } => {
+                    eprintln!("Migrated {count} package(s) to global store");
+                    if local_skipped > 0 {
+                        eprintln!(
+                            "WARNING: {local_skipped} local-source package(s) were not migrated. \
+                             DO NOT remove .weave/deps/ until they are reinstalled."
+                        );
+                    } else {
+                        eprintln!(
+                            "You can now safely remove .weave/deps/ with: rm -rf .weave/deps/"
+                        );
+                    }
+                }
+            }
+        }
+        Commands::Gc { dry_run } => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let store_root = package::global_store_root()?;
+            let result = package::gc(&project_root, &store_root, dry_run)?;
+            if result.removed.is_empty() {
+                eprintln!("nothing to collect — all checkouts are referenced");
+            } else if dry_run {
+                for entry in &result.removed {
+                    eprintln!("  would remove {entry}");
+                }
+                eprintln!(
+                    "would remove {} unreferenced checkout(s), freeing ~{} bytes",
+                    result.removed.len(),
+                    result.freed_bytes
+                );
+            } else {
+                for entry in &result.removed {
+                    eprintln!("  removed {entry}");
+                }
+                eprintln!(
+                    "removed {} unreferenced checkout(s), freed ~{} bytes",
+                    result.removed.len(),
+                    result.freed_bytes
+                );
             }
         }
         Commands::Check { dirs, fix } => {
