@@ -87,14 +87,16 @@ pub(crate) fn resolve_tool_and_model(
         }
     }
 
-    // Fallback: no tier-based selection available — pick any auto-selectable installed tool.
-    // This covers minimal-init configs that have empty tiers but enabled tools.
+    // Fallback: minimal-init configs with empty tiers — pick any auto-selectable installed tool.
+    // Only activates when tiers are empty to avoid silently bypassing configured tier mappings.
     if let Some(cfg) = config {
-        for tool in csa_config::global::all_known_tools() {
-            let name = tool.as_str();
-            if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
-                let tool_name = parse_tool_name(name)?;
-                return Ok((tool_name, None, None));
+        if cfg.tiers.is_empty() {
+            for tool in csa_config::global::all_known_tools() {
+                let name = tool.as_str();
+                if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
+                    let tool_name = parse_tool_name(name)?;
+                    return Ok((tool_name, None, None));
+                }
             }
         }
     }
