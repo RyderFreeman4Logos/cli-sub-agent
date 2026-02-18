@@ -154,7 +154,9 @@ Post full audit trail (model specs for both sides) to PR.
 csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
 ```
 
-## ELSE IF !(${COMMENT_IS_STALE})
+## ELSE
+
+<!-- COMMENT_IS_STALE check is enforced via step conditions in plan.toml -->
 
 ## Step 9: Fix Real Issue
 

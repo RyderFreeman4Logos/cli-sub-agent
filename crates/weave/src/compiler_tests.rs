@@ -689,30 +689,3 @@ collection = "items"
         "legacy plans without max_iterations should default to 10"
     );
 }
-
-// ---------------------------------------------------------------------------
-// LoopTermination enum variants
-// ---------------------------------------------------------------------------
-
-#[test]
-fn test_loop_termination_variants() {
-    use super::LoopTermination;
-
-    let converged = LoopTermination::Converged { iterations: 3 };
-    let max_reached = LoopTermination::MaxIterationsReached { limit: 10 };
-    let success = LoopTermination::SuccessCondition { iterations: 5 };
-    let exhausted = LoopTermination::CollectionExhausted { iterations: 7 };
-
-    // Verify each variant is distinguishable.
-    assert_ne!(converged, max_reached);
-    assert_ne!(success, exhausted);
-
-    // Verify serde round-trip.
-    let json = serde_json::to_string(&converged).unwrap();
-    let restored: LoopTermination = serde_json::from_str(&json).unwrap();
-    assert_eq!(converged, restored);
-
-    let json = serde_json::to_string(&max_reached).unwrap();
-    let restored: LoopTermination = serde_json::from_str(&json).unwrap();
-    assert_eq!(max_reached, restored);
-}

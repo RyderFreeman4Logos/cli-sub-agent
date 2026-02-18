@@ -70,20 +70,6 @@ fn default_max_iterations() -> u32 {
     10
 }
 
-/// Why a loop exited — always available after loop execution completes.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum LoopTermination {
-    /// Loop output stabilised (current == previous iteration output).
-    Converged { iterations: u32 },
-    /// Hit the `max_iterations` cap without convergence.
-    MaxIterationsReached { limit: u32 },
-    /// An explicit success condition evaluated to true.
-    SuccessCondition { iterations: u32 },
-    /// Collection was exhausted (normal FOR-each completion).
-    CollectionExhausted { iterations: u32 },
-}
-
 /// A variable declaration collected from the plan.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VariableDecl {
