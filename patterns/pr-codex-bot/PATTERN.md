@@ -10,9 +10,15 @@ version = "0.1.0"
 
 Orchestrates iterative fix-and-review loop with cloud review bot on GitHub PRs.
 Two-layer review: local pre-PR cumulative audit + cloud bot review.
+Staleness guard: before arbitration, each bot comment is checked against the
+latest HEAD to detect whether the referenced code has been modified since the
+comment was posted. Stale comments (referencing already-modified code) are
+reclassified as Category A and skipped, preventing wasted debate cycles on
+already-fixed issues.
 
 FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration,
-running Step 2 in background, creating PR without Step 2 completion.
+running Step 2 in background, creating PR without Step 2 completion,
+debating stale comments without staleness check.
 
 ## Step 1: Commit Changes
 
@@ -108,7 +114,30 @@ Classify each comment:
 - Category B (suspected false positive): queue for arbitration
 - Category C (real issue): queue for fix
 
-## IF ${COMMENT_IS_FALSE_POSITIVE}
+## Step 7a: Staleness Filter
+
+Tool: bash
+OnFail: skip
+
+For each bot comment, check whether the referenced code has been modified
+since the comment was posted. Compare the comment's file paths and line
+ranges against the latest HEAD diff (`git diff main...HEAD`) and commit
+timestamps (`git log --since`). Comments that reference lines/hunks
+modified after the comment timestamp are marked as "potentially stale"
+(`COMMENT_IS_STALE=true`) and reclassified as Category A (already
+addressed). Stale comments are skipped before entering the debate
+arbitration step, preventing wasted cycles debating already-fixed issues.
+
+```bash
+# For each comment in BOT_COMMENTS:
+#   1. Extract file path and line range from comment body
+#   2. Get comment creation timestamp from GitHub API
+#   3. Check: git log --since="${COMMENT_TIMESTAMP}" --oneline -- "${FILE}"
+#   4. If file changed after comment → COMMENT_IS_STALE=true
+#   5. Stale comments are reclassified as Category A (skip arbitration)
+```
+
+## IF ${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})
 
 ## Step 8: Arbitrate via Debate
 
@@ -125,7 +154,7 @@ Post full audit trail (model specs for both sides) to PR.
 csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
 ```
 
-## ELSE
+## ELSE IF !(${COMMENT_IS_STALE})
 
 ## Step 9: Fix Real Issue
 
@@ -133,7 +162,7 @@ Tool: csa
 Tier: tier-2-standard
 OnFail: retry 2
 
-Fix the real issue. Commit the fix.
+Fix the real issue (non-stale, non-false-positive). Commit the fix.
 
 ## ENDIF
 
