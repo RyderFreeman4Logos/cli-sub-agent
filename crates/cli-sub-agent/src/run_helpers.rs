@@ -55,7 +55,21 @@ pub(crate) fn resolve_tool_and_model(
         return Ok((tool_name, None, resolved_model));
     }
 
-    // Case 3: neither tool nor model_spec → use round-robin tier-based selection
+    // Case 3: neither tool nor model_spec → use round-robin tier-based selection.
+    // When --force is active, bypass tiers and pick any installed tool.
+    if force {
+        for tool in csa_config::global::all_known_tools() {
+            if is_tool_binary_available(tool.as_str()) {
+                let tool_name = parse_tool_name(tool.as_str())?;
+                return Ok((tool_name, None, None));
+            }
+        }
+        anyhow::bail!(
+            "No installed tools found. Install at least one tool \
+             (gemini-cli, opencode, codex, claude-code)."
+        );
+    }
+
     if let Some(cfg) = config {
         // Try round-robin rotation first (needs project root to persist state)
         if let Ok(Some((tool_name_str, tier_model_spec))) =
