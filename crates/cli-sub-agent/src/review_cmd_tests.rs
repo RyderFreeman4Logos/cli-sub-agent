@@ -550,7 +550,7 @@ fn verify_review_skill_missing_returns_actionable_error() {
         "should mention missing skill: {msg}"
     );
     assert!(
-        msg.contains("csa skill install"),
+        msg.contains("weave install"),
         "should include install guidance: {msg}"
     );
     assert!(

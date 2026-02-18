@@ -137,7 +137,39 @@ available and properly configured.
 
 ## Step 4: Install Core Skills
 
-Install the base persona skills that enable CSA's core capabilities:
+CSA resolves skills from four locations (in priority order):
+
+1. `.csa/skills/<name>/` — project-local runtime overrides
+2. `skills/<name>/` — project-shipped (committed to VCS)
+3. `~/.config/cli-sub-agent/skills/<name>/` — global user
+4. `.weave/deps/<name>/` — weave-managed dependencies
+
+### Option A: Symlink from patterns (recommended for contributors)
+
+If the project already ships patterns in `patterns/`, create symlinks so CSA
+can discover skills directly:
+
+```bash
+# Create symlinks for each pattern skill
+for pattern in patterns/*/; do
+  name=$(basename "$pattern")
+  skill_dir="$pattern/skills/$name"
+  if [ -d "$skill_dir" ] && [ ! -e "skills/$name" ]; then
+    # Link .skill.toml into skill subdir (agent config)
+    [ -f "$pattern/.skill.toml" ] && [ ! -e "$skill_dir/.skill.toml" ] && \
+      ln -s "../../.skill.toml" "$skill_dir/.skill.toml"
+    # Link skill into top-level skills/
+    mkdir -p skills
+    ln -s "../patterns/$name/skills/$name" "skills/$name"
+  fi
+done
+```
+
+This avoids file duplication — `skills/<name>/` symlinks point to
+`patterns/<name>/skills/<name>/`, and `.skill.toml` chains back to the
+pattern root.
+
+### Option B: Install via weave (recommended for end users)
 
 ```bash
 # Install from the CSA repository
@@ -151,6 +183,10 @@ This installs all skills and patterns into `.weave/deps/cli-sub-agent/`.
 ```bash
 weave audit
 weave check --fix
+
+# Verify skill resolution
+csa review --help   # Should not report "skill not found"
+csa debate --help   # Should not report "skill not found"
 ```
 
 ---
@@ -431,6 +467,8 @@ weave visualize plan.toml --mermaid     # Mermaid flowchart
 | `csa: command not found` | Run `mise use -g ubi:RyderFreeman4Logos/cli-sub-agent[exe=csa]` |
 | `weave: command not found` | Run `curl -fsSL https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/main/install.sh \| sh` or build from source: `cargo install --path crates/weave` |
 | `csa doctor` shows tool unavailable | Install the missing tool or remove from `tool_priority` |
+| `csa review`: skill not found | Symlink: `ln -s ../patterns/csa-review/skills/csa-review skills/csa-review` or run `weave install RyderFreeman4Logos/cli-sub-agent` |
+| `csa debate`: skill not found | Symlink: `ln -s ../patterns/debate/skills/debate skills/debate` or run `weave install` |
 | `weave audit` reports missing deps | Run `weave install RyderFreeman4Logos/cli-sub-agent` |
 | Broken symlinks after update | Run `weave check --fix` |
 | Codex rate limit / quota | Wait for cooldown or switch tool: `csa run --tool claude-code` |

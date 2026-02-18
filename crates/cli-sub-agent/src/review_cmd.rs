@@ -315,8 +315,9 @@ fn verify_review_skill_available(project_root: &Path) -> Result<()> {
                 "Review skill not found — `csa review` requires the 'csa-review' skill.\n\n\
                  {resolve_err}\n\n\
                  Install the review skill with one of:\n\
-                 1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place SKILL.md in .csa/skills/csa-review/ or .weave/deps/csa-review/\n\n\
+                 1) weave install RyderFreeman4Logos/cli-sub-agent\n\
+                 2) Symlink: ln -s ../patterns/csa-review/skills/csa-review skills/csa-review\n\
+                 3) Manually place SKILL.md in .csa/skills/csa-review/ or skills/csa-review/\n\n\
                  Without the skill, the review tool cannot follow the structured review protocol."
             )
         }

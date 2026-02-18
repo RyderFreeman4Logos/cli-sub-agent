@@ -1,9 +1,10 @@
 //! Resolve a skill by name from standard search paths.
 //!
 //! Search order:
-//! 1. `./.csa/skills/<name>/`         (project-local)
-//! 2. `~/.config/cli-sub-agent/skills/<name>/`  (global user)
-//! 3. `.weave/deps/<name>/`           (weave-managed)
+//! 1. `./.csa/skills/<name>/`         (project-local, runtime overrides)
+//! 2. `./skills/<name>/`             (project-shipped, committed to VCS)
+//! 3. `~/.config/cli-sub-agent/skills/<name>/`  (global user)
+//! 4. `.weave/deps/<name>/`           (weave-managed)
 
 use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
@@ -67,12 +68,15 @@ pub(crate) fn resolve_skill(name: &str, project_root: &Path) -> Result<ResolvedS
 
 /// Build the ordered list of directories to search for a skill.
 fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
-    let mut paths = Vec::with_capacity(3);
+    let mut paths = Vec::with_capacity(4);
 
-    // 1. Project-local: .csa/skills/<name>/
+    // 1. Project-local (runtime): .csa/skills/<name>/
     paths.push(project_root.join(".csa").join("skills").join(name));
 
-    // 2. Global user: ~/.config/cli-sub-agent/skills/<name>/
+    // 2. Project-shipped (committed): skills/<name>/
+    paths.push(project_root.join("skills").join(name));
+
+    // 3. Global user: ~/.config/cli-sub-agent/skills/<name>/
     if let Some(base) = directories::BaseDirs::new() {
         paths.push(
             base.config_dir()
@@ -82,7 +86,7 @@ fn search_paths(name: &str, project_root: &Path) -> Vec<PathBuf> {
         );
     }
 
-    // 3. Weave-managed: .weave/deps/<name>/
+    // 4. Weave-managed: .weave/deps/<name>/
     paths.push(project_root.join(".weave").join("deps").join(name));
 
     paths
@@ -179,6 +183,55 @@ tool = "claude-code"
     }
 
     #[test]
+    fn resolve_skill_from_project_skills() {
+        let tmp = TempDir::new().unwrap();
+        // No .csa/skills — only skills/ (project-shipped)
+        make_skill_dir(
+            tmp.path(),
+            "skills/my-review",
+            "# Project Review\nShipped with repo.",
+            Some(
+                r#"
+[skill]
+name = "my-review"
+version = "0.1.0"
+
+[agent]
+tier = "tier-2-standard"
+max_turns = 25
+tools = [{ tool = "auto" }]
+"#,
+            ),
+        );
+
+        let resolved = resolve_skill("my-review", tmp.path()).unwrap();
+        assert!(resolved.skill_md.contains("Project Review"));
+        let config = resolved.config.as_ref().unwrap();
+        assert_eq!(config.skill.name, "my-review");
+        assert!(resolved.dir.ends_with("skills/my-review"));
+    }
+
+    #[test]
+    fn resolve_skill_csa_takes_priority_over_project_skills() {
+        let tmp = TempDir::new().unwrap();
+        make_skill_dir(tmp.path(), ".csa/skills/review", "# CSA Review", None);
+        make_skill_dir(tmp.path(), "skills/review", "# Project Review", None);
+
+        let resolved = resolve_skill("review", tmp.path()).unwrap();
+        assert!(resolved.skill_md.contains("CSA Review"));
+    }
+
+    #[test]
+    fn resolve_skill_project_skills_takes_priority_over_weave() {
+        let tmp = TempDir::new().unwrap();
+        make_skill_dir(tmp.path(), "skills/review", "# Project Review", None);
+        make_skill_dir(tmp.path(), ".weave/deps/review", "# Weave Review", None);
+
+        let resolved = resolve_skill("review", tmp.path()).unwrap();
+        assert!(resolved.skill_md.contains("Project Review"));
+    }
+
+    #[test]
     fn resolve_skill_csa_takes_priority_over_weave() {
         let tmp = TempDir::new().unwrap();
         make_skill_dir(tmp.path(), ".csa/skills/review", "# CSA Review", None);
@@ -196,6 +249,7 @@ tool = "claude-code"
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not found"), "{err}");
         assert!(err.contains(".csa/skills/nonexistent"), "{err}");
+        assert!(err.contains("skills/nonexistent"), "{err}");
     }
 
     #[test]

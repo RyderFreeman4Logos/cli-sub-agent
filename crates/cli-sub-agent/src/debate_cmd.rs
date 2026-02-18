@@ -294,8 +294,9 @@ fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
                 "Debate skill not found — `csa debate` requires the 'debate' skill.\n\n\
                  {resolve_err}\n\n\
                  Install the debate skill with one of:\n\
-                 1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place SKILL.md in .csa/skills/debate/ or .weave/deps/debate/\n\n\
+                 1) weave install RyderFreeman4Logos/cli-sub-agent\n\
+                 2) Symlink: ln -s ../patterns/debate/skills/debate skills/debate\n\
+                 3) Manually place SKILL.md in .csa/skills/debate/ or skills/debate/\n\n\
                  Without the skill, the debate tool cannot follow the structured debate protocol."
             )
         }
@@ -722,7 +723,7 @@ mod tests {
             "should mention missing skill: {msg}"
         );
         assert!(
-            msg.contains("csa skill install"),
+            msg.contains("weave install"),
             "should include install guidance: {msg}"
         );
         assert!(
