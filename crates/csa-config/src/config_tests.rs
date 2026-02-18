@@ -23,6 +23,7 @@ fn test_save_and_load_roundtrip() {
                 allow_edit_existing_files: false,
             }),
             suppress_notify: true,
+            ..Default::default()
         },
     );
 
@@ -94,14 +95,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
 #[test]
 fn test_is_tool_enabled_configured_enabled() {
     let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let config = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -132,6 +126,7 @@ fn test_is_tool_enabled_configured_disabled() {
             enabled: false,
             restrictions: None,
             suppress_notify: true,
+            ..Default::default()
         },
     );
 
@@ -218,20 +213,14 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
 #[test]
 fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
     let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
     tools.insert(
         "claude-code".to_string(),
         ToolConfig {
             enabled: false,
             restrictions: None,
             suppress_notify: true,
+            ..Default::default()
         },
     );
 
@@ -282,6 +271,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
                 allow_edit_existing_files: false,
             }),
             suppress_notify: true,
+            ..Default::default()
         },
     );
 
@@ -308,14 +298,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
 #[test]
 fn test_can_tool_edit_existing_without_restrictions() {
     let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let config = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -362,22 +345,8 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
 #[test]
 fn test_resolve_tier_default_selection() {
     let mut tools = HashMap::new();
-    tools.insert(
-        "gemini-cli".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("gemini-cli".to_string(), ToolConfig::default());
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let mut tiers = HashMap::new();
     tiers.insert(
@@ -423,14 +392,7 @@ fn test_resolve_tier_default_selection() {
 #[test]
 fn test_resolve_tier_fallback_to_tier3() {
     let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let mut tiers = HashMap::new();
     tiers.insert(
@@ -477,16 +439,10 @@ fn test_resolve_tier_skips_disabled_tools() {
             enabled: false, // Disabled
             restrictions: None,
             suppress_notify: true,
+            ..Default::default()
         },
     );
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let mut tiers = HashMap::new();
     tiers.insert(

@@ -55,6 +55,24 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if config.resources.idle_timeout_seconds == 0 {
         bail!("resources.idle_timeout_seconds must be > 0 (got 0)");
     }
+    if let Some(mem) = config.resources.memory_max_mb {
+        if mem < 256 {
+            bail!(
+                "resources.memory_max_mb must be >= 256 (got {}). \
+                 Tool processes need at least 256 MB to function.",
+                mem
+            );
+        }
+    }
+    if let Some(pids) = config.resources.pids_max {
+        if pids < 10 {
+            bail!(
+                "resources.pids_max must be >= 10 (got {}). \
+                 Tool processes need at least 10 PIDs for process trees.",
+                pids
+            );
+        }
+    }
     Ok(())
 }
 

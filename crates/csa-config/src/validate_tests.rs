@@ -12,14 +12,7 @@ fn test_validate_config_succeeds_on_valid() {
     let dir = tempdir().unwrap();
 
     let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let mut tiers = HashMap::new();
     tiers.insert(
@@ -91,14 +84,7 @@ fn test_validate_config_fails_on_unknown_tool() {
     let dir = tempdir().unwrap();
 
     let mut tools = HashMap::new();
-    tools.insert(
-        "unknown-tool".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("unknown-tool".to_string(), ToolConfig::default());
 
     let config = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -139,6 +125,7 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
             min_free_memory_mb: 4096,
             idle_timeout_seconds: 0,
             initial_estimates: HashMap::new(),
+            ..Default::default()
         },
         tools: HashMap::new(),
         review: None,
@@ -662,14 +649,7 @@ fn test_validate_all_four_known_tools_accepted() {
 
     let mut tools = HashMap::new();
     for name in &["gemini-cli", "opencode", "codex", "claude-code"] {
-        tools.insert(
-            name.to_string(),
-            ToolConfig {
-                enabled: true,
-                restrictions: None,
-                suppress_notify: true,
-            },
-        );
+        tools.insert(name.to_string(), ToolConfig::default());
     }
 
     let config = ProjectConfig {
@@ -752,14 +732,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
     let dir = tempdir().unwrap();
 
     let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: true,
-            restrictions: None,
-            suppress_notify: true,
-        },
-    );
+    tools.insert("codex".to_string(), ToolConfig::default());
 
     let config = ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
@@ -790,4 +763,5 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
     );
 }
 
+include!("validate_tests_sandbox.rs");
 include!("validate_tests_tiers.rs");

@@ -192,6 +192,7 @@ pub fn init_project(
                     allow_edit_existing_files: false,
                 }),
                 suppress_notify: true,
+                ..Default::default()
             },
         );
     }
@@ -206,6 +207,7 @@ pub fn init_project(
                 enabled: is_usable,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
     }
@@ -246,6 +248,7 @@ pub fn init_project(
                 min_free_memory_mb: 4096,
                 idle_timeout_seconds: 300,
                 initial_estimates,
+                ..Default::default()
             },
             tools,
             review: None,

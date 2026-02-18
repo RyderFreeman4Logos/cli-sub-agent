@@ -267,6 +267,12 @@ pub struct GlobalToolConfig {
     /// Environment variables injected into child processes for this tool.
     #[serde(default)]
     pub env: HashMap<String, String>,
+    /// Per-tool memory limit override (MB). Takes precedence over project/global resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max_mb: Option<u64>,
+    /// Per-tool swap limit override (MB). Takes precedence over project/global resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_swap_max_mb: Option<u64>,
 }
 
 fn default_max_concurrent() -> u32 {

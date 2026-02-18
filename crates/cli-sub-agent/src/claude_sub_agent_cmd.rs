@@ -223,6 +223,7 @@ mod tests {
                     enabled: true,
                     restrictions: None,
                     suppress_notify: true,
+                    ..Default::default()
                 },
             );
             tier_models.push(format!("{tool}/provider/model/medium"));
@@ -288,6 +289,7 @@ mod tests {
                 enabled: true,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
         tool_map.insert(
@@ -296,6 +298,7 @@ mod tests {
                 enabled: true,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
         tool_map.insert(
@@ -304,6 +307,7 @@ mod tests {
                 enabled: false,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
         tool_map.insert(
@@ -312,6 +316,7 @@ mod tests {
                 enabled: false,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
 
