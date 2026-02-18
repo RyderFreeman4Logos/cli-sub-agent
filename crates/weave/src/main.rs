@@ -147,19 +147,19 @@ fn main() -> Result<()> {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
 
             if let Some(local_path) = path {
-                let pkg = package::install_from_local(&local_path, &project_root)?;
-                eprintln!(
-                    "installed {} (local) -> .weave/deps/{}/",
-                    pkg.name, pkg.name
-                );
+                let store_root = package::global_store_root()?;
+                let pkg =
+                    package::install_from_local(&local_path, &project_root, &store_root)?;
+                eprintln!("installed {} (local) -> {}/", pkg.name, pkg.name);
             } else if let Some(git_source) = source {
                 let cache_root = package::default_cache_root()?;
-                let pkg = package::install(&git_source, &project_root, &cache_root)?;
+                let store_root = package::global_store_root()?;
+                let pkg =
+                    package::install(&git_source, &project_root, &cache_root, &store_root)?;
+                let commit_short = &pkg.commit[..pkg.commit.len().min(8)];
                 eprintln!(
-                    "installed {} ({}) -> .weave/deps/{}/",
-                    pkg.name,
-                    &pkg.commit[..pkg.commit.len().min(12)],
-                    pkg.name
+                    "installed {} ({}) -> {}/{}/",
+                    pkg.name, commit_short, pkg.name, commit_short
                 );
             } else {
                 bail!("either <SOURCE> or --path <DIR> is required");

@@ -7,7 +7,9 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::{LockedPackage, Lockfile, SourceKind, detect_skill_md_case_mismatch, load_project_lockfile};
+use super::{
+    LockedPackage, Lockfile, SourceKind, detect_skill_md_case_mismatch, load_project_lockfile,
+};
 
 /// Audit result for a single package.
 #[derive(Debug)]

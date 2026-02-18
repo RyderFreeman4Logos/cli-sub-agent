@@ -2,10 +2,11 @@
 //!
 //! Skills are distributed as git repositories. Weave clones them into a
 //! content-addressable cache (`~/.cache/weave/git/<url-hash>/`) and checks
-//! out the requested revision into `.weave/deps/<name>/`.
+//! out the requested revision into the global package store at
+//! `~/.local/share/weave/packages/<name>/<commit-prefix>/`.
 //!
 //! Commands:
-//! - `install <source>` — clone/fetch + checkout into deps
+//! - `install <source>` — clone/fetch + checkout into global store
 //! - `lock` — snapshot current deps into `weave.lock`
 //! - `update [name]` — fetch latest and re-lock
 //! - `audit` — verify lockfile consistency
@@ -215,7 +216,11 @@ pub fn find_lockfile(project_root: &Path) -> Option<PathBuf> {
 pub fn load_project_lockfile(project_root: &Path) -> Result<Lockfile> {
     match find_lockfile(project_root) {
         Some(path) => load_lockfile(&path),
-        None => bail!("no lockfile found at {} or {}", lockfile_path(project_root).display(), legacy_lockfile_path(project_root).display()),
+        None => bail!(
+            "no lockfile found at {} or {}",
+            lockfile_path(project_root).display(),
+            legacy_lockfile_path(project_root).display()
+        ),
     }
 }
 
@@ -384,17 +389,27 @@ pub(crate) fn detect_skill_md_case_mismatch(dir: &Path) -> Option<String> {
 // Public API: install
 // ---------------------------------------------------------------------------
 
-/// Install a skill from a git source into `.weave/deps/<name>/`.
+/// Install a skill from a git source into the global package store.
+///
+/// Checkout goes to `<store_root>/<name>/<commit-prefix>/`.
+/// Skips checkout when the destination already contains a valid checkout
+/// (content-addressed idempotency).
 ///
 /// Returns the locked package entry.
-pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<LockedPackage> {
+pub fn install(
+    source: &str,
+    project_root: &Path,
+    cache_root: &Path,
+    store_root: &Path,
+) -> Result<LockedPackage> {
     let src = parse_source(source)?;
     let cas = ensure_cached(cache_root, &src.url)?;
     let commit = resolve_commit(&cas, src.git_ref.as_deref())?;
 
-    let deps_dir = project_root.join(".weave").join("deps");
-    let dest = deps_dir.join(&src.name);
-    checkout_to(&cas, &commit, &dest)?;
+    let dest = package_dir(store_root, &src.name, &commit);
+    if !is_checkout_valid(&dest) {
+        checkout_to(&cas, &commit, &dest)?;
+    }
 
     let version = read_version(&dest);
 
@@ -423,11 +438,15 @@ pub fn install(source: &str, project_root: &Path, cache_root: &Path) -> Result<L
 // Public API: install_from_local
 // ---------------------------------------------------------------------------
 
-/// Install a skill from a local directory path into `.weave/deps/<name>/`.
+/// Install a skill from a local directory path into the global package store.
 ///
 /// The source directory is recursively copied (excluding `.git/`).
 /// Returns the locked package entry with `source_kind = Local`.
-pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<LockedPackage> {
+pub fn install_from_local(
+    source_path: &Path,
+    project_root: &Path,
+    store_root: &Path,
+) -> Result<LockedPackage> {
     let canonical = source_path
         .canonicalize()
         .with_context(|| format!("cannot resolve path: {}", source_path.display()))?;
@@ -474,28 +493,24 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
         }
     }
 
-    let deps_dir = project_root.join(".weave").join("deps");
-    let dest = deps_dir.join(&name);
+    // Resolve the store root through any symlinks so overlap detection
+    // works correctly even when the store path contains symlinks.
+    let resolved_store = if store_root.exists() {
+        store_root.canonicalize()?
+    } else {
+        store_root.to_path_buf()
+    };
+    // Local sources use "local" as the commit prefix in the global store.
+    let dest = package_dir(&resolved_store, &name, "local");
 
     // Guard against source/destination overlap.
-    // Resolve dest without requiring it to exist: canonicalize the parent
-    // (deps_dir) and append the name.  Also check whether source is inside
-    // the project root to catch `weave install --path .`.
-    let project_canonical = project_root
-        .canonicalize()
-        .with_context(|| format!("cannot resolve project root: {}", project_root.display()))?;
     {
-        let dest_approx = if deps_dir.exists() {
-            deps_dir.canonicalize()?.join(&name)
+        let dest_approx = if dest.parent().map_or(false, |p| p.exists()) {
+            dest.parent().unwrap().canonicalize()?.join(
+                dest.file_name().unwrap_or_default(),
+            )
         } else {
-            // deps/ doesn't exist yet.  Resolve .weave itself if it exists
-            // (it might be a symlink) so the overlap check uses the real path.
-            let weave_dir = project_root.join(".weave");
-            if weave_dir.exists() {
-                weave_dir.canonicalize()?.join("deps").join(&name)
-            } else {
-                project_canonical.join(".weave").join("deps").join(&name)
-            }
+            dest.clone()
         };
         if canonical == dest_approx
             || canonical.starts_with(&dest_approx)
@@ -511,9 +526,10 @@ pub fn install_from_local(source_path: &Path, project_root: &Path) -> Result<Loc
 
     // Copy to a staging directory first, then swap — ensures the original
     // is preserved if the copy fails (atomic-ish replace).
-    std::fs::create_dir_all(&deps_dir)
-        .with_context(|| format!("failed to create {}", deps_dir.display()))?;
-    let staging = deps_dir.join(format!(".{name}.staging.{}", std::process::id()));
+    let parent = dest.parent().context("invalid global store path")?;
+    std::fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create {}", parent.display()))?;
+    let staging = parent.join(format!(".local.staging.{}", std::process::id()));
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
     }
@@ -676,8 +692,8 @@ pub fn update(
     force: bool,
 ) -> Result<Vec<LockedPackage>> {
     let lock_path = lockfile_path(project_root);
-    let mut lockfile =
-        load_project_lockfile(project_root).context("no lockfile found — run `weave lock` first")?;
+    let mut lockfile = load_project_lockfile(project_root)
+        .context("no lockfile found — run `weave lock` first")?;
 
     let targets: Vec<usize> = if let Some(n) = name {
         let idx = lockfile

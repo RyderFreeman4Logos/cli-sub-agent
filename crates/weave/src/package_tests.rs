@@ -237,7 +237,10 @@ fn lock_reads_from_legacy_and_writes_to_new() {
     // Re-lock reads from legacy, writes to new.
     let result = lock(tmp.path()).unwrap();
     assert_eq!(result.package.len(), 1);
-    assert_eq!(result.package[0].repo, "https://github.com/org/migrated.git");
+    assert_eq!(
+        result.package[0].repo,
+        "https://github.com/org/migrated.git"
+    );
 
     // New lockfile was created.
     assert!(tmp.path().join("weave.lock").is_file());
