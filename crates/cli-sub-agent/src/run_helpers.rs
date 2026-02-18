@@ -87,10 +87,22 @@ pub(crate) fn resolve_tool_and_model(
         }
     }
 
-    // Case 4: no config or no tier mapping → error
+    // Fallback: no tier-based selection available — pick any auto-selectable installed tool.
+    // This covers minimal-init configs that have empty tiers but enabled tools.
+    if let Some(cfg) = config {
+        for tool in csa_config::global::all_known_tools() {
+            let name = tool.as_str();
+            if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
+                let tool_name = parse_tool_name(name)?;
+                return Ok((tool_name, None, None));
+            }
+        }
+    }
+
+    // Case 4: no config, no tier, and no auto-selectable installed tool → error
     anyhow::bail!(
-        "No tool specified and no tier-based selection available. \
-         Use --tool or run 'csa init' to configure tiers."
+        "No tool specified and no tier-based or auto-selectable tool available. \
+         Use --tool, run 'csa init --full' to configure tiers, or install a tool."
     )
 }
 
