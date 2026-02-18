@@ -321,17 +321,14 @@ pub fn link_skills(project_root: &Path, scope: LinkScope, force: bool) -> Result
     for target_dir_name in DEFAULT_CHECK_DIRS {
         let target_dir = base_dir.join(target_dir_name);
 
-        // Only create links in directories that already exist or whose parent
-        // tool directory exists (e.g., create `.claude/skills/` if `.claude/`
-        // exists).
-        let parent = target_dir.parent();
-        let should_create = if target_dir.is_dir() {
-            true
-        } else if let Some(p) = parent {
-            p.is_dir()
-        } else {
-            false
-        };
+        // Decide whether to create this target directory.
+        // - The primary directory (.claude/skills/) is always created — it is
+        //   the standard discovery path and must exist for first-time setups.
+        // - Other tool directories are only created if their parent already
+        //   exists (e.g., create .codex/skills/ only if .codex/ is present).
+        let is_primary = *target_dir_name == DEFAULT_CHECK_DIRS[0];
+        let should_create =
+            target_dir.is_dir() || is_primary || target_dir.parent().is_some_and(|p| p.is_dir());
 
         if !should_create {
             continue;
@@ -640,12 +637,28 @@ fn is_weave_managed_path(path: &Path, store_root: &Path) -> bool {
     match (path.canonicalize(), store_root.canonicalize()) {
         (Ok(cp), Ok(cs)) => cp.starts_with(&cs),
         _ => {
-            // Fallback: string-based check (less reliable but better than nothing).
-            let ps = path.to_string_lossy();
-            let ss = store_root.to_string_lossy();
-            ps.starts_with(ss.as_ref())
+            // Fallback for broken symlinks: normalize `..` segments via
+            // component-based cleanup so relative resolution still matches.
+            let np = normalize_path(path);
+            let ns = normalize_path(store_root);
+            np.starts_with(&ns)
         }
     }
+}
+
+/// Normalize a path by resolving `.` and `..` components lexically (no I/O).
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            std::path::Component::CurDir => {}
+            c => out.push(c.as_os_str()),
+        }
+    }
+    out
 }
 
 /// Create a symlink (platform-specific).
