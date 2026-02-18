@@ -489,8 +489,20 @@ fn create_skill_link(
 /// - Its target resolves to a known skill source directory (handles renames).
 ///
 /// Returns paths without modifying the filesystem.
+///
+/// **Note**: User-scope stale detection is not yet supported in multi-project
+/// environments. When `scope == User`, this function returns an empty list to
+/// avoid accidentally removing links created for other projects.
 pub fn detect_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<PathBuf>> {
     if scope == LinkScope::None {
+        return Ok(Vec::new());
+    }
+
+    if scope == LinkScope::User {
+        warn!(
+            "stale-link detection for user scope is not supported in multi-project \
+             environments; skipping. Use project scope or manually remove stale links."
+        );
         return Ok(Vec::new());
     }
 
