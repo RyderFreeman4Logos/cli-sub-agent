@@ -368,11 +368,12 @@ fn version_fields_present_in_toml_when_set() {
 #[test]
 fn lock_preserves_requested_version_from_existing_lockfile() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Create dep directory.
-    let deps = tmp.path().join(".weave").join("deps").join("pinned-dep");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Pinned").unwrap();
+    // Create package checkout in global store.
+    let checkout = package_dir(&store, "pinned-dep", "abc123");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Pinned").unwrap();
 
     // Create lockfile with pinned version.
     let initial = Lockfile {
@@ -390,7 +391,7 @@ fn lock_preserves_requested_version_from_existing_lockfile() {
     save_lockfile(&lp, &initial).unwrap();
 
     // Re-lock — should preserve requested_version and resolved_ref.
-    let result = lock(tmp.path()).unwrap();
+    let result = lock(tmp.path(), &store).unwrap();
     assert_eq!(result.package.len(), 1);
     assert_eq!(
         result.package[0].requested_version,

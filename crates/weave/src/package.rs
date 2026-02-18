@@ -11,7 +11,6 @@
 //! - `update [name]` — fetch latest and re-lock
 //! - `audit` — verify lockfile consistency
 
-use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -505,10 +504,11 @@ pub fn install_from_local(
 
     // Guard against source/destination overlap.
     {
-        let dest_approx = if dest.parent().map_or(false, |p| p.exists()) {
-            dest.parent().unwrap().canonicalize()?.join(
-                dest.file_name().unwrap_or_default(),
-            )
+        let dest_approx = if dest.parent().is_some_and(|p| p.exists()) {
+            dest.parent()
+                .unwrap()
+                .canonicalize()?
+                .join(dest.file_name().unwrap_or_default())
         } else {
             dest.clone()
         };
@@ -619,55 +619,37 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 // Public API: lock
 // ---------------------------------------------------------------------------
 
-/// Generate or regenerate the lockfile from the current `.weave/deps/` state.
+/// Regenerate the lockfile from the current lockfile state and global store.
 ///
-/// For each dep directory that has a matching lockfile entry, keep it.
-/// For new deps (no lockfile entry), attempt to discover the git remote.
-pub fn lock(project_root: &Path) -> Result<Lockfile> {
-    let deps_dir = project_root.join(".weave").join("deps");
+/// For each existing lockfile entry, verify the checkout exists in the
+/// global store and update the version if changed. Entries whose checkouts
+/// are missing from the store are retained (audit will flag them).
+pub fn lock(project_root: &Path, store_root: &Path) -> Result<Lockfile> {
     let lock_path = lockfile_path(project_root);
 
     let existing = load_project_lockfile(project_root).unwrap_or(Lockfile {
         package: Vec::new(),
     });
 
-    // Index existing entries by name.
-    let existing_map: BTreeMap<String, LockedPackage> = existing
-        .package
-        .into_iter()
-        .map(|p| (p.name.clone(), p))
-        .collect();
-
     let mut packages = Vec::new();
 
-    if deps_dir.is_dir() {
-        let mut entries: Vec<_> = std::fs::read_dir(&deps_dir)
-            .with_context(|| format!("failed to read {}", deps_dir.display()))?
-            .filter_map(|e| e.ok())
-            .filter(|e| e.path().is_dir())
-            .collect();
-        entries.sort_by_key(|e| e.file_name());
-
-        for entry in entries {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if let Some(existing_pkg) = existing_map.get(&name) {
-                // Keep existing lockfile entry, update version if changed.
-                let mut pkg = existing_pkg.clone();
-                pkg.version = read_version(&entry.path());
-                packages.push(pkg);
-            } else {
-                // New dep without lockfile entry — record with unknown repo/commit.
-                packages.push(LockedPackage {
-                    name,
-                    repo: String::new(),
-                    commit: String::new(),
-                    version: read_version(&entry.path()),
-                    source_kind: SourceKind::default(),
-                    requested_version: None,
-                    resolved_ref: None,
-                });
+    for pkg in existing.package {
+        let mut updated = pkg.clone();
+        // Determine the checkout directory in the global store.
+        let commit_key = if pkg.source_kind == SourceKind::Local {
+            "local"
+        } else if pkg.commit.is_empty() {
+            ""
+        } else {
+            &pkg.commit
+        };
+        if !commit_key.is_empty() {
+            let checkout = package_dir(store_root, &pkg.name, commit_key);
+            if checkout.is_dir() {
+                updated.version = read_version(&checkout);
             }
         }
+        packages.push(updated);
     }
 
     let lockfile = Lockfile { package: packages };
@@ -689,6 +671,7 @@ pub fn update(
     name: Option<&str>,
     project_root: &Path,
     cache_root: &Path,
+    store_root: &Path,
     force: bool,
 ) -> Result<Vec<LockedPackage>> {
     let lock_path = lockfile_path(project_root);
@@ -739,9 +722,10 @@ pub fn update(
         let new_commit = resolve_commit(&cas, resolve_ref)?;
 
         if new_commit != pkg.commit {
-            let deps_dir = project_root.join(".weave").join("deps");
-            let dest = deps_dir.join(&pkg.name);
-            checkout_to(&cas, &new_commit, &dest)?;
+            let dest = package_dir(store_root, &pkg.name, &new_commit);
+            if !is_checkout_valid(&dest) {
+                checkout_to(&cas, &new_commit, &dest)?;
+            }
 
             let version = read_version(&dest);
             lockfile.package[idx].commit = new_commit;

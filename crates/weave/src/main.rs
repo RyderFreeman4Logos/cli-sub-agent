@@ -148,14 +148,12 @@ fn main() -> Result<()> {
 
             if let Some(local_path) = path {
                 let store_root = package::global_store_root()?;
-                let pkg =
-                    package::install_from_local(&local_path, &project_root, &store_root)?;
+                let pkg = package::install_from_local(&local_path, &project_root, &store_root)?;
                 eprintln!("installed {} (local) -> {}/", pkg.name, pkg.name);
             } else if let Some(git_source) = source {
                 let cache_root = package::default_cache_root()?;
                 let store_root = package::global_store_root()?;
-                let pkg =
-                    package::install(&git_source, &project_root, &cache_root, &store_root)?;
+                let pkg = package::install(&git_source, &project_root, &cache_root, &store_root)?;
                 let commit_short = &pkg.commit[..pkg.commit.len().min(8)];
                 eprintln!(
                     "installed {} ({}) -> {}/{}/",
@@ -167,7 +165,8 @@ fn main() -> Result<()> {
         }
         Commands::Lock => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
-            let lockfile = package::lock(&project_root)?;
+            let store_root = package::global_store_root()?;
+            let lockfile = package::lock(&project_root, &store_root)?;
             eprintln!("locked {} package(s)", lockfile.package.len());
             for pkg in &lockfile.package {
                 let ver = pkg.version.as_deref().unwrap_or("-");
@@ -182,7 +181,14 @@ fn main() -> Result<()> {
         Commands::Update { name, force } => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
             let cache_root = package::default_cache_root()?;
-            let updated = package::update(name.as_deref(), &project_root, &cache_root, force)?;
+            let store_root = package::global_store_root()?;
+            let updated = package::update(
+                name.as_deref(),
+                &project_root,
+                &cache_root,
+                &store_root,
+                force,
+            )?;
             for pkg in &updated {
                 let commit_short = if pkg.commit.len() > 12 {
                     &pkg.commit[..12]
@@ -194,7 +200,8 @@ fn main() -> Result<()> {
         }
         Commands::Audit => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
-            let results = package::audit(&project_root)?;
+            let store_root = package::global_store_root()?;
+            let results = package::audit(&project_root, &store_root)?;
             if results.is_empty() {
                 eprintln!("audit passed: no issues found");
             } else {

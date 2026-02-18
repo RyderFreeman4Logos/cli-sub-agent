@@ -162,7 +162,8 @@ fn cas_dir_differs_for_different_urls() {
 #[test]
 fn lock_empty_project() {
     let tmp = TempDir::new().unwrap();
-    let lockfile = lock(tmp.path()).unwrap();
+    let store = tmp.path().join("store");
+    let lockfile = lock(tmp.path(), &store).unwrap();
     assert!(lockfile.package.is_empty());
     // Lockfile written to new path.
     assert!(tmp.path().join("weave.lock").is_file());
@@ -213,14 +214,16 @@ fn find_lockfile_returns_none_when_missing() {
 #[test]
 fn lock_reads_from_legacy_and_writes_to_new() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Create dep directory.
-    let deps = tmp.path().join(".weave").join("deps").join("migrated");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Migrated").unwrap();
+    // Create package checkout in global store.
+    let checkout = package_dir(&store, "migrated", "abc123");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Migrated").unwrap();
 
     // Write lockfile only at the legacy path.
     let legacy = tmp.path().join(".weave").join("lock.toml");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
     let initial = Lockfile {
         package: vec![LockedPackage {
             name: "migrated".to_string(),
@@ -235,7 +238,7 @@ fn lock_reads_from_legacy_and_writes_to_new() {
     save_lockfile(&legacy, &initial).unwrap();
 
     // Re-lock reads from legacy, writes to new.
-    let result = lock(tmp.path()).unwrap();
+    let result = lock(tmp.path(), &store).unwrap();
     assert_eq!(result.package.len(), 1);
     assert_eq!(
         result.package[0].repo,
@@ -294,28 +297,14 @@ fn is_checkout_valid_missing_dir_is_invalid() {
 }
 
 #[test]
-fn lock_picks_up_existing_deps() {
-    let tmp = TempDir::new().unwrap();
-    let deps = tmp.path().join(".weave").join("deps").join("my-skill");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# My Skill").unwrap();
-
-    let lockfile = lock(tmp.path()).unwrap();
-    assert_eq!(lockfile.package.len(), 1);
-    assert_eq!(lockfile.package[0].name, "my-skill");
-    assert!(lockfile.package[0].repo.is_empty()); // Not installed via weave.
-    // Written to new location.
-    assert!(tmp.path().join("weave.lock").is_file());
-}
-
-#[test]
 fn lock_preserves_existing_lockfile_entries() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Create dep directory.
-    let deps = tmp.path().join(".weave").join("deps").join("audit");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Audit").unwrap();
+    // Create package checkout in global store.
+    let checkout = package_dir(&store, "audit", "abc123");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Audit").unwrap();
 
     // Create initial lockfile at the new path.
     let initial = Lockfile {
@@ -333,7 +322,7 @@ fn lock_preserves_existing_lockfile_entries() {
     save_lockfile(&lp, &initial).unwrap();
 
     // Re-lock — should preserve the repo/commit info.
-    let result = lock(tmp.path()).unwrap();
+    let result = lock(tmp.path(), &store).unwrap();
     assert_eq!(result.package.len(), 1);
     assert_eq!(result.package[0].repo, "https://github.com/org/audit.git");
     assert_eq!(result.package[0].commit, "abc123");
@@ -342,20 +331,22 @@ fn lock_preserves_existing_lockfile_entries() {
 #[test]
 fn audit_empty_project_no_issues() {
     let tmp = TempDir::new().unwrap();
-    let results = audit(tmp.path()).unwrap();
+    let store = tmp.path().join("store");
+    let results = audit(tmp.path(), &store).unwrap();
     assert!(results.is_empty());
 }
 
 #[test]
 fn audit_detects_missing_dep() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Lockfile references a package that doesn't exist on disk.
+    // Lockfile references a package that doesn't exist in the store.
     let lockfile = Lockfile {
         package: vec![LockedPackage {
             name: "ghost".to_string(),
             repo: "https://example.com/ghost.git".to_string(),
-            commit: "abc".to_string(),
+            commit: "abc12345".to_string(),
             version: None,
             source_kind: SourceKind::default(),
             requested_version: None,
@@ -365,7 +356,7 @@ fn audit_detects_missing_dep() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].name, "ghost");
     assert!(
@@ -377,38 +368,19 @@ fn audit_detects_missing_dep() {
 }
 
 #[test]
-fn audit_detects_unlocked_dep() {
-    let tmp = TempDir::new().unwrap();
-
-    // Create a dep directory but no lockfile entry.
-    let deps = tmp.path().join(".weave").join("deps").join("orphan");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Orphan").unwrap();
-
-    let results = audit(tmp.path()).unwrap();
-    assert_eq!(results.len(), 1);
-    assert_eq!(results[0].name, "orphan");
-    assert!(
-        results[0]
-            .issues
-            .iter()
-            .any(|i| matches!(i, AuditIssue::MissingFromLockfile))
-    );
-}
-
-#[test]
 fn audit_detects_missing_skill_md() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Dep directory exists but has no SKILL.md.
-    let deps = tmp.path().join(".weave").join("deps").join("broken");
-    std::fs::create_dir_all(&deps).unwrap();
+    // Create checkout dir in store but without SKILL.md.
+    let checkout = package_dir(&store, "broken", "abc12345");
+    std::fs::create_dir_all(&checkout).unwrap();
 
     let lockfile = Lockfile {
         package: vec![LockedPackage {
             name: "broken".to_string(),
             repo: "https://example.com/broken.git".to_string(),
-            commit: "abc".to_string(),
+            commit: "abc12345".to_string(),
             version: None,
             source_kind: SourceKind::default(),
             requested_version: None,
@@ -418,7 +390,7 @@ fn audit_detects_missing_skill_md() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     assert_eq!(results.len(), 1);
     assert!(
         results[0]
@@ -431,16 +403,17 @@ fn audit_detects_missing_skill_md() {
 #[test]
 fn audit_detects_unknown_repo() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    let deps = tmp.path().join(".weave").join("deps").join("local");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Local").unwrap();
+    let checkout = package_dir(&store, "local", "abc12345");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Local").unwrap();
 
     let lockfile = Lockfile {
         package: vec![LockedPackage {
             name: "local".to_string(),
             repo: String::new(),
-            commit: String::new(),
+            commit: "abc12345".to_string(),
             version: None,
             source_kind: SourceKind::Git, // Git source with empty repo → UnknownRepo
             requested_version: None,
@@ -450,7 +423,7 @@ fn audit_detects_unknown_repo() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     assert_eq!(results.len(), 1);
     assert!(
         results[0]
@@ -467,20 +440,18 @@ fn audit_detects_unknown_repo() {
 #[test]
 fn audit_detects_case_mismatch_skill_md() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Dep directory exists with lowercase `skill.md` instead of `SKILL.md`.
-    let deps = tmp.path().join(".weave").join("deps").join("bad-case");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("skill.md"), "# Wrong Case").unwrap();
+    // Checkout in store with lowercase `skill.md` instead of `SKILL.md`.
+    let checkout = package_dir(&store, "bad-case", "abc12345");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("skill.md"), "# Wrong Case").unwrap();
 
     // Skip on case-insensitive filesystems (e.g. macOS HFS+/APFS default).
-    // On such systems `SKILL.md` resolves to the same inode as `skill.md`,
-    // so the audit detection logic cannot trigger the case-mismatch path.
-    let probe = deps.join("_CaSe_PrObE_");
+    let probe = checkout.join("_CaSe_PrObE_");
     std::fs::write(&probe, "").unwrap();
-    if deps.join("_case_probe_").exists() {
+    if checkout.join("_case_probe_").exists() {
         std::fs::remove_file(&probe).unwrap();
-        // Case-insensitive FS: detection cannot work, skip test.
         return;
     }
     std::fs::remove_file(&probe).unwrap();
@@ -489,7 +460,7 @@ fn audit_detects_case_mismatch_skill_md() {
         package: vec![LockedPackage {
             name: "bad-case".to_string(),
             repo: "https://example.com/bad-case.git".to_string(),
-            commit: "abc".to_string(),
+            commit: "abc12345".to_string(),
             version: None,
             source_kind: SourceKind::default(),
             requested_version: None,
@@ -499,7 +470,7 @@ fn audit_detects_case_mismatch_skill_md() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     assert_eq!(results.len(), 1);
     assert!(
         results[0]
@@ -520,17 +491,18 @@ fn audit_detects_case_mismatch_skill_md() {
 #[test]
 fn audit_correct_skill_md_no_case_issue() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Dep directory has the correct `SKILL.md`.
-    let deps = tmp.path().join(".weave").join("deps").join("good");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Good Skill").unwrap();
+    // Checkout with the correct `SKILL.md`.
+    let checkout = package_dir(&store, "good", "abc12345");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Good Skill").unwrap();
 
     let lockfile = Lockfile {
         package: vec![LockedPackage {
             name: "good".to_string(),
             repo: "https://example.com/good.git".to_string(),
-            commit: "abc".to_string(),
+            commit: "abc12345".to_string(),
             version: None,
             source_kind: SourceKind::default(),
             requested_version: None,
@@ -540,23 +512,24 @@ fn audit_correct_skill_md_no_case_issue() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     assert!(results.is_empty(), "expected no issues, got: {results:?}");
 }
 
 #[test]
 fn audit_neither_skill_md_variant_is_missing() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Dep directory exists but has NO skill.md variant at all.
-    let deps = tmp.path().join(".weave").join("deps").join("empty");
-    std::fs::create_dir_all(&deps).unwrap();
+    // Checkout exists but has NO skill.md variant at all.
+    let checkout = package_dir(&store, "empty", "abc12345");
+    std::fs::create_dir_all(&checkout).unwrap();
 
     let lockfile = Lockfile {
         package: vec![LockedPackage {
             name: "empty".to_string(),
             repo: "https://example.com/empty.git".to_string(),
-            commit: "abc".to_string(),
+            commit: "abc12345".to_string(),
             version: None,
             source_kind: SourceKind::default(),
             requested_version: None,
@@ -566,7 +539,7 @@ fn audit_neither_skill_md_variant_is_missing() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     assert_eq!(results.len(), 1);
     assert!(
         results[0]
@@ -637,10 +610,12 @@ commit = "abc"
 #[test]
 fn audit_skips_unknown_repo_for_local_source() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    let deps = tmp.path().join(".weave").join("deps").join("local-skill");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Local Skill").unwrap();
+    // Create local source checkout in global store.
+    let checkout = package_dir(&store, "local-skill", "local");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Local Skill").unwrap();
 
     let lockfile = Lockfile {
         package: vec![LockedPackage {
@@ -656,7 +631,7 @@ fn audit_skips_unknown_repo_for_local_source() {
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
-    let results = audit(tmp.path()).unwrap();
+    let results = audit(tmp.path(), &store).unwrap();
     // No issues — empty repo is expected for Local sources.
     assert!(results.is_empty(), "expected no issues, got: {results:?}");
 }
@@ -668,11 +643,12 @@ fn audit_skips_unknown_repo_for_local_source() {
 #[test]
 fn lock_preserves_source_kind_from_existing_lockfile() {
     let tmp = TempDir::new().unwrap();
+    let store = tmp.path().join("store");
 
-    // Create dep directory.
-    let deps = tmp.path().join(".weave").join("deps").join("local-dep");
-    std::fs::create_dir_all(&deps).unwrap();
-    std::fs::write(deps.join("SKILL.md"), "# Local").unwrap();
+    // Create local-source checkout in global store.
+    let checkout = package_dir(&store, "local-dep", "local");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Local").unwrap();
 
     // Create lockfile with Local source_kind.
     let initial = Lockfile {
@@ -690,7 +666,7 @@ fn lock_preserves_source_kind_from_existing_lockfile() {
     save_lockfile(&lp, &initial).unwrap();
 
     // Re-lock — should preserve source_kind.
-    let result = lock(tmp.path()).unwrap();
+    let result = lock(tmp.path(), &store).unwrap();
     assert_eq!(result.package.len(), 1);
     assert_eq!(result.package[0].source_kind, SourceKind::Local);
 }
