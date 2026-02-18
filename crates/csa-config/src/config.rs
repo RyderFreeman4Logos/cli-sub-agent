@@ -27,9 +27,9 @@ pub struct ProjectConfig {
     pub schema_version: u32,
     #[serde(default)]
     pub project: ProjectMeta,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "ResourcesConfig::is_default")]
     pub resources: ResourcesConfig,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, ToolConfig>,
     /// Optional per-project override for `csa review` tool selection.
     ///
@@ -45,11 +45,11 @@ pub struct ProjectConfig {
     /// Uses the same `ReviewConfig` shape (`tool = "auto" | "codex" | ...`).
     #[serde(default)]
     pub debate: Option<ReviewConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tiers: HashMap<String, TierConfig>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tier_mapping: HashMap<String, String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub aliases: HashMap<String, String>,
     /// Optional per-project tool priority override.
     /// When set, overrides the global `[preferences].tool_priority`.
@@ -159,6 +159,17 @@ impl Default for ResourcesConfig {
             idle_timeout_seconds: default_idle_timeout_seconds(),
             initial_estimates: HashMap::new(),
         }
+    }
+}
+
+impl ResourcesConfig {
+    /// Returns true when all fields match their defaults.
+    /// Used by `skip_serializing_if` to omit the `[resources]` section
+    /// from minimal project configs.
+    pub fn is_default(&self) -> bool {
+        self.min_free_memory_mb == default_min_mem()
+            && self.idle_timeout_seconds == default_idle_timeout_seconds()
+            && self.initial_estimates.is_empty()
     }
 }
 
