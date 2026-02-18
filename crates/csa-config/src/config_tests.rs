@@ -45,7 +45,10 @@ fn test_save_and_load_roundtrip() {
 
     config.save(dir.path()).unwrap();
 
-    let loaded = ProjectConfig::load(dir.path()).unwrap();
+    // Use load_with_paths to avoid merging with real global config
+    // (which may have gemini-cli disabled, overriding the test value).
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let loaded = ProjectConfig::load_with_paths(None, &project_path).unwrap();
     assert!(loaded.is_some());
     let loaded = loaded.unwrap();
 

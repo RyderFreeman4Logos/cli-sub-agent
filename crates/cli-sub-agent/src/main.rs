@@ -65,6 +65,7 @@ async fn main() -> Result<()> {
             model_spec,
             model,
             thinking,
+            force,
             no_failover,
             wait,
             idle_timeout,
@@ -96,6 +97,7 @@ async fn main() -> Result<()> {
                 model_spec,
                 model,
                 thinking,
+                force,
                 no_failover,
                 wait,
                 idle_timeout,
@@ -145,9 +147,10 @@ async fn main() -> Result<()> {
         },
         Commands::Init {
             non_interactive,
-            minimal,
+            full,
+            template,
         } => {
-            config_cmds::handle_init(non_interactive, minimal)?;
+            config_cmds::handle_init(non_interactive, full, template)?;
         }
         Commands::Gc {
             dry_run,

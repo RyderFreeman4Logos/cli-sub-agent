@@ -23,14 +23,17 @@ pub(crate) fn resolve_tool_and_model(
     model: Option<&str>,
     config: Option<&ProjectConfig>,
     project_root: &Path,
+    force: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
         // Enforce tier whitelist: model-spec must appear in tiers
-        if let Some(cfg) = config {
-            cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
+        if !force {
+            if let Some(cfg) = config {
+                cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
+            }
         }
         return Ok((tool_name, Some(spec.to_string()), None));
     }
@@ -43,9 +46,11 @@ pub(crate) fn resolve_tool_and_model(
                 .unwrap_or_else(|| m.to_string())
         });
         // Enforce tier whitelist: tool must be in tiers; model name must match if provided
-        if let Some(cfg) = config {
-            cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
-            cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
+        if !force {
+            if let Some(cfg) = config {
+                cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
+                cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
+            }
         }
         return Ok((tool_name, None, resolved_model));
     }

@@ -258,3 +258,139 @@ models = ["codex/openai/o3/high"]
     assert_eq!(tier.description, "Project version");
     assert_eq!(tier.models, vec!["codex/openai/o3/high"]);
 }
+
+#[test]
+fn test_global_disable_wins_over_project_enable() {
+    // Global config disables gemini-cli; project config enables it.
+    // After merge, gemini-cli must remain disabled.
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tools.gemini-cli]
+enabled = false
+suppress_notify = true
+[tools.codex]
+enabled = true
+suppress_notify = true
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[tools.gemini-cli]
+enabled = true
+suppress_notify = true
+[tools.codex]
+enabled = true
+suppress_notify = true
+[tiers.tier-1-quick]
+description = "Quick"
+models = ["gemini-cli/google/flash/xhigh"]
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    // gemini-cli must be disabled (global wins)
+    assert!(
+        !config.is_tool_enabled("gemini-cli"),
+        "globally-disabled tool must remain disabled after merge"
+    );
+    // codex stays enabled (both agree)
+    assert!(config.is_tool_enabled("codex"));
+    // gemini-cli must not be auto-selectable
+    assert!(
+        !config.is_tool_auto_selectable("gemini-cli"),
+        "globally-disabled tool must not be auto-selectable"
+    );
+}
+
+#[test]
+fn test_global_disable_wins_tool_only_in_global() {
+    // Tool disabled in global but not mentioned in project config at all.
+    // After merge, tool should still be disabled.
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tools.opencode]
+enabled = false
+suppress_notify = true
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[project]
+name = "test"
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    assert!(
+        !config.is_tool_enabled("opencode"),
+        "tool disabled only in global must remain disabled"
+    );
+}
+
+#[test]
+fn test_global_enable_can_be_overridden_by_project_disable() {
+    // Global enables a tool, project disables it. Project wins (standard merge).
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[tools.codex]
+enabled = true
+suppress_notify = true
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[tools.codex]
+enabled = false
+suppress_notify = true
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    // Project disabling an enabled tool is fine (standard overlay)
+    assert!(
+        !config.is_tool_enabled("codex"),
+        "project can still disable a globally-enabled tool"
+    );
+}

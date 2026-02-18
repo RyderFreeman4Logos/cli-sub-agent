@@ -14,7 +14,7 @@ fn csa_cmd(tmp: &std::path::Path) -> Command {
     cmd
 }
 
-/// Run `csa init` inside the given temp directory so that a project config exists.
+/// Run `csa init` (minimal mode) inside the given temp directory.
 fn init_project(tmp: &std::path::Path) {
     let status = csa_cmd(tmp)
         .arg("init")
@@ -22,6 +22,16 @@ fn init_project(tmp: &std::path::Path) {
         .status()
         .expect("failed to run csa init");
     assert!(status.success(), "csa init should succeed");
+}
+
+/// Run `csa init --full` inside the given temp directory (full auto-detection mode).
+fn init_project_full(tmp: &std::path::Path) {
+    let status = csa_cmd(tmp)
+        .args(["init", "--full"])
+        .current_dir(tmp)
+        .status()
+        .expect("failed to run csa init --full");
+    assert!(status.success(), "csa init --full should succeed");
 }
 
 #[test]
@@ -82,7 +92,7 @@ fn review_help_shows_options() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn config_show_exits_zero_after_init() {
+fn config_show_exits_zero_after_init_minimal() {
     let tmp = tempfile::tempdir().expect("tempdir");
     init_project(tmp.path());
 
@@ -94,7 +104,29 @@ fn config_show_exits_zero_after_init() {
 
     assert!(output.status.success(), "csa config show should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Config output is TOML — verify a few expected keys.
+    assert!(
+        stdout.contains("schema_version"),
+        "should contain schema_version"
+    );
+    assert!(
+        stdout.contains("[project]"),
+        "should contain [project] section"
+    );
+}
+
+#[test]
+fn config_show_exits_zero_after_init_full() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    init_project_full(tmp.path());
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "show"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config show");
+
+    assert!(output.status.success(), "csa config show should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(
         stdout.contains("schema_version"),
         "should contain schema_version"
@@ -130,9 +162,9 @@ fn gc_dry_run_exits_zero() {
 }
 
 #[test]
-fn tiers_list_exits_zero_after_init() {
+fn tiers_list_exits_zero_after_init_full() {
     let tmp = tempfile::tempdir().expect("tempdir");
-    init_project(tmp.path());
+    init_project_full(tmp.path());
 
     let output = csa_cmd(tmp.path())
         .args(["tiers", "list"])
@@ -142,7 +174,7 @@ fn tiers_list_exits_zero_after_init() {
 
     assert!(output.status.success(), "csa tiers list should exit 0");
     let stdout = String::from_utf8_lossy(&output.stdout);
-    // Default config always defines at least these tiers.
+    // Full init defines at least these tiers.
     assert!(stdout.contains("tier-1"), "should list tier-1");
     assert!(stdout.contains("tier-2"), "should list tier-2");
     assert!(stdout.contains("tier-3"), "should list tier-3");

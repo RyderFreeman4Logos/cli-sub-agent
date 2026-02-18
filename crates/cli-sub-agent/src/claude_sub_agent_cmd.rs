@@ -41,6 +41,7 @@ pub(crate) async fn handle_claude_sub_agent(
             args.model.as_deref(),
             config.as_ref(),
             &project_root,
+            false, // claude-sub-agent does not support --force
         )?;
 
     // 8. Build executor and validate tool
