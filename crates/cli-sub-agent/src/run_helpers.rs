@@ -56,17 +56,19 @@ pub(crate) fn resolve_tool_and_model(
     }
 
     // Case 3: neither tool nor model_spec → use round-robin tier-based selection.
-    // When --force is active, bypass tiers and pick any installed tool.
+    // When --force is active, bypass tiers and pick any installed+enabled tool.
     if force {
         for tool in csa_config::global::all_known_tools() {
-            if is_tool_binary_available(tool.as_str()) {
-                let tool_name = parse_tool_name(tool.as_str())?;
+            let name = tool.as_str();
+            let enabled = config.map_or(true, |cfg| cfg.is_tool_enabled(name));
+            if enabled && is_tool_binary_available(name) {
+                let tool_name = parse_tool_name(name)?;
                 return Ok((tool_name, None, None));
             }
         }
         anyhow::bail!(
-            "No installed tools found. Install at least one tool \
-             (gemini-cli, opencode, codex, claude-code)."
+            "No installed and enabled tools found. Install at least one tool \
+             (gemini-cli, opencode, codex, claude-code) or check enabled status."
         );
     }
 
