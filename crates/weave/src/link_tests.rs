@@ -365,32 +365,62 @@ fn create_skill_link_force_overwrites_non_symlink() {
 
 #[cfg(unix)]
 #[test]
-fn remove_stale_links_removes_unmanaged() {
+fn is_stale_link_detects_stale() {
     let tmp = tempdir().unwrap();
-    let project = tmp.path().join("project");
-    let skills_dir = project.join(".claude").join("skills");
+    let store_root = tmp.path().join("store");
+    let skills_dir = tmp.path().join("skills");
     std::fs::create_dir_all(&skills_dir).unwrap();
 
-    // Create a lockfile with no packages (simulates post-uninstall).
-    write_lockfile(&project, &[]);
+    // Create a source dir inside the store (simulates a weave-managed skill).
+    let source = store_root.join("pkg").join("abc12345").join("skill-a");
+    std::fs::create_dir_all(&source).unwrap();
 
-    // Create a symlink pointing into the weave store — but since store doesn't
-    // match global_store_root() in test, this tests the string-based fallback.
-    // For a proper test, we'd need to mock global_store_root. Instead, test
-    // the cleanup function with a broken link (which is also stale).
-    let stale_link = skills_dir.join("old-skill");
-    std::os::unix::fs::symlink("/nonexistent/weave/store/path", &stale_link).unwrap();
+    // Create a symlink that points into the store.
+    let link_path = skills_dir.join("skill-a");
+    let relative = pathdiff::diff_paths(&source, &skills_dir).unwrap();
+    std::os::unix::fs::symlink(&relative, &link_path).unwrap();
 
-    // Stale removal won't catch this because is_weave_managed_path checks
-    // against the real global store root. This is expected — stale removal
-    // only affects weave-managed links.
-    assert!(
-        stale_link
-            .symlink_metadata()
-            .unwrap()
-            .file_type()
-            .is_symlink()
-    );
+    // When the skill name is NOT in the set, it should be detected as stale.
+    let empty_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    assert!(is_stale_link(&link_path, &store_root, &empty_set));
+
+    // When the skill name IS in the set, it should NOT be stale.
+    let mut active_set = std::collections::HashSet::new();
+    active_set.insert("skill-a");
+    assert!(!is_stale_link(&link_path, &store_root, &active_set));
+}
+
+#[cfg(unix)]
+#[test]
+fn is_stale_link_ignores_non_weave_symlink() {
+    let tmp = tempdir().unwrap();
+    let store_root = tmp.path().join("store");
+    std::fs::create_dir_all(&store_root).unwrap();
+    let skills_dir = tmp.path().join("skills");
+    std::fs::create_dir_all(&skills_dir).unwrap();
+
+    // Create a symlink pointing outside the store.
+    let foreign = tmp.path().join("foreign");
+    std::fs::create_dir_all(&foreign).unwrap();
+    let link_path = skills_dir.join("foreign-skill");
+    std::os::unix::fs::symlink(&foreign, &link_path).unwrap();
+
+    let empty_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    // Not weave-managed, so not stale.
+    assert!(!is_stale_link(&link_path, &store_root, &empty_set));
+}
+
+#[test]
+fn is_stale_link_returns_false_for_non_symlink() {
+    let tmp = tempdir().unwrap();
+    let store_root = tmp.path().join("store");
+    std::fs::create_dir_all(&store_root).unwrap();
+
+    let regular_dir = tmp.path().join("regular");
+    std::fs::create_dir_all(&regular_dir).unwrap();
+
+    let empty_set: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    assert!(!is_stale_link(&regular_dir, &store_root, &empty_set));
 }
 
 // ---------------------------------------------------------------------------

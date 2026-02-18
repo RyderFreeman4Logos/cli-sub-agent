@@ -481,9 +481,9 @@ fn create_skill_link(
 // Sync (reconcile)
 // ---------------------------------------------------------------------------
 
-/// Remove stale symlinks that point into the weave store but whose package
-/// is no longer in the lockfile.
-pub fn remove_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<PathBuf>> {
+/// Detect stale symlinks that point into the weave store but whose skill name
+/// is no longer in the lockfile. Returns paths without modifying the filesystem.
+pub fn detect_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<PathBuf>> {
     if scope == LinkScope::None {
         return Ok(Vec::new());
     }
@@ -493,16 +493,9 @@ pub fn remove_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<P
     let skill_names: std::collections::HashSet<&str> =
         skills.iter().map(|s| s.name.as_str()).collect();
 
-    let base_dir = match scope {
-        LinkScope::Project => project_root.to_path_buf(),
-        LinkScope::User => {
-            let dirs = directories::BaseDirs::new().context("cannot determine home directory")?;
-            dirs.home_dir().to_path_buf()
-        }
-        LinkScope::None => unreachable!(),
-    };
+    let base_dir = scope_base_dir(project_root, scope)?;
 
-    let mut removed = Vec::new();
+    let mut stale = Vec::new();
 
     for dir_name in DEFAULT_CHECK_DIRS {
         let dir = base_dir.join(dir_name);
@@ -517,48 +510,87 @@ pub fn remove_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<P
 
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
-            let meta = match std::fs::symlink_metadata(&path) {
-                Ok(m) => m,
-                Err(_) => continue,
-            };
-
-            if !meta.file_type().is_symlink() {
-                continue;
+            if is_stale_link(&path, &store_root, &skill_names) {
+                stale.push(path);
             }
+        }
+    }
 
-            // Read link target and check if it points into weave store.
-            let target = match std::fs::read_link(&path) {
-                Ok(t) => t,
-                Err(_) => continue,
-            };
+    Ok(stale)
+}
 
-            let resolved = if target.is_absolute() {
-                target
-            } else {
-                dir.join(&target)
-            };
+/// Remove stale symlinks that point into the weave store but whose package
+/// is no longer in the lockfile.
+pub fn remove_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<PathBuf>> {
+    let stale = detect_stale_links(project_root, scope)?;
 
-            if !is_weave_managed_path(&resolved, &store_root) {
-                continue;
-            }
-
-            // This symlink points into the weave store. Is its name still
-            // in the current skill set?
-            let link_name = match path.file_name() {
-                Some(n) => n.to_string_lossy().to_string(),
-                None => continue,
-            };
-
-            if !skill_names.contains(link_name.as_str()) {
-                // Stale — package was uninstalled or skill was removed.
-                if remove_symlink(&path).is_ok() {
-                    removed.push(path);
-                }
+    let mut removed = Vec::new();
+    for path in stale {
+        match remove_symlink(&path) {
+            Ok(()) => removed.push(path),
+            Err(e) => {
+                eprintln!(
+                    "warning: failed to remove stale symlink {}: {}",
+                    path.display(),
+                    e
+                );
             }
         }
     }
 
     Ok(removed)
+}
+
+/// Resolve scope to a base directory.
+fn scope_base_dir(project_root: &Path, scope: LinkScope) -> Result<PathBuf> {
+    match scope {
+        LinkScope::Project => Ok(project_root.to_path_buf()),
+        LinkScope::User => {
+            let dirs = directories::BaseDirs::new().context("cannot determine home directory")?;
+            Ok(dirs.home_dir().to_path_buf())
+        }
+        LinkScope::None => unreachable!(),
+    }
+}
+
+/// Check if a symlink is stale (points into weave store but skill name no
+/// longer in the current skill set).
+fn is_stale_link(
+    path: &Path,
+    store_root: &Path,
+    skill_names: &std::collections::HashSet<&str>,
+) -> bool {
+    let meta = match std::fs::symlink_metadata(path) {
+        Ok(m) => m,
+        Err(_) => return false,
+    };
+
+    if !meta.file_type().is_symlink() {
+        return false;
+    }
+
+    let target = match std::fs::read_link(path) {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    let resolved = if target.is_absolute() {
+        target
+    } else {
+        let parent = path.parent().unwrap_or(Path::new("."));
+        parent.join(&target)
+    };
+
+    if !is_weave_managed_path(&resolved, store_root) {
+        return false;
+    }
+
+    let link_name = match path.file_name() {
+        Some(n) => n.to_string_lossy().to_string(),
+        None => return false,
+    };
+
+    !skill_names.contains(link_name.as_str())
 }
 
 // ---------------------------------------------------------------------------

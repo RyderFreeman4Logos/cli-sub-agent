@@ -471,18 +471,23 @@ fn main() -> Result<()> {
                     }
 
                     if dry_run {
-                        // Dry-run: show what would be done.
+                        // Dry-run: show what would be done without modifying anything.
                         let skills = link::discover_skills(&project_root)?;
                         eprintln!("would link {} skill(s):", skills.len());
                         for skill in &skills {
                             eprintln!("  {} (from {})", skill.name, skill.package_name);
                         }
 
-                        let stale = link::remove_stale_links(&project_root, LinkScope::None)?;
-                        // Stale detection in dry-run is tricky; just report what we'd link.
+                        let stale = link::detect_stale_links(&project_root, scope)?;
                         if stale.is_empty() {
-                            eprintln!("(dry-run: no changes made)");
+                            eprintln!("no stale links detected");
+                        } else {
+                            eprintln!("would remove {} stale link(s):", stale.len());
+                            for p in &stale {
+                                eprintln!("  - {}", p.display());
+                            }
                         }
+                        eprintln!("(dry-run: no changes made)");
                         return Ok(());
                     }
 
