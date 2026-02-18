@@ -345,6 +345,7 @@ fn kill_cached_descendants(#[cfg(target_os = "linux")] cached: &[u32], pgid: u32
 /// These guards are shell snippets executed before tool runs:
 /// - `branch-protection`: warns when running on protected branches.
 /// - `dirty-tree-reminder`: reminds when uncommitted changes exist.
+/// - `commit-workflow`: reminds about unpushed commits on feature branches.
 pub fn builtin_prompt_guards() -> Vec<PromptGuardEntry> {
     vec![
         PromptGuardEntry {
@@ -365,6 +366,22 @@ if [ -n "$status" ]; then
   count=$(echo "$status" | wc -l | tr -d ' ')
   echo "REMINDER: Working tree has $count uncommitted change(s). Consider committing or stashing before starting new work."
 fi"#
+                .to_string(),
+            timeout_secs: 5,
+        },
+        PromptGuardEntry {
+            name: "commit-workflow".to_string(),
+            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+case "$branch" in main|master|dev|develop|release/*) exit 0 ;; esac
+remote_ref="origin/${branch}"
+if git rev-parse --verify "$remote_ref" >/dev/null 2>&1; then
+  unpushed=$(git rev-list "${remote_ref}..HEAD" --count 2>/dev/null) || exit 0
+else
+  unpushed=$(git rev-list "main..HEAD" --count 2>/dev/null \
+    || git rev-list "master..HEAD" --count 2>/dev/null) || exit 0
+fi
+[ "$unpushed" -gt 0 ] && echo "WORKFLOW: ${unpushed} unpushed commit(s) on '${branch}'. Push when ready: git push -u origin ${branch}"
+exit 0"#
                 .to_string(),
             timeout_secs: 5,
         },

@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Branch protection: blocks commits on protected branches.
+# Install: git config core.hooksPath .githooks
+# Or copy to any project: .githooks/pre-commit + git config core.hooksPath .githooks
+set -euo pipefail
+
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+[ -z "$branch" ] && exit 0  # detached HEAD
+
+PROTECTED="main dev master"
+
+for pb in $PROTECTED; do
+  if [ "$branch" = "$pb" ]; then
+    echo ""
+    echo "BLOCKED: Cannot commit directly to '$branch'."
+    echo ""
+    echo "Create a feature branch first:"
+    echo "  git checkout -b feat/<description>"
+    echo "  git checkout -b fix/<description>"
+    echo ""
+    echo "Branch naming: feat/ fix/ refactor/ chore/ docs/ test/"
+    echo ""
+    exit 1
+  fi
+done

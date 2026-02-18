@@ -124,6 +124,33 @@ csa init
 
 This creates `.csa/config.toml` with default settings.
 
+### Install git branch protection (recommended)
+
+Prevents commits on protected branches (main, dev, master). Works with all
+tools — Claude Code, Codex, Gemini, manual git:
+
+```bash
+mkdir -p .githooks
+cat > .githooks/pre-commit << 'HOOK'
+#!/usr/bin/env bash
+set -euo pipefail
+branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+[ -z "$branch" ] && exit 0
+for pb in main dev master; do
+  if [ "$branch" = "$pb" ]; then
+    echo "BLOCKED: Cannot commit directly to '$branch'. Create a feature branch first."
+    exit 1
+  fi
+done
+HOOK
+chmod +x .githooks/pre-commit
+git config core.hooksPath .githooks
+```
+
+CSA also ships **built-in prompt guards** (branch-protection, dirty-tree-reminder,
+commit-workflow) that automatically inject workflow reminders into every
+`csa run` session — no installation needed.
+
 ### Check tool availability
 
 ```bash
@@ -313,13 +340,14 @@ max_concurrent = 3
 
 ## Step 7: Configure Hooks (Optional)
 
-CSA has a hook system that runs shell scripts at key lifecycle events. Two
+CSA has a hook system that runs shell scripts at key lifecycle events. Three
 **built-in prompt guards** are enabled by default — no configuration needed:
 
 | Guard | What it does |
 |-------|--------------|
 | `branch-protection` | Warns when running on protected branches (main, dev, release/*) |
 | `dirty-tree-reminder` | Reminds about uncommitted changes in the working tree |
+| `commit-workflow` | Reminds about unpushed commits on feature branches |
 
 ### Adding custom guards
 

@@ -475,13 +475,15 @@ mod unix_tests {
     }
 
     #[test]
-    fn test_builtin_prompt_guards_returns_two_entries() {
+    fn test_builtin_prompt_guards_returns_three_entries() {
         let guards = builtin_prompt_guards();
-        assert_eq!(guards.len(), 2);
+        assert_eq!(guards.len(), 3);
         assert_eq!(guards[0].name, "branch-protection");
         assert_eq!(guards[1].name, "dirty-tree-reminder");
+        assert_eq!(guards[2].name, "commit-workflow");
         assert_eq!(guards[0].timeout_secs, 5);
         assert_eq!(guards[1].timeout_secs, 5);
+        assert_eq!(guards[2].timeout_secs, 5);
     }
 
     #[test]
@@ -506,6 +508,21 @@ mod unix_tests {
         assert!(
             results.len() <= 1,
             "dirty-tree-reminder should produce at most one result, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn test_builtin_commit_workflow_executes_successfully() {
+        // Verify the guard runs without error. On protected branches it
+        // exits early (0 results); on feature branches it may report
+        // unpushed commits (0 or 1 result). Both are valid.
+        let guards = builtin_prompt_guards();
+        let workflow_guard = &guards[2];
+        let results = run_prompt_guards(std::slice::from_ref(workflow_guard), &test_context());
+        assert!(
+            results.len() <= 1,
+            "commit-workflow should produce at most one result, got {}",
             results.len()
         );
     }
