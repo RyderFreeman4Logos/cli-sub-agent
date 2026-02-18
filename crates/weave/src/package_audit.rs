@@ -41,6 +41,11 @@ pub enum AuditIssue {
         /// Target the symlink points to.
         target: PathBuf,
     },
+    /// A pattern has no companion skill (patterns/<name>/skills/<name>/SKILL.md).
+    MissingCompanionSkill {
+        /// Pattern name.
+        pattern: String,
+    },
 }
 
 impl std::fmt::Display for AuditIssue {
@@ -62,6 +67,13 @@ impl std::fmt::Display for AuditIssue {
                     "broken symlink: {} -> {}",
                     path.display(),
                     target.display()
+                )
+            }
+            Self::MissingCompanionSkill { pattern } => {
+                write!(
+                    f,
+                    "pattern '{pattern}' has no companion skill at \
+                     patterns/{pattern}/skills/{pattern}/SKILL.md"
                 )
             }
         }
@@ -114,6 +126,11 @@ pub fn audit(project_root: &Path, store_root: &Path) -> Result<Vec<AuditResult>>
             if pkg.repo.is_empty() && pkg.source_kind != SourceKind::Local {
                 issues.push(AuditIssue::UnknownRepo);
             }
+
+            // Check for companion skills in patterns.
+            if dep_path.is_dir() {
+                check_companion_skills(&dep_path, &mut issues);
+            }
         }
 
         if !issues.is_empty() {
@@ -125,4 +142,44 @@ pub fn audit(project_root: &Path, store_root: &Path) -> Result<Vec<AuditResult>>
     }
 
     Ok(results)
+}
+
+/// Check that each pattern in a package has a companion skill.
+///
+/// A companion skill is at `patterns/<name>/skills/<name>/SKILL.md` and serves
+/// as the entry point for orchestrators to discover the pattern.
+fn check_companion_skills(dep_path: &Path, issues: &mut Vec<AuditIssue>) {
+    let patterns_dir = dep_path.join("patterns");
+    let entries = match std::fs::read_dir(&patterns_dir) {
+        Ok(e) => e,
+        Err(_) => return, // No patterns/ directory — nothing to check.
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let pattern_dir = entry.path();
+        if !pattern_dir.is_dir() {
+            continue;
+        }
+
+        // Only check directories that have a PATTERN.md (i.e., are actual patterns).
+        if !pattern_dir.join("PATTERN.md").is_file() {
+            continue;
+        }
+
+        let pattern_name = match pattern_dir.file_name() {
+            Some(n) => n.to_string_lossy().to_string(),
+            None => continue,
+        };
+
+        let companion = pattern_dir
+            .join("skills")
+            .join(&pattern_name)
+            .join("SKILL.md");
+
+        if !companion.is_file() {
+            issues.push(AuditIssue::MissingCompanionSkill {
+                pattern: pattern_name,
+            });
+        }
+    }
 }
