@@ -418,6 +418,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "async-trait",
+ "csa-resource",
  "libc",
  "serde",
  "serde_json",
@@ -509,6 +510,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "csa-core",
+ "csa-resource",
  "libc",
  "serde",
  "tokio",
