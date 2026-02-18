@@ -82,6 +82,9 @@ enum Commands {
         fix: bool,
     },
 
+    /// Migrate from legacy .weave/lock.toml to weave.lock and global store.
+    Migrate,
+
     /// Batch-compile all plan.toml files in a directory tree.
     CompileAll {
         /// Root directory to scan for plan.toml files (default: patterns/).
@@ -211,6 +214,25 @@ fn main() -> Result<()> {
                     }
                 }
                 std::process::exit(1);
+            }
+        }
+        Commands::Migrate => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let cache_root = package::default_cache_root()?;
+            let store_root = package::global_store_root()?;
+            match package::migrate(&project_root, &cache_root, &store_root)? {
+                package::MigrateResult::AlreadyMigrated => {
+                    eprintln!("already migrated — weave.lock exists");
+                }
+                package::MigrateResult::NothingToMigrate => {
+                    eprintln!("nothing to migrate — no .weave/lock.toml found");
+                }
+                package::MigrateResult::Migrated { count, .. } => {
+                    eprintln!("Migrated {count} package(s) to global store");
+                    eprintln!(
+                        "You can now safely remove .weave/deps/ with: rm -rf .weave/deps/"
+                    );
+                }
             }
         }
         Commands::Check { dirs, fix } => {

@@ -740,6 +740,72 @@ pub fn update(
 }
 
 // ---------------------------------------------------------------------------
+// Public API: migrate
+// ---------------------------------------------------------------------------
+
+/// Migrate from legacy `.weave/lock.toml` to the new `weave.lock` format,
+/// ensuring all git-sourced packages are checked out in the global store.
+///
+/// Returns the number of packages migrated. Prints nothing to migrate if the
+/// legacy lockfile does not exist or the new lockfile already exists.
+pub fn migrate(
+    project_root: &Path,
+    cache_root: &Path,
+    store_root: &Path,
+) -> Result<MigrateResult> {
+    let new_path = lockfile_path(project_root);
+    if new_path.is_file() {
+        return Ok(MigrateResult::AlreadyMigrated);
+    }
+
+    let old_path = legacy_lockfile_path(project_root);
+    if !old_path.is_file() {
+        return Ok(MigrateResult::NothingToMigrate);
+    }
+
+    let lockfile = load_lockfile(&old_path)
+        .with_context(|| format!("failed to read legacy lockfile at {}", old_path.display()))?;
+
+    let mut migrated_count: usize = 0;
+
+    for pkg in &lockfile.package {
+        if pkg.source_kind != SourceKind::Git {
+            continue;
+        }
+        if pkg.repo.is_empty() || pkg.commit.is_empty() {
+            continue;
+        }
+
+        let dest = package_dir(store_root, &pkg.name, &pkg.commit);
+        if is_checkout_valid(&dest) {
+            continue;
+        }
+
+        let cas = ensure_cached(cache_root, &pkg.repo)?;
+        checkout_to(&cas, &pkg.commit, &dest)?;
+        migrated_count += 1;
+    }
+
+    save_lockfile(&new_path, &lockfile)?;
+
+    Ok(MigrateResult::Migrated {
+        count: lockfile.package.len(),
+        checkouts: migrated_count,
+    })
+}
+
+/// Result of a `weave migrate` operation.
+#[derive(Debug, PartialEq)]
+pub enum MigrateResult {
+    /// `weave.lock` already exists — nothing to do.
+    AlreadyMigrated,
+    /// No legacy `.weave/lock.toml` found.
+    NothingToMigrate,
+    /// Successfully migrated N packages (M new checkouts).
+    Migrated { count: usize, checkouts: usize },
+}
+
+// ---------------------------------------------------------------------------
 // Public API: audit (in package_audit.rs)
 // ---------------------------------------------------------------------------
 

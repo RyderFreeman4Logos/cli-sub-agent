@@ -552,6 +552,121 @@ fn audit_neither_skill_md_variant_is_missing() {
 }
 
 // ---------------------------------------------------------------------------
+// migrate tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_nothing_when_no_legacy_lockfile() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    assert_eq!(result, MigrateResult::NothingToMigrate);
+}
+
+#[test]
+fn migrate_already_migrated_when_weave_lock_exists() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+
+    // Create weave.lock (new format).
+    let new = lockfile_path(tmp.path());
+    std::fs::write(&new, "").unwrap();
+
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    assert_eq!(result, MigrateResult::AlreadyMigrated);
+}
+
+#[test]
+fn migrate_creates_weave_lock_from_legacy() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+
+    // Create checkout that already exists in global store (skip git ops).
+    let checkout = package_dir(&store, "test-skill", "abc12345");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Test").unwrap();
+
+    // Write legacy lockfile with a Local source (no git needed).
+    let legacy = tmp.path().join(".weave").join("lock.toml");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let lockfile = Lockfile {
+        package: vec![LockedPackage {
+            name: "test-skill".to_string(),
+            repo: String::new(),
+            commit: String::new(),
+            version: None,
+            source_kind: SourceKind::Local,
+            requested_version: None,
+            resolved_ref: None,
+        }],
+    };
+    save_lockfile(&legacy, &lockfile).unwrap();
+
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    assert!(
+        matches!(result, MigrateResult::Migrated { count: 1, .. }),
+        "expected Migrated with 1 package, got: {result:?}"
+    );
+
+    // New lockfile must exist.
+    let new_path = lockfile_path(tmp.path());
+    assert!(new_path.is_file(), "weave.lock should be created");
+
+    // Verify content matches.
+    let loaded = load_lockfile(&new_path).unwrap();
+    assert_eq!(loaded.package.len(), 1);
+    assert_eq!(loaded.package[0].name, "test-skill");
+}
+
+#[test]
+fn migrate_skips_valid_checkout_in_global_store() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+
+    // Pre-create a valid checkout in global store.
+    let checkout = package_dir(&store, "pre-existing", "deadbeef");
+    std::fs::create_dir_all(&checkout).unwrap();
+    std::fs::write(checkout.join("SKILL.md"), "# Pre-existing").unwrap();
+
+    // Write legacy lockfile referencing git source with empty repo
+    // (which will be skipped because repo is empty).
+    let legacy = tmp.path().join(".weave").join("lock.toml");
+    std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
+    let lockfile = Lockfile {
+        package: vec![LockedPackage {
+            name: "pre-existing".to_string(),
+            repo: "https://example.com/pre-existing.git".to_string(),
+            commit: "deadbeef".to_string(),
+            version: None,
+            source_kind: SourceKind::Git,
+            requested_version: None,
+            resolved_ref: None,
+        }],
+    };
+    save_lockfile(&legacy, &lockfile).unwrap();
+
+    // This should succeed because checkout already valid — no git needed.
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    assert!(
+        matches!(
+            result,
+            MigrateResult::Migrated {
+                count: 1,
+                checkouts: 0
+            }
+        ),
+        "expected Migrated(count=1, checkouts=0) since checkout valid, got: {result:?}"
+    );
+
+    // New lockfile must exist.
+    assert!(lockfile_path(tmp.path()).is_file());
+}
+
+// ---------------------------------------------------------------------------
 // SourceKind serialization tests
 // ---------------------------------------------------------------------------
 
