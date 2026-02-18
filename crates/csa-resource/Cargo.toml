@@ -12,6 +12,8 @@ toml.workspace = true
 serde.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+libc.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

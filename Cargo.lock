@@ -521,11 +521,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "csa-core",
+ "libc",
  "serde",
  "sysinfo",
  "tempfile",
  "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]
