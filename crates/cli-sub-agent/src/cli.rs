@@ -488,6 +488,11 @@ pub enum AuditCommands {
         /// Additional ignore patterns (prefix/path based)
         #[arg(long)]
         ignore: Vec<String>,
+
+        /// Mirror directory for mapping source paths to output locations.
+        /// When set, blog_path is auto-computed as {mirror_dir}/{source_path}.md.
+        #[arg(long)]
+        mirror_dir: Option<String>,
     },
 
     /// Show audit status by comparing manifest and current filesystem
@@ -519,9 +524,15 @@ pub enum AuditCommands {
         #[arg(long)]
         auditor: Option<String>,
 
-        /// Blog path associated with generated content
+        /// Blog path associated with generated content.
+        /// Overrides auto-computation from mirror_dir.
         #[arg(long)]
         blog_path: Option<String>,
+
+        /// Mirror directory for auto-computing blog_path.
+        /// Overrides manifest meta mirror_dir for this update.
+        #[arg(long)]
+        mirror_dir: Option<String>,
     },
 
     /// Mark files as approved

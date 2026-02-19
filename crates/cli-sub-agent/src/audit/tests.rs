@@ -224,6 +224,7 @@ fn test_io_save_load_round_trip() {
             created_at: "2026-02-19T00:00:00Z".to_string(),
             updated_at: "2026-02-19T00:00:01Z".to_string(),
             last_scanned_at: Some("2026-02-19T00:00:02Z".to_string()),
+            mirror_dir: None,
         },
         files,
     };

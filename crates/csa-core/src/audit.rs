@@ -20,6 +20,10 @@ pub struct ManifestMeta {
     pub updated_at: String,
     #[serde(default)]
     pub last_scanned_at: Option<String>,
+    /// Optional mirror directory for mapping source paths to output locations.
+    /// When set, blog_path can be auto-computed as `{mirror_dir}/{relative_source_path}.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mirror_dir: Option<String>,
 }
 
 fn default_project_root() -> String {
@@ -73,6 +77,7 @@ impl AuditManifest {
                 created_at: now.clone(),
                 updated_at: now,
                 last_scanned_at: None,
+                mirror_dir: None,
             },
             files: BTreeMap::new(),
         }
@@ -116,6 +121,7 @@ mod tests {
                 created_at: "2026-02-19T00:00:00Z".to_string(),
                 updated_at: "2026-02-19T00:01:00Z".to_string(),
                 last_scanned_at: Some("2026-02-19T00:02:00Z".to_string()),
+                mirror_dir: None,
             },
             files,
         };
@@ -236,5 +242,41 @@ hash = "sha256:abc"
 
         assert!(a_pos < m_pos);
         assert!(m_pos < z_pos);
+    }
+
+    #[test]
+    fn test_mirror_dir_toml_round_trip() {
+        let mut manifest = AuditManifest::new(".");
+        manifest.meta.created_at = "2026-02-19T00:00:00Z".to_string();
+        manifest.meta.updated_at = "2026-02-19T00:01:00Z".to_string();
+        manifest.meta.mirror_dir = Some("./drafts".to_string());
+
+        let toml_str = toml::to_string_pretty(&manifest).expect("manifest should serialize");
+        assert!(
+            toml_str.contains("mirror_dir"),
+            "serialized TOML should contain mirror_dir when set"
+        );
+
+        let parsed: AuditManifest =
+            toml::from_str(&toml_str).expect("manifest should deserialize");
+        assert_eq!(parsed.meta.mirror_dir, Some("./drafts".to_string()));
+    }
+
+    #[test]
+    fn test_mirror_dir_none_omitted_in_toml() {
+        let mut manifest = AuditManifest::new(".");
+        manifest.meta.created_at = "2026-02-19T00:00:00Z".to_string();
+        manifest.meta.updated_at = "2026-02-19T00:01:00Z".to_string();
+        // mirror_dir is None by default
+
+        let toml_str = toml::to_string_pretty(&manifest).expect("manifest should serialize");
+        assert!(
+            !toml_str.contains("mirror_dir"),
+            "serialized TOML should NOT contain mirror_dir when None"
+        );
+
+        let parsed: AuditManifest =
+            toml::from_str(&toml_str).expect("manifest should deserialize");
+        assert_eq!(parsed.meta.mirror_dir, None);
     }
 }
