@@ -123,6 +123,12 @@ pub struct ToolConfig {
     /// Per-tool swap limit override (MB). Takes precedence over project resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_swap_max_mb: Option<u64>,
+    /// Per-tool Node.js heap size limit (MB). Takes precedence over project resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_heap_limit_mb: Option<u64>,
+    /// Opt-in lean mode for ACP-backed tools.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lean_mode: Option<bool>,
 }
 
 impl Default for ToolConfig {
@@ -133,6 +139,8 @@ impl Default for ToolConfig {
             suppress_notify: true,
             memory_max_mb: None,
             memory_swap_max_mb: None,
+            node_heap_limit_mb: None,
+            lean_mode: None,
         }
     }
 }
@@ -166,6 +174,9 @@ pub struct ResourcesConfig {
     /// Maximum swap usage in MB for child tool processes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_swap_max_mb: Option<u64>,
+    /// Default Node.js heap size limit (MB) for child tool processes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub node_heap_limit_mb: Option<u64>,
     /// Maximum number of PIDs for child tool process trees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pids_max: Option<u32>,
@@ -188,6 +199,7 @@ impl Default for ResourcesConfig {
             enforcement_mode: None,
             memory_max_mb: None,
             memory_swap_max_mb: None,
+            node_heap_limit_mb: None,
             pids_max: None,
         }
     }
@@ -204,6 +216,7 @@ impl ResourcesConfig {
             && self.enforcement_mode.is_none()
             && self.memory_max_mb.is_none()
             && self.memory_swap_max_mb.is_none()
+            && self.node_heap_limit_mb.is_none()
             && self.pids_max.is_none()
     }
 }
@@ -437,54 +450,6 @@ impl ProjectConfig {
     pub fn is_tool_auto_selectable(&self, tool: &str) -> bool {
         self.is_tool_enabled(tool)
             && (self.tiers.is_empty() || self.is_tool_configured_in_tiers(tool))
-    }
-
-    /// Resolve sandbox enforcement mode (defaults to `Off`).
-    pub fn enforcement_mode(&self) -> EnforcementMode {
-        self.resources
-            .enforcement_mode
-            .unwrap_or(EnforcementMode::Off)
-    }
-
-    /// Resolve memory_max_mb: tool-level override > project resources > None.
-    pub fn sandbox_memory_max_mb(&self, tool: &str) -> Option<u64> {
-        self.tools
-            .get(tool)
-            .and_then(|t| t.memory_max_mb)
-            .or(self.resources.memory_max_mb)
-    }
-
-    /// Resolve memory_swap_max_mb: tool-level override > project resources > None.
-    pub fn sandbox_memory_swap_max_mb(&self, tool: &str) -> Option<u64> {
-        self.tools
-            .get(tool)
-            .and_then(|t| t.memory_swap_max_mb)
-            .or(self.resources.memory_swap_max_mb)
-    }
-
-    /// Resolve pids_max from project resources config.
-    pub fn sandbox_pids_max(&self) -> Option<u32> {
-        self.resources.pids_max
-    }
-
-    /// Check if notification hooks should be suppressed for a tool.
-    ///
-    /// Defaults to `true` (suppress) since CSA always runs tools as
-    /// non-interactive sub-agents where desktop notifications are not useful.
-    pub fn should_suppress_notify(&self, tool: &str) -> bool {
-        self.tools
-            .get(tool)
-            .map(|t| t.suppress_notify)
-            .unwrap_or(true)
-    }
-
-    /// Check if a tool is allowed to edit existing files
-    pub fn can_tool_edit_existing(&self, tool: &str) -> bool {
-        self.tools
-            .get(tool)
-            .and_then(|t| t.restrictions.as_ref())
-            .map(|r| r.allow_edit_existing_files)
-            .unwrap_or(true) // Default: allow (only gemini-cli needs explicit deny)
     }
 
     /// Get the config file path for a project root

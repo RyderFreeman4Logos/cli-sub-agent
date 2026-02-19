@@ -515,6 +515,7 @@ dependencies = [
  "csa-session",
  "regex",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "toml",

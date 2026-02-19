@@ -64,6 +64,15 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
             );
         }
     }
+    if let Some(heap) = config.resources.node_heap_limit_mb {
+        if heap < 512 {
+            bail!(
+                "resources.node_heap_limit_mb must be >= 512 (got {}). \
+                 Node-based tools need at least 512 MB heap to function.",
+                heap
+            );
+        }
+    }
     if let Some(pids) = config.resources.pids_max {
         if pids < 10 {
             bail!(
@@ -105,6 +114,16 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
                      Tool processes need at least 256 MB to function.",
                     tool_name,
                     mem
+                );
+            }
+        }
+        if let Some(heap) = tool_config.node_heap_limit_mb {
+            if heap < 512 {
+                bail!(
+                    "tools.{}.node_heap_limit_mb must be >= 512 (got {}). \
+                     Node-based tools need at least 512 MB heap to function.",
+                    tool_name,
+                    heap
                 );
             }
         }

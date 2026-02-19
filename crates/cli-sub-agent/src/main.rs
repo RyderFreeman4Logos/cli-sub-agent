@@ -16,6 +16,7 @@ mod mcp_server;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_execute;
+mod pipeline_env;
 mod pipeline_sandbox;
 mod plan_cmd;
 mod process_tree;

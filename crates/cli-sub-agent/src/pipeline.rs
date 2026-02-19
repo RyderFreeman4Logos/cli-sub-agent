@@ -507,14 +507,7 @@ pub(crate) async fn execute_with_session_and_meta(
     });
 
     // Inject CSA_SUPPRESS_NOTIFY to skip desktop notifications in non-interactive mode.
-    let suppress = config
-        .map(|c| c.should_suppress_notify(executor.tool_name()))
-        .unwrap_or(true);
-    let mut merged_env: std::collections::HashMap<String, String> =
-        extra_env.cloned().unwrap_or_default();
-    if suppress {
-        merged_env.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
-    }
+    let merged_env = crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
     let merged_env_ref = if merged_env.is_empty() {
         None
     } else {
