@@ -131,30 +131,46 @@ pub(crate) fn validate_mirror_dir(mirror_dir: &str, project_root: &Path) -> Resu
         }
     }
     let resolved = project_root.join(path);
-    // If it already exists, canonicalize and verify containment.
+    let canonical_root = project_root.canonicalize().with_context(|| {
+        format!(
+            "Failed to canonicalize project root: {}",
+            project_root.display()
+        )
+    })?;
+
+    // Walk up from the resolved path to find the deepest existing ancestor.
+    // Canonicalize it to resolve symlinks, then verify containment within
+    // the project root. This catches symlink escapes even when the full
+    // target path does not yet exist.
+    let mut ancestor = resolved.as_path();
+    while !ancestor.exists() {
+        ancestor = match ancestor.parent() {
+            Some(p) => p,
+            None => break,
+        };
+    }
+    if ancestor.exists() {
+        let canonical_ancestor = ancestor
+            .canonicalize()
+            .with_context(|| format!("Failed to canonicalize ancestor: {}", ancestor.display()))?;
+        if !canonical_ancestor.starts_with(&canonical_root) {
+            bail!(
+                "Mirror directory escapes project root: {} (ancestor {} resolved to {})",
+                mirror_dir,
+                ancestor.display(),
+                canonical_ancestor.display()
+            );
+        }
+    }
+
     if resolved.exists() {
-        let canonical = resolved.canonicalize().with_context(|| {
+        Ok(resolved.canonicalize().with_context(|| {
             format!(
                 "Failed to canonicalize mirror directory: {}",
                 resolved.display()
             )
-        })?;
-        let canonical_root = project_root.canonicalize().with_context(|| {
-            format!(
-                "Failed to canonicalize project root: {}",
-                project_root.display()
-            )
-        })?;
-        if !canonical.starts_with(&canonical_root) {
-            bail!(
-                "Mirror directory escapes project root: {} (resolved to {})",
-                mirror_dir,
-                canonical.display()
-            );
-        }
-        Ok(canonical)
+        })?)
     } else {
-        // Directory doesn't exist yet; component check above is sufficient.
         Ok(resolved)
     }
 }
@@ -310,6 +326,43 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let result = validate_mirror_dir(".", tmp.path());
         assert!(result.is_ok());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_mirror_dir_rejects_symlink_escape() {
+        let project = tempfile::tempdir().expect("project tempdir");
+        let external = tempfile::tempdir().expect("external tempdir");
+
+        // Create a symlink inside the project pointing outside.
+        let symlink_path = project.path().join("link");
+        std::os::unix::fs::symlink(external.path(), &symlink_path).expect("symlink");
+
+        // "link/new": "link" is a symlink to external dir, "new" doesn't exist.
+        // The deepest existing ancestor is "link", which resolves outside.
+        let result = validate_mirror_dir("link/new", project.path());
+        assert!(result.is_err(), "should reject symlink escape: {result:?}");
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("escapes project root"),
+            "error should mention escape"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_validate_mirror_dir_rejects_existing_symlink_dir() {
+        let project = tempfile::tempdir().expect("project tempdir");
+        let external = tempfile::tempdir().expect("external tempdir");
+
+        let symlink_path = project.path().join("escape");
+        std::os::unix::fs::symlink(external.path(), &symlink_path).expect("symlink");
+
+        // "escape" exists as a symlink to an external directory.
+        let result = validate_mirror_dir("escape", project.path());
+        assert!(result.is_err(), "should reject symlink escape: {result:?}");
     }
 
     #[test]

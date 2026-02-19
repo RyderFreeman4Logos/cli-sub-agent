@@ -20,28 +20,20 @@ static USE_CRATE_RE: LazyLock<Regex> =
 /// Non-Rust files and files where dependency parsing fails fall back to
 /// directory-depth ordering (deeper paths first, then alphabetical).
 ///
-/// Module names are scoped to their crate root (the directory containing
-/// `lib.rs` or `main.rs`) to avoid false edges between identically-named
-/// modules in different crates.
+/// Dependencies are resolved by file path structure rather than module name
+/// indexing, which correctly handles nested modules with the same basename
+/// (e.g., `src/config.rs` and `src/foo/config.rs`).
 pub(crate) fn topo_sort(files: &[String], project_root: &Path) -> Vec<String> {
     let rust_files: Vec<&String> = files.iter().filter(|f| f.ends_with(".rs")).collect();
     let non_rust_files: Vec<&String> = files.iter().filter(|f| !f.ends_with(".rs")).collect();
 
-    // Group Rust files by crate root for scoped module name resolution.
+    // Group Rust files by crate root for scoped `use crate::` resolution.
     let crate_roots = discover_crate_roots(&rust_files);
 
-    // Build crate-scoped module-name -> file-path index for Rust files.
-    // Key format: "{crate_root}::{module_name}" to avoid cross-crate collisions.
-    let mut mod_to_file: HashMap<String, String> = HashMap::new();
-    for file in &rust_files {
-        let crate_root = find_crate_root(file, &crate_roots);
-        for module_name in infer_module_names(file) {
-            let scoped_name = format!("{crate_root}::{module_name}");
-            mod_to_file.insert(scoped_name, (*file).clone());
-        }
-    }
+    // Build file set for O(1) membership checks.
+    let file_set: HashSet<&str> = rust_files.iter().map(|f| f.as_str()).collect();
 
-    // Build adjacency list: file -> set of files it depends on.
+    // Build adjacency list using path-based dependency resolution.
     let mut deps: HashMap<String, HashSet<String>> = HashMap::new();
     for file in &rust_files {
         deps.insert((*file).clone(), HashSet::new());
@@ -55,15 +47,21 @@ pub(crate) fn topo_sort(files: &[String], project_root: &Path) -> Vec<String> {
         };
 
         let crate_root = find_crate_root(file, &crate_roots);
-        let referenced_modules = parse_dependencies(&content);
-        for module_name in referenced_modules {
-            // Look up the scoped name within the same crate.
-            let scoped_name = format!("{crate_root}::{module_name}");
-            if let Some(dep_file) = mod_to_file.get(&scoped_name) {
-                if dep_file != *file {
-                    deps.entry((*file).clone())
-                        .or_default()
-                        .insert(dep_file.clone());
+
+        // Resolve `mod foo;` declarations to child module file paths.
+        for mod_name in parse_mod_declarations(&content) {
+            for candidate in resolve_child_module(file, &mod_name) {
+                if file_set.contains(candidate.as_str()) && candidate != **file {
+                    deps.entry((*file).clone()).or_default().insert(candidate);
+                }
+            }
+        }
+
+        // Resolve `use crate::foo` to crate-root-level module file paths.
+        for module_name in parse_use_crate_refs(&content) {
+            for candidate in resolve_crate_use(&crate_root, &module_name) {
+                if file_set.contains(candidate.as_str()) && candidate != **file {
+                    deps.entry((*file).clone()).or_default().insert(candidate);
                 }
             }
         }
@@ -122,49 +120,66 @@ fn find_crate_root(file: &str, crate_roots: &[String]) -> String {
     ".".to_string()
 }
 
-/// Infer the module name(s) that a file path could represent.
+/// Extract `mod foo;` declaration names from source code.
 ///
-/// For example:
-/// - `src/foo.rs` -> `["foo"]`
-/// - `src/foo/mod.rs` -> `["foo"]`
-/// - `src/lib.rs` -> `["lib"]`
-fn infer_module_names(file_path: &str) -> Vec<String> {
-    let path = Path::new(file_path);
-    let mut names = Vec::new();
-
-    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-        if stem == "mod" {
-            // src/foo/mod.rs -> module name is "foo" (parent directory)
-            if let Some(parent) = path.parent() {
-                if let Some(dir_name) = parent.file_name().and_then(|s| s.to_str()) {
-                    names.push(dir_name.to_string());
-                }
-            }
-        } else {
-            names.push(stem.to_string());
-        }
-    }
-
-    names
+/// Matches `mod foo;`, `pub mod foo;`, and `pub(crate) mod foo;` but NOT
+/// inline `mod foo { ... }` blocks (no trailing semicolon).
+fn parse_mod_declarations(content: &str) -> HashSet<String> {
+    MOD_DECL_RE
+        .captures_iter(content)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .collect()
 }
 
-/// Extract module names referenced via `mod foo;` and `use crate::foo`.
-fn parse_dependencies(content: &str) -> HashSet<String> {
-    let mut deps = HashSet::new();
+/// Extract top-level crate module names from `use crate::foo` declarations.
+fn parse_use_crate_refs(content: &str) -> HashSet<String> {
+    USE_CRATE_RE
+        .captures_iter(content)
+        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
+        .collect()
+}
 
-    for cap in MOD_DECL_RE.captures_iter(content) {
-        if let Some(m) = cap.get(1) {
-            deps.insert(m.as_str().to_string());
+/// Resolve `mod foo;` from a declaring file to candidate child module file paths.
+///
+/// Rust module resolution rules:
+/// - `src/lib.rs` declaring `mod foo` -> `src/foo.rs` or `src/foo/mod.rs`
+/// - `src/bar.rs` declaring `mod foo` -> `src/bar/foo.rs` or `src/bar/foo/mod.rs`
+/// - `src/bar/mod.rs` declaring `mod foo` -> `src/bar/foo.rs` or `src/bar/foo/mod.rs`
+fn resolve_child_module(declaring_file: &str, mod_name: &str) -> Vec<String> {
+    let path = Path::new(declaring_file);
+    let parent_dir = match path.file_stem().and_then(|s| s.to_str()) {
+        Some("mod" | "lib" | "main") => {
+            // mod.rs, lib.rs, main.rs -> child modules are siblings in the same dir
+            path.parent().unwrap_or(Path::new("")).to_path_buf()
         }
-    }
-
-    for cap in USE_CRATE_RE.captures_iter(content) {
-        if let Some(m) = cap.get(1) {
-            deps.insert(m.as_str().to_string());
+        _ => {
+            // foo.rs -> child modules are in foo/ directory
+            path.with_extension("")
         }
-    }
+    };
 
-    deps
+    let candidate_file = parent_dir.join(format!("{mod_name}.rs"));
+    let candidate_mod = parent_dir.join(mod_name).join("mod.rs");
+
+    vec![
+        candidate_file.to_string_lossy().replace('\\', "/"),
+        candidate_mod.to_string_lossy().replace('\\', "/"),
+    ]
+}
+
+/// Resolve `use crate::foo` to candidate file paths within the crate root.
+///
+/// `use crate::foo` always references a top-level module of the crate,
+/// regardless of where the `use` statement appears.
+fn resolve_crate_use(crate_root: &str, module_name: &str) -> Vec<String> {
+    if crate_root == "." {
+        vec![format!("{module_name}.rs"), format!("{module_name}/mod.rs")]
+    } else {
+        vec![
+            format!("{crate_root}/{module_name}.rs"),
+            format!("{crate_root}/{module_name}/mod.rs"),
+        ]
+    }
 }
 
 /// Kahn's algorithm producing a topological ordering (leaves first).
@@ -258,44 +273,63 @@ mod tests {
     use std::fs;
 
     #[test]
-    fn test_infer_module_names_regular_file() {
-        assert_eq!(infer_module_names("src/foo.rs"), vec!["foo"]);
-        assert_eq!(infer_module_names("src/bar/baz.rs"), vec!["baz"]);
-    }
-
-    #[test]
-    fn test_infer_module_names_mod_file() {
-        assert_eq!(infer_module_names("src/foo/mod.rs"), vec!["foo"]);
-    }
-
-    #[test]
-    fn test_infer_module_names_lib() {
-        assert_eq!(infer_module_names("src/lib.rs"), vec!["lib"]);
-    }
-
-    #[test]
-    fn test_parse_dependencies_mod_decl() {
+    fn test_parse_mod_declarations() {
         let content = "mod foo;\npub mod bar;\npub(crate) mod baz;";
-        let deps = parse_dependencies(content);
-        assert!(deps.contains("foo"));
-        assert!(deps.contains("bar"));
-        assert!(deps.contains("baz"));
+        let decls = parse_mod_declarations(content);
+        assert!(decls.contains("foo"));
+        assert!(decls.contains("bar"));
+        assert!(decls.contains("baz"));
     }
 
     #[test]
-    fn test_parse_dependencies_use_crate() {
-        let content = "use crate::config;\nuse crate::session::State;";
-        let deps = parse_dependencies(content);
-        assert!(deps.contains("config"));
-        assert!(deps.contains("session"));
-    }
-
-    #[test]
-    fn test_parse_dependencies_ignores_inline_mod() {
+    fn test_parse_mod_declarations_ignores_inline() {
         // `mod foo { ... }` should NOT be captured (no trailing semicolon).
         let content = "mod inline {\n    fn hello() {}\n}";
-        let deps = parse_dependencies(content);
-        assert!(!deps.contains("inline"));
+        let decls = parse_mod_declarations(content);
+        assert!(!decls.contains("inline"));
+    }
+
+    #[test]
+    fn test_parse_use_crate_refs() {
+        let content = "use crate::config;\nuse crate::session::State;";
+        let refs = parse_use_crate_refs(content);
+        assert!(refs.contains("config"));
+        assert!(refs.contains("session"));
+    }
+
+    #[test]
+    fn test_resolve_child_module_from_lib() {
+        let candidates = resolve_child_module("src/lib.rs", "foo");
+        assert!(candidates.contains(&"src/foo.rs".to_string()));
+        assert!(candidates.contains(&"src/foo/mod.rs".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_child_module_from_regular_file() {
+        let candidates = resolve_child_module("src/bar.rs", "foo");
+        assert!(candidates.contains(&"src/bar/foo.rs".to_string()));
+        assert!(candidates.contains(&"src/bar/foo/mod.rs".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_child_module_from_mod_rs() {
+        let candidates = resolve_child_module("src/bar/mod.rs", "foo");
+        assert!(candidates.contains(&"src/bar/foo.rs".to_string()));
+        assert!(candidates.contains(&"src/bar/foo/mod.rs".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_crate_use() {
+        let candidates = resolve_crate_use("crate_a/src", "config");
+        assert!(candidates.contains(&"crate_a/src/config.rs".to_string()));
+        assert!(candidates.contains(&"crate_a/src/config/mod.rs".to_string()));
+    }
+
+    #[test]
+    fn test_resolve_crate_use_dot_root() {
+        let candidates = resolve_crate_use(".", "config");
+        assert!(candidates.contains(&"config.rs".to_string()));
+        assert!(candidates.contains(&"config/mod.rs".to_string()));
     }
 
     #[test]
@@ -303,6 +337,9 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).expect("mkdir");
+
+        // lib.rs establishes the crate root for `use crate::` resolution.
+        fs::write(src.join("lib.rs"), "").expect("write");
 
         // leaf.rs has no dependencies
         fs::write(src.join("leaf.rs"), "pub fn leaf() {}").expect("write");
@@ -314,6 +351,7 @@ mod tests {
         fs::write(src.join("root.rs"), "use crate::middle;\npub fn root() {}").expect("write");
 
         let files = vec![
+            "src/lib.rs".to_string(),
             "src/root.rs".to_string(),
             "src/middle.rs".to_string(),
             "src/leaf.rs".to_string(),
@@ -341,6 +379,9 @@ mod tests {
         let src = tmp.path().join("src");
         fs::create_dir_all(&src).expect("mkdir");
 
+        // lib.rs establishes the crate root.
+        fs::write(src.join("lib.rs"), "").expect("write");
+
         // a.rs depends on b, b.rs depends on a (cycle)
         fs::write(src.join("a.rs"), "use crate::b;").expect("write");
         fs::write(src.join("b.rs"), "use crate::a;").expect("write");
@@ -349,6 +390,7 @@ mod tests {
         fs::write(src.join("independent.rs"), "pub fn ind() {}").expect("write");
 
         let files = vec![
+            "src/lib.rs".to_string(),
             "src/a.rs".to_string(),
             "src/b.rs".to_string(),
             "src/independent.rs".to_string(),
@@ -357,7 +399,7 @@ mod tests {
         let sorted = topo_sort(&files, tmp.path());
 
         // All files should still appear in output (cycle doesn't drop files).
-        assert_eq!(sorted.len(), 3);
+        assert_eq!(sorted.len(), 4);
         assert!(sorted.contains(&"src/a.rs".to_string()));
         assert!(sorted.contains(&"src/b.rs".to_string()));
         assert!(sorted.contains(&"src/independent.rs".to_string()));
@@ -492,17 +534,7 @@ mod tests {
             .unwrap();
         assert!(b_config < b_lib, "crate_b: config before lib: {sorted:?}");
 
-        // Cross-crate independence: crate_b's config must NOT appear as a
-        // dependency of crate_a's lib (and vice versa). We verify by ensuring
-        // that crate_b/src/config.rs is NOT forced before crate_a/src/lib.rs
-        // in a way that would indicate a false cross-crate edge.
-        // Since both crates are independent, the two sub-graphs should be
-        // interleaved only by alphabetical tiebreaking, not by dependency.
-        // Specifically, crate_a's lib should NOT depend on crate_b's config.
-        // The simplest invariant: if we removed crate_b entirely, crate_a's
-        // order would be [config, lib]. We can check that crate_a's internal
-        // order is independent of crate_b's presence by ensuring the relative
-        // order of crate_a files matches the 2-file case.
+        // Cross-crate independence: verify crate_a order is preserved alone.
         let a_only_files = vec![
             "crate_a/src/lib.rs".to_string(),
             "crate_a/src/config.rs".to_string(),
@@ -520,6 +552,57 @@ mod tests {
             a_only_config < a_only_lib,
             "isolated crate_a: config before lib: {a_only_sorted:?}"
         );
+    }
+
+    #[test]
+    fn test_nested_same_name_modules_no_collision() {
+        // Same crate has `src/config.rs` and `src/foo/config.rs`.
+        // Path-based resolution must NOT confuse the two.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let src = tmp.path().join("src");
+        let src_foo = src.join("foo");
+        fs::create_dir_all(&src_foo).expect("mkdir");
+
+        // lib.rs declares top-level modules
+        fs::write(src.join("lib.rs"), "mod foo;\nmod config;").expect("write");
+
+        // Top-level config module
+        fs::write(src.join("config.rs"), "pub fn top_config() {}").expect("write");
+
+        // foo.rs declares its own nested config
+        fs::write(src.join("foo.rs"), "mod config;\npub fn foo() {}").expect("write");
+
+        // Nested config under foo/
+        fs::write(src_foo.join("config.rs"), "pub fn nested_config() {}").expect("write");
+
+        let files = vec![
+            "src/lib.rs".to_string(),
+            "src/config.rs".to_string(),
+            "src/foo.rs".to_string(),
+            "src/foo/config.rs".to_string(),
+        ];
+
+        let sorted = topo_sort(&files, tmp.path());
+        assert_eq!(sorted.len(), 4, "all files present: {sorted:?}");
+
+        // src/config.rs before src/lib.rs (lib depends on config)
+        let config_pos = sorted.iter().position(|f| f == "src/config.rs").unwrap();
+        let lib_pos = sorted.iter().position(|f| f == "src/lib.rs").unwrap();
+        assert!(config_pos < lib_pos, "config before lib: {sorted:?}");
+
+        // src/foo/config.rs before src/foo.rs (foo depends on its nested config)
+        let nested_config_pos = sorted
+            .iter()
+            .position(|f| f == "src/foo/config.rs")
+            .unwrap();
+        let foo_pos = sorted.iter().position(|f| f == "src/foo.rs").unwrap();
+        assert!(
+            nested_config_pos < foo_pos,
+            "nested config before foo: {sorted:?}"
+        );
+
+        // src/foo.rs before src/lib.rs (lib depends on foo)
+        assert!(foo_pos < lib_pos, "foo before lib: {sorted:?}");
     }
 
     #[test]
