@@ -8,9 +8,14 @@ use std::sync::LazyLock;
 static MOD_DECL_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*(?:pub(?:\(crate\))?\s+)?mod\s+(\w+)\s*;").unwrap());
 
-/// Regex matching `use crate::some::path` declarations.
+/// Regex matching simple `use crate::foo` (and `pub use crate::foo`) declarations.
 static USE_CRATE_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^\s*use\s+crate::(\w+)").unwrap());
+    LazyLock::new(|| Regex::new(r"(?m)^\s*(?:pub(?:\(crate\))?\s+)?use\s+crate::(\w+)").unwrap());
+
+/// Regex matching grouped imports like `use crate::{foo, bar}`.
+static USE_CRATE_GROUPED_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?m)^\s*(?:pub(?:\(crate\))?\s+)?use\s+crate::\{([^}]+)\}").unwrap()
+});
 
 /// Sort files in topological order based on Rust `mod`/`use crate::` dependencies.
 ///
@@ -109,7 +114,13 @@ fn discover_crate_roots(rust_files: &[&String]) -> Vec<String> {
         if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
             if stem == "lib" || stem == "main" {
                 if let Some(parent) = path.parent() {
-                    roots.insert(parent.to_string_lossy().replace('\\', "/"));
+                    let root = parent.to_string_lossy().replace('\\', "/");
+                    // Root-level lib.rs/main.rs has empty parent; normalize to ".".
+                    roots.insert(if root.is_empty() {
+                        ".".to_string()
+                    } else {
+                        root
+                    });
                 }
             }
         }
@@ -150,12 +161,39 @@ fn parse_mod_declarations(content: &str) -> HashSet<String> {
         .collect()
 }
 
-/// Extract top-level crate module names from `use crate::foo` declarations.
+/// Extract top-level crate module names from `use crate::` declarations.
+///
+/// Handles simple (`use crate::foo`), pub (`pub use crate::foo`), and
+/// grouped (`use crate::{foo, bar::Baz}`) import forms.
 fn parse_use_crate_refs(content: &str) -> HashSet<String> {
-    USE_CRATE_RE
-        .captures_iter(content)
-        .filter_map(|cap| cap.get(1).map(|m| m.as_str().to_string()))
-        .collect()
+    let mut refs = HashSet::new();
+
+    // Simple form: `use crate::foo` or `pub use crate::foo`
+    for cap in USE_CRATE_RE.captures_iter(content) {
+        if let Some(m) = cap.get(1) {
+            refs.insert(m.as_str().to_string());
+        }
+    }
+
+    // Grouped form: `use crate::{foo, bar::Baz, baz}`
+    for cap in USE_CRATE_GROUPED_RE.captures_iter(content) {
+        if let Some(m) = cap.get(1) {
+            for item in m.as_str().split(',') {
+                let trimmed = item.trim();
+                // Extract first identifier: "foo::Bar" -> "foo", "self" -> skip
+                if let Some(ident) = trimmed
+                    .split(|c: char| !c.is_alphanumeric() && c != '_')
+                    .next()
+                {
+                    if !ident.is_empty() && ident != "self" {
+                        refs.insert(ident.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    refs
 }
 
 /// Resolve `mod foo;` from a declaring file to candidate child module file paths.
@@ -309,11 +347,36 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_use_crate_refs() {
+    fn test_parse_use_crate_refs_simple() {
         let content = "use crate::config;\nuse crate::session::State;";
         let refs = parse_use_crate_refs(content);
         assert!(refs.contains("config"));
         assert!(refs.contains("session"));
+    }
+
+    #[test]
+    fn test_parse_use_crate_refs_pub() {
+        let content = "pub use crate::config;\npub(crate) use crate::session;";
+        let refs = parse_use_crate_refs(content);
+        assert!(refs.contains("config"));
+        assert!(refs.contains("session"));
+    }
+
+    #[test]
+    fn test_parse_use_crate_refs_grouped() {
+        // Single-line grouped import
+        let refs = parse_use_crate_refs("use crate::{config, session::State, util};");
+        assert!(refs.contains("config"));
+        assert!(refs.contains("session"));
+        assert!(refs.contains("util"));
+        // Multi-line grouped import
+        let refs2 = parse_use_crate_refs("use crate::{\n    config,\n    session,\n};");
+        assert!(refs2.contains("config"));
+        assert!(refs2.contains("session"));
+        // `self` should be skipped
+        let refs3 = parse_use_crate_refs("use crate::{self, config};");
+        assert!(refs3.contains("config"));
+        assert!(!refs3.contains("self"), "self should be skipped");
     }
 
     #[test]
@@ -637,6 +700,48 @@ mod tests {
         assert!(roots.contains(&"crate_a/src".to_string()));
         assert!(roots.contains(&"crate_b/src".to_string()));
         assert_eq!(roots.len(), 2);
+    }
+
+    #[test]
+    fn test_discover_crate_roots_root_level_lib() {
+        // lib.rs at project root: parent is empty, should normalize to ".".
+        let files = vec!["lib.rs".to_string(), "config.rs".to_string()];
+        let refs: Vec<&String> = files.iter().collect();
+        let roots = discover_crate_roots(&refs);
+        assert!(
+            roots.contains(&".".to_string()),
+            "root-level lib.rs should yield '.' as crate root: {roots:?}"
+        );
+    }
+
+    #[test]
+    fn test_root_level_crate_use_resolution() {
+        // Project with lib.rs at root (no src/ directory).
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        fs::write(tmp.path().join("lib.rs"), "mod config;").expect("write");
+        fs::write(tmp.path().join("config.rs"), "pub fn load() {}").expect("write");
+        fs::write(
+            tmp.path().join("app.rs"),
+            "use crate::config;\npub fn app() {}",
+        )
+        .expect("write");
+
+        let files = vec![
+            "lib.rs".to_string(),
+            "config.rs".to_string(),
+            "app.rs".to_string(),
+        ];
+
+        let sorted = topo_sort(&files, &files, tmp.path());
+        assert_eq!(sorted.len(), 3, "all files: {sorted:?}");
+
+        let config_pos = sorted.iter().position(|f| f == "config.rs").unwrap();
+        let app_pos = sorted.iter().position(|f| f == "app.rs").unwrap();
+        assert!(
+            config_pos < app_pos,
+            "config before app in root-level crate: {sorted:?}"
+        );
     }
 
     #[test]
