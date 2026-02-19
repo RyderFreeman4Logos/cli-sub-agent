@@ -204,6 +204,69 @@ fn resolve_idle_timeout_uses_config_then_default() {
     );
 }
 
+fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectConfig {
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            node_heap_limit_mb,
+            ..Default::default()
+        },
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    }
+}
+
+#[test]
+fn build_merged_env_injects_node_options_when_heap_limit_configured() {
+    let cfg = test_config_with_node_heap_limit(Some(2048));
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), "claude-code");
+
+    assert_eq!(
+        merged.get("NODE_OPTIONS"),
+        Some(&"--max-old-space-size=2048".to_string())
+    );
+    assert_eq!(
+        merged.get("CSA_SUPPRESS_NOTIFY"),
+        Some(&"1".to_string()),
+        "suppress notify should remain enabled by default"
+    );
+}
+
+#[test]
+fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
+    let cfg = test_config_with_node_heap_limit(None);
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), "claude-code");
+
+    assert!(
+        !merged.contains_key("NODE_OPTIONS"),
+        "NODE_OPTIONS should be absent when no node heap limit is configured"
+    );
+}
+
+#[test]
+fn build_merged_env_appends_node_options_when_existing_value_present() {
+    let cfg = test_config_with_node_heap_limit(Some(2048));
+    let mut extra_env = HashMap::new();
+    extra_env.insert("NODE_OPTIONS".to_string(), "--trace-warnings".to_string());
+
+    let merged = crate::pipeline_env::build_merged_env(Some(&extra_env), Some(&cfg), "claude-code");
+
+    assert_eq!(
+        merged.get("NODE_OPTIONS"),
+        Some(&"--trace-warnings --max-old-space-size=2048".to_string())
+    );
+}
+
 #[test]
 fn context_load_options_with_skips_empty_returns_none() {
     let skip_files: Vec<String> = Vec::new();
