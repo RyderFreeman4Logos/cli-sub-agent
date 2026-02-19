@@ -240,10 +240,16 @@ fn test_audit_init_parse() {
 
     match cli.command {
         Commands::Audit {
-            command: AuditCommands::Init { root, ignore },
+            command:
+                AuditCommands::Init {
+                    root,
+                    ignore,
+                    mirror_dir,
+                },
         } => {
             assert_eq!(root, ".");
             assert!(ignore.is_empty());
+            assert!(mirror_dir.is_none());
         }
         _ => panic!("expected audit init subcommand"),
     }
@@ -265,7 +271,7 @@ fn test_audit_status_parse() {
         } => {
             assert!(matches!(format, OutputFormat::Json));
             assert_eq!(filter, None);
-            assert_eq!(order, "depth");
+            assert_eq!(order, "topo");
         }
         _ => panic!("expected audit status subcommand"),
     }

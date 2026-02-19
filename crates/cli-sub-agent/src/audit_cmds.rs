@@ -1,32 +1,27 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use csa_core::audit::{AuditManifest, AuditStatus, FileEntry};
 use csa_core::types::OutputFormat;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::Path;
 
-use crate::audit::{diff, hash, io, scan, security};
+use crate::audit::helpers::{
+    canonical_root, compute_mirror_blog_path, current_root, expand_file_args, manifest_path,
+    parse_status, resolve_manifest_key, scan_and_hash, validate_mirror_dir,
+};
+use crate::audit::status::{
+    build_status_rows, print_status_json, print_status_text, sort_rows, summarize_rows,
+};
+use crate::audit::{diff, io, security};
 use crate::cli::AuditCommands;
-
-#[derive(Debug, Clone)]
-struct StatusRow {
-    path: String,
-    status: AuditStatus,
-    hash: String,
-    auditor: Option<String>,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct StatusSummary {
-    pending: usize,
-    generated: usize,
-    approved: usize,
-    modified: usize,
-}
 
 pub(crate) fn handle_audit(command: AuditCommands) -> Result<()> {
     match command {
-        AuditCommands::Init { root, ignore } => handle_audit_init(root, ignore),
+        AuditCommands::Init {
+            root,
+            ignore,
+            mirror_dir,
+        } => handle_audit_init(root, ignore, mirror_dir),
         AuditCommands::Status {
             format,
             filter,
@@ -37,20 +32,39 @@ pub(crate) fn handle_audit(command: AuditCommands) -> Result<()> {
             status,
             auditor,
             blog_path,
-        } => handle_audit_update(files, status, auditor, blog_path),
+            mirror_dir,
+        } => handle_audit_update(files, status, auditor, blog_path, mirror_dir),
         AuditCommands::Approve { files, approved_by } => handle_audit_approve(files, approved_by),
         AuditCommands::Reset { files } => handle_audit_reset(files),
         AuditCommands::Sync => handle_audit_sync(),
     }
 }
 
-pub(crate) fn handle_audit_init(root: String, ignores: Vec<String>) -> Result<()> {
+pub(crate) fn handle_audit_init(
+    root: String,
+    ignores: Vec<String>,
+    mirror_dir: Option<String>,
+) -> Result<()> {
     let scan_root = canonical_root(Path::new(&root))?;
-    let manifest_path = manifest_path(&scan_root);
+    let mpath = manifest_path(&scan_root);
     let file_hashes = scan_and_hash(&scan_root, &ignores)?;
 
     let mut manifest = AuditManifest::new(scan_root.display().to_string());
     manifest.meta.last_scanned_at = Some(Utc::now().to_rfc3339());
+    manifest.meta.mirror_dir = mirror_dir.clone();
+
+    // Validate and create mirror directory if specified.
+    if let Some(ref dir) = mirror_dir {
+        let mirror_path = validate_mirror_dir(dir, &scan_root)?;
+        if !mirror_path.exists() {
+            std::fs::create_dir_all(&mirror_path).with_context(|| {
+                format!(
+                    "Failed to create mirror directory: {}",
+                    mirror_path.display()
+                )
+            })?;
+        }
+    }
 
     for (path, hash_value) in file_hashes {
         manifest.files.insert(
@@ -66,10 +80,10 @@ pub(crate) fn handle_audit_init(root: String, ignores: Vec<String>) -> Result<()
         );
     }
 
-    io::save(&manifest_path, &manifest)?;
+    io::save(&mpath, &manifest)?;
     println!(
         "Initialized audit manifest: {} ({} files)",
-        manifest_path.display(),
+        mpath.display(),
         manifest.files.len()
     );
     Ok(())
@@ -81,19 +95,20 @@ pub(crate) fn handle_audit_status(
     order: String,
 ) -> Result<()> {
     let root = current_root()?;
-    let manifest_path = manifest_path(&root);
-    let manifest = io::load(&manifest_path)?;
+    let mpath = manifest_path(&root);
+    let manifest = io::load(&mpath)?;
     let current_hashes = scan_and_hash(&root, &[])?;
     let manifest_diff = diff::diff_manifest(&manifest, &current_hashes);
 
     let modified_paths: BTreeSet<String> = manifest_diff.modified.into_iter().collect();
-    let mut rows = build_status_rows(&manifest, &current_hashes, &modified_paths);
+    let mut rows = build_status_rows(&manifest, &current_hashes, &modified_paths, &root);
     let filtered_status = filter.as_deref().map(parse_status).transpose()?;
     if let Some(expected) = filtered_status {
         rows.retain(|row| row.status == expected);
     }
 
-    sort_rows(&mut rows, &order)?;
+    let all_keys: Vec<String> = current_hashes.keys().cloned().collect();
+    sort_rows(&mut rows, &order, &root, &all_keys)?;
     let summary = summarize_rows(&rows, &modified_paths);
 
     match format {
@@ -101,7 +116,7 @@ pub(crate) fn handle_audit_status(
             print_status_text(&rows, summary);
         }
         OutputFormat::Json => {
-            print_status_json(&manifest, &manifest_path, &rows, summary);
+            print_status_json(&manifest, &mpath, &rows, summary);
         }
     }
 
@@ -113,6 +128,7 @@ pub(crate) fn handle_audit_approve(files: Vec<String>, approved_by: String) -> R
     let path = manifest_path(&root);
     let mut manifest = io::load(&path)?;
     let approved_at = Utc::now().to_rfc3339();
+    let files = expand_file_args(&files, &manifest, &root)?;
     let approved_count = files.len();
 
     for raw in files {
@@ -136,11 +152,25 @@ pub(crate) fn handle_audit_update(
     status_str: String,
     auditor: Option<String>,
     blog_path: Option<String>,
+    mirror_dir: Option<String>,
 ) -> Result<()> {
     let status = parse_status(&status_str)?;
     let root = current_root()?;
     let path = manifest_path(&root);
     let mut manifest = io::load(&path)?;
+
+    // Validate and apply CLI mirror_dir override.
+    if let Some(ref md) = mirror_dir {
+        validate_mirror_dir(md, &root)?;
+        manifest.meta.mirror_dir = Some(md.clone());
+    }
+
+    // Resolve effective mirror_dir: CLI flag takes priority, then manifest meta.
+    let effective_mirror_dir = mirror_dir
+        .as_deref()
+        .or(manifest.meta.mirror_dir.as_deref());
+
+    let files = expand_file_args(&files, &manifest, &root)?;
     let updated_count = files.len();
 
     for raw in files {
@@ -152,7 +182,14 @@ pub(crate) fn handle_audit_update(
 
         entry.audit_status = status;
         entry.auditor = auditor.clone();
-        entry.blog_path = blog_path.clone();
+
+        // Blog path resolution: explicit --blog-path wins, otherwise auto-compute
+        // from effective mirror_dir if available.
+        entry.blog_path = if blog_path.is_some() {
+            blog_path.clone()
+        } else {
+            effective_mirror_dir.map(|md| compute_mirror_blog_path(md, &key))
+        };
 
         if status != AuditStatus::Approved {
             entry.approved_by = None;
@@ -246,197 +283,207 @@ pub(crate) fn handle_audit_sync() -> Result<()> {
     Ok(())
 }
 
-fn current_root() -> Result<PathBuf> {
-    canonical_root(&std::env::current_dir()?)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::audit::helpers::canonical_root;
+    use std::fs;
 
-fn canonical_root(path: &Path) -> Result<PathBuf> {
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize root path: {}", path.display()))?;
-    if !canonical.is_dir() {
-        bail!("Root path is not a directory: {}", canonical.display());
+    #[test]
+    fn test_audit_init_stores_mirror_dir_in_manifest() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        // Create a dummy source file so the manifest is non-trivial.
+        let src_dir = root.join("src");
+        fs::create_dir_all(&src_dir).expect("create src dir");
+        fs::write(src_dir.join("lib.rs"), "fn main() {}").expect("write src");
+
+        // Simulate handle_audit_init with mirror_dir.
+        let scan_root = canonical_root(root).unwrap();
+        let mpath = manifest_path(&scan_root);
+        let file_hashes = scan_and_hash(&scan_root, &[]).unwrap();
+
+        let mut manifest = AuditManifest::new(scan_root.display().to_string());
+        manifest.meta.last_scanned_at = Some(Utc::now().to_rfc3339());
+        manifest.meta.mirror_dir = Some("./drafts".to_string());
+
+        for (path, hash_value) in file_hashes {
+            manifest.files.insert(
+                path,
+                FileEntry {
+                    hash: hash_value,
+                    audit_status: AuditStatus::Pending,
+                    blog_path: None,
+                    auditor: None,
+                    approved_by: None,
+                    approved_at: None,
+                },
+            );
+        }
+
+        io::save(&mpath, &manifest).expect("save");
+
+        // Reload and verify.
+        let loaded = io::load(&mpath).expect("load");
+        assert_eq!(loaded.meta.mirror_dir, Some("./drafts".to_string()));
     }
-    Ok(canonical)
-}
 
-fn manifest_path(root: &Path) -> PathBuf {
-    root.join(io::DEFAULT_MANIFEST_PATH)
-}
+    #[test]
+    fn test_audit_init_creates_mirror_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
 
-fn scan_and_hash(root: &Path, ignores: &[String]) -> Result<BTreeMap<String, String>> {
-    let mut current = BTreeMap::new();
-    let files = scan::scan_directory(root, ignores)?;
-    for relative in files {
-        let validated = security::validate_path(&relative, root)?;
-        let key = path_to_key(&relative);
-        let hash_value = hash::hash_file(&validated)?;
-        current.insert(key, hash_value);
-    }
-    Ok(current)
-}
+        // Create a dummy source file.
+        fs::create_dir_all(root.join("src")).expect("create src");
+        fs::write(root.join("src/lib.rs"), "fn main() {}").expect("write src");
 
-fn resolve_manifest_key(raw: &str, root: &Path) -> Result<String> {
-    let validated = security::validate_path(Path::new(raw), root)?;
-    let relative = validated.strip_prefix(root).with_context(|| {
-        format!(
-            "Validated path is outside root (path: {}, root: {})",
-            validated.display(),
-            root.display()
+        let mirror_path = root.join("my-drafts");
+        assert!(!mirror_path.exists(), "mirror dir should not exist yet");
+
+        handle_audit_init(
+            root.to_string_lossy().to_string(),
+            vec![],
+            Some("my-drafts".to_string()),
         )
-    })?;
+        .expect("init should succeed");
 
-    if relative.as_os_str().is_empty() {
-        bail!("File path resolves to root directory, expected a file: {raw}");
+        assert!(mirror_path.exists(), "mirror dir should have been created");
     }
 
-    Ok(path_to_key(relative))
-}
+    #[test]
+    fn test_audit_update_auto_computes_blog_path_from_mirror_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
 
-fn path_to_key(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
+        // Initialize a manifest with mirror_dir in meta.
+        fs::create_dir_all(root.join("src")).expect("create src");
+        fs::write(root.join("src/lib.rs"), "fn main() {}").expect("write src");
 
-fn parse_status(value: &str) -> Result<AuditStatus> {
-    match value.to_ascii_lowercase().as_str() {
-        "pending" => Ok(AuditStatus::Pending),
-        "generated" => Ok(AuditStatus::Generated),
-        "approved" => Ok(AuditStatus::Approved),
-        _ => bail!("Invalid audit status: '{value}'. Valid: pending, generated, approved"),
-    }
-}
+        handle_audit_init(
+            root.to_string_lossy().to_string(),
+            vec![],
+            Some("./drafts".to_string()),
+        )
+        .expect("init");
 
-fn build_status_rows(
-    manifest: &AuditManifest,
-    current_hashes: &BTreeMap<String, String>,
-    modified_paths: &BTreeSet<String>,
-) -> Vec<StatusRow> {
-    let mut rows = Vec::with_capacity(current_hashes.len());
-    for (path, current_hash) in current_hashes {
-        if let Some(entry) = manifest.files.get(path) {
-            // Modified files are downgraded to Pending regardless of stored status,
-            // since the file content has changed since the last audit.
-            let effective_status = if modified_paths.contains(path) {
-                AuditStatus::Pending
-            } else {
-                entry.audit_status
-            };
-            rows.push(StatusRow {
-                path: path.clone(),
-                status: effective_status,
-                hash: current_hash.clone(),
-                auditor: entry.auditor.clone(),
-            });
-        } else {
-            rows.push(StatusRow {
-                path: path.clone(),
-                status: AuditStatus::Pending,
-                hash: current_hash.clone(),
-                auditor: None,
-            });
-        }
-    }
-    rows
-}
+        // Run update from the project root so current_root() resolves correctly.
+        let _guard = TempCwd::set(root);
+        handle_audit_update(
+            vec!["src/lib.rs".to_string()],
+            "generated".to_string(),
+            None,
+            None, // no explicit blog_path
+            None, // no CLI mirror_dir override
+        )
+        .expect("update");
 
-fn summarize_rows(rows: &[StatusRow], modified_paths: &BTreeSet<String>) -> StatusSummary {
-    let mut summary = StatusSummary::default();
-    for row in rows {
-        match row.status {
-            AuditStatus::Pending => summary.pending += 1,
-            AuditStatus::Generated => summary.generated += 1,
-            AuditStatus::Approved => summary.approved += 1,
-        }
-        if modified_paths.contains(&row.path) {
-            summary.modified += 1;
-        }
-    }
-    summary
-}
-
-fn sort_rows(rows: &mut [StatusRow], order: &str) -> Result<()> {
-    match order {
-        "depth" => {
-            rows.sort_by(|left, right| {
-                let left_depth = path_depth(&left.path);
-                let right_depth = path_depth(&right.path);
-                right_depth
-                    .cmp(&left_depth)
-                    .then_with(|| left.path.cmp(&right.path))
-            });
-            Ok(())
-        }
-        "alpha" => {
-            rows.sort_by(|left, right| left.path.cmp(&right.path));
-            Ok(())
-        }
-        _ => bail!("Invalid order: '{order}'. Valid: depth, alpha"),
-    }
-}
-
-fn path_depth(path: &str) -> usize {
-    path.split('/')
-        .filter(|segment| !segment.is_empty())
-        .count()
-}
-
-fn print_status_text(rows: &[StatusRow], summary: StatusSummary) {
-    println!(
-        "{:<60} | {:<9} | {:<12} | AUDITOR",
-        "PATH", "STATUS", "HASH"
-    );
-    println!("{}", "-".repeat(95));
-    for row in rows {
-        let short_hash: String = row.hash.chars().take(12).collect();
-        let auditor = row.auditor.as_deref().unwrap_or("-");
-        println!(
-            "{:<60} | {:<9} | {:<12} | {}",
-            row.path, row.status, short_hash, auditor
+        let scan_root = canonical_root(root).unwrap();
+        let manifest = io::load(&manifest_path(&scan_root)).expect("load");
+        let entry = manifest
+            .files
+            .get("src/lib.rs")
+            .expect("entry should exist");
+        assert_eq!(
+            entry.blog_path,
+            Some("drafts/src/lib.rs.md".to_string()),
+            "blog_path should be auto-computed from manifest mirror_dir"
         );
     }
-    println!(
-        "{} pending, {} generated, {} approved ({} modified since last scan)",
-        summary.pending, summary.generated, summary.approved, summary.modified
-    );
-}
 
-fn print_status_json(
-    manifest: &AuditManifest,
-    manifest_path: &Path,
-    rows: &[StatusRow],
-    summary: StatusSummary,
-) {
-    let files: Vec<_> = rows
-        .iter()
-        .map(|row| {
-            serde_json::json!({
-                "path": row.path,
-                "status": row.status.to_string(),
-                "hash": row.hash,
-                "auditor": row.auditor,
-            })
-        })
-        .collect();
+    #[test]
+    fn test_audit_update_explicit_blog_path_overrides_mirror_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
 
-    let payload = serde_json::json!({
-        "meta": {
-            "manifest_path": manifest_path.display().to_string(),
-            "project_root": manifest.meta.project_root,
-            "created_at": manifest.meta.created_at,
-            "updated_at": manifest.meta.updated_at,
-            "last_scanned_at": manifest.meta.last_scanned_at,
-        },
-        "summary": {
-            "pending": summary.pending,
-            "generated": summary.generated,
-            "approved": summary.approved,
-            "modified": summary.modified,
-        },
-        "files": files,
-    });
+        fs::create_dir_all(root.join("src")).expect("create src");
+        fs::write(root.join("src/lib.rs"), "fn main() {}").expect("write src");
 
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
-    );
+        handle_audit_init(
+            root.to_string_lossy().to_string(),
+            vec![],
+            Some("./drafts".to_string()),
+        )
+        .expect("init");
+
+        let _guard = TempCwd::set(root);
+        handle_audit_update(
+            vec!["src/lib.rs".to_string()],
+            "generated".to_string(),
+            None,
+            Some("custom/blog.md".to_string()), // explicit blog_path
+            None,
+        )
+        .expect("update");
+
+        let scan_root = canonical_root(root).unwrap();
+        let manifest = io::load(&manifest_path(&scan_root)).expect("load");
+        let entry = manifest
+            .files
+            .get("src/lib.rs")
+            .expect("entry should exist");
+        assert_eq!(
+            entry.blog_path,
+            Some("custom/blog.md".to_string()),
+            "explicit --blog-path should override auto-computation"
+        );
+    }
+
+    #[test]
+    fn test_audit_update_cli_mirror_dir_overrides_manifest() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let root = tmp.path();
+
+        fs::create_dir_all(root.join("src")).expect("create src");
+        fs::write(root.join("src/lib.rs"), "fn main() {}").expect("write src");
+
+        // Init without mirror_dir.
+        handle_audit_init(root.to_string_lossy().to_string(), vec![], None).expect("init");
+
+        let _guard = TempCwd::set(root);
+        handle_audit_update(
+            vec!["src/lib.rs".to_string()],
+            "generated".to_string(),
+            None,
+            None,
+            Some("output".to_string()), // CLI mirror_dir flag
+        )
+        .expect("update");
+
+        let scan_root = canonical_root(root).unwrap();
+        let manifest = io::load(&manifest_path(&scan_root)).expect("load");
+
+        // manifest.meta.mirror_dir should be updated by CLI flag.
+        assert_eq!(manifest.meta.mirror_dir, Some("output".to_string()));
+
+        let entry = manifest
+            .files
+            .get("src/lib.rs")
+            .expect("entry should exist");
+        assert_eq!(
+            entry.blog_path,
+            Some("output/src/lib.rs.md".to_string()),
+            "blog_path should be auto-computed from CLI --mirror-dir"
+        );
+    }
+
+    /// RAII guard for temporarily changing the working directory in tests.
+    ///
+    /// Restores to a known-good stable directory on drop, not the previous cwd,
+    /// to avoid failures when parallel tests remove each other's temp directories.
+    struct TempCwd;
+
+    impl TempCwd {
+        fn set(new_dir: &Path) -> Self {
+            std::env::set_current_dir(new_dir).expect("set cwd");
+            Self
+        }
+    }
+
+    impl Drop for TempCwd {
+        fn drop(&mut self) {
+            // Restore to a stable directory that always exists.
+            let _ = std::env::set_current_dir("/tmp");
+        }
+    }
 }
