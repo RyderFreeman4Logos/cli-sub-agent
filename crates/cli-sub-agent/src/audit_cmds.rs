@@ -86,14 +86,14 @@ pub(crate) fn handle_audit_status(
     let current_hashes = scan_and_hash(&root, &[])?;
     let manifest_diff = diff::diff_manifest(&manifest, &current_hashes);
 
-    let mut rows = build_status_rows(&manifest, &current_hashes);
+    let modified_paths: BTreeSet<String> = manifest_diff.modified.into_iter().collect();
+    let mut rows = build_status_rows(&manifest, &current_hashes, &modified_paths);
     let filtered_status = filter.as_deref().map(parse_status).transpose()?;
     if let Some(expected) = filtered_status {
         rows.retain(|row| row.status == expected);
     }
 
     sort_rows(&mut rows, &order)?;
-    let modified_paths: BTreeSet<String> = manifest_diff.modified.into_iter().collect();
     let summary = summarize_rows(&rows, &modified_paths);
 
     match format {
@@ -309,13 +309,21 @@ fn parse_status(value: &str) -> Result<AuditStatus> {
 fn build_status_rows(
     manifest: &AuditManifest,
     current_hashes: &BTreeMap<String, String>,
+    modified_paths: &BTreeSet<String>,
 ) -> Vec<StatusRow> {
     let mut rows = Vec::with_capacity(current_hashes.len());
     for (path, current_hash) in current_hashes {
         if let Some(entry) = manifest.files.get(path) {
+            // Modified files are downgraded to Pending regardless of stored status,
+            // since the file content has changed since the last audit.
+            let effective_status = if modified_paths.contains(path) {
+                AuditStatus::Pending
+            } else {
+                entry.audit_status
+            };
             rows.push(StatusRow {
                 path: path.clone(),
-                status: entry.audit_status,
+                status: effective_status,
                 hash: current_hash.clone(),
                 auditor: entry.auditor.clone(),
             });
