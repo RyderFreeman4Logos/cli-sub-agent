@@ -1,4 +1,5 @@
 use super::*;
+use std::time::Instant;
 use weave::compiler::VariableDecl;
 
 #[test]
@@ -400,4 +401,26 @@ async fn execute_plan_continues_on_skip_failure() {
     );
     assert!(results[0].skipped, "step 1 should be marked as skipped");
     assert_eq!(results[1].exit_code, 0, "step 2 should succeed");
+}
+
+#[tokio::test]
+async fn run_with_heartbeat_returns_success_exit_code() {
+    let code = run_with_heartbeat(
+        "[1/heartbeat]",
+        async { Ok::<i32, anyhow::Error>(0) },
+        Instant::now(),
+    )
+    .await;
+    assert_eq!(code, 0);
+}
+
+#[tokio::test]
+async fn run_with_heartbeat_maps_errors_to_exit_code_one() {
+    let code = run_with_heartbeat(
+        "[1/heartbeat]",
+        async { Err::<i32, anyhow::Error>(anyhow::anyhow!("boom")) },
+        Instant::now(),
+    )
+    .await;
+    assert_eq!(code, 1);
 }

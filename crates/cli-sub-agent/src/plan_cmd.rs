@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use tracing::{error, info, warn};
@@ -27,6 +27,8 @@ use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
 use crate::pipeline::{determine_project_root, execute_with_session};
 use crate::run_helpers::build_executor;
+
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 
 /// Result of executing a single step.
 struct StepResult {
@@ -94,6 +96,11 @@ pub(crate) async fn handle_plan_run(
     // 7. Execute steps sequentially
     info!(
         "Executing workflow '{}' ({} steps)",
+        plan.name,
+        plan.steps.len()
+    );
+    eprintln!(
+        "Running workflow '{}' with {} step(s)...",
         plan.name,
         plan.steps.len()
     );
@@ -321,6 +328,7 @@ async fn execute_step(
 ) -> StepResult {
     let start = Instant::now();
     let label = format!("[{}/{}]", step.id, step.title);
+    eprintln!("{} - START", label);
 
     // Skip steps with conditions or loops (v1 limitation).
     // These use a non-zero exit code to prevent silent success when
@@ -394,25 +402,33 @@ async fn execute_step(
     for attempt in 1..=max_attempts {
         if attempt > 1 {
             info!("{} - Retry attempt {}/{}", label, attempt, max_attempts);
+            eprintln!("{} - RETRY {}/{}", label, attempt, max_attempts);
         }
 
-        let result = if model_spec.as_deref() == Some("bash") {
+        let exit_code = if model_spec.as_deref() == Some("bash") {
             // Direct bash execution
-            execute_bash_step(&label, &prompt, project_root).await
+            run_with_heartbeat(
+                &label,
+                execute_bash_step(&label, &prompt, project_root),
+                start,
+            )
+            .await
         } else {
             // CSA tool execution
-            execute_csa_step(
+            run_with_heartbeat(
                 &label,
-                &prompt,
-                &tool_name,
-                model_spec.as_deref(),
-                project_root,
-                config,
+                execute_csa_step(
+                    &label,
+                    &prompt,
+                    &tool_name,
+                    model_spec.as_deref(),
+                    project_root,
+                    config,
+                ),
+                start,
             )
             .await
         };
-
-        let exit_code = result.unwrap_or(1);
 
         if exit_code == 0 {
             info!(
@@ -420,6 +436,7 @@ async fn execute_step(
                 label,
                 start.elapsed().as_secs_f64()
             );
+            eprintln!("{} - PASS ({:.2}s)", label, start.elapsed().as_secs_f64());
             return StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
@@ -443,6 +460,7 @@ async fn execute_step(
                 "{} - Failed (exit {}), skipping per on_fail=skip",
                 label, exit_code
             );
+            eprintln!("{} - SKIP (exit {}, on_fail=skip)", label, exit_code);
             StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
@@ -455,6 +473,10 @@ async fn execute_step(
         FailAction::Delegate(target) => {
             warn!(
                 "{} - Failed (exit {}), delegate to '{}' not supported in v1 — treating as abort",
+                label, exit_code, target
+            );
+            eprintln!(
+                "{} - FAIL (exit {}, delegate '{}' unsupported)",
                 label, exit_code, target
             );
             StepResult {
@@ -472,6 +494,7 @@ async fn execute_step(
         _ => {
             // Abort or Retry (already exhausted retries)
             error!("{} - Failed with exit code {}", label, exit_code);
+            eprintln!("{} - FAIL (exit {})", label, exit_code);
             StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
@@ -479,6 +502,37 @@ async fn execute_step(
                 duration_secs: duration,
                 skipped: false,
                 error: Some(format!("Exit code {}", exit_code)),
+            }
+        }
+    }
+}
+
+/// Keep workflow output alive for parents that enforce inactivity timeouts.
+async fn run_with_heartbeat<F>(label: &str, execution: F, step_started_at: Instant) -> i32
+where
+    F: std::future::Future<Output = Result<i32>>,
+{
+    let mut execution = std::pin::pin!(execution);
+    let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            result = &mut execution => {
+                return match result {
+                    Ok(code) => code,
+                    Err(err) => {
+                        error!("{label} - Execution failed: {err}");
+                        1
+                    }
+                };
+            }
+            _ = ticker.tick() => {
+                eprintln!(
+                    "{label} - RUNNING ({:.0}s elapsed)",
+                    step_started_at.elapsed().as_secs_f64()
+                );
             }
         }
     }
