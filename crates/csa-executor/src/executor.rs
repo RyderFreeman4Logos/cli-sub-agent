@@ -368,10 +368,30 @@ impl Executor {
         (cmd, stdin_data)
     }
 
+    /// Environment variables to strip from child processes.
+    ///
+    /// These prevent recursive-invocation guards in CLI tools from blocking
+    /// legitimate CSA sub-agent launches.  Mirrors the same list in
+    /// `csa-acp::AcpConnection::STRIPPED_ENV_VARS`.
+    const STRIPPED_ENV_VARS: &[&str] = &[
+        // Claude Code sets this to detect recursive invocations.  When
+        // inherited by a child process, the child refuses to start.
+        "CLAUDECODE",
+        // Entrypoint tracking for the parent session — not meaningful for
+        // a fresh sub-agent invocation.
+        "CLAUDE_CODE_ENTRYPOINT",
+    ];
+
     /// Build base command with session environment variables.
     fn build_base_command(&self, session: &MetaSessionState) -> Command {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(&session.project_path);
+
+        // Strip environment variables that would trigger recursive-invocation
+        // guards in child tool processes (e.g., Claude Code's CLAUDECODE check).
+        for var in Self::STRIPPED_ENV_VARS {
+            cmd.env_remove(var);
+        }
 
         // Set CSA environment variables
         cmd.env("CSA_SESSION_ID", &session.meta_session_id);
