@@ -146,12 +146,11 @@ impl AcpConnection {
                 let memory_max_mb = config.memory_max_mb;
                 let pids_max = config.pids_max.map(u64::from);
 
-                // Chain rlimit setup after the setsid pre_exec.
+                // Apply rlimits in the child process (setsid is already installed by build_cmd).
                 // SAFETY: apply_rlimits calls setrlimit which is async-signal-safe.
                 #[cfg(unix)]
                 unsafe {
                     cmd.pre_exec(move || {
-                        libc::setsid();
                         csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
                             .map_err(std::io::Error::other)
                     });

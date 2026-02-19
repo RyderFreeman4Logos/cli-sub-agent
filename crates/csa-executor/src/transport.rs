@@ -311,6 +311,7 @@ impl Transport for AcpTransport {
         let sandbox_config = options.sandbox.map(|s| s.config.clone());
         let sandbox_tool_name = options.sandbox.map(|s| s.tool_name.clone());
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
+        let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
 
         // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
@@ -327,7 +328,7 @@ impl Transport for AcpTransport {
                     // then replicate the session setup from run_prompt.
                     let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
                     let sess_id = sandbox_session_id.as_deref().unwrap_or("");
-                    rt.block_on(run_acp_sandboxed(
+                    match rt.block_on(run_acp_sandboxed(
                         &acp_command,
                         &acp_args,
                         &working_dir,
@@ -339,8 +340,28 @@ impl Transport for AcpTransport {
                         cfg,
                         tool_name,
                         sess_id,
-                    ))
-                    .map_err(|e| anyhow!("ACP transport (sandboxed) failed: {e}"))
+                    )) {
+                        Ok(output) => Ok(output),
+                        Err(e) if sandbox_best_effort => {
+                            tracing::warn!(
+                                "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
+                            );
+                            rt.block_on(csa_acp::transport::run_prompt(
+                                &acp_command,
+                                &acp_args,
+                                &working_dir,
+                                &env,
+                                csa_acp::transport::AcpSessionStart {
+                                    system_prompt: system_prompt.as_deref(),
+                                    resume_session_id: resume_session_id.as_deref(),
+                                },
+                                &prompt,
+                                std::time::Duration::from_secs(idle_timeout_seconds),
+                            ))
+                            .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
+                        }
+                        Err(e) => Err(anyhow!("ACP transport (sandboxed) failed: {e}")),
+                    }
                 } else {
                     rt.block_on(csa_acp::transport::run_prompt(
                         &acp_command,

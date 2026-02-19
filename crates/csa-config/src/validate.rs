@@ -73,18 +73,40 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
             );
         }
     }
+    // Required enforcement mode demands an explicit memory limit.
+    if matches!(
+        config.resources.enforcement_mode,
+        Some(crate::config::EnforcementMode::Required)
+    ) && config.resources.memory_max_mb.is_none()
+    {
+        bail!(
+            "resources.enforcement_mode = \"required\" but resources.memory_max_mb is not set. \
+             Required mode needs an explicit memory limit to enforce."
+        );
+    }
     Ok(())
 }
 
 fn validate_tools(config: &ProjectConfig) -> Result<()> {
     let known_tools = ["gemini-cli", "opencode", "codex", "claude-code"];
-    for tool_name in config.tools.keys() {
+    for (tool_name, tool_config) in &config.tools {
         if !known_tools.contains(&tool_name.as_str()) {
             bail!(
                 "Unknown tool '{}'. Known tools: {:?}",
                 tool_name,
                 known_tools
             );
+        }
+        // Validate per-tool sandbox memory overrides.
+        if let Some(mem) = tool_config.memory_max_mb {
+            if mem < 256 {
+                bail!(
+                    "tools.{}.memory_max_mb must be >= 256 (got {}). \
+                     Tool processes need at least 256 MB to function.",
+                    tool_name,
+                    mem
+                );
+            }
         }
     }
     Ok(())
