@@ -58,7 +58,9 @@ Working directory: ${CWD}"
 
 Synthesize CSA findings into a structured TODO plan.
 Each item is a [ ] checkbox with executor tag.
-Descriptions in user's preferred language.
+Write all TODO descriptions, section headers, and task names in ${USER_LANGUAGE}.
+Technical terms, code snippets, commit scope strings, and executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]) remain in English.
+If USER_LANGUAGE is empty or unset, default to the language used in the FEATURE description.
 Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool].
 
 ## Step 5: Phase 3 — Adversarial Debate
@@ -96,5 +98,5 @@ csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 
 ## Step 8: Phase 4 — User Approval
 
-Present TODO to user for review.
+Present TODO to user for review in ${USER_LANGUAGE}.
 User chooses: APPROVE → proceed to mktsk, MODIFY → revise, REJECT → abandon.

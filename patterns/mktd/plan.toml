@@ -11,6 +11,10 @@ name = "FEATURE"
 [[plan.variables]]
 name = "FINALIZED_TODO_CONTENT"
 
+[[plan.variables]]
+name = "USER_LANGUAGE"
+description = "Primary language for TODO content (auto-detected from conversation or FEATURE description; e.g. 'Chinese (Simplified)', 'English', 'Japanese')"
+
 [[plan.steps]]
 id = 1
 title = "Phase 1 — RECON Dimension 1 (Structure)"
@@ -63,7 +67,9 @@ title = "Phase 2 — DRAFT TODO"
 prompt = """
 Synthesize CSA findings into a structured TODO plan.
 Each item is a [ ] checkbox with executor tag.
-Descriptions in user's preferred language.
+Write all TODO descriptions, section headers, and task names in ${USER_LANGUAGE}.
+Technical terms, code snippets, commit scope strings, and executor tags remain in English.
+If USER_LANGUAGE is empty or unset, default to the language used in the FEATURE description.
 Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool]."""
 on_fail = "abort"
 
@@ -110,6 +116,6 @@ on_fail = "abort"
 id = 9
 title = "Phase 4 — User Approval"
 prompt = """
-Present TODO to user for review.
+Present TODO to user for review in ${USER_LANGUAGE}.
 User chooses: APPROVE → proceed to mktsk, MODIFY → revise, REJECT → abandon."""
 on_fail = "abort"
