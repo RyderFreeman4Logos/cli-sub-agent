@@ -59,7 +59,7 @@ just test
 | `Tier:` | `${VAR}` or literal | Tier override for this step |
 
 **Note on OnFail formats**: In PATTERN.md, `OnFail: retry 2` is a plain string
-parsed by `parse_fail_action`. In `plan.toml`, serde deserializes `FailAction`
+parsed by `parse_fail_action`. In `workflow.toml`, serde deserializes `FailAction`
 enum variants: `on_fail = "abort"` for unit variants, but `on_fail = { retry = 2 }`
 (table form) for parameterized variants like `Retry(u32)` or `Delegate(String)`.
 
@@ -68,7 +68,7 @@ enum variants: `on_fail = "abort"` for unit variants, but `on_fail = { retry = 2
 Use `${VAR_NAME}` anywhere in the body. Variables are:
 - Set by the orchestrator before dispatch
 - Evaluated by the executor at runtime
-- Listed in `plan.toml` for tooling
+- Listed in `workflow.toml` for tooling
 
 Common variables:
 - `${FILES}` — files to operate on

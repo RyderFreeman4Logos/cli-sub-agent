@@ -400,7 +400,7 @@ The `csa-acp` crate and Transport trait abstraction are fully implemented and me
 The weave compiler and skill-lang workflow engine are implemented:
 
 - **skill-lang = Markdown with structured conventions**; the compiler is the LLM (`weave compile`), and the runtime is CSA
-- Two-layer representation: `PATTERN.md` (natural language source) → `plan.toml` (deterministic execution plan)
+- Two-layer representation: `PATTERN.md` (natural language source) → `workflow.toml` (deterministic execution plan)
 - Naming system: **skill** (atomic unit) → **pattern** (composed workflow) → **loom** (git repository)
 - 11 workflow skills converted to skill-lang patterns and successfully compiled
 - Syntax support: `## Step N`, `IF/ELSE/ENDIF`, `FOR/IN/ENDFOR`, `INCLUDE`, `${VAR}`, and Hint lines (`Tool:/Tier:/OnFail:`)

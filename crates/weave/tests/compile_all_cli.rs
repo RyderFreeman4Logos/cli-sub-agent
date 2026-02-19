@@ -21,8 +21,8 @@ fn compile_all_subcommand_parses_and_runs_on_empty_dir() {
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
-        stderr.contains("no plan.toml"),
-        "should report no plan.toml found, got: {stderr}"
+        stderr.contains("no workflow.toml"),
+        "should report no workflow.toml found, got: {stderr}"
     );
 }
 
@@ -46,8 +46,8 @@ prompt = "Say hello"
 on_fail = "abort"
 "#;
 
-    fs::write(p1.join("plan.toml"), plan_toml).unwrap();
-    fs::write(p2.join("plan.toml"), plan_toml).unwrap();
+    fs::write(p1.join("workflow.toml"), plan_toml).unwrap();
+    fs::write(p2.join("workflow.toml"), plan_toml).unwrap();
 
     let output = weave_cmd()
         .arg("compile-all")
@@ -86,7 +86,7 @@ fn compile_all_exits_nonzero_when_pattern_fails() {
 
     let broken = tmp.path().join("broken");
     fs::create_dir_all(&broken).unwrap();
-    fs::write(broken.join("plan.toml"), "invalid toml [").unwrap();
+    fs::write(broken.join("workflow.toml"), "invalid toml [").unwrap();
 
     let output = weave_cmd()
         .arg("compile-all")

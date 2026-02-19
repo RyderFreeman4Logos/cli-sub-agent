@@ -190,7 +190,7 @@ csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
 
 ## ELSE
 
-<!-- COMMENT_IS_STALE check is enforced via step conditions in plan.toml -->
+<!-- COMMENT_IS_STALE check is enforced via step conditions in workflow.toml -->
 
 ## Step 9: Fix Real Issue
 

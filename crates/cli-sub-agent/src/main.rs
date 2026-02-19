@@ -16,6 +16,7 @@ mod mcp_server;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_sandbox;
+mod plan_cmd;
 mod process_tree;
 mod review_cmd;
 mod review_consensus;
@@ -31,8 +32,8 @@ mod tiers_cmd;
 mod todo_cmd;
 
 use cli::{
-    Cli, Commands, ConfigCommands, SessionCommands, SetupCommands, SkillCommands, TiersCommands,
-    TodoCommands,
+    Cli, Commands, ConfigCommands, PlanCommands, SessionCommands, SetupCommands, SkillCommands,
+    TiersCommands, TodoCommands,
 };
 use csa_core::types::OutputFormat;
 
@@ -280,6 +281,16 @@ async fn main() -> Result<()> {
                 cd,
             } => {
                 todo_cmd::handle_dag(timestamp, format, cd)?;
+            }
+        },
+        Commands::Plan { cmd } => match cmd {
+            PlanCommands::Run {
+                file,
+                vars,
+                dry_run,
+                cd,
+            } => {
+                plan_cmd::handle_plan_run(file, vars, dry_run, cd, current_depth).await?;
             }
         },
         Commands::SelfUpdate { check } => {

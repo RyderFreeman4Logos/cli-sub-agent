@@ -668,7 +668,7 @@ Lint ${mod}.
 
 #[test]
 fn test_max_iterations_toml_backward_compat() {
-    // Simulate a legacy plan.toml that has no max_iterations field.
+    // Simulate a legacy workflow.toml that has no max_iterations field.
     let legacy_toml = r#"
 [plan]
 name = "legacy"

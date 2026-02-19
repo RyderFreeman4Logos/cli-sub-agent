@@ -133,16 +133,16 @@ enum Commands {
         dry_run: bool,
     },
 
-    /// Batch-compile all plan.toml files in a directory tree.
+    /// Batch-compile all workflow.toml files in a directory tree.
     CompileAll {
-        /// Root directory to scan for plan.toml files (default: patterns/).
+        /// Root directory to scan for workflow.toml files (default: patterns/).
         #[arg(long, default_value = "patterns")]
         dir: PathBuf,
     },
 
-    /// Visualize a compiled plan.toml as ASCII (default), Mermaid, or PNG.
+    /// Visualize a compiled workflow.toml as ASCII (default), Mermaid, or PNG.
     Visualize {
-        /// Input plan.toml file path.
+        /// Input workflow.toml file path.
         plan: PathBuf,
 
         /// Write PNG output to file.
