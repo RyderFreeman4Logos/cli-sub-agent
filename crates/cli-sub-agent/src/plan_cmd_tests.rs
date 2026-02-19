@@ -188,7 +188,7 @@ fn resolve_step_tool_unknown_tool_errors() {
 }
 
 #[tokio::test]
-async fn execute_step_skips_condition_with_nonzero_exit() {
+async fn execute_step_skips_when_condition_is_false() {
     let step = PlanStep {
         id: 1,
         title: "conditional".into(),
@@ -203,11 +203,32 @@ async fn execute_step_skips_condition_with_nonzero_exit() {
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
     let result = execute_step(&step, &vars, tmp.path(), None).await;
-    assert!(result.skipped);
-    assert_ne!(
+    assert!(result.skipped, "unset condition var must skip");
+    assert_eq!(
         result.exit_code, 0,
-        "unsupported skip must not masquerade as success"
+        "condition-false skip is intentional, not a failure"
     );
+}
+
+#[tokio::test]
+async fn execute_step_runs_when_condition_is_true() {
+    let step = PlanStep {
+        id: 1,
+        title: "conditional".into(),
+        tool: Some("bash".into()),
+        prompt: "```bash\necho hello\n```".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: Some("${FLAG}".into()),
+        loop_var: None,
+    };
+    let mut vars = HashMap::new();
+    vars.insert("FLAG".into(), "yes".into());
+    let tmp = tempfile::tempdir().unwrap();
+    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    assert!(!result.skipped, "true condition must execute step");
+    assert_eq!(result.exit_code, 0, "bash echo should succeed");
 }
 
 #[tokio::test]
@@ -278,8 +299,57 @@ async fn execute_step_bash_runs_code_block() {
 }
 
 #[tokio::test]
-async fn execute_plan_fails_on_unsupported_condition_steps() {
-    // A plan with only unsupported condition steps must NOT pass silently.
+async fn execute_plan_skips_false_condition_cleanly() {
+    // A plan with condition-false steps must skip them with exit_code 0
+    // and continue to subsequent steps.
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "conditional step".into(),
+                tool: Some("bash".into()),
+                prompt: "echo hello".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Skip,
+                condition: Some("${FLAG}".into()),
+                loop_var: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "unconditional step".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho ok\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    // Both steps should be processed
+    assert_eq!(results.len(), 2, "both steps must be processed");
+    // Step 1: skipped with success (condition false)
+    assert!(results[0].skipped);
+    assert_eq!(
+        results[0].exit_code, 0,
+        "condition-false skip is not a failure"
+    );
+    // Step 2: executed successfully
+    assert!(!results[1].skipped);
+    assert_eq!(results[1].exit_code, 0);
+}
+
+#[tokio::test]
+async fn execute_plan_runs_true_condition_steps() {
+    // When condition is true, the step must execute (not skip).
     let plan = ExecutionPlan {
         name: "test".into(),
         description: String::new(),
@@ -288,30 +358,21 @@ async fn execute_plan_fails_on_unsupported_condition_steps() {
             id: 1,
             title: "conditional step".into(),
             tool: Some("bash".into()),
-            prompt: "echo hello".into(),
+            prompt: "```bash\necho hello\n```".into(),
             tier: None,
             depends_on: vec![],
-            on_fail: FailAction::Skip,
+            on_fail: FailAction::Abort,
             condition: Some("${FLAG}".into()),
             loop_var: None,
         }],
     };
-    let vars = HashMap::new();
+    let mut vars = HashMap::new();
+    vars.insert("FLAG".into(), "yes".into());
     let tmp = tempfile::tempdir().unwrap();
     let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
-    // The step should be skipped with non-zero exit
     assert_eq!(results.len(), 1);
-    assert!(results[0].skipped);
-    assert_ne!(results[0].exit_code, 0);
-    // Verify that handle_plan_run would fail: unsupported skips count as failures
-    let unsupported = results
-        .iter()
-        .filter(|r| r.skipped && r.exit_code != 0)
-        .count();
-    assert!(
-        unsupported > 0,
-        "unsupported skips must be counted as failures"
-    );
+    assert!(!results[0].skipped, "true condition must execute");
+    assert_eq!(results[0].exit_code, 0);
 }
 
 #[tokio::test]

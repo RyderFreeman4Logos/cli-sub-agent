@@ -17,6 +17,7 @@ mod pipeline_env;
 mod pipeline_execute;
 mod pipeline_sandbox;
 mod plan_cmd;
+mod plan_condition;
 mod process_tree;
 mod review_cmd;
 mod review_consensus;
