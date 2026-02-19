@@ -13,6 +13,7 @@ mod gc;
 mod mcp_server;
 mod pattern_resolver;
 mod pipeline;
+mod pipeline_sandbox;
 mod process_tree;
 mod review_cmd;
 mod review_consensus;

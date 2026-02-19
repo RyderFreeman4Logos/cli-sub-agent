@@ -467,6 +467,7 @@ dependencies = [
  "csa-acp",
  "csa-core",
  "csa-process",
+ "csa-resource",
  "csa-session",
  "regex",
  "serde",

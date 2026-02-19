@@ -11,8 +11,8 @@ pub mod validate;
 
 // Re-export key types
 pub use state::{
-    ContextStatus, Genealogy, MetaSessionState, PhaseEvent, SessionPhase, TaskContext, TokenUsage,
-    ToolState,
+    ContextStatus, Genealogy, MetaSessionState, PhaseEvent, SandboxInfo, SessionPhase, TaskContext,
+    TokenUsage, ToolState,
 };
 
 pub use metadata::SessionMetadata;

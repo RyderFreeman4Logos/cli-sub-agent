@@ -22,6 +22,7 @@ fn make_test_session() -> MetaSessionState {
         task_context: csa_session::state::TaskContext::default(),
         turn_count: 0,
         token_budget: None,
+        sandbox_info: None,
     }
 }
 

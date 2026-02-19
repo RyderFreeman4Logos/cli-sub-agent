@@ -263,6 +263,7 @@ mod tests {
             task_context: Default::default(),
             turn_count: 0,
             token_budget: None,
+            sandbox_info: None,
         }
     }
 

@@ -349,6 +349,7 @@ mod tests {
             task_context: Default::default(),
             turn_count: 0,
             token_budget: None,
+            sandbox_info: None,
         };
 
         // Should deterministically pick "codex" (alphabetically first)
@@ -482,6 +483,7 @@ mod tests {
             task_context: Default::default(),
             turn_count: 5,
             token_budget: None,
+            sandbox_info: None,
         };
 
         let note = note_from_session(&session);

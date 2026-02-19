@@ -114,12 +114,7 @@ pub struct ToolConfig {
     pub enabled: bool,
     #[serde(default)]
     pub restrictions: Option<ToolRestrictions>,
-    /// Suppress notification hooks when running as a CSA sub-agent.
-    ///
-    /// When `true` (the default), CSA injects `CSA_SUPPRESS_NOTIFY=1` into the
-    /// child process environment. ACP adapters (claude-code-acp, codex-acp) and
-    /// CLI tools can read this variable to skip desktop notification hooks that
-    /// are not useful in non-interactive sub-agent contexts.
+    /// Suppress notification hooks (default: true). Injects `CSA_SUPPRESS_NOTIFY=1`.
     #[serde(default = "default_true")]
     pub suppress_notify: bool,
     /// Per-tool memory limit override (MB). Takes precedence over project resources.
@@ -154,13 +149,10 @@ pub struct ToolRestrictions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesConfig {
-    /// Minimum combined free memory (physical + swap) in MB.
-    /// CSA refuses to launch a tool when combined free memory
-    /// would drop below this after accounting for tool usage.
+    /// Minimum combined free memory (physical + swap) in MB before refusing launch.
     #[serde(default = "default_min_mem")]
     pub min_free_memory_mb: u64,
-    /// Kill a running child process only if there is no streamed output
-    /// (stdout/stderr/ACP events) for this many consecutive seconds.
+    /// Kill child if no streamed output for this many consecutive seconds.
     #[serde(default = "default_idle_timeout_seconds")]
     pub idle_timeout_seconds: u64,
     #[serde(default)]
@@ -445,6 +437,34 @@ impl ProjectConfig {
     pub fn is_tool_auto_selectable(&self, tool: &str) -> bool {
         self.is_tool_enabled(tool)
             && (self.tiers.is_empty() || self.is_tool_configured_in_tiers(tool))
+    }
+
+    /// Resolve sandbox enforcement mode (defaults to `Off`).
+    pub fn enforcement_mode(&self) -> EnforcementMode {
+        self.resources
+            .enforcement_mode
+            .unwrap_or(EnforcementMode::Off)
+    }
+
+    /// Resolve memory_max_mb: tool-level override > project resources > None.
+    pub fn sandbox_memory_max_mb(&self, tool: &str) -> Option<u64> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.memory_max_mb)
+            .or(self.resources.memory_max_mb)
+    }
+
+    /// Resolve memory_swap_max_mb: tool-level override > project resources > None.
+    pub fn sandbox_memory_swap_max_mb(&self, tool: &str) -> Option<u64> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.memory_swap_max_mb)
+            .or(self.resources.memory_swap_max_mb)
+    }
+
+    /// Resolve pids_max from project resources config.
+    pub fn sandbox_pids_max(&self) -> Option<u32> {
+        self.resources.pids_max
     }
 
     /// Check if notification hooks should be suppressed for a tool.

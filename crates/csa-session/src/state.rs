@@ -53,6 +53,20 @@ pub struct MetaSessionState {
     /// Token budget tracking (allocated, used, remaining).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<TokenBudget>,
+
+    /// Resource sandbox telemetry for this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sandbox_info: Option<SandboxInfo>,
+}
+
+/// Lightweight telemetry about the resource sandbox applied to a session.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SandboxInfo {
+    /// Sandbox isolation mode used: "cgroup", "rlimit", or "none".
+    pub mode: String,
+    /// Memory limit applied (MB), if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max_mb: Option<u64>,
 }
 
 /// Genealogy tracking for session parent-child relationships
@@ -470,6 +484,7 @@ mod tests {
             },
             turn_count: 0,
             token_budget: None,
+            sandbox_info: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -661,6 +676,7 @@ mod tests {
             task_context: TaskContext::default(),
             turn_count: 3,
             token_budget: Some(budget.clone()),
+            sandbox_info: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");

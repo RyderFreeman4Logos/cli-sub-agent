@@ -506,9 +506,7 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     });
 
-    // Inject CSA_SUPPRESS_NOTIFY based on per-tool config (default: suppress).
-    // This env var signals ACP adapters and CLI tools to skip desktop notifications
-    // that are not useful when running non-interactively under CSA.
+    // Inject CSA_SUPPRESS_NOTIFY to skip desktop notifications in non-interactive mode.
     let suppress = config
         .map(|c| c.should_suppress_notify(executor.tool_name()))
         .unwrap_or(true);
@@ -548,10 +546,7 @@ pub(crate) async fn execute_with_session_and_meta(
         warn!("PreRun hook failed: {}", e);
     }
 
-    // Run prompt guards (every session-based turn, including resume).
-    // Ephemeral runs bypass this function entirely (no session context for guards).
-    // Guard output is appended to effective_prompt so reminders appear at the end,
-    // where they have the strongest influence on tool behavior.
+    // Run prompt guards: append reminders to effective_prompt (strongest influence at end).
     if !hooks_config.prompt_guard.is_empty() {
         let guard_context = GuardContext {
             project_root: session.project_path.clone(),
@@ -573,18 +568,43 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     }
 
+    // Resolve sandbox configuration from project config and enforcement mode.
+    let execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
+        config,
+        executor.tool_name(),
+        &session.meta_session_id,
+        stream_mode,
+        idle_timeout_seconds,
+    ) {
+        crate::pipeline_sandbox::SandboxResolution::Ok(opts) => opts,
+        crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
+            let err = anyhow::anyhow!(msg);
+            write_pre_exec_error_result(
+                project_root,
+                &session.meta_session_id,
+                executor.tool_name(),
+                &err,
+            );
+            if let Some(ref mut cg) = cleanup_guard {
+                cg.defuse();
+            }
+            return Err(err);
+        }
+    };
+
+    // Record sandbox telemetry in session state (first turn only).
+    crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
+
     // Execute via transport abstraction.
-    // TODO(signal): Restore SIGINT/SIGTERM forwarding to child process groups.
-    // Phase C moved signal handling responsibility to the Transport layer, but
-    // AcpTransport does not yet propagate signals. LegacyTransport inherits
-    // csa-process::wait_and_capture which handles signals via process groups.
+    // TODO(signal): AcpTransport doesn't propagate SIGINT/SIGTERM yet;
+    // LegacyTransport inherits signal handling via csa-process process groups.
     let transport_result = match executor
         .execute_with_transport(
             &effective_prompt,
             tool_state.as_ref(),
             &session,
             merged_env_ref,
-            csa_executor::ExecuteOptions::new(stream_mode, idle_timeout_seconds),
+            execute_options,
             session_config,
         )
         .await
@@ -604,9 +624,7 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     };
 
-    // Tool execution completed — defuse cleanup guard now.
-    // The session directory contains execution artifacts worth preserving
-    // even if a later persistence step (save_session, hooks) fails.
+    // Tool execution completed — defuse cleanup guard (preserve artifacts on later errors).
     if let Some(ref mut guard) = cleanup_guard {
         guard.defuse();
     }
