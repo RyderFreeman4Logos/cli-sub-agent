@@ -73,6 +73,27 @@ pub struct AcpConnection {
 }
 
 impl AcpConnection {
+    /// Environment variables stripped before spawning ACP child processes.
+    ///
+    /// These are set by the parent Claude Code instance and interfere with
+    /// the child ACP adapter or the tool it wraps.
+    const STRIPPED_ENV_VARS: &[&str] = &[
+        // Claude Code sets this to detect recursive invocations.  When
+        // inherited by a child claude-code-acp → claude-code chain, the
+        // child refuses to start.
+        "CLAUDECODE",
+        // Entrypoint tracking for the parent session — not meaningful for
+        // the ACP subprocess.
+        "CLAUDE_CODE_ENTRYPOINT",
+    ];
+
+    /// Default timeout for ACP initialization and session setup.
+    ///
+    /// If the ACP process does not respond to `initialize`, `session/new`,
+    /// or `session/load` within this duration, the connection is killed and
+    /// an error is returned.
+    const INIT_TIMEOUT: Duration = Duration::from_secs(60);
+
     /// Spawn an ACP process without resource sandboxing.
     pub async fn spawn(
         command: &str,
@@ -208,6 +229,11 @@ impl AcpConnection {
     }
 
     /// Build a standard ACP command with piped stdio and environment.
+    ///
+    /// Strips inherited environment variables that cause the spawned ACP
+    /// adapter (e.g. `claude-code-acp`) to fail.  The parent Claude Code
+    /// process sets `CLAUDECODE=1` for recursion detection, which makes
+    /// any child Claude Code instance refuse to start.
     fn build_cmd_base(
         command: &str,
         args: &[String],
@@ -220,6 +246,14 @@ impl AcpConnection {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
+
+        // Strip parent-process env vars that interfere with the ACP child.
+        // CLAUDECODE=1 triggers recursion detection in claude-code, causing
+        // immediate exit with "unset the CLAUDECODE environment variable".
+        // CLAUDE_CODE_ENTRYPOINT is parent-specific context, not relevant.
+        for var in Self::STRIPPED_ENV_VARS {
+            cmd.env_remove(var);
+        }
 
         for (key, value) in env {
             cmd.env(key, value);
@@ -309,12 +343,29 @@ impl AcpConnection {
         self.ensure_process_running()?;
 
         let request = InitializeRequest::new(ProtocolVersion::LATEST);
-        self.local_set
-            .run_until(async { self.connection.initialize(request).await })
-            .await
-            .map_err(|err| AcpError::InitializationFailed(err.to_string()))?;
+        let result = self
+            .local_set
+            .run_until(async {
+                tokio::select! {
+                    response = self.connection.initialize(request) => Some(response),
+                    () = tokio::time::sleep(Self::INIT_TIMEOUT) => None,
+                }
+            })
+            .await;
 
-        Ok(())
+        match result {
+            Some(Ok(_response)) => Ok(()),
+            Some(Err(err)) => Err(AcpError::InitializationFailed(err.to_string())),
+            None => {
+                let stderr = self.stderr();
+                let _ = self.kill();
+                Err(AcpError::InitializationFailed(format!(
+                    "ACP initialize timed out after {}s{}",
+                    Self::INIT_TIMEOUT.as_secs(),
+                    Self::format_stderr(&stderr),
+                )))
+            }
+        }
     }
 
     // TODO(acp-sdk): ACP v0.9.4 `NewSessionRequest` does not support system_prompt.
@@ -330,13 +381,29 @@ impl AcpConnection {
         let session_working_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
         let request = NewSessionRequest::new(session_working_dir);
 
-        let response = self
+        let result = self
             .local_set
-            .run_until(async { self.connection.new_session(request).await })
-            .await
-            .map_err(|err| AcpError::SessionFailed(err.to_string()))?;
+            .run_until(async {
+                tokio::select! {
+                    response = self.connection.new_session(request) => Some(response),
+                    () = tokio::time::sleep(Self::INIT_TIMEOUT) => None,
+                }
+            })
+            .await;
 
-        Ok(response.session_id.0.to_string())
+        match result {
+            Some(Ok(response)) => Ok(response.session_id.0.to_string()),
+            Some(Err(err)) => Err(AcpError::SessionFailed(err.to_string())),
+            None => {
+                let stderr = self.stderr();
+                let _ = self.kill();
+                Err(AcpError::SessionFailed(format!(
+                    "ACP session/new timed out after {}s{}",
+                    Self::INIT_TIMEOUT.as_secs(),
+                    Self::format_stderr(&stderr),
+                )))
+            }
+        }
     }
 
     pub async fn load_session(
@@ -350,12 +417,29 @@ impl AcpConnection {
         let request =
             LoadSessionRequest::new(SessionId::new(session_id.to_string()), session_working_dir);
 
-        self.local_set
-            .run_until(async { self.connection.load_session(request).await })
-            .await
-            .map_err(|err| AcpError::SessionFailed(err.to_string()))?;
+        let result = self
+            .local_set
+            .run_until(async {
+                tokio::select! {
+                    response = self.connection.load_session(request) => Some(response),
+                    () = tokio::time::sleep(Self::INIT_TIMEOUT) => None,
+                }
+            })
+            .await;
 
-        Ok(session_id.to_string())
+        match result {
+            Some(Ok(_response)) => Ok(session_id.to_string()),
+            Some(Err(err)) => Err(AcpError::SessionFailed(err.to_string())),
+            None => {
+                let stderr = self.stderr();
+                let _ = self.kill();
+                Err(AcpError::SessionFailed(format!(
+                    "ACP session/load timed out after {}s{}",
+                    Self::INIT_TIMEOUT.as_secs(),
+                    Self::format_stderr(&stderr),
+                )))
+            }
+        }
     }
 
     pub async fn prompt(
@@ -455,6 +539,19 @@ impl AcpConnection {
             return Err(AcpError::ProcessExited(status.code().unwrap_or(-1)));
         }
         Ok(())
+    }
+
+    /// Format captured stderr for inclusion in error messages.
+    ///
+    /// Returns an empty string when no stderr was captured, or
+    /// `"; stderr: <content>"` otherwise.
+    fn format_stderr(stderr: &str) -> String {
+        let trimmed = stderr.trim();
+        if trimmed.is_empty() {
+            String::new()
+        } else {
+            format!("; stderr: {trimmed}")
+        }
     }
 }
 
