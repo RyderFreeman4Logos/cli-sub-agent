@@ -17,12 +17,42 @@ use tokio::{
     task::LocalSet,
 };
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
-use tracing::warn;
+use tracing::{debug, warn};
+
+pub use csa_resource::cgroup::SandboxConfig;
+use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
 
 use crate::{
     client::{AcpClient, SessionEvent, SharedActivity, SharedEvents},
     error::{AcpError, AcpResult},
 };
+
+/// Holds sandbox resources that must live as long as the ACP child process.
+///
+/// Mirrors [`csa_process::SandboxHandle`] for the ACP transport path.
+///
+/// # Signal semantics
+///
+/// - **`Cgroup`**: The ACP process runs inside a systemd transient scope.
+///   On drop, the guard calls `systemctl --user stop <scope>`, sending
+///   `SIGTERM` to all processes in the scope.
+///
+/// - **`Rlimit`**: `setrlimit` was applied in the child's `pre_exec`.  The
+///   optional [`RssWatcher`] monitors RSS from the parent side.
+///
+/// - **`None`**: No sandbox active.
+///
+/// [`RssWatcher`]: csa_resource::rlimit::RssWatcher
+pub enum AcpSandboxHandle {
+    /// cgroup scope guard -- dropped to stop the scope.
+    Cgroup(csa_resource::cgroup::CgroupScopeGuard),
+    /// `setrlimit` was applied in child; optional RSS watcher monitors externally.
+    Rlimit {
+        watcher: Option<csa_resource::rlimit::RssWatcher>,
+    },
+    /// No sandbox active.
+    None,
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptResult {
@@ -43,12 +73,123 @@ pub struct AcpConnection {
 }
 
 impl AcpConnection {
+    /// Spawn an ACP process without resource sandboxing.
     pub async fn spawn(
         command: &str,
         args: &[String],
         working_dir: &Path,
         env: &HashMap<String, String>,
     ) -> AcpResult<Self> {
+        let cmd = Self::build_cmd(command, args, working_dir, env);
+        Self::spawn_with_cmd(cmd, working_dir).await
+    }
+
+    /// Spawn an ACP process with optional resource sandbox.
+    ///
+    /// When `sandbox` is `Some`, the process is wrapped in resource isolation
+    /// based on the host's detected capability (cgroup v2 or setrlimit).
+    /// When `sandbox` is `None`, behavior is identical to [`Self::spawn`].
+    ///
+    /// Returns the connection and a [`AcpSandboxHandle`] that must be kept
+    /// alive for the duration of the child process.
+    pub async fn spawn_sandboxed(
+        command: &str,
+        args: &[String],
+        working_dir: &Path,
+        env: &HashMap<String, String>,
+        sandbox: Option<&SandboxConfig>,
+        tool_name: &str,
+        session_id: &str,
+    ) -> AcpResult<(Self, AcpSandboxHandle)> {
+        let Some(config) = sandbox else {
+            let conn = Self::spawn(command, args, working_dir, env).await?;
+            return Ok((conn, AcpSandboxHandle::None));
+        };
+
+        match detect_sandbox_capability() {
+            SandboxCapability::CgroupV2 => {
+                // Build systemd-run wrapper command, then append the ACP binary + args.
+                let scope_cmd =
+                    csa_resource::cgroup::create_scope_command(tool_name, session_id, config);
+                let mut cmd = Command::from(scope_cmd);
+                cmd.arg(command);
+                cmd.args(args);
+                cmd.current_dir(working_dir)
+                    .stdin(Stdio::piped())
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped());
+
+                // SAFETY: setsid() is async-signal-safe, runs before exec in child.
+                #[cfg(unix)]
+                unsafe {
+                    cmd.pre_exec(|| {
+                        libc::setsid();
+                        Ok(())
+                    });
+                }
+
+                for (key, value) in env {
+                    cmd.env(key, value);
+                }
+
+                let conn = Self::spawn_with_cmd(cmd, working_dir).await?;
+                let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
+                debug!(
+                    scope = %guard.scope_name(),
+                    "ACP process spawned inside cgroup scope"
+                );
+                Ok((conn, AcpSandboxHandle::Cgroup(guard)))
+            }
+            SandboxCapability::Setrlimit => {
+                let mut cmd = Self::build_cmd(command, args, working_dir, env);
+
+                let memory_max_mb = config.memory_max_mb;
+                let pids_max = config.pids_max.map(u64::from);
+
+                // Apply rlimits in the child process (setsid is already installed by build_cmd).
+                // SAFETY: apply_rlimits calls setrlimit which is async-signal-safe.
+                #[cfg(unix)]
+                unsafe {
+                    cmd.pre_exec(move || {
+                        csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
+                            .map_err(std::io::Error::other)
+                    });
+                }
+
+                let conn = Self::spawn_with_cmd_raw(cmd, working_dir).await?;
+
+                let watcher = conn.child.borrow().id().and_then(|pid| {
+                    debug!(pid, memory_max_mb, "starting RSS watcher for ACP child");
+                    match csa_resource::rlimit::RssWatcher::start(
+                        pid,
+                        memory_max_mb,
+                        Duration::from_secs(5),
+                    ) {
+                        Ok(w) => Some(w),
+                        Err(e) => {
+                            tracing::warn!("failed to start RSS watcher: {e:#}");
+                            None
+                        }
+                    }
+                });
+
+                Ok((conn, AcpSandboxHandle::Rlimit { watcher }))
+            }
+            SandboxCapability::None => {
+                debug!("no sandbox capability detected; spawning ACP without isolation");
+                let conn = Self::spawn(command, args, working_dir, env).await?;
+                Ok((conn, AcpSandboxHandle::None))
+            }
+        }
+    }
+
+    /// Build a standard ACP command with piped stdio and `setsid` pre-exec.
+    fn build_cmd(
+        command: &str,
+        args: &[String],
+        working_dir: &Path,
+        env: &HashMap<String, String>,
+    ) -> Command {
         let mut cmd = Command::new(command);
         cmd.args(args)
             .current_dir(working_dir)
@@ -71,6 +212,17 @@ impl AcpConnection {
             cmd.env(key, value);
         }
 
+        cmd
+    }
+
+    /// Shared connection setup from a pre-built command.
+    async fn spawn_with_cmd(cmd: Command, working_dir: &Path) -> AcpResult<Self> {
+        Self::spawn_with_cmd_raw(cmd, working_dir).await
+    }
+
+    /// Core spawn logic: takes a fully configured command, spawns it, and
+    /// sets up the ACP protocol connection over stdin/stdout.
+    async fn spawn_with_cmd_raw(mut cmd: Command, working_dir: &Path) -> AcpResult<Self> {
         let mut child = cmd.spawn().map_err(AcpError::SpawnFailed)?;
 
         let stdin = child.stdin.take().ok_or_else(|| {

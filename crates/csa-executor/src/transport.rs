@@ -4,26 +4,60 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use csa_acp::{SessionConfig, SessionEvent};
-use csa_process::{ExecutionResult, StreamMode, spawn_tool, wait_and_capture_with_idle_timeout};
+use csa_process::{
+    ExecutionResult, StreamMode, spawn_tool, spawn_tool_sandboxed,
+    wait_and_capture_with_idle_timeout,
+};
+use csa_resource::cgroup::SandboxConfig;
 use csa_session::state::{MetaSessionState, ToolState};
 
 use crate::executor::Executor;
 
 const SUMMARY_MAX_CHARS: usize = 200;
 
+/// Sandbox configuration passed through the transport layer.
+///
+/// Carries cgroup/rlimit limits together with identifiers needed for
+/// scope naming.  This is the transport-layer counterpart of
+/// [`crate::executor::SandboxContext`].
+#[derive(Debug, Clone)]
+pub struct SandboxTransportConfig {
+    /// Resource limits to apply (memory, swap, PIDs).
+    pub config: SandboxConfig,
+    /// Tool name for cgroup scope naming (e.g. "claude-code").
+    pub tool_name: String,
+    /// Session ID for cgroup scope naming.
+    /// When true, sandbox spawn failures fall back to unsandboxed spawn.
+    pub best_effort: bool,
+    pub session_id: String,
+}
+
+/// Bundled execution options passed through the transport layer.
+///
+/// Groups stream mode, idle timeout, and optional sandbox config into a single
+/// parameter to keep the `Transport::execute` signature within clippy's argument limit.
+#[derive(Debug, Clone)]
+pub struct TransportOptions<'a> {
+    pub stream_mode: StreamMode,
+    pub idle_timeout_seconds: u64,
+    pub sandbox: Option<&'a SandboxTransportConfig>,
+}
+
 /// Transport abstraction for executing prompts via different protocols.
 /// Implementations: LegacyTransport (CLI non-interactive) and AcpTransport (ACP protocol).
 #[async_trait]
 pub trait Transport: Send + Sync {
     /// Execute a prompt and return the result.
+    ///
+    /// When `options.sandbox` is provided, the spawned tool process will be wrapped
+    /// in resource isolation (cgroup scope or setrlimit fallback).
     async fn execute(
         &self,
         prompt: &str,
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-        stream_mode: StreamMode,
-        idle_timeout_seconds: u64,
+        options: TransportOptions<'_>,
     ) -> Result<TransportResult>;
 
     #[cfg(test)]
@@ -85,19 +119,53 @@ impl Transport for LegacyTransport {
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-        stream_mode: StreamMode,
-        idle_timeout_seconds: u64,
+        options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
         let (cmd, stdin_data) = self
             .executor
             .build_command(prompt, tool_state, session, extra_env);
-        let child = spawn_tool(cmd, stdin_data).await?;
+
+        let sandbox_cfg = options.sandbox.map(|s| &s.config);
+        let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
+        let (tool_name, session_id) = options
+            .sandbox
+            .map(|s| (s.tool_name.as_str(), s.session_id.as_str()))
+            .unwrap_or(("", ""));
+
+        let (child, _sandbox_handle) = match spawn_tool_sandboxed(
+            cmd,
+            stdin_data.clone(),
+            sandbox_cfg,
+            tool_name,
+            session_id,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) if best_effort => {
+                tracing::warn!(
+                    "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
+                );
+                let child = spawn_tool(
+                    self.executor
+                        .build_command(prompt, tool_state, session, extra_env)
+                        .0,
+                    stdin_data,
+                )
+                .await?;
+                (child, csa_process::SandboxHandle::None)
+            }
+            Err(e) => return Err(e),
+        };
+
         let execution = wait_and_capture_with_idle_timeout(
             child,
-            stream_mode,
-            std::time::Duration::from_secs(idle_timeout_seconds),
+            options.stream_mode,
+            std::time::Duration::from_secs(options.idle_timeout_seconds),
         )
         .await?;
+
+        // _sandbox_handle is kept alive until here, then dropped (cleanup).
 
         Ok(TransportResult {
             execution,
@@ -220,13 +288,12 @@ impl Transport for AcpTransport {
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-        stream_mode: StreamMode,
-        idle_timeout_seconds: u64,
+        options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
-        if stream_mode != StreamMode::BufferOnly {
+        if options.stream_mode != StreamMode::BufferOnly {
             tracing::debug!(
                 "ACP transport does not yet support stream_mode={:?}; output will be buffered",
-                stream_mode
+                options.stream_mode
             );
         }
 
@@ -241,6 +308,12 @@ impl Transport for AcpTransport {
             tracing::debug!(session_id, "resuming ACP session from tool state");
         }
 
+        let sandbox_config = options.sandbox.map(|s| s.config.clone());
+        let sandbox_tool_name = options.sandbox.map(|s| s.tool_name.clone());
+        let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
+        let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
+        let idle_timeout_seconds = options.idle_timeout_seconds;
+
         // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
         // dedicated current-thread runtime so callers can stay Send-safe.
         let output =
@@ -249,19 +322,61 @@ impl Transport for AcpTransport {
                     .enable_all()
                     .build()
                     .map_err(|e| anyhow!("failed to build ACP runtime: {e}"))?;
-                rt.block_on(csa_acp::transport::run_prompt(
-                    &acp_command,
-                    &acp_args,
-                    &working_dir,
-                    &env,
-                    csa_acp::transport::AcpSessionStart {
-                        system_prompt: system_prompt.as_deref(),
-                        resume_session_id: resume_session_id.as_deref(),
-                    },
-                    &prompt,
-                    std::time::Duration::from_secs(idle_timeout_seconds),
-                ))
-                .map_err(|e| anyhow!("ACP transport failed: {e}"))
+
+                if let Some(ref cfg) = sandbox_config {
+                    // Sandboxed path: use AcpConnection::spawn_sandboxed directly,
+                    // then replicate the session setup from run_prompt.
+                    let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
+                    let sess_id = sandbox_session_id.as_deref().unwrap_or("");
+                    match rt.block_on(run_acp_sandboxed(
+                        &acp_command,
+                        &acp_args,
+                        &working_dir,
+                        &env,
+                        system_prompt.as_deref(),
+                        resume_session_id.as_deref(),
+                        &prompt,
+                        std::time::Duration::from_secs(idle_timeout_seconds),
+                        cfg,
+                        tool_name,
+                        sess_id,
+                    )) {
+                        Ok(output) => Ok(output),
+                        Err(e) if sandbox_best_effort => {
+                            tracing::warn!(
+                                "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
+                            );
+                            rt.block_on(csa_acp::transport::run_prompt(
+                                &acp_command,
+                                &acp_args,
+                                &working_dir,
+                                &env,
+                                csa_acp::transport::AcpSessionStart {
+                                    system_prompt: system_prompt.as_deref(),
+                                    resume_session_id: resume_session_id.as_deref(),
+                                },
+                                &prompt,
+                                std::time::Duration::from_secs(idle_timeout_seconds),
+                            ))
+                            .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
+                        }
+                        Err(e) => Err(anyhow!("ACP transport (sandboxed) failed: {e}")),
+                    }
+                } else {
+                    rt.block_on(csa_acp::transport::run_prompt(
+                        &acp_command,
+                        &acp_args,
+                        &working_dir,
+                        &env,
+                        csa_acp::transport::AcpSessionStart {
+                            system_prompt: system_prompt.as_deref(),
+                            resume_session_id: resume_session_id.as_deref(),
+                        },
+                        &prompt,
+                        std::time::Duration::from_secs(idle_timeout_seconds),
+                    ))
+                    .map_err(|e| anyhow!("ACP transport failed: {e}"))
+                }
             })
             .await
             .map_err(|e| anyhow!("ACP transport join error: {e}"))??;
@@ -312,6 +427,94 @@ impl TransportFactory {
             TransportMode::Acp => Box::new(AcpTransport::new(executor.tool_name(), session_config)),
         }
     }
+}
+
+/// Run an ACP prompt with sandbox isolation.
+///
+/// Replicates the logic of `csa_acp::transport::run_prompt` but uses
+/// `AcpConnection::spawn_sandboxed` to wrap the ACP process in resource
+/// isolation.  The returned `AcpSandboxHandle` is kept alive for the
+/// duration of the session.
+#[allow(clippy::too_many_arguments)]
+async fn run_acp_sandboxed(
+    command: &str,
+    args: &[String],
+    working_dir: &Path,
+    env: &HashMap<String, String>,
+    system_prompt: Option<&str>,
+    resume_session_id: Option<&str>,
+    prompt: &str,
+    idle_timeout: std::time::Duration,
+    sandbox_config: &SandboxConfig,
+    tool_name: &str,
+    session_id: &str,
+) -> csa_acp::AcpResult<csa_acp::transport::AcpOutput> {
+    use csa_acp::AcpConnection;
+
+    let (connection, _sandbox_handle) = AcpConnection::spawn_sandboxed(
+        command,
+        args,
+        working_dir,
+        env,
+        Some(sandbox_config),
+        tool_name,
+        session_id,
+    )
+    .await?;
+
+    connection.initialize().await?;
+
+    let acp_session_id = if let Some(resume_id) = resume_session_id {
+        tracing::debug!(
+            resume_session_id = resume_id,
+            "loading ACP session (sandboxed)"
+        );
+        match connection.load_session(resume_id, Some(working_dir)).await {
+            Ok(id) => id,
+            Err(error) => {
+                tracing::warn!(
+                    resume_session_id = resume_id,
+                    error = %error,
+                    "Failed to resume sandboxed ACP session, creating new session"
+                );
+                connection
+                    .new_session(system_prompt, Some(working_dir))
+                    .await?
+            }
+        }
+    } else {
+        connection
+            .new_session(system_prompt, Some(working_dir))
+            .await?
+    };
+
+    let result = connection
+        .prompt(&acp_session_id, prompt, idle_timeout)
+        .await?;
+
+    let mut exit_code = connection.exit_code().await?.unwrap_or(0);
+    let mut stderr = connection.stderr();
+    if result.timed_out {
+        exit_code = 137;
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(&format!(
+            "idle timeout: no ACP events/stderr for {}s; process killed",
+            idle_timeout.as_secs()
+        ));
+        stderr.push('\n');
+    }
+
+    // _sandbox_handle dropped here, cleaning up cgroup scope if applicable.
+
+    Ok(csa_acp::transport::AcpOutput {
+        output: result.output,
+        stderr,
+        events: result.events,
+        session_id: acp_session_id,
+        exit_code,
+    })
 }
 
 fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
@@ -502,6 +705,7 @@ mod tests {
             task_context: csa_session::state::TaskContext::default(),
             turn_count: 0,
             token_budget: None,
+            sandbox_info: None,
         };
 
         let mut extra = HashMap::new();

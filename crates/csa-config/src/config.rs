@@ -6,6 +6,21 @@ use std::path::{Path, PathBuf};
 
 use crate::global::{PreferencesConfig, ReviewConfig};
 
+/// Sandbox enforcement mode for resource limits (cgroups, rlimits).
+///
+/// Controls whether CSA enforces memory/PID limits on child tool processes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum EnforcementMode {
+    /// Require sandbox setup; abort if kernel support is missing.
+    Required,
+    /// Try to enforce limits; fall back gracefully if unavailable.
+    BestEffort,
+    /// Disable sandbox enforcement entirely.
+    #[default]
+    Off,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierConfig {
     pub description: String,
@@ -99,14 +114,15 @@ pub struct ToolConfig {
     pub enabled: bool,
     #[serde(default)]
     pub restrictions: Option<ToolRestrictions>,
-    /// Suppress notification hooks when running as a CSA sub-agent.
-    ///
-    /// When `true` (the default), CSA injects `CSA_SUPPRESS_NOTIFY=1` into the
-    /// child process environment. ACP adapters (claude-code-acp, codex-acp) and
-    /// CLI tools can read this variable to skip desktop notification hooks that
-    /// are not useful in non-interactive sub-agent contexts.
+    /// Suppress notification hooks (default: true). Injects `CSA_SUPPRESS_NOTIFY=1`.
     #[serde(default = "default_true")]
     pub suppress_notify: bool,
+    /// Per-tool memory limit override (MB). Takes precedence over project resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max_mb: Option<u64>,
+    /// Per-tool swap limit override (MB). Takes precedence over project resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_swap_max_mb: Option<u64>,
 }
 
 impl Default for ToolConfig {
@@ -115,6 +131,8 @@ impl Default for ToolConfig {
             enabled: true,
             restrictions: None,
             suppress_notify: true,
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
         }
     }
 }
@@ -131,17 +149,26 @@ pub struct ToolRestrictions {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourcesConfig {
-    /// Minimum combined free memory (physical + swap) in MB.
-    /// CSA refuses to launch a tool when combined free memory
-    /// would drop below this after accounting for tool usage.
+    /// Minimum combined free memory (physical + swap) in MB before refusing launch.
     #[serde(default = "default_min_mem")]
     pub min_free_memory_mb: u64,
-    /// Kill a running child process only if there is no streamed output
-    /// (stdout/stderr/ACP events) for this many consecutive seconds.
+    /// Kill child if no streamed output for this many consecutive seconds.
     #[serde(default = "default_idle_timeout_seconds")]
     pub idle_timeout_seconds: u64,
     #[serde(default)]
     pub initial_estimates: HashMap<String, u64>,
+    /// Sandbox enforcement mode for resource limits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforcement_mode: Option<EnforcementMode>,
+    /// Maximum physical memory (RSS) in MB for child tool processes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_max_mb: Option<u64>,
+    /// Maximum swap usage in MB for child tool processes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_swap_max_mb: Option<u64>,
+    /// Maximum number of PIDs for child tool process trees.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pids_max: Option<u32>,
 }
 
 fn default_min_mem() -> u64 {
@@ -158,6 +185,10 @@ impl Default for ResourcesConfig {
             min_free_memory_mb: default_min_mem(),
             idle_timeout_seconds: default_idle_timeout_seconds(),
             initial_estimates: HashMap::new(),
+            enforcement_mode: None,
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
         }
     }
 }
@@ -170,6 +201,10 @@ impl ResourcesConfig {
         self.min_free_memory_mb == default_min_mem()
             && self.idle_timeout_seconds == default_idle_timeout_seconds()
             && self.initial_estimates.is_empty()
+            && self.enforcement_mode.is_none()
+            && self.memory_max_mb.is_none()
+            && self.memory_swap_max_mb.is_none()
+            && self.pids_max.is_none()
     }
 }
 
@@ -402,6 +437,34 @@ impl ProjectConfig {
     pub fn is_tool_auto_selectable(&self, tool: &str) -> bool {
         self.is_tool_enabled(tool)
             && (self.tiers.is_empty() || self.is_tool_configured_in_tiers(tool))
+    }
+
+    /// Resolve sandbox enforcement mode (defaults to `Off`).
+    pub fn enforcement_mode(&self) -> EnforcementMode {
+        self.resources
+            .enforcement_mode
+            .unwrap_or(EnforcementMode::Off)
+    }
+
+    /// Resolve memory_max_mb: tool-level override > project resources > None.
+    pub fn sandbox_memory_max_mb(&self, tool: &str) -> Option<u64> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.memory_max_mb)
+            .or(self.resources.memory_max_mb)
+    }
+
+    /// Resolve memory_swap_max_mb: tool-level override > project resources > None.
+    pub fn sandbox_memory_swap_max_mb(&self, tool: &str) -> Option<u64> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.memory_swap_max_mb)
+            .or(self.resources.memory_swap_max_mb)
+    }
+
+    /// Resolve pids_max from project resources config.
+    pub fn sandbox_pids_max(&self) -> Option<u32> {
+        self.resources.pids_max
     }
 
     /// Check if notification hooks should be suppressed for a tool.

@@ -13,12 +13,13 @@ pub use context_loader::{
     ContextFile, ContextLoadOptions, format_context_for_prompt, load_project_context,
 };
 pub use csa_process::ExecutionResult;
-pub use executor::{ExecuteOptions, Executor};
+pub use executor::{ExecuteOptions, Executor, SandboxContext};
 pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
 pub use session_id::{extract_session_id, extract_session_id_from_transport};
 pub use transport::{
-    AcpTransport, LegacyTransport, Transport, TransportFactory, TransportMode, TransportResult,
+    AcpTransport, LegacyTransport, SandboxTransportConfig, Transport, TransportFactory,
+    TransportMode, TransportOptions, TransportResult,
 };
 
 // Re-export session config types from csa-acp for pipeline integration.

@@ -5,7 +5,11 @@ use serde::Serialize;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
-use tracing::warn;
+use tracing::{debug, warn};
+
+use csa_resource::cgroup::SandboxConfig;
+use csa_resource::rlimit::RssWatcher;
+use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
 
 /// Controls whether stdout is forwarded to stderr in real-time.
 ///
@@ -19,6 +23,32 @@ pub enum StreamMode {
     /// Buffer stdout AND forward each line to stderr with `[stdout] ` prefix (default).
     #[default]
     TeeToStderr,
+}
+
+/// Holds sandbox resources that must live as long as the child process.
+///
+/// # Signal semantics
+///
+/// - **`Cgroup`**: The child runs inside a systemd transient scope.  On drop,
+///   [`CgroupScopeGuard`] calls `systemctl --user stop <scope>`, which sends
+///   `SIGTERM` to **all** processes in the scope.  CSA should let systemd
+///   handle cleanup rather than sending signals directly when a scope is active.
+///
+/// - **`Rlimit`**: `setrlimit` was applied in the child's `pre_exec`.  The
+///   optional [`RssWatcher`] monitors RSS from the parent and sends `SIGTERM`
+///   to the child's process group if RSS exceeds the threshold.
+///
+/// - **`None`**: No sandbox active; signal handling is unchanged.
+///
+/// [`CgroupScopeGuard`]: csa_resource::cgroup::CgroupScopeGuard
+/// [`RssWatcher`]: csa_resource::rlimit::RssWatcher
+pub enum SandboxHandle {
+    /// cgroup scope guard -- dropped to stop the scope.
+    Cgroup(csa_resource::cgroup::CgroupScopeGuard),
+    /// `setrlimit` was applied in child; optional RSS watcher monitors externally.
+    Rlimit { watcher: Option<RssWatcher> },
+    /// No sandbox active.
+    None,
 }
 
 /// Result of executing a command.
@@ -100,6 +130,147 @@ pub async fn spawn_tool(
     }
 
     Ok(child)
+}
+
+/// Spawn a tool process with optional resource sandbox.
+///
+/// When `sandbox` is `Some`, the child process is wrapped in resource
+/// isolation based on the host's detected capability:
+///
+/// - **CgroupV2**: The tool binary is launched inside a systemd transient
+///   scope via `systemd-run --user --scope`.  A [`CgroupScopeGuard`] is
+///   returned that stops the scope on drop.
+///
+/// - **Setrlimit**: `RLIMIT_AS` and optionally `RLIMIT_NPROC` are applied
+///   in the child via `pre_exec`.  An [`RssWatcher`] is started after spawn
+///   to monitor RSS from the parent side.
+///
+/// - **None capability**: Falls through to normal `spawn_tool` behavior.
+///
+/// When `sandbox` is `None`, this delegates directly to [`spawn_tool`] with
+/// no overhead — behavior is identical to the unsandboxed path.
+///
+/// # Arguments
+///
+/// * `cmd` — The tool command to spawn.  For cgroup mode, this is rebuilt as
+///   a child of `systemd-run`; for rlimit mode, `pre_exec` is added.
+/// * `stdin_data` — Optional data to write to the child's stdin.
+/// * `sandbox` — Resource limits to enforce.  `None` skips sandboxing.
+/// * `tool_name` — Tool identifier for scope naming (e.g. "claude-code").
+/// * `session_id` — Session identifier for scope naming.
+///
+/// [`CgroupScopeGuard`]: csa_resource::cgroup::CgroupScopeGuard
+/// [`RssWatcher`]: csa_resource::rlimit::RssWatcher
+pub async fn spawn_tool_sandboxed(
+    cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+    sandbox: Option<&SandboxConfig>,
+    tool_name: &str,
+    session_id: &str,
+) -> Result<(tokio::process::Child, SandboxHandle)> {
+    let Some(config) = sandbox else {
+        let child = spawn_tool(cmd, stdin_data).await?;
+        return Ok((child, SandboxHandle::None));
+    };
+
+    match detect_sandbox_capability() {
+        SandboxCapability::CgroupV2 => {
+            spawn_with_cgroup(cmd, stdin_data, config, tool_name, session_id).await
+        }
+        SandboxCapability::Setrlimit => spawn_with_rlimit(cmd, stdin_data, config).await,
+        SandboxCapability::None => {
+            debug!("no sandbox capability detected; spawning without isolation");
+            let child = spawn_tool(cmd, stdin_data).await?;
+            Ok((child, SandboxHandle::None))
+        }
+    }
+}
+
+/// Spawn inside a systemd cgroup scope.
+///
+/// Builds a `systemd-run --user --scope` command that wraps the original
+/// tool command, then spawns it via [`spawn_tool`].
+async fn spawn_with_cgroup(
+    original_cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+    config: &SandboxConfig,
+    tool_name: &str,
+    session_id: &str,
+) -> Result<(tokio::process::Child, SandboxHandle)> {
+    // Build systemd-run wrapper: `systemd-run --user --scope ... -- <tool> <args>`
+    let scope_cmd = csa_resource::cgroup::create_scope_command(tool_name, session_id, config);
+
+    // Convert std::process::Command to tokio::process::Command and append
+    // the original program + args after the "--" separator.
+    let mut tokio_cmd = Command::from(scope_cmd);
+    tokio_cmd.arg(original_cmd.as_std().get_program());
+    tokio_cmd.args(original_cmd.as_std().get_args());
+
+    // Propagate environment from the original command.
+    let envs: Vec<_> = original_cmd
+        .as_std()
+        .get_envs()
+        .filter_map(|(k, v)| v.map(|val| (k.to_owned(), val.to_owned())))
+        .collect();
+    for (key, val) in &envs {
+        tokio_cmd.env(key, val);
+    }
+
+    if let Some(dir) = original_cmd.as_std().get_current_dir() {
+        tokio_cmd.current_dir(dir);
+    }
+
+    let child = spawn_tool(tokio_cmd, stdin_data).await?;
+    let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
+
+    debug!(
+        scope = %guard.scope_name(),
+        pid = child.id(),
+        "spawned tool inside cgroup scope"
+    );
+
+    Ok((child, SandboxHandle::Cgroup(guard)))
+}
+
+/// Spawn with `setrlimit` applied in the child's `pre_exec`.
+///
+/// After spawn, starts an [`RssWatcher`] to monitor the child's resident set
+/// size from the parent process.
+async fn spawn_with_rlimit(
+    mut cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+    config: &SandboxConfig,
+) -> Result<(tokio::process::Child, SandboxHandle)> {
+    let memory_max_mb = config.memory_max_mb;
+    let pids_max = config.pids_max.map(u64::from);
+
+    // SAFETY: `apply_rlimits` calls `setrlimit` which is async-signal-safe.
+    // This closure runs between fork and exec in the child process, before
+    // the Rust runtime is active in the child.
+    unsafe {
+        cmd.pre_exec(move || {
+            csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
+                .map_err(std::io::Error::other)
+        });
+    }
+
+    let child = spawn_tool(cmd, stdin_data).await?;
+
+    let watcher = child.id().and_then(|pid| {
+        debug!(
+            pid,
+            memory_max_mb, "starting RSS watcher for sandboxed child"
+        );
+        match RssWatcher::start(pid, memory_max_mb, Duration::from_secs(5)) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                warn!("failed to start RSS watcher: {e:#}");
+                None
+            }
+        }
+    });
+
+    Ok((child, SandboxHandle::Rlimit { watcher }))
 }
 
 /// Wait for a spawned child process and capture its output.

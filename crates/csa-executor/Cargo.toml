@@ -9,6 +9,7 @@ license.workspace = true
 csa-core.workspace = true
 csa-session.workspace = true
 csa-process.workspace = true
+csa-resource.workspace = true
 csa-acp = { path = "../csa-acp" }
 agent-teams.workspace = true
 tokio.workspace = true

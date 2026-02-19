@@ -189,7 +189,7 @@ mod tests {
         let b = a; // Copy
         assert_eq!(a, b); // PartialEq + Eq
 
-        let c = a.clone(); // Clone
+        let c = a; // Copy
         assert_eq!(a, c);
 
         // Hash: can be used as HashMap key

@@ -13,6 +13,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
                 enabled: false,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
     }
@@ -23,6 +24,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
                 enabled: true,
                 restrictions: None,
                 suppress_notify: true,
+                ..Default::default()
             },
         );
     }

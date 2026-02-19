@@ -123,6 +123,13 @@ max_recursion_depth = 5
 # codex = 800
 # claude-code = 1200
 
+# ─── Resource Sandbox ─────────────────────────────────────────────
+# [resources]
+# enforcement_mode = "best-effort"   # "required" | "best-effort" | "off"
+# memory_max_mb = 8192               # Max RSS per tool process (>= 256)
+# memory_swap_max_mb = 4096          # Max swap per tool process
+# pids_max = 512                     # Max PIDs per tool process tree (>= 10)
+
 # ─── Tool Configuration ────────────────────────────────────────
 # [tools.codex]
 # enabled = true

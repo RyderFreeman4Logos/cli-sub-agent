@@ -418,6 +418,7 @@ dependencies = [
  "agent-client-protocol",
  "anyhow",
  "async-trait",
+ "csa-resource",
  "libc",
  "serde",
  "serde_json",
@@ -466,6 +467,7 @@ dependencies = [
  "csa-acp",
  "csa-core",
  "csa-process",
+ "csa-resource",
  "csa-session",
  "regex",
  "serde",
@@ -509,6 +511,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "csa-core",
+ "csa-resource",
  "libc",
  "serde",
  "tokio",
@@ -521,11 +524,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "csa-core",
+ "libc",
  "serde",
  "sysinfo",
  "tempfile",
  "tokio",
  "toml",
+ "tracing",
 ]
 
 [[package]]

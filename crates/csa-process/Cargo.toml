@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 csa-core.workspace = true
+csa-resource.workspace = true
 tokio.workspace = true
 libc.workspace = true
 anyhow.workspace = true

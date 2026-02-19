@@ -26,6 +26,7 @@ fn test_session(
         task_context: TaskContext::default(),
         turn_count: 0,
         token_budget: None,
+        sandbox_info: None,
     }
 }
 

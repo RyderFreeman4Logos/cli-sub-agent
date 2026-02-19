@@ -372,6 +372,7 @@ mod tests {
                     enabled: true,
                     restrictions: None,
                     suppress_notify: true,
+                    ..Default::default()
                 },
             );
         }

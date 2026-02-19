@@ -23,6 +23,7 @@ fn test_max_concurrent_tool_override() {
         GlobalToolConfig {
             max_concurrent: Some(5),
             env: HashMap::new(),
+            ..Default::default()
         },
     );
     assert_eq!(config.max_concurrent("gemini-cli"), 5);
@@ -39,6 +40,7 @@ fn test_env_vars() {
         GlobalToolConfig {
             max_concurrent: None,
             env,
+            ..Default::default()
         },
     );
 
@@ -55,6 +57,7 @@ fn test_env_vars_empty_returns_none() {
         GlobalToolConfig {
             max_concurrent: Some(2),
             env: HashMap::new(),
+            ..Default::default()
         },
     );
     assert!(config.env_vars("codex").is_none());
@@ -102,6 +105,7 @@ fn test_all_tool_slots() {
         GlobalToolConfig {
             max_concurrent: Some(5),
             env: HashMap::new(),
+            ..Default::default()
         },
     );
 
@@ -344,6 +348,7 @@ fn test_all_tool_slots_includes_extra_config_tools() {
         GlobalToolConfig {
             max_concurrent: Some(7),
             env: HashMap::new(),
+            ..Default::default()
         },
     );
 
@@ -383,6 +388,7 @@ fn test_env_vars_multiple_keys() {
         GlobalToolConfig {
             max_concurrent: None,
             env,
+            ..Default::default()
         },
     );
 
@@ -414,6 +420,7 @@ fn test_max_concurrent_with_custom_default() {
         GlobalToolConfig {
             max_concurrent: Some(2),
             env: HashMap::new(),
+            ..Default::default()
         },
     );
     assert_eq!(config.max_concurrent("codex"), 2);
@@ -428,6 +435,7 @@ fn test_max_concurrent_tool_with_none_uses_default() {
         GlobalToolConfig {
             max_concurrent: None, // explicitly None
             env: HashMap::new(),
+            ..Default::default()
         },
     );
     assert_eq!(config.max_concurrent("codex"), 3); // falls back to default

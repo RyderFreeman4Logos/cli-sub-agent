@@ -11,14 +11,37 @@ use std::path::Path;
 use tokio::process::Command;
 
 use crate::model_spec::{ModelSpec, ThinkingBudget};
-use crate::transport::{LegacyTransport, Transport, TransportFactory, TransportResult};
+use crate::transport::{
+    LegacyTransport, SandboxTransportConfig, Transport, TransportFactory, TransportOptions,
+    TransportResult,
+};
 
 pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 
-#[derive(Debug, Clone, Copy)]
+/// Options for tool execution, including stream mode, timeouts, and optional sandbox config.
+#[derive(Debug, Clone)]
 pub struct ExecuteOptions {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    /// Optional resource sandbox config (cgroup/rlimit limits).
+    /// When `Some`, the spawned tool process will be wrapped in resource isolation.
+    pub sandbox: Option<SandboxContext>,
+}
+
+/// Sandbox configuration resolved from project/tool config.
+///
+/// Carries the resource limits together with identifiers needed to name
+/// the cgroup scope (tool name + session ID).
+#[derive(Debug, Clone)]
+pub struct SandboxContext {
+    /// Resource limits to apply.
+    pub config: csa_resource::cgroup::SandboxConfig,
+    /// Tool name for scope naming (e.g. "claude-code").
+    pub tool_name: String,
+    /// Session ID for scope naming.
+    pub session_id: String,
+    /// When true, sandbox spawn failures fall back to unsandboxed spawn.
+    pub best_effort: bool,
 }
 
 impl ExecuteOptions {
@@ -26,7 +49,14 @@ impl ExecuteOptions {
         Self {
             stream_mode,
             idle_timeout_seconds,
+            sandbox: None,
         }
+    }
+
+    /// Set sandbox context for resource isolation.
+    pub fn with_sandbox(mut self, sandbox: SandboxContext) -> Self {
+        self.sandbox = Some(sandbox);
+        self
     }
 }
 
@@ -254,16 +284,20 @@ impl Executor {
         options: ExecuteOptions,
         session_config: Option<SessionConfig>,
     ) -> Result<TransportResult> {
+        let sandbox_transport = options.sandbox.as_ref().map(|ctx| SandboxTransportConfig {
+            config: ctx.config.clone(),
+            tool_name: ctx.tool_name.clone(),
+            session_id: ctx.session_id.clone(),
+            best_effort: ctx.best_effort,
+        });
+        let transport_options = TransportOptions {
+            stream_mode: options.stream_mode,
+            idle_timeout_seconds: options.idle_timeout_seconds,
+            sandbox: sandbox_transport.as_ref(),
+        };
         let transport = self.transport(session_config);
         transport
-            .execute(
-                prompt,
-                tool_state,
-                session,
-                extra_env,
-                options.stream_mode,
-                options.idle_timeout_seconds,
-            )
+            .execute(prompt, tool_state, session, extra_env, transport_options)
             .await
     }
 

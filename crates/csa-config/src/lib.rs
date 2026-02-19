@@ -7,7 +7,8 @@ pub mod mcp;
 pub mod validate;
 
 pub use config::{
-    ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig, ToolRestrictions,
+    EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
+    ToolRestrictions,
 };
 pub use global::{GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};

@@ -3,6 +3,8 @@
 use anyhow::Result;
 use csa_config::ProjectConfig;
 use csa_core::types::OutputFormat;
+use csa_resource::rlimit::{current_rlimit_as, current_rlimit_nproc};
+use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability, systemd_version};
 use std::env;
 use std::process::Command;
 use sysinfo::System;
@@ -51,6 +53,10 @@ async fn run_doctor_text() -> Result<()> {
 
     println!("=== Resource Status ===");
     print_resource_status();
+    println!();
+
+    println!("=== Sandbox ===");
+    print_sandbox_status();
 
     Ok(())
 }
@@ -122,6 +128,24 @@ async fn run_doctor_json() -> Result<()> {
     let available_memory = sys.available_memory();
     let free_swap = sys.free_swap();
 
+    // Sandbox detection
+    let cap = detect_sandbox_capability();
+    let sandbox_status = match cap {
+        SandboxCapability::CgroupV2 => serde_json::json!({
+            "capability": "CgroupV2",
+            "systemd_version": systemd_version(),
+            "user_scope": true,
+        }),
+        SandboxCapability::Setrlimit => serde_json::json!({
+            "capability": "Setrlimit",
+            "rlimit_as_mb": current_rlimit_as(),
+            "rlimit_nproc": current_rlimit_nproc(),
+        }),
+        SandboxCapability::None => serde_json::json!({
+            "capability": "None",
+        }),
+    };
+
     let result = serde_json::json!({
         "platform": {
             "os": os,
@@ -136,6 +160,7 @@ async fn run_doctor_json() -> Result<()> {
             "free_swap_bytes": free_swap,
             "total_free_bytes": available_memory.saturating_add(free_swap),
         },
+        "sandbox": sandbox_status,
     });
 
     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -320,6 +345,35 @@ fn print_resource_status() {
         format_bytes(available_memory_bytes),
         format_bytes(free_swap_bytes),
     );
+}
+
+/// Print sandbox capability status.
+fn print_sandbox_status() {
+    let cap = detect_sandbox_capability();
+    println!("Capability:  {}", cap);
+
+    match cap {
+        SandboxCapability::CgroupV2 => {
+            if let Some(ver) = systemd_version() {
+                println!("Systemd:     {}", ver);
+            }
+            println!("User scope:  supported");
+        }
+        SandboxCapability::Setrlimit => {
+            match current_rlimit_as() {
+                Some(mb) => println!("RLIMIT_AS:   {} MB", mb),
+                None => println!("RLIMIT_AS:   unlimited"),
+            }
+            match current_rlimit_nproc() {
+                Some(n) => println!("RLIMIT_NPROC: {}", n),
+                None => println!("RLIMIT_NPROC: unlimited"),
+            }
+        }
+        SandboxCapability::None => {
+            println!("Warning:     No sandbox isolation available.");
+            println!("             Resource limits will not be enforced.");
+        }
+    }
 }
 
 /// Format bytes as human-readable string (GB).
