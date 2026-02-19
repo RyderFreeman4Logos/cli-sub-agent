@@ -65,10 +65,17 @@ pub(crate) async fn handle_plan_run(
         );
     }
 
-    // 4. Load and parse workflow TOML
-    let workflow_path = PathBuf::from(&file);
+    // 4. Load and parse workflow TOML (resolve relative to project root)
+    let workflow_path = {
+        let p = PathBuf::from(&file);
+        if p.is_absolute() {
+            p
+        } else {
+            project_root.join(&p)
+        }
+    };
     if !workflow_path.exists() {
-        bail!("Workflow file not found: {}", file);
+        bail!("Workflow file not found: {}", workflow_path.display());
     }
     let content = std::fs::read_to_string(&workflow_path)
         .with_context(|| format!("Failed to read workflow file: {}", file))?;
@@ -96,7 +103,20 @@ pub(crate) async fn handle_plan_run(
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
 
-    // 9. Exit with error if any step failed (and wasn't skipped)
+    // 9. Warn about unsupported skips (condition/loop)
+    let unsupported_skips = results
+        .iter()
+        .filter(|r| r.skipped && r.exit_code != 0)
+        .count();
+    if unsupported_skips > 0 {
+        warn!(
+            "{} step(s) skipped due to unsupported v1 features (conditions/loops). \
+             These steps were NOT executed — workflow results may be incomplete.",
+            unsupported_skips
+        );
+    }
+
+    // 10. Exit with error if any step failed (and wasn't skipped)
     let failed = results
         .iter()
         .filter(|r| !r.skipped && r.exit_code != 0)
@@ -167,20 +187,35 @@ fn resolve_step_tool(
             "opencode" => return Ok((ToolName::Opencode, None)),
             "codex" => return Ok((ToolName::Codex, None)),
             "claude-code" => return Ok((ToolName::ClaudeCode, None)),
-            // "csa" in v1: treat as "use default tool from config"
+            // "csa": use step.tier if present, else default tier from config
             "csa" => {
                 if let Some(cfg) = config {
+                    // Respect step.tier when tool=csa (P2 fix: don't ignore tier)
+                    if let Some(ref tier_name) = step.tier {
+                        if let Some(tier) = cfg.tiers.get(tier_name) {
+                            for model_spec_str in &tier.models {
+                                let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
+                                if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
+                                    let tool = parse_tool_name(parts[0])?;
+                                    return Ok((tool, Some(model_spec_str.clone())));
+                                }
+                            }
+                        }
+                    }
+                    // Fallback: default tier
                     if let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default") {
                         let spec = ModelSpec::parse(&model_spec)?;
                         let tool = parse_tool_name(&spec.tool)?;
                         return Ok((tool, Some(model_spec)));
                     }
                 }
-                // Fallback: codex as default CSA tool
+                // Last resort: codex
                 return Ok((ToolName::Codex, None));
             }
+            // "weave" = compile-time INCLUDE directive, skip at runtime
+            "weave" => return Ok((ToolName::ClaudeCode, Some("weave-include".to_string()))),
             other => bail!(
-                "Unknown tool '{}' in step {} ('{}'). Known: bash, gemini-cli, opencode, codex, claude-code, csa",
+                "Unknown tool '{}' in step {} ('{}'). Known: bash, gemini-cli, opencode, codex, claude-code, csa, weave",
                 other,
                 step.id,
                 step.title
@@ -274,37 +309,36 @@ async fn execute_step(
     let start = Instant::now();
     let label = format!("[{}/{}]", step.id, step.title);
 
-    // Skip steps with conditions or loops (v1 limitation)
+    // Skip steps with conditions or loops (v1 limitation).
+    // These use a non-zero exit code to prevent silent success when
+    // critical workflow logic is not actually executed.
     if step.condition.is_some() {
         warn!(
-            "{} - Skipping: conditional steps not supported in v1",
+            "{} - UNSUPPORTED: conditional steps require v2; skipping",
             label
         );
         return StepResult {
             step_id: step.id,
             title: step.title.clone(),
-            exit_code: 0,
+            exit_code: 2,
             duration_secs: 0.0,
             skipped: true,
             error: Some("Conditional steps not supported in v1".to_string()),
         };
     }
     if step.loop_var.is_some() {
-        warn!("{} - Skipping: loop steps not supported in v1", label);
+        warn!("{} - UNSUPPORTED: loop steps require v2; skipping", label);
         return StepResult {
             step_id: step.id,
             title: step.title.clone(),
-            exit_code: 0,
+            exit_code: 2,
             duration_secs: 0.0,
             skipped: true,
             error: Some("Loop steps not supported in v1".to_string()),
         };
     }
 
-    // Substitute variables in prompt
-    let prompt = substitute_vars(&step.prompt, variables);
-
-    // Resolve tool
+    // Resolve tool first (needed for weave-include check)
     let (tool_name, model_spec) = match resolve_step_tool(step, config) {
         Ok(t) => t,
         Err(e) => {
@@ -319,6 +353,22 @@ async fn execute_step(
             };
         }
     };
+
+    // Skip weave INCLUDE steps (compile-time directive, not executable at runtime)
+    if model_spec.as_deref() == Some("weave-include") {
+        info!("{} - Skipping INCLUDE step (compile-time directive)", label);
+        return StepResult {
+            step_id: step.id,
+            title: step.title.clone(),
+            exit_code: 0,
+            duration_secs: 0.0,
+            skipped: true,
+            error: None,
+        };
+    }
+
+    // Substitute variables in prompt
+    let prompt = substitute_vars(&step.prompt, variables);
 
     // Determine retry count from on_fail
     let max_attempts = match &step.on_fail {
@@ -652,159 +702,5 @@ fn print_summary(results: &[StepResult], total_duration: f64) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use weave::compiler::VariableDecl;
-
-    #[test]
-    fn parse_variables_uses_defaults() {
-        let plan = ExecutionPlan {
-            name: "test".into(),
-            description: String::new(),
-            variables: vec![
-                VariableDecl {
-                    name: "FOO".into(),
-                    default: Some("bar".into()),
-                },
-                VariableDecl {
-                    name: "BAZ".into(),
-                    default: None,
-                },
-            ],
-            steps: vec![],
-        };
-
-        let vars = parse_variables(&[], &plan).unwrap();
-        assert_eq!(vars.get("FOO").map(String::as_str), Some("bar"));
-        assert!(!vars.contains_key("BAZ"));
-    }
-
-    #[test]
-    fn parse_variables_cli_overrides_default() {
-        let plan = ExecutionPlan {
-            name: "test".into(),
-            description: String::new(),
-            variables: vec![VariableDecl {
-                name: "FOO".into(),
-                default: Some("default".into()),
-            }],
-            steps: vec![],
-        };
-
-        let vars = parse_variables(&["FOO=override".into()], &plan).unwrap();
-        assert_eq!(vars.get("FOO").map(String::as_str), Some("override"));
-    }
-
-    #[test]
-    fn parse_variables_rejects_invalid_format() {
-        let plan = ExecutionPlan {
-            name: "test".into(),
-            description: String::new(),
-            variables: vec![],
-            steps: vec![],
-        };
-
-        let err = parse_variables(&["NO_EQUALS_SIGN".into()], &plan);
-        assert!(err.is_err());
-    }
-
-    #[test]
-    fn substitute_vars_replaces_placeholders() {
-        let mut vars = HashMap::new();
-        vars.insert("NAME".into(), "world".into());
-        vars.insert("COUNT".into(), "42".into());
-
-        assert_eq!(
-            substitute_vars("Hello ${NAME}, count=${COUNT}!", &vars),
-            "Hello world, count=42!"
-        );
-    }
-
-    #[test]
-    fn substitute_vars_leaves_unknown_placeholders() {
-        let vars = HashMap::new();
-        assert_eq!(substitute_vars("${UNKNOWN}", &vars), "${UNKNOWN}");
-    }
-
-    #[test]
-    fn extract_bash_code_block_finds_bash_fence() {
-        let prompt = "Run this:\n```bash\necho hello\n```\nDone.";
-        assert_eq!(extract_bash_code_block(prompt), Some("echo hello"));
-    }
-
-    #[test]
-    fn extract_bash_code_block_finds_plain_fence() {
-        let prompt = "```\nls -la\n```";
-        assert_eq!(extract_bash_code_block(prompt), Some("ls -la"));
-    }
-
-    #[test]
-    fn extract_bash_code_block_returns_none_when_no_fence() {
-        assert_eq!(extract_bash_code_block("just some text"), None);
-    }
-
-    #[test]
-    fn truncate_short_string() {
-        assert_eq!(truncate("hello", 10), "hello");
-    }
-
-    #[test]
-    fn truncate_long_string() {
-        let s = "a".repeat(100);
-        let result = truncate(&s, 10);
-        assert_eq!(result.len(), 13); // 10 chars + "..."
-        assert!(result.ends_with("..."));
-    }
-
-    #[test]
-    fn resolve_step_tool_explicit_bash() {
-        let step = PlanStep {
-            id: 1,
-            title: "test".into(),
-            tool: Some("bash".into()),
-            prompt: String::new(),
-            tier: None,
-            depends_on: vec![],
-            on_fail: FailAction::Abort,
-            condition: None,
-            loop_var: None,
-        };
-        let (tool, spec) = resolve_step_tool(&step, None).unwrap();
-        assert_eq!(tool, ToolName::ClaudeCode);
-        assert_eq!(spec.as_deref(), Some("bash"));
-    }
-
-    #[test]
-    fn resolve_step_tool_explicit_codex() {
-        let step = PlanStep {
-            id: 1,
-            title: "test".into(),
-            tool: Some("codex".into()),
-            prompt: String::new(),
-            tier: None,
-            depends_on: vec![],
-            on_fail: FailAction::Abort,
-            condition: None,
-            loop_var: None,
-        };
-        let (tool, _) = resolve_step_tool(&step, None).unwrap();
-        assert_eq!(tool, ToolName::Codex);
-    }
-
-    #[test]
-    fn resolve_step_tool_fallback_no_config() {
-        let step = PlanStep {
-            id: 1,
-            title: "test".into(),
-            tool: None,
-            prompt: String::new(),
-            tier: None,
-            depends_on: vec![],
-            on_fail: FailAction::Abort,
-            condition: None,
-            loop_var: None,
-        };
-        let (tool, _) = resolve_step_tool(&step, None).unwrap();
-        assert_eq!(tool, ToolName::Codex);
-    }
-}
+#[path = "plan_cmd_tests.rs"]
+mod tests;
