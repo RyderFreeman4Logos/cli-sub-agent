@@ -1,5 +1,3 @@
-use std::io::IsTerminal;
-
 use anyhow::Result;
 use clap::Parser;
 
@@ -79,12 +77,10 @@ async fn main() -> Result<()> {
             no_stream_stdout,
         } => {
             // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
-            // default: stream when stderr is TTY and output format is Text.
+            // default: stream for Text output in all contexts.
             let stream_mode = if no_stream_stdout {
                 csa_process::StreamMode::BufferOnly
-            } else if stream_stdout
-                || (matches!(output_format, OutputFormat::Text) && std::io::stderr().is_terminal())
-            {
+            } else if stream_stdout || matches!(output_format, OutputFormat::Text) {
                 csa_process::StreamMode::TeeToStderr
             } else {
                 csa_process::StreamMode::BufferOnly

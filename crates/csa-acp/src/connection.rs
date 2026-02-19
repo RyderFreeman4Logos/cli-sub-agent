@@ -62,6 +62,12 @@ pub struct PromptResult {
     pub timed_out: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PromptIoOptions<'a> {
+    pub stream_stdout_to_stderr: bool,
+    pub output_spool: Option<&'a Path>,
+}
+
 pub struct AcpConnection {
     local_set: LocalSet,
     connection: ClientSideConnection,
@@ -460,11 +466,24 @@ impl AcpConnection {
         text: &str,
         idle_timeout: Duration,
     ) -> AcpResult<PromptResult> {
+        self.prompt_with_io(session_id, text, idle_timeout, PromptIoOptions::default())
+            .await
+    }
+
+    pub async fn prompt_with_io(
+        &self,
+        session_id: &str,
+        text: &str,
+        idle_timeout: Duration,
+        io: PromptIoOptions<'_>,
+    ) -> AcpResult<PromptResult> {
         self.ensure_process_running()?;
 
         // Clear stale events before dispatching this prompt turn.
         self.events.borrow_mut().clear();
         *self.last_activity.borrow_mut() = Instant::now();
+        let mut streamed_event_index = 0usize;
+        let mut output_spool = open_output_spool_file(io.output_spool);
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
 
@@ -480,9 +499,21 @@ impl AcpConnection {
                 loop {
                     tokio::select! {
                         response = &mut prompt_future => {
+                            stream_new_agent_messages(
+                                &self.events,
+                                &mut streamed_event_index,
+                                io.stream_stdout_to_stderr,
+                                &mut output_spool,
+                            );
                             break PromptOutcome::Completed(response);
                         }
                         _ = tokio::time::sleep(Duration::from_millis(200)) => {
+                            stream_new_agent_messages(
+                                &self.events,
+                                &mut streamed_event_index,
+                                io.stream_stdout_to_stderr,
+                                &mut output_spool,
+                            );
                             if self.last_activity.borrow().elapsed() >= idle_timeout {
                                 break PromptOutcome::IdleTimeout;
                             }
@@ -492,6 +523,12 @@ impl AcpConnection {
             })
             .await;
 
+        stream_new_agent_messages(
+            &self.events,
+            &mut streamed_event_index,
+            io.stream_stdout_to_stderr,
+            &mut output_spool,
+        );
         let events = std::mem::take(&mut *self.events.borrow_mut());
         let output = collect_agent_output(&events);
         match outcome {
@@ -567,6 +604,60 @@ impl AcpConnection {
     }
 }
 
+fn open_output_spool_file(path: Option<&Path>) -> Option<std::fs::File> {
+    let path = path?;
+    use std::fs::OpenOptions;
+    match OpenOptions::new().create(true).append(true).open(path) {
+        Ok(file) => Some(file),
+        Err(error) => {
+            tracing::warn!(
+                path = %path.display(),
+                %error,
+                "failed to open ACP output spool file"
+            );
+            None
+        }
+    }
+}
+
+fn stream_new_agent_messages(
+    events: &SharedEvents,
+    processed_index: &mut usize,
+    stream_stdout_to_stderr: bool,
+    output_spool: &mut Option<std::fs::File>,
+) {
+    let new_messages = {
+        let events_ref = events.borrow();
+        if *processed_index >= events_ref.len() {
+            return;
+        }
+
+        let mut messages = Vec::new();
+        for event in &events_ref[*processed_index..] {
+            if let SessionEvent::AgentMessage(chunk) = event {
+                messages.push(chunk.clone());
+            }
+        }
+        *processed_index = events_ref.len();
+        messages
+    };
+
+    for chunk in &new_messages {
+        if stream_stdout_to_stderr {
+            eprint!("[stdout] {chunk}");
+        }
+        spool_chunk(output_spool, chunk.as_bytes());
+    }
+}
+
+fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
+    if let Some(file) = spool {
+        use std::io::Write;
+        let _ = file.write_all(bytes);
+        let _ = file.flush();
+    }
+}
+
 fn collect_agent_output(events: &[SessionEvent]) -> String {
     let mut output = String::new();
     for event in events {
@@ -589,93 +680,5 @@ fn stop_reason_to_string(reason: StopReason) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stripped_env_vars_contains_claudecode() {
-        assert!(
-            AcpConnection::STRIPPED_ENV_VARS.contains(&"CLAUDECODE"),
-            "STRIPPED_ENV_VARS must strip CLAUDECODE (recursion detection)"
-        );
-        assert!(
-            AcpConnection::STRIPPED_ENV_VARS.contains(&"CLAUDE_CODE_ENTRYPOINT"),
-            "STRIPPED_ENV_VARS must strip CLAUDE_CODE_ENTRYPOINT (parent context)"
-        );
-    }
-
-    #[test]
-    fn format_stderr_empty() {
-        assert_eq!(AcpConnection::format_stderr(""), String::new());
-    }
-
-    #[test]
-    fn format_stderr_whitespace_only() {
-        assert_eq!(AcpConnection::format_stderr("  \n  "), String::new());
-    }
-
-    #[test]
-    fn format_stderr_with_content() {
-        assert_eq!(
-            AcpConnection::format_stderr("  some error\n"),
-            "; stderr: some error"
-        );
-    }
-
-    /// Verify that `env_remove` with `STRIPPED_ENV_VARS` actually prevents
-    /// a child process from seeing `CLAUDECODE`.
-    ///
-    /// This test validates the *mechanism* (env_remove + var list), not the
-    /// private `build_cmd_base` method directly (tokio::Command doesn't
-    /// expose env introspection).  Since `build_cmd_base` and the cgroup
-    /// path both iterate `STRIPPED_ENV_VARS` with `cmd.env_remove(var)`,
-    /// verifying the var list and the env_remove effect is sufficient.
-    ///
-    /// Note: uses `unsafe set_var/remove_var` which is unsound under
-    /// parallel test execution.  Acceptable here because the test is
-    /// short-lived and the vars are cleaned up immediately.
-    #[tokio::test]
-    async fn env_remove_strips_claudecode_from_child() {
-        // Save original values so we can restore after the test.
-        let orig_claudecode = std::env::var("CLAUDECODE").ok();
-        let orig_entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
-
-        // SAFETY: set_var is unsound under parallel test execution (Rust
-        // 1.66+ deprecation).  Acceptable here: this test is short-lived,
-        // single-threaded (#[tokio::test] default), and we restore the
-        // original value immediately after spawning the child.
-        unsafe { std::env::set_var("CLAUDECODE", "1") };
-
-        let mut std_cmd = std::process::Command::new("printenv");
-        std_cmd.current_dir(std::env::current_dir().unwrap());
-        for var in AcpConnection::STRIPPED_ENV_VARS {
-            std_cmd.env_remove(var);
-        }
-
-        let output = std_cmd.output().expect("printenv should be available");
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        // SAFETY: restore original env state (same single-threaded context).
-        unsafe {
-            match orig_claudecode {
-                Some(v) => std::env::set_var("CLAUDECODE", v),
-                None => std::env::remove_var("CLAUDECODE"),
-            }
-            match orig_entrypoint {
-                Some(v) => std::env::set_var("CLAUDE_CODE_ENTRYPOINT", v),
-                None => std::env::remove_var("CLAUDE_CODE_ENTRYPOINT"),
-            }
-        }
-
-        assert!(
-            !stdout.lines().any(|line| line.starts_with("CLAUDECODE=")),
-            "CLAUDECODE should have been stripped from child environment, got:\n{stdout}"
-        );
-        assert!(
-            !stdout
-                .lines()
-                .any(|line| line.starts_with("CLAUDE_CODE_ENTRYPOINT=")),
-            "CLAUDE_CODE_ENTRYPOINT should have been stripped"
-        );
-    }
-}
+#[path = "connection_tests.rs"]
+mod tests;

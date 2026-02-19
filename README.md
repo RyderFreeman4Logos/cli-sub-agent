@@ -127,7 +127,7 @@ csa run --tool auto "fix login page bug"
 # Resume last session
 csa run --last "continue the implementation"
 
-# Output streams to stderr by default (auto-enabled on TTY)
+# Output streams to stderr by default for text output
 # Use --no-stream-stdout to suppress
 csa run --tool claude-code "refactor error handling"
 ```
@@ -378,7 +378,7 @@ Sessions use flat physical storage with a logical tree structure. Parent-child r
 | **`flock` file locks** | Session-level locks + global slot locks |
 | **P95 memory estimation** | Checks system available memory against tool historical P95 before spawn |
 | **Global concurrency slots** | Limits concurrency per tool (for example, codex max 5) |
-| **StreamMode** | Streams output to stderr by default (auto-enabled on TTY); suppressed with `--no-stream-stdout` |
+| **StreamMode** | Streams output to stderr by default for text output; suppressed with `--no-stream-stdout` |
 | **TokenBudget** | Tier-level token budgets (soft threshold 75%, hard threshold 100%) |
 
 ## Roadmap
