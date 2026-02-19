@@ -93,11 +93,16 @@ pub(crate) fn summarize_rows(
     summary
 }
 
-pub(crate) fn sort_rows(rows: &mut [StatusRow], order: &str, project_root: &Path) -> Result<()> {
+pub(crate) fn sort_rows(
+    rows: &mut [StatusRow],
+    order: &str,
+    project_root: &Path,
+    all_manifest_keys: &[String],
+) -> Result<()> {
     match order {
         "topo" => {
             let paths: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
-            let sorted_paths = topo::topo_sort(&paths, project_root);
+            let sorted_paths = topo::topo_sort(&paths, all_manifest_keys, project_root);
             let index_map: std::collections::HashMap<&str, usize> = sorted_paths
                 .iter()
                 .enumerate()

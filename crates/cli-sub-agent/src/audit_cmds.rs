@@ -107,7 +107,8 @@ pub(crate) fn handle_audit_status(
         rows.retain(|row| row.status == expected);
     }
 
-    sort_rows(&mut rows, &order, &root)?;
+    let all_keys: Vec<String> = current_hashes.keys().cloned().collect();
+    sort_rows(&mut rows, &order, &root, &all_keys)?;
     let summary = summarize_rows(&rows, &modified_paths);
 
     match format {

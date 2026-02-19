@@ -23,12 +23,26 @@ static USE_CRATE_RE: LazyLock<Regex> =
 /// Dependencies are resolved by file path structure rather than module name
 /// indexing, which correctly handles nested modules with the same basename
 /// (e.g., `src/config.rs` and `src/foo/config.rs`).
-pub(crate) fn topo_sort(files: &[String], project_root: &Path) -> Vec<String> {
+///
+/// `context_files` provides the full manifest file list for crate root
+/// discovery. This ensures `lib.rs`/`main.rs` are found even when `files`
+/// has been filtered (e.g., `--filter generated`). Pass `files` again when
+/// no filtering was applied.
+pub(crate) fn topo_sort(
+    files: &[String],
+    context_files: &[String],
+    project_root: &Path,
+) -> Vec<String> {
     let rust_files: Vec<&String> = files.iter().filter(|f| f.ends_with(".rs")).collect();
     let non_rust_files: Vec<&String> = files.iter().filter(|f| !f.ends_with(".rs")).collect();
 
-    // Group Rust files by crate root for scoped `use crate::` resolution.
-    let crate_roots = discover_crate_roots(&rust_files);
+    // Discover crate roots from the full (unfiltered) file set so that
+    // `lib.rs`/`main.rs` are found even when the sort input was filtered.
+    let context_rust: Vec<&String> = context_files
+        .iter()
+        .filter(|f| f.ends_with(".rs"))
+        .collect();
+    let crate_roots = discover_crate_roots(&context_rust);
 
     // Build file set for O(1) membership checks.
     let file_set: HashSet<&str> = rust_files.iter().map(|f| f.as_str()).collect();
@@ -109,10 +123,15 @@ fn discover_crate_roots(rust_files: &[&String]) -> Vec<String> {
 /// Find the crate root for a given file path.
 ///
 /// Returns the longest matching crate root, or "." as fallback.
+/// Matches on path-segment boundaries to avoid `crate_a/src` matching
+/// `crate_a/src2/file.rs`.
 fn find_crate_root(file: &str, crate_roots: &[String]) -> String {
     let file_normalized = file.replace('\\', "/");
     for root in crate_roots {
-        if file_normalized.starts_with(root) {
+        if file_normalized.starts_with(root)
+            && (file_normalized.len() == root.len()
+                || file_normalized[root.len()..].starts_with('/'))
+        {
             return root.clone();
         }
     }
@@ -357,7 +376,7 @@ mod tests {
             "src/leaf.rs".to_string(),
         ];
 
-        let sorted = topo_sort(&files, tmp.path());
+        let sorted = topo_sort(&files, &files, tmp.path());
 
         let leaf_pos = sorted.iter().position(|f| f == "src/leaf.rs").unwrap();
         let mid_pos = sorted.iter().position(|f| f == "src/middle.rs").unwrap();
@@ -396,7 +415,7 @@ mod tests {
             "src/independent.rs".to_string(),
         ];
 
-        let sorted = topo_sort(&files, tmp.path());
+        let sorted = topo_sort(&files, &files, tmp.path());
 
         // All files should still appear in output (cycle doesn't drop files).
         assert_eq!(sorted.len(), 4);
@@ -433,7 +452,7 @@ mod tests {
             "docs/guide.md".to_string(),
         ];
 
-        let sorted = topo_sort(&files, tmp.path());
+        let sorted = topo_sort(&files, &files, tmp.path());
         assert_eq!(sorted.len(), 4);
 
         // Rust files come first, non-Rust after.
@@ -471,7 +490,7 @@ mod tests {
 
         let files = vec!["src/main.rs".to_string(), "src/config.rs".to_string()];
 
-        let sorted = topo_sort(&files, tmp.path());
+        let sorted = topo_sort(&files, &files, tmp.path());
 
         let config_pos = sorted.iter().position(|f| f == "src/config.rs").unwrap();
         let main_pos = sorted.iter().position(|f| f == "src/main.rs").unwrap();
@@ -508,7 +527,7 @@ mod tests {
             "crate_b/src/config.rs".to_string(),
         ];
 
-        let sorted = topo_sort(&files, tmp.path());
+        let sorted = topo_sort(&files, &files, tmp.path());
 
         // All 4 files must appear.
         assert_eq!(sorted.len(), 4, "all files present: {sorted:?}");
@@ -539,7 +558,7 @@ mod tests {
             "crate_a/src/lib.rs".to_string(),
             "crate_a/src/config.rs".to_string(),
         ];
-        let a_only_sorted = topo_sort(&a_only_files, tmp.path());
+        let a_only_sorted = topo_sort(&a_only_files, &a_only_files, tmp.path());
         let a_only_config = a_only_sorted
             .iter()
             .position(|f| f == "crate_a/src/config.rs")
@@ -582,7 +601,7 @@ mod tests {
             "src/foo/config.rs".to_string(),
         ];
 
-        let sorted = topo_sort(&files, tmp.path());
+        let sorted = topo_sort(&files, &files, tmp.path());
         assert_eq!(sorted.len(), 4, "all files present: {sorted:?}");
 
         // src/config.rs before src/lib.rs (lib depends on config)
@@ -628,5 +647,47 @@ mod tests {
             "crates/inner/src"
         );
         assert_eq!(find_crate_root("crates/other/src/bar.rs", &roots), "crates");
+    }
+
+    #[test]
+    fn test_find_crate_root_respects_path_boundary() {
+        // "crate_a/src" must NOT match "crate_a/src2/file.rs".
+        let roots = vec!["crate_a/src".to_string()];
+        assert_eq!(find_crate_root("crate_a/src/foo.rs", &roots), "crate_a/src");
+        // src2 is NOT a child of src, should fall back to "."
+        assert_eq!(find_crate_root("crate_a/src2/foo.rs", &roots), ".");
+    }
+
+    #[test]
+    fn test_topo_sort_with_filtered_files_uses_context() {
+        // Simulates `--filter generated` where lib.rs (approved) is excluded
+        // from `files` but present in `context_files`.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).expect("mkdir");
+
+        fs::write(src.join("lib.rs"), "mod config;").expect("write");
+        fs::write(src.join("config.rs"), "pub fn load() {}").expect("write");
+        fs::write(src.join("util.rs"), "use crate::config;\npub fn u() {}").expect("write");
+
+        // Full manifest (context_files) includes lib.rs.
+        let all_files = vec![
+            "src/lib.rs".to_string(),
+            "src/config.rs".to_string(),
+            "src/util.rs".to_string(),
+        ];
+        // Filtered files exclude lib.rs (e.g., only "generated" status).
+        let filtered = vec!["src/config.rs".to_string(), "src/util.rs".to_string()];
+
+        let sorted = topo_sort(&filtered, &all_files, tmp.path());
+        assert_eq!(sorted.len(), 2, "only filtered files: {sorted:?}");
+
+        // config (leaf) before util (depends on config via `use crate::config`)
+        let config_pos = sorted.iter().position(|f| f == "src/config.rs").unwrap();
+        let util_pos = sorted.iter().position(|f| f == "src/util.rs").unwrap();
+        assert!(
+            config_pos < util_pos,
+            "config before util with context: {sorted:?}"
+        );
     }
 }
