@@ -240,7 +240,12 @@ fn test_audit_init_parse() {
 
     match cli.command {
         Commands::Audit {
-            command: AuditCommands::Init { root, ignore, mirror_dir },
+            command:
+                AuditCommands::Init {
+                    root,
+                    ignore,
+                    mirror_dir,
+                },
         } => {
             assert_eq!(root, ".");
             assert!(ignore.is_empty());

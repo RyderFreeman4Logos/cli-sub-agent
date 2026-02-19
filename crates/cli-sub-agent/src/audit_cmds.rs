@@ -1,34 +1,19 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use chrono::Utc;
 use csa_core::audit::{AuditManifest, AuditStatus, FileEntry};
 use csa_core::types::OutputFormat;
-use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::collections::BTreeSet;
+use std::path::Path;
 
-use crate::audit::{diff, hash, io, scan, security, topo};
+use crate::audit::helpers::{
+    canonical_root, compute_mirror_blog_path, current_root, expand_file_args, manifest_path,
+    parse_status, resolve_manifest_key, scan_and_hash,
+};
+use crate::audit::status::{
+    build_status_rows, print_status_json, print_status_text, sort_rows, summarize_rows,
+};
+use crate::audit::{diff, io, security};
 use crate::cli::AuditCommands;
-
-#[derive(Debug, Clone)]
-struct StatusRow {
-    path: String,
-    status: AuditStatus,
-    hash: String,
-    auditor: Option<String>,
-    /// Whether the blog file exists on disk.
-    /// `Some(true)` = blog_path set and file exists,
-    /// `Some(false)` = blog_path set but file missing,
-    /// `None` = no blog_path configured.
-    blog_exists: Option<bool>,
-}
-
-#[derive(Debug, Clone, Copy, Default)]
-struct StatusSummary {
-    pending: usize,
-    generated: usize,
-    approved: usize,
-    modified: usize,
-    blogs_exist: usize,
-}
 
 pub(crate) fn handle_audit(command: AuditCommands) -> Result<()> {
     match command {
@@ -61,7 +46,7 @@ pub(crate) fn handle_audit_init(
     mirror_dir: Option<String>,
 ) -> Result<()> {
     let scan_root = canonical_root(Path::new(&root))?;
-    let manifest_path = manifest_path(&scan_root);
+    let mpath = manifest_path(&scan_root);
     let file_hashes = scan_and_hash(&scan_root, &ignores)?;
 
     let mut manifest = AuditManifest::new(scan_root.display().to_string());
@@ -73,7 +58,10 @@ pub(crate) fn handle_audit_init(
         let mirror_path = scan_root.join(dir);
         if !mirror_path.exists() {
             std::fs::create_dir_all(&mirror_path).with_context(|| {
-                format!("Failed to create mirror directory: {}", mirror_path.display())
+                format!(
+                    "Failed to create mirror directory: {}",
+                    mirror_path.display()
+                )
             })?;
         }
     }
@@ -92,10 +80,10 @@ pub(crate) fn handle_audit_init(
         );
     }
 
-    io::save(&manifest_path, &manifest)?;
+    io::save(&mpath, &manifest)?;
     println!(
         "Initialized audit manifest: {} ({} files)",
-        manifest_path.display(),
+        mpath.display(),
         manifest.files.len()
     );
     Ok(())
@@ -107,8 +95,8 @@ pub(crate) fn handle_audit_status(
     order: String,
 ) -> Result<()> {
     let root = current_root()?;
-    let manifest_path = manifest_path(&root);
-    let manifest = io::load(&manifest_path)?;
+    let mpath = manifest_path(&root);
+    let manifest = io::load(&mpath)?;
     let current_hashes = scan_and_hash(&root, &[])?;
     let manifest_diff = diff::diff_manifest(&manifest, &current_hashes);
 
@@ -127,7 +115,7 @@ pub(crate) fn handle_audit_status(
             print_status_text(&rows, summary);
         }
         OutputFormat::Json => {
-            print_status_json(&manifest, &manifest_path, &rows, summary);
+            print_status_json(&manifest, &mpath, &rows, summary);
         }
     }
 
@@ -212,21 +200,6 @@ pub(crate) fn handle_audit_update(
     Ok(())
 }
 
-/// Compute the blog path by mirroring the source path under the mirror directory.
-///
-/// E.g., mirror_dir="./drafts", key="crates/csa-core/src/lib.rs"
-///   -> "drafts/crates/csa-core/src/lib.rs.md"
-///
-/// When mirror_dir is ".", the blog path sits alongside the source:
-///   -> "crates/csa-core/src/lib.rs.md"
-fn compute_mirror_blog_path(mirror_dir: &str, source_key: &str) -> String {
-    let mirror = Path::new(mirror_dir);
-    let mirrored = mirror.join(format!("{source_key}.md"));
-    // Normalize to forward slashes and strip leading "./" for consistent manifest keys.
-    let normalized = mirrored.to_string_lossy().replace('\\', "/");
-    normalized.strip_prefix("./").unwrap_or(&normalized).to_string()
-}
-
 pub(crate) fn handle_audit_reset(files: Vec<String>) -> Result<()> {
     let root = current_root()?;
     let path = manifest_path(&root);
@@ -308,632 +281,11 @@ pub(crate) fn handle_audit_sync() -> Result<()> {
     Ok(())
 }
 
-fn current_root() -> Result<PathBuf> {
-    canonical_root(&std::env::current_dir()?)
-}
-
-fn canonical_root(path: &Path) -> Result<PathBuf> {
-    let canonical = path
-        .canonicalize()
-        .with_context(|| format!("Failed to canonicalize root path: {}", path.display()))?;
-    if !canonical.is_dir() {
-        bail!("Root path is not a directory: {}", canonical.display());
-    }
-    Ok(canonical)
-}
-
-fn manifest_path(root: &Path) -> PathBuf {
-    root.join(io::DEFAULT_MANIFEST_PATH)
-}
-
-fn scan_and_hash(root: &Path, ignores: &[String]) -> Result<BTreeMap<String, String>> {
-    let mut current = BTreeMap::new();
-    let files = scan::scan_directory(root, ignores)?;
-    for relative in files {
-        let validated = security::validate_path(&relative, root)?;
-        let key = path_to_key(&relative);
-        let hash_value = hash::hash_file(&validated)?;
-        current.insert(key, hash_value);
-    }
-    Ok(current)
-}
-
-/// Returns `true` if the string contains glob metacharacters (`*`, `?`, `[`).
-fn is_glob_pattern(s: &str) -> bool {
-    s.contains('*') || s.contains('?') || s.contains('[')
-}
-
-/// Expand file arguments that may contain glob patterns against manifest keys.
-///
-/// Arguments containing glob metacharacters are matched against the manifest's
-/// file keys (relative paths). Non-glob arguments pass through unchanged.
-/// Returns an error if a glob pattern matches zero files in the manifest.
-fn expand_file_args(
-    args: &[String],
-    manifest: &AuditManifest,
-    _project_root: &Path,
-) -> Result<Vec<String>> {
-    let mut expanded = Vec::new();
-    // Use literal separator so `*` does not cross `/` boundaries,
-    // while `**` still matches across directories.
-    let match_opts = glob::MatchOptions {
-        require_literal_separator: true,
-        ..Default::default()
-    };
-
-    for arg in args {
-        if is_glob_pattern(arg) {
-            let pattern = glob::Pattern::new(arg)
-                .with_context(|| format!("Invalid glob pattern: {arg}"))?;
-
-            let matched: Vec<String> = manifest
-                .files
-                .keys()
-                .filter(|key| pattern.matches_with(key, match_opts))
-                .cloned()
-                .collect();
-
-            if matched.is_empty() {
-                bail!("Glob pattern '{arg}' matched zero files in the audit manifest");
-            }
-
-            expanded.extend(matched);
-        } else {
-            expanded.push(arg.clone());
-        }
-    }
-
-    Ok(expanded)
-}
-
-fn resolve_manifest_key(raw: &str, root: &Path) -> Result<String> {
-    let validated = security::validate_path(Path::new(raw), root)?;
-    let relative = validated.strip_prefix(root).with_context(|| {
-        format!(
-            "Validated path is outside root (path: {}, root: {})",
-            validated.display(),
-            root.display()
-        )
-    })?;
-
-    if relative.as_os_str().is_empty() {
-        bail!("File path resolves to root directory, expected a file: {raw}");
-    }
-
-    Ok(path_to_key(relative))
-}
-
-fn path_to_key(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
-}
-
-fn parse_status(value: &str) -> Result<AuditStatus> {
-    match value.to_ascii_lowercase().as_str() {
-        "pending" => Ok(AuditStatus::Pending),
-        "generated" => Ok(AuditStatus::Generated),
-        "approved" => Ok(AuditStatus::Approved),
-        _ => bail!("Invalid audit status: '{value}'. Valid: pending, generated, approved"),
-    }
-}
-
-fn build_status_rows(
-    manifest: &AuditManifest,
-    current_hashes: &BTreeMap<String, String>,
-    modified_paths: &BTreeSet<String>,
-    project_root: &Path,
-) -> Vec<StatusRow> {
-    let mut rows = Vec::with_capacity(current_hashes.len());
-    for (path, current_hash) in current_hashes {
-        if let Some(entry) = manifest.files.get(path) {
-            // Modified files are downgraded to Pending regardless of stored status,
-            // since the file content has changed since the last audit.
-            let effective_status = if modified_paths.contains(path) {
-                AuditStatus::Pending
-            } else {
-                entry.audit_status
-            };
-            let blog_exists = check_blog_exists(&entry.blog_path, project_root);
-            rows.push(StatusRow {
-                path: path.clone(),
-                status: effective_status,
-                hash: current_hash.clone(),
-                auditor: entry.auditor.clone(),
-                blog_exists,
-            });
-        } else {
-            rows.push(StatusRow {
-                path: path.clone(),
-                status: AuditStatus::Pending,
-                hash: current_hash.clone(),
-                auditor: None,
-                blog_exists: None,
-            });
-        }
-    }
-    rows
-}
-
-/// Check whether a blog file exists on disk.
-///
-/// Returns `Some(true)` if `blog_path` is set and the resolved file exists,
-/// `Some(false)` if set but missing, or `None` if no blog path is configured.
-fn check_blog_exists(blog_path: &Option<String>, project_root: &Path) -> Option<bool> {
-    blog_path.as_ref().map(|bp| project_root.join(bp).exists())
-}
-
-fn summarize_rows(rows: &[StatusRow], modified_paths: &BTreeSet<String>) -> StatusSummary {
-    let mut summary = StatusSummary::default();
-    for row in rows {
-        match row.status {
-            AuditStatus::Pending => summary.pending += 1,
-            AuditStatus::Generated => summary.generated += 1,
-            AuditStatus::Approved => summary.approved += 1,
-        }
-        if modified_paths.contains(&row.path) {
-            summary.modified += 1;
-        }
-        if row.blog_exists == Some(true) {
-            summary.blogs_exist += 1;
-        }
-    }
-    summary
-}
-
-fn sort_rows(rows: &mut [StatusRow], order: &str, project_root: &Path) -> Result<()> {
-    match order {
-        "topo" => {
-            let paths: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
-            let sorted_paths = topo::topo_sort(&paths, project_root);
-            let index_map: std::collections::HashMap<&str, usize> = sorted_paths
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (p.as_str(), i))
-                .collect();
-            rows.sort_by(|left, right| {
-                let left_idx = index_map
-                    .get(left.path.as_str())
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                let right_idx = index_map
-                    .get(right.path.as_str())
-                    .copied()
-                    .unwrap_or(usize::MAX);
-                left_idx.cmp(&right_idx)
-            });
-            Ok(())
-        }
-        "depth" => {
-            rows.sort_by(|left, right| {
-                let left_depth = path_depth(&left.path);
-                let right_depth = path_depth(&right.path);
-                right_depth
-                    .cmp(&left_depth)
-                    .then_with(|| left.path.cmp(&right.path))
-            });
-            Ok(())
-        }
-        "alpha" => {
-            rows.sort_by(|left, right| left.path.cmp(&right.path));
-            Ok(())
-        }
-        _ => bail!("Invalid order: '{order}'. Valid: topo, depth, alpha"),
-    }
-}
-
-fn path_depth(path: &str) -> usize {
-    path.split('/')
-        .filter(|segment| !segment.is_empty())
-        .count()
-}
-
-fn print_status_text(rows: &[StatusRow], summary: StatusSummary) {
-    println!(
-        "{:<60} | {:<9} | {:<12} | {:<4} | AUDITOR",
-        "PATH", "STATUS", "HASH", "BLOG"
-    );
-    println!("{}", "-".repeat(101));
-    for row in rows {
-        let short_hash: String = row.hash.chars().take(12).collect();
-        let auditor = row.auditor.as_deref().unwrap_or("-");
-        let blog_indicator = match row.blog_exists {
-            Some(true) => "\u{2713}",
-            Some(false) => "\u{2717}",
-            None => "-",
-        };
-        println!(
-            "{:<60} | {:<9} | {:<12} | {:<4} | {}",
-            row.path, row.status, short_hash, blog_indicator, auditor
-        );
-    }
-    println!(
-        "{} pending, {} generated, {} approved, {} blogs exist ({} modified since last scan)",
-        summary.pending, summary.generated, summary.approved, summary.blogs_exist, summary.modified
-    );
-}
-
-fn print_status_json(
-    manifest: &AuditManifest,
-    manifest_path: &Path,
-    rows: &[StatusRow],
-    summary: StatusSummary,
-) {
-    let files: Vec<_> = rows
-        .iter()
-        .map(|row| {
-            serde_json::json!({
-                "path": row.path,
-                "status": row.status.to_string(),
-                "hash": row.hash,
-                "auditor": row.auditor,
-                "blog_exists": row.blog_exists,
-            })
-        })
-        .collect();
-
-    let payload = serde_json::json!({
-        "meta": {
-            "manifest_path": manifest_path.display().to_string(),
-            "project_root": manifest.meta.project_root,
-            "created_at": manifest.meta.created_at,
-            "updated_at": manifest.meta.updated_at,
-            "last_scanned_at": manifest.meta.last_scanned_at,
-        },
-        "summary": {
-            "pending": summary.pending,
-            "generated": summary.generated,
-            "approved": summary.approved,
-            "modified": summary.modified,
-            "blogs_exist": summary.blogs_exist,
-        },
-        "files": files,
-    });
-
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&payload).unwrap_or_else(|_| "{}".to_string())
-    );
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::audit::helpers::canonical_root;
     use std::fs;
-
-    #[test]
-    fn test_check_blog_exists_file_present() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let blog_file = tmp.path().join("blog/post.md");
-        fs::create_dir_all(blog_file.parent().unwrap()).expect("create blog dir");
-        fs::write(&blog_file, "# Audit Blog").expect("write blog file");
-
-        let blog_path = Some("blog/post.md".to_string());
-        assert_eq!(check_blog_exists(&blog_path, tmp.path()), Some(true));
-    }
-
-    #[test]
-    fn test_check_blog_exists_file_missing() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let blog_path = Some("blog/nonexistent.md".to_string());
-        assert_eq!(check_blog_exists(&blog_path, tmp.path()), Some(false));
-    }
-
-    #[test]
-    fn test_check_blog_exists_no_path() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        assert_eq!(check_blog_exists(&None, tmp.path()), None);
-    }
-
-    #[test]
-    fn test_build_status_rows_blog_exists() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-
-        // Create an actual blog file on disk for one entry.
-        let blog_file = tmp.path().join("blog/exists.md");
-        fs::create_dir_all(blog_file.parent().unwrap()).expect("create blog dir");
-        fs::write(&blog_file, "# Blog").expect("write blog");
-
-        let mut manifest = AuditManifest::new(tmp.path().display().to_string());
-        manifest.files.insert(
-            "src/a.rs".to_string(),
-            FileEntry {
-                hash: "sha256:aaa".to_string(),
-                audit_status: AuditStatus::Generated,
-                blog_path: Some("blog/exists.md".to_string()),
-                auditor: None,
-                approved_by: None,
-                approved_at: None,
-            },
-        );
-        manifest.files.insert(
-            "src/b.rs".to_string(),
-            FileEntry {
-                hash: "sha256:bbb".to_string(),
-                audit_status: AuditStatus::Pending,
-                blog_path: Some("blog/missing.md".to_string()),
-                auditor: None,
-                approved_by: None,
-                approved_at: None,
-            },
-        );
-        manifest.files.insert(
-            "src/c.rs".to_string(),
-            FileEntry {
-                hash: "sha256:ccc".to_string(),
-                audit_status: AuditStatus::Pending,
-                blog_path: None,
-                auditor: None,
-                approved_by: None,
-                approved_at: None,
-            },
-        );
-
-        let mut current_hashes = BTreeMap::new();
-        current_hashes.insert("src/a.rs".to_string(), "sha256:aaa".to_string());
-        current_hashes.insert("src/b.rs".to_string(), "sha256:bbb".to_string());
-        current_hashes.insert("src/c.rs".to_string(), "sha256:ccc".to_string());
-        // A file not in manifest at all (new file).
-        current_hashes.insert("src/d.rs".to_string(), "sha256:ddd".to_string());
-
-        let modified = BTreeSet::new();
-        let rows = build_status_rows(&manifest, &current_hashes, &modified, tmp.path());
-
-        let find_row = |path: &str| rows.iter().find(|r| r.path == path).unwrap();
-
-        assert_eq!(find_row("src/a.rs").blog_exists, Some(true));
-        assert_eq!(find_row("src/b.rs").blog_exists, Some(false));
-        assert_eq!(find_row("src/c.rs").blog_exists, None);
-        // New file not in manifest should have blog_exists = None.
-        assert_eq!(find_row("src/d.rs").blog_exists, None);
-    }
-
-    #[test]
-    fn test_summary_counts_blogs_exist() {
-        let rows = vec![
-            StatusRow {
-                path: "a.rs".to_string(),
-                status: AuditStatus::Generated,
-                hash: "sha256:a".to_string(),
-                auditor: None,
-                blog_exists: Some(true),
-            },
-            StatusRow {
-                path: "b.rs".to_string(),
-                status: AuditStatus::Pending,
-                hash: "sha256:b".to_string(),
-                auditor: None,
-                blog_exists: Some(false),
-            },
-            StatusRow {
-                path: "c.rs".to_string(),
-                status: AuditStatus::Approved,
-                hash: "sha256:c".to_string(),
-                auditor: None,
-                blog_exists: None,
-            },
-            StatusRow {
-                path: "d.rs".to_string(),
-                status: AuditStatus::Generated,
-                hash: "sha256:d".to_string(),
-                auditor: None,
-                blog_exists: Some(true),
-            },
-        ];
-
-        let modified = BTreeSet::new();
-        let summary = summarize_rows(&rows, &modified);
-
-        assert_eq!(summary.blogs_exist, 2);
-        assert_eq!(summary.pending, 1);
-        assert_eq!(summary.generated, 2);
-        assert_eq!(summary.approved, 1);
-    }
-
-    #[test]
-    fn test_json_output_includes_blog_exists() {
-        let manifest = AuditManifest::new(".");
-        let manifest_path = PathBuf::from("/tmp/test-manifest.toml");
-
-        let rows = vec![
-            StatusRow {
-                path: "a.rs".to_string(),
-                status: AuditStatus::Generated,
-                hash: "sha256:aaa".to_string(),
-                auditor: None,
-                blog_exists: Some(true),
-            },
-            StatusRow {
-                path: "b.rs".to_string(),
-                status: AuditStatus::Pending,
-                hash: "sha256:bbb".to_string(),
-                auditor: None,
-                blog_exists: Some(false),
-            },
-            StatusRow {
-                path: "c.rs".to_string(),
-                status: AuditStatus::Pending,
-                hash: "sha256:ccc".to_string(),
-                auditor: None,
-                blog_exists: None,
-            },
-        ];
-
-        let summary = StatusSummary {
-            pending: 2,
-            generated: 1,
-            approved: 0,
-            modified: 0,
-            blogs_exist: 1,
-        };
-
-        // Build the JSON payload (same logic as print_status_json but capture it).
-        let files: Vec<_> = rows
-            .iter()
-            .map(|row| {
-                serde_json::json!({
-                    "path": row.path,
-                    "status": row.status.to_string(),
-                    "hash": row.hash,
-                    "auditor": row.auditor,
-                    "blog_exists": row.blog_exists,
-                })
-            })
-            .collect();
-
-        let payload = serde_json::json!({
-            "meta": {
-                "manifest_path": manifest_path.display().to_string(),
-                "project_root": manifest.meta.project_root,
-                "created_at": manifest.meta.created_at,
-                "updated_at": manifest.meta.updated_at,
-                "last_scanned_at": manifest.meta.last_scanned_at,
-            },
-            "summary": {
-                "pending": summary.pending,
-                "generated": summary.generated,
-                "approved": summary.approved,
-                "modified": summary.modified,
-                "blogs_exist": summary.blogs_exist,
-            },
-            "files": files,
-        });
-
-        // Verify blog_exists per file entry.
-        let file_entries = payload["files"].as_array().unwrap();
-        assert_eq!(file_entries[0]["blog_exists"], serde_json::json!(true));
-        assert_eq!(file_entries[1]["blog_exists"], serde_json::json!(false));
-        assert_eq!(file_entries[2]["blog_exists"], serde_json::json!(null));
-
-        // Verify summary includes blogs_exist.
-        assert_eq!(payload["summary"]["blogs_exist"], serde_json::json!(1));
-    }
-
-    /// Helper to create a manifest with a known set of file keys for glob tests.
-    fn manifest_with_keys(keys: &[&str]) -> AuditManifest {
-        let mut manifest = AuditManifest::new("/tmp/test-root".to_string());
-        for key in keys {
-            manifest.files.insert(
-                key.to_string(),
-                FileEntry {
-                    hash: format!("sha256:{key}"),
-                    audit_status: AuditStatus::Pending,
-                    blog_path: None,
-                    auditor: None,
-                    approved_by: None,
-                    approved_at: None,
-                },
-            );
-        }
-        manifest
-    }
-
-    #[test]
-    fn test_expand_file_args_glob_src_double_star() {
-        let manifest = manifest_with_keys(&[
-            "src/main.rs",
-            "src/lib.rs",
-            "src/nested/deep.rs",
-            "tests/integration.rs",
-            "Cargo.toml",
-        ]);
-        let root = PathBuf::from("/tmp/test-root");
-        let args = vec!["src/**".to_string()];
-
-        let result = expand_file_args(&args, &manifest, &root).unwrap();
-        assert!(result.contains(&"src/main.rs".to_string()));
-        assert!(result.contains(&"src/lib.rs".to_string()));
-        assert!(result.contains(&"src/nested/deep.rs".to_string()));
-        assert!(!result.contains(&"tests/integration.rs".to_string()));
-        assert!(!result.contains(&"Cargo.toml".to_string()));
-    }
-
-    #[test]
-    fn test_expand_file_args_glob_star_rs() {
-        let manifest = manifest_with_keys(&[
-            "main.rs",
-            "lib.rs",
-            "src/nested.rs",
-            "Cargo.toml",
-        ]);
-        let root = PathBuf::from("/tmp/test-root");
-        let args = vec!["*.rs".to_string()];
-
-        let result = expand_file_args(&args, &manifest, &root).unwrap();
-        // `*.rs` should match top-level .rs files only (no path separators).
-        assert!(result.contains(&"main.rs".to_string()));
-        assert!(result.contains(&"lib.rs".to_string()));
-        // Nested paths contain '/' so `*.rs` (without `**`) should NOT match them.
-        assert!(!result.contains(&"src/nested.rs".to_string()));
-    }
-
-    #[test]
-    fn test_expand_file_args_glob_zero_matches_is_error() {
-        let manifest = manifest_with_keys(&["src/main.rs", "src/lib.rs"]);
-        let root = PathBuf::from("/tmp/test-root");
-        let args = vec!["nonexistent/**".to_string()];
-
-        let result = expand_file_args(&args, &manifest, &root);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(err_msg.contains("matched zero files"));
-    }
-
-    #[test]
-    fn test_expand_file_args_non_glob_passthrough() {
-        let manifest = manifest_with_keys(&["src/main.rs"]);
-        let root = PathBuf::from("/tmp/test-root");
-        let args = vec!["src/main.rs".to_string(), "some/other/path.rs".to_string()];
-
-        let result = expand_file_args(&args, &manifest, &root).unwrap();
-        // Non-glob arguments pass through unchanged (not validated here).
-        assert_eq!(result, vec!["src/main.rs", "some/other/path.rs"]);
-    }
-
-    #[test]
-    fn test_expand_file_args_mixed_glob_and_literal() {
-        let manifest = manifest_with_keys(&[
-            "src/main.rs",
-            "src/lib.rs",
-            "Cargo.toml",
-        ]);
-        let root = PathBuf::from("/tmp/test-root");
-        let args = vec!["Cargo.toml".to_string(), "src/*".to_string()];
-
-        let result = expand_file_args(&args, &manifest, &root).unwrap();
-        // Literal first, then glob-expanded entries.
-        assert_eq!(result[0], "Cargo.toml");
-        assert!(result.contains(&"src/main.rs".to_string()));
-        assert!(result.contains(&"src/lib.rs".to_string()));
-        assert_eq!(result.len(), 3);
-    }
-
-    #[test]
-    fn test_is_glob_pattern() {
-        assert!(is_glob_pattern("src/**"));
-        assert!(is_glob_pattern("*.rs"));
-        assert!(is_glob_pattern("src/[ab].rs"));
-        assert!(is_glob_pattern("src/??.rs"));
-        assert!(!is_glob_pattern("src/main.rs"));
-        assert!(!is_glob_pattern("Cargo.toml"));
-    }
-
-    #[test]
-    fn test_compute_mirror_blog_path_drafts_dir() {
-        let result = compute_mirror_blog_path("./drafts", "crates/csa-core/src/lib.rs");
-        assert_eq!(result, "drafts/crates/csa-core/src/lib.rs.md");
-    }
-
-    #[test]
-    fn test_compute_mirror_blog_path_dot_dir() {
-        // mirror_dir "." places blog alongside the source file.
-        let result = compute_mirror_blog_path(".", "src/lib.rs");
-        assert_eq!(result, "src/lib.rs.md");
-    }
-
-    #[test]
-    fn test_compute_mirror_blog_path_nested_dir() {
-        let result = compute_mirror_blog_path("output/blogs", "src/main.rs");
-        assert_eq!(result, "output/blogs/src/main.rs.md");
-    }
 
     #[test]
     fn test_audit_init_stores_mirror_dir_in_manifest() {
@@ -947,7 +299,7 @@ mod tests {
 
         // Simulate handle_audit_init with mirror_dir.
         let scan_root = canonical_root(root).unwrap();
-        let manifest_path = manifest_path(&scan_root);
+        let mpath = manifest_path(&scan_root);
         let file_hashes = scan_and_hash(&scan_root, &[]).unwrap();
 
         let mut manifest = AuditManifest::new(scan_root.display().to_string());
@@ -968,10 +320,10 @@ mod tests {
             );
         }
 
-        io::save(&manifest_path, &manifest).expect("save");
+        io::save(&mpath, &manifest).expect("save");
 
         // Reload and verify.
-        let loaded = io::load(&manifest_path).expect("load");
+        let loaded = io::load(&mpath).expect("load");
         assert_eq!(loaded.meta.mirror_dir, Some("./drafts".to_string()));
     }
 
@@ -1019,14 +371,17 @@ mod tests {
             vec!["src/lib.rs".to_string()],
             "generated".to_string(),
             None,
-            None,  // no explicit blog_path
-            None,  // no CLI mirror_dir override
+            None, // no explicit blog_path
+            None, // no CLI mirror_dir override
         )
         .expect("update");
 
         let scan_root = canonical_root(root).unwrap();
         let manifest = io::load(&manifest_path(&scan_root)).expect("load");
-        let entry = manifest.files.get("src/lib.rs").expect("entry should exist");
+        let entry = manifest
+            .files
+            .get("src/lib.rs")
+            .expect("entry should exist");
         assert_eq!(
             entry.blog_path,
             Some("drafts/src/lib.rs.md".to_string()),
@@ -1054,14 +409,17 @@ mod tests {
             vec!["src/lib.rs".to_string()],
             "generated".to_string(),
             None,
-            Some("custom/blog.md".to_string()),  // explicit blog_path
+            Some("custom/blog.md".to_string()), // explicit blog_path
             None,
         )
         .expect("update");
 
         let scan_root = canonical_root(root).unwrap();
         let manifest = io::load(&manifest_path(&scan_root)).expect("load");
-        let entry = manifest.files.get("src/lib.rs").expect("entry should exist");
+        let entry = manifest
+            .files
+            .get("src/lib.rs")
+            .expect("entry should exist");
         assert_eq!(
             entry.blog_path,
             Some("custom/blog.md".to_string()),
@@ -1086,7 +444,7 @@ mod tests {
             "generated".to_string(),
             None,
             None,
-            Some("output".to_string()),  // CLI mirror_dir flag
+            Some("output".to_string()), // CLI mirror_dir flag
         )
         .expect("update");
 
@@ -1096,7 +454,10 @@ mod tests {
         // manifest.meta.mirror_dir should be updated by CLI flag.
         assert_eq!(manifest.meta.mirror_dir, Some("output".to_string()));
 
-        let entry = manifest.files.get("src/lib.rs").expect("entry should exist");
+        let entry = manifest
+            .files
+            .get("src/lib.rs")
+            .expect("entry should exist");
         assert_eq!(
             entry.blog_path,
             Some("output/src/lib.rs.md".to_string()),

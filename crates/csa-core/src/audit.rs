@@ -257,8 +257,7 @@ hash = "sha256:abc"
             "serialized TOML should contain mirror_dir when set"
         );
 
-        let parsed: AuditManifest =
-            toml::from_str(&toml_str).expect("manifest should deserialize");
+        let parsed: AuditManifest = toml::from_str(&toml_str).expect("manifest should deserialize");
         assert_eq!(parsed.meta.mirror_dir, Some("./drafts".to_string()));
     }
 
@@ -275,8 +274,7 @@ hash = "sha256:abc"
             "serialized TOML should NOT contain mirror_dir when None"
         );
 
-        let parsed: AuditManifest =
-            toml::from_str(&toml_str).expect("manifest should deserialize");
+        let parsed: AuditManifest = toml::from_str(&toml_str).expect("manifest should deserialize");
         assert_eq!(parsed.meta.mirror_dir, None);
     }
 }
