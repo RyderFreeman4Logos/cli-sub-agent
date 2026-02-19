@@ -40,6 +40,7 @@ pub struct SandboxTransportConfig {
 pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub lean_mode: bool,
     pub sandbox: Option<&'a SandboxTransportConfig>,
 }
 
@@ -249,6 +250,20 @@ impl AcpTransport {
         }
     }
 
+    pub(crate) fn build_lean_mode_meta(
+        lean_mode: bool,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        if !lean_mode {
+            return None;
+        }
+        let serde_json::Value::Object(meta) =
+            serde_json::json!({"claudeCode": {"options": {"settingSources": []}}})
+        else {
+            return None;
+        };
+        Some(meta)
+    }
+
     pub(crate) fn build_env(
         &self,
         session: &MetaSessionState,
@@ -313,6 +328,7 @@ impl Transport for AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
+        let session_meta = Self::build_lean_mode_meta(options.lean_mode);
 
         // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
         // dedicated current-thread runtime so callers can stay Send-safe.
@@ -335,6 +351,7 @@ impl Transport for AcpTransport {
                         &env,
                         system_prompt.as_deref(),
                         resume_session_id.as_deref(),
+                        session_meta.clone(),
                         &prompt,
                         std::time::Duration::from_secs(idle_timeout_seconds),
                         cfg,
@@ -354,6 +371,7 @@ impl Transport for AcpTransport {
                                 csa_acp::transport::AcpSessionStart {
                                     system_prompt: system_prompt.as_deref(),
                                     resume_session_id: resume_session_id.as_deref(),
+                                    meta: session_meta.clone(),
                                 },
                                 &prompt,
                                 std::time::Duration::from_secs(idle_timeout_seconds),
@@ -371,6 +389,7 @@ impl Transport for AcpTransport {
                         csa_acp::transport::AcpSessionStart {
                             system_prompt: system_prompt.as_deref(),
                             resume_session_id: resume_session_id.as_deref(),
+                            meta: session_meta.clone(),
                         },
                         &prompt,
                         std::time::Duration::from_secs(idle_timeout_seconds),
@@ -443,6 +462,7 @@ async fn run_acp_sandboxed(
     env: &HashMap<String, String>,
     system_prompt: Option<&str>,
     resume_session_id: Option<&str>,
+    meta: Option<serde_json::Map<String, serde_json::Value>>,
     prompt: &str,
     idle_timeout: std::time::Duration,
     sandbox_config: &SandboxConfig,
@@ -478,13 +498,13 @@ async fn run_acp_sandboxed(
                     "Failed to resume sandboxed ACP session, creating new session"
                 );
                 connection
-                    .new_session(system_prompt, Some(working_dir))
+                    .new_session(system_prompt, Some(working_dir), meta.clone())
                     .await?
             }
         }
     } else {
         connection
-            .new_session(system_prompt, Some(working_dir))
+            .new_session(system_prompt, Some(working_dir), meta.clone())
             .await?
     };
 
@@ -754,3 +774,7 @@ mod tests {
         assert!(resume_id.is_none());
     }
 }
+
+#[cfg(test)]
+#[path = "transport_lean_mode_tests.rs"]
+mod lean_mode_tests;

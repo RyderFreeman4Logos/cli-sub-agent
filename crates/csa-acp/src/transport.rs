@@ -5,10 +5,11 @@ use crate::{client::SessionEvent, connection::AcpConnection, error::AcpResult};
 
 pub use crate::connection::PromptResult;
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AcpSessionStart<'a> {
     pub system_prompt: Option<&'a str>,
     pub resume_session_id: Option<&'a str>,
+    pub meta: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -33,6 +34,7 @@ impl AcpSession {
         env: &HashMap<String, String>,
         system_prompt: Option<&str>,
         resume_session_id: Option<&str>,
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> AcpResult<Self> {
         let connection = AcpConnection::spawn(command, args, working_dir, env).await?;
         connection.initialize().await?;
@@ -50,14 +52,14 @@ impl AcpSession {
                         "Failed to resume ACP session, creating new session"
                     );
                     connection
-                        .new_session(system_prompt, Some(working_dir))
+                        .new_session(system_prompt, Some(working_dir), meta.clone())
                         .await?
                 }
             }
         } else {
             tracing::debug!("creating new ACP session");
             connection
-                .new_session(system_prompt, Some(working_dir))
+                .new_session(system_prompt, Some(working_dir), meta.clone())
                 .await?
         };
 
@@ -108,6 +110,7 @@ pub async fn run_prompt(
         env,
         session_start.system_prompt,
         session_start.resume_session_id,
+        session_start.meta,
     )
     .await?;
     let result = session

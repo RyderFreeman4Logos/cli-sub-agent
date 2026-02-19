@@ -1,6 +1,7 @@
 //! Project configuration loading and validation (.csa/config.toml).
 
 pub mod config;
+mod config_runtime;
 pub mod global;
 pub mod init;
 pub mod mcp;

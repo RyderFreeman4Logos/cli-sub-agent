@@ -376,18 +376,19 @@ impl AcpConnection {
         }
     }
 
-    // TODO(acp-sdk): ACP v0.9.4 `NewSessionRequest` does not support system_prompt.
-    // When the SDK adds system_prompt to session/new, thread `_system_prompt` through
-    // to the request. Until then, system prompts must be prepended to the first prompt.
+    // `NewSessionRequest` does not support system_prompt.
+    // System prompts are prepended to the first prompt at a higher layer.
     pub async fn new_session(
         &self,
         _system_prompt: Option<&str>,
         working_dir: Option<&Path>,
+        meta: Option<serde_json::Map<String, serde_json::Value>>,
     ) -> AcpResult<String> {
         self.ensure_process_running()?;
 
         let session_working_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
-        let request = NewSessionRequest::new(session_working_dir);
+        let mut request = NewSessionRequest::new(session_working_dir);
+        request.meta = meta;
 
         let result = self
             .local_set

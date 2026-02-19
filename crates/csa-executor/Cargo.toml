@@ -14,6 +14,7 @@ csa-acp = { path = "../csa-acp" }
 agent-teams.workspace = true
 tokio.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 toml.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true

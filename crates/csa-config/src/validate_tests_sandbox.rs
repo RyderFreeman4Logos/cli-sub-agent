@@ -127,3 +127,79 @@ fn test_validate_pids_max_at_minimum() {
     let result = validate_config(dir.path());
     assert!(result.is_ok(), "pids_max 10 should be valid");
 }
+
+#[test]
+fn test_validate_node_heap_limit_mb_too_low_in_resources() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            node_heap_limit_mb: Some(256),
+            ..Default::default()
+        },
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("resources.node_heap_limit_mb must be >= 512")
+    );
+}
+
+#[test]
+fn test_validate_node_heap_limit_mb_too_low_in_tool() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            node_heap_limit_mb: Some(128),
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("tools.claude-code.node_heap_limit_mb must be >= 512")
+    );
+}
