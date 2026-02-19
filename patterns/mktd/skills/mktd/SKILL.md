@@ -50,12 +50,12 @@ csa run --skill mktd "Plan the implementation of <feature description>"
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
-1b. **Phase 1.5 -- LANGUAGE DETECTION**: Detect the primary language used in conversation with the user. Set USER_LANGUAGE accordingly (e.g., "Chinese (Simplified)", "English", "Japanese"). If unclear, default to the language used in the FEATURE description. This language will be used for all TODO descriptions, section headers, and task names.
-2. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in USER_LANGUAGE. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
-3. **Phase 3 -- DEBATE**: Run `csa debate` (tier-2) to adversarially review the TODO draft. Mandatory -- no exceptions.
-4. **Phase 3b -- REVISE**: Incorporate debate feedback. Concede valid points, defend sound decisions.
-5. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, write content, `csa todo save`.
-6. **Phase 4b -- APPROVE**: Present to user for APPROVE / MODIFY / REJECT.
+2. **Phase 1.5 -- LANGUAGE DETECTION**: Detect the primary language used in conversation with the user. Set USER_LANGUAGE accordingly (e.g., "Chinese (Simplified)", "English", "Japanese"). If unclear, default to the language used in the FEATURE description. This language will be used for all TODO descriptions, section headers, and task names.
+3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in USER_LANGUAGE. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
+4. **Phase 3 -- DEBATE**: Run `csa debate` (tier-2) to adversarially review the TODO draft. Mandatory -- no exceptions.
+5. **Phase 3b -- REVISE**: Incorporate debate feedback. Concede valid points, defend sound decisions.
+6. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, write content, `csa todo save`.
+7. **Phase 4b -- APPROVE**: Present to user for APPROVE / MODIFY / REJECT.
 
 ## Example Usage
 
