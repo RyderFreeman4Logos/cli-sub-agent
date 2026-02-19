@@ -122,8 +122,8 @@ condition = "${VAR}"   # optional: only run if truthy
 
 **Project-level** (default):
 ```bash
-# Weave auto-links after install:
-weave install
+# Weave auto-links after install (requires source):
+weave install <source-repo-or-path>
 
 # Or manual symlink:
 ln -s ../../patterns/<name>/skills/<name>/ .claude/skills/<name>
