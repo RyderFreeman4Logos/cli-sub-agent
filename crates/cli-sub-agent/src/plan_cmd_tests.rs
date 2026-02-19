@@ -275,3 +275,129 @@ async fn execute_step_bash_runs_code_block() {
     assert!(!result.skipped);
     assert_eq!(result.exit_code, 0);
 }
+
+#[tokio::test]
+async fn execute_plan_fails_on_unsupported_condition_steps() {
+    // A plan with only unsupported condition steps must NOT pass silently.
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![PlanStep {
+            id: 1,
+            title: "conditional step".into(),
+            tool: Some("bash".into()),
+            prompt: "echo hello".into(),
+            tier: None,
+            depends_on: vec![],
+            on_fail: FailAction::Skip,
+            condition: Some("${FLAG}".into()),
+            loop_var: None,
+        }],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    // The step should be skipped with non-zero exit
+    assert_eq!(results.len(), 1);
+    assert!(results[0].skipped);
+    assert_ne!(results[0].exit_code, 0);
+    // Verify that handle_plan_run would fail: unsupported skips count as failures
+    let unsupported = results
+        .iter()
+        .filter(|r| r.skipped && r.exit_code != 0)
+        .count();
+    assert!(
+        unsupported > 0,
+        "unsupported skips must be counted as failures"
+    );
+}
+
+#[tokio::test]
+async fn execute_plan_aborts_on_retry_exhaustion() {
+    // After retry(1) is exhausted on a failing step, the next step must NOT run.
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "always fails".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nexit 1\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Retry(1),
+                condition: None,
+                loop_var: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "should not run".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho unreachable\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    // Only step 1 should execute; step 2 should be skipped due to abort on retry exhaustion
+    assert_eq!(
+        results.len(),
+        1,
+        "retry exhaustion must abort — step 2 should not run"
+    );
+    assert_eq!(results[0].step_id, 1);
+    assert_ne!(results[0].exit_code, 0);
+}
+
+#[tokio::test]
+async fn execute_plan_continues_on_skip_failure() {
+    // on_fail=skip should NOT abort — next step must still run.
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "fails but skip".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nexit 1\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Skip,
+                condition: None,
+                loop_var: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "should run".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho ok\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    assert_eq!(
+        results.len(),
+        2,
+        "on_fail=skip must not abort — both steps should execute"
+    );
+    assert!(results[0].skipped, "step 1 should be marked as skipped");
+    assert_eq!(results[1].exit_code, 0, "step 2 should succeed");
+}

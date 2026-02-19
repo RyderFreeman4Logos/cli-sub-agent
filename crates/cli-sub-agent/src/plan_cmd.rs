@@ -116,13 +116,20 @@ pub(crate) async fn handle_plan_run(
         );
     }
 
-    // 10. Exit with error if any step failed (and wasn't skipped)
-    let failed = results
+    // 10. Exit with error if any step failed (including unsupported skips,
+    //     which use non-zero exit codes to prevent silent success).
+    let execution_failures = results
         .iter()
         .filter(|r| !r.skipped && r.exit_code != 0)
         .count();
-    if failed > 0 {
-        bail!("{} step(s) failed", failed);
+    let total_failures = execution_failures + unsupported_skips;
+    if total_failures > 0 {
+        bail!(
+            "{} step(s) failed ({} execution, {} unsupported-skip)",
+            total_failures,
+            execution_failures,
+            unsupported_skips
+        );
     }
 
     Ok(())
@@ -281,16 +288,22 @@ async fn execute_plan(
 
     for step in &plan.steps {
         let result = execute_step(step, variables, project_root, config).await;
-        let should_abort = !result.skipped && result.exit_code != 0;
+        let is_failure = !result.skipped && result.exit_code != 0;
 
-        // Check if we should abort the entire plan
-        let abort = should_abort && matches!(step.on_fail, FailAction::Abort);
+        // Abort on failure when: on_fail=abort, or retry exhausted (retries
+        // already happened inside execute_step; reaching here means all failed),
+        // or delegate (unsupported in v1 — treated as abort).
+        let abort = is_failure
+            && matches!(
+                step.on_fail,
+                FailAction::Abort | FailAction::Retry(_) | FailAction::Delegate(_)
+            );
         results.push(result);
 
         if abort {
             error!(
-                "Step {} ('{}') failed with on_fail=abort — stopping workflow",
-                step.id, step.title
+                "Step {} ('{}') failed (on_fail={:?}) — stopping workflow",
+                step.id, step.title, step.on_fail
             );
             break;
         }
