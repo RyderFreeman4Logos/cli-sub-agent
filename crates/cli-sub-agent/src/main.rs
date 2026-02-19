@@ -4,6 +4,7 @@ use anyhow::Result;
 use clap::Parser;
 
 mod audit;
+mod audit_cmds;
 mod batch;
 mod claude_sub_agent_cmd;
 mod cli;
@@ -37,8 +38,6 @@ use csa_core::types::OutputFormat;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    audit::touch_symbols();
-
     // Read current depth from env
     let current_depth: u32 = std::env::var("CSA_DEPTH")
         .ok()
@@ -149,6 +148,9 @@ async fn main() -> Result<()> {
                 session_cmds::handle_session_checkpoints(cd)?;
             }
         },
+        Commands::Audit { command } => {
+            audit_cmds::handle_audit(command)?;
+        }
         Commands::Init {
             non_interactive,
             full,
