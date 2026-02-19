@@ -37,6 +37,8 @@ pub(crate) fn resolve_sandbox_options(
         return SandboxResolution::Ok(execute_options);
     };
 
+    execute_options = execute_options.with_lean_mode(cfg.tool_lean_mode(tool_name));
+
     let enforcement = cfg.enforcement_mode();
     if matches!(enforcement, csa_config::EnforcementMode::Off) {
         return SandboxResolution::Ok(execute_options);

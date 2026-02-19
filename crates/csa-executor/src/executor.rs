@@ -23,6 +23,7 @@ pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 pub struct ExecuteOptions {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub lean_mode: bool,
     /// Optional resource sandbox config (cgroup/rlimit limits).
     /// When `Some`, the spawned tool process will be wrapped in resource isolation.
     pub sandbox: Option<SandboxContext>,
@@ -49,8 +50,15 @@ impl ExecuteOptions {
         Self {
             stream_mode,
             idle_timeout_seconds,
+            lean_mode: false,
             sandbox: None,
         }
+    }
+
+    /// Set ACP lean mode metadata behavior.
+    pub fn with_lean_mode(mut self, lean_mode: bool) -> Self {
+        self.lean_mode = lean_mode;
+        self
     }
 
     /// Set sandbox context for resource isolation.
@@ -293,6 +301,7 @@ impl Executor {
         let transport_options = TransportOptions {
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
+            lean_mode: options.lean_mode,
             sandbox: sandbox_transport.as_ref(),
         };
         let transport = self.transport(session_config);
