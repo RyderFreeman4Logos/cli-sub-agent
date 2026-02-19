@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
 use crate::run_helpers::read_prompt;
@@ -86,7 +86,8 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         Some(&global_config),
     );
 
-    let execution = if let Some(timeout_secs) = args.timeout {
+    let timeout_secs = resolve_debate_timeout_seconds(args.timeout, &global_config);
+    let execution =
         match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), execute_future)
             .await
         {
@@ -97,14 +98,11 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
                     "Debate aborted: wall-clock timeout exceeded"
                 );
                 anyhow::bail!(
-                    "Debate aborted: --timeout {timeout_secs}s exceeded. \
-                     Increase --timeout for longer runs, or use --idle-timeout to kill only when output stalls."
+                    "Debate aborted: timeout {timeout_secs}s exceeded. \
+                     Use --timeout to override, or set [debate].timeout_seconds in global config."
                 );
             }
-        }
-    } else {
-        execute_future.await?
-    };
+        };
 
     let output = render_debate_output(
         &execution.execution.output,
@@ -324,6 +322,27 @@ fn resolve_debate_stream_mode(
     } else {
         csa_process::StreamMode::BufferOnly
     }
+}
+
+fn resolve_debate_timeout_seconds(
+    timeout_override: Option<u64>,
+    global_config: &GlobalConfig,
+) -> u64 {
+    if let Some(timeout) = timeout_override {
+        return timeout;
+    }
+
+    let configured_timeout = global_config.debate.timeout_seconds;
+    if configured_timeout == 0 {
+        let fallback_timeout = GlobalConfig::default().debate.timeout_seconds;
+        warn!(
+            fallback_timeout = fallback_timeout,
+            "Invalid [debate].timeout_seconds=0 detected in global config; using default timeout"
+        );
+        return fallback_timeout;
+    }
+
+    configured_timeout
 }
 
 /// Build a debate instruction that passes parameters to the debate skill.
@@ -670,6 +689,29 @@ mod tests {
         let result =
             crate::cli::Cli::try_parse_from(["csa", "debate", "--idle-timeout", "0", "question"]);
         assert!(result.is_err(), "idle_timeout=0 should be rejected");
+    }
+
+    #[test]
+    fn debate_timeout_uses_global_default_when_cli_missing() {
+        let config = GlobalConfig::default();
+        assert_eq!(resolve_debate_timeout_seconds(None, &config), 1800);
+    }
+
+    #[test]
+    fn debate_timeout_prefers_cli_override() {
+        let config = GlobalConfig::default();
+        assert_eq!(resolve_debate_timeout_seconds(Some(900), &config), 900);
+    }
+
+    #[test]
+    fn debate_timeout_falls_back_when_global_config_is_zero() {
+        let mut config = GlobalConfig::default();
+        config.debate.timeout_seconds = 0;
+
+        assert_eq!(
+            resolve_debate_timeout_seconds(None, &config),
+            GlobalConfig::default().debate.timeout_seconds
+        );
     }
 
     // --- CLI parse tests for --rounds flag (#138) ---

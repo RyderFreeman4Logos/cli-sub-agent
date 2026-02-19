@@ -272,7 +272,7 @@ pub struct ReviewArgs {
     )]
     pub consensus: String,
 
-    /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
+    /// Absolute wall-clock timeout in seconds (kills execution after N seconds when set)
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub timeout: Option<u64>,
 

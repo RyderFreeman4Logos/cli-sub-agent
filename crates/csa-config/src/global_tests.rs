@@ -140,6 +140,7 @@ fn test_review_config_default() {
 fn test_debate_config_default() {
     let config = GlobalConfig::default();
     assert_eq!(config.debate.tool, "auto");
+    assert_eq!(config.debate.timeout_seconds, 1800);
 }
 
 #[test]
@@ -223,9 +224,11 @@ fn test_parse_debate_config() {
     let toml_str = r#"
 [debate]
 tool = "codex"
+timeout_seconds = 2400
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.debate.tool, "codex");
+    assert_eq!(config.debate.timeout_seconds, 2400);
 }
 
 #[test]
@@ -490,6 +493,7 @@ diff_command = "delta"
     assert_eq!(config.max_concurrent("gemini-cli"), 2); // falls to default
     assert_eq!(config.review.tool, "codex");
     assert_eq!(config.debate.tool, "claude-code");
+    assert_eq!(config.debate.timeout_seconds, 1800);
     assert_eq!(config.fallback.cloud_review_exhausted, "auto-local");
     assert_eq!(config.todo.show_command.as_deref(), Some("bat -l md"));
     assert_eq!(config.todo.diff_command.as_deref(), Some("delta"));
@@ -503,6 +507,7 @@ fn test_parse_empty_toml() {
     assert!(config.tools.is_empty());
     assert_eq!(config.review.tool, "auto");
     assert_eq!(config.debate.tool, "auto");
+    assert_eq!(config.debate.timeout_seconds, 1800);
     assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
 }
 
