@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
 use crate::run_helpers::read_prompt;
@@ -328,7 +328,21 @@ fn resolve_debate_timeout_seconds(
     timeout_override: Option<u64>,
     global_config: &GlobalConfig,
 ) -> u64 {
-    timeout_override.unwrap_or(global_config.debate.timeout_seconds)
+    if let Some(timeout) = timeout_override {
+        return timeout;
+    }
+
+    let configured_timeout = global_config.debate.timeout_seconds;
+    if configured_timeout == 0 {
+        let fallback_timeout = GlobalConfig::default().debate.timeout_seconds;
+        warn!(
+            fallback_timeout = fallback_timeout,
+            "Invalid [debate].timeout_seconds=0 detected in global config; using default timeout"
+        );
+        return fallback_timeout;
+    }
+
+    configured_timeout
 }
 
 /// Build a debate instruction that passes parameters to the debate skill.
@@ -687,6 +701,17 @@ mod tests {
     fn debate_timeout_prefers_cli_override() {
         let config = GlobalConfig::default();
         assert_eq!(resolve_debate_timeout_seconds(Some(900), &config), 900);
+    }
+
+    #[test]
+    fn debate_timeout_falls_back_when_global_config_is_zero() {
+        let mut config = GlobalConfig::default();
+        config.debate.timeout_seconds = 0;
+
+        assert_eq!(
+            resolve_debate_timeout_seconds(None, &config),
+            GlobalConfig::default().debate.timeout_seconds
+        );
     }
 
     // --- CLI parse tests for --rounds flag (#138) ---
