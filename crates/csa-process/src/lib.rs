@@ -68,6 +68,15 @@ pub struct ExecutionResult {
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
+#[derive(Debug, Clone, Copy)]
+enum PreExecPolicy {
+    SetsidOnly,
+    SetsidAndRlimits {
+        memory_max_mb: u64,
+        pids_max: Option<u64>,
+    },
+}
+
 /// Spawn a tool process without waiting for it to complete.
 ///
 /// - Spawns the command
@@ -83,8 +92,16 @@ const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 /// Use this when you need the PID before waiting (e.g., for resource monitoring).
 /// Call `wait_and_capture()` after starting monitoring to complete execution.
 pub async fn spawn_tool(
+    cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+) -> Result<tokio::process::Child> {
+    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::SetsidOnly).await
+}
+
+async fn spawn_tool_with_pre_exec(
     mut cmd: Command,
     stdin_data: Option<Vec<u8>>,
+    pre_exec_policy: PreExecPolicy,
 ) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -95,17 +112,24 @@ pub async fn spawn_tool(
     }
     cmd.kill_on_drop(true);
 
-    // Isolate child in its own process group to prevent signal inheritance
-    // and enable clean termination of the entire subprocess tree.
-    // SAFETY: setsid() is async-signal-safe and we call it before exec,
-    // so no Rust runtime state exists in the child yet.
+    // Isolate child in its own process group and optionally apply rlimits.
+    // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
     #[cfg(unix)]
     unsafe {
-        cmd.pre_exec(|| {
+        cmd.pre_exec(move || {
             libc::setsid();
-            Ok(())
+            match pre_exec_policy {
+                PreExecPolicy::SetsidOnly => Ok(()),
+                PreExecPolicy::SetsidAndRlimits {
+                    memory_max_mb,
+                    pids_max,
+                } => csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
+                    .map_err(std::io::Error::other),
+            }
         });
     }
+    #[cfg(not(unix))]
+    let _ = pre_exec_policy;
 
     let mut child = cmd.spawn().context("Failed to spawn command")?;
 
@@ -237,24 +261,22 @@ async fn spawn_with_cgroup(
 /// After spawn, starts an [`RssWatcher`] to monitor the child's resident set
 /// size from the parent process.
 async fn spawn_with_rlimit(
-    mut cmd: Command,
+    cmd: Command,
     stdin_data: Option<Vec<u8>>,
     config: &SandboxConfig,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
     let memory_max_mb = config.memory_max_mb;
     let pids_max = config.pids_max.map(u64::from);
 
-    // SAFETY: `apply_rlimits` calls `setrlimit` which is async-signal-safe.
-    // This closure runs between fork and exec in the child process, before
-    // the Rust runtime is active in the child.
-    unsafe {
-        cmd.pre_exec(move || {
-            csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
-                .map_err(std::io::Error::other)
-        });
-    }
-
-    let child = spawn_tool(cmd, stdin_data).await?;
+    let child = spawn_tool_with_pre_exec(
+        cmd,
+        stdin_data,
+        PreExecPolicy::SetsidAndRlimits {
+            memory_max_mb,
+            pids_max,
+        },
+    )
+    .await?;
 
     let watcher = child.id().and_then(|pid| {
         debug!(

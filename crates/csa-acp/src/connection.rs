@@ -141,16 +141,17 @@ impl AcpConnection {
                 Ok((conn, AcpSandboxHandle::Cgroup(guard)))
             }
             SandboxCapability::Setrlimit => {
-                let mut cmd = Self::build_cmd(command, args, working_dir, env);
+                let mut cmd = Self::build_cmd_base(command, args, working_dir, env);
 
                 let memory_max_mb = config.memory_max_mb;
                 let pids_max = config.pids_max.map(u64::from);
 
-                // Apply rlimits in the child process (setsid is already installed by build_cmd).
-                // SAFETY: apply_rlimits calls setrlimit which is async-signal-safe.
+                // Apply setsid + rlimits in a single pre_exec hook.
+                // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
                 #[cfg(unix)]
                 unsafe {
                     cmd.pre_exec(move || {
+                        libc::setsid();
                         csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
                             .map_err(std::io::Error::other)
                     });
@@ -190,12 +191,7 @@ impl AcpConnection {
         working_dir: &Path,
         env: &HashMap<String, String>,
     ) -> Command {
-        let mut cmd = Command::new(command);
-        cmd.args(args)
-            .current_dir(working_dir)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        let mut cmd = Self::build_cmd_base(command, args, working_dir, env);
 
         // Isolate ACP child in its own process group so timeout kill can
         // terminate the full subtree.
@@ -207,6 +203,23 @@ impl AcpConnection {
                 Ok(())
             });
         }
+
+        cmd
+    }
+
+    /// Build a standard ACP command with piped stdio and environment.
+    fn build_cmd_base(
+        command: &str,
+        args: &[String],
+        working_dir: &Path,
+        env: &HashMap<String, String>,
+    ) -> Command {
+        let mut cmd = Command::new(command);
+        cmd.args(args)
+            .current_dir(working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
 
         for (key, value) in env {
             cmd.env(key, value);
