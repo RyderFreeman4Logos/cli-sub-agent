@@ -54,9 +54,14 @@ just test
 
 | Annotation | Values | Effect |
 |------------|--------|--------|
-| `Tool:` | `bash` / `csa` / omit | What executes this step |
-| `OnFail:` | `abort` / `retry N` | Error handling strategy |
+| `Tool:` | `bash` / `csa` / `codex` / `claude-code` / any tool name / omit | What executes this step |
+| `OnFail:` | `abort` / `skip` / `retry N` / `delegate [target]` | Error handling strategy |
 | `Tier:` | `${VAR}` or literal | Tier override for this step |
+
+**Note on OnFail formats**: In PATTERN.md, `OnFail: retry 2` is a plain string
+parsed by `parse_fail_action`. In `plan.toml`, serde deserializes `FailAction`
+enum variants: `on_fail = "abort"` for unit variants, but `on_fail = { retry = 2 }`
+(table form) for parameterized variants like `Retry(u32)` or `Delegate(String)`.
 
 ### Variables
 

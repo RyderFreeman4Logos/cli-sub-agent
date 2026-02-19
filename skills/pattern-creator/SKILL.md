@@ -113,7 +113,7 @@ id = 1
 title = "Step Title"
 prompt = "What this step does"
 tool = "bash"          # optional: bash | csa | omit for orchestrator logic
-on_fail = "abort"      # abort | retry N
+on_fail = "abort"      # "abort" | "skip" | { retry = N } | { delegate = "target" }
 tier = "tier-1-quick"  # optional tier override
 condition = "${VAR}"   # optional: only run if truthy
 ```
