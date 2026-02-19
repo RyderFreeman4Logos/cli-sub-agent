@@ -94,16 +94,26 @@ pub struct DebateConfig {
     /// - Otherwise → error (user must configure explicitly)
     #[serde(default = "default_debate_tool")]
     pub tool: String,
+    /// Default absolute wall-clock timeout (seconds) for `csa debate`.
+    ///
+    /// `csa debate --timeout <N>` overrides this per invocation.
+    #[serde(default = "default_debate_timeout_seconds")]
+    pub timeout_seconds: u64,
 }
 
 fn default_debate_tool() -> String {
     "auto".to_string()
 }
 
+fn default_debate_timeout_seconds() -> u64 {
+    1800
+}
+
 impl Default for DebateConfig {
     fn default() -> Self {
         Self {
             tool: default_debate_tool(),
+            timeout_seconds: default_debate_timeout_seconds(),
         }
     }
 }
@@ -419,6 +429,8 @@ tool = "auto"
 # Set explicitly if auto-detection fails (e.g., parent is opencode).
 [debate]
 tool = "auto"
+# Default wall-clock timeout for `csa debate` (30 minutes).
+timeout_seconds = 1800
 
 # Fallback behavior when external services are unavailable.
 # cloud_review_exhausted: what to do when cloud review bot is unavailable.
