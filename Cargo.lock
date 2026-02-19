@@ -345,6 +345,7 @@ dependencies = [
  "directories",
  "ignore",
  "libc",
+ "regex",
  "serde",
  "serde_json",
  "sha2",

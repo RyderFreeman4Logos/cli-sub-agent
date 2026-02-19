@@ -265,7 +265,7 @@ fn test_audit_status_parse() {
         } => {
             assert!(matches!(format, OutputFormat::Json));
             assert_eq!(filter, None);
-            assert_eq!(order, "depth");
+            assert_eq!(order, "topo");
         }
         _ => panic!("expected audit status subcommand"),
     }

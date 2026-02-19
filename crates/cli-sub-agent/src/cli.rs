@@ -500,8 +500,8 @@ pub enum AuditCommands {
         #[arg(long)]
         filter: Option<String>,
 
-        /// Sort order: depth (deepest first) or alpha
-        #[arg(long, default_value = "depth", value_parser = ["depth", "alpha"])]
+        /// Sort order: topo (topological, leaves first), depth (deepest first), or alpha
+        #[arg(long, default_value = "topo", value_parser = ["topo", "depth", "alpha"])]
         order: String,
     },
 
