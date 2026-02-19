@@ -40,6 +40,7 @@ pub struct SandboxTransportConfig {
 pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub output_spool: Option<&'a Path>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
 }
 
@@ -100,6 +101,7 @@ impl LegacyTransport {
             child,
             stream_mode,
             std::time::Duration::from_secs(idle_timeout_seconds),
+            None,
         )
         .await?;
 
@@ -162,6 +164,7 @@ impl Transport for LegacyTransport {
             child,
             options.stream_mode,
             std::time::Duration::from_secs(options.idle_timeout_seconds),
+            options.output_spool,
         )
         .await?;
 
@@ -387,6 +390,16 @@ impl Transport for AcpTransport {
             stderr_output: output.stderr,
             exit_code: output.exit_code,
         };
+
+        if let Some(spool_path) = options.output_spool {
+            if let Err(error) = std::fs::write(spool_path, &execution.output) {
+                tracing::warn!(
+                    path = %spool_path.display(),
+                    %error,
+                    "Failed to write ACP output spool file"
+                );
+            }
+        }
 
         Ok(TransportResult {
             execution,

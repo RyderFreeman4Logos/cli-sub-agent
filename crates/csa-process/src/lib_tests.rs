@@ -153,10 +153,14 @@ async fn test_wait_and_capture_with_idle_timeout_kills_silent_process() {
     cmd.args(["-c", "sleep 5"]);
 
     let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-    let result =
-        wait_and_capture_with_idle_timeout(child, StreamMode::BufferOnly, Duration::from_secs(1))
-            .await
-            .expect("Failed to wait");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .expect("Failed to wait");
 
     assert_eq!(result.exit_code, 137);
     assert!(result.summary.contains("idle timeout"));
@@ -168,10 +172,14 @@ async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
     cmd.args(["-c", "for _ in 1 2 3; do echo tick; sleep 0.4; done"]);
 
     let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-    let result =
-        wait_and_capture_with_idle_timeout(child, StreamMode::BufferOnly, Duration::from_secs(1))
-            .await
-            .expect("Failed to wait");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .expect("Failed to wait");
 
     assert_eq!(result.exit_code, 0);
     assert!(result.output.contains("tick"));
@@ -188,10 +196,14 @@ async fn test_idle_timeout_detects_partial_output_without_newlines() {
     ]);
 
     let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
-    let result =
-        wait_and_capture_with_idle_timeout(child, StreamMode::BufferOnly, Duration::from_secs(1))
-            .await
-            .expect("Failed to wait");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        None,
+    )
+    .await
+    .expect("Failed to wait");
 
     assert_eq!(
         result.exit_code, 0,

@@ -5,7 +5,7 @@
 //! - Executor building and tool installation checks
 //! - Global slot acquisition with concurrency limits
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
@@ -569,7 +569,7 @@ pub(crate) async fn execute_with_session_and_meta(
     }
 
     // Resolve sandbox configuration from project config and enforcement mode.
-    let execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
+    let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
         config,
         executor.tool_name(),
         &session.meta_session_id,
@@ -591,38 +591,24 @@ pub(crate) async fn execute_with_session_and_meta(
             return Err(err);
         }
     };
+    execute_options.output_spool = Some(session_dir.join("output.log"));
 
     // Record sandbox telemetry in session state (first turn only).
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
 
-    // Execute via transport abstraction.
-    // TODO(signal): AcpTransport doesn't propagate SIGINT/SIGTERM yet;
-    // LegacyTransport inherits signal handling via csa-process process groups.
-    let transport_result = match executor
-        .execute_with_transport(
-            &effective_prompt,
-            tool_state.as_ref(),
-            &session,
-            merged_env_ref,
-            execute_options,
-            session_config,
-        )
-        .await
-    {
-        Ok(result) => result,
-        Err(e) => {
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &e,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(e).context("Failed to execute tool via transport");
-        }
-    };
+    let transport_result = crate::pipeline_execute::execute_transport_with_signal(
+        executor,
+        &effective_prompt,
+        tool_state.as_ref(),
+        &session,
+        merged_env_ref,
+        execute_options,
+        session_config,
+        project_root,
+        &mut cleanup_guard,
+        execution_start_time,
+    )
+    .await?;
 
     // Tool execution completed — defuse cleanup guard (preserve artifacts on later errors).
     if let Some(ref mut guard) = cleanup_guard {

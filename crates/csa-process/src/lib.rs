@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -314,6 +315,7 @@ pub async fn wait_and_capture(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        None,
     )
     .await
 }
@@ -322,13 +324,31 @@ pub async fn wait_and_capture(
 ///
 /// The process is killed only when there is no stdout/stderr output for the full
 /// `idle_timeout` duration.
+///
+/// When `output_spool` is `Some`, each stdout chunk is also written to the given
+/// file path with an explicit flush after each write.  This ensures partial output
+/// survives OOM kills or other ungraceful terminations — the caller can recover
+/// output from the spool file even if this function never returns.
 pub async fn wait_and_capture_with_idle_timeout(
     mut child: tokio::process::Child,
     stream_mode: StreamMode,
     idle_timeout: Duration,
+    output_spool: Option<&Path>,
 ) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let stderr = child.stderr.take();
+
+    // Open spool file for incremental crash-safe output.
+    let mut spool_file = output_spool.and_then(|path| {
+        use std::fs::OpenOptions;
+        match OpenOptions::new().create(true).append(true).open(path) {
+            Ok(f) => Some(f),
+            Err(e) => {
+                warn!(path = %path.display(), error = %e, "Failed to open output spool file");
+                None
+            }
+        }
+    });
 
     // Use byte-level reads instead of read_line() to detect partial output
     // (e.g., progress bars with \r, streaming dots without \n). This prevents
@@ -369,6 +389,8 @@ pub async fn wait_and_capture_with_idle_timeout(
                         Ok(n) => {
                             last_activity = Instant::now();
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
+                            // Spool to disk for crash recovery
+                            spool_chunk(&mut spool_file, &stdout_buf[..n]);
                             accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
@@ -427,6 +449,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         Ok(n) => {
                             last_activity = Instant::now();
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
+                            spool_chunk(&mut spool_file, &stdout_buf[..n]);
                             accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
@@ -509,8 +532,21 @@ pub async fn run_and_capture_with_stdin(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        None,
     )
     .await
+}
+
+/// Write a raw byte chunk to the spool file and flush.
+///
+/// Best-effort: errors are silently ignored because the spool is a crash-recovery
+/// aid, not the primary output path.
+fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
+    if let Some(f) = spool {
+        use std::io::Write;
+        let _ = f.write_all(bytes);
+        let _ = f.flush();
+    }
 }
 
 /// Accumulate a chunk of bytes into a line buffer, flushing complete lines to output.
