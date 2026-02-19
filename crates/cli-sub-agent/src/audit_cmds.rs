@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::audit::helpers::{
     canonical_root, compute_mirror_blog_path, current_root, expand_file_args, manifest_path,
-    parse_status, resolve_manifest_key, scan_and_hash,
+    parse_status, resolve_manifest_key, scan_and_hash, validate_mirror_dir,
 };
 use crate::audit::status::{
     build_status_rows, print_status_json, print_status_text, sort_rows, summarize_rows,
@@ -53,9 +53,9 @@ pub(crate) fn handle_audit_init(
     manifest.meta.last_scanned_at = Some(Utc::now().to_rfc3339());
     manifest.meta.mirror_dir = mirror_dir.clone();
 
-    // Create mirror directory if specified and it doesn't exist.
+    // Validate and create mirror directory if specified.
     if let Some(ref dir) = mirror_dir {
-        let mirror_path = scan_root.join(dir);
+        let mirror_path = validate_mirror_dir(dir, &scan_root)?;
         if !mirror_path.exists() {
             std::fs::create_dir_all(&mirror_path).with_context(|| {
                 format!(
@@ -158,8 +158,9 @@ pub(crate) fn handle_audit_update(
     let path = manifest_path(&root);
     let mut manifest = io::load(&path)?;
 
-    // If CLI flag overrides mirror_dir, update manifest meta.
+    // Validate and apply CLI mirror_dir override.
     if let Some(ref md) = mirror_dir {
+        validate_mirror_dir(md, &root)?;
         manifest.meta.mirror_dir = Some(md.clone());
     }
 

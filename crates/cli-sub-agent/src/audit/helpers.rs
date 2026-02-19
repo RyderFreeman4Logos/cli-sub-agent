@@ -113,6 +113,52 @@ pub(crate) fn parse_status(value: &str) -> Result<AuditStatus> {
     }
 }
 
+/// Validate that a mirror directory path is safe (relative, within project root).
+///
+/// Rejects absolute paths and parent traversal (`..`). The path must resolve
+/// to a location within or equal to `project_root` after canonicalization.
+/// If the directory does not yet exist (common for init), we validate the
+/// string components without canonicalization.
+pub(crate) fn validate_mirror_dir(mirror_dir: &str, project_root: &Path) -> Result<PathBuf> {
+    let path = Path::new(mirror_dir);
+    if path.is_absolute() {
+        bail!("Mirror directory must be a relative path, got absolute: {mirror_dir}");
+    }
+    // Reject any component that is ".."
+    for component in path.components() {
+        if matches!(component, std::path::Component::ParentDir) {
+            bail!("Mirror directory must not contain '..': {mirror_dir}");
+        }
+    }
+    let resolved = project_root.join(path);
+    // If it already exists, canonicalize and verify containment.
+    if resolved.exists() {
+        let canonical = resolved.canonicalize().with_context(|| {
+            format!(
+                "Failed to canonicalize mirror directory: {}",
+                resolved.display()
+            )
+        })?;
+        let canonical_root = project_root.canonicalize().with_context(|| {
+            format!(
+                "Failed to canonicalize project root: {}",
+                project_root.display()
+            )
+        })?;
+        if !canonical.starts_with(&canonical_root) {
+            bail!(
+                "Mirror directory escapes project root: {} (resolved to {})",
+                mirror_dir,
+                canonical.display()
+            );
+        }
+        Ok(canonical)
+    } else {
+        // Directory doesn't exist yet; component check above is sufficient.
+        Ok(resolved)
+    }
+}
+
 /// Compute the blog path by mirroring the source path under the mirror directory.
 ///
 /// E.g., mirror_dir="./drafts", key="crates/csa-core/src/lib.rs"
@@ -234,6 +280,36 @@ mod tests {
         assert!(is_glob_pattern("src/??.rs"));
         assert!(!is_glob_pattern("src/main.rs"));
         assert!(!is_glob_pattern("Cargo.toml"));
+    }
+
+    #[test]
+    fn test_validate_mirror_dir_rejects_absolute() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = validate_mirror_dir("/etc/evil", tmp.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("relative path"));
+    }
+
+    #[test]
+    fn test_validate_mirror_dir_rejects_parent_traversal() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = validate_mirror_dir("../escape", tmp.path());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains(".."));
+    }
+
+    #[test]
+    fn test_validate_mirror_dir_accepts_valid_relative() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = validate_mirror_dir("drafts/audit", tmp.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_mirror_dir_accepts_dot() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let result = validate_mirror_dir(".", tmp.path());
+        assert!(result.is_ok());
     }
 
     #[test]

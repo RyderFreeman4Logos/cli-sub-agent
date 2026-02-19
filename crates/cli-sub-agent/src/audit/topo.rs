@@ -19,15 +19,25 @@ static USE_CRATE_RE: LazyLock<Regex> =
 ///
 /// Non-Rust files and files where dependency parsing fails fall back to
 /// directory-depth ordering (deeper paths first, then alphabetical).
+///
+/// Module names are scoped to their crate root (the directory containing
+/// `lib.rs` or `main.rs`) to avoid false edges between identically-named
+/// modules in different crates.
 pub(crate) fn topo_sort(files: &[String], project_root: &Path) -> Vec<String> {
     let rust_files: Vec<&String> = files.iter().filter(|f| f.ends_with(".rs")).collect();
     let non_rust_files: Vec<&String> = files.iter().filter(|f| !f.ends_with(".rs")).collect();
 
-    // Build module-name -> file-path index for Rust files.
+    // Group Rust files by crate root for scoped module name resolution.
+    let crate_roots = discover_crate_roots(&rust_files);
+
+    // Build crate-scoped module-name -> file-path index for Rust files.
+    // Key format: "{crate_root}::{module_name}" to avoid cross-crate collisions.
     let mut mod_to_file: HashMap<String, String> = HashMap::new();
     for file in &rust_files {
+        let crate_root = find_crate_root(file, &crate_roots);
         for module_name in infer_module_names(file) {
-            mod_to_file.insert(module_name, (*file).clone());
+            let scoped_name = format!("{crate_root}::{module_name}");
+            mod_to_file.insert(scoped_name, (*file).clone());
         }
     }
 
@@ -44,9 +54,12 @@ pub(crate) fn topo_sort(files: &[String], project_root: &Path) -> Vec<String> {
             Err(_) => continue,
         };
 
+        let crate_root = find_crate_root(file, &crate_roots);
         let referenced_modules = parse_dependencies(&content);
         for module_name in referenced_modules {
-            if let Some(dep_file) = mod_to_file.get(&module_name) {
+            // Look up the scoped name within the same crate.
+            let scoped_name = format!("{crate_root}::{module_name}");
+            if let Some(dep_file) = mod_to_file.get(&scoped_name) {
                 if dep_file != *file {
                     deps.entry((*file).clone())
                         .or_default()
@@ -71,6 +84,42 @@ pub(crate) fn topo_sort(files: &[String], project_root: &Path) -> Vec<String> {
     let mut result = sorted_rust;
     result.extend(non_rust_sorted);
     result
+}
+
+/// Discover crate root directories from the file list.
+///
+/// A crate root is the directory containing `lib.rs` or `main.rs`.
+/// Returns a sorted list of crate root paths (longest first for greedy matching).
+fn discover_crate_roots(rust_files: &[&String]) -> Vec<String> {
+    let mut roots: HashSet<String> = HashSet::new();
+    for file in rust_files {
+        let path = Path::new(file.as_str());
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+            if stem == "lib" || stem == "main" {
+                if let Some(parent) = path.parent() {
+                    roots.insert(parent.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    // Sort longest first so deeper crate roots match before shallower ones.
+    let mut sorted: Vec<String> = roots.into_iter().collect();
+    sorted.sort_by_key(|r| std::cmp::Reverse(r.len()));
+    sorted
+}
+
+/// Find the crate root for a given file path.
+///
+/// Returns the longest matching crate root, or "." as fallback.
+fn find_crate_root(file: &str, crate_roots: &[String]) -> String {
+    let file_normalized = file.replace('\\', "/");
+    for root in crate_roots {
+        if file_normalized.starts_with(root) {
+            return root.clone();
+        }
+    }
+    // Fallback: use "." (project root as single implicit crate).
+    ".".to_string()
 }
 
 /// Infer the module name(s) that a file path could represent.
@@ -389,5 +438,112 @@ mod tests {
             config_pos < main_pos,
             "config (leaf) should come before main: {sorted:?}"
         );
+    }
+
+    #[test]
+    fn test_multi_crate_same_name_module_no_cross_crate_edge() {
+        // Two crates each have a `config.rs`. The topo sort must NOT create a
+        // dependency edge from crate_a/src/lib.rs to crate_b/src/config.rs
+        // (or vice versa) just because the module names collide.
+        let tmp = tempfile::tempdir().expect("tempdir");
+
+        // crate_a: lib.rs declares `mod config;`
+        let a_src = tmp.path().join("crate_a/src");
+        fs::create_dir_all(&a_src).expect("mkdir crate_a");
+        fs::write(a_src.join("lib.rs"), "mod config;\npub fn a() {}").expect("write");
+        fs::write(a_src.join("config.rs"), "pub fn cfg_a() {}").expect("write");
+
+        // crate_b: lib.rs declares `mod config;`
+        let b_src = tmp.path().join("crate_b/src");
+        fs::create_dir_all(&b_src).expect("mkdir crate_b");
+        fs::write(b_src.join("lib.rs"), "mod config;\npub fn b() {}").expect("write");
+        fs::write(b_src.join("config.rs"), "pub fn cfg_b() {}").expect("write");
+
+        let files = vec![
+            "crate_a/src/lib.rs".to_string(),
+            "crate_a/src/config.rs".to_string(),
+            "crate_b/src/lib.rs".to_string(),
+            "crate_b/src/config.rs".to_string(),
+        ];
+
+        let sorted = topo_sort(&files, tmp.path());
+
+        // All 4 files must appear.
+        assert_eq!(sorted.len(), 4, "all files present: {sorted:?}");
+
+        // Within each crate: config (leaf) before lib (depends on config).
+        let a_config = sorted
+            .iter()
+            .position(|f| f == "crate_a/src/config.rs")
+            .unwrap();
+        let a_lib = sorted
+            .iter()
+            .position(|f| f == "crate_a/src/lib.rs")
+            .unwrap();
+        assert!(a_config < a_lib, "crate_a: config before lib: {sorted:?}");
+
+        let b_config = sorted
+            .iter()
+            .position(|f| f == "crate_b/src/config.rs")
+            .unwrap();
+        let b_lib = sorted
+            .iter()
+            .position(|f| f == "crate_b/src/lib.rs")
+            .unwrap();
+        assert!(b_config < b_lib, "crate_b: config before lib: {sorted:?}");
+
+        // Cross-crate independence: crate_b's config must NOT appear as a
+        // dependency of crate_a's lib (and vice versa). We verify by ensuring
+        // that crate_b/src/config.rs is NOT forced before crate_a/src/lib.rs
+        // in a way that would indicate a false cross-crate edge.
+        // Since both crates are independent, the two sub-graphs should be
+        // interleaved only by alphabetical tiebreaking, not by dependency.
+        // Specifically, crate_a's lib should NOT depend on crate_b's config.
+        // The simplest invariant: if we removed crate_b entirely, crate_a's
+        // order would be [config, lib]. We can check that crate_a's internal
+        // order is independent of crate_b's presence by ensuring the relative
+        // order of crate_a files matches the 2-file case.
+        let a_only_files = vec![
+            "crate_a/src/lib.rs".to_string(),
+            "crate_a/src/config.rs".to_string(),
+        ];
+        let a_only_sorted = topo_sort(&a_only_files, tmp.path());
+        let a_only_config = a_only_sorted
+            .iter()
+            .position(|f| f == "crate_a/src/config.rs")
+            .unwrap();
+        let a_only_lib = a_only_sorted
+            .iter()
+            .position(|f| f == "crate_a/src/lib.rs")
+            .unwrap();
+        assert!(
+            a_only_config < a_only_lib,
+            "isolated crate_a: config before lib: {a_only_sorted:?}"
+        );
+    }
+
+    #[test]
+    fn test_discover_crate_roots_multiple() {
+        let files = vec![
+            "crate_a/src/lib.rs".to_string(),
+            "crate_a/src/config.rs".to_string(),
+            "crate_b/src/main.rs".to_string(),
+            "crate_b/src/util.rs".to_string(),
+        ];
+        let refs: Vec<&String> = files.iter().collect();
+        let roots = discover_crate_roots(&refs);
+        assert!(roots.contains(&"crate_a/src".to_string()));
+        assert!(roots.contains(&"crate_b/src".to_string()));
+        assert_eq!(roots.len(), 2);
+    }
+
+    #[test]
+    fn test_find_crate_root_matches_longest() {
+        let roots = vec!["crates/inner/src".to_string(), "crates".to_string()];
+        assert_eq!(
+            find_crate_root("crates/inner/src/foo.rs", &roots),
+            "crates/inner/src"
+        );
+        assert_eq!(find_crate_root("crates/other/src/bar.rs", &roots), "crates");
     }
 }
