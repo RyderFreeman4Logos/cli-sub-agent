@@ -95,6 +95,7 @@ pub(crate) fn resolve_sandbox_options(
         config: sandbox_config,
         tool_name: tool_name.to_string(),
         session_id: session_id.to_string(),
+        best_effort: matches!(enforcement, csa_config::EnforcementMode::BestEffort),
     });
 
     SandboxResolution::Ok(execute_options)

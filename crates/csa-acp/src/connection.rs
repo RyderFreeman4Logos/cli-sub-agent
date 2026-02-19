@@ -159,13 +159,19 @@ impl AcpConnection {
 
                 let conn = Self::spawn_with_cmd_raw(cmd, working_dir).await?;
 
-                let watcher = conn.child.borrow().id().map(|pid| {
+                let watcher = conn.child.borrow().id().and_then(|pid| {
                     debug!(pid, memory_max_mb, "starting RSS watcher for ACP child");
-                    csa_resource::rlimit::RssWatcher::start(
+                    match csa_resource::rlimit::RssWatcher::start(
                         pid,
                         memory_max_mb,
                         Duration::from_secs(5),
-                    )
+                    ) {
+                        Ok(w) => Some(w),
+                        Err(e) => {
+                            tracing::warn!("failed to start RSS watcher: {e:#}");
+                            None
+                        }
+                    }
                 });
 
                 Ok((conn, AcpSandboxHandle::Rlimit { watcher }))

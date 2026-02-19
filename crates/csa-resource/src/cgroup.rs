@@ -215,7 +215,10 @@ pub fn cleanup_orphan_scopes() -> Result<Vec<OrphanScope>> {
 
     for unit_name in scopes {
         let pids = scope_active_pids(&unit_name);
-        if pids == 0 {
+        // Only stop scopes confirmed to have 0 active PIDs.
+        // If the query failed (None), leave the scope alone to avoid
+        // accidentally killing a scope whose PID count is unknown.
+        if pids == Some(0) {
             debug!(scope = %unit_name, "stopping orphan scope (0 active PIDs)");
             let _ = Command::new("systemctl")
                 .args(["--user", "stop", &unit_name])
@@ -273,7 +276,10 @@ fn list_csa_scopes() -> Result<Vec<String>> {
 }
 
 /// Query active PID count for a scope via `systemctl show`.
-fn scope_active_pids(unit_name: &str) -> u32 {
+///
+/// Returns `None` if the query fails (systemctl error, parse failure),
+/// distinguishing "unknown" from "zero processes".
+fn scope_active_pids(unit_name: &str) -> Option<u32> {
     let output = Command::new("systemctl")
         .args([
             "--user",
@@ -284,15 +290,15 @@ fn scope_active_pids(unit_name: &str) -> u32 {
         ])
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .output();
+        .output()
+        .ok()?;
 
-    match output {
-        Ok(o) if o.status.success() => {
-            let s = String::from_utf8_lossy(&o.stdout);
-            s.trim().parse::<u32>().unwrap_or(0)
-        }
-        _ => 0,
+    if !output.status.success() {
+        return None;
     }
+
+    let s = String::from_utf8_lossy(&output.stdout);
+    s.trim().parse::<u32>().ok()
 }
 
 // ---------------------------------------------------------------------------

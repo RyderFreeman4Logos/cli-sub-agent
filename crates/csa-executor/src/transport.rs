@@ -27,6 +27,8 @@ pub struct SandboxTransportConfig {
     /// Tool name for cgroup scope naming (e.g. "claude-code").
     pub tool_name: String,
     /// Session ID for cgroup scope naming.
+    /// When true, sandbox spawn failures fall back to unsandboxed spawn.
+    pub best_effort: bool,
     pub session_id: String,
 }
 
@@ -124,13 +126,37 @@ impl Transport for LegacyTransport {
             .build_command(prompt, tool_state, session, extra_env);
 
         let sandbox_cfg = options.sandbox.map(|s| &s.config);
+        let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let (tool_name, session_id) = options
             .sandbox
             .map(|s| (s.tool_name.as_str(), s.session_id.as_str()))
             .unwrap_or(("", ""));
 
-        let (child, _sandbox_handle) =
-            spawn_tool_sandboxed(cmd, stdin_data, sandbox_cfg, tool_name, session_id).await?;
+        let (child, _sandbox_handle) = match spawn_tool_sandboxed(
+            cmd,
+            stdin_data.clone(),
+            sandbox_cfg,
+            tool_name,
+            session_id,
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(e) if best_effort => {
+                tracing::warn!(
+                    "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
+                );
+                let child = spawn_tool(
+                    self.executor
+                        .build_command(prompt, tool_state, session, extra_env)
+                        .0,
+                    stdin_data,
+                )
+                .await?;
+                (child, csa_process::SandboxHandle::None)
+            }
+            Err(e) => return Err(e),
+        };
 
         let execution = wait_and_capture_with_idle_timeout(
             child,

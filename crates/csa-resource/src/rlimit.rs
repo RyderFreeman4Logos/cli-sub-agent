@@ -77,19 +77,19 @@ impl RssWatcher {
     /// * `pid` — OS process ID to monitor.
     /// * `memory_max_mb` — threshold in megabytes.
     /// * `poll_interval` — how often to sample (recommended: 5 s).
-    pub fn start(pid: u32, memory_max_mb: u64, poll_interval: Duration) -> Self {
+    pub fn start(pid: u32, memory_max_mb: u64, poll_interval: Duration) -> Result<Self> {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
 
         let handle = thread::Builder::new()
             .name(format!("rss-watcher-{pid}"))
             .spawn(move || Self::watch_loop(pid, memory_max_mb, poll_interval, stop))
-            .expect("failed to spawn rss-watcher thread");
+            .context("failed to spawn rss-watcher thread")?;
 
-        Self {
+        Ok(Self {
             stop_flag,
             handle: Some(handle),
-        }
+        })
     }
 
     /// Core polling loop executed on the background thread.
@@ -281,7 +281,8 @@ mod tests {
     #[test]
     fn test_rss_watcher_stop() {
         // Start watcher for a nonexistent PID — it should exit quickly.
-        let watcher = RssWatcher::start(u32::MAX - 1, 1024, Duration::from_millis(50));
+        let watcher = RssWatcher::start(u32::MAX - 1, 1024, Duration::from_millis(50))
+            .expect("thread spawn should succeed in test");
         // Give the thread time to detect missing PID.
         thread::sleep(Duration::from_millis(200));
         watcher.stop();
@@ -289,7 +290,8 @@ mod tests {
 
     #[test]
     fn test_rss_watcher_drop_does_not_panic() {
-        let _watcher = RssWatcher::start(u32::MAX - 1, 1024, Duration::from_millis(50));
+        let _watcher = RssWatcher::start(u32::MAX - 1, 1024, Duration::from_millis(50))
+            .expect("thread spawn should succeed in test");
         // Dropping without explicit stop should not panic.
     }
 }

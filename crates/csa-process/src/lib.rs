@@ -256,12 +256,18 @@ async fn spawn_with_rlimit(
 
     let child = spawn_tool(cmd, stdin_data).await?;
 
-    let watcher = child.id().map(|pid| {
+    let watcher = child.id().and_then(|pid| {
         debug!(
             pid,
             memory_max_mb, "starting RSS watcher for sandboxed child"
         );
-        RssWatcher::start(pid, memory_max_mb, Duration::from_secs(5))
+        match RssWatcher::start(pid, memory_max_mb, Duration::from_secs(5)) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                warn!("failed to start RSS watcher: {e:#}");
+                None
+            }
+        }
     });
 
     Ok((child, SandboxHandle::Rlimit { watcher }))

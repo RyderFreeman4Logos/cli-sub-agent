@@ -40,6 +40,8 @@ pub struct SandboxContext {
     pub tool_name: String,
     /// Session ID for scope naming.
     pub session_id: String,
+    /// When true, sandbox spawn failures fall back to unsandboxed spawn.
+    pub best_effort: bool,
 }
 
 impl ExecuteOptions {
@@ -286,6 +288,7 @@ impl Executor {
             config: ctx.config.clone(),
             tool_name: ctx.tool_name.clone(),
             session_id: ctx.session_id.clone(),
+            best_effort: ctx.best_effort,
         });
         let transport_options = TransportOptions {
             stream_mode: options.stream_mode,
