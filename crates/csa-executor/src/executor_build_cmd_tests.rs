@@ -649,5 +649,148 @@ fn test_build_command_current_dir() {
     );
 }
 
+// ── STRIPPED_ENV_VARS: recursion guard removal ──────────────────
+// Both build_base_command and build_execute_in_command must strip these.
+
+#[test]
+fn test_stripped_env_vars_contains_claudecode() {
+    assert!(
+        Executor::STRIPPED_ENV_VARS.contains(&"CLAUDECODE"),
+        "STRIPPED_ENV_VARS must strip CLAUDECODE (recursion detection)"
+    );
+    assert!(
+        Executor::STRIPPED_ENV_VARS.contains(&"CLAUDE_CODE_ENTRYPOINT"),
+        "STRIPPED_ENV_VARS must strip CLAUDE_CODE_ENTRYPOINT (parent context)"
+    );
+}
+
+#[test]
+fn test_build_command_strips_claudecode_env() {
+    let exec = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let (cmd, _stdin_data) = exec.build_command("test", None, &session, None);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    // env_remove() registers the key with None value, signalling
+    // "remove from inherited environment".
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CLAUDECODE")),
+        Some(&None),
+        "CLAUDECODE should be env_removed (value = None)"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CLAUDE_CODE_ENTRYPOINT")),
+        Some(&None),
+        "CLAUDE_CODE_ENTRYPOINT should be env_removed (value = None)"
+    );
+}
+
+#[test]
+fn test_build_command_strips_claudecode_for_all_executors() {
+    let executors: Vec<Executor> = vec![
+        Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::ClaudeCode {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        },
+    ];
+
+    let session = make_test_session();
+    for exec in executors {
+        let tool = exec.tool_name().to_string();
+        let (cmd, _) = exec.build_command("test", None, &session, None);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+            envs.into_iter().collect();
+
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new("CLAUDECODE")),
+            Some(&None),
+            "{tool}: CLAUDECODE should be stripped"
+        );
+    }
+}
+
+// ── build_execute_in_command: env stripping ─────────────────────
+
+#[test]
+fn test_build_execute_in_command_strips_claudecode_env() {
+    let exec = Executor::ClaudeCode {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, None);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CLAUDECODE")),
+        Some(&None),
+        "build_execute_in_command should strip CLAUDECODE"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("CLAUDE_CODE_ENTRYPOINT")),
+        Some(&None),
+        "build_execute_in_command should strip CLAUDE_CODE_ENTRYPOINT"
+    );
+}
+
+#[test]
+fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
+    let executors: Vec<Executor> = vec![
+        Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::ClaudeCode {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+        },
+        Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        },
+    ];
+
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    for exec in executors {
+        let tool = exec.tool_name().to_string();
+        let (cmd, _) = exec.build_execute_in_command("test", work_dir, None);
+        let envs: Vec<_> = cmd.as_std().get_envs().collect();
+        let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> =
+            envs.into_iter().collect();
+
+        assert_eq!(
+            env_map.get(std::ffi::OsStr::new("CLAUDECODE")),
+            Some(&None),
+            "{tool}: build_execute_in_command should strip CLAUDECODE"
+        );
+    }
+}
+
 // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not executor)
 // based on per-tool config. See pipeline.rs suppress_notify logic.
