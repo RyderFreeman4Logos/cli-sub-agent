@@ -354,6 +354,10 @@ impl Executor {
     ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = Command::new(self.executable_name());
         cmd.current_dir(work_dir);
+        // Strip recursive-invocation guard vars (same as build_base_command).
+        for var in Self::STRIPPED_ENV_VARS {
+            cmd.env_remove(var);
+        }
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
