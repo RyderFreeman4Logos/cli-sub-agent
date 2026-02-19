@@ -1,7 +1,11 @@
 use std::time::Duration;
 use std::{collections::HashMap, path::Path};
 
-use crate::{client::SessionEvent, connection::AcpConnection, error::AcpResult};
+use crate::{
+    client::SessionEvent,
+    connection::{AcpConnection, PromptIoOptions},
+    error::AcpResult,
+};
 
 pub use crate::connection::PromptResult;
 
@@ -19,6 +23,27 @@ pub struct AcpOutput {
     pub events: Vec<SessionEvent>,
     pub session_id: String,
     pub exit_code: i32,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AcpOutputIoOptions<'a> {
+    pub stream_stdout_to_stderr: bool,
+    pub output_spool: Option<&'a Path>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AcpRunOptions<'a> {
+    pub idle_timeout: Duration,
+    pub io: AcpOutputIoOptions<'a>,
+}
+
+impl Default for AcpRunOptions<'_> {
+    fn default() -> Self {
+        Self {
+            idle_timeout: Duration::from_secs(300),
+            io: AcpOutputIoOptions::default(),
+        }
+    }
 }
 
 pub struct AcpSession {
@@ -92,6 +117,17 @@ impl AcpSession {
             .prompt(&self.session_id, prompt, idle_timeout)
             .await
     }
+
+    pub async fn prompt_with_idle_timeout_and_io(
+        &self,
+        prompt: &str,
+        idle_timeout: Duration,
+        io: PromptIoOptions<'_>,
+    ) -> AcpResult<PromptResult> {
+        self.connection
+            .prompt_with_io(&self.session_id, prompt, idle_timeout, io)
+            .await
+    }
 }
 
 pub async fn run_prompt(
@@ -102,6 +138,30 @@ pub async fn run_prompt(
     session_start: AcpSessionStart<'_>,
     prompt: &str,
     idle_timeout: Duration,
+) -> AcpResult<AcpOutput> {
+    run_prompt_with_io(
+        command,
+        args,
+        working_dir,
+        env,
+        session_start,
+        prompt,
+        AcpRunOptions {
+            idle_timeout,
+            io: AcpOutputIoOptions::default(),
+        },
+    )
+    .await
+}
+
+pub async fn run_prompt_with_io(
+    command: &str,
+    args: &[String],
+    working_dir: &Path,
+    env: &HashMap<String, String>,
+    session_start: AcpSessionStart<'_>,
+    prompt: &str,
+    options: AcpRunOptions<'_>,
 ) -> AcpResult<AcpOutput> {
     let session = AcpSession::new(
         command,
@@ -114,7 +174,14 @@ pub async fn run_prompt(
     )
     .await?;
     let result = session
-        .prompt_with_idle_timeout(prompt, idle_timeout)
+        .prompt_with_idle_timeout_and_io(
+            prompt,
+            options.idle_timeout,
+            PromptIoOptions {
+                stream_stdout_to_stderr: options.io.stream_stdout_to_stderr,
+                output_spool: options.io.output_spool,
+            },
+        )
         .await?;
 
     // ACP processes may stay alive across prompts. If the prompt itself succeeded
@@ -129,7 +196,7 @@ pub async fn run_prompt(
         }
         stderr.push_str(&format!(
             "idle timeout: no ACP events/stderr for {}s; process killed",
-            idle_timeout.as_secs()
+            options.idle_timeout.as_secs()
         ));
         stderr.push('\n');
     }

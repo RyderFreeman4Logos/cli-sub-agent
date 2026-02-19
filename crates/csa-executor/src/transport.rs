@@ -308,13 +308,6 @@ impl Transport for AcpTransport {
         extra_env: Option<&HashMap<String, String>>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
-        if options.stream_mode != StreamMode::BufferOnly {
-            tracing::debug!(
-                "ACP transport does not yet support stream_mode={:?}; output will be buffered",
-                options.stream_mode
-            );
-        }
-
         let env = self.build_env(session, extra_env);
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
@@ -332,6 +325,8 @@ impl Transport for AcpTransport {
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
         let session_meta = Self::build_lean_mode_meta(options.lean_mode);
+        let stream_stdout_to_stderr = options.stream_mode != StreamMode::BufferOnly;
+        let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
 
         // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
         // dedicated current-thread runtime so callers can stay Send-safe.
@@ -360,13 +355,15 @@ impl Transport for AcpTransport {
                         cfg,
                         tool_name,
                         sess_id,
+                        stream_stdout_to_stderr,
+                        output_spool.as_deref(),
                     )) {
                         Ok(output) => Ok(output),
                         Err(e) if sandbox_best_effort => {
                             tracing::warn!(
                                 "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
                             );
-                            rt.block_on(csa_acp::transport::run_prompt(
+                            rt.block_on(csa_acp::transport::run_prompt_with_io(
                                 &acp_command,
                                 &acp_args,
                                 &working_dir,
@@ -377,14 +374,22 @@ impl Transport for AcpTransport {
                                     meta: session_meta.clone(),
                                 },
                                 &prompt,
-                                std::time::Duration::from_secs(idle_timeout_seconds),
+                                csa_acp::transport::AcpRunOptions {
+                                    idle_timeout: std::time::Duration::from_secs(
+                                        idle_timeout_seconds,
+                                    ),
+                                    io: csa_acp::transport::AcpOutputIoOptions {
+                                        stream_stdout_to_stderr,
+                                        output_spool: output_spool.as_deref(),
+                                    },
+                                },
                             ))
                             .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
                         }
                         Err(e) => Err(anyhow!("ACP transport (sandboxed) failed: {e}")),
                     }
                 } else {
-                    rt.block_on(csa_acp::transport::run_prompt(
+                    rt.block_on(csa_acp::transport::run_prompt_with_io(
                         &acp_command,
                         &acp_args,
                         &working_dir,
@@ -395,7 +400,13 @@ impl Transport for AcpTransport {
                             meta: session_meta.clone(),
                         },
                         &prompt,
-                        std::time::Duration::from_secs(idle_timeout_seconds),
+                        csa_acp::transport::AcpRunOptions {
+                            idle_timeout: std::time::Duration::from_secs(idle_timeout_seconds),
+                            io: csa_acp::transport::AcpOutputIoOptions {
+                                stream_stdout_to_stderr,
+                                output_spool: output_spool.as_deref(),
+                            },
+                        },
                     ))
                     .map_err(|e| anyhow!("ACP transport failed: {e}"))
                 }
@@ -409,16 +420,6 @@ impl Transport for AcpTransport {
             stderr_output: output.stderr,
             exit_code: output.exit_code,
         };
-
-        if let Some(spool_path) = options.output_spool {
-            if let Err(error) = std::fs::write(spool_path, &execution.output) {
-                tracing::warn!(
-                    path = %spool_path.display(),
-                    %error,
-                    "Failed to write ACP output spool file"
-                );
-            }
-        }
 
         Ok(TransportResult {
             execution,
@@ -462,11 +463,6 @@ impl TransportFactory {
 }
 
 /// Run an ACP prompt with sandbox isolation.
-///
-/// Replicates the logic of `csa_acp::transport::run_prompt` but uses
-/// `AcpConnection::spawn_sandboxed` to wrap the ACP process in resource
-/// isolation.  The returned `AcpSandboxHandle` is kept alive for the
-/// duration of the session.
 #[allow(clippy::too_many_arguments)]
 async fn run_acp_sandboxed(
     command: &str,
@@ -481,6 +477,8 @@ async fn run_acp_sandboxed(
     sandbox_config: &SandboxConfig,
     tool_name: &str,
     session_id: &str,
+    stream_stdout_to_stderr: bool,
+    output_spool: Option<&Path>,
 ) -> csa_acp::AcpResult<csa_acp::transport::AcpOutput> {
     use csa_acp::AcpConnection;
 
@@ -522,7 +520,15 @@ async fn run_acp_sandboxed(
     };
 
     let result = connection
-        .prompt(&acp_session_id, prompt, idle_timeout)
+        .prompt_with_io(
+            &acp_session_id,
+            prompt,
+            idle_timeout,
+            csa_acp::connection::PromptIoOptions {
+                stream_stdout_to_stderr,
+                output_spool,
+            },
+        )
         .await?;
 
     let mut exit_code = connection.exit_code().await?.unwrap_or(0);

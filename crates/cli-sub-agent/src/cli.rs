@@ -88,7 +88,7 @@ pub enum Commands {
         #[arg(long, conflicts_with = "no_stream_stdout")]
         stream_stdout: bool,
 
-        /// Suppress real-time stdout streaming to stderr (streams by default when TTY)
+        /// Suppress real-time stdout streaming to stderr (streams by default for text output)
         #[arg(long)]
         no_stream_stdout: bool,
     },
