@@ -1,6 +1,12 @@
 // End-to-end tests for the csa binary.
 // Requires actual tool installations for full testing.
 
+#[path = "../src/cli.rs"]
+mod cli_defs;
+
+use clap::Parser;
+use cli_defs::{AuditCommands, Cli, Commands};
+use csa_core::types::OutputFormat;
 use std::process::Command;
 
 /// Create a [`Command`] pointing at the built `csa` binary with HOME, XDG_STATE_HOME,
@@ -209,4 +215,58 @@ fn session_list_exits_zero() {
         combined.contains("No sessions found"),
         "empty state should report no sessions"
     );
+}
+
+#[test]
+fn test_audit_help() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output = csa_cmd(tmp.path())
+        .args(["audit", "--help"])
+        .output()
+        .expect("failed to run csa audit --help");
+
+    assert!(output.status.success(), "csa audit --help should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("Manage audit manifest lifecycle"));
+    assert!(stdout.contains("init"));
+    assert!(stdout.contains("status"));
+    assert!(stdout.contains("sync"));
+}
+
+#[test]
+fn test_audit_init_parse() {
+    let cli = Cli::try_parse_from(["csa", "audit", "init", "--root", "."])
+        .expect("audit init args should parse");
+
+    match cli.command {
+        Commands::Audit {
+            command: AuditCommands::Init { root, ignore },
+        } => {
+            assert_eq!(root, ".");
+            assert!(ignore.is_empty());
+        }
+        _ => panic!("expected audit init subcommand"),
+    }
+}
+
+#[test]
+fn test_audit_status_parse() {
+    let cli = Cli::try_parse_from(["csa", "audit", "status", "--format", "json"])
+        .expect("audit status args should parse");
+
+    match cli.command {
+        Commands::Audit {
+            command:
+                AuditCommands::Status {
+                    format,
+                    filter,
+                    order,
+                },
+        } => {
+            assert!(matches!(format, OutputFormat::Json));
+            assert_eq!(filter, None);
+            assert_eq!(order, "depth");
+        }
+        _ => panic!("expected audit status subcommand"),
+    }
 }

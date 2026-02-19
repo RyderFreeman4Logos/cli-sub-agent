@@ -52,3 +52,5 @@ tempfile = "3.10"
 
 # Utilities
 regex = "1.11"
+sha2 = "0.10"
+ignore = "0.4"

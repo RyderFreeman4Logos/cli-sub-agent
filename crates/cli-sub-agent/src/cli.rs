@@ -95,6 +95,12 @@ pub enum Commands {
         cmd: SessionCommands,
     },
 
+    /// Manage audit manifest lifecycle
+    Audit {
+        #[command(subcommand)]
+        command: AuditCommands,
+    },
+
     /// Initialize project configuration (.csa/config.toml)
     ///
     /// By default, creates a minimal config with only [project] metadata.
@@ -469,6 +475,75 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum AuditCommands {
+    /// Initialize audit manifest by scanning and hashing files
+    Init {
+        /// Root path to scan
+        #[arg(long, default_value = ".")]
+        root: String,
+
+        /// Additional ignore patterns (prefix/path based)
+        #[arg(long)]
+        ignore: Vec<String>,
+    },
+
+    /// Show audit status by comparing manifest and current filesystem
+    Status {
+        /// Output format for audit status
+        #[arg(long, value_enum, default_value = "text")]
+        format: OutputFormat,
+
+        /// Optional status filter (pending, generated, approved)
+        #[arg(long)]
+        filter: Option<String>,
+
+        /// Sort order: depth (deepest first) or alpha
+        #[arg(long, default_value = "depth", value_parser = ["depth", "alpha"])]
+        order: String,
+    },
+
+    /// Update audit metadata for files
+    Update {
+        /// Files to update
+        #[arg(required = true)]
+        files: Vec<String>,
+
+        /// New status (pending, generated, approved)
+        #[arg(long, default_value = "generated")]
+        status: String,
+
+        /// Auditor name
+        #[arg(long)]
+        auditor: Option<String>,
+
+        /// Blog path associated with generated content
+        #[arg(long)]
+        blog_path: Option<String>,
+    },
+
+    /// Mark files as approved
+    Approve {
+        /// Files to approve
+        #[arg(required = true)]
+        files: Vec<String>,
+
+        /// Approver identity
+        #[arg(long, default_value = "human")]
+        approved_by: String,
+    },
+
+    /// Reset files to pending status
+    Reset {
+        /// Files to reset
+        #[arg(required = true)]
+        files: Vec<String>,
+    },
+
+    /// Reconcile manifest with filesystem state
+    Sync,
 }
 
 #[derive(Subcommand)]
