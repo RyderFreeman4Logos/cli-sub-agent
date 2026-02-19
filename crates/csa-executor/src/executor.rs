@@ -7,7 +7,7 @@ use csa_process::{ExecutionResult, StreamMode};
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
 use crate::model_spec::{ModelSpec, ThinkingBudget};
@@ -23,6 +23,7 @@ pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 pub struct ExecuteOptions {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub output_spool: Option<PathBuf>,
     pub lean_mode: bool,
     /// Optional resource sandbox config (cgroup/rlimit limits).
     /// When `Some`, the spawned tool process will be wrapped in resource isolation.
@@ -50,6 +51,7 @@ impl ExecuteOptions {
         Self {
             stream_mode,
             idle_timeout_seconds,
+            output_spool: None,
             lean_mode: false,
             sandbox: None,
         }
@@ -64,6 +66,12 @@ impl ExecuteOptions {
     /// Set sandbox context for resource isolation.
     pub fn with_sandbox(mut self, sandbox: SandboxContext) -> Self {
         self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Set output spool file path for incremental/final output persistence.
+    pub fn with_output_spool(mut self, output_spool: PathBuf) -> Self {
+        self.output_spool = Some(output_spool);
         self
     }
 }
@@ -301,6 +309,7 @@ impl Executor {
         let transport_options = TransportOptions {
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
+            output_spool: options.output_spool.as_deref(),
             lean_mode: options.lean_mode,
             sandbox: sandbox_transport.as_ref(),
         };
