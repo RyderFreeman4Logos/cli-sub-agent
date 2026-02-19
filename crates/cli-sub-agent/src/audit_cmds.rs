@@ -119,6 +119,7 @@ pub(crate) fn handle_audit_approve(files: Vec<String>, approved_by: String) -> R
     let path = manifest_path(&root);
     let mut manifest = io::load(&path)?;
     let approved_at = Utc::now().to_rfc3339();
+    let files = expand_file_args(&files, &manifest, &root)?;
     let approved_count = files.len();
 
     for raw in files {
@@ -147,6 +148,7 @@ pub(crate) fn handle_audit_update(
     let root = current_root()?;
     let path = manifest_path(&root);
     let mut manifest = io::load(&path)?;
+    let files = expand_file_args(&files, &manifest, &root)?;
     let updated_count = files.len();
 
     for raw in files {
@@ -280,6 +282,54 @@ fn scan_and_hash(root: &Path, ignores: &[String]) -> Result<BTreeMap<String, Str
         current.insert(key, hash_value);
     }
     Ok(current)
+}
+
+/// Returns `true` if the string contains glob metacharacters (`*`, `?`, `[`).
+fn is_glob_pattern(s: &str) -> bool {
+    s.contains('*') || s.contains('?') || s.contains('[')
+}
+
+/// Expand file arguments that may contain glob patterns against manifest keys.
+///
+/// Arguments containing glob metacharacters are matched against the manifest's
+/// file keys (relative paths). Non-glob arguments pass through unchanged.
+/// Returns an error if a glob pattern matches zero files in the manifest.
+fn expand_file_args(
+    args: &[String],
+    manifest: &AuditManifest,
+    _project_root: &Path,
+) -> Result<Vec<String>> {
+    let mut expanded = Vec::new();
+    // Use literal separator so `*` does not cross `/` boundaries,
+    // while `**` still matches across directories.
+    let match_opts = glob::MatchOptions {
+        require_literal_separator: true,
+        ..Default::default()
+    };
+
+    for arg in args {
+        if is_glob_pattern(arg) {
+            let pattern = glob::Pattern::new(arg)
+                .with_context(|| format!("Invalid glob pattern: {arg}"))?;
+
+            let matched: Vec<String> = manifest
+                .files
+                .keys()
+                .filter(|key| pattern.matches_with(key, match_opts))
+                .cloned()
+                .collect();
+
+            if matched.is_empty() {
+                bail!("Glob pattern '{arg}' matched zero files in the audit manifest");
+            }
+
+            expanded.extend(matched);
+        } else {
+            expanded.push(arg.clone());
+        }
+    }
+
+    Ok(expanded)
 }
 
 fn resolve_manifest_key(raw: &str, root: &Path) -> Result<String> {
@@ -701,5 +751,114 @@ mod tests {
 
         // Verify summary includes blogs_exist.
         assert_eq!(payload["summary"]["blogs_exist"], serde_json::json!(1));
+    }
+
+    /// Helper to create a manifest with a known set of file keys for glob tests.
+    fn manifest_with_keys(keys: &[&str]) -> AuditManifest {
+        let mut manifest = AuditManifest::new("/tmp/test-root".to_string());
+        for key in keys {
+            manifest.files.insert(
+                key.to_string(),
+                FileEntry {
+                    hash: format!("sha256:{key}"),
+                    audit_status: AuditStatus::Pending,
+                    blog_path: None,
+                    auditor: None,
+                    approved_by: None,
+                    approved_at: None,
+                },
+            );
+        }
+        manifest
+    }
+
+    #[test]
+    fn test_expand_file_args_glob_src_double_star() {
+        let manifest = manifest_with_keys(&[
+            "src/main.rs",
+            "src/lib.rs",
+            "src/nested/deep.rs",
+            "tests/integration.rs",
+            "Cargo.toml",
+        ]);
+        let root = PathBuf::from("/tmp/test-root");
+        let args = vec!["src/**".to_string()];
+
+        let result = expand_file_args(&args, &manifest, &root).unwrap();
+        assert!(result.contains(&"src/main.rs".to_string()));
+        assert!(result.contains(&"src/lib.rs".to_string()));
+        assert!(result.contains(&"src/nested/deep.rs".to_string()));
+        assert!(!result.contains(&"tests/integration.rs".to_string()));
+        assert!(!result.contains(&"Cargo.toml".to_string()));
+    }
+
+    #[test]
+    fn test_expand_file_args_glob_star_rs() {
+        let manifest = manifest_with_keys(&[
+            "main.rs",
+            "lib.rs",
+            "src/nested.rs",
+            "Cargo.toml",
+        ]);
+        let root = PathBuf::from("/tmp/test-root");
+        let args = vec!["*.rs".to_string()];
+
+        let result = expand_file_args(&args, &manifest, &root).unwrap();
+        // `*.rs` should match top-level .rs files only (no path separators).
+        assert!(result.contains(&"main.rs".to_string()));
+        assert!(result.contains(&"lib.rs".to_string()));
+        // Nested paths contain '/' so `*.rs` (without `**`) should NOT match them.
+        assert!(!result.contains(&"src/nested.rs".to_string()));
+    }
+
+    #[test]
+    fn test_expand_file_args_glob_zero_matches_is_error() {
+        let manifest = manifest_with_keys(&["src/main.rs", "src/lib.rs"]);
+        let root = PathBuf::from("/tmp/test-root");
+        let args = vec!["nonexistent/**".to_string()];
+
+        let result = expand_file_args(&args, &manifest, &root);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("matched zero files"));
+    }
+
+    #[test]
+    fn test_expand_file_args_non_glob_passthrough() {
+        let manifest = manifest_with_keys(&["src/main.rs"]);
+        let root = PathBuf::from("/tmp/test-root");
+        let args = vec!["src/main.rs".to_string(), "some/other/path.rs".to_string()];
+
+        let result = expand_file_args(&args, &manifest, &root).unwrap();
+        // Non-glob arguments pass through unchanged (not validated here).
+        assert_eq!(result, vec!["src/main.rs", "some/other/path.rs"]);
+    }
+
+    #[test]
+    fn test_expand_file_args_mixed_glob_and_literal() {
+        let manifest = manifest_with_keys(&[
+            "src/main.rs",
+            "src/lib.rs",
+            "Cargo.toml",
+        ]);
+        let root = PathBuf::from("/tmp/test-root");
+        let args = vec!["Cargo.toml".to_string(), "src/*".to_string()];
+
+        let result = expand_file_args(&args, &manifest, &root).unwrap();
+        // Literal first, then glob-expanded entries.
+        assert_eq!(result[0], "Cargo.toml");
+        assert!(result.contains(&"src/main.rs".to_string()));
+        assert!(result.contains(&"src/lib.rs".to_string()));
+        assert_eq!(result.len(), 3);
+    }
+
+    #[test]
+    fn test_is_glob_pattern() {
+        assert!(is_glob_pattern("src/**"));
+        assert!(is_glob_pattern("*.rs"));
+        assert!(is_glob_pattern("src/[ab].rs"));
+        assert!(is_glob_pattern("src/??.rs"));
+        assert!(!is_glob_pattern("src/main.rs"));
+        assert!(!is_glob_pattern("Cargo.toml"));
     }
 }
