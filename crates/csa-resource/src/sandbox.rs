@@ -58,10 +58,13 @@ fn has_cgroup_v2() -> bool {
 
 /// Check whether `systemd-run --user --scope` is functional.
 ///
-/// Uses `--dry-run` (systemd >= 236) so nothing is actually created.
+/// Runs a trivial command (`/bin/true`) inside a transient scope to verify
+/// that the systemd user instance is available and scope creation works.
+/// Previously used `--dry-run` which requires systemd >= 253 (not 236 as
+/// documented) and silently fails on older versions like Debian 12 (systemd 252).
 fn has_systemd_user_scope() -> bool {
     Command::new("systemd-run")
-        .args(["--user", "--scope", "--dry-run", "true"])
+        .args(["--user", "--scope", "--quiet", "/bin/true"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
