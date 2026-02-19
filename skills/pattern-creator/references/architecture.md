@@ -12,7 +12,7 @@ patterns/<name>/
 │   ├── [skill] name, version
 │   └── [agent] tier, max_turns, token_budget, tools, skip_context, extra_context
 │
-├── plan.toml                     # Machine-readable step/variable manifest
+├── workflow.toml                  # Machine-readable step/variable manifest
 │   ├── [plan] name, description
 │   ├── [[plan.variables]]        # All ${VAR} used in PATTERN.md
 │   └── [[plan.steps]]            # Structured step definitions

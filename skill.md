@@ -514,15 +514,15 @@ csa gc --dry-run                        # Preview garbage collection
 
 ```bash
 weave compile PATTERN.md                # Compile to execution plan
-weave compile PATTERN.md -o plan.toml   # Compile to file
+weave compile PATTERN.md -o workflow.toml   # Compile to file
 weave install user/repo                 # Install skill from GitHub
 weave install --path ./local-skill      # Install from local path
 weave lock                              # Generate lockfile
 weave update                            # Update all dependencies
 weave audit                             # Check consistency
 weave check --fix                       # Fix broken symlinks
-weave visualize plan.toml               # ASCII workflow diagram
-weave visualize plan.toml --mermaid     # Mermaid flowchart
+weave visualize workflow.toml               # ASCII workflow diagram
+weave visualize workflow.toml --mermaid     # Mermaid flowchart
 ```
 
 ---

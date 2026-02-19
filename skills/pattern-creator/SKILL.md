@@ -1,6 +1,6 @@
 ---
 name: pattern-creator
-description: "Guide for creating CSA patterns — composable, auditable workflow definitions with companion skill entry points. Use when users want to create a new pattern, convert an existing skill into a pattern, or understand pattern architecture (PATTERN.md, companion skill, .skill.toml, plan.toml, weave linking, installation scope)."
+description: "Guide for creating CSA patterns — composable, auditable workflow definitions with companion skill entry points. Use when users want to create a new pattern, convert an existing skill into a pattern, or understand pattern architecture (PATTERN.md, companion skill, .skill.toml, workflow.toml, weave linking, installation scope)."
 ---
 
 # Pattern Creator
@@ -64,7 +64,7 @@ Create the directory structure:
 patterns/<name>/
 ├── PATTERN.md              # Workflow definition (TOML frontmatter + steps)
 ├── .skill.toml             # Agent config (tier, tools, token_budget)
-├── plan.toml               # Machine-readable step+variable manifest
+├── workflow.toml            # Machine-readable step+variable manifest
 └── skills/
     └── <name>/
         └── SKILL.md        # Companion skill (YAML frontmatter, entry point)
@@ -97,7 +97,7 @@ max_turns = 30                 # advisory, not enforced
 tools = [{ tool = "auto" }]    # or explicit [{ tool = "codex" }, { tool = "claude-code" }]
 ```
 
-### Step 6: Write plan.toml
+### Step 6: Write workflow.toml
 
 ```toml
 [plan]
@@ -156,4 +156,4 @@ resolver follows the companion skill's actual directory name back to the pattern
 | `PATTERN.md` | TOML frontmatter + Markdown | Yes | Workflow definition |
 | `skills/<name>/SKILL.md` | YAML frontmatter + Markdown | Yes | Entry point for Claude Code |
 | `.skill.toml` | TOML | Recommended | Agent config (tier, tools, budget) |
-| `plan.toml` | TOML | Recommended | Machine-readable manifest |
+| `workflow.toml` | TOML | Recommended | Machine-readable manifest |

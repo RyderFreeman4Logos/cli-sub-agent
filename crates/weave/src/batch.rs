@@ -1,4 +1,4 @@
-//! Batch compilation: walk a directory tree for `plan.toml` sources and compile
+//! Batch compilation: walk a directory tree for `workflow.toml` sources and compile
 //! each one, printing per-pattern progress and a final summary.
 
 use std::path::{Path, PathBuf};
@@ -24,19 +24,19 @@ pub struct PatternResult {
     pub error: Option<String>,
 }
 
-/// Recursively find all `plan.toml` files under `root`, compile each one via
+/// Recursively find all `workflow.toml` files under `root`, compile each one via
 /// the existing parse-then-compile pipeline, and return an aggregated summary.
 ///
 /// For each skill markdown file compiled, progress is printed to stderr:
 /// ```text
-/// [1/5] patterns/commit/plan.toml ... OK
-/// [2/5] patterns/debate/plan.toml ... FAILED: <reason>
+/// [1/5] patterns/commit/workflow.toml ... OK
+/// [2/5] patterns/debate/workflow.toml ... FAILED: <reason>
 /// ```
 pub fn compile_all(root: &Path) -> Result<BatchSummary> {
-    let plans = find_plan_tomls(root)?;
+    let plans = find_workflow_tomls(root)?;
 
     if plans.is_empty() {
-        eprintln!("no plan.toml files found under {}", root.display());
+        eprintln!("no workflow.toml files found under {}", root.display());
         return Ok(BatchSummary {
             ok: 0,
             failed: 0,
@@ -82,15 +82,15 @@ pub fn compile_all(root: &Path) -> Result<BatchSummary> {
     })
 }
 
-/// Find all `plan.toml` files under `root`, sorted for deterministic output.
-fn find_plan_tomls(root: &Path) -> Result<Vec<PathBuf>> {
+/// Find all `workflow.toml` files under `root`, sorted for deterministic output.
+fn find_workflow_tomls(root: &Path) -> Result<Vec<PathBuf>> {
     let mut plans = Vec::new();
     walk_dir(root, &mut plans)?;
     plans.sort();
     Ok(plans)
 }
 
-/// Recursive directory walker that collects paths named `plan.toml`.
+/// Recursive directory walker that collects paths named `workflow.toml`.
 fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     let entries = std::fs::read_dir(dir)
         .with_context(|| format!("failed to read directory {}", dir.display()))?;
@@ -100,7 +100,7 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
         let path = entry.path();
         if path.is_dir() {
             walk_dir(&path, out)?;
-        } else if path.file_name().is_some_and(|n| n == "plan.toml") {
+        } else if path.file_name().is_some_and(|n| n == "workflow.toml") {
             out.push(path);
         }
     }
@@ -108,20 +108,20 @@ fn walk_dir(dir: &Path, out: &mut Vec<PathBuf>) -> Result<()> {
     Ok(())
 }
 
-/// Compile a single `plan.toml` by finding its sibling SKILL.md (or PATTERN.md)
+/// Compile a single `workflow.toml` by finding its sibling SKILL.md (or PATTERN.md)
 /// source, parsing and compiling it, and verifying the TOML round-trips.
 ///
-/// Since `plan.toml` is already the *compiled* output, we validate it by
+/// Since `workflow.toml` is already the *compiled* output, we validate it by
 /// deserializing and re-serializing to ensure structural correctness.
 fn compile_single(plan_path: &Path) -> Result<()> {
-    // Look for a companion skill markdown source next to (or near) plan.toml.
-    // The convention is: patterns/<name>/PATTERN.md compiles to plan.toml in the
-    // same directory, or skills/<name>/SKILL.md.  If a PATTERN.md or SKILL.md
-    // exists we compile from source; otherwise we validate the plan.toml itself.
+    // Look for a companion skill markdown source next to (or near) workflow.toml.
+    // The convention is: patterns/<name>/PATTERN.md compiles to workflow.toml in
+    // the same directory, or skills/<name>/SKILL.md.  If a PATTERN.md or SKILL.md
+    // exists we compile from source; otherwise we validate the workflow.toml itself.
 
     let parent = plan_path
         .parent()
-        .context("plan.toml has no parent directory")?;
+        .context("workflow.toml has no parent directory")?;
 
     // Try PATTERN.md first, then look for SKILL.md in a skills/ subdirectory.
     let source = find_skill_source(parent);
@@ -138,11 +138,11 @@ fn compile_single(plan_path: &Path) -> Result<()> {
             Ok(())
         }
         None => {
-            // No source file found; validate plan.toml structure by deserializing.
+            // No source file found; validate workflow.toml structure by deserializing.
             let content = std::fs::read_to_string(plan_path)
                 .with_context(|| format!("failed to read {}", plan_path.display()))?;
             let _plan = crate::compiler::plan_from_toml(&content)
-                .with_context(|| format!("invalid plan.toml at {}", plan_path.display()))?;
+                .with_context(|| format!("invalid workflow.toml at {}", plan_path.display()))?;
             Ok(())
         }
     }
@@ -191,8 +191,8 @@ Say hello to the world.
 "#
     }
 
-    /// Create a minimal valid plan.toml for testing.
-    fn minimal_plan_toml() -> &'static str {
+    /// Create a minimal valid workflow.toml for testing.
+    fn minimal_workflow_toml() -> &'static str {
         r#"[plan]
 name = "test-plan"
 
@@ -219,7 +219,7 @@ on_fail = "abort"
         let pattern_dir = tmp.path().join("my-pattern");
         fs::create_dir_all(&pattern_dir).unwrap();
         fs::write(pattern_dir.join("PATTERN.md"), minimal_pattern_md()).unwrap();
-        fs::write(pattern_dir.join("plan.toml"), minimal_plan_toml()).unwrap();
+        fs::write(pattern_dir.join("workflow.toml"), minimal_workflow_toml()).unwrap();
 
         let summary = compile_all(tmp.path()).expect("compile_all should succeed");
         assert_eq!(summary.ok, 1);
@@ -229,12 +229,12 @@ on_fail = "abort"
     }
 
     #[test]
-    fn compile_all_validates_plan_toml_without_source() {
+    fn compile_all_validates_workflow_toml_without_source() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let pattern_dir = tmp.path().join("no-source");
         fs::create_dir_all(&pattern_dir).unwrap();
-        // Only plan.toml, no PATTERN.md or SKILL.md.
-        fs::write(pattern_dir.join("plan.toml"), minimal_plan_toml()).unwrap();
+        // Only workflow.toml, no PATTERN.md or SKILL.md.
+        fs::write(pattern_dir.join("workflow.toml"), minimal_workflow_toml()).unwrap();
 
         let summary = compile_all(tmp.path()).expect("compile_all should succeed");
         assert_eq!(summary.ok, 1);
@@ -246,7 +246,11 @@ on_fail = "abort"
         let tmp = tempfile::tempdir().expect("tempdir");
         let pattern_dir = tmp.path().join("broken");
         fs::create_dir_all(&pattern_dir).unwrap();
-        fs::write(pattern_dir.join("plan.toml"), "this is not valid toml [").unwrap();
+        fs::write(
+            pattern_dir.join("workflow.toml"),
+            "this is not valid toml [",
+        )
+        .unwrap();
 
         let summary = compile_all(tmp.path()).expect("compile_all should succeed");
         assert_eq!(summary.ok, 0);
@@ -263,12 +267,12 @@ on_fail = "abort"
         let good = tmp.path().join("good");
         fs::create_dir_all(&good).unwrap();
         fs::write(good.join("PATTERN.md"), minimal_pattern_md()).unwrap();
-        fs::write(good.join("plan.toml"), minimal_plan_toml()).unwrap();
+        fs::write(good.join("workflow.toml"), minimal_workflow_toml()).unwrap();
 
         // Bad pattern.
         let bad = tmp.path().join("bad");
         fs::create_dir_all(&bad).unwrap();
-        fs::write(bad.join("plan.toml"), "not valid").unwrap();
+        fs::write(bad.join("workflow.toml"), "not valid").unwrap();
 
         let summary = compile_all(tmp.path()).expect("compile_all should succeed");
         assert_eq!(summary.ok, 1);
@@ -277,17 +281,17 @@ on_fail = "abort"
     }
 
     #[test]
-    fn find_plan_tomls_returns_sorted_paths() {
+    fn find_workflow_tomls_returns_sorted_paths() {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let z_dir = tmp.path().join("z-pattern");
         let a_dir = tmp.path().join("a-pattern");
         fs::create_dir_all(&z_dir).unwrap();
         fs::create_dir_all(&a_dir).unwrap();
-        fs::write(z_dir.join("plan.toml"), "").unwrap();
-        fs::write(a_dir.join("plan.toml"), "").unwrap();
+        fs::write(z_dir.join("workflow.toml"), "").unwrap();
+        fs::write(a_dir.join("workflow.toml"), "").unwrap();
 
-        let plans = find_plan_tomls(tmp.path()).expect("find_plan_tomls should succeed");
+        let plans = find_workflow_tomls(tmp.path()).expect("find_workflow_tomls should succeed");
         assert_eq!(plans.len(), 2);
         // "a-pattern" should come before "z-pattern".
         assert!(plans[0] < plans[1]);
