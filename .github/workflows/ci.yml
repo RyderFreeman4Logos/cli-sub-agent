@@ -58,6 +58,12 @@ jobs:
             echo "::error::Version ($current) matches main. Run 'just bump-patch' before pushing."
             exit 1
           fi
+          # Ensure version is strictly greater than main (no downgrades).
+          highest=$(printf '%s\n%s\n' "$main_ver" "$current" | sort -V | tail -1)
+          if [ "$highest" != "$current" ]; then
+            echo "::error::Version ($current) is lower than main ($main_ver). Version must be incremented, not decremented."
+            exit 1
+          fi
 
   test:
     name: Test
