@@ -4,6 +4,7 @@ pub mod acp;
 pub mod config;
 mod config_merge;
 mod config_runtime;
+pub mod gc;
 pub mod global;
 pub mod init;
 pub mod mcp;
@@ -17,6 +18,7 @@ pub use config::{
     ToolConfig, ToolResourceProfile, ToolRestrictions,
 };
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
+pub use gc::GcConfig;
 pub use global::{GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig};

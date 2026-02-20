@@ -565,6 +565,9 @@ idle_timeout_seconds = 300
 slot_wait_timeout_seconds = 300
 stdin_write_timeout_seconds = 30
 termination_grace_period_seconds = 5
+[gc]
+transcript_max_age_days = 30
+transcript_max_size_mb = 500
 [acp]
 init_timeout_seconds = 60
 # [tools.codex]
