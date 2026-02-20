@@ -54,7 +54,11 @@ impl WeaveLock {
     }
 
     /// Load from `{project_dir}/weave.lock`, creating a default if missing.
-    pub fn load_or_init(project_dir: &Path, csa_version: &str, weave_version: &str) -> Result<Self> {
+    pub fn load_or_init(
+        project_dir: &Path,
+        csa_version: &str,
+        weave_version: &str,
+    ) -> Result<Self> {
         match Self::load(project_dir)? {
             Some(lock) => Ok(lock),
             None => {
@@ -80,8 +84,7 @@ impl WeaveLock {
     /// Write atomically to `{project_dir}/weave.lock`.
     pub fn save(&self, project_dir: &Path) -> Result<()> {
         let path = lock_path(project_dir);
-        let content =
-            toml::to_string_pretty(self).context("serializing weave.lock")?;
+        let content = toml::to_string_pretty(self).context("serializing weave.lock")?;
 
         // Atomic write: write to temp file then rename.
         let tmp_path = path.with_extension("lock.tmp");
