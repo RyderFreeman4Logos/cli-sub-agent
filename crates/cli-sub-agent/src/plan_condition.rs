@@ -38,11 +38,19 @@ pub(crate) fn evaluate_condition(condition: &str, vars: &HashMap<String, String>
         }
     }
 
-    // Base case: ${VAR} — substitute and check truthiness
+    // Base case: ${VAR} — substitute and check truthiness.
+    // NOTE: bare variable names (e.g. `has_tests` without `${}`) are NOT
+    // supported.  The weave compiler always emits `${VAR}` form.
     let resolved = substitute_vars(trimmed, vars);
 
     // If the resolved string still contains ${...}, the var was not provided → false
     if resolved.contains("${") {
+        return false;
+    }
+
+    // Fail-closed: reject resolved strings that still look like malformed
+    // expressions — leftover operators or unbalanced parentheses.
+    if looks_malformed(&resolved) {
         return false;
     }
 
@@ -90,6 +98,11 @@ fn split_top_level_and(expr: &str) -> Option<Vec<&str>> {
         return None;
     }
 
+    // Fail-closed: unbalanced parentheses across the whole expression
+    if depth != 0 {
+        return None;
+    }
+
     parts.push(&expr[start..]);
     Some(parts)
 }
@@ -121,6 +134,37 @@ fn strip_balanced_parens(expr: &str) -> Option<&str> {
         return None;
     }
     Some(&expr[1..expr.len() - 1])
+}
+
+/// Return `true` when the resolved string looks like a malformed expression
+/// rather than a simple value — unbalanced parentheses or leftover operators.
+fn looks_malformed(s: &str) -> bool {
+    let trimmed = s.trim();
+    // Leftover conjunction/disjunction operators
+    if trimmed.contains(" && ") || trimmed.contains(" || ") {
+        return true;
+    }
+    // Trailing or leading operator fragments
+    if trimmed.starts_with("&& ")
+        || trimmed.starts_with("|| ")
+        || trimmed.ends_with(" &&")
+        || trimmed.ends_with(" ||")
+    {
+        return true;
+    }
+    // Unbalanced parentheses
+    let mut depth: i32 = 0;
+    for b in trimmed.bytes() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth < 0 {
+            return true;
+        }
+    }
+    depth != 0
 }
 
 /// Substitute `${VAR}` placeholders in a string.
@@ -259,6 +303,40 @@ mod tests {
         assert!(!evaluate_condition("((${A})", &vars));
         // Unresolved variable reference → false
         assert!(!evaluate_condition("${DOES_NOT_EXIST}", &vars));
+    }
+
+    #[test]
+    fn unbalanced_parens_with_set_vars_is_false() {
+        // P1-1: Unbalanced parens must fail-closed even when variables resolve
+        let mut vars = HashMap::new();
+        vars.insert("A".into(), "yes".into());
+        // Extra opening paren
+        assert!(!evaluate_condition("((${A})", &vars));
+        // Extra closing paren
+        assert!(!evaluate_condition("(${A}))", &vars));
+        // Unbalanced in conjunction
+        assert!(!evaluate_condition("((${A}) && (${A})", &vars));
+    }
+
+    #[test]
+    fn trailing_operator_is_false() {
+        // P1-1: Trailing && should fail-closed
+        let mut vars = HashMap::new();
+        vars.insert("A".into(), "yes".into());
+        assert!(!evaluate_condition("(${A}) && ", &vars));
+        assert!(!evaluate_condition(" && (${A})", &vars));
+    }
+
+    #[test]
+    fn malformed_with_set_vars_fails_closed() {
+        // P1-2: Verify fail-closed exercises with *set* variables, not just unset
+        let mut vars = HashMap::new();
+        vars.insert("A".into(), "yes".into());
+        vars.insert("B".into(), "true".into());
+        // Leftover operator after substitution
+        assert!(!evaluate_condition("(${A}) && (${B}) && ", &vars));
+        // Unbalanced opening paren with conjunction
+        assert!(!evaluate_condition("((${A}) && (${B})", &vars));
     }
 
     #[test]
