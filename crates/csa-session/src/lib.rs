@@ -6,6 +6,7 @@ pub mod genealogy;
 pub mod git;
 pub mod manager;
 pub mod metadata;
+pub mod redact;
 pub mod result;
 pub mod state;
 pub mod validate;
@@ -19,6 +20,7 @@ pub use state::{
 pub use metadata::SessionMetadata;
 
 pub use event_writer::{EventWriteStats, EventWriter};
+pub use redact::redact_event;
 pub use result::{SessionArtifact, SessionResult};
 
 // Re-export manager functions

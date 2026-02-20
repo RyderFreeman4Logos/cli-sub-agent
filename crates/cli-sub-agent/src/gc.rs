@@ -2,11 +2,14 @@ use anyhow::Result;
 use std::fs;
 use tracing::{info, warn};
 
-use csa_config::GlobalConfig;
+use csa_config::{GcConfig, GlobalConfig};
 use csa_core::types::OutputFormat;
 use csa_session::{
     PhaseEvent, delete_session, get_session_dir, get_session_root, list_sessions, save_session_in,
 };
+
+mod transcript;
+use transcript::{cleanup_project_transcripts, load_gc_config_for_sessions};
 
 /// Default age threshold (in days) for retiring stale Active sessions.
 const RETIRE_AFTER_DAYS: i64 = 7;
@@ -19,6 +22,7 @@ pub(crate) fn handle_gc(
     let project_root = crate::pipeline::determine_project_root(None)?;
     let session_root = get_session_root(&project_root)?;
     let sessions = list_sessions(&project_root, None)?;
+    let gc_config = GcConfig::load_for_project(&project_root)?;
     let now = chrono::Utc::now();
 
     let mut stale_locks_removed = 0;
@@ -181,6 +185,8 @@ pub(crate) fn handle_gc(
         }
     }
 
+    let transcript_stats = cleanup_project_transcripts(&session_root, gc_config, dry_run);
+
     let mut stale_slots_cleaned = 0;
     if let Ok(slots_dir) = GlobalConfig::slots_dir() {
         if slots_dir.exists() {
@@ -233,6 +239,8 @@ pub(crate) fn handle_gc(
                 "empty_sessions_removed": empty_sessions_removed,
                 "orphan_dirs_removed": orphan_dirs_removed,
                 "sessions_retired": sessions_retired,
+                "transcripts_removed": transcript_stats.files_removed,
+                "transcript_bytes_reclaimed": transcript_stats.bytes_reclaimed,
                 "stale_slots_cleaned": stale_slots_cleaned,
             });
             if max_age_days.is_some() {
@@ -265,6 +273,10 @@ pub(crate) fn handle_gc(
                 "{}  Orphan directories removed: {}",
                 prefix, orphan_dirs_removed
             );
+            eprintln!(
+                "{}  Transcript files removed: {} ({} bytes)",
+                prefix, transcript_stats.files_removed, transcript_stats.bytes_reclaimed
+            );
             eprintln!("{}  Stale slots cleaned: {}", prefix, stale_slots_cleaned);
         }
     }
@@ -296,6 +308,8 @@ pub(crate) fn handle_gc_global(
     let mut total_orphan_dirs = 0u64;
     let mut total_expired_sessions = 0u64;
     let mut total_sessions_retired = 0u64;
+    let mut total_transcripts_removed = 0u64;
+    let mut total_transcript_bytes_reclaimed = 0u64;
     let mut projects_failed = 0u64;
 
     if dry_run {
@@ -504,6 +518,14 @@ pub(crate) fn handle_gc_global(
                 }
             }
         }
+
+        let project_gc_config = load_gc_config_for_sessions(session_root, &sessions);
+        let transcript_stats =
+            cleanup_project_transcripts(session_root, project_gc_config, dry_run);
+        total_transcripts_removed =
+            total_transcripts_removed.saturating_add(transcript_stats.files_removed);
+        total_transcript_bytes_reclaimed =
+            total_transcript_bytes_reclaimed.saturating_add(transcript_stats.bytes_reclaimed);
     }
 
     let mut stale_slots_cleaned = 0u64;
@@ -561,6 +583,8 @@ pub(crate) fn handle_gc_global(
                 "empty_sessions_removed": total_empty_sessions,
                 "orphan_dirs_removed": total_orphan_dirs,
                 "sessions_retired": total_sessions_retired,
+                "transcripts_removed": total_transcripts_removed,
+                "transcript_bytes_reclaimed": total_transcript_bytes_reclaimed,
                 "stale_slots_cleaned": stale_slots_cleaned,
             });
             if max_age_days.is_some() {
@@ -596,6 +620,10 @@ pub(crate) fn handle_gc_global(
             eprintln!(
                 "{}  Orphan directories removed: {}",
                 prefix, total_orphan_dirs
+            );
+            eprintln!(
+                "{}  Transcript files removed: {} ({} bytes)",
+                prefix, total_transcripts_removed, total_transcript_bytes_reclaimed
             );
             eprintln!("{}  Stale slots cleaned: {}", prefix, stale_slots_cleaned);
         }

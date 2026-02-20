@@ -17,7 +17,10 @@ pub(crate) fn persist_if_enabled(
 
     let transcript_rel_path = "output/acp-events.jsonl";
     let transcript_path = session_dir.join(transcript_rel_path);
-    let mut event_writer = EventWriter::new(&transcript_path);
+    let redaction_enabled = config
+        .map(|cfg| cfg.session.transcript_redaction)
+        .unwrap_or(true);
+    let mut event_writer = EventWriter::with_redaction(&transcript_path, redaction_enabled);
     event_writer.append_all(transport_result.events.iter());
     event_writer.flush();
 
@@ -64,6 +67,7 @@ mod tests {
             acp: Default::default(),
             session: SessionConfig {
                 transcript_enabled: enabled,
+                transcript_redaction: true,
             },
             tools: HashMap::new(),
             review: None,

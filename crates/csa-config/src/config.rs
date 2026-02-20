@@ -54,16 +54,28 @@ pub struct TierConfig {
     pub max_turns: Option<u32>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionConfig {
     /// Persist ACP transcript events to `output/acp-events.jsonl` when enabled.
     #[serde(default)]
     pub transcript_enabled: bool,
+    /// Redact sensitive content before writing transcript events to disk.
+    #[serde(default = "default_true")]
+    pub transcript_redaction: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            transcript_enabled: false,
+            transcript_redaction: true,
+        }
+    }
 }
 
 impl SessionConfig {
     pub fn is_default(&self) -> bool {
-        !self.transcript_enabled
+        !self.transcript_enabled && self.transcript_redaction
     }
 }
 
@@ -542,72 +554,39 @@ impl ProjectConfig {
 
     /// Generate a commented template for user-level config.
     pub fn user_config_template() -> String {
-        r#"# CSA User-Level Configuration
-# Location: ~/.config/cli-sub-agent/config.toml
-#
-# This file provides default tiers, tool settings, and aliases
-# that apply across all CSA projects unless overridden by
-# project-level .csa/config.toml.
-
+        r#"# CSA User-Level Configuration (~/.config/cli-sub-agent/config.toml)
 schema_version = 1
-
 [session]
-# Opt-in: persist ACP events to output/acp-events.jsonl.
 transcript_enabled = false
-
+transcript_redaction = true
 [resources]
-# Minimum combined free memory (physical + swap) in MB.
 min_free_memory_mb = 4096
-# Kill child processes only when no streamed output appears for N seconds.
 idle_timeout_seconds = 300
-# Maximum seconds to wait for a free slot when running with --wait.
 slot_wait_timeout_seconds = 300
-# Maximum seconds to write prompt payload to child stdin.
 stdin_write_timeout_seconds = 30
-# Grace period between SIGTERM and SIGKILL for forced shutdown.
 termination_grace_period_seconds = 5
-
+[gc]
+transcript_max_age_days = 30
+transcript_max_size_mb = 500
 [acp]
-# Timeout for ACP initialize/session setup calls.
 init_timeout_seconds = 60
-
-# Tool configuration defaults.
 # [tools.codex]
 # enabled = true
-
 # [tools.gemini-cli]
 # enabled = true
-
-# Tier definitions.
-# Uncomment and customize for your environment.
-#
 # [tiers.tier-1-quick]
 # description = "Quick tasks: fast models"
-# models = [
-#     "gemini-cli/google/gemini-2.5-flash/low",
-# ]
-#
+# models = ["gemini-cli/google/gemini-2.5-flash/low"]
 # [tiers.tier-2-standard]
 # description = "Standard tasks: balanced models"
-# models = [
-#     "codex/openai/o3/medium",
-#     "gemini-cli/google/gemini-2.5-pro/medium",
-# ]
-#
+# models = ["codex/openai/o3/medium", "gemini-cli/google/gemini-2.5-pro/medium"]
 # [tiers.tier-3-heavy]
 # description = "Complex tasks: strongest models"
-# models = [
-#     "claude-code/anthropic/claude-sonnet-4-5-20250929/high",
-#     "codex/openai/o3/high",
-# ]
-
-# Tier mapping: task_type -> tier_name
+# models = ["claude-code/anthropic/claude-sonnet-4-5-20250929/high", "codex/openai/o3/high"]
 # [tier_mapping]
 # default = "tier-2-standard"
 # quick = "tier-1-quick"
 # complex = "tier-3-heavy"
-
-# Aliases: shorthand -> full model spec
 # [aliases]
 # fast = "gemini-cli/google/gemini-2.5-flash/low"
 # smart = "codex/openai/o3/high"

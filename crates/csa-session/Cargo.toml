@@ -17,6 +17,7 @@ ulid.workspace = true
 directories.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
