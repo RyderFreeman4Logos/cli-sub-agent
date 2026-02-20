@@ -367,6 +367,13 @@ impl Executor {
     }
 
     /// Build command for execute_in() legacy path.
+    ///
+    /// For Codex legacy CLI, this translates `CSA_SUPPRESS_NOTIFY=1` from
+    /// `extra_env` into `-c notify=[]`, because Codex does not consume that
+    /// environment variable directly.
+    ///
+    /// TODO(acp-notify): ACP `session/new` currently has no dedicated notify
+    /// option, so this suppression path only applies to legacy CLI execution.
     pub(crate) fn build_execute_in_command(
         &self,
         prompt: &str,
@@ -384,6 +391,11 @@ impl Executor {
         }
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
+        if matches!(self, Self::Codex { .. }) {
+            if let Some(env) = extra_env {
+                cmd.args(Self::codex_notify_suppression_args(env));
+            }
+        }
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
         if matches!(prompt_transport, PromptTransport::Argv) {
             self.append_prompt_args(&mut cmd, prompt);
@@ -607,6 +619,13 @@ impl Executor {
                         .arg(budget.token_count().to_string());
                 }
             }
+        }
+    }
+
+    fn codex_notify_suppression_args(env: &HashMap<String, String>) -> Vec<String> {
+        match env.get("CSA_SUPPRESS_NOTIFY").map(String::as_str) {
+            Some("1") => vec!["-c".to_string(), "notify=[]".to_string()],
+            _ => Vec::new(),
         }
     }
 

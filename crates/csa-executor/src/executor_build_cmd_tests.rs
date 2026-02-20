@@ -821,3 +821,87 @@ fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
 
 // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not executor)
 // based on per-tool config. See pipeline.rs suppress_notify logic.
+// TODO(acp-notify): ACP path currently propagates CSA_SUPPRESS_NOTIFY env only;
+// codex notify suppression (`-c notify=[]`) is covered here for legacy execute_in.
+
+#[test]
+fn test_build_execute_in_command_codex_notify_suppressed() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let mut extra = HashMap::new();
+    extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        args.contains(&"-c".to_string()),
+        "Codex should include -c when notify is suppressed"
+    );
+    assert!(
+        args.contains(&"notify=[]".to_string()),
+        "Codex should inject -c notify=[] when CSA_SUPPRESS_NOTIFY=1"
+    );
+}
+
+#[test]
+fn test_build_execute_in_command_codex_notify_not_suppressed() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let mut extra = HashMap::new();
+    extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "0".to_string());
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.contains(&"notify=[]".to_string()),
+        "Codex should not inject notify suppression when CSA_SUPPRESS_NOTIFY!=1"
+    );
+}
+
+#[test]
+fn test_codex_dual_c_flags_coexist() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: Some(ThinkingBudget::Low),
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let mut extra = HashMap::new();
+    extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    let c_flag_count = args.iter().filter(|arg| arg.as_str() == "-c").count();
+    assert_eq!(
+        c_flag_count, 2,
+        "Codex should include two -c flags when effort and notify suppression coexist"
+    );
+    assert!(
+        args.contains(&"model_reasoning_effort=low".to_string()),
+        "Codex should include thinking budget effort arg"
+    );
+    assert!(
+        args.contains(&"notify=[]".to_string()),
+        "Codex should include notify suppression arg"
+    );
+}
