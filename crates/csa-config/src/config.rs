@@ -233,7 +233,7 @@ fn default_min_mem() -> u64 {
 }
 
 fn default_idle_timeout_seconds() -> u64 {
-    120
+    300
 }
 
 fn default_slot_wait_timeout_seconds() -> u64 {
@@ -539,7 +539,7 @@ schema_version = 1
 # Minimum combined free memory (physical + swap) in MB.
 min_free_memory_mb = 4096
 # Kill child processes only when no streamed output appears for N seconds.
-idle_timeout_seconds = 120
+idle_timeout_seconds = 300
 # Maximum seconds to wait for a free slot when running with --wait.
 slot_wait_timeout_seconds = 300
 # Maximum seconds to write prompt payload to child stdin.

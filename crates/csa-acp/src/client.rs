@@ -122,7 +122,11 @@ impl Client for AcpClient {
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc, time::Instant};
+    use std::{
+        cell::RefCell,
+        rc::Rc,
+        time::{Duration, Instant},
+    };
 
     use agent_client_protocol::{
         ContentBlock, ContentChunk, SessionUpdate, TextContent, ToolCall, ToolCallStatus,
@@ -186,7 +190,9 @@ mod tests {
     #[test]
     fn test_push_event_appends_to_shared_buffer() {
         let events = Rc::new(RefCell::new(Vec::new()));
-        let client = AcpClient::new(Rc::clone(&events), Rc::new(RefCell::new(Instant::now())));
+        let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
+        let before = *last_activity.borrow();
+        let client = AcpClient::new(Rc::clone(&events), Rc::clone(&last_activity));
 
         client.push_event(SessionEvent::Other("payload".to_string()));
 
@@ -196,5 +202,9 @@ mod tests {
             SessionEvent::Other(payload) => assert_eq!(payload, "payload"),
             other => panic!("unexpected stored event: {other:?}"),
         }
+        assert!(
+            *last_activity.borrow() > before,
+            "push_event must refresh last_activity for all session events"
+        );
     }
 }

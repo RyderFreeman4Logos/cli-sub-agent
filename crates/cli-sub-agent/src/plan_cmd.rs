@@ -31,7 +31,9 @@ use crate::plan_display::{print_plan, print_summary};
 
 #[path = "plan_cmd_exec.rs"]
 mod plan_cmd_exec;
-use plan_cmd_exec::{execute_bash_step, execute_csa_step, run_with_heartbeat};
+use plan_cmd_exec::{
+    StepExecutionOutcome, execute_bash_step, execute_csa_step, run_with_heartbeat,
+};
 #[cfg(test)]
 use plan_cmd_exec::{extract_bash_code_block, is_stale_session_error, truncate};
 
@@ -555,7 +557,7 @@ async fn execute_step(
             eprintln!("{} - RETRY {}/{}", label, attempt, max_attempts);
         }
 
-        let outcome = match &target {
+        let execution_result = match &target {
             StepTarget::DirectBash => {
                 run_with_heartbeat(
                     &label,
@@ -585,6 +587,17 @@ async fn execute_step(
                 .await
             }
             StepTarget::WeaveInclude => unreachable!("handled above"),
+        };
+        let outcome = match execution_result {
+            Ok(outcome) => outcome,
+            Err(err) => {
+                error!("{label} - Execution failed: {err}");
+                StepExecutionOutcome {
+                    exit_code: 1,
+                    output: String::new(),
+                    session_id: None,
+                }
+            }
         };
 
         if outcome.exit_code == 0 {

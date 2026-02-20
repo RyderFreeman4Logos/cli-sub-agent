@@ -178,14 +178,15 @@ async fn run_with_heartbeat_returns_success_exit_code() {
         },
         Instant::now(),
     )
-    .await;
+    .await
+    .expect("heartbeat wrapper should return success outcome");
     assert_eq!(outcome.exit_code, 0);
     assert_eq!(outcome.output, "ok");
 }
 
 #[tokio::test]
-async fn run_with_heartbeat_maps_errors_to_exit_code_one() {
-    let outcome = run_with_heartbeat(
+async fn run_with_heartbeat_returns_execution_error() {
+    let result = run_with_heartbeat(
         "[1/heartbeat]",
         async {
             Err::<super::plan_cmd_exec::StepExecutionOutcome, anyhow::Error>(anyhow::anyhow!(
@@ -195,9 +196,11 @@ async fn run_with_heartbeat_maps_errors_to_exit_code_one() {
         Instant::now(),
     )
     .await;
-    assert_eq!(outcome.exit_code, 1);
-    assert!(outcome.output.is_empty());
-    assert!(outcome.session_id.is_none());
+    let err = match result {
+        Ok(_) => panic!("heartbeat wrapper should preserve execution error"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("boom"));
 }
 
 // --- Output capture & forwarding tests ---

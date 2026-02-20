@@ -116,6 +116,7 @@ pub(crate) async fn handle_run(
     no_failover: bool,
     wait: bool,
     idle_timeout: Option<u64>,
+    no_idle_timeout: bool,
     current_depth: u32,
     output_format: OutputFormat,
     stream_mode: csa_process::StreamMode,
@@ -208,8 +209,12 @@ pub(crate) async fn handle_run(
     };
 
     let strategy = tool.unwrap_or(ToolArg::Auto).into_strategy();
-    let idle_timeout_seconds =
-        pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout);
+    let idle_timeout_seconds = if no_idle_timeout {
+        info!("Idle timeout disabled via --no-idle-timeout");
+        u64::MAX
+    } else {
+        pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout)
+    };
 
     // 7. Resolve initial tool based on strategy
     let mut heterogeneous_runtime_fallback_candidates: Vec<ToolName> = Vec::new();

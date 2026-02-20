@@ -98,6 +98,10 @@ pub enum Commands {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         idle_timeout: Option<u64>,
 
+        /// Disable idle-timeout killing (run until process exits or wall-clock timeout fires)
+        #[arg(long, conflicts_with = "idle_timeout")]
+        no_idle_timeout: bool,
+
         /// Force stdout streaming to stderr even in non-TTY/non-Text contexts
         #[arg(long, conflicts_with = "no_stream_stdout")]
         stream_stdout: bool,

@@ -594,12 +594,12 @@ created_at = "2024-01-01T00:00:00Z"
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
 
-    let loaded = ProjectConfig::load(dir.path()).unwrap();
+    let loaded = ProjectConfig::load_with_paths(None, &config_dir.join("config.toml")).unwrap();
     assert!(loaded.is_some());
     let loaded = loaded.unwrap();
 
     assert_eq!(loaded.project.max_recursion_depth, 5);
-    assert_eq!(loaded.resources.idle_timeout_seconds, 120);
+    assert_eq!(loaded.resources.idle_timeout_seconds, 300);
 }
 
 #[test]
