@@ -12,9 +12,23 @@ use weave::package;
 use weave::parser::parse_skill;
 use weave::visualize::{self, VisualizeResult, VisualizeTarget};
 
+/// Build version string combining Cargo.toml version and git describe.
+fn build_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        let cargo_ver = env!("CARGO_PKG_VERSION");
+        let git_desc = env!("WEAVE_GIT_DESCRIBE");
+        if git_desc.is_empty() {
+            cargo_ver.to_string()
+        } else {
+            format!("{cargo_ver} ({git_desc})")
+        }
+    })
+}
+
 /// Weave — skill language compiler and package manager.
 #[derive(Parser)]
-#[command(name = "weave", version, about)]
+#[command(name = "weave", version = build_version(), about)]
 struct Cli {
     /// Output format.
     #[arg(long, default_value = "text", global = true)]
