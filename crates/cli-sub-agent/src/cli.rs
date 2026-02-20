@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand};
+use clap::{ArgGroup, Parser, Subcommand};
 use csa_core::types::{OutputFormat, ToolArg, ToolName};
 
 #[path = "cli_todo.rs"]
@@ -240,6 +240,11 @@ pub enum Commands {
 }
 
 #[derive(clap::Args)]
+#[command(group(
+    ArgGroup::new("review_scope")
+        .args(["diff", "commit", "range", "files"])
+        .multiple(false)
+))]
 pub struct ReviewArgs {
     /// Tool to use for review (defaults to global [review] config or project fallback)
     #[arg(long)]
@@ -258,8 +263,8 @@ pub struct ReviewArgs {
     pub diff: bool,
 
     /// Compare against branch (default: main)
-    #[arg(long, default_value = "main")]
-    pub branch: String,
+    #[arg(long, conflicts_with_all = ["diff", "commit", "range", "files"])]
+    pub branch: Option<String>,
 
     /// Review specific commit
     #[arg(long)]
