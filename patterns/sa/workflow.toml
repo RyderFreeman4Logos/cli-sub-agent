@@ -1,6 +1,6 @@
 [workflow]
 name = "sa"
-description = "Three-tier recursive delegation: Tier 0 dispatches, Tier 1 plans/implements, Tier 2 explores/fixes"
+description = "Three-layer recursive delegation: Layer 0 dispatches, Layer 1 plans/implements, Layer 2 explores/fixes"
 
 [[workflow.variables]]
 name = "IMPL_FILE"
@@ -42,7 +42,7 @@ id = 2
 title = "Prepare Planning Prompt"
 prompt = """
 Build planning prompt with user's requirements.
-NEVER pre-read files — Tier 1 and Tier 2 read files natively.
+NEVER pre-read files — Layer 1 and Layer 2 read files natively.
 Use mktemp for temp files (no race conditions).
 
 ```bash
@@ -52,11 +52,11 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 3
-title = "Dispatch Planning to Tier 1"
+title = "Dispatch Planning to Layer 1"
 tool = "bash"
 prompt = """
-Tier 1 (claude-code) will:
-1. Spawn up to 3 parallel Tier 2 workers for codebase exploration
+Layer 1 (claude-code) will:
+1. Spawn up to 3 parallel Layer 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
 4. Write `result.toml` (with `todo_path`) in CSA session state dir
@@ -97,11 +97,11 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 6
-title = "Dispatch Implementation to Tier 1"
+title = "Dispatch Implementation to Layer 1"
 tool = "bash"
 prompt = """
-Resume the Tier 1 session for implementation.
-Tier 1 will: implement → delegate errors to Tier 2 → review → commit.
+Resume the Layer 1 session for implementation.
+Layer 1 will: implement → delegate errors to Layer 2 → review → commit.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
@@ -115,7 +115,7 @@ id = 7
 title = "Step 6a: Resume with Feedback"
 tool = "bash"
 prompt = """
-Resume Tier 1 with user's revision feedback.
+Resume Layer 1 with user's revision feedback.
 
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)

@@ -339,7 +339,7 @@ done
 
 | Pattern | What it does |
 |---------|--------------|
-| `sa` | Three-tier recursive sub-agent orchestration |
+| `sa` | Three-layer recursive sub-agent orchestration |
 | `dev-to-merge` | Branch-to-merge: implement, validate, PR, review, merge |
 | `csa-issue-reporter` | Structured GitHub issue filing for CSA errors |
 
