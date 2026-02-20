@@ -684,6 +684,10 @@ pub enum PlanCommands {
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,
 
+        /// Override tool for all CSA steps (ignores tier routing)
+        #[arg(long)]
+        tool: Option<ToolName>,
+
         /// Show execution plan without running
         #[arg(long)]
         dry_run: bool,

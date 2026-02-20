@@ -314,10 +314,11 @@ async fn main() -> Result<()> {
             PlanCommands::Run {
                 file,
                 vars,
+                tool,
                 dry_run,
                 cd,
             } => {
-                plan_cmd::handle_plan_run(file, vars, dry_run, cd, current_depth).await?;
+                plan_cmd::handle_plan_run(file, vars, tool, dry_run, cd, current_depth).await?;
             }
         },
         Commands::Migrate { dry_run, status } => {
