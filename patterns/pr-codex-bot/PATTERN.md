@@ -85,27 +85,52 @@ gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
 PR_NUM=$(gh pr view --json number -q '.number')
 ```
 
-## Step 5: Trigger Cloud Bot Review
+## Step 5: Trigger Cloud Bot Review and Poll for Response
 
-> **Tier**: 0 (Orchestrator) -- shell command to trigger external bot.
-
-Tool: bash
-
-Trigger the cloud review bot. Capture PR number for polling.
-
-```bash
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
-```
-
-## Step 6: Poll for Bot Response
-
-> **Tier**: 0 (Orchestrator) -- polling loop, no code analysis.
+> **Tier**: 0 (Orchestrator) -- trigger + polling loop, no code analysis.
+> This step is SELF-CONTAINED: trigger and poll are atomic. The orchestrator
+> MUST NOT split these into separate manual actions.
 
 Tool: bash
 OnFail: skip
 
-Bounded poll (max 10 minutes). If bot unavailable, fall through —
-local review (Step 2) already covers main...HEAD.
+Trigger `@codex review` (skip if already commented on this HEAD), then poll
+for bot response with bounded timeout (max 10 minutes, 30s interval).
+If bot times out, set BOT_UNAVAILABLE and fall through — local review
+(Step 2) already covers main...HEAD.
+
+```bash
+# --- Trigger @codex review (idempotent) ---
+CURRENT_SHA="$(git rev-parse HEAD)"
+EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+  --jq "[.[] | select(.body | test(\"@codex review\")) | select(.body | test(\"${CURRENT_SHA}\") or (.updated_at > \"$(git log -1 --format=%cI HEAD~1 2>/dev/null || echo 1970-01-01)\"))] | length" 2>/dev/null || echo "0")
+if [ "${EXISTING}" = "0" ]; then
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+fi
+
+# --- Poll for bot response (max 10 min) ---
+BOT_UNAVAILABLE=true
+POLL_INTERVAL=30
+MAX_WAIT=600
+WAITED=0
+while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
+  sleep "${POLL_INTERVAL}"
+  WAITED=$((WAITED + POLL_INTERVAL))
+  BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+    --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
+  if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
+    BOT_UNAVAILABLE=false
+    break
+  fi
+  echo "Polling... ${WAITED}s / ${MAX_WAIT}s"
+done
+
+if [ "${BOT_UNAVAILABLE}" = "true" ]; then
+  echo "Bot timed out after ${MAX_WAIT}s. Falling back to local review."
+  # Fallback: run local csa review for coverage confirmation
+  csa review --range main..HEAD 2>/dev/null || true
+fi
+```
 
 ## IF ${BOT_UNAVAILABLE}
 

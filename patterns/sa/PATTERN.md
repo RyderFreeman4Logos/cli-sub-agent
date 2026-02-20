@@ -144,4 +144,21 @@ number of tasks completed. If HAS_ISSUES, iterate.
 
 Evaluate whether to push and create PR (if milestone complete).
 
+## Step 10: Invoke pr-codex-bot (MANDATORY)
+
+> **Tier**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
+> Tier 1 executors MUST invoke /pr-codex-bot after PR creation.
+> This is NOT optional — polling for bot review is part of the PR lifecycle.
+
+Tool: skill
+OnFail: abort
+
+After PR creation, invoke the pr-codex-bot skill to trigger cloud review,
+poll for response (with 10 min timeout), and handle the full review loop.
+This ensures the bot review is never forgotten or skipped.
+
+```
+/pr-codex-bot
+```
+
 ## ENDIF
