@@ -34,6 +34,40 @@ pub(crate) fn resolve_sandbox_options(
     let mut execute_options = ExecuteOptions::new(stream_mode, idle_timeout_seconds);
 
     let Some(cfg) = config else {
+        // No project config — apply profile-based defaults for heavyweight tools.
+        let defaults = csa_config::default_sandbox_for_tool(tool_name);
+        execute_options = execute_options.with_lean_mode(defaults.lean_mode);
+
+        if matches!(defaults.enforcement, csa_config::EnforcementMode::Off) {
+            return SandboxResolution::Ok(execute_options);
+        }
+
+        let Some(memory_max_mb) = defaults.memory_max_mb else {
+            return SandboxResolution::Ok(execute_options);
+        };
+
+        let sandbox_config = csa_resource::SandboxConfig {
+            memory_max_mb,
+            memory_swap_max_mb: defaults.memory_swap_max_mb,
+            pids_max: None,
+        };
+
+        let capability = csa_resource::detect_sandbox_capability();
+        if matches!(capability, csa_resource::SandboxCapability::None) {
+            warn!(
+                tool = tool_name,
+                "No sandbox capability available; skipping enforcement for profile defaults"
+            );
+            return SandboxResolution::Ok(execute_options);
+        }
+
+        execute_options = execute_options.with_sandbox(SandboxContext {
+            config: sandbox_config,
+            tool_name: tool_name.to_string(),
+            session_id: session_id.to_string(),
+            best_effort: true, // Profile defaults always use best-effort
+        });
+
         return SandboxResolution::Ok(execute_options);
     };
 
@@ -146,3 +180,7 @@ pub(crate) fn record_sandbox_telemetry(
         "Sandbox telemetry recorded in session state"
     );
 }
+
+#[cfg(test)]
+#[path = "pipeline_sandbox_tests.rs"]
+mod tests;
