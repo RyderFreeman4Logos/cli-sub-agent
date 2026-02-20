@@ -1,0 +1,37 @@
+[workflow]
+name = "migrate"
+description = "Run and manage CSA project migrations"
+
+[[workflow.steps]]
+id = 1
+title = "Check Migration Status"
+tool = "bash"
+prompt = """
+```bash
+csa migrate --status
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
+title = "Apply Pending Migrations"
+tool = "bash"
+prompt = """
+Apply all pending migrations:
+
+```bash
+csa migrate
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 3
+title = "Verify weave.lock"
+tool = "bash"
+prompt = """
+Confirm weave.lock was updated:
+
+```bash
+cat weave.lock
+```"""
+on_fail = "abort"
