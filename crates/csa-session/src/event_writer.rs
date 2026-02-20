@@ -235,8 +235,8 @@ fn load_resume_state(path: &Path) -> std::io::Result<ResumeState> {
 
     let mut reader = BufReader::new(file);
     let mut line_buf = Vec::new();
-    let mut last_complete_line = Vec::new();
     let mut existing_lines = 0_u64;
+    let mut last_valid_next_seq: Option<u64> = None;
 
     loop {
         line_buf.clear();
@@ -253,25 +253,13 @@ fn load_resume_state(path: &Path) -> std::io::Result<ResumeState> {
         }
 
         existing_lines = existing_lines.saturating_add(1);
-        last_complete_line.clear();
-        last_complete_line.extend_from_slice(&line_buf[..line_buf.len() - 1]);
+        let complete_line = &line_buf[..line_buf.len() - 1];
+        if let Ok(parsed) = serde_json::from_slice::<JsonlSeq>(complete_line) {
+            last_valid_next_seq = Some(parsed.seq.saturating_add(1));
+        }
     }
 
-    let next_seq = if last_complete_line.is_empty() {
-        0
-    } else {
-        match serde_json::from_slice::<JsonlSeq>(&last_complete_line) {
-            Ok(parsed) => parsed.seq.saturating_add(1),
-            Err(err) => {
-                warn!(
-                    path = %path.display(),
-                    error = %err,
-                    "failed to parse sequence from existing ACP transcript tail"
-                );
-                0
-            }
-        }
-    };
+    let next_seq = last_valid_next_seq.unwrap_or(0);
 
     Ok(ResumeState {
         next_seq,
@@ -359,6 +347,42 @@ mod tests {
         let stats = resumed.stats();
         assert_eq!(stats.lines_written, 3);
         assert_eq!(stats.write_failures, 0);
+    }
+
+    #[test]
+    fn test_writer_resumes_from_last_valid_seq_when_tail_is_corrupted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("output").join("acp-events.jsonl");
+
+        {
+            let mut first = EventWriter::new(&path);
+            first.append(&SessionEvent::AgentMessage("hello".to_string()));
+            first.append(&SessionEvent::AgentThought("thinking".to_string()));
+            first.flush();
+        }
+
+        {
+            let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(b"{\"seq\":not-json}\n").unwrap();
+        }
+
+        let mut resumed = EventWriter::new(&path);
+        resumed.append(&SessionEvent::PlanUpdate(
+            "{\"step\":\"resume-after-corruption\"}".to_string(),
+        ));
+        resumed.flush();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let valid_seqs: Vec<u64> = content
+            .lines()
+            .filter_map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()?
+                    .get("seq")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .collect();
+        assert_eq!(valid_seqs, vec![0, 1, 2]);
     }
 
     #[test]

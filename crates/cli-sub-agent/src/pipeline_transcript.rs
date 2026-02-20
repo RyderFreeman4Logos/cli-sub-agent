@@ -46,3 +46,89 @@ pub(crate) fn persist_if_enabled(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use csa_acp::SessionEvent;
+    use csa_config::config::CURRENT_SCHEMA_VERSION;
+    use csa_config::{ProjectMeta, ResourcesConfig, SessionConfig};
+    use csa_process::ExecutionResult;
+    use std::collections::HashMap;
+
+    fn config_with_transcript_enabled(enabled: bool) -> ProjectConfig {
+        ProjectConfig {
+            schema_version: CURRENT_SCHEMA_VERSION,
+            project: ProjectMeta::default(),
+            resources: ResourcesConfig::default(),
+            acp: Default::default(),
+            session: SessionConfig {
+                transcript_enabled: enabled,
+            },
+            tools: HashMap::new(),
+            review: None,
+            debate: None,
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+            preferences: None,
+        }
+    }
+
+    fn transport_result_with_events(events: Vec<SessionEvent>) -> TransportResult {
+        TransportResult {
+            execution: ExecutionResult {
+                output: String::new(),
+                stderr_output: String::new(),
+                summary: String::new(),
+                exit_code: 0,
+            },
+            provider_session_id: None,
+            events,
+        }
+    }
+
+    #[test]
+    fn test_persist_if_enabled_disabled_does_not_write_transcript_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = config_with_transcript_enabled(false);
+        let transport_result =
+            transport_result_with_events(vec![SessionEvent::AgentMessage("hello".to_string())]);
+
+        let artifacts = persist_if_enabled(Some(&cfg), tmp.path(), &transport_result);
+
+        assert!(artifacts.is_empty());
+        assert!(!tmp.path().join("output").join("acp-events.jsonl").exists());
+        assert_eq!(transport_result.events.len(), 1);
+    }
+
+    #[test]
+    fn test_persist_if_enabled_handles_empty_events_gracefully() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cfg = config_with_transcript_enabled(true);
+        let transport_result = transport_result_with_events(Vec::new());
+
+        let artifacts = persist_if_enabled(Some(&cfg), tmp.path(), &transport_result);
+        let transcript_path = tmp.path().join("output").join("acp-events.jsonl");
+
+        assert_eq!(artifacts.len(), 1);
+        assert_eq!(artifacts[0].path, "output/acp-events.jsonl");
+        assert_eq!(artifacts[0].line_count, Some(0));
+        assert!(transcript_path.exists());
+    }
+
+    #[test]
+    fn test_persist_if_enabled_gracefully_handles_writer_creation_failure() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocked_path = tmp.path().join("blocked");
+        fs::write(&blocked_path, "not-a-directory").unwrap();
+
+        let cfg = config_with_transcript_enabled(true);
+        let transport_result =
+            transport_result_with_events(vec![SessionEvent::AgentMessage("hello".to_string())]);
+
+        let artifacts = persist_if_enabled(Some(&cfg), &blocked_path, &transport_result);
+
+        assert!(artifacts.is_empty());
+    }
+}
