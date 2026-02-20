@@ -290,8 +290,17 @@ fn ensure_cached(cache_root: &Path, url: &str) -> Result<PathBuf> {
 
     if cas.join("HEAD").is_file() {
         // Already cloned — fetch updates.
+        // In a bare repo `git fetch --all` updates FETCH_HEAD but does NOT
+        // advance local branch refs.  Use an explicit refspec so that
+        // `resolve_commit(cas, None)` (which resolves HEAD → main) sees the
+        // latest remote commit.
         let status = Command::new("git")
-            .args(["fetch", "--quiet", "--all"])
+            .args([
+                "fetch",
+                "--quiet",
+                "origin",
+                "+refs/heads/*:refs/heads/*",
+            ])
             .current_dir(&cas)
             .status()
             .context("failed to run git fetch")?;
