@@ -128,6 +128,7 @@ fn resolve_step_tool_explicit_bash_returns_direct_bash() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let target = resolve_step_tool(&step, None).unwrap();
     assert!(
@@ -148,6 +149,7 @@ fn resolve_step_tool_explicit_codex() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let target = resolve_step_tool(&step, None).unwrap();
     assert!(matches!(
@@ -171,6 +173,7 @@ fn resolve_step_tool_fallback_no_config() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let target = resolve_step_tool(&step, None).unwrap();
     assert!(matches!(
@@ -194,6 +197,7 @@ fn resolve_step_tool_weave_returns_include_marker() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let target = resolve_step_tool(&step, None).unwrap();
     assert!(matches!(target, StepTarget::WeaveInclude));
@@ -211,6 +215,7 @@ fn resolve_step_tool_unknown_tool_errors() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     assert!(resolve_step_tool(&step, None).is_err());
 }
@@ -227,6 +232,7 @@ async fn execute_step_skips_when_condition_is_false() {
         on_fail: FailAction::Abort,
         condition: Some("${SOME_VAR}".into()),
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -250,6 +256,7 @@ async fn execute_step_runs_when_condition_is_true() {
         on_fail: FailAction::Abort,
         condition: Some("${FLAG}".into()),
         loop_var: None,
+        session: None,
     };
     let mut vars = HashMap::new();
     vars.insert("FLAG".into(), "yes".into());
@@ -275,6 +282,7 @@ async fn execute_step_skips_loop_with_nonzero_exit() {
             collection: "${ITEMS}".into(),
             max_iterations: 10,
         }),
+        session: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -295,6 +303,7 @@ async fn execute_step_skips_weave_include() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -318,6 +327,7 @@ async fn execute_step_bash_runs_code_block() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
@@ -345,6 +355,7 @@ async fn execute_plan_skips_false_condition_cleanly() {
                 on_fail: FailAction::Skip,
                 condition: Some("${FLAG}".into()),
                 loop_var: None,
+                session: None,
             },
             PlanStep {
                 id: 2,
@@ -356,6 +367,7 @@ async fn execute_plan_skips_false_condition_cleanly() {
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
         ],
     };
@@ -394,6 +406,7 @@ async fn execute_plan_runs_true_condition_steps() {
             on_fail: FailAction::Abort,
             condition: Some("${FLAG}".into()),
             loop_var: None,
+            session: None,
         }],
     };
     let mut vars = HashMap::new();
@@ -425,6 +438,7 @@ async fn execute_plan_aborts_on_retry_exhaustion() {
                 on_fail: FailAction::Retry(1),
                 condition: None,
                 loop_var: None,
+                session: None,
             },
             PlanStep {
                 id: 2,
@@ -436,6 +450,7 @@ async fn execute_plan_aborts_on_retry_exhaustion() {
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
         ],
     };
@@ -472,6 +487,7 @@ async fn execute_plan_continues_on_skip_failure() {
                 on_fail: FailAction::Skip,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
             PlanStep {
                 id: 2,
@@ -483,6 +499,7 @@ async fn execute_plan_continues_on_skip_failure() {
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
         ],
     };
@@ -540,6 +557,7 @@ async fn execute_step_bash_git_commit_runs_directly() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let mut vars = HashMap::new();
     vars.insert("COMMIT_MSG".into(), commit_msg.into());
@@ -580,6 +598,7 @@ async fn execute_step_bash_passes_variables_as_env() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let mut vars = HashMap::new();
     vars.insert("MSG".into(), "substituted_value".into());
@@ -607,6 +626,7 @@ async fn execute_step_bash_step_output_with_shell_metacharacters_is_not_executed
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+            session: None,
             },
             PlanStep {
                 id: 2,
@@ -619,6 +639,7 @@ async fn execute_step_bash_step_output_with_shell_metacharacters_is_not_executed
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+            session: None,
             },
         ],
     };
@@ -662,6 +683,7 @@ async fn execute_step_bash_cli_var_with_shell_metacharacters_is_not_executed() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+            session: None,
     };
 
     let tmp = tempfile::tempdir().unwrap();
@@ -688,6 +710,7 @@ async fn execute_step_bash_without_code_block_runs_raw_prompt() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
@@ -695,4 +718,59 @@ async fn execute_step_bash_without_code_block_runs_raw_prompt() {
     assert_eq!(result.exit_code, 0);
     let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
     assert_eq!(content.trim(), "raw_exec");
+}
+
+#[tokio::test]
+async fn execute_plan_injects_step_session_variable() {
+    let plan = ExecutionPlan {
+        name: "session-vars".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "producer".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho produced\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "consumer".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nif [ -z \"${STEP_1_SESSION+x}\" ]; then exit 1; fi\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+        ],
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let vars = HashMap::new();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[1].exit_code, 0);
+}
+
+#[test]
+fn stale_session_fallback_detects_missing_prefix_errors() {
+    let err = anyhow::anyhow!("No session matching prefix '01XYZ'");
+    assert!(is_stale_session_error(&err));
+}
+
+#[test]
+fn stale_session_fallback_ignores_unrelated_errors() {
+    let err = anyhow::anyhow!("tool execution failed");
+    assert!(!is_stale_session_error(&err));
 }

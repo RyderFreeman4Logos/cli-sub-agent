@@ -88,6 +88,26 @@ Deep analysis of the codebase.
 }
 
 #[test]
+fn test_compile_step_with_session_hint() {
+    let input = r#"---
+name = "sessioned"
+---
+## Continue Prior Context
+Session: ${STEP_1_SESSION}
+Tool: codex
+Use the forwarded session.
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    let step = &plan.steps[0];
+    assert_eq!(step.session.as_deref(), Some("${STEP_1_SESSION}"));
+    assert_eq!(step.tool.as_deref(), Some("codex"));
+    assert_eq!(step.prompt, "Use the forwarded session.");
+    assert!(plan.variables.iter().any(|v| v.name == "STEP_1_SESSION"));
+}
+
+#[test]
 fn test_compile_step_with_onfail_skip() {
     let input = r#"---
 name = "resilient"

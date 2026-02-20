@@ -16,7 +16,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use tracing::{error, info, warn};
@@ -24,14 +24,16 @@ use tracing::{error, info, warn};
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
-use csa_process::check_tool_installed;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
-use crate::pipeline::{determine_project_root, execute_with_session};
+use crate::pipeline::determine_project_root;
 use crate::plan_display::{print_plan, print_summary};
-use crate::run_helpers::build_executor;
 
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+#[path = "plan_cmd_exec.rs"]
+mod plan_cmd_exec;
+use plan_cmd_exec::{execute_bash_step, execute_csa_step, run_with_heartbeat};
+#[cfg(test)]
+use plan_cmd_exec::{extract_bash_code_block, is_stale_session_error, truncate};
 
 /// Resolved execution target for a plan step.
 ///
@@ -70,6 +72,9 @@ pub(crate) struct StepResult {
     /// Captured output from step execution (stdout for bash, output/summary for CSA).
     /// Available to subsequent steps as `${STEP_<id>_OUTPUT}`.
     pub(crate) output: Option<String>,
+    /// CSA meta session ID produced by this step.
+    /// Available to subsequent steps as `${STEP_<id>_SESSION}`.
+    pub(crate) session_id: Option<String>,
 }
 
 /// Handle `csa plan run <file>`.
@@ -369,6 +374,9 @@ async fn execute_plan(
         let var_key = format!("STEP_{}_OUTPUT", result.step_id);
         let var_value = result.output.as_deref().unwrap_or("").to_string();
         vars.insert(var_key, var_value);
+        let session_var_key = format!("STEP_{}_SESSION", result.step_id);
+        let session_var_value = result.session_id.as_deref().unwrap_or("").to_string();
+        vars.insert(session_var_key, session_var_value);
 
         // Abort on failure when: on_fail=abort, or retry exhausted (retries
         // already happened inside execute_step; reaching here means all failed),
@@ -422,6 +430,7 @@ async fn execute_step(
                 skipped: true,
                 error: None,
                 output: None,
+                session_id: None,
             };
         }
         info!("{} - Condition '{}' met, proceeding", label, condition);
@@ -436,6 +445,7 @@ async fn execute_step(
             skipped: true,
             error: Some("Loop steps not supported in v1".to_string()),
             output: None,
+            session_id: None,
         };
     }
 
@@ -452,6 +462,7 @@ async fn execute_step(
                 skipped: false,
                 error: Some(format!("Tool resolution failed: {}", e)),
                 output: None,
+                session_id: None,
             };
         }
     };
@@ -489,12 +500,28 @@ async fn execute_step(
             skipped: true,
             error: None,
             output: None,
+            session_id: None,
         };
     }
 
     // CSA prompts use template substitution. Bash steps receive variables via env vars.
     let csa_prompt = match &target {
         StepTarget::CsaTool { .. } => Some(substitute_vars(&step.prompt, variables)),
+        _ => None,
+    };
+    let csa_session = match &target {
+        StepTarget::CsaTool { .. } => step
+            .session
+            .as_deref()
+            .map(|session| substitute_vars(session, variables))
+            .and_then(|session| {
+                let trimmed = session.trim();
+                if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(trimmed.to_string())
+                }
+            }),
         _ => None,
     };
 
@@ -528,7 +555,7 @@ async fn execute_step(
             eprintln!("{} - RETRY {}/{}", label, attempt, max_attempts);
         }
 
-        let (exit_code, step_output) = match &target {
+        let outcome = match &target {
             StepTarget::DirectBash => {
                 run_with_heartbeat(
                     &label,
@@ -549,6 +576,7 @@ async fn execute_step(
                         prompt,
                         tool_name,
                         model_spec.as_deref(),
+                        csa_session.as_deref(),
                         project_root,
                         config,
                     ),
@@ -559,13 +587,18 @@ async fn execute_step(
             StepTarget::WeaveInclude => unreachable!("handled above"),
         };
 
-        if exit_code == 0 {
+        if outcome.exit_code == 0 {
             info!(
                 "{} - Completed in {:.2}s",
                 label,
                 start.elapsed().as_secs_f64()
             );
             eprintln!("{} - PASS ({:.2}s)", label, start.elapsed().as_secs_f64());
+            let output = if outcome.output.is_empty() {
+                None
+            } else {
+                Some(outcome.output)
+            };
             return StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
@@ -573,11 +606,12 @@ async fn execute_step(
                 duration_secs: start.elapsed().as_secs_f64(),
                 skipped: false,
                 error: None,
-                output: step_output,
+                output,
+                session_id: outcome.session_id,
             };
         }
 
-        last_result = Some(exit_code);
+        last_result = Some(outcome.exit_code);
     }
 
     let exit_code = last_result.unwrap_or(1);
@@ -599,6 +633,7 @@ async fn execute_step(
                 skipped: true,
                 error: Some(format!("Skipped after failure (exit code {})", exit_code)),
                 output: None,
+                session_id: None,
             }
         }
         FailAction::Delegate(target) => {
@@ -621,6 +656,7 @@ async fn execute_step(
                     target, exit_code
                 )),
                 output: None,
+                session_id: None,
             }
         }
         _ => {
@@ -635,197 +671,11 @@ async fn execute_step(
                 skipped: false,
                 error: Some(format!("Exit code {}", exit_code)),
                 output: None,
+                session_id: None,
             }
         }
     }
 }
-
-/// Keep workflow output alive for parents that enforce inactivity timeouts.
-async fn run_with_heartbeat<F>(
-    label: &str,
-    execution: F,
-    step_started_at: Instant,
-) -> (i32, Option<String>)
-where
-    F: std::future::Future<Output = Result<(i32, Option<String>)>>,
-{
-    let mut execution = std::pin::pin!(execution);
-    let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
-    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    ticker.tick().await;
-
-    loop {
-        tokio::select! {
-            result = &mut execution => {
-                return match result {
-                    Ok(pair) => pair,
-                    Err(err) => {
-                        error!("{label} - Execution failed: {err}");
-                        (1, None)
-                    }
-                };
-            }
-            _ = ticker.tick() => {
-                eprintln!(
-                    "{label} - RUNNING ({:.0}s elapsed)",
-                    step_started_at.elapsed().as_secs_f64()
-                );
-            }
-        }
-    }
-}
-
-/// Execute a bash step by extracting the code block from the prompt.
-///
-/// Unlike CSA steps, bash steps do not use `${VAR}` string substitution.
-/// All workflow variables are passed as environment variables so shell parsing
-/// cannot be influenced by interpolated script text.
-async fn execute_bash_step(
-    label: &str,
-    prompt: &str,
-    env_vars: &HashMap<String, String>,
-    project_root: &Path,
-) -> Result<(i32, Option<String>)> {
-    let script = extract_bash_code_block(prompt).unwrap_or(prompt);
-    info!("{} - Executing bash: {}", label, truncate(script, 80));
-    for key in env_vars.keys() {
-        validate_variable_name(key)?;
-    }
-
-    let output = tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg(script)
-        .envs(env_vars.iter())
-        .current_dir(project_root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .await
-        .context("Failed to spawn bash")?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    // Tee stdout so callers still see it (backward compat).
-    if !stdout.is_empty() {
-        eprint!("{}", stdout);
-    }
-    let captured = if stdout.is_empty() {
-        None
-    } else {
-        Some(stdout)
-    };
-    Ok((output.status.code().unwrap_or(1), captured))
-}
-
-/// Execute a step via CSA tool (codex, claude-code, gemini-cli, opencode).
-async fn execute_csa_step(
-    label: &str,
-    prompt: &str,
-    tool_name: &ToolName,
-    model_spec: Option<&str>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-) -> Result<(i32, Option<String>)> {
-    info!("{} - Dispatching to {} ...", label, tool_name.as_str());
-
-    // Build executor
-    let executor = build_executor(tool_name, model_spec, None, None, config)?;
-
-    // Check tool is installed
-    check_tool_installed(executor.runtime_binary_name()).await?;
-
-    // Load global config for env injection
-    let global_config = csa_config::GlobalConfig::load()?;
-    let extra_env = global_config.env_vars(executor.tool_name()).cloned();
-    let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
-
-    // Acquire global slot
-    let max_concurrent = global_config.max_concurrent(executor.tool_name());
-    let slots_dir = csa_config::GlobalConfig::slots_dir()?;
-    let _slot_guard = match csa_lock::slot::try_acquire_slot(
-        &slots_dir,
-        executor.tool_name(),
-        max_concurrent,
-        None,
-    ) {
-        Ok(csa_lock::slot::SlotAcquireResult::Acquired(slot)) => slot,
-        Ok(csa_lock::slot::SlotAcquireResult::Exhausted(status)) => {
-            bail!(
-                "All {} slots for '{}' occupied ({}/{})",
-                max_concurrent,
-                executor.tool_name(),
-                status.occupied,
-                status.max_slots,
-            );
-        }
-        Err(e) => bail!(
-            "Slot acquisition failed for '{}': {}",
-            executor.tool_name(),
-            e
-        ),
-    };
-
-    // Execute with ephemeral session
-    let result = execute_with_session(
-        &executor,
-        tool_name,
-        prompt,
-        None,                                 // session_arg: ephemeral
-        Some("plan-step".to_string()),        // description
-        std::env::var("CSA_SESSION_ID").ok(), // parent
-        project_root,
-        config,
-        extra_env.as_ref(),
-        Some("plan"),                         // task_type
-        None,                                 // tier_name (already resolved)
-        None,                                 // context_load_options
-        csa_process::StreamMode::TeeToStderr, // stream for visibility
-        idle_timeout_seconds,
-        None, // MCP injection
-    )
-    .await?;
-
-    // Prefer output; fall back to summary if output is empty.
-    let captured = if !result.output.is_empty() {
-        Some(result.output)
-    } else if !result.summary.is_empty() {
-        Some(result.summary)
-    } else {
-        None
-    };
-    Ok((result.exit_code, captured))
-}
-
-// --- Helpers ---
-
-/// Extract the first fenced code block from a prompt string.
-///
-/// Looks for ```bash or ``` blocks and returns the content.
-fn extract_bash_code_block(prompt: &str) -> Option<&str> {
-    // Find opening fence (```bash or ```)
-    let start_patterns = ["```bash\n", "```sh\n", "```\n"];
-    for pattern in &start_patterns {
-        if let Some(start_idx) = prompt.find(pattern) {
-            let code_start = start_idx + pattern.len();
-            if let Some(end_idx) = prompt[code_start..].find("```") {
-                let code = &prompt[code_start..code_start + end_idx];
-                return Some(code.trim());
-            }
-        }
-    }
-    None
-}
-
-/// Truncate a string for display purposes.
-fn truncate(s: &str, max_len: usize) -> String {
-    let first_line = s.lines().next().unwrap_or(s);
-    if first_line.len() > max_len {
-        format!("{}...", &first_line[..max_len])
-    } else {
-        first_line.to_string()
-    }
-}
-
-// --- Display (see plan_display.rs) ---
 
 #[cfg(test)]
 #[path = "plan_cmd_tests.rs"]

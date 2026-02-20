@@ -23,6 +23,7 @@ fn resolve_step_tool_all_explicit_tools() {
             on_fail: FailAction::Abort,
             condition: None,
             loop_var: None,
+            session: None,
         };
         let target = resolve_step_tool(&step, None).unwrap();
         if expect_direct_bash {
@@ -61,6 +62,7 @@ async fn execute_step_tool_override_replaces_csa_tool() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     // Even with tool_override=claude-code, bash step must still run as bash
@@ -93,6 +95,7 @@ fn tool_override_clears_model_spec() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let target = resolve_step_tool(&step, None).unwrap();
     // Without override: should be CsaTool with codex
@@ -140,6 +143,7 @@ fn tool_override_does_not_affect_weave_include() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let target = resolve_step_tool(&step, None).unwrap();
     // Simulate override: WeaveInclude must pass through unchanged
@@ -161,26 +165,39 @@ fn tool_override_does_not_affect_weave_include() {
 
 #[tokio::test]
 async fn run_with_heartbeat_returns_success_exit_code() {
-    let (code, output) = run_with_heartbeat(
+    let outcome = run_with_heartbeat(
         "[1/heartbeat]",
-        async { Ok::<(i32, Option<String>), anyhow::Error>((0, Some("ok".into()))) },
+        async {
+            Ok::<super::plan_cmd_exec::StepExecutionOutcome, anyhow::Error>(
+                super::plan_cmd_exec::StepExecutionOutcome {
+                    exit_code: 0,
+                    output: "ok".into(),
+                    session_id: None,
+                },
+            )
+        },
         Instant::now(),
     )
     .await;
-    assert_eq!(code, 0);
-    assert_eq!(output.as_deref(), Some("ok"));
+    assert_eq!(outcome.exit_code, 0);
+    assert_eq!(outcome.output, "ok");
 }
 
 #[tokio::test]
 async fn run_with_heartbeat_maps_errors_to_exit_code_one() {
-    let (code, output) = run_with_heartbeat(
+    let outcome = run_with_heartbeat(
         "[1/heartbeat]",
-        async { Err::<(i32, Option<String>), anyhow::Error>(anyhow::anyhow!("boom")) },
+        async {
+            Err::<super::plan_cmd_exec::StepExecutionOutcome, anyhow::Error>(anyhow::anyhow!(
+                "boom"
+            ))
+        },
         Instant::now(),
     )
     .await;
-    assert_eq!(code, 1);
-    assert!(output.is_none());
+    assert_eq!(outcome.exit_code, 1);
+    assert!(outcome.output.is_empty());
+    assert!(outcome.session_id.is_none());
 }
 
 // --- Output capture & forwarding tests ---
@@ -198,6 +215,7 @@ async fn execute_step_bash_captures_stdout_in_output() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
@@ -228,6 +246,7 @@ async fn execute_plan_injects_step_output_variables() {
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
             PlanStep {
                 id: 2,
@@ -239,6 +258,7 @@ async fn execute_plan_injects_step_output_variables() {
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
         ],
     };
@@ -277,6 +297,7 @@ async fn execute_plan_skipped_step_injects_empty_output() {
                 on_fail: FailAction::Abort,
                 condition: Some("${NEVER_SET}".into()),
                 loop_var: None,
+                session: None,
             },
             PlanStep {
                 id: 2,
@@ -288,6 +309,7 @@ async fn execute_plan_skipped_step_injects_empty_output() {
                 on_fail: FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             },
         ],
     };
@@ -324,6 +346,7 @@ async fn execute_step_csa_empty_prompt_warns_without_panic() {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     };
     let vars = HashMap::new();
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;

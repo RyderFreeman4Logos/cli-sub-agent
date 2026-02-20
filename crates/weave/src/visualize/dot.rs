@@ -140,6 +140,7 @@ mod tests {
                     on_fail: FailAction::Abort,
                     condition: None,
                     loop_var: None,
+                    session: None,
                 },
                 PlanStep {
                     id: 2,
@@ -151,6 +152,7 @@ mod tests {
                     on_fail: FailAction::Retry(2),
                     condition: Some("has_tests".to_string()),
                     loop_var: None,
+                    session: None,
                 },
             ],
         };
