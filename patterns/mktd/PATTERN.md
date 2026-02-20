@@ -19,40 +19,27 @@ Mandatory adversarial review catches blind spots.
 Tool: csa
 Tier: tier-1-quick
 
-Explore codebase structure relevant to the feature.
-Main agent MUST NOT use Read/Glob/Grep/Bash for exploration in Phase 1.
-
-```bash
-csa run "Analyze codebase structure relevant to ${FEATURE}.
+Analyze codebase structure relevant to ${FEATURE}.
 Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
-Working directory: ${CWD}"
-```
+Working directory: ${CWD}
 
 ## Step 2: Phase 1 — RECON Dimension 2 (Patterns)
 
 Tool: csa
 Tier: tier-1-quick
 
-Find existing patterns similar to the feature.
-
-```bash
-csa run "Find existing patterns or similar features to ${FEATURE} in this codebase.
+Find existing patterns or similar features to ${FEATURE} in this codebase.
 Report: file paths with approach, reusable components, conventions to follow.
-Working directory: ${CWD}"
-```
+Working directory: ${CWD}
 
 ## Step 3: Phase 1 — RECON Dimension 3 (Constraints)
 
 Tool: csa
 Tier: tier-1-quick
 
-Identify constraints and risks.
-
-```bash
-csa run "Identify constraints and risks for implementing ${FEATURE}.
+Identify constraints and risks for implementing ${FEATURE}.
 Report: potential breaking changes, security considerations, performance, compatibility.
-Working directory: ${CWD}"
-```
+Working directory: ${CWD}
 
 ## Step 4: Phase 2 — DRAFT TODO
 
@@ -72,10 +59,6 @@ Tier: tier-2-standard
 
 Mandatory adversarial review of the TODO draft.
 No exceptions — even "simple" plans benefit from challenge.
-
-```bash
-csa debate "Review this TODO plan for ${FEATURE}. Challenge assumptions, identify gaps, suggest improvements."
-```
 
 ## Step 6: Revise TODO
 

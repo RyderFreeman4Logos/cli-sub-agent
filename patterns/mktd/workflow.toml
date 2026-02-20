@@ -20,14 +20,9 @@ id = 1
 title = "Phase 1 — RECON Dimension 1 (Structure)"
 tool = "csa"
 prompt = """
-Explore codebase structure relevant to the feature.
-Main agent MUST NOT use Read/Glob/Grep/Bash for exploration in Phase 1.
-
-```bash
-csa run "Analyze codebase structure relevant to ${FEATURE}.
+Analyze codebase structure relevant to ${FEATURE}.
 Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
-Working directory: ${CWD}"
-```"""
+Working directory: ${CWD}"""
 tier = "tier-1-quick"
 on_fail = "abort"
 
@@ -36,13 +31,9 @@ id = 2
 title = "Phase 1 — RECON Dimension 2 (Patterns)"
 tool = "csa"
 prompt = """
-Find existing patterns similar to the feature.
-
-```bash
-csa run "Find existing patterns or similar features to ${FEATURE} in this codebase.
+Find existing patterns or similar features to ${FEATURE} in this codebase.
 Report: file paths with approach, reusable components, conventions to follow.
-Working directory: ${CWD}"
-```"""
+Working directory: ${CWD}"""
 tier = "tier-1-quick"
 on_fail = "abort"
 
@@ -51,13 +42,9 @@ id = 3
 title = "Phase 1 — RECON Dimension 3 (Constraints)"
 tool = "csa"
 prompt = """
-Identify constraints and risks.
-
-```bash
-csa run "Identify constraints and risks for implementing ${FEATURE}.
+Identify constraints and risks for implementing ${FEATURE}.
 Report: potential breaking changes, security considerations, performance, compatibility.
-Working directory: ${CWD}"
-```"""
+Working directory: ${CWD}"""
 tier = "tier-1-quick"
 on_fail = "abort"
 
