@@ -11,20 +11,18 @@ use std::collections::HashMap;
 ///
 /// Unresolved `${VAR}` references (where the var was not provided) evaluate to
 /// false, allowing workflows with optional condition variables to skip those
-/// steps cleanly.
+/// steps cleanly.  Malformed expressions (unbalanced parens, empty) also
+/// evaluate to false (fail-closed).
 pub(crate) fn evaluate_condition(condition: &str, vars: &HashMap<String, String>) -> bool {
     let trimmed = condition.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
 
-    // Handle conjunction: (a) && (b)
-    // Must check before parenthesized-expression stripping to avoid
-    // incorrectly treating "(a) && (b)" as a single parenthesized expr.
-    if let Some(pos) = trimmed.find(") && (") {
-        if trimmed.starts_with('(') && trimmed.ends_with(')') {
-            let left = &trimmed[1..pos];
-            // ") && (" is 6 chars; skip to the content after the opening '('
-            let right = &trimmed[pos + 6..trimmed.len() - 1];
-            return evaluate_condition(left, vars) && evaluate_condition(right, vars);
-        }
+    // Split on top-level " && " (parenthesis-depth 0).  Handles 2+ conjuncts
+    // including negated and nested sub-expressions.
+    if let Some(parts) = split_top_level_and(trimmed) {
+        return parts.iter().all(|p| evaluate_condition(p, vars));
     }
 
     // Handle negation: !(expr)
@@ -32,10 +30,12 @@ pub(crate) fn evaluate_condition(condition: &str, vars: &HashMap<String, String>
         return !evaluate_condition(inner, vars);
     }
 
-    // Handle simple parenthesized expression: (expr)
-    // Only strip if the parens are balanced (no inner conjunction).
-    if trimmed.starts_with('(') && trimmed.ends_with(')') && !trimmed.contains(" && ") {
-        return evaluate_condition(&trimmed[1..trimmed.len() - 1], vars);
+    // Handle parenthesized expression: (expr) — strip only when the outer
+    // parens are the matching pair that wraps the entire expression.
+    if trimmed.starts_with('(') && trimmed.ends_with(')') {
+        if let Some(inner) = strip_balanced_parens(trimmed) {
+            return evaluate_condition(inner, vars);
+        }
     }
 
     // Base case: ${VAR} — substitute and check truthiness
@@ -49,6 +49,78 @@ pub(crate) fn evaluate_condition(condition: &str, vars: &HashMap<String, String>
     // Truthy: non-empty and not literally "false" or "0"
     let lower = resolved.trim().to_lowercase();
     !lower.is_empty() && lower != "false" && lower != "0"
+}
+
+/// Split `expr` into parts at every ` && ` that occurs at parenthesis depth 0.
+///
+/// Returns `None` when there is no top-level ` && ` (i.e. the expression is
+/// not a conjunction at the outermost level).
+fn split_top_level_and(expr: &str) -> Option<Vec<&str>> {
+    let bytes = expr.as_bytes();
+    let mut depth: i32 = 0;
+    let mut parts: Vec<&str> = Vec::new();
+    let mut start = 0;
+    let and_token = b" && ";
+    let and_len = and_token.len();
+
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' if depth == 0
+                && i + and_len <= bytes.len()
+                && &bytes[i..i + and_len] == and_token =>
+            {
+                parts.push(&expr[start..i]);
+                i += and_len;
+                start = i;
+                continue;
+            }
+            _ => {}
+        }
+        if depth < 0 {
+            // Unbalanced — fail-closed
+            return None;
+        }
+        i += 1;
+    }
+
+    if parts.is_empty() {
+        return None;
+    }
+
+    parts.push(&expr[start..]);
+    Some(parts)
+}
+
+/// Strip a single layer of balanced outer parentheses.
+///
+/// Returns `None` when the opening `(` does not match the final `)` (e.g. the
+/// string contains `) && (` at depth 0, which means the "outer" parens
+/// actually belong to separate sub-expressions).
+fn strip_balanced_parens(expr: &str) -> Option<&str> {
+    debug_assert!(expr.starts_with('(') && expr.ends_with(')'));
+    let bytes = expr.as_bytes();
+    let mut depth: i32 = 0;
+    for (idx, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => {
+                depth -= 1;
+                // If depth drops to 0 before the last char, the opening `(`
+                // closed mid-string — the outer parens are not a matching pair.
+                if depth == 0 && idx < bytes.len() - 1 {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    Some(&expr[1..expr.len() - 1])
 }
 
 /// Substitute `${VAR}` placeholders in a string.
@@ -138,5 +210,61 @@ mod tests {
             "(${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE}))",
             &empty
         ));
+    }
+
+    #[test]
+    fn three_conjuncts_with_negation() {
+        // P1 regression: 3+ conjuncts broke the old `find(") && (")` logic.
+        let expr = "(!(${COMMENT_IS_FALSE_POSITIVE})) && (${REVIEW_HAS_ISSUES}) && (!(${COMMENT_IS_STALE}))";
+
+        // All conditions met: !(unset=false)=true && yes=true && !(unset=false)=true → true
+        let mut vars = HashMap::new();
+        vars.insert("REVIEW_HAS_ISSUES".into(), "yes".into());
+        assert!(evaluate_condition(expr, &vars));
+
+        // Middle var unset → false
+        let empty = HashMap::new();
+        assert!(!evaluate_condition(expr, &empty));
+
+        // Negated var is truthy → !(true)=false → whole conjunction false
+        let mut fp_set = HashMap::new();
+        fp_set.insert("REVIEW_HAS_ISSUES".into(), "yes".into());
+        fp_set.insert("COMMENT_IS_FALSE_POSITIVE".into(), "yes".into());
+        assert!(!evaluate_condition(expr, &fp_set));
+    }
+
+    #[test]
+    fn nested_conjunction() {
+        // Nested: (!(A)) && ((B) && (!(C)))
+        let expr = "(!(${A})) && ((${B}) && (!(${C})))";
+
+        let mut vars = HashMap::new();
+        vars.insert("B".into(), "yes".into());
+        // A unset → !(false)=true, B=true, C unset → !(false)=true → true
+        assert!(evaluate_condition(expr, &vars));
+
+        // C set → !(true)=false → inner conjunction false → whole false
+        let mut vars2 = HashMap::new();
+        vars2.insert("B".into(), "yes".into());
+        vars2.insert("C".into(), "yes".into());
+        assert!(!evaluate_condition(expr, &vars2));
+    }
+
+    #[test]
+    fn malformed_expression_is_false() {
+        let vars = HashMap::new();
+        // Empty expression
+        assert!(!evaluate_condition("", &vars));
+        // Unbalanced parens — inner var unset, so base-case resolves to false
+        assert!(!evaluate_condition("((${A})", &vars));
+        // Unresolved variable reference → false
+        assert!(!evaluate_condition("${DOES_NOT_EXIST}", &vars));
+    }
+
+    #[test]
+    fn empty_condition_is_false() {
+        let vars = HashMap::new();
+        assert!(!evaluate_condition("", &vars));
+        assert!(!evaluate_condition("   ", &vars));
     }
 }
