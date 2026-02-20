@@ -40,6 +40,31 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-features -- -D warnings
 
+  version-bump:
+    name: Version Bump
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check version bumped vs main
+        run: |
+          current=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          main_ver=$(git show origin/main:Cargo.toml | grep '^version' | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "PR version: $current"
+          echo "main version: $main_ver"
+          if [ "$current" = "$main_ver" ]; then
+            echo "::error::Version ($current) matches main. Run 'just bump-patch' before pushing."
+            exit 1
+          fi
+          # Ensure version is strictly greater than main (no downgrades).
+          highest=$(printf '%s\n%s\n' "$main_ver" "$current" | sort -V | tail -1)
+          if [ "$highest" != "$current" ]; then
+            echo "::error::Version ($current) is lower than main ($main_ver). Version must be incremented, not decremented."
+            exit 1
+          fi
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}

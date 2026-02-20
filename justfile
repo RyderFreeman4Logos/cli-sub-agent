@@ -220,10 +220,11 @@ install-hooks:
         echo "Git hooks created and installed (core.hooksPath → .githooks)"; \
     fi
 
-# Install latest local build to /usr/local/bin (requires cargo-auditable).
+# Install latest local build to /usr/local/bin (reuses workspace target/ cache).
 install:
-    CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/cli-sub-agent
-    CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/weave
+    cargo build --release --all-features -p cli-sub-agent -p weave
+    install -m 755 target/release/csa /usr/local/bin/csa
+    install -m 755 target/release/weave /usr/local/bin/weave
     @echo "Verifying installation..."
     @csa --version
     @weave --version
