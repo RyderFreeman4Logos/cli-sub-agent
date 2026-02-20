@@ -55,6 +55,7 @@ This skill exists to keep the main agent out of code-level work.
 3. Base decisions on reports, not direct code inspection.
 4. Gate transitions: APPROVE / MODIFY / REJECT / ESCALATE.
 5. If confidence is low, trigger cross-review by another employee.
+6. **After PR creation, invoke `/pr-codex-bot`** — this is MANDATORY. The pr-codex-bot skill handles `@codex review` triggering, polling (10 min timeout), fallback to local review, and the full bot review loop. Tier 1 executors MUST invoke this skill; it is NOT optional.
 
 ### Tier 0 Manager: What You MUST NEVER Do
 

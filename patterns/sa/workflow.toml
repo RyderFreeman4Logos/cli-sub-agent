@@ -171,3 +171,18 @@ tool = "weave"
 prompt = "commit"
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
+
+[[workflow.steps]]
+id = 13
+title = "Invoke pr-codex-bot (MANDATORY)"
+tool = "skill"
+prompt = """
+After PR creation, invoke /pr-codex-bot to trigger cloud review, poll for
+response (with 10 min timeout), and handle the full review loop. This ensures
+the bot review is never forgotten or skipped.
+
+```
+/pr-codex-bot
+```"""
+on_fail = "abort"
+condition = "${REVIEW_IS_CLEAN}"

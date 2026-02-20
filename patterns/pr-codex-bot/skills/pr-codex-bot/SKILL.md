@@ -117,18 +117,20 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
 2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): Run `csa review --branch main` covering all commits since main. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds).
 3. **Push and create PR**: `git push -u origin`, `gh pr create --base main`.
-4. **Trigger cloud bot**: `gh pr comment --body "@codex review"`.
-5. **Poll for bot response**: Bounded poll (max 10 minutes). If bot unavailable, proceed to merge (local review already covers).
-6. **Evaluate bot comments**: Classify each as:
+4. **Trigger cloud bot and poll** (SELF-CONTAINED -- trigger + poll are atomic):
+   - Trigger `@codex review` (idempotent: skip if already commented on this HEAD).
+   - Poll for bot response (max 10 minutes, 30s interval).
+   - If bot times out: fallback to `csa review --range main..HEAD`, then proceed to merge.
+5. **Evaluate bot comments**: Classify each as:
    - Category A (already fixed): react and acknowledge.
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
    - Category C (real issue): queue for staleness filter, then fix.
-7. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
-8. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Post full audit trail to PR.
-9. **Fix non-stale real issues**: For surviving Category C comments, fix, commit, push.
-10. **Re-trigger**: Push fixes and `@codex review` again. Loop (max 10 iterations).
-11. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
-12. **Merge**: `gh pr merge --squash --delete-branch`, then `git checkout main && git pull`.
+6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
+7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Post full audit trail to PR.
+8. **Fix non-stale real issues**: For surviving Category C comments, fix, commit, push.
+9. **Re-trigger**: Push fixes and re-trigger (loops back to step 4). Max 10 iterations.
+10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
+11. **Merge**: `gh pr merge --squash --delete-branch`, then `git checkout main && git pull`.
 
 ## Example Usage
 

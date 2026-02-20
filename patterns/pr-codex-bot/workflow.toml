@@ -92,23 +92,46 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 5
-title = "Trigger Cloud Bot Review"
+title = "Trigger Cloud Bot Review and Poll for Response"
 tool = "bash"
 prompt = """
-Trigger the cloud review bot. Capture PR number for polling.
+Trigger @codex review (idempotent — skip if already commented on this HEAD),
+then poll for bot response with bounded timeout (max 10 min, 30s interval).
+If bot times out, set BOT_UNAVAILABLE and fall through — local review
+(Step 2) already covers main...HEAD. On timeout, run fallback local review:
+csa review --range main..HEAD.
 
 ```bash
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
-```"""
-on_fail = "abort"
+# --- Trigger @codex review (idempotent) ---
+CURRENT_SHA="$(git rev-parse HEAD)"
+EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
+  --jq "[.[] | select(.body | test(\\"@codex review\\")) | select(.body | test(\\"${CURRENT_SHA}\\") or (.updated_at > \\"$(git log -1 --format=%cI HEAD~1 2>/dev/null || echo 1970-01-01)\\"))] | length" 2>/dev/null || echo "0")
+if [ "${EXISTING}" = "0" ]; then
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+fi
 
-[[workflow.steps]]
-id = 6
-title = "Poll for Bot Response"
-tool = "bash"
-prompt = """
-Bounded poll (max 10 minutes). If bot unavailable, fall through —
-local review (Step 2) already covers main...HEAD."""
+# --- Poll for bot response (max 10 min) ---
+BOT_UNAVAILABLE=true
+POLL_INTERVAL=30
+MAX_WAIT=600
+WAITED=0
+while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
+  sleep "${POLL_INTERVAL}"
+  WAITED=$((WAITED + POLL_INTERVAL))
+  BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
+    --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\")] | length" 2>/dev/null || echo "0")
+  if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
+    BOT_UNAVAILABLE=false
+    break
+  fi
+  echo "Polling... ${WAITED}s / ${MAX_WAIT}s"
+done
+
+if [ "${BOT_UNAVAILABLE}" = "true" ]; then
+  echo "Bot timed out after ${MAX_WAIT}s. Falling back to local review."
+  csa review --range main..HEAD 2>/dev/null || true
+fi
+```"""
 on_fail = "skip"
 
 [[workflow.steps]]
