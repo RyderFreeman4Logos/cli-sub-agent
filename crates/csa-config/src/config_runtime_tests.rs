@@ -25,6 +25,7 @@ fn empty_config() -> ProjectConfig {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     }
 }
 

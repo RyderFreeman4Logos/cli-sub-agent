@@ -19,7 +19,7 @@ pub use state::{
 pub use metadata::SessionMetadata;
 
 pub use event_writer::{EventWriteStats, EventWriter};
-pub use result::SessionResult;
+pub use result::{SessionArtifact, SessionResult};
 
 // Re-export manager functions
 pub use manager::{

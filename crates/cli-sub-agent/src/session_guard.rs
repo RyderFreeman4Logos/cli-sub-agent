@@ -86,6 +86,7 @@ pub(crate) fn write_pre_exec_error_result(
         tool: tool_name.to_string(),
         started_at: now,
         completed_at: now,
+        events_count: 0,
         artifacts: Vec::new(),
     };
     if let Err(e) = save_result(project_root, session_id, &result) {

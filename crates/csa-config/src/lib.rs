@@ -13,8 +13,8 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
-    ToolResourceProfile, ToolRestrictions,
+    EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, SessionConfig, TierConfig,
+    ToolConfig, ToolResourceProfile, ToolRestrictions,
 };
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use global::{GlobalConfig, GlobalMcpConfig};

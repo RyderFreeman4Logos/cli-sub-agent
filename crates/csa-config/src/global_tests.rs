@@ -700,6 +700,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: prefs,
+        session: Default::default(),
     }
 }
 

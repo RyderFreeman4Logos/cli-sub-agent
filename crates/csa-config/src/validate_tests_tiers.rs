@@ -52,6 +52,7 @@ fn test_validate_multiple_tiers_all_valid() {
         tier_mapping,
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -93,6 +94,7 @@ fn test_validate_tier_with_multiple_models_all_valid() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -134,6 +136,7 @@ fn test_validate_tier_with_one_bad_model_in_list() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -178,6 +181,7 @@ fn test_validate_tier_token_budget_zero_rejected() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -217,6 +221,7 @@ fn test_validate_tier_max_turns_zero_rejected() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -256,6 +261,7 @@ fn test_validate_tier_with_valid_budget_and_turns() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -294,6 +300,7 @@ fn test_validate_tier_model_spec_unknown_tool_rejected() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -337,6 +344,7 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

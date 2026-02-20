@@ -29,6 +29,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     }
 }
 
