@@ -44,6 +44,7 @@ fn test_validate_config_succeeds_on_valid() {
         tier_mapping,
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -72,6 +73,7 @@ fn test_validate_config_fails_on_empty_name() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -104,6 +106,7 @@ fn test_validate_config_fails_on_unknown_tool() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -138,6 +141,7 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -174,6 +178,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -219,6 +224,7 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -267,6 +273,7 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         tier_mapping,
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -324,6 +331,7 @@ fn test_validate_config_fails_on_empty_models() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -372,6 +380,7 @@ fn test_validate_config_accepts_custom_tier_names() {
         tier_mapping,
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -402,6 +411,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -436,6 +446,7 @@ fn test_validate_max_recursion_depth_boundary_20() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -463,6 +474,7 @@ fn test_validate_max_recursion_depth_boundary_21() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -502,6 +514,7 @@ fn test_validate_model_spec_two_parts() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -546,6 +559,7 @@ fn test_validate_model_spec_five_parts() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -581,6 +595,7 @@ fn test_validate_review_tool_auto_accepted() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -612,6 +627,7 @@ fn test_validate_all_known_review_tools_accepted() {
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
             preferences: None,
+            session: Default::default(),
         };
 
         config.save(dir.path()).unwrap();
@@ -648,6 +664,7 @@ fn test_validate_all_known_debate_tools_accepted() {
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
             preferences: None,
+            session: Default::default(),
         };
 
         config.save(dir.path()).unwrap();
@@ -685,6 +702,7 @@ fn test_validate_all_four_known_tools_accepted() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -712,6 +730,7 @@ fn test_validate_no_review_no_debate_is_ok() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -739,6 +758,7 @@ fn test_validate_max_recursion_depth_zero() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -747,42 +767,6 @@ fn test_validate_max_recursion_depth_zero() {
     assert!(result.is_ok(), "max_recursion_depth 0 should be valid");
 }
 
-#[test]
-fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
-    let dir = tempdir().unwrap();
-
-    let mut tools = HashMap::new();
-    tools.insert("codex".to_string(), ToolConfig::default());
-
-    let config = ProjectConfig {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project: ProjectMeta {
-            name: "test-project".to_string(),
-            created_at: Utc::now(),
-            max_recursion_depth: 5,
-        },
-        resources: ResourcesConfig::default(),
-        acp: Default::default(),
-        tools,
-        review: None,
-        debate: None,
-        tiers: HashMap::new(),
-        tier_mapping: HashMap::new(),
-        aliases: HashMap::new(),
-        preferences: Some(crate::global::PreferencesConfig {
-            tool_priority: vec!["codexx".into(), "codex".into()],
-        }),
-    };
-
-    config.save(dir.path()).unwrap();
-    // Should pass validation (warn is non-fatal)
-    let result = validate_config(dir.path());
-    assert!(
-        result.is_ok(),
-        "unknown tool_priority entry should warn, not fail: {:?}",
-        result
-    );
-}
-
+include!("validate_tests_preferences.rs");
 include!("validate_tests_sandbox.rs");
 include!("validate_tests_tiers.rs");

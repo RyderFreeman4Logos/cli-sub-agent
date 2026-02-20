@@ -54,6 +54,19 @@ pub struct TierConfig {
     pub max_turns: Option<u32>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SessionConfig {
+    /// Persist ACP transcript events to `output/acp-events.jsonl` when enabled.
+    #[serde(default)]
+    pub transcript_enabled: bool,
+}
+
+impl SessionConfig {
+    pub fn is_default(&self) -> bool {
+        !self.transcript_enabled
+    }
+}
+
 /// Current schema version for config.toml
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -68,6 +81,9 @@ pub struct ProjectConfig {
     /// ACP transport behavior overrides.
     #[serde(default, skip_serializing_if = "AcpConfig::is_default")]
     pub acp: AcpConfig,
+    /// Session-level behavior toggles.
+    #[serde(default, skip_serializing_if = "SessionConfig::is_default")]
+    pub session: SessionConfig,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, ToolConfig>,
     /// Optional per-project override for `csa review` tool selection.
@@ -534,6 +550,10 @@ impl ProjectConfig {
 # project-level .csa/config.toml.
 
 schema_version = 1
+
+[session]
+# Opt-in: persist ACP events to output/acp-events.jsonl.
+transcript_enabled = false
 
 [resources]
 # Minimum combined free memory (physical + swap) in MB.

@@ -23,6 +23,7 @@ fn test_validate_memory_max_mb_too_low() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -59,6 +60,7 @@ fn test_validate_memory_max_mb_at_minimum() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -89,6 +91,7 @@ fn test_validate_pids_max_too_low() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -125,6 +128,7 @@ fn test_validate_pids_max_at_minimum() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -155,6 +159,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -197,6 +202,7 @@ fn test_validate_per_tool_required_enforcement_without_memory_fails() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -243,6 +249,7 @@ fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -283,6 +290,7 @@ fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -323,6 +331,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

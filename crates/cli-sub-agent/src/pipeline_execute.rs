@@ -44,6 +44,7 @@ pub(crate) async fn execute_transport_with_signal(
                         tool: executor.tool_name().to_string(),
                         started_at: execution_start_time,
                         completed_at: interrupted_at,
+                        events_count: 0,
                         artifacts: Vec::new(),
                     };
                     if let Err(e) = save_result(project_root, &session.meta_session_id, &interrupted_result) {
@@ -68,6 +69,7 @@ pub(crate) async fn execute_transport_with_signal(
                         tool: executor.tool_name().to_string(),
                         started_at: execution_start_time,
                         completed_at: interrupted_at,
+                        events_count: 0,
                         artifacts: Vec::new(),
                     };
                     if let Err(e) = save_result(project_root, &session.meta_session_id, &interrupted_result) {

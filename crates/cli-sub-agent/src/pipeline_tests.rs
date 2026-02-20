@@ -69,6 +69,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), Some(42)), 42);
@@ -197,6 +198,7 @@ fn resolve_idle_timeout_uses_config_then_default() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), None), 222);
@@ -226,6 +228,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     }
 }
 
@@ -428,6 +431,7 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     }
 }
 
@@ -559,6 +563,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
         preferences: None,
+        session: Default::default(),
     };
 
     let result_true = build_and_validate_executor(

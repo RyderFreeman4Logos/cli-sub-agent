@@ -1,6 +1,7 @@
 //! Session management with ULID-based genealogy tracking.
 
 pub mod checkpoint;
+pub mod event_writer;
 pub mod genealogy;
 pub mod git;
 pub mod manager;
@@ -17,7 +18,8 @@ pub use state::{
 
 pub use metadata::SessionMetadata;
 
-pub use result::SessionResult;
+pub use event_writer::{EventWriteStats, EventWriter};
+pub use result::{SessionArtifact, SessionResult};
 
 // Re-export manager functions
 pub use manager::{

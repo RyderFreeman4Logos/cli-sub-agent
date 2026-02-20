@@ -612,6 +612,9 @@ pub(crate) async fn execute_with_session_and_meta(
     // Extract provider session ID from transport metadata or fallback output parsing.
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
+    let events_count = transport_result.events.len() as u64;
+    let transcript_artifacts =
+        crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let result = transport_result.execution;
 
     // Parse token usage from output (best-effort)
@@ -731,7 +734,8 @@ pub(crate) async fn execute_with_session_and_meta(
         tool: executor.tool_name().to_string(),
         started_at: execution_start_time,
         completed_at: execution_end_time,
-        artifacts: Vec::new(), // populated by hooks later (Phase 3.3)
+        events_count,
+        artifacts: transcript_artifacts,
     };
     if let Err(e) = save_result(project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);

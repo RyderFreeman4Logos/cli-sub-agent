@@ -473,6 +473,7 @@ mod tests {
             tool: "codex".to_string(),
             started_at: now,
             completed_at: now,
+            events_count: 0,
             artifacts: Vec::new(),
         }
     }

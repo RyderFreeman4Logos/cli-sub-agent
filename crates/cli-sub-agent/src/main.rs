@@ -17,6 +17,7 @@ mod pipeline;
 mod pipeline_env;
 mod pipeline_execute;
 mod pipeline_sandbox;
+mod pipeline_transcript;
 mod plan_cmd;
 mod plan_condition;
 mod plan_display;

@@ -230,6 +230,7 @@ mod tests {
             tier_mapping,
             aliases: HashMap::new(),
             preferences: None,
+            session: Default::default(),
         }
     }
 

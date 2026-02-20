@@ -223,6 +223,7 @@ pub fn init_project(
             },
             resources: ResourcesConfig::default(),
             acp: Default::default(),
+            session: Default::default(),
             tools: HashMap::new(),
             review: None,
             debate: None,
@@ -252,6 +253,7 @@ pub fn init_project(
                 ..Default::default()
             },
             acp: Default::default(),
+            session: Default::default(),
             tools,
             review: None,
             debate: None,

@@ -37,7 +37,8 @@ fn test_save_and_load_result() {
         tool: "codex".to_string(),
         started_at: chrono::Utc::now(),
         completed_at: chrono::Utc::now(),
-        artifacts: vec!["output/result.txt".to_string()],
+        events_count: 0,
+        artifacts: vec![crate::result::SessionArtifact::new("output/result.txt")],
     };
     save_result_in(td.path(), &state.meta_session_id, &result).unwrap();
     let loaded = load_result_in(td.path(), &state.meta_session_id)
