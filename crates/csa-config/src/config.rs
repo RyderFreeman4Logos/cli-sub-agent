@@ -210,7 +210,7 @@ fn default_min_mem() -> u64 {
 }
 
 fn default_idle_timeout_seconds() -> u64 {
-    300
+    120
 }
 
 impl Default for ResourcesConfig {
@@ -559,7 +559,7 @@ schema_version = 1
 # Minimum combined free memory (physical + swap) in MB.
 min_free_memory_mb = 4096
 # Kill child processes only when no streamed output appears for N seconds.
-idle_timeout_seconds = 300
+idle_timeout_seconds = 120
 
 # Tool configuration defaults.
 # [tools.codex]

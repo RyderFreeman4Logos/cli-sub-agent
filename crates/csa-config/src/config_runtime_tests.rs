@@ -6,6 +6,7 @@ use crate::config::{
     CURRENT_SCHEMA_VERSION, EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig,
     ToolConfig, ToolResourceProfile,
 };
+use crate::config_runtime::default_sandbox_for_tool;
 
 fn empty_config() -> ProjectConfig {
     ProjectConfig {
@@ -180,8 +181,8 @@ fn memory_max_heavyweight_gets_profile_default() {
     let cfg = empty_config();
     assert_eq!(
         cfg.sandbox_memory_max_mb("claude-code"),
-        Some(4096),
-        "Heavyweight profile should provide 4096 MB default"
+        Some(2048),
+        "Heavyweight profile should provide 2048 MB default"
     );
 }
 
@@ -211,10 +212,10 @@ fn memory_max_tool_override_wins_over_profile() {
 #[test]
 fn memory_max_project_level_wins_over_profile() {
     let mut cfg = empty_config();
-    cfg.resources.memory_max_mb = Some(2048);
+    cfg.resources.memory_max_mb = Some(1024);
     assert_eq!(
         cfg.sandbox_memory_max_mb("claude-code"),
-        Some(2048),
+        Some(1024),
         "Project-level memory_max_mb should override profile default"
     );
 }
@@ -224,8 +225,8 @@ fn memory_swap_heavyweight_gets_profile_default() {
     let cfg = empty_config();
     assert_eq!(
         cfg.sandbox_memory_swap_max_mb("claude-code"),
-        Some(2048),
-        "Heavyweight profile should provide 2048 MB swap default"
+        Some(0),
+        "Heavyweight profile should provide 0 MB swap default (no swap)"
     );
 }
 
@@ -318,4 +319,74 @@ fn legacy_enforcement_mode_still_works() {
 fn legacy_enforcement_mode_defaults_to_off() {
     let cfg = empty_config();
     assert_eq!(cfg.enforcement_mode(), EnforcementMode::Off);
+}
+
+// ── Lean mode defaults ─────────────────────────────────────────────────
+
+#[test]
+fn lean_mode_heavyweight_defaults_to_true() {
+    let cfg = empty_config();
+    assert!(
+        cfg.tool_lean_mode("claude-code"),
+        "Heavyweight tools should default lean_mode to true"
+    );
+}
+
+#[test]
+fn lean_mode_lightweight_defaults_to_false() {
+    let cfg = empty_config();
+    assert!(
+        !cfg.tool_lean_mode("codex"),
+        "Lightweight tools should default lean_mode to false"
+    );
+}
+
+#[test]
+fn lean_mode_explicit_false_overrides_default() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            lean_mode: Some(false),
+            ..Default::default()
+        },
+    );
+    assert!(
+        !cfg.tool_lean_mode("claude-code"),
+        "Explicit lean_mode=false should override Heavyweight default"
+    );
+}
+
+// ── Node heap limit defaults ───────────────────────────────────────────
+
+#[test]
+fn node_heap_limit_heavyweight_defaults_to_2048() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.sandbox_node_heap_limit_mb("claude-code"),
+        Some(2048),
+        "Heavyweight tools should default node_heap_limit_mb to 2048"
+    );
+}
+
+// ── default_sandbox_for_tool pub API ───────────────────────────────────
+
+#[test]
+fn default_sandbox_for_tool_claude_code() {
+    let opts = default_sandbox_for_tool("claude-code");
+    assert_eq!(opts.enforcement, EnforcementMode::BestEffort);
+    assert_eq!(opts.memory_max_mb, Some(2048));
+    assert_eq!(opts.memory_swap_max_mb, Some(0));
+    assert!(opts.lean_mode);
+    assert_eq!(opts.node_heap_limit_mb, Some(2048));
+}
+
+#[test]
+fn default_sandbox_for_tool_codex() {
+    let opts = default_sandbox_for_tool("codex");
+    assert_eq!(opts.enforcement, EnforcementMode::Off);
+    assert_eq!(opts.memory_max_mb, None);
+    assert_eq!(opts.memory_swap_max_mb, None);
+    assert!(!opts.lean_mode);
+    assert_eq!(opts.node_heap_limit_mb, None);
 }

@@ -28,8 +28,8 @@ fn profile_defaults(profile: ToolResourceProfile) -> ProfileDefaults {
         },
         ToolResourceProfile::Heavyweight => ProfileDefaults {
             enforcement: EnforcementMode::BestEffort,
-            memory_max_mb: Some(4096),
-            memory_swap_max_mb: Some(2048),
+            memory_max_mb: Some(2048),
+            memory_swap_max_mb: Some(0),
         },
         ToolResourceProfile::Custom => ProfileDefaults {
             enforcement: EnforcementMode::Off,
@@ -117,12 +117,16 @@ impl ProjectConfig {
             })
     }
 
-    /// Resolve node_heap_limit_mb: tool-level override > project resources > None.
+    /// Resolve node_heap_limit_mb: tool-level override > project resources > profile default > None.
     pub fn sandbox_node_heap_limit_mb(&self, tool: &str) -> Option<u64> {
         self.tools
             .get(tool)
             .and_then(|t| t.node_heap_limit_mb)
             .or(self.resources.node_heap_limit_mb)
+            .or_else(|| match default_profile(tool) {
+                ToolResourceProfile::Heavyweight => Some(2048),
+                _ => None,
+            })
     }
 
     /// Resolve pids_max from project resources config.
@@ -141,12 +145,14 @@ impl ProjectConfig {
             .unwrap_or(true)
     }
 
-    /// Resolve lean_mode for a tool (defaults to false).
+    /// Resolve lean_mode for a tool.
+    ///
+    /// Defaults to `true` for Heavyweight tools, `false` otherwise.
     pub fn tool_lean_mode(&self, tool: &str) -> bool {
         self.tools
             .get(tool)
             .and_then(|t| t.lean_mode)
-            .unwrap_or(false)
+            .unwrap_or_else(|| matches!(default_profile(tool), ToolResourceProfile::Heavyweight))
     }
 
     /// Check if a tool is allowed to edit existing files.
@@ -156,6 +162,34 @@ impl ProjectConfig {
             .and_then(|t| t.restrictions.as_ref())
             .map(|r| r.allow_edit_existing_files)
             .unwrap_or(true)
+    }
+}
+
+/// Default sandbox options derived from a tool's resource profile.
+/// Used when no ProjectConfig is available (e.g., no .csa/config.toml).
+#[derive(Debug, Clone)]
+pub struct DefaultSandboxOptions {
+    pub enforcement: EnforcementMode,
+    pub memory_max_mb: Option<u64>,
+    pub memory_swap_max_mb: Option<u64>,
+    pub lean_mode: bool,
+    pub node_heap_limit_mb: Option<u64>,
+}
+
+/// Get default sandbox options for a tool based on its resource profile.
+/// This is the public gateway to the private `default_profile()` / `profile_defaults()`.
+pub fn default_sandbox_for_tool(tool: &str) -> DefaultSandboxOptions {
+    let profile = default_profile(tool);
+    let defaults = profile_defaults(profile);
+    DefaultSandboxOptions {
+        enforcement: defaults.enforcement,
+        memory_max_mb: defaults.memory_max_mb,
+        memory_swap_max_mb: defaults.memory_swap_max_mb,
+        lean_mode: matches!(profile, ToolResourceProfile::Heavyweight),
+        node_heap_limit_mb: match profile {
+            ToolResourceProfile::Heavyweight => Some(2048),
+            _ => None,
+        },
     }
 }
 

@@ -584,7 +584,7 @@ created_at = "2024-01-01T00:00:00Z"
     let loaded = loaded.unwrap();
 
     assert_eq!(loaded.project.max_recursion_depth, 5);
-    assert_eq!(loaded.resources.idle_timeout_seconds, 300);
+    assert_eq!(loaded.resources.idle_timeout_seconds, 120);
 }
 
 #[test]

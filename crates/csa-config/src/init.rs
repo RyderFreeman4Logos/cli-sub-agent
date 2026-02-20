@@ -246,7 +246,7 @@ pub fn init_project(
             },
             resources: ResourcesConfig {
                 min_free_memory_mb: 4096,
-                idle_timeout_seconds: 300,
+                idle_timeout_seconds: 120,
                 initial_estimates,
                 ..Default::default()
             },

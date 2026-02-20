@@ -13,6 +13,7 @@ pub use config::{
     EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
     ToolResourceProfile, ToolRestrictions,
 };
+pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use global::{GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig};
