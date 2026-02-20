@@ -1,20 +1,20 @@
-[plan]
+[workflow]
 name = "mktsk"
 description = "Convert TODO plans into Task tool entries for persistent serial execution across auto-compaction"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "CONTEXT_ABOVE_80_PERCENT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "TASK_IS_IMPLEMENTATION"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "TASK_LIST"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "TODO_ITEMS"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Parse TODO Plan"
 prompt = """
@@ -22,13 +22,13 @@ Read the TODO plan file (from mktd output or user-provided plan).
 Extract each [ ] item with its executor tag and description."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Create Task Entries"
 prompt = ""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Step 2a: Create TaskCreate Entry"
 prompt = """
@@ -39,11 +39,11 @@ Each task MUST include:
 - DONE WHEN condition (mechanically verifiable)"""
 on_fail = "abort"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TODO_ITEMS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Step 2b: Append Commit Task"
 prompt = """
@@ -51,28 +51,28 @@ For implementation tasks, append a corresponding commit task:
 [Skill:commit] → runs full commit workflow (fmt → lint → test → audit → review → commit)"""
 on_fail = "abort"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TODO_ITEMS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Execute Tasks Serially"
 prompt = ""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Step 4a: Implement"
 prompt = "Write code for the current task."
 on_fail = "abort"
 condition = "${TASK_IS_IMPLEMENTATION}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TASK_LIST}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Step 4b: Quality Gates"
 tool = "bash"
@@ -82,14 +82,14 @@ just pre-commit
 ```"""
 condition = "${TASK_IS_IMPLEMENTATION}"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TASK_LIST}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Step 4c: Review"
 tool = "bash"
@@ -100,22 +100,22 @@ csa review --diff
 on_fail = "abort"
 condition = "${TASK_IS_IMPLEMENTATION}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TASK_LIST}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Step 4d: Commit"
 prompt = ""
 on_fail = "abort"
 condition = "${TASK_IS_IMPLEMENTATION}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TASK_LIST}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Include commit"
 tool = "weave"
@@ -123,22 +123,22 @@ prompt = "commit"
 on_fail = "abort"
 condition = "${TASK_IS_IMPLEMENTATION}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TASK_LIST}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Step 4e: Compact Context"
 prompt = "Preserve task list and decisions. Compact process details."
 on_fail = "abort"
 condition = "${CONTEXT_ABOVE_80_PERCENT}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "task"
 collection = "${TASK_LIST}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 12
 title = "Verify Completion"
 prompt = """

@@ -187,6 +187,105 @@ pub fn execute_migration(migration: &Migration, project_root: &Path) -> Result<(
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Built-in migrations
+// ---------------------------------------------------------------------------
+
+/// Build a registry pre-loaded with all known migrations.
+pub fn default_registry() -> MigrationRegistry {
+    let mut r = MigrationRegistry::new();
+    r.register(plan_to_workflow_migration());
+    r
+}
+
+/// Migration 0.1.2: rename `[plan]` → `[workflow]` in workflow TOML files.
+///
+/// Applies to all `workflow.toml` files under `patterns/` and any
+/// `.csa/config.toml` references. The weave compiler already accepts
+/// both keys via `#[serde(alias = "plan")]`, so this is a forward-only
+/// rename to the canonical key name.
+fn plan_to_workflow_migration() -> Migration {
+    Migration {
+        id: "0.1.2-plan-to-workflow".to_string(),
+        from_version: Version::new(0, 1, 1),
+        to_version: Version::new(0, 1, 2),
+        description: "Rename [plan] to [workflow] in workflow TOML files".to_string(),
+        steps: vec![MigrationStep::Custom {
+            label: "rename plan keys to workflow in all workflow.toml files".to_string(),
+            apply: Box::new(rename_plan_keys_in_project),
+        }],
+    }
+}
+
+/// Walk `patterns/` looking for `workflow.toml` files and replace
+/// `[plan]` / `[[plan.` / `plan.` table references with `workflow`.
+fn rename_plan_keys_in_project(project_root: &Path) -> Result<()> {
+    let patterns_dir = project_root.join("patterns");
+    if !patterns_dir.is_dir() {
+        return Ok(());
+    }
+    rename_plan_keys_recursive(&patterns_dir)
+}
+
+fn rename_plan_keys_recursive(dir: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            rename_plan_keys_recursive(&path)?;
+        } else if path.file_name().and_then(|n| n.to_str()) == Some("workflow.toml") {
+            rename_plan_keys_in_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Replace plan-based TOML keys with workflow-based keys in a single file.
+/// Handles: `[plan]`, `[[plan.steps]]`, `[[plan.variables]]`, `[plan.steps.on_fail]`,
+/// `[plan.steps.loop_var]` and similar nested table paths.
+fn rename_plan_keys_in_file(path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(path)?;
+    let mut result = String::with_capacity(content.len());
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if is_plan_table_header(trimmed) {
+            // Replace `plan` with `workflow` only in the table key portion.
+            let replaced = replace_plan_in_header(line);
+            result.push_str(&replaced);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+
+    // Only write if actually changed.
+    if result != content {
+        std::fs::write(path, result)?;
+    }
+    Ok(())
+}
+
+/// Check if a trimmed line is a TOML table header referencing `plan`.
+fn is_plan_table_header(trimmed: &str) -> bool {
+    // Matches `[plan]`, `[[plan.steps]]`, `[plan.steps.on_fail]`, etc.
+    (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        && (trimmed.contains("[plan]")
+            || trimmed.contains("[plan.")
+            || trimmed.contains("[[plan."))
+}
+
+/// Replace `plan` with `workflow` in a TOML table header line,
+/// preserving leading whitespace and bracket structure.
+fn replace_plan_in_header(line: &str) -> String {
+    // We only replace the first occurrence of `plan` that appears
+    // right after `[` or `[[` — this avoids false positives.
+    line.replacen("[plan]", "[workflow]", 1)
+        .replacen("[[plan.", "[[workflow.", 1)
+        .replacen("[plan.", "[workflow.", 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

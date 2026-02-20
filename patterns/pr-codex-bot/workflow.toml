@@ -1,47 +1,47 @@
-[plan]
+[workflow]
 name = "pr-codex-bot"
 description = "Iterative PR review loop with cloud codex bot: local review, push, bot trigger, false-positive arbitration, fix, merge"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BOT_COMMENTS"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BOT_HAS_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BOT_UNAVAILABLE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "CLEAN_BRANCH"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMENT_IS_FALSE_POSITIVE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMENT_IS_STALE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FIXES_ACCUMULATED"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "LOCAL_REVIEW_HAS_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PR_BODY"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PR_NUM"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PR_TITLE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REPO"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "WORKFLOW_BRANCH"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Commit Changes"
 tool = "bash"
@@ -54,7 +54,7 @@ WORKFLOW_BRANCH="$(git branch --show-current)"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"
 tool = "bash"
@@ -67,7 +67,7 @@ csa review --branch main
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Fix Local Review Issues"
 tool = "csa"
@@ -75,10 +75,10 @@ prompt = "Fix issues found by local review. Loop until clean (max 3 rounds)."
 tier = "tier-2-standard"
 condition = "${LOCAL_REVIEW_HAS_ISSUES}"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 3
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Push and Create PR"
 tool = "bash"
@@ -90,7 +90,7 @@ PR_NUM=$(gh pr view --json number -q '.number')
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Trigger Cloud Bot Review"
 tool = "bash"
@@ -102,7 +102,7 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Poll for Bot Response"
 tool = "bash"
@@ -111,7 +111,7 @@ Bounded poll (max 10 minutes). If bot unavailable, fall through —
 local review (Step 2) already covers main...HEAD."""
 on_fail = "skip"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Step 6a: Merge Without Bot"
 tool = "bash"
@@ -126,7 +126,7 @@ git checkout main && git pull origin main
 on_fail = "abort"
 condition = "${BOT_UNAVAILABLE}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Evaluate Each Bot Comment"
 tool = "claude-code"
@@ -135,7 +135,7 @@ tier = "tier-3-complex"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Staleness Filter"
 tool = "bash"
@@ -155,11 +155,11 @@ skipped before arbitration — they do not enter the debate step.
 on_fail = "skip"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Arbitrate via Debate"
 tool = "csa"
@@ -168,11 +168,11 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Include debate"
 tool = "weave"
@@ -180,11 +180,11 @@ prompt = "debate"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 12
 title = "Fix Real Issue"
 tool = "csa"
@@ -192,14 +192,14 @@ prompt = "Fix the real issue. Commit the fix."
 tier = "tier-2-standard"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE})) && (!(${COMMENT_IS_STALE})))"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 13
 title = "Push Fixes and Re-trigger"
 tool = "bash"
@@ -213,14 +213,14 @@ Loop back to Step 6 (poll). Max 10 total iterations."""
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 14
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to merge."
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 15
 title = "Clean Resubmission (if needed)"
 tool = "bash"
@@ -236,7 +236,7 @@ gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 16
 title = "Final Merge"
 tool = "bash"
@@ -250,7 +250,7 @@ git checkout main && git pull origin main
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 17
 title = "Step 12b: Final Merge (Direct)"
 tool = "bash"

@@ -1,29 +1,29 @@
-[plan]
+[workflow]
 name = "csa-review"
 description = "CSA-driven code review with independent model selection, session isolation, and structured outputs"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FIX_PROMPT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "MODE_IS_REVIEW_AND_FIX"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REVIEW_PROMPT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REVIEW_TOOL"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SCOPE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SCOPE_IS_PRE_PR"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SESSION_ID"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Role Detection"
 prompt = """
@@ -33,7 +33,7 @@ If invoked by user → orchestrator mode (follow steps below).
 Review agents MUST NOT run csa commands (prevents recursion)."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Determine Review Tool"
 tool = "bash"
@@ -46,7 +46,7 @@ csa config get review.tool 2>/dev/null || echo "auto"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Auto-Detect TODO Plan"
 tool = "bash"
@@ -60,7 +60,7 @@ csa todo find --branch "$(git branch --show-current)"
 on_fail = "abort"
 condition = "${SCOPE_IS_PRE_PR}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Build Review Prompt"
 prompt = """
@@ -75,7 +75,7 @@ Review prompt instructs agent to:
 5. Generate review-findings.json and review-report.md"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Execute Review via CSA"
 tool = "csa"
@@ -86,7 +86,7 @@ csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PR
 tier = "tier-2-standard"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Present Results"
 prompt = """
@@ -94,7 +94,7 @@ Read and display review-report.md, review-findings.json summary,
 AGENTS.md checklist summary. Report CSA session ID for follow-up."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Fix Mode"
 tool = "csa"
@@ -110,7 +110,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${MODE_IS_REVIEW_AND_FIX}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Verification"
 tool = "bash"

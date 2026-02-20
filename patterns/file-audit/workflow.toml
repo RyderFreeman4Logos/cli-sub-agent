@@ -1,26 +1,26 @@
-[plan]
+[workflow]
 name = "file-audit"
 description = "Per-file AGENTS.md compliance audit with Chinese reports and tech blog"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "AUDIT_SCOPE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FILE_PATH"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "HAS_VIOLATIONS"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PROJECT_ROOT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "RELATIVE_PATH"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "TARGET_FILES"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Discover AGENTS.md Chain"
 tool = "bash"
@@ -33,7 +33,7 @@ find "${PROJECT_ROOT}" -name "AGENTS.md" -not -path "*/node_modules/*" -not -pat
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Collect Target Files"
 tool = "bash"
@@ -46,7 +46,7 @@ find "${AUDIT_SCOPE}" -name "*.rs" -not -name "*test*" | sort
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Prepare Output Directory"
 tool = "bash"
@@ -59,7 +59,7 @@ mkdir -p "./drafts/audit/$(dirname "${RELATIVE_PATH}")"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Audit Single File"
 tool = "csa"
@@ -80,11 +80,11 @@ Example checkbox format:
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "file"
 collection = "${TARGET_FILES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Write Audit Report"
 tool = "bash"
@@ -93,11 +93,11 @@ Write the audit report to `./drafts/audit/${RELATIVE_PATH}.audit.md`.
 The report is in Chinese with AGENTS.md compliance checkboxes."""
 on_fail = "abort"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "file"
 collection = "${TARGET_FILES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Generate Violation Summary"
 tool = "csa"
@@ -109,7 +109,7 @@ tier = "tier-1-quick"
 on_fail = "abort"
 condition = "${HAS_VIOLATIONS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Write Tech Blog"
 tool = "csa"

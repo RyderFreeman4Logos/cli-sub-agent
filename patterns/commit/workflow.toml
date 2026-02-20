@@ -1,38 +1,38 @@
-[plan]
+[workflow]
 name = "commit"
 description = "Strict commit discipline with Conventional Commits, mandatory security audit, test verification, and pre-commit review"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "AUDIT_FAIL"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "AUDIT_PASS_DEFERRED"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BRANCH"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMIT_MSG"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FILES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "HAS_DEFERRED_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "IS_MILESTONE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PR_BODY"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REVIEW_HAS_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SCOPE"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Branch Check"
 tool = "bash"
@@ -50,7 +50,7 @@ fi
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Run Formatters"
 tool = "bash"
@@ -59,10 +59,10 @@ prompt = """
 just fmt
 ```"""
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Run Linters"
 tool = "bash"
@@ -71,10 +71,10 @@ prompt = """
 just clippy
 ```"""
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Run Tests"
 tool = "bash"
@@ -84,7 +84,7 @@ just test
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Stage Changes"
 tool = "bash"
@@ -101,7 +101,7 @@ fi
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Security Scan"
 tool = "bash"
@@ -118,7 +118,7 @@ done
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Security Audit"
 tool = "csa"
@@ -126,21 +126,21 @@ prompt = ""
 tier = "tier-2-standard"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Include security-audit"
 tool = "weave"
 prompt = "security-audit"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Step 7a: Fix Audit Issues"
 prompt = "Fix blocking issues and re-run from Step 2."
 on_fail = "abort"
 condition = "${AUDIT_FAIL}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Step 7b: Record Deferred Issues"
 prompt = """
@@ -149,7 +149,7 @@ immediate post-commit fixing."""
 on_fail = "abort"
 condition = "${AUDIT_PASS_DEFERRED}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Pre-Commit Review"
 tool = "csa"
@@ -157,14 +157,14 @@ prompt = ""
 tier = "tier-2-standard"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 12
 title = "Include ai-reviewed-commit"
 tool = "weave"
 prompt = "ai-reviewed-commit"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 13
 title = "Fix Review Issues"
 tool = "csa"
@@ -177,10 +177,10 @@ just pre-commit
 tier = "tier-2-standard"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 3
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 14
 title = "Generate Commit Message"
 tool = "csa"
@@ -198,7 +198,7 @@ csa run --tool codex --thinking low "Run 'git diff --staged' and generate a Conv
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 15
 title = "Commit"
 tool = "bash"
@@ -208,7 +208,7 @@ git commit -m "${COMMIT_MSG}"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 16
 title = "Auto PR"
 tool = "bash"
@@ -223,14 +223,14 @@ gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 17
 title = "Invoke PR Codex Bot"
 prompt = ""
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 18
 title = "Include pr-codex-bot"
 tool = "weave"
@@ -238,7 +238,7 @@ prompt = "pr-codex-bot"
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 19
 title = "Fix Deferred Issues"
 prompt = """

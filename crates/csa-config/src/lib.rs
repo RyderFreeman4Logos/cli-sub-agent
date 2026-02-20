@@ -16,6 +16,6 @@ pub use config::{
 pub use global::{GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig};
-pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version};
+pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version, default_registry};
 pub use validate::validate_config;
 pub use weave_lock::{VersionCheckResult, WeaveLock, check_version};

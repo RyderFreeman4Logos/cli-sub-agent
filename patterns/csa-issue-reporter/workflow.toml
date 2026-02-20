@@ -1,17 +1,17 @@
-[plan]
+[workflow]
 name = "csa-issue-reporter"
 description = "File structured GitHub issues when CSA encounters errors during operation"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "ISSUE_BODY"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "ISSUE_TITLE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "ISSUE_URL"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Gather Environment Context"
 tool = "bash"
@@ -26,7 +26,7 @@ git -C "$(git rev-parse --show-toplevel)" log -1 --format="%h %s" 2>/dev/null
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Determine Labels"
 prompt = """
@@ -41,7 +41,7 @@ Map error type to GitHub labels:
 If labels do not exist, fall back to just "bug"."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Create Issue"
 tool = "bash"
@@ -58,7 +58,7 @@ gh issue create \
 ```'''
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Report Back"
 prompt = """

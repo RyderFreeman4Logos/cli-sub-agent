@@ -1,21 +1,21 @@
-[plan]
+[workflow]
 name = "mktd"
 description = "Make TODO: CSA-powered reconnaissance, adversarial debate, and structured TODO plan generation"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "CWD"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FEATURE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FINALIZED_TODO_CONTENT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "USER_LANGUAGE"
 description = "Primary language for TODO content (auto-detected from conversation or FEATURE description; e.g. 'Chinese (Simplified)', 'English', 'Japanese')"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Phase 1 — RECON Dimension 1 (Structure)"
 tool = "csa"
@@ -31,7 +31,7 @@ Working directory: ${CWD}"
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Phase 1 — RECON Dimension 2 (Patterns)"
 tool = "csa"
@@ -46,7 +46,7 @@ Working directory: ${CWD}"
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Phase 1 — RECON Dimension 3 (Constraints)"
 tool = "csa"
@@ -61,7 +61,7 @@ Working directory: ${CWD}"
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Phase 2 — DRAFT TODO"
 prompt = """
@@ -73,7 +73,7 @@ If USER_LANGUAGE is empty or unset, default to the language used in the FEATURE 
 Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool]."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Phase 3 — Adversarial Debate"
 tool = "csa"
@@ -81,14 +81,14 @@ prompt = ""
 tier = "tier-2-standard"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Include debate"
 tool = "weave"
 prompt = "debate"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Revise TODO"
 prompt = """
@@ -96,7 +96,7 @@ Incorporate debate feedback. Update plan based on valid criticisms.
 Concede valid points, defend sound decisions with evidence."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Save TODO"
 tool = "bash"
@@ -112,7 +112,7 @@ csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Phase 4 — User Approval"
 prompt = """

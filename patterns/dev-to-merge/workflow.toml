@@ -1,41 +1,41 @@
-[plan]
+[workflow]
 name = "dev-to-merge"
 description = "Full development cycle from branch creation through commit, PR, codex-bot review, and merge"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BOT_COMMENTS"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BOT_HAS_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "BRANCH"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMENT_IS_FALSE_POSITIVE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMENT_TEXT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMIT_MSG"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PR_BODY"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PR_NUM"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REPO"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REVIEW_HAS_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SCOPE"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Validate Branch"
 tool = "bash"
@@ -54,7 +54,7 @@ fi
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Run Formatters"
 tool = "bash"
@@ -65,10 +65,10 @@ Run the project formatter to ensure consistent code style.
 just fmt
 ```"""
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Run Linters"
 tool = "bash"
@@ -79,10 +79,10 @@ Run linters to catch static analysis issues.
 just clippy
 ```"""
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Run Tests"
 tool = "bash"
@@ -94,7 +94,7 @@ just test
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Stage Changes"
 tool = "bash"
@@ -112,7 +112,7 @@ fi
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Security Scan"
 tool = "bash"
@@ -130,7 +130,7 @@ done
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Security Audit"
 tool = "csa"
@@ -144,7 +144,7 @@ Phase 3: No debug code, secrets, or commented-out code."""
 tier = "tier-2-standard"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Pre-Commit Review"
 tool = "csa"
@@ -160,7 +160,7 @@ Review output includes AGENTS.md compliance checklist."""
 tier = "tier-2-standard"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Fix Review Issues"
 tool = "csa"
@@ -170,10 +170,10 @@ Preserve original code intent. Do NOT delete code to silence warnings."""
 tier = "tier-2-standard"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 3
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Re-run Quality Gates"
 tool = "bash"
@@ -186,7 +186,7 @@ just pre-commit
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Re-review"
 tool = "csa"
@@ -197,7 +197,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 12
 title = "Generate Commit Message"
 tool = "csa"
@@ -211,7 +211,7 @@ csa run "Run 'git diff --staged' and generate a Conventional Commits message. Sc
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 13
 title = "Commit"
 tool = "bash"
@@ -226,7 +226,7 @@ git commit -m "${COMMIT_MSG}"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 14
 title = "Push to Origin"
 tool = "bash"
@@ -237,10 +237,10 @@ Push the feature branch to the remote origin.
 git push -u origin "${BRANCH}"
 ```"""
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 15
 title = "Create Pull Request"
 tool = "bash"
@@ -254,7 +254,7 @@ gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 16
 title = "Trigger Codex Bot Review"
 tool = "bash"
@@ -271,7 +271,7 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 17
 title = "Poll for Bot Response"
 tool = "bash"
@@ -280,7 +280,7 @@ Poll for bot review response with a bounded timeout (max 10 minutes).
 If the bot does not respond, fall through to UNAVAILABLE handling."""
 on_fail = "skip"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 18
 title = "Evaluate Bot Comments"
 tool = "claude-code"
@@ -293,7 +293,7 @@ tier = "tier-3-complex"
 on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 19
 title = "Process Comment"
 prompt = """
@@ -302,11 +302,11 @@ Determine category (A/B/C) and take appropriate action."""
 on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 20
 title = "Arbitrate False Positive"
 tool = "csa"
@@ -321,11 +321,11 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 21
 title = "Fix Real Issue"
 tool = "csa"
@@ -333,14 +333,14 @@ prompt = "Fix the real issue identified by the bot. Commit the fix."
 tier = "tier-2-standard"
 condition = "${BOT_HAS_ISSUES}"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 2
 
-[plan.steps.loop_var]
+[workflow.steps.loop_var]
 variable = "comment"
 collection = "${BOT_COMMENTS}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 22
 title = "Push Fixes and Re-trigger Review"
 tool = "bash"
@@ -354,14 +354,14 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 23
 title = "Bot Review Clean"
 prompt = "No issues found by the codex bot. Proceed to merge."
 on_fail = "abort"
 condition = "!(${BOT_HAS_ISSUES})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 24
 title = "Merge PR"
 tool = "bash"

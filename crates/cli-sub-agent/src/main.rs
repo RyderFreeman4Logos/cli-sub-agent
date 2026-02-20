@@ -60,7 +60,7 @@ async fn main() -> Result<()> {
 
     // Check weave.lock version alignment (non-fatal).
     if let Ok(cwd) = std::env::current_dir() {
-        let registry = csa_config::MigrationRegistry::new();
+        let registry = csa_config::default_registry();
         match csa_config::check_version(
             &cwd,
             env!("CARGO_PKG_VERSION"),

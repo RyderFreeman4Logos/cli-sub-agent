@@ -1,35 +1,35 @@
-[plan]
+[workflow]
 name = "debate"
 description = "Adversarial multi-tool AI debate for strategy formulation with tier-based model escalation"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "CRITIC_MODEL"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "CRITIQUE_PROMPT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "CURRENT_TIER"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "ESCALATION_PROMPT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "HIGHER_TIER_MODEL"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "NEEDS_ESCALATION"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PROPOSAL_PROMPT"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PROPOSER_MODEL"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "RESPONSE_PROMPT"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Role Detection"
 prompt = """
@@ -39,7 +39,7 @@ If invoked by user via /debate → orchestrator mode.
 Participants MUST NOT run any csa commands (infinite recursion)."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Verify Prerequisites"
 tool = "bash"
@@ -51,7 +51,7 @@ which csa && csa --format json tiers list
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Discover Available Models"
 tool = "bash"
@@ -64,7 +64,7 @@ csa --format json tiers list
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Resolve Debate Tool"
 prompt = """
@@ -72,7 +72,7 @@ CSA auto-selects heterogeneous tool: claude-code caller → codex reviewer,
 codex caller → claude-code reviewer. Override with explicit --tool if needed."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Select Starting Tier"
 prompt = """
@@ -81,7 +81,7 @@ Filter models to those matching the debate tool.
 Validate >= 2 models available. If < 2, try next higher tier."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Round 1 — Proposal"
 tool = "csa"
@@ -98,7 +98,7 @@ csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}"
 tier = "${CURRENT_TIER}"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Round 1 — Critique"
 tool = "csa"
@@ -115,7 +115,7 @@ csa run --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}"
 tier = "${CURRENT_TIER}"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Round 1 — Response"
 tool = "csa"
@@ -131,7 +131,7 @@ csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}"
 tier = "${CURRENT_TIER}"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Convergence Evaluation"
 prompt = """
@@ -142,7 +142,7 @@ Orchestrator evaluates after each critique-response pair:
 - Arguments circular → escalate tier"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Tier Escalation"
 prompt = """
@@ -156,7 +156,7 @@ csa run --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}"
 on_fail = "abort"
 condition = "${NEEDS_ESCALATION}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Final Synthesis"
 prompt = """
