@@ -68,8 +68,11 @@ fn test_list_artifacts() {
     let dir = get_session_dir_in(td.path(), &state.meta_session_id);
     std::fs::write(dir.join("output/report.txt"), "test").unwrap();
     std::fs::write(dir.join("output/diff.patch"), "test").unwrap();
+    std::fs::write(dir.join("output/acp-events.jsonl"), "{\"ts\":\"2026-01-01T00:00:00Z\"}\n")
+        .unwrap();
     let artifacts = list_artifacts_in(td.path(), &state.meta_session_id).unwrap();
-    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts.len(), 3);
+    assert!(artifacts.contains(&"acp-events.jsonl".to_string()));
     assert!(artifacts.contains(&"diff.patch".to_string()));
     assert!(artifacts.contains(&"report.txt".to_string()));
 }

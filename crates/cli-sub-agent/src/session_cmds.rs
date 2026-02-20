@@ -1,5 +1,6 @@
 use anyhow::Result;
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 use tracing::info;
 
@@ -72,6 +73,58 @@ fn resolve_session_status(project_root: &Path, session: &MetaSessionState) -> St
             "Error".to_string()
         }
     }
+}
+
+#[derive(Debug, Clone)]
+struct TranscriptSummary {
+    event_count: u64,
+    size_bytes: u64,
+    first_timestamp: Option<String>,
+    last_timestamp: Option<String>,
+}
+
+fn load_transcript_summary(session_dir: &Path) -> Result<Option<TranscriptSummary>> {
+    let transcript_path = session_dir.join("output").join("acp-events.jsonl");
+    if !transcript_path.is_file() {
+        return Ok(None);
+    }
+
+    let size_bytes = fs::metadata(&transcript_path)?.len();
+    let file = File::open(&transcript_path)?;
+    let reader = BufReader::new(file);
+
+    let mut event_count = 0u64;
+    let mut first_timestamp: Option<String> = None;
+    let mut last_timestamp: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        event_count = event_count.saturating_add(1);
+        if let Some(ts) = extract_transcript_timestamp(&line) {
+            if first_timestamp.is_none() {
+                first_timestamp = Some(ts.clone());
+            }
+            last_timestamp = Some(ts);
+        }
+    }
+
+    Ok(Some(TranscriptSummary {
+        event_count,
+        size_bytes,
+        first_timestamp,
+        last_timestamp,
+    }))
+}
+
+fn extract_transcript_timestamp(line: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(line)
+        .ok()?
+        .get("ts")?
+        .as_str()
+        .map(ToString::to_string)
 }
 
 pub(crate) fn handle_session_list(
@@ -335,10 +388,21 @@ pub(crate) fn handle_session_result(session: String, json: bool, cd: Option<Stri
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    let transcript_summary = load_transcript_summary(&session_dir)?;
     match load_result(&project_root, &resolved_id)? {
         Some(result) => {
             if json {
-                println!("{}", serde_json::to_string_pretty(&result)?);
+                let mut payload = serde_json::to_value(&result)?;
+                if let Some(summary) = transcript_summary {
+                    payload["transcript_summary"] = serde_json::json!({
+                        "event_count": summary.event_count,
+                        "size_bytes": summary.size_bytes,
+                        "first_timestamp": summary.first_timestamp,
+                        "last_timestamp": summary.last_timestamp,
+                    });
+                }
+                println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
                 println!("Session: {}", resolved_id);
                 println!("Status:  {}", result.status);
@@ -352,6 +416,19 @@ pub(crate) fn handle_session_result(session: String, json: bool, cd: Option<Stri
                     for a in &result.artifacts {
                         println!("  - {}", a);
                     }
+                }
+                if let Some(summary) = transcript_summary {
+                    println!("Transcript:");
+                    println!("  Events: {}", summary.event_count);
+                    println!("  Size:   {} bytes", summary.size_bytes);
+                    println!(
+                        "  First:  {}",
+                        summary.first_timestamp.as_deref().unwrap_or("-")
+                    );
+                    println!(
+                        "  Last:   {}",
+                        summary.last_timestamp.as_deref().unwrap_or("-")
+                    );
                 }
             }
         }

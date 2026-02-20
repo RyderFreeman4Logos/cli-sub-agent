@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 const STATE_FILE_NAME: &str = "state.toml";
+const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
 
 /// Resolved identifiers for resuming a tool session.
 #[derive(Debug, Clone)]
@@ -541,6 +542,10 @@ pub(crate) fn list_artifacts_in(base_dir: &Path, session_id: &str) -> Result<Vec
         if entry.file_type()?.is_file() {
             artifacts.push(entry.file_name().to_string_lossy().to_string());
         }
+    }
+    let transcript_path = output_dir.join(TRANSCRIPT_FILE_NAME);
+    if transcript_path.is_file() && !artifacts.iter().any(|name| name == TRANSCRIPT_FILE_NAME) {
+        artifacts.push(TRANSCRIPT_FILE_NAME.to_string());
     }
     artifacts.sort();
     Ok(artifacts)
