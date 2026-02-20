@@ -664,9 +664,18 @@ async fn execute_step_tool_override_replaces_csa_tool() {
     };
     let vars = HashMap::new();
     // Even with tool_override=claude-code, bash step must still run as bash
-    let result =
-        execute_step(&bash_step, &vars, tmp.path(), None, Some(&ToolName::ClaudeCode)).await;
-    assert_eq!(result.exit_code, 0, "bash step must not be affected by --tool override");
+    let result = execute_step(
+        &bash_step,
+        &vars,
+        tmp.path(),
+        None,
+        Some(&ToolName::ClaudeCode),
+    )
+    .await;
+    assert_eq!(
+        result.exit_code, 0,
+        "bash step must not be affected by --tool override"
+    );
     assert!(!result.skipped);
 }
 
@@ -710,7 +719,10 @@ fn tool_override_clears_model_spec() {
             model_spec,
         } => {
             assert_eq!(tool_name, ToolName::ClaudeCode, "tool must be overridden");
-            assert!(model_spec.is_none(), "model_spec must be cleared on override");
+            assert!(
+                model_spec.is_none(),
+                "model_spec must be cleared on override"
+            );
         }
         _ => panic!("expected CsaTool"),
     }
