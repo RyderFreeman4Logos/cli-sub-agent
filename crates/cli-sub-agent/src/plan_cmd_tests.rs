@@ -54,6 +54,21 @@ fn parse_variables_rejects_invalid_format() {
 }
 
 #[test]
+fn parse_variables_rejects_invalid_variable_name() {
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![],
+    };
+
+    let err = parse_variables(&["BAD-NAME=value".into()], &plan);
+    assert!(err.is_err());
+    let message = err.unwrap_err().to_string();
+    assert!(message.contains("[A-Za-z_][A-Za-z0-9_]*"));
+}
+
+#[test]
 fn substitute_vars_replaces_placeholders() {
     let mut vars = HashMap::new();
     vars.insert("NAME".into(), "world".into());
@@ -552,15 +567,14 @@ async fn execute_step_bash_git_commit_runs_directly() {
 }
 
 #[tokio::test]
-async fn execute_step_bash_substitutes_variables_in_code_block() {
-    // Verify that ${VAR} placeholders inside bash code blocks are substituted
-    // before execution.
+async fn execute_step_bash_passes_variables_as_env() {
+    // Variables are exposed to bash via process environment.
     let tmp = tempfile::tempdir().unwrap();
     let step = PlanStep {
         id: 1,
-        title: "var substitution".into(),
+        title: "env var".into(),
         tool: Some("bash".into()),
-        prompt: "```bash\necho ${MSG} > output.txt\n```".into(),
+        prompt: "```bash\nprintenv MSG > output.txt\n```".into(),
         tier: None,
         depends_on: vec![],
         on_fail: FailAction::Abort,
@@ -574,6 +588,89 @@ async fn execute_step_bash_substitutes_variables_in_code_block() {
     assert_eq!(result.exit_code, 0);
     let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
     assert_eq!(content.trim(), "substituted_value");
+}
+
+#[tokio::test]
+async fn execute_step_bash_step_output_with_shell_metacharacters_is_not_executed() {
+    let plan = ExecutionPlan {
+        name: "injection-check".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "emit payload".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nprintf '%s' '$(touch injected_file)'\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "use prior output".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho ${STEP_1_OUTPUT} > output.txt\nif [ -f injected_file ]; then exit 1; fi\n```"
+                    .into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+        ],
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let vars = HashMap::new();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[1].exit_code, 0);
+    assert!(!tmp.path().join("injected_file").exists());
+
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(content.trim(), "$(touch injected_file)");
+}
+
+#[tokio::test]
+async fn execute_step_bash_cli_var_with_shell_metacharacters_is_not_executed() {
+    let plan = ExecutionPlan {
+        name: "cli-vars".into(),
+        description: String::new(),
+        variables: vec![VariableDecl {
+            name: "USER_INPUT".into(),
+            default: None,
+        }],
+        steps: vec![],
+    };
+    let vars = parse_variables(&["USER_INPUT=$(touch should_not_run)".into()], &plan).unwrap();
+
+    let step = PlanStep {
+        id: 1,
+        title: "cli var check".into(),
+        tool: Some("bash".into()),
+        prompt:
+            "```bash\necho ${USER_INPUT} > output.txt\nif [ -f should_not_run ]; then exit 1; fi\n```"
+                .into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+
+    let tmp = tempfile::tempdir().unwrap();
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    assert_eq!(result.exit_code, 0);
+    assert!(!tmp.path().join("should_not_run").exists());
+
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(content.trim(), "$(touch should_not_run)");
 }
 
 #[tokio::test]

@@ -8,7 +8,8 @@
 //! - Linear sequential execution of steps
 //! - Tier→tool resolution via project config
 //! - `tool = "bash"` direct execution (extracts code block from prompt)
-//! - `${VAR}` substitution from `--var KEY=VALUE` CLI arguments
+//! - Workflow variables from `--var KEY=VALUE` and `STEP_<id>_OUTPUT`
+//! - `${VAR}` substitution for CSA prompts and condition evaluation
 //! - `on_fail` handling: abort / skip / retry N
 //! - `condition` evaluation: `${VAR}` truthiness, `!(expr)`, `(a) && (b)`
 //! - Steps with `loop_var` are skipped with a warning (v2)
@@ -192,6 +193,7 @@ fn parse_variables(cli_vars: &[String], plan: &ExecutionPlan) -> Result<HashMap<
 
     // Seed with plan-declared defaults
     for decl in &plan.variables {
+        validate_variable_name(&decl.name)?;
         if let Some(ref default) = decl.default {
             vars.insert(decl.name.clone(), default.clone());
         }
@@ -202,13 +204,38 @@ fn parse_variables(cli_vars: &[String], plan: &ExecutionPlan) -> Result<HashMap<
         let (key, value) = entry
             .split_once('=')
             .with_context(|| format!("Invalid --var format '{}': expected KEY=VALUE", entry))?;
+        validate_variable_name(key)?;
         vars.insert(key.to_string(), value.to_string());
     }
 
     Ok(vars)
 }
 
-/// Substitute `${VAR}` placeholders in a string.
+/// Validate variable name format (`[A-Za-z_][A-Za-z0-9_]*`).
+fn validate_variable_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let Some(first) = chars.next() else {
+        bail!("Invalid variable name '': must match [A-Za-z_][A-Za-z0-9_]*");
+    };
+
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        bail!(
+            "Invalid variable name '{}': must match [A-Za-z_][A-Za-z0-9_]*",
+            name
+        );
+    }
+
+    if chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
+        Ok(())
+    } else {
+        bail!(
+            "Invalid variable name '{}': must match [A-Za-z_][A-Za-z0-9_]*",
+            name
+        );
+    }
+}
+
+/// Substitute `${VAR}` placeholders in a string (used by CSA steps only).
 fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {
@@ -465,21 +492,26 @@ async fn execute_step(
         };
     }
 
-    // Substitute variables in prompt
-    let prompt = substitute_vars(&step.prompt, variables);
+    // CSA prompts use template substitution. Bash steps receive variables via env vars.
+    let csa_prompt = match &target {
+        StepTarget::CsaTool { .. } => Some(substitute_vars(&step.prompt, variables)),
+        _ => None,
+    };
 
     // Warn when a CSA step has an empty prompt (likely a missing weave include)
-    if matches!(target, StepTarget::CsaTool { .. }) && prompt.trim().is_empty() {
-        warn!(
-            "{} - CSA step has empty prompt — tool will start with no context. \
-             This usually means a weave include was not expanded. \
-             Add a descriptive prompt to step {} in the workflow file.",
-            label, step.id
-        );
-        eprintln!(
-            "{} - WARNING: empty prompt for CSA step (tool will have no context)",
-            label
-        );
+    if let Some(prompt) = csa_prompt.as_deref() {
+        if prompt.trim().is_empty() {
+            warn!(
+                "{} - CSA step has empty prompt — tool will start with no context. \
+                 This usually means a weave include was not expanded. \
+                 Add a descriptive prompt to step {} in the workflow file.",
+                label, step.id
+            );
+            eprintln!(
+                "{} - WARNING: empty prompt for CSA step (tool will have no context)",
+                label
+            );
+        }
     }
 
     // Determine retry count from on_fail
@@ -500,7 +532,7 @@ async fn execute_step(
             StepTarget::DirectBash => {
                 run_with_heartbeat(
                     &label,
-                    execute_bash_step(&label, &prompt, project_root),
+                    execute_bash_step(&label, &step.prompt, variables, project_root),
                     start,
                 )
                 .await
@@ -509,11 +541,12 @@ async fn execute_step(
                 tool_name,
                 model_spec,
             } => {
+                let prompt = csa_prompt.as_deref().unwrap_or_default();
                 run_with_heartbeat(
                     &label,
                     execute_csa_step(
                         &label,
-                        &prompt,
+                        prompt,
                         tool_name,
                         model_spec.as_deref(),
                         project_root,
@@ -643,17 +676,26 @@ where
 }
 
 /// Execute a bash step by extracting the code block from the prompt.
+///
+/// Unlike CSA steps, bash steps do not use `${VAR}` string substitution.
+/// All workflow variables are passed as environment variables so shell parsing
+/// cannot be influenced by interpolated script text.
 async fn execute_bash_step(
     label: &str,
     prompt: &str,
+    env_vars: &HashMap<String, String>,
     project_root: &Path,
 ) -> Result<(i32, Option<String>)> {
     let script = extract_bash_code_block(prompt).unwrap_or(prompt);
     info!("{} - Executing bash: {}", label, truncate(script, 80));
+    for key in env_vars.keys() {
+        validate_variable_name(key)?;
+    }
 
     let output = tokio::process::Command::new("bash")
         .arg("-c")
         .arg(script)
+        .envs(env_vars.iter())
         .current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
