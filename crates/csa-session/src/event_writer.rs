@@ -1,16 +1,22 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use chrono::SecondsFormat;
 use csa_acp::SessionEvent;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::warn;
 
 const TRANSCRIPT_SCHEMA_VERSION: u8 = 1;
 const FLUSH_SIZE_BYTES: usize = 64 * 1024;
 const FLUSH_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Debug, Clone, Copy, Default)]
+struct ResumeState {
+    next_seq: u64,
+    existing_lines: u64,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EventWriteStats {
@@ -42,8 +48,25 @@ struct JsonlEvent<'a> {
     data: &'a SessionEvent,
 }
 
+#[derive(Deserialize)]
+struct JsonlSeq {
+    seq: u64,
+}
+
 impl EventWriter {
     pub fn new(output_path: &Path) -> Self {
+        let resume_state = match load_resume_state(output_path) {
+            Ok(state) => state,
+            Err(err) => {
+                warn!(
+                    path = %output_path.display(),
+                    error = %err,
+                    "failed to inspect existing ACP transcript state"
+                );
+                ResumeState::default()
+            }
+        };
+
         let (writer, write_failures) = match open_transcript_file(output_path) {
             Ok(file) => (Some(BufWriter::new(file)), 0),
             Err(err) => {
@@ -61,8 +84,8 @@ impl EventWriter {
             writer,
             pending: Vec::new(),
             pending_lines: 0,
-            seq: 0,
-            lines_written: 0,
+            seq: resume_state.next_seq,
+            lines_written: resume_state.existing_lines,
             bytes_written: 0,
             write_failures,
             last_flush: Instant::now(),
@@ -199,6 +222,63 @@ fn open_transcript_file(path: &Path) -> std::io::Result<File> {
     Ok(file)
 }
 
+fn load_resume_state(path: &Path) -> std::io::Result<ResumeState> {
+    let file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(ResumeState::default()),
+        Err(err) => return Err(err),
+    };
+
+    if file.metadata()?.len() == 0 {
+        return Ok(ResumeState::default());
+    }
+
+    let mut reader = BufReader::new(file);
+    let mut line_buf = Vec::new();
+    let mut last_complete_line = Vec::new();
+    let mut existing_lines = 0_u64;
+
+    loop {
+        line_buf.clear();
+        let read_bytes = reader.read_until(b'\n', &mut line_buf)?;
+        if read_bytes == 0 {
+            break;
+        }
+
+        let Some(last_byte) = line_buf.last() else {
+            continue;
+        };
+        if *last_byte != b'\n' {
+            continue;
+        }
+
+        existing_lines = existing_lines.saturating_add(1);
+        last_complete_line.clear();
+        last_complete_line.extend_from_slice(&line_buf[..line_buf.len() - 1]);
+    }
+
+    let next_seq = if last_complete_line.is_empty() {
+        0
+    } else {
+        match serde_json::from_slice::<JsonlSeq>(&last_complete_line) {
+            Ok(parsed) => parsed.seq.saturating_add(1),
+            Err(err) => {
+                warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "failed to parse sequence from existing ACP transcript tail"
+                );
+                0
+            }
+        }
+    };
+
+    Ok(ResumeState {
+        next_seq,
+        existing_lines,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -239,6 +319,46 @@ mod tests {
 
         let content = std::fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 1);
+    }
+
+    #[test]
+    fn test_writer_resumes_seq_and_total_line_count() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("output").join("acp-events.jsonl");
+
+        {
+            let mut first = EventWriter::new(&path);
+            first.append(&SessionEvent::AgentMessage("hello".to_string()));
+            first.append(&SessionEvent::AgentThought("thinking".to_string()));
+            first.flush();
+            assert_eq!(first.stats().lines_written, 2);
+        }
+
+        let mut resumed = EventWriter::new(&path);
+        resumed.append(&SessionEvent::PlanUpdate(
+            "{\"step\":\"resume\"}".to_string(),
+        ));
+        resumed.flush();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3);
+
+        let seqs: Vec<u64> = lines
+            .iter()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .unwrap()
+                    .get("seq")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+
+        let stats = resumed.stats();
+        assert_eq!(stats.lines_written, 3);
+        assert_eq!(stats.write_failures, 0);
     }
 
     #[test]
