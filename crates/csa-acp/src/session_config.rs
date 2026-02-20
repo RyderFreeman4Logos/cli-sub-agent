@@ -25,6 +25,8 @@ pub struct SessionConfig {
     pub models: Vec<String>,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    #[serde(default)]
+    pub mcp_proxy_socket: Option<String>,
 }
 
 impl SessionConfig {
@@ -85,6 +87,7 @@ GITHUB_TOKEN = "token"
                     .into_iter()
                     .collect(),
             }],
+            mcp_proxy_socket: None,
         };
 
         assert_eq!(cfg, expected);

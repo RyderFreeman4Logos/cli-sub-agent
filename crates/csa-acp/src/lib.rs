@@ -1,6 +1,7 @@
 pub mod client;
 pub mod connection;
 pub mod error;
+pub mod mcp_proxy_client;
 pub mod session_config;
 pub mod transport;
 

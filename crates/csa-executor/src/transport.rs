@@ -256,19 +256,48 @@ impl AcpTransport {
         }
     }
 
-    /// Build ACP session meta from setting_sources config.
+    /// Build ACP session meta from setting_sources and MCP config.
     ///
-    /// `Some(sources)` → `{"claudeCode":{"options":{"settingSources": sources}}}`.
-    /// `None` → no meta (load everything).
+    /// - setting sources: `{"claudeCode":{"options":{"settingSources": [...]}}}`
+    /// - MCP servers: `{"claudeCode":{"options":{"mcpServers": {...}}}}`
+    /// - when proxy socket exists, `mcpServers` contains a single `csa-mcp-hub` entry.
     pub(crate) fn build_session_meta(
         setting_sources: Option<&[String]>,
+        session_config: Option<&SessionConfig>,
     ) -> Option<serde_json::Map<String, serde_json::Value>> {
-        let sources = setting_sources?;
-        let serde_json::Value::Object(meta) =
-            serde_json::json!({"claudeCode": {"options": {"settingSources": sources}}})
-        else {
+        let mut options = serde_json::Map::new();
+        if let Some(sources) = setting_sources {
+            options.insert(
+                "settingSources".to_string(),
+                serde_json::Value::Array(
+                    sources
+                        .iter()
+                        .map(|source| serde_json::Value::String(source.clone()))
+                        .collect(),
+                ),
+            );
+        }
+        if let Some(cfg) = session_config {
+            let mcp_servers = csa_acp::mcp_proxy_client::resolve_mcp_meta_servers(cfg);
+            let non_empty_servers = mcp_servers
+                .as_object()
+                .map(|servers| !servers.is_empty())
+                .unwrap_or(false);
+            if non_empty_servers {
+                options.insert("mcpServers".to_string(), mcp_servers);
+            }
+        }
+        if options.is_empty() {
             return None;
-        };
+        }
+
+        let mut claude_code = serde_json::Map::new();
+        claude_code.insert("options".to_string(), serde_json::Value::Object(options));
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "claudeCode".to_string(),
+            serde_json::Value::Object(claude_code),
+        );
         Some(meta)
     }
 
@@ -342,7 +371,10 @@ impl Transport for AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
-        let session_meta = Self::build_session_meta(options.setting_sources.as_deref());
+        let session_meta = Self::build_session_meta(
+            options.setting_sources.as_deref(),
+            self.session_config.as_ref(),
+        );
         let stream_stdout_to_stderr = options.stream_mode != StreamMode::BufferOnly;
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
 
@@ -664,6 +696,7 @@ mod tests {
             tier: Some("tier-2".to_string()),
             models: vec!["codex/openai/o3/medium".to_string()],
             mcp_servers: Vec::new(),
+            mcp_proxy_socket: None,
         };
 
         let transport = TransportFactory::create(&executor, Some(session_config.clone()));

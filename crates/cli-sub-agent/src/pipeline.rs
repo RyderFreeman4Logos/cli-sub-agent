@@ -502,6 +502,7 @@ pub(crate) async fn execute_with_session_and_meta(
         }
         SessionConfig {
             mcp_servers,
+            mcp_proxy_socket: gc.mcp_proxy_socket.clone(),
             ..Default::default()
         }
     });
