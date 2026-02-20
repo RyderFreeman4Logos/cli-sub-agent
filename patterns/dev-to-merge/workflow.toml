@@ -250,7 +250,7 @@ of changes for ${SCOPE} and a test plan checklist covering tests, linting,
 security audit, and codex review.
 
 ```bash
-gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
+gh pr create --base main --repo "${REPO}" --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
 
@@ -277,7 +277,22 @@ title = "Poll for Bot Response"
 tool = "bash"
 prompt = """
 Poll for bot review response with a bounded timeout (max 10 minutes).
-If the bot does not respond, fall through to UNAVAILABLE handling."""
+If the bot does not respond, fall through to UNAVAILABLE handling.
+
+```bash
+TIMEOUT=600; INTERVAL=30; ELAPSED=0
+while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+  COMMENTS=$(gh pr view "${PR_NUM}" --repo "${REPO}" --json comments -q '.comments[].body')
+  if echo "$COMMENTS" | grep -q "codex"; then
+    echo "Bot response received."
+    exit 0
+  fi
+  sleep "$INTERVAL"
+  ELAPSED=$((ELAPSED + INTERVAL))
+done
+echo "Bot did not respond within timeout."
+exit 1
+```"""
 on_fail = "skip"
 
 [[workflow.steps]]
@@ -296,6 +311,7 @@ condition = "${BOT_HAS_ISSUES}"
 [[workflow.steps]]
 id = 19
 title = "Process Comment"
+tool = "claude-code"
 prompt = """
 Evaluate this specific bot comment against the current code state.
 Determine category (A/B/C) and take appropriate action."""
@@ -357,9 +373,15 @@ condition = "${BOT_HAS_ISSUES}"
 [[workflow.steps]]
 id = 23
 title = "Bot Review Clean"
-prompt = "No issues found by the codex bot. Proceed to merge."
+tool = "bash"
+prompt = """
+No issues found by the codex bot. Proceed to merge.
+
+```bash
+echo "Bot review clean — no issues found. Proceeding to merge."
+```"""
 on_fail = "abort"
-condition = "!(${BOT_HAS_ISSUES})"
+condition = "(!(${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
 id = 24
