@@ -3,6 +3,7 @@ use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use crate::redact::redact_event;
 use chrono::SecondsFormat;
 use csa_acp::SessionEvent;
 use serde::{Deserialize, Serialize};
@@ -29,6 +30,7 @@ pub struct EventWriteStats {
 pub struct EventWriter {
     output_path: PathBuf,
     writer: Option<BufWriter<File>>,
+    redaction_enabled: bool,
     pending: Vec<u8>,
     pending_lines: u64,
     seq: u64,
@@ -55,6 +57,10 @@ struct JsonlSeq {
 
 impl EventWriter {
     pub fn new(output_path: &Path) -> Self {
+        Self::with_redaction(output_path, true)
+    }
+
+    pub fn with_redaction(output_path: &Path, redaction_enabled: bool) -> Self {
         let resume_state = match load_resume_state(output_path) {
             Ok(state) => state,
             Err(err) => {
@@ -92,6 +98,7 @@ impl EventWriter {
         Self {
             output_path: output_path.to_path_buf(),
             writer,
+            redaction_enabled,
             pending: Vec::new(),
             pending_lines: 0,
             seq: resume_state.next_seq,
@@ -111,11 +118,16 @@ impl EventWriter {
             data: event,
         };
 
-        match serde_json::to_vec(&payload) {
-            Ok(mut line) => {
+        match serde_json::to_string(&payload) {
+            Ok(line) => {
                 self.seq = self.seq.saturating_add(1);
-                line.push(b'\n');
-                self.pending.extend_from_slice(&line);
+                let serialized = if self.redaction_enabled {
+                    redact_event(&line)
+                } else {
+                    line
+                };
+                self.pending.extend_from_slice(serialized.as_bytes());
+                self.pending.push(b'\n');
                 self.pending_lines = self.pending_lines.saturating_add(1);
                 if self.should_flush() {
                     self.flush_internal();
@@ -495,6 +507,35 @@ mod tests {
         writer.append(&SessionEvent::Other("x".to_string()));
         writer.flush();
         assert!(writer.stats().write_failures >= 1);
+    }
+
+    #[test]
+    fn test_writer_redacts_sensitive_values_by_default() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("output").join("acp-events.jsonl");
+        let mut writer = EventWriter::new(&path);
+        writer.append(&SessionEvent::AgentMessage(
+            "token=sk-test_123456789".to_string(),
+        ));
+        writer.flush();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("[REDACTED]"));
+        assert!(!content.contains("sk-test_123456789"));
+    }
+
+    #[test]
+    fn test_writer_can_disable_redaction() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("output").join("acp-events.jsonl");
+        let mut writer = EventWriter::with_redaction(&path, false);
+        writer.append(&SessionEvent::AgentMessage(
+            "token=sk-test_123456789".to_string(),
+        ));
+        writer.flush();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("sk-test_123456789"));
     }
 
     #[cfg(unix)]
