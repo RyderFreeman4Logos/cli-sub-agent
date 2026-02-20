@@ -80,6 +80,7 @@ pub(crate) fn resolve_pattern(name: &str, project_root: &Path) -> Result<Resolve
     let candidates = search_paths(name, project_root);
 
     for dir in &candidates {
+        // Primary: skills/<name>/SKILL.md (new layout)
         let skill_md_path = dir.join("skills").join(name).join("SKILL.md");
         if skill_md_path.is_file() {
             let skill_md = std::fs::read_to_string(&skill_md_path)
@@ -95,13 +96,35 @@ pub(crate) fn resolve_pattern(name: &str, project_root: &Path) -> Result<Resolve
                 config,
             });
         }
+
+        // Fallback: PATTERN.md at pattern root (legacy weave-locked layout)
+        let pattern_md_path = dir.join("PATTERN.md");
+        if pattern_md_path.is_file() {
+            let skill_md = std::fs::read_to_string(&pattern_md_path)
+                .with_context(|| format!("failed to read {}", pattern_md_path.display()))?;
+
+            let config = load_skill_config(dir, name, project_root)?;
+
+            debug!(pattern_dir = %dir.display(), "Pattern resolved (PATTERN.md fallback)");
+
+            return Ok(ResolvedPattern {
+                dir: dir.clone(),
+                skill_md,
+                config,
+            });
+        }
     }
 
     bail!(
         "Pattern '{name}' not found. Searched:\n{}",
         candidates
             .iter()
-            .map(|p| format!("  - {}/skills/{name}/SKILL.md", p.display()))
+            .map(|p| {
+                format!(
+                    "  - {0}/skills/{name}/SKILL.md\n  - {0}/PATTERN.md",
+                    p.display()
+                )
+            })
             .collect::<Vec<_>>()
             .join("\n")
     )

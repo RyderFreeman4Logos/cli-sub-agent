@@ -180,6 +180,39 @@ fn resolve_pattern_repo_takes_priority_over_global_store() {
 }
 
 #[test]
+fn resolve_pattern_falls_back_to_pattern_md() {
+    let tmp = TempDir::new().unwrap();
+    // Legacy layout: only PATTERN.md at pattern root, no skills/ directory.
+    let pattern_dir = tmp.path().join("patterns").join("debate");
+    fs::create_dir_all(&pattern_dir).unwrap();
+    fs::write(pattern_dir.join("PATTERN.md"), "# Debate\nLegacy layout.").unwrap();
+
+    let resolved = resolve_pattern("debate", tmp.path()).unwrap();
+    assert!(resolved.skill_md.contains("Legacy layout"));
+    assert!(resolved.dir.ends_with("patterns/debate"));
+}
+
+#[test]
+fn resolve_pattern_skill_md_takes_priority() {
+    let tmp = TempDir::new().unwrap();
+    // Create both: PATTERN.md at root AND skills/<name>/SKILL.md
+    let pattern_dir = tmp.path().join("patterns").join("debate");
+    fs::create_dir_all(&pattern_dir).unwrap();
+    fs::write(pattern_dir.join("PATTERN.md"), "# Legacy content").unwrap();
+
+    let skill_dir = pattern_dir.join("skills").join("debate");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "# New layout content").unwrap();
+
+    let resolved = resolve_pattern("debate", tmp.path()).unwrap();
+    assert!(
+        resolved.skill_md.contains("New layout content"),
+        "SKILL.md should take priority over PATTERN.md, got: {}",
+        resolved.skill_md
+    );
+}
+
+#[test]
 fn resolve_pattern_not_found() {
     let tmp = TempDir::new().unwrap();
     let result = resolve_pattern("nonexistent", tmp.path());

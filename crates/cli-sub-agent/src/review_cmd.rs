@@ -322,7 +322,7 @@ fn verify_review_skill_available(project_root: &Path) -> Result<()> {
                  {resolve_err}\n\n\
                  Install the review pattern with one of:\n\
                  1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place skills/csa-review/SKILL.md inside .csa/patterns/csa-review/ or patterns/csa-review/\n\n\
+                 2) Manually place skills/csa-review/SKILL.md (or PATTERN.md) inside .csa/patterns/csa-review/ or patterns/csa-review/\n\n\
                  Without the pattern, the review tool cannot follow the structured review protocol."
             )
         }
