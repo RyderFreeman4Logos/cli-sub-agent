@@ -131,6 +131,7 @@ No tests available.
                 on_fail: crate::compiler::FailAction::Abort,
                 condition: None,
                 loop_var: None,
+                session: None,
             }],
         };
 

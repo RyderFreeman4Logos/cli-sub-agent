@@ -43,6 +43,8 @@ pub struct PlanStep {
     pub condition: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub loop_var: Option<LoopSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<String>,
 }
 
 /// How to handle a step failure.
@@ -109,6 +111,10 @@ static TIER_HINT_RE: LazyLock<Regex> =
 /// Matches a `OnFail: <action>` line at the start of a step body.
 static ONFAIL_HINT_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?i)^OnFail:\s*(.+)\s*$").expect("valid regex"));
+
+/// Matches a `Session: <id|template>` line at the start of a step body.
+static SESSION_HINT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)^Session:\s*(.+)\s*$").expect("valid regex"));
 
 /// Matches a `MaxIterations: <n>` line at the start of a step body (FOR loops).
 static MAXITER_HINT_RE: LazyLock<Regex> =
@@ -237,6 +243,7 @@ fn compile_blocks(blocks: &[Block], ctx: &mut CompileCtx) -> Result<()> {
 struct StepHints {
     tool: Option<String>,
     tier: Option<String>,
+    session: Option<String>,
     on_fail: FailAction,
     max_iterations: Option<u32>,
     prompt: String,
@@ -247,6 +254,7 @@ struct StepHints {
 fn extract_hints(body: &str) -> StepHints {
     let mut tool = None;
     let mut tier = None;
+    let mut session = None;
     let mut on_fail = FailAction::Abort;
     let mut max_iterations = None;
     let mut prompt_lines = Vec::new();
@@ -266,6 +274,10 @@ fn extract_hints(body: &str) -> StepHints {
                 on_fail = parse_fail_action(caps[1].trim());
                 continue;
             }
+            if let Some(caps) = SESSION_HINT_RE.captures(line) {
+                session = Some(caps[1].trim().to_string());
+                continue;
+            }
             if let Some(caps) = MAXITER_HINT_RE.captures(line) {
                 max_iterations = caps[1].parse().ok();
                 continue;
@@ -282,6 +294,7 @@ fn extract_hints(body: &str) -> StepHints {
     StepHints {
         tool,
         tier,
+        session,
         on_fail,
         max_iterations,
         prompt,
@@ -323,6 +336,9 @@ fn compile_step(title: &str, body: &str, variables: &[String], ctx: &mut Compile
     // Stash max_iterations hint — will be applied to the LoopSpec by
     // compile_for if this step ends up inside a FOR block.
     ctx.pending_max_iterations = hints.max_iterations;
+    if let Some(ref session) = hints.session {
+        ctx.collect_vars(session);
+    }
 
     ctx.steps.push(PlanStep {
         id,
@@ -334,6 +350,7 @@ fn compile_step(title: &str, body: &str, variables: &[String], ctx: &mut Compile
         on_fail: hints.on_fail,
         condition: None,
         loop_var: None,
+        session: hints.session,
     });
     Ok(())
 }
@@ -369,6 +386,7 @@ fn compile_if(
             on_fail: FailAction::Skip,
             condition: Some(condition.to_string()),
             loop_var: None,
+            session: None,
         });
     }
 
@@ -459,6 +477,7 @@ fn compile_include(path: &str, ctx: &mut CompileCtx) {
         on_fail: FailAction::Abort,
         condition: None,
         loop_var: None,
+        session: None,
     });
 }
 

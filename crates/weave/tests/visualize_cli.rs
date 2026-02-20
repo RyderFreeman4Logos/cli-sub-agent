@@ -86,6 +86,7 @@ fn visualize_reads_plan_from_stdin_when_dash_is_used() {
             on_fail: FailAction::Abort,
             condition: None,
             loop_var: None,
+            session: None,
         }],
     };
     let plan_toml = plan_to_toml(&plan).expect("serialize plan toml");
@@ -147,6 +148,7 @@ fn visualize_png_writes_file_when_dot_is_available() {
             on_fail: FailAction::Abort,
             condition: None,
             loop_var: None,
+            session: None,
         }],
     };
 
