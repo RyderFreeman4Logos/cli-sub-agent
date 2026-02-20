@@ -788,3 +788,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 #[path = "plan_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "plan_cmd_override_tests.rs"]
+mod override_tests;
