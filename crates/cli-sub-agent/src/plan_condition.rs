@@ -167,7 +167,11 @@ fn looks_malformed(s: &str) -> bool {
     depth != 0
 }
 
-/// Substitute `${VAR}` placeholders in a string.
+/// Substitute `${VAR}` placeholders for condition evaluation only.
+///
+/// Safety: this function does not execute shell code. The resolved value is
+/// consumed only by boolean condition parsing, so shell-injection concerns from
+/// bash script execution do not apply here.
 fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {
