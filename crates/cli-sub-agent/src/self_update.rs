@@ -208,8 +208,8 @@ fn get_target_triple() -> Result<String> {
     let os = std::env::consts::OS;
 
     let target = match (arch, os) {
-        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
-        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("x86_64", "linux") => "x86_64-unknown-linux-musl",
+        ("aarch64", "linux") => "aarch64-unknown-linux-musl",
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
         _ => anyhow::bail!(
@@ -295,7 +295,7 @@ mod tests {
             "tag_name": "v1.0.0",
             "assets": [
                 {
-                    "name": "csa-x86_64-unknown-linux-gnu.tar.gz",
+                    "name": "csa-x86_64-unknown-linux-musl.tar.gz",
                     "browser_download_url": "https://example.com/download/csa.tar.gz"
                 },
                 {
@@ -307,7 +307,7 @@ mod tests {
         let info: ReleaseInfo = serde_json::from_str(json).unwrap();
         assert_eq!(info.tag_name, "v1.0.0");
         assert_eq!(info.assets.len(), 2);
-        assert_eq!(info.assets[0].name, "csa-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(info.assets[0].name, "csa-x86_64-unknown-linux-musl.tar.gz");
     }
 
     #[test]
@@ -360,8 +360,8 @@ mod tests {
 
     #[test]
     fn asset_name_format_matches_expected_pattern() {
-        let target = "x86_64-unknown-linux-gnu";
+        let target = "x86_64-unknown-linux-musl";
         let expected_name = format!("csa-{}.tar.gz", target);
-        assert_eq!(expected_name, "csa-x86_64-unknown-linux-gnu.tar.gz");
+        assert_eq!(expected_name, "csa-x86_64-unknown-linux-musl.tar.gz");
     }
 }
