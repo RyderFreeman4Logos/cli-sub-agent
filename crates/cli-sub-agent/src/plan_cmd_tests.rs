@@ -103,7 +103,7 @@ fn truncate_long_string() {
 }
 
 #[test]
-fn resolve_step_tool_explicit_bash() {
+fn resolve_step_tool_explicit_bash_returns_direct_bash() {
     let step = PlanStep {
         id: 1,
         title: "test".into(),
@@ -115,9 +115,11 @@ fn resolve_step_tool_explicit_bash() {
         condition: None,
         loop_var: None,
     };
-    let (tool, spec) = resolve_step_tool(&step, None).unwrap();
-    assert_eq!(tool, ToolName::ClaudeCode);
-    assert_eq!(spec.as_deref(), Some("bash"));
+    let target = resolve_step_tool(&step, None).unwrap();
+    assert!(
+        matches!(target, StepTarget::DirectBash),
+        "tool=bash must resolve to DirectBash, not a CSA tool"
+    );
 }
 
 #[test]
@@ -133,8 +135,14 @@ fn resolve_step_tool_explicit_codex() {
         condition: None,
         loop_var: None,
     };
-    let (tool, _) = resolve_step_tool(&step, None).unwrap();
-    assert_eq!(tool, ToolName::Codex);
+    let target = resolve_step_tool(&step, None).unwrap();
+    assert!(matches!(
+        target,
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -150,8 +158,14 @@ fn resolve_step_tool_fallback_no_config() {
         condition: None,
         loop_var: None,
     };
-    let (tool, _) = resolve_step_tool(&step, None).unwrap();
-    assert_eq!(tool, ToolName::Codex);
+    let target = resolve_step_tool(&step, None).unwrap();
+    assert!(matches!(
+        target,
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            ..
+        }
+    ));
 }
 
 #[test]
@@ -167,8 +181,8 @@ fn resolve_step_tool_weave_returns_include_marker() {
         condition: None,
         loop_var: None,
     };
-    let (_tool, spec) = resolve_step_tool(&step, None).unwrap();
-    assert_eq!(spec.as_deref(), Some("weave-include"));
+    let target = resolve_step_tool(&step, None).unwrap();
+    assert!(matches!(target, StepTarget::WeaveInclude));
 }
 
 #[test]
@@ -462,6 +476,164 @@ async fn execute_plan_continues_on_skip_failure() {
     );
     assert!(results[0].skipped, "step 1 should be marked as skipped");
     assert_eq!(results[1].exit_code, 0, "step 2 should succeed");
+}
+
+#[tokio::test]
+async fn execute_step_bash_git_commit_runs_directly() {
+    // Regression test for issue #182: git commit via tool=bash must execute
+    // directly via shell, not through an AI tool that prompts for confirmation.
+    let tmp = tempfile::tempdir().unwrap();
+
+    // Set up a minimal git repo with a staged file
+    std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.email", "test@test.com"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::process::Command::new("git")
+        .args(["config", "user.name", "Test"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    std::fs::write(tmp.path().join("file.txt"), "hello").unwrap();
+    std::process::Command::new("git")
+        .args(["add", "file.txt"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+
+    let commit_msg = "fix: test commit for issue 182";
+    let step = PlanStep {
+        id: 13,
+        title: "Commit".into(),
+        tool: Some("bash".into()),
+        prompt: format!("Create the commit:\n```bash\ngit commit -m \"{commit_msg}\"\n```"),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let mut vars = HashMap::new();
+    vars.insert("COMMIT_MSG".into(), commit_msg.into());
+    let result = execute_step(&step, &vars, tmp.path(), None).await;
+
+    assert!(!result.skipped, "bash step must not be skipped");
+    assert_eq!(
+        result.exit_code, 0,
+        "git commit via direct bash must succeed (exit 0), got error: {:?}",
+        result.error
+    );
+
+    // Verify the commit was actually created
+    let log = std::process::Command::new("git")
+        .args(["log", "--oneline", "-1"])
+        .current_dir(tmp.path())
+        .output()
+        .unwrap();
+    let log_str = String::from_utf8_lossy(&log.stdout);
+    assert!(
+        log_str.contains("test commit for issue 182"),
+        "commit must exist in git log: {}",
+        log_str
+    );
+}
+
+#[tokio::test]
+async fn execute_step_bash_substitutes_variables_in_code_block() {
+    // Verify that ${VAR} placeholders inside bash code blocks are substituted
+    // before execution.
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "var substitution".into(),
+        tool: Some("bash".into()),
+        prompt: "```bash\necho ${MSG} > output.txt\n```".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let mut vars = HashMap::new();
+    vars.insert("MSG".into(), "substituted_value".into());
+    let result = execute_step(&step, &vars, tmp.path(), None).await;
+
+    assert_eq!(result.exit_code, 0);
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(content.trim(), "substituted_value");
+}
+
+#[tokio::test]
+async fn execute_step_bash_without_code_block_runs_raw_prompt() {
+    // When no fenced code block is present, execute_bash_step falls back
+    // to running the entire prompt as the script.
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "raw prompt".into(),
+        tool: Some("bash".into()),
+        prompt: "echo raw_exec > output.txt".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let vars = HashMap::new();
+    let result = execute_step(&step, &vars, tmp.path(), None).await;
+
+    assert_eq!(result.exit_code, 0);
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(content.trim(), "raw_exec");
+}
+
+#[test]
+fn resolve_step_tool_all_explicit_tools() {
+    // Verify all explicit tool names resolve to the correct StepTarget variant.
+    let cases = [
+        ("bash", true),         // DirectBash
+        ("claude-code", false), // CsaTool
+        ("codex", false),       // CsaTool
+        ("gemini-cli", false),  // CsaTool
+        ("opencode", false),    // CsaTool
+        ("weave", false),       // WeaveInclude (not CsaTool, not DirectBash)
+    ];
+    for (tool_str, expect_direct_bash) in cases {
+        let step = PlanStep {
+            id: 1,
+            title: format!("test-{tool_str}"),
+            tool: Some(tool_str.into()),
+            prompt: String::new(),
+            tier: None,
+            depends_on: vec![],
+            on_fail: FailAction::Abort,
+            condition: None,
+            loop_var: None,
+        };
+        let target = resolve_step_tool(&step, None).unwrap();
+        if expect_direct_bash {
+            assert!(
+                matches!(target, StepTarget::DirectBash),
+                "tool={tool_str} must resolve to DirectBash"
+            );
+        } else if tool_str == "weave" {
+            assert!(
+                matches!(target, StepTarget::WeaveInclude),
+                "tool=weave must resolve to WeaveInclude"
+            );
+        } else {
+            assert!(
+                matches!(target, StepTarget::CsaTool { .. }),
+                "tool={tool_str} must resolve to CsaTool"
+            );
+        }
+    }
 }
 
 #[tokio::test]

@@ -31,6 +31,32 @@ use crate::run_helpers::build_executor;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 
+/// Resolved execution target for a plan step.
+///
+/// Separates direct shell execution from AI tool dispatch so the routing
+/// is type-safe — `tool = "bash"` can never accidentally fall through to
+/// an AI tool's interactive confirmation flow.
+enum StepTarget {
+    /// Execute bash code block directly via `tokio::process::Command`.
+    DirectBash,
+    /// Skip this step (compile-time INCLUDE directive from weave).
+    WeaveInclude,
+    /// Dispatch to an AI tool via CSA infrastructure.
+    CsaTool {
+        tool_name: ToolName,
+        model_spec: Option<String>,
+    },
+}
+
+impl StepTarget {
+    fn csa(tool: ToolName, spec: Option<String>) -> Self {
+        Self::CsaTool {
+            tool_name: tool,
+            model_spec: spec,
+        }
+    }
+}
+
 /// Result of executing a single step.
 struct StepResult {
     step_id: usize,
@@ -143,9 +169,7 @@ pub(crate) async fn handle_plan_run(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Variable handling
-// ---------------------------------------------------------------------------
+// --- Variable handling ---
 
 /// Parse `KEY=VALUE` pairs and merge with plan-declared defaults.
 fn parse_variables(cli_vars: &[String], plan: &ExecutionPlan) -> Result<HashMap<String, String>> {
@@ -179,29 +203,24 @@ fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
     result
 }
 
-// ---------------------------------------------------------------------------
-// Tier → tool resolution
-// ---------------------------------------------------------------------------
+// --- Tier → tool resolution ---
 
-/// Resolve a step's tool and model spec from its annotations and config.
+/// Resolve a step's execution target from its annotations and config.
 ///
 /// Resolution order:
 /// 1. `step.tool` — explicit tool name (e.g. "bash", "claude-code", "codex")
 /// 2. `step.tier` — tier name looked up in config's `tiers` map
 /// 3. Fallback: "bash" (safest default for v1)
-fn resolve_step_tool(
-    step: &PlanStep,
-    config: Option<&ProjectConfig>,
-) -> Result<(ToolName, Option<String>)> {
+fn resolve_step_tool(step: &PlanStep, config: Option<&ProjectConfig>) -> Result<StepTarget> {
     // 1. Explicit tool annotation
     if let Some(ref tool_str) = step.tool {
         let tool_lower = tool_str.to_lowercase();
         match tool_lower.as_str() {
-            "bash" => return Ok((ToolName::ClaudeCode, Some("bash".to_string()))),
-            "gemini-cli" => return Ok((ToolName::GeminiCli, None)),
-            "opencode" => return Ok((ToolName::Opencode, None)),
-            "codex" => return Ok((ToolName::Codex, None)),
-            "claude-code" => return Ok((ToolName::ClaudeCode, None)),
+            "bash" => return Ok(StepTarget::DirectBash),
+            "gemini-cli" => return Ok(StepTarget::csa(ToolName::GeminiCli, None)),
+            "opencode" => return Ok(StepTarget::csa(ToolName::Opencode, None)),
+            "codex" => return Ok(StepTarget::csa(ToolName::Codex, None)),
+            "claude-code" => return Ok(StepTarget::csa(ToolName::ClaudeCode, None)),
             // "csa": use step.tier if present, else default tier from config
             "csa" => {
                 if let Some(cfg) = config {
@@ -212,7 +231,7 @@ fn resolve_step_tool(
                                 let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
                                 if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
                                     let tool = parse_tool_name(parts[0])?;
-                                    return Ok((tool, Some(model_spec_str.clone())));
+                                    return Ok(StepTarget::csa(tool, Some(model_spec_str.clone())));
                                 }
                             }
                         }
@@ -221,14 +240,14 @@ fn resolve_step_tool(
                     if let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default") {
                         let spec = ModelSpec::parse(&model_spec)?;
                         let tool = parse_tool_name(&spec.tool)?;
-                        return Ok((tool, Some(model_spec)));
+                        return Ok(StepTarget::csa(tool, Some(model_spec)));
                     }
                 }
                 // Last resort: codex
-                return Ok((ToolName::Codex, None));
+                return Ok(StepTarget::csa(ToolName::Codex, None));
             }
             // "weave" = compile-time INCLUDE directive, skip at runtime
-            "weave" => return Ok((ToolName::ClaudeCode, Some("weave-include".to_string()))),
+            "weave" => return Ok(StepTarget::WeaveInclude),
             other => bail!(
                 "Unknown tool '{}' in step {} ('{}'). Known: bash, gemini-cli, opencode, codex, claude-code, csa, weave",
                 other,
@@ -247,7 +266,7 @@ fn resolve_step_tool(
                     let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
                     if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
                         let tool = parse_tool_name(parts[0])?;
-                        return Ok((tool, Some(model_spec_str.clone())));
+                        return Ok(StepTarget::csa(tool, Some(model_spec_str.clone())));
                     }
                 }
             }
@@ -256,7 +275,7 @@ fn resolve_step_tool(
                 tier_name, step.id
             );
         }
-        return Ok((ToolName::Codex, None));
+        return Ok(StepTarget::csa(ToolName::Codex, None));
     }
 
     // 3. Fallback: use default tool from config, or codex
@@ -264,11 +283,11 @@ fn resolve_step_tool(
         if let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default") {
             let spec = ModelSpec::parse(&model_spec)?;
             let tool = parse_tool_name(&spec.tool)?;
-            return Ok((tool, Some(model_spec)));
+            return Ok(StepTarget::csa(tool, Some(model_spec)));
         }
     }
 
-    Ok((ToolName::Codex, None))
+    Ok(StepTarget::csa(ToolName::Codex, None))
 }
 
 fn parse_tool_name(tool: &str) -> Result<ToolName> {
@@ -281,9 +300,7 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Execution
-// ---------------------------------------------------------------------------
+// --- Execution ---
 
 /// Execute all steps in the plan sequentially.
 async fn execute_plan(
@@ -364,8 +381,8 @@ async fn execute_step(
         };
     }
 
-    // Resolve tool first (needed for weave-include check)
-    let (tool_name, model_spec) = match resolve_step_tool(step, config) {
+    // Resolve execution target (needed for weave-include check)
+    let target = match resolve_step_tool(step, config) {
         Ok(t) => t,
         Err(e) => {
             error!("{} - Failed to resolve tool: {}", label, e);
@@ -381,7 +398,7 @@ async fn execute_step(
     };
 
     // Skip weave INCLUDE steps (compile-time directive, not executable at runtime)
-    if model_spec.as_deref() == Some("weave-include") {
+    if matches!(target, StepTarget::WeaveInclude) {
         info!("{} - Skipping INCLUDE step (compile-time directive)", label);
         return StepResult {
             step_id: step.id,
@@ -410,29 +427,34 @@ async fn execute_step(
             eprintln!("{} - RETRY {}/{}", label, attempt, max_attempts);
         }
 
-        let exit_code = if model_spec.as_deref() == Some("bash") {
-            // Direct bash execution
-            run_with_heartbeat(
-                &label,
-                execute_bash_step(&label, &prompt, project_root),
-                start,
-            )
-            .await
-        } else {
-            // CSA tool execution
-            run_with_heartbeat(
-                &label,
-                execute_csa_step(
+        let exit_code = match &target {
+            StepTarget::DirectBash => {
+                run_with_heartbeat(
                     &label,
-                    &prompt,
-                    &tool_name,
-                    model_spec.as_deref(),
-                    project_root,
-                    config,
-                ),
-                start,
-            )
-            .await
+                    execute_bash_step(&label, &prompt, project_root),
+                    start,
+                )
+                .await
+            }
+            StepTarget::CsaTool {
+                tool_name,
+                model_spec,
+            } => {
+                run_with_heartbeat(
+                    &label,
+                    execute_csa_step(
+                        &label,
+                        &prompt,
+                        tool_name,
+                        model_spec.as_deref(),
+                        project_root,
+                        config,
+                    ),
+                    start,
+                )
+                .await
+            }
+            StepTarget::WeaveInclude => unreachable!("handled above"),
         };
 
         if exit_code == 0 {
@@ -632,9 +654,7 @@ async fn execute_csa_step(
     Ok(result.exit_code)
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
+// --- Helpers ---
 
 /// Extract the first fenced code block from a prompt string.
 ///
@@ -664,9 +684,7 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Display
-// ---------------------------------------------------------------------------
+// --- Display ---
 
 /// Print the execution plan for dry-run mode.
 fn print_plan(
@@ -691,18 +709,16 @@ fn print_plan(
     println!("Steps ({}):", plan.steps.len());
     for step in &plan.steps {
         let tool_info = match resolve_step_tool(step, config) {
-            Ok((tool, spec)) => {
-                if let Some(s) = spec {
-                    if s == "bash" {
-                        "bash".to_string()
-                    } else {
-                        format!("{} ({})", tool.as_str(), s)
-                    }
-                } else {
-                    tool.as_str().to_string()
-                }
-            }
-            Err(e) => format!("<error: {}>", e),
+            Ok(StepTarget::DirectBash) => "bash (direct)".into(),
+            Ok(StepTarget::WeaveInclude) => "weave (include)".into(),
+            Ok(StepTarget::CsaTool {
+                tool_name,
+                model_spec,
+            }) => match model_spec {
+                Some(s) => format!("{} ({})", tool_name.as_str(), s),
+                None => tool_name.as_str().to_string(),
+            },
+            Err(e) => format!("<error: {e}>"),
         };
 
         let on_fail = match &step.on_fail {
