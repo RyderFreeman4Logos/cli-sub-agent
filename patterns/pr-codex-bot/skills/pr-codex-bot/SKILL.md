@@ -106,6 +106,23 @@ Tier 0 (Orchestrator)
 - All changes must be committed on a feature branch
 - Feature branch must be ahead of main
 
+### Configuration
+
+The cloud bot trigger can be disabled per-project via `.csa/config.toml`:
+
+```toml
+[pr_review]
+cloud_bot = false   # skip @codex cloud review, use local codex instead
+```
+
+**Check at runtime**: `csa config get pr_review.cloud_bot --default true`
+
+When `cloud_bot = false`:
+- Steps 4-9 (cloud bot trigger, poll, classify, arbitrate, fix) are **skipped entirely**
+- An additional local review (`csa review --range main..HEAD`) replaces the cloud review
+- The workflow proceeds directly to merge after local review passes
+- This avoids the 10-minute polling timeout and GitHub API dependency
+
 ### Quick Start
 
 ```bash
@@ -117,6 +134,9 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
 2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): Run `csa review --branch main` covering all commits since main. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds).
 3. **Push and create PR**: `git push -u origin`, `gh pr create --base main`.
+3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
+    If `false` → skip Steps 4-9. Run `csa review --range main..HEAD` for supplementary
+    local coverage, then jump to Step 11 (merge).
 4. **Trigger cloud bot and poll** (SELF-CONTAINED -- trigger + poll are atomic):
    - Trigger `@codex review` (idempotent: skip if already commented on this HEAD).
    - Poll for bot response (max 10 minutes, 30s interval).
@@ -149,11 +169,13 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 
 1. Local pre-PR review (`csa review --branch main`) completed synchronously (not backgrounded).
 2. All local review issues fixed before PR creation.
-3. PR created and cloud bot triggered.
-4. Bot response received or timeout reached (bot unavailability handled gracefully).
-5. Every bot comment classified (A/B/C) and actioned appropriately.
-6. Staleness filter applied: comments referencing code modified since posting are reclassified as stale (Category A) and skipped before arbitration.
-7. Non-stale false positives arbitrated via `csa debate` with independent model; audit trail posted to PR.
-8. Real issues fixed and re-reviewed.
-9. PR merged via squash-merge with branch cleanup.
-10. Local main updated: `git checkout main && git pull origin main`.
+3. PR created.
+4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
+5. **If cloud_bot enabled (default)**: cloud bot triggered, response received or timeout handled.
+6. **If cloud_bot disabled**: supplementary local review (`csa review --range main..HEAD`) run instead.
+7. Every bot comment classified (A/B/C) and actioned appropriately (cloud_bot enabled only).
+8. Staleness filter applied (cloud_bot enabled only).
+9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
+10. Real issues fixed and re-reviewed (cloud_bot enabled only).
+11. PR merged via squash-merge with branch cleanup.
+12. Local main updated: `git checkout main && git pull origin main`.

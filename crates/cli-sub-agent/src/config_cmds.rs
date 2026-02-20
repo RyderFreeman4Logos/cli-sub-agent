@@ -179,6 +179,12 @@ max_recursion_depth = 5
 # security_audit = "tier-3-complex"
 # bug_fix = "tier-2-standard"
 
+# ─── PR Review ──────────────────────────────────────────────────
+# [pr_review]
+# cloud_bot = true       # Set to false to skip @codex cloud review
+#                        # and use local codex (csa review) instead.
+#                        # Useful for repos without cloud bot access.
+
 # ─── Aliases ────────────────────────────────────────────────────
 # [aliases]
 # fast = "codex/openai/gpt-5-codex-mini/low"

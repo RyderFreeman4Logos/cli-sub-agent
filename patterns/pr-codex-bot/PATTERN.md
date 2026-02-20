@@ -85,6 +85,25 @@ gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
 PR_NUM=$(gh pr view --json number -q '.number')
 ```
 
+## Step 4a: Check Cloud Bot Configuration
+
+> **Tier**: 0 (Orchestrator) -- config check, lightweight.
+
+Tool: bash
+
+Check whether cloud bot review is enabled for this project.
+
+```bash
+CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
+```
+
+If `CLOUD_BOT` is `false`:
+- Skip Steps 5 through 10 (cloud bot trigger, poll, classify, arbitrate, fix).
+- Run supplementary local review: `csa review --range main..HEAD`.
+- Jump directly to Step 12b (Final Merge — Direct).
+
+## IF ${CLOUD_BOT} != "false"
+
 ## Step 5: Trigger Cloud Bot Review and Poll for Response
 
 > **Tier**: 0 (Orchestrator) -- trigger + polling loop, no code analysis.
@@ -254,6 +273,9 @@ No issues found by bot. Proceed to merge.
 ## ENDIF
 
 ## ENDIF
+
+## ENDIF
+<!-- End of CLOUD_BOT != "false" block -->
 
 ## IF !(${BOT_UNAVAILABLE})
 
