@@ -99,7 +99,7 @@ CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 
 If `CLOUD_BOT` is `false`:
 - Skip Steps 5 through 10 (cloud bot trigger, poll, classify, arbitrate, fix).
-- Run supplementary local review: `csa review --range main..HEAD`.
+- Run supplementary local review: `csa review --range main...HEAD`.
 - Jump directly to Step 12b (Final Merge — Direct).
 
 ## IF ${CLOUD_BOT} != "false"
@@ -147,7 +147,7 @@ done
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "Bot timed out after ${MAX_WAIT}s. Falling back to local review."
   # Fallback: run local csa review for coverage confirmation
-  csa review --range main..HEAD 2>/dev/null || true
+  csa review --range main...HEAD 2>/dev/null || true
 fi
 ```
 

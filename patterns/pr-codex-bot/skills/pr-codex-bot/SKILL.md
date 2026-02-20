@@ -119,7 +119,7 @@ cloud_bot = false   # skip @codex cloud review, use local codex instead
 
 When `cloud_bot = false`:
 - Steps 4-9 (cloud bot trigger, poll, classify, arbitrate, fix) are **skipped entirely**
-- An additional local review (`csa review --range main..HEAD`) replaces the cloud review
+- An additional local review (`csa review --range main...HEAD`) replaces the cloud review
 - The workflow proceeds directly to merge after local review passes
 - This avoids the 10-minute polling timeout and GitHub API dependency
 
@@ -135,12 +135,12 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): Run `csa review --branch main` covering all commits since main. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds).
 3. **Push and create PR**: `git push -u origin`, `gh pr create --base main`.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
-    If `false` → skip Steps 4-9. Run `csa review --range main..HEAD` for supplementary
+    If `false` → skip Steps 4-9. Run `csa review --range main...HEAD` for supplementary
     local coverage, then jump to Step 11 (merge).
 4. **Trigger cloud bot and poll** (SELF-CONTAINED -- trigger + poll are atomic):
    - Trigger `@codex review` (idempotent: skip if already commented on this HEAD).
    - Poll for bot response (max 10 minutes, 30s interval).
-   - If bot times out: fallback to `csa review --range main..HEAD`, then proceed to merge.
+   - If bot times out: fallback to `csa review --range main...HEAD`, then proceed to merge.
 5. **Evaluate bot comments**: Classify each as:
    - Category A (already fixed): react and acknowledge.
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
@@ -172,7 +172,7 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 3. PR created.
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
 5. **If cloud_bot enabled (default)**: cloud bot triggered, response received or timeout handled.
-6. **If cloud_bot disabled**: supplementary local review (`csa review --range main..HEAD`) run instead.
+6. **If cloud_bot disabled**: supplementary local review (`csa review --range main...HEAD`) run instead.
 7. Every bot comment classified (A/B/C) and actioned appropriately (cloud_bot enabled only).
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
