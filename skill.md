@@ -536,4 +536,6 @@ weave visualize workflow.toml --mermaid     # Mermaid flowchart
 | `csa doctor` shows tool unavailable | Install the missing tool or remove from `tool_priority` |
 | `weave audit` reports missing deps | Run `weave install RyderFreeman4Logos/cli-sub-agent` |
 | Broken symlinks after update | Run `weave check --fix` |
+| Pattern skills missing after install | Run `weave update && weave link sync --force`. If `weave update` reports the same commit, the bare cache may be stale — delete `~/.cache/weave/git/` and retry. |
+| `weave link sync` reports foreign symlink conflict | A non-weave symlink exists at the target. Use `weave link sync --force` to overwrite, or remove it manually first. |
 | Codex rate limit / quota | Wait for cooldown or switch tool: `csa run --tool claude-code` |
