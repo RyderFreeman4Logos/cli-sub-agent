@@ -101,6 +101,11 @@ fn redact_nested_json_string(input: &str, patterns: &RedactionPatterns) -> Optio
 
 fn redact_json_value(value: &mut Value, key: Option<&str>, patterns: &RedactionPatterns) {
     let key_is_sensitive = key.is_some_and(is_sensitive_key);
+    if key_is_sensitive {
+        *value = Value::String("[REDACTED]".to_string());
+        return;
+    }
+
     match value {
         Value::Object(map) => {
             for (child_key, child_value) in map {
@@ -113,21 +118,13 @@ fn redact_json_value(value: &mut Value, key: Option<&str>, patterns: &RedactionP
             }
         }
         Value::String(text) => {
-            if key_is_sensitive {
-                *text = "[REDACTED]".to_string();
-                return;
-            }
             if let Some(redacted_nested) = redact_nested_json_string(text, patterns) {
                 *text = redacted_nested;
                 return;
             }
             *text = redact_text(text, patterns);
         }
-        _ => {
-            if key_is_sensitive {
-                *value = Value::String("[REDACTED]".to_string());
-            }
-        }
+        _ => {}
     }
 }
 
@@ -217,5 +214,25 @@ mod tests {
         assert!(out.contains(r#"\"password\":\"[REDACTED]\""#));
         assert!(out.contains(r#"\"secret\":\"[REDACTED]\""#));
         assert!(out.contains(r#"\"api_key\":\"[REDACTED]\""#));
+    }
+
+    #[test]
+    fn test_redact_event_masks_sensitive_object_value_as_whole() {
+        let line = r#"{"secret":{"nested":"value","token":"sk-abc123"}}"#;
+        let out = redact_event(line);
+        assert_eq!(out, r#"{"secret":"[REDACTED]"}"#);
+        assert!(!out.contains("nested"));
+        assert!(!out.contains("value"));
+        assert!(!out.contains("sk-abc123"));
+    }
+
+    #[test]
+    fn test_redact_event_masks_sensitive_array_value_as_whole() {
+        let line = r#"{"token":["a","b","sk-abc123"]}"#;
+        let out = redact_event(line);
+        assert_eq!(out, r#"{"token":"[REDACTED]"}"#);
+        assert!(!out.contains(r#""a""#));
+        assert!(!out.contains(r#""b""#));
+        assert!(!out.contains("sk-abc123"));
     }
 }

@@ -48,6 +48,18 @@ pub(crate) fn cleanup_project_transcripts(
     gc_config: GcConfig,
     dry_run: bool,
 ) -> TranscriptCleanupStats {
+    let canonical_session_root = match session_root.canonicalize() {
+        Ok(path) => path,
+        Err(error) => {
+            warn!(
+                root = %session_root.display(),
+                error = %error,
+                "Skipping transcript GC because session root cannot be canonicalized"
+            );
+            return TranscriptCleanupStats::default();
+        }
+    };
+
     let sessions_dir = session_root.join("sessions");
     let files = collect_transcript_files(&sessions_dir);
     let max_size_bytes = gc_config
@@ -63,11 +75,23 @@ pub(crate) fn cleanup_project_transcripts(
     let mut stats = TranscriptCleanupStats::default();
     let mut cumulative = 0u64;
     for file in candidates {
+        let canonical_path = match canonical_path_within_root(&file.path, &canonical_session_root) {
+            Some(path) => path,
+            None => {
+                warn!(
+                    path = %file.path.display(),
+                    root = %canonical_session_root.display(),
+                    "Skipping transcript cleanup outside session root boundary"
+                );
+                continue;
+            }
+        };
+
         cumulative = cumulative.saturating_add(file.size_bytes);
         if dry_run {
             eprintln!(
                 "[dry-run] Would remove transcript: {} ({} bytes, cumulative {} bytes)",
-                file.path.display(),
+                canonical_path.display(),
                 file.size_bytes,
                 cumulative
             );
@@ -76,10 +100,10 @@ pub(crate) fn cleanup_project_transcripts(
             continue;
         }
 
-        match fs::remove_file(&file.path) {
+        match fs::remove_file(&canonical_path) {
             Ok(()) => {
                 info!(
-                    path = %file.path.display(),
+                    path = %canonical_path.display(),
                     size_bytes = file.size_bytes,
                     "Removed transcript file during GC"
                 );
@@ -88,7 +112,7 @@ pub(crate) fn cleanup_project_transcripts(
             }
             Err(error) => {
                 warn!(
-                    path = %file.path.display(),
+                    path = %canonical_path.display(),
                     error = %error,
                     "Failed to remove transcript file during GC"
                 );
@@ -165,11 +189,18 @@ fn is_transcript_expired(now: SystemTime, modified: SystemTime, max_age_days: u6
     now.duration_since(modified).is_ok_and(|age| age > max_age)
 }
 
+fn canonical_path_within_root(path: &Path, root: &Path) -> Option<PathBuf> {
+    let canonical = path.canonicalize().ok()?;
+    canonical.starts_with(root).then_some(canonical)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{TranscriptFile, plan_transcript_cleanup};
+    use super::{TranscriptFile, canonical_path_within_root, plan_transcript_cleanup};
+    use std::fs;
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
+    use tempfile::tempdir;
 
     #[test]
     fn test_plan_transcript_cleanup_removes_files_older_than_age_limit() {
@@ -193,5 +224,38 @@ mod tests {
             removals[0].path,
             PathBuf::from("/tmp/old/output/acp-events.jsonl")
         );
+    }
+
+    #[test]
+    fn test_canonical_path_within_root_accepts_internal_path() {
+        let root = tempdir().unwrap();
+        let transcript = root.path().join("sessions/s1/output/acp-events.jsonl");
+        fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        fs::write(&transcript, "{}\n").unwrap();
+
+        let canonical_root = root.path().canonicalize().unwrap();
+        let resolved = canonical_path_within_root(&transcript, &canonical_root);
+        assert!(resolved.is_some());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_canonical_path_within_root_rejects_symlink_escape() {
+        use std::os::unix::fs::symlink;
+
+        let root = tempdir().unwrap();
+        let outside = tempdir().unwrap();
+        let outside_output = outside.path().join("output");
+        fs::create_dir_all(&outside_output).unwrap();
+        fs::write(outside_output.join("acp-events.jsonl"), "{}\n").unwrap();
+
+        let session_dir = root.path().join("sessions/01TESTSESSION00000000000000");
+        fs::create_dir_all(&session_dir).unwrap();
+        symlink(&outside_output, session_dir.join("output")).unwrap();
+
+        let escaped = session_dir.join("output/acp-events.jsonl");
+        let canonical_root = root.path().canonicalize().unwrap();
+        let resolved = canonical_path_within_root(&escaped, &canonical_root);
+        assert!(resolved.is_none(), "symlink escape must be rejected");
     }
 }
