@@ -75,6 +75,7 @@ pub(crate) struct StepResult {
 pub(crate) async fn handle_plan_run(
     file: String,
     vars: Vec<String>,
+    tool_override: Option<ToolName>,
     dry_run: bool,
     cd: Option<String>,
     current_depth: u32,
@@ -136,7 +137,17 @@ pub(crate) async fn handle_plan_run(
         plan.steps.len()
     );
     let total_start = Instant::now();
-    let results = execute_plan(&plan, &variables, &project_root, config.as_ref()).await?;
+    if let Some(ref tool) = tool_override {
+        eprintln!("  Tool override: --tool {} (all CSA steps)", tool.as_str());
+    }
+    let results = execute_plan(
+        &plan,
+        &variables,
+        &project_root,
+        config.as_ref(),
+        tool_override.as_ref(),
+    )
+    .await?;
 
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
@@ -318,12 +329,13 @@ async fn execute_plan(
     variables: &HashMap<String, String>,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    tool_override: Option<&ToolName>,
 ) -> Result<Vec<StepResult>> {
     let mut results = Vec::with_capacity(plan.steps.len());
     let mut vars = variables.clone();
 
     for step in &plan.steps {
-        let result = execute_step(step, &vars, project_root, config).await;
+        let result = execute_step(step, &vars, project_root, config, tool_override).await;
         let is_failure = !result.skipped && result.exit_code != 0;
 
         // Inject step output for subsequent steps (successful steps only).
@@ -359,6 +371,7 @@ async fn execute_step(
     variables: &HashMap<String, String>,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    tool_override: Option<&ToolName>,
 ) -> StepResult {
     let start = Instant::now();
     let label = format!("[{}/{}]", step.id, step.title);
@@ -414,6 +427,28 @@ async fn execute_step(
                 output: None,
             };
         }
+    };
+
+    // Apply --tool override: replace tool for all CSA steps (bash/weave unaffected).
+    // Clear model_spec since the tier-resolved spec may reference a different tool.
+    let target = if let Some(override_tool) = tool_override {
+        match target {
+            StepTarget::CsaTool { .. } => {
+                info!(
+                    "{} - Tool override: {} → {}",
+                    label,
+                    "tier-resolved",
+                    override_tool.as_str()
+                );
+                StepTarget::CsaTool {
+                    tool_name: *override_tool,
+                    model_spec: None,
+                }
+            }
+            other => other,
+        }
+    } else {
+        target
     };
 
     // Skip weave INCLUDE steps (compile-time directive, not executable at runtime)

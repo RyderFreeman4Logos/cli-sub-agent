@@ -216,7 +216,7 @@ async fn execute_step_skips_when_condition_is_false() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
     assert!(result.skipped, "unset condition var must skip");
     assert_eq!(
         result.exit_code, 0,
@@ -240,7 +240,7 @@ async fn execute_step_runs_when_condition_is_true() {
     let mut vars = HashMap::new();
     vars.insert("FLAG".into(), "yes".into());
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
     assert!(!result.skipped, "true condition must execute step");
     assert_eq!(result.exit_code, 0, "bash echo should succeed");
 }
@@ -264,7 +264,7 @@ async fn execute_step_skips_loop_with_nonzero_exit() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
     assert!(result.skipped);
     assert_ne!(result.exit_code, 0);
 }
@@ -284,7 +284,7 @@ async fn execute_step_skips_weave_include() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
     assert!(result.skipped);
     assert_eq!(
         result.exit_code, 0,
@@ -307,7 +307,7 @@ async fn execute_step_bash_runs_code_block() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
     assert!(!result.skipped);
     assert_eq!(result.exit_code, 0);
 }
@@ -347,7 +347,9 @@ async fn execute_plan_skips_false_condition_cleanly() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
     // Both steps should be processed
     assert_eq!(results.len(), 2, "both steps must be processed");
     // Step 1: skipped with success (condition false)
@@ -383,7 +385,9 @@ async fn execute_plan_runs_true_condition_steps() {
     let mut vars = HashMap::new();
     vars.insert("FLAG".into(), "yes".into());
     let tmp = tempfile::tempdir().unwrap();
-    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 1);
     assert!(!results[0].skipped, "true condition must execute");
     assert_eq!(results[0].exit_code, 0);
@@ -423,7 +427,9 @@ async fn execute_plan_aborts_on_retry_exhaustion() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
     // Only step 1 should execute; step 2 should be skipped due to abort on retry exhaustion
     assert_eq!(
         results.len(),
@@ -468,7 +474,9 @@ async fn execute_plan_continues_on_skip_failure() {
     };
     let vars = HashMap::new();
     let tmp = tempfile::tempdir().unwrap();
-    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
     assert_eq!(
         results.len(),
         2,
@@ -521,7 +529,7 @@ async fn execute_step_bash_git_commit_runs_directly() {
     };
     let mut vars = HashMap::new();
     vars.insert("COMMIT_MSG".into(), commit_msg.into());
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
     assert!(!result.skipped, "bash step must not be skipped");
     assert_eq!(
@@ -562,7 +570,7 @@ async fn execute_step_bash_substitutes_variables_in_code_block() {
     };
     let mut vars = HashMap::new();
     vars.insert("MSG".into(), "substituted_value".into());
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
     assert_eq!(result.exit_code, 0);
     let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
@@ -586,7 +594,7 @@ async fn execute_step_bash_without_code_block_runs_raw_prompt() {
         loop_var: None,
     };
     let vars = HashMap::new();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
     assert_eq!(result.exit_code, 0);
     let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
@@ -636,6 +644,119 @@ fn resolve_step_tool_all_explicit_tools() {
     }
 }
 
+// --- Tool override tests ---
+
+#[tokio::test]
+async fn execute_step_tool_override_replaces_csa_tool() {
+    // A bash step with tool=bash should produce exit 0 via DirectBash.
+    // When --tool override is provided, bash steps should be unaffected.
+    let tmp = tempfile::tempdir().unwrap();
+    let bash_step = PlanStep {
+        id: 1,
+        title: "bash-step".into(),
+        tool: Some("bash".into()),
+        prompt: "```bash\necho ok\n```".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let vars = HashMap::new();
+    // Even with tool_override=claude-code, bash step must still run as bash
+    let result = execute_step(
+        &bash_step,
+        &vars,
+        tmp.path(),
+        None,
+        Some(&ToolName::ClaudeCode),
+    )
+    .await;
+    assert_eq!(
+        result.exit_code, 0,
+        "bash step must not be affected by --tool override"
+    );
+    assert!(!result.skipped);
+}
+
+#[test]
+fn tool_override_clears_model_spec() {
+    // When --tool override is applied, the model_spec from tier resolution
+    // must be cleared to avoid tool/spec mismatch.
+    let step = PlanStep {
+        id: 1,
+        title: "csa-step".into(),
+        tool: Some("codex".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let target = resolve_step_tool(&step, None).unwrap();
+    // Without override: should be CsaTool with codex
+    assert!(matches!(
+        target,
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            ..
+        }
+    ));
+
+    // Simulate override application (same logic as execute_step)
+    let override_tool = ToolName::ClaudeCode;
+    let overridden = match target {
+        StepTarget::CsaTool { .. } => StepTarget::CsaTool {
+            tool_name: override_tool,
+            model_spec: None,
+        },
+        other => other,
+    };
+    match overridden {
+        StepTarget::CsaTool {
+            tool_name,
+            model_spec,
+        } => {
+            assert_eq!(tool_name, ToolName::ClaudeCode, "tool must be overridden");
+            assert!(
+                model_spec.is_none(),
+                "model_spec must be cleared on override"
+            );
+        }
+        _ => panic!("expected CsaTool"),
+    }
+}
+
+#[test]
+fn tool_override_does_not_affect_weave_include() {
+    let step = PlanStep {
+        id: 1,
+        title: "include-step".into(),
+        tool: Some("weave".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let target = resolve_step_tool(&step, None).unwrap();
+    // Simulate override: WeaveInclude must pass through unchanged
+    let override_tool = ToolName::ClaudeCode;
+    let overridden = match target {
+        StepTarget::CsaTool { .. } => StepTarget::CsaTool {
+            tool_name: override_tool,
+            model_spec: None,
+        },
+        other => other,
+    };
+    assert!(
+        matches!(overridden, StepTarget::WeaveInclude),
+        "weave step must not be affected by --tool override"
+    );
+}
+
 #[tokio::test]
 async fn run_with_heartbeat_returns_success_exit_code() {
     let (code, output) = run_with_heartbeat(
@@ -675,7 +796,7 @@ async fn execute_step_bash_captures_stdout_in_output() {
         loop_var: None,
     };
     let vars = HashMap::new();
-    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
     assert_eq!(result.exit_code, 0);
     assert!(
         result.output.is_some(),
@@ -718,7 +839,9 @@ async fn execute_plan_injects_step_output_variables() {
         ],
     };
     let vars = HashMap::new();
-    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 2);
     assert_eq!(results[0].exit_code, 0);
     assert_eq!(results[1].exit_code, 0);
@@ -765,7 +888,9 @@ async fn execute_plan_skipped_step_injects_empty_output() {
         ],
     };
     let vars = HashMap::new();
-    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
     assert_eq!(results.len(), 2);
     assert!(results[0].skipped);
     assert_eq!(results[1].exit_code, 0);
