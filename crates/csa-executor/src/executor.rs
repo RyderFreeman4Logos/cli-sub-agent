@@ -420,6 +420,19 @@ impl Executor {
         cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
         cmd.env("CSA_PROJECT_ROOT", &session.project_path);
 
+        // CSA_SESSION_DIR: absolute path to this session's state directory
+        match csa_session::manager::get_session_dir(
+            Path::new(&session.project_path),
+            &session.meta_session_id,
+        ) {
+            Ok(dir) => {
+                cmd.env("CSA_SESSION_DIR", dir.to_string_lossy().as_ref());
+            }
+            Err(e) => {
+                tracing::warn!("failed to compute CSA_SESSION_DIR: {e:#}");
+            }
+        }
+
         // CSA_TOOL: tells the child process which tool it is running as
         cmd.env("CSA_TOOL", self.tool_name());
         // CSA_PARENT_TOOL: tells the child process which tool its parent is

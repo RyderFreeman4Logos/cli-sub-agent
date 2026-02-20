@@ -64,6 +64,33 @@ fn test_build_command_gemini_sets_csa_env_vars() {
 }
 
 #[test]
+fn test_build_command_sets_csa_session_dir() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let (cmd, _stdin_data) = exec.build_command("hello", None, &session, None);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    let session_dir = env_map
+        .get(std::ffi::OsStr::new("CSA_SESSION_DIR"))
+        .expect("CSA_SESSION_DIR should be present")
+        .expect("CSA_SESSION_DIR should have a value");
+    let session_dir_str = session_dir.to_string_lossy();
+    assert!(
+        session_dir_str.contains("/sessions/"),
+        "CSA_SESSION_DIR should contain /sessions/ path segment, got: {session_dir_str}"
+    );
+    assert!(
+        session_dir_str.contains("01HTEST000000000000000000"),
+        "CSA_SESSION_DIR should contain the session ID, got: {session_dir_str}"
+    );
+}
+
+#[test]
 fn test_build_command_codex_sets_csa_env_vars() {
     let exec = Executor::Codex {
         model_override: None,

@@ -14,8 +14,8 @@ csa run --tool {review_tool} \
 2. For security findings, verify exploit paths are closed and document residual risk.
 3. Re-run targeted checks/tests for touched areas and record verification evidence.
 4. Generate:
-   - fix-summary.md (what was fixed and how)
-   - post-fix-review-findings.json (remaining findings after fixes)
+   - $CSA_SESSION_DIR/reviewer-{N}/fix-summary.md (what was fixed and how)
+   - $CSA_SESSION_DIR/reviewer-{N}/post-fix-review-findings.json (remaining findings after fixes)
 5. If any P0/P1 remains, explicitly mark as incomplete with explanation."
 ```
 

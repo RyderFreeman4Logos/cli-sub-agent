@@ -72,7 +72,8 @@ Review prompt instructs agent to:
 2. Collect diff for given scope
 3. Three-pass review (discovery, evidence filtering, adversarial security)
 4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules)
-5. Generate review-findings.json and review-report.md"""
+5. Generate $CSA_SESSION_DIR/reviewer-{N}/review-findings.json and
+   $CSA_SESSION_DIR/reviewer-{N}/review-report.md"""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -90,7 +91,8 @@ on_fail = "abort"
 id = 6
 title = "Present Results"
 prompt = """
-Read and display review-report.md, review-findings.json summary,
+Read and display $CSA_SESSION_DIR/reviewer-{N}/review-report.md and
+$CSA_SESSION_DIR/reviewer-{N}/review-findings.json summary,
 AGENTS.md checklist summary. Report CSA session ID for follow-up."""
 on_fail = "abort"
 
@@ -100,7 +102,8 @@ title = "Fix Mode"
 tool = "csa"
 prompt = """
 Resume same CSA session to fix all P0 and P1 issues.
-Generate fix-summary.md and post-fix-review-findings.json.
+Generate $CSA_SESSION_DIR/reviewer-{N}/fix-summary.md and
+$CSA_SESSION_DIR/reviewer-{N}/post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
 ```bash

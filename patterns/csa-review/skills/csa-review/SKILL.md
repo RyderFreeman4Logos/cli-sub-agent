@@ -108,14 +108,14 @@ Key behaviors:
 ### Step 4: Present Results
 
 After CSA returns:
-1. Read and display `review-report.md` if generated.
-2. Read and display `review-findings.json` summary (finding count by priority).
+1. Read and display `$CSA_SESSION_DIR/reviewer-{N}/review-report.md` if generated.
+2. Read and display `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` summary (finding count by priority).
 3. Read and display AGENTS.md checklist summary (checked rule count and violation count).
 4. Report the CSA session ID for potential follow-up.
 
 ### Step 5: Fix Mode (optional, when mode=review-and-fix)
 
-If mode is `review-and-fix`, resume the same CSA session to fix all P0 and P1 issues, generate fix-summary.md and post-fix-review-findings.json, and mark any remaining P0/P1 as incomplete.
+If mode is `review-and-fix`, resume the same CSA session to fix all P0 and P1 issues, generate `$CSA_SESSION_DIR/reviewer-{N}/fix-summary.md` and `$CSA_SESSION_DIR/reviewer-{N}/post-fix-review-findings.json`, and mark any remaining P0/P1 as incomplete.
 
 > **See**: [Fix Workflow](references/fix-workflow.md) for the full fix mode protocol and verification steps.
 
@@ -160,7 +160,7 @@ When findings are contested, use the `debate` skill for adversarial arbitration.
 4. **No recursive `csa run` or `csa review` calls** from the review agent (session tree depth = 2 max: orchestrator → review agent).
 5. Review agent read CLAUDE.md autonomously (not pre-fed by orchestrator).
 6. Review agent discovered and applied AGENTS.md files (root-to-leaf) for all changed paths.
-7. `review-findings.json` and `review-report.md` were generated.
+7. `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` and `$CSA_SESSION_DIR/reviewer-{N}/review-report.md` were generated.
 8. Every finding has concrete evidence (trigger, expected, actual) and calibrated confidence. AGENTS.md violations reference rule IDs.
 9. `review-findings.json` includes a complete `agents_md_checklist` with no missing applicable rules.
 10. `review-report.md` includes AGENTS.md checklist section with all items checked.

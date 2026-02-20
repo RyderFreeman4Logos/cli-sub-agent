@@ -6,6 +6,8 @@
 > **CRITICAL**: You are the review agent. Your job is to review code DIRECTLY — NOT to orchestrate.
 > **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command.
 > Do NOT spawn sub-agents. Do NOT delegate. Execute every step below yourself using `git`, `cat`, `grep`, etc.
+> Write review artifacts to `$CSA_SESSION_DIR/reviewer-{N}/` (for example:
+> `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` and `$CSA_SESSION_DIR/reviewer-{N}/review-report.md`).
 
 ## Step 1: Read Project Context
 
@@ -137,14 +139,14 @@ When scope is `uncommitted` (per-commit review), generate a suggested commit mes
 - Type: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`
 - Scope: the primary crate or module affected
 - Description: concise summary of what changed and why (not how)
-- Include in `generated_outputs.commit_message` in review-findings.json
+- Include in `generated_outputs.commit_message` in `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json`
 
 ### PR Body (pre-PR scope only)
 
 When scope is `base:<branch>` or `range:` (pre-PR review), generate a suggested PR body:
 - `## Summary` with 2-4 bullet points describing the changes
 - `## Test plan` with a checklist of verification steps
-- Include in `generated_outputs.pr_body` in review-findings.json
+- Include in `generated_outputs.pr_body` in `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json`
 
 If P0 or P1 findings exist, set both fields to `null` — the developer needs to fix issues first.
 
