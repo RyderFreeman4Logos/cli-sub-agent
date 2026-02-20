@@ -54,7 +54,7 @@ Route execution based on the task's executor tag:
 Execute via CSA sub-agent:
 
 ```bash
-csa run --tool <tool> "prompt with task description and DONE WHEN condition"
+csa run "prompt with task description and DONE WHEN condition"
 ```
 
 ### ELIF tag matches `[Sub:developer]` (e.g., `[Sub:rust-sonnet-developer]`, `[Sub:developer]`)
