@@ -10,7 +10,8 @@
 //! - `tool = "bash"` direct execution (extracts code block from prompt)
 //! - `${VAR}` substitution from `--var KEY=VALUE` CLI arguments
 //! - `on_fail` handling: abort / skip / retry N
-//! - Steps with `condition` or `loop_var` are skipped with a warning
+//! - `condition` evaluation: `${VAR}` truthiness, `!(expr)`, `(a) && (b)`
+//! - Steps with `loop_var` are skipped with a warning (v2)
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -110,14 +111,14 @@ pub(crate) async fn handle_plan_run(
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
 
-    // 9. Warn about unsupported skips (condition/loop)
+    // 9. Warn about unsupported skips (loop_var)
     let unsupported_skips = results
         .iter()
         .filter(|r| r.skipped && r.exit_code != 0)
         .count();
     if unsupported_skips > 0 {
         warn!(
-            "{} step(s) skipped due to unsupported v1 features (conditions/loops). \
+            "{} step(s) skipped due to unsupported v1 features (loops). \
              These steps were NOT executed — workflow results may be incomplete.",
             unsupported_skips
         );
@@ -330,22 +331,26 @@ async fn execute_step(
     let label = format!("[{}/{}]", step.id, step.title);
     eprintln!("{} - START", label);
 
-    // Skip steps with conditions or loops (v1 limitation).
-    // These use a non-zero exit code to prevent silent success when
-    // critical workflow logic is not actually executed.
-    if step.condition.is_some() {
-        warn!(
-            "{} - UNSUPPORTED: conditional steps require v2; skipping",
-            label
-        );
-        return StepResult {
-            step_id: step.id,
-            title: step.title.clone(),
-            exit_code: 2,
-            duration_secs: 0.0,
-            skipped: true,
-            error: Some("Conditional steps not supported in v1".to_string()),
-        };
+    // Evaluate condition: skip step when condition evaluates to false.
+    // Steps whose condition is true (or absent) proceed to execution.
+    if let Some(ref condition) = step.condition {
+        let condition_met = crate::plan_condition::evaluate_condition(condition, variables);
+        if !condition_met {
+            info!(
+                "{} - SKIP (condition '{}' evaluated to false)",
+                label, condition
+            );
+            eprintln!("{} - SKIP (condition not met)", label);
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: 0.0,
+                skipped: true,
+                error: None,
+            };
+        }
+        info!("{} - Condition '{}' met, proceeding", label, condition);
     }
     if step.loop_var.is_some() {
         warn!("{} - UNSUPPORTED: loop steps require v2; skipping", label);
