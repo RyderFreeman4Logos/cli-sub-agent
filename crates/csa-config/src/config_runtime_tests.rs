@@ -306,6 +306,57 @@ fn enforcement_explicit_off_on_tool_disables_sandbox() {
     );
 }
 
+// ── P1: Custom profile inherits inherent memory defaults ───────────────
+
+#[test]
+fn memory_max_enforcement_only_inherits_heavyweight_defaults() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(EnforcementMode::Required),
+            ..Default::default()
+        },
+    );
+    // Profile resolves to Custom (enforcement_mode set), but memory
+    // should fall back to inherent Heavyweight defaults (2048), not None.
+    assert_eq!(
+        cfg.tool_resource_profile("claude-code"),
+        ToolResourceProfile::Custom,
+    );
+    assert_eq!(
+        cfg.sandbox_memory_max_mb("claude-code"),
+        Some(2048),
+        "Custom profile with enforcement set must inherit Heavyweight memory_max_mb"
+    );
+    assert_eq!(
+        cfg.sandbox_memory_swap_max_mb("claude-code"),
+        Some(0),
+        "Custom profile with enforcement set must inherit Heavyweight memory_swap_max_mb"
+    );
+}
+
+#[test]
+fn memory_max_enforcement_only_lightweight_stays_none() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(EnforcementMode::BestEffort),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_resource_profile("codex"),
+        ToolResourceProfile::Custom,
+    );
+    assert_eq!(
+        cfg.sandbox_memory_max_mb("codex"),
+        None,
+        "Lightweight inherent profile should still return None for memory"
+    );
+}
+
 // ── Backward compatibility ─────────────────────────────────────────────
 
 #[test]
