@@ -77,45 +77,53 @@ on_fail = "abort"
 id = 5
 title = "Phase 3 — Adversarial Debate"
 tool = "csa"
-prompt = ""
+prompt = """
+Critically evaluate this draft TODO plan. Act as a devil's advocate.
+
+## Draft TODO Plan
+${STEP_4_OUTPUT}
+
+## Instructions
+Challenge assumptions, identify gaps, question priorities, and suggest improvements.
+Focus on:
+- Missing dependencies or prerequisites
+- Incorrect task ordering
+- Unrealistic scope or missing edge cases
+- Security risks not addressed
+- Tasks that should be split or combined
+
+Output a structured critique:
+1. **Valid Concerns** — issues that MUST be addressed
+2. **Suggested Changes** — concrete improvements
+3. **Overall Assessment** — is the plan ready or needs revision?"""
 tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 6
-title = "Include debate"
-tool = "weave"
-prompt = "debate"
-on_fail = "abort"
-
-[[workflow.steps]]
-id = 7
 title = "Revise TODO"
 prompt = """
-Incorporate debate feedback. Update plan based on valid criticisms.
-Concede valid points, defend sound decisions with evidence.
+Incorporate debate feedback into the TODO plan.
+Concede valid points and revise accordingly. Defend sound decisions with evidence.
 
 ## Prior Context
 
 ### Draft TODO (Step 4)
 ${STEP_4_OUTPUT}
 
-### Adversarial Debate (Step 5)
-${STEP_5_OUTPUT}
-
-### Debate Include (Step 6)
-${STEP_6_OUTPUT}"""
+### Adversarial Critique (Step 5)
+${STEP_5_OUTPUT}"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 8
+id = 7
 title = "Save TODO"
 tool = "bash"
 prompt = """
 Save finalized TODO using csa todo for git-tracked lifecycle.
 
 ```bash
-[[ -n "${FINALIZED_TODO_CONTENT:-}" ]] || { echo "FINALIZED_TODO_CONTENT is empty — agent must produce content in Steps 4-6" >&2; exit 1; }
+[[ -n "${FINALIZED_TODO_CONTENT:-}" ]] || { echo "FINALIZED_TODO_CONTENT is empty — agent must produce content in Steps 4-6 (draft, debate, revise)" >&2; exit 1; }
 TODO_TS=$(csa todo create --branch "$(git branch --show-current)" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
 printf '%s\\n' "${FINALIZED_TODO_CONTENT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
@@ -124,7 +132,7 @@ csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 9
+id = 8
 title = "Phase 4 — User Approval"
 prompt = """
 Present TODO to user for review in ${USER_LANGUAGE}.

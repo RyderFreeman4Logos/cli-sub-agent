@@ -25,7 +25,12 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 2
 title = "Create Task Entries"
-prompt = ""
+prompt = """
+For each TODO item extracted in Step 1, create a TaskCreate entry.
+Each task MUST include subject, description, executor tag, and DONE WHEN condition.
+
+## TODO Items
+${STEP_1_OUTPUT}"""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -58,7 +63,13 @@ collection = "${TODO_ITEMS}"
 [[workflow.steps]]
 id = 5
 title = "Execute Tasks Serially"
-prompt = ""
+prompt = """
+Execute each task from the task list in order.
+For implementation tasks, write code then run quality gates (fmt, clippy, test).
+For non-implementation tasks, follow the task description directly.
+
+## Task List
+${STEP_2_OUTPUT}"""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -107,7 +118,10 @@ collection = "${TASK_LIST}"
 [[workflow.steps]]
 id = 9
 title = "Step 4d: Commit"
-prompt = ""
+prompt = """
+Run the full commit workflow for the current task:
+format, lint, test, security audit, code review, then create commit.
+Use Conventional Commits format with appropriate scope."""
 on_fail = "abort"
 condition = "${TASK_IS_IMPLEMENTATION}"
 
@@ -117,18 +131,6 @@ collection = "${TASK_LIST}"
 
 [[workflow.steps]]
 id = 10
-title = "Include commit"
-tool = "weave"
-prompt = "commit"
-on_fail = "abort"
-condition = "${TASK_IS_IMPLEMENTATION}"
-
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TASK_LIST}"
-
-[[workflow.steps]]
-id = 11
 title = "Step 4e: Compact Context"
 prompt = "Preserve task list and decisions. Compact process details."
 on_fail = "abort"
@@ -139,7 +141,7 @@ variable = "task"
 collection = "${TASK_LIST}"
 
 [[workflow.steps]]
-id = 12
+id = 11
 title = "Verify Completion"
 prompt = """
 Check all tasks completed. Run final quality gates.

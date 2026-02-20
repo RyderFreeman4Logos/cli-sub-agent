@@ -468,6 +468,20 @@ async fn execute_step(
     // Substitute variables in prompt
     let prompt = substitute_vars(&step.prompt, variables);
 
+    // Warn when a CSA step has an empty prompt (likely a missing weave include)
+    if matches!(target, StepTarget::CsaTool { .. }) && prompt.trim().is_empty() {
+        warn!(
+            "{} - CSA step has empty prompt — tool will start with no context. \
+             This usually means a weave include was not expanded. \
+             Add a descriptive prompt to step {} in the workflow file.",
+            label, step.id
+        );
+        eprintln!(
+            "{} - WARNING: empty prompt for CSA step (tool will have no context)",
+            label
+        );
+    }
+
     // Determine retry count from on_fail
     let max_attempts = match &step.on_fail {
         FailAction::Retry(n) => (*n).max(1),
@@ -774,3 +788,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 #[path = "plan_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "plan_cmd_override_tests.rs"]
+mod override_tests;
