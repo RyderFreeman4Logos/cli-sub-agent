@@ -168,14 +168,26 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_5ms() -> Result<()> 
 
     let test_result = (|| -> Result<()> {
         wait_for_socket(&socket_path, Duration::from_secs(5))?;
-        // Allow extra time for the hub to connect to its MCP backend servers
-        // after the socket becomes connectable (macOS CI runners are slower).
-        std::thread::sleep(Duration::from_millis(500));
 
-        let list_response = connect_and_request(
-            &socket_path,
-            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
-        )?;
+        // Retry tools/list until the hub has connected its MCP backend.
+        // On macOS CI runners the hub socket is ready before backends register.
+        let mut list_response = Value::Null;
+        for attempt in 0..20 {
+            std::thread::sleep(Duration::from_millis(250));
+            list_response = connect_and_request(
+                &socket_path,
+                &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            )?;
+            if list_response["result"]["tools"][0]["name"] == "echo_tool" {
+                break;
+            }
+            if attempt == 19 {
+                bail!(
+                    "hub never registered MCP backend after 5s; last response: {}",
+                    list_response
+                );
+            }
+        }
         assert_eq!(list_response["result"]["tools"][0]["name"], "echo_tool");
 
         let call_response = connect_and_request(
