@@ -298,7 +298,7 @@ fn verify_debate_skill_available(project_root: &Path) -> Result<()> {
                  {resolve_err}\n\n\
                  Install the debate pattern with one of:\n\
                  1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
-                 2) Manually place skills/debate/SKILL.md inside .csa/patterns/debate/ or patterns/debate/\n\n\
+                 2) Manually place skills/debate/SKILL.md (or PATTERN.md) inside .csa/patterns/debate/ or patterns/debate/\n\n\
                  Without the pattern, the debate tool cannot follow the structured debate protocol."
             )
         }
