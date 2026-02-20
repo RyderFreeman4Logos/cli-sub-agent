@@ -28,7 +28,7 @@ use csa_session::{
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
-pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 300;
+pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,

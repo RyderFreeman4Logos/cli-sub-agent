@@ -261,6 +261,11 @@ impl AcpConnection {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
 
+        // Safety net: ensure child process is cleaned up if AcpConnection is dropped
+        // without explicit kill() (e.g., during panic). Not the primary shutdown mechanism —
+        // explicit kill() in transport.rs handles normal cleanup.
+        cmd.kill_on_drop(true);
+
         // Strip parent-process env vars that interfere with the ACP child.
         // CLAUDECODE=1 triggers recursion detection in claude-code, causing
         // immediate exit with "unset the CLAUDECODE environment variable".

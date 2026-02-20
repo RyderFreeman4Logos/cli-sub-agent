@@ -201,6 +201,12 @@ pub async fn run_prompt_with_io(
         stderr.push('\n');
     }
 
+    // Kill ACP process immediately for single-prompt usage (no session resumption).
+    // In session mode (resume_session_id is Some), the process stays alive for reuse.
+    if session_start.resume_session_id.is_none() {
+        let _ = session.connection().kill();
+    }
+
     Ok(AcpOutput {
         output: result.output,
         stderr,
