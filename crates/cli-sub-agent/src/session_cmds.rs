@@ -389,7 +389,18 @@ pub(crate) fn handle_session_result(session: String, json: bool, cd: Option<Stri
     let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
     let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
     let session_dir = get_session_dir(&project_root, &resolved_id)?;
-    let transcript_summary = load_transcript_summary(&session_dir)?;
+    let transcript_summary = match load_transcript_summary(&session_dir) {
+        Ok(summary) => summary,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %resolved_id,
+                path = %session_dir.display(),
+                error = %err,
+                "Failed to load transcript summary; continuing without transcript metadata"
+            );
+            None
+        }
+    };
     match load_result(&project_root, &resolved_id)? {
         Some(result) => {
             if json {
