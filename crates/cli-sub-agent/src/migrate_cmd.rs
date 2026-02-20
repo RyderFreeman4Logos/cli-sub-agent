@@ -108,8 +108,6 @@ fn run_migrations(
     lock.versions.weave = weave_version.to_string();
     lock.save(project_dir)?;
 
-    eprintln!(
-        "All migrations applied. weave.lock updated to {csa_version}."
-    );
+    eprintln!("All migrations applied. weave.lock updated to {csa_version}.");
     Ok(())
 }
