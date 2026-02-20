@@ -6,7 +6,7 @@ use anyhow::Result;
 use tempfile::TempDir;
 use tracing::{info, warn};
 
-use csa_config::GlobalConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
@@ -90,6 +90,12 @@ fn take_next_runtime_fallback_tool(
         return Some(candidate);
     }
     None
+}
+
+fn resolve_slot_wait_timeout_seconds(config: Option<&ProjectConfig>) -> u64 {
+    config
+        .map(|cfg| cfg.resources.slot_wait_timeout_seconds)
+        .unwrap_or(csa_config::ResourcesConfig::default().slot_wait_timeout_seconds)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -493,7 +499,9 @@ pub(crate) async fn handle_run(
                         tool = %tool_name_str,
                         "All slots occupied, waiting for a free slot"
                     );
-                    let timeout = std::time::Duration::from_secs(300);
+                    let timeout = std::time::Duration::from_secs(
+                        resolve_slot_wait_timeout_seconds(config.as_ref()),
+                    );
                     let slot = csa_lock::slot::acquire_slot_blocking(
                         &slots_dir,
                         tool_name_str,

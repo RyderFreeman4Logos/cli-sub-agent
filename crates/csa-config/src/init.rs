@@ -222,6 +222,7 @@ pub fn init_project(
                 max_recursion_depth: 5,
             },
             resources: ResourcesConfig::default(),
+            acp: Default::default(),
             tools: HashMap::new(),
             review: None,
             debate: None,
@@ -250,6 +251,7 @@ pub fn init_project(
                 initial_estimates,
                 ..Default::default()
             },
+            acp: Default::default(),
             tools,
             review: None,
             debate: None,

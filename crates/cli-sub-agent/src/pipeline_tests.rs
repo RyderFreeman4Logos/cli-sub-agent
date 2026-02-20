@@ -61,6 +61,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
             initial_estimates: HashMap::new(),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -188,6 +189,7 @@ fn resolve_idle_timeout_uses_config_then_default() {
             initial_estimates: HashMap::new(),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -216,6 +218,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
             node_heap_limit_mb,
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -417,6 +420,7 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
         schema_version: CURRENT_SCHEMA_VERSION,
         project: ProjectMeta::default(),
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -547,6 +551,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         schema_version: CURRENT_SCHEMA_VERSION,
         project: ProjectMeta::default(),
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,

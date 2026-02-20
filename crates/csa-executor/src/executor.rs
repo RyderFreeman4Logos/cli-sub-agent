@@ -23,6 +23,8 @@ pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 pub struct ExecuteOptions {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub stdin_write_timeout_seconds: u64,
+    pub acp_init_timeout_seconds: u64,
     pub output_spool: Option<PathBuf>,
     /// Selective MCP/setting sources for ACP session meta.
     /// `Some(sources)` → inject `settingSources` into session meta.
@@ -54,10 +56,24 @@ impl ExecuteOptions {
         Self {
             stream_mode,
             idle_timeout_seconds,
+            stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
+            acp_init_timeout_seconds: 60,
             output_spool: None,
             setting_sources: None,
             sandbox: None,
         }
+    }
+
+    /// Override stdin write timeout (seconds) for spawned child processes.
+    pub fn with_stdin_write_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.stdin_write_timeout_seconds = seconds;
+        self
+    }
+
+    /// Override ACP initialization timeout (seconds).
+    pub fn with_acp_init_timeout_seconds(mut self, seconds: u64) -> Self {
+        self.acp_init_timeout_seconds = seconds;
+        self
     }
 
     /// Set selective MCP/setting sources for ACP session meta.
@@ -312,6 +328,8 @@ impl Executor {
         let transport_options = TransportOptions {
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
+            stdin_write_timeout_seconds: options.stdin_write_timeout_seconds,
+            acp_init_timeout_seconds: options.acp_init_timeout_seconds,
             output_spool: options.output_spool.as_deref(),
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),

@@ -692,6 +692,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,

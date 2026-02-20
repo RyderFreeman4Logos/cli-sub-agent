@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use crate::acp::AcpConfig;
+use crate::config_merge::{enforce_global_tool_disables, merge_toml_values, warn_deprecated_keys};
 use crate::global::{PreferencesConfig, ReviewConfig};
 
 /// Sandbox enforcement mode for resource limits (cgroups, rlimits).
@@ -63,6 +65,9 @@ pub struct ProjectConfig {
     pub project: ProjectMeta,
     #[serde(default, skip_serializing_if = "ResourcesConfig::is_default")]
     pub resources: ResourcesConfig,
+    /// ACP transport behavior overrides.
+    #[serde(default, skip_serializing_if = "AcpConfig::is_default")]
+    pub acp: AcpConfig,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, ToolConfig>,
     /// Optional per-project override for `csa review` tool selection.
@@ -195,6 +200,12 @@ pub struct ResourcesConfig {
     /// Kill child if no streamed output for this many consecutive seconds.
     #[serde(default = "default_idle_timeout_seconds")]
     pub idle_timeout_seconds: u64,
+    /// Maximum time to block when waiting for a free global tool slot.
+    #[serde(default = "default_slot_wait_timeout_seconds")]
+    pub slot_wait_timeout_seconds: u64,
+    /// Maximum time to write prompt payload to child stdin.
+    #[serde(default = "default_stdin_write_timeout_seconds")]
+    pub stdin_write_timeout_seconds: u64,
     #[serde(default)]
     pub initial_estimates: HashMap<String, u64>,
     /// Sandbox enforcement mode for resource limits.
@@ -222,11 +233,21 @@ fn default_idle_timeout_seconds() -> u64 {
     120
 }
 
+fn default_slot_wait_timeout_seconds() -> u64 {
+    300
+}
+
+fn default_stdin_write_timeout_seconds() -> u64 {
+    30
+}
+
 impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
             min_free_memory_mb: default_min_mem(),
             idle_timeout_seconds: default_idle_timeout_seconds(),
+            slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
+            stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
             initial_estimates: HashMap::new(),
             enforcement_mode: None,
             memory_max_mb: None,
@@ -244,73 +265,14 @@ impl ResourcesConfig {
     pub fn is_default(&self) -> bool {
         self.min_free_memory_mb == default_min_mem()
             && self.idle_timeout_seconds == default_idle_timeout_seconds()
+            && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
+            && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.initial_estimates.is_empty()
             && self.enforcement_mode.is_none()
             && self.memory_max_mb.is_none()
             && self.memory_swap_max_mb.is_none()
             && self.node_heap_limit_mb.is_none()
             && self.pids_max.is_none()
-    }
-}
-
-/// Warn about deprecated config keys that serde silently ignores.
-fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
-    if let Some(resources) = raw.get("resources") {
-        if resources.get("min_free_swap_mb").is_some() {
-            eprintln!(
-                "warning: config '{}': 'resources.min_free_swap_mb' is deprecated and ignored. \
-                 Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead.",
-                source
-            );
-        }
-    }
-}
-
-/// Deep merge two TOML values. Overlay wins for non-table values.
-/// Tables are merged recursively (project-level keys override user-level keys).
-fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml::Value {
-    match (base, overlay) {
-        (toml::Value::Table(mut base_map), toml::Value::Table(overlay_map)) => {
-            for (key, overlay_val) in overlay_map {
-                let merged_val = match base_map.remove(&key) {
-                    Some(base_val) => merge_toml_values(base_val, overlay_val),
-                    None => overlay_val,
-                };
-                base_map.insert(key, merged_val);
-            }
-            toml::Value::Table(base_map)
-        }
-        (_, overlay) => overlay,
-    }
-}
-
-/// Re-apply `tools.*.enabled = false` from the global config into a merged
-/// TOML value.  This ensures that global disablement is a hard override:
-/// project configs cannot set a globally-disabled tool back to `enabled = true`.
-fn enforce_global_tool_disables(global: &toml::Value, merged: &mut toml::Value) {
-    let global_tools = match global.get("tools").and_then(|t| t.as_table()) {
-        Some(t) => t,
-        None => return,
-    };
-    let merged_tools = match merged.get_mut("tools").and_then(|t| t.as_table_mut()) {
-        Some(t) => t,
-        None => return,
-    };
-
-    for (tool_name, global_tool_val) in global_tools {
-        let globally_disabled =
-            global_tool_val.get("enabled").and_then(|v| v.as_bool()) == Some(false);
-        if !globally_disabled {
-            continue;
-        }
-        // Force `enabled = false` in the merged config for this tool.
-        if let Some(merged_tool) = merged_tools.get_mut(tool_name) {
-            if let Some(table) = merged_tool.as_table_mut() {
-                table.insert("enabled".to_string(), toml::Value::Boolean(false));
-            }
-        } else {
-            // Tool only in global config (already disabled via base merge), nothing to fix.
-        }
     }
 }
 
@@ -569,6 +531,14 @@ schema_version = 1
 min_free_memory_mb = 4096
 # Kill child processes only when no streamed output appears for N seconds.
 idle_timeout_seconds = 120
+# Maximum seconds to wait for a free slot when running with --wait.
+slot_wait_timeout_seconds = 300
+# Maximum seconds to write prompt payload to child stdin.
+stdin_write_timeout_seconds = 30
+
+[acp]
+# Timeout for ACP initialize/session setup calls.
+init_timeout_seconds = 60
 
 # Tool configuration defaults.
 # [tools.codex]

@@ -4,12 +4,6 @@
 //! content-addressable cache (`~/.cache/weave/git/<url-hash>/`) and checks
 //! out the requested revision into the global package store at
 //! `~/.local/share/weave/packages/<name>/<commit-prefix>/`.
-//!
-//! Commands:
-//! - `install <source>` — clone/fetch + checkout into global store
-//! - `lock` — snapshot current deps into `weave.lock`
-//! - `update [name]` — fetch latest and re-lock
-//! - `audit` — verify lockfile consistency
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -57,10 +51,6 @@ pub struct LockedPackage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resolved_ref: Option<String>,
 }
-
-// ---------------------------------------------------------------------------
-// Source parsing
-// ---------------------------------------------------------------------------
 
 /// Parsed install source — a git URL with an optional ref and skill name.
 #[derive(Debug, Clone, PartialEq)]
@@ -295,12 +285,7 @@ fn ensure_cached(cache_root: &Path, url: &str) -> Result<PathBuf> {
         // `resolve_commit(cas, None)` (which resolves HEAD → main) sees the
         // latest remote commit.
         let status = Command::new("git")
-            .args([
-                "fetch",
-                "--quiet",
-                "origin",
-                "+refs/heads/*:refs/heads/*",
-            ])
+            .args(["fetch", "--quiet", "origin", "+refs/heads/*:refs/heads/*"])
             .current_dir(&cas)
             .status()
             .context("failed to run git fetch")?;

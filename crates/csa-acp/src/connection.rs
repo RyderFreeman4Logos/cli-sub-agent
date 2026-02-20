@@ -76,6 +76,37 @@ pub struct AcpConnection {
     last_activity: SharedActivity,
     stderr_buf: Rc<RefCell<String>>,
     default_working_dir: PathBuf,
+    init_timeout: Duration,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AcpConnectionOptions {
+    /// Timeout for ACP initialization/session setup operations.
+    pub init_timeout: Duration,
+}
+
+impl Default for AcpConnectionOptions {
+    fn default() -> Self {
+        Self {
+            init_timeout: Duration::from_secs(60),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AcpSpawnRequest<'a> {
+    pub command: &'a str,
+    pub args: &'a [String],
+    pub working_dir: &'a Path,
+    pub env: &'a HashMap<String, String>,
+    pub options: AcpConnectionOptions,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AcpSandboxRequest<'a> {
+    pub config: &'a SandboxConfig,
+    pub tool_name: &'a str,
+    pub session_id: &'a str,
 }
 
 impl AcpConnection {
@@ -93,15 +124,6 @@ impl AcpConnection {
         "CLAUDE_CODE_ENTRYPOINT",
     ];
 
-    /// Default timeout for ACP initialization and session setup.
-    ///
-    /// If the ACP process does not respond to `initialize` or `session/new`
-    /// within this duration, the connection is killed and an error is returned.
-    ///
-    /// For `session/load`, only an error is returned (no kill) so the caller
-    /// can fall back to `session/new` on the same connection.
-    const INIT_TIMEOUT: Duration = Duration::from_secs(60);
-
     /// Spawn an ACP process without resource sandboxing.
     pub async fn spawn(
         command: &str,
@@ -109,8 +131,26 @@ impl AcpConnection {
         working_dir: &Path,
         env: &HashMap<String, String>,
     ) -> AcpResult<Self> {
+        Self::spawn_with_options(
+            command,
+            args,
+            working_dir,
+            env,
+            AcpConnectionOptions::default(),
+        )
+        .await
+    }
+
+    /// Spawn an ACP process with explicit connection options.
+    pub async fn spawn_with_options(
+        command: &str,
+        args: &[String],
+        working_dir: &Path,
+        env: &HashMap<String, String>,
+        options: AcpConnectionOptions,
+    ) -> AcpResult<Self> {
         let cmd = Self::build_cmd(command, args, working_dir, env);
-        Self::spawn_with_cmd(cmd, working_dir).await
+        Self::spawn_with_cmd(cmd, working_dir, options).await
     }
 
     /// Spawn an ACP process with optional resource sandbox.
@@ -122,28 +162,33 @@ impl AcpConnection {
     /// Returns the connection and a [`AcpSandboxHandle`] that must be kept
     /// alive for the duration of the child process.
     pub async fn spawn_sandboxed(
-        command: &str,
-        args: &[String],
-        working_dir: &Path,
-        env: &HashMap<String, String>,
-        sandbox: Option<&SandboxConfig>,
-        tool_name: &str,
-        session_id: &str,
+        request: AcpSpawnRequest<'_>,
+        sandbox: Option<AcpSandboxRequest<'_>>,
     ) -> AcpResult<(Self, AcpSandboxHandle)> {
-        let Some(config) = sandbox else {
-            let conn = Self::spawn(command, args, working_dir, env).await?;
+        let Some(sandbox) = sandbox else {
+            let conn = Self::spawn_with_options(
+                request.command,
+                request.args,
+                request.working_dir,
+                request.env,
+                request.options,
+            )
+            .await?;
             return Ok((conn, AcpSandboxHandle::None));
         };
 
         match detect_sandbox_capability() {
             SandboxCapability::CgroupV2 => {
                 // Build systemd-run wrapper command, then append the ACP binary + args.
-                let scope_cmd =
-                    csa_resource::cgroup::create_scope_command(tool_name, session_id, config);
+                let scope_cmd = csa_resource::cgroup::create_scope_command(
+                    sandbox.tool_name,
+                    sandbox.session_id,
+                    sandbox.config,
+                );
                 let mut cmd = Command::from(scope_cmd);
-                cmd.arg(command);
-                cmd.args(args);
-                cmd.current_dir(working_dir)
+                cmd.arg(request.command);
+                cmd.args(request.args);
+                cmd.current_dir(request.working_dir)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
@@ -163,12 +208,15 @@ impl AcpConnection {
                     cmd.env_remove(var);
                 }
 
-                for (key, value) in env {
+                for (key, value) in request.env {
                     cmd.env(key, value);
                 }
 
-                let conn = Self::spawn_with_cmd(cmd, working_dir).await?;
-                let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
+                let conn = Self::spawn_with_cmd(cmd, request.working_dir, request.options).await?;
+                let guard = csa_resource::cgroup::CgroupScopeGuard::new(
+                    sandbox.tool_name,
+                    sandbox.session_id,
+                );
                 debug!(
                     scope = %guard.scope_name(),
                     "ACP process spawned inside cgroup scope"
@@ -176,10 +224,15 @@ impl AcpConnection {
                 Ok((conn, AcpSandboxHandle::Cgroup(guard)))
             }
             SandboxCapability::Setrlimit => {
-                let mut cmd = Self::build_cmd_base(command, args, working_dir, env);
+                let mut cmd = Self::build_cmd_base(
+                    request.command,
+                    request.args,
+                    request.working_dir,
+                    request.env,
+                );
 
-                let memory_max_mb = config.memory_max_mb;
-                let pids_max = config.pids_max.map(u64::from);
+                let memory_max_mb = sandbox.config.memory_max_mb;
+                let pids_max = sandbox.config.pids_max.map(u64::from);
 
                 // Apply setsid + rlimits in a single pre_exec hook.
                 // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
@@ -192,7 +245,8 @@ impl AcpConnection {
                     });
                 }
 
-                let conn = Self::spawn_with_cmd_raw(cmd, working_dir).await?;
+                let conn =
+                    Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
 
                 let watcher = conn.child.borrow().id().and_then(|pid| {
                     debug!(pid, memory_max_mb, "starting RSS watcher for ACP child");
@@ -213,7 +267,14 @@ impl AcpConnection {
             }
             SandboxCapability::None => {
                 debug!("no sandbox capability detected; spawning ACP without isolation");
-                let conn = Self::spawn(command, args, working_dir, env).await?;
+                let conn = Self::spawn_with_options(
+                    request.command,
+                    request.args,
+                    request.working_dir,
+                    request.env,
+                    request.options,
+                )
+                .await?;
                 Ok((conn, AcpSandboxHandle::None))
             }
         }
@@ -282,13 +343,21 @@ impl AcpConnection {
     }
 
     /// Shared connection setup from a pre-built command.
-    async fn spawn_with_cmd(cmd: Command, working_dir: &Path) -> AcpResult<Self> {
-        Self::spawn_with_cmd_raw(cmd, working_dir).await
+    async fn spawn_with_cmd(
+        cmd: Command,
+        working_dir: &Path,
+        options: AcpConnectionOptions,
+    ) -> AcpResult<Self> {
+        Self::spawn_with_cmd_raw(cmd, working_dir, options).await
     }
 
     /// Core spawn logic: takes a fully configured command, spawns it, and
     /// sets up the ACP protocol connection over stdin/stdout.
-    async fn spawn_with_cmd_raw(mut cmd: Command, working_dir: &Path) -> AcpResult<Self> {
+    async fn spawn_with_cmd_raw(
+        mut cmd: Command,
+        working_dir: &Path,
+        options: AcpConnectionOptions,
+    ) -> AcpResult<Self> {
         let mut child = cmd.spawn().map_err(AcpError::SpawnFailed)?;
 
         let stdin = child.stdin.take().ok_or_else(|| {
@@ -355,6 +424,7 @@ impl AcpConnection {
             last_activity,
             stderr_buf,
             default_working_dir: working_dir.to_path_buf(),
+            init_timeout: options.init_timeout,
         })
     }
 
@@ -367,7 +437,7 @@ impl AcpConnection {
             .run_until(async {
                 tokio::select! {
                     response = self.connection.initialize(request) => Some(response),
-                    () = tokio::time::sleep(Self::INIT_TIMEOUT) => None,
+                    () = tokio::time::sleep(self.init_timeout) => None,
                 }
             })
             .await;
@@ -380,7 +450,7 @@ impl AcpConnection {
                 let _ = self.kill();
                 Err(AcpError::InitializationFailed(format!(
                     "ACP initialize timed out after {}s{}",
-                    Self::INIT_TIMEOUT.as_secs(),
+                    self.init_timeout.as_secs(),
                     Self::format_stderr(&stderr),
                 )))
             }
@@ -408,7 +478,7 @@ impl AcpConnection {
             .run_until(async {
                 tokio::select! {
                     response = self.connection.new_session(request) => Some(response),
-                    () = tokio::time::sleep(Self::INIT_TIMEOUT) => None,
+                    () = tokio::time::sleep(self.init_timeout) => None,
                 }
             })
             .await;
@@ -421,7 +491,7 @@ impl AcpConnection {
                 let _ = self.kill();
                 Err(AcpError::SessionFailed(format!(
                     "ACP session/new timed out after {}s{}",
-                    Self::INIT_TIMEOUT.as_secs(),
+                    self.init_timeout.as_secs(),
                     Self::format_stderr(&stderr),
                 )))
             }
@@ -444,7 +514,7 @@ impl AcpConnection {
             .run_until(async {
                 tokio::select! {
                     response = self.connection.load_session(request) => Some(response),
-                    () = tokio::time::sleep(Self::INIT_TIMEOUT) => None,
+                    () = tokio::time::sleep(self.init_timeout) => None,
                 }
             })
             .await;
@@ -460,7 +530,7 @@ impl AcpConnection {
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
                     "ACP session/load timed out after {}s{}",
-                    Self::INIT_TIMEOUT.as_secs(),
+                    self.init_timeout.as_secs(),
                     Self::format_stderr(&stderr),
                 )))
             }

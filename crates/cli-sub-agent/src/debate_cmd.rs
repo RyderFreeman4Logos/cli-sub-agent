@@ -2,7 +2,7 @@ use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
 use std::path::Path;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::cli::DebateArgs;
 use crate::run_helpers::read_prompt;
@@ -86,8 +86,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         Some(&global_config),
     );
 
-    let timeout_secs = resolve_debate_timeout_seconds(args.timeout, &global_config);
-    let execution =
+    let execution = if let Some(timeout_secs) = args.timeout {
         match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), execute_future)
             .await
         {
@@ -98,11 +97,14 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
                     "Debate aborted: wall-clock timeout exceeded"
                 );
                 anyhow::bail!(
-                    "Debate aborted: timeout {timeout_secs}s exceeded. \
-                     Use --timeout to override, or set [debate].timeout_seconds in global config."
+                    "Debate aborted: --timeout {timeout_secs}s exceeded. \
+                     Increase --timeout for longer runs, or rely on --idle-timeout to terminate stalled output."
                 );
             }
-        };
+        }
+    } else {
+        execute_future.await?
+    };
 
     let output = render_debate_output(
         &execution.execution.output,
@@ -322,27 +324,6 @@ fn resolve_debate_stream_mode(
     } else {
         csa_process::StreamMode::BufferOnly
     }
-}
-
-fn resolve_debate_timeout_seconds(
-    timeout_override: Option<u64>,
-    global_config: &GlobalConfig,
-) -> u64 {
-    if let Some(timeout) = timeout_override {
-        return timeout;
-    }
-
-    let configured_timeout = global_config.debate.timeout_seconds;
-    if configured_timeout == 0 {
-        let fallback_timeout = GlobalConfig::default().debate.timeout_seconds;
-        warn!(
-            fallback_timeout = fallback_timeout,
-            "Invalid [debate].timeout_seconds=0 detected in global config; using default timeout"
-        );
-        return fallback_timeout;
-    }
-
-    configured_timeout
 }
 
 /// Build a debate instruction that passes parameters to the debate skill.

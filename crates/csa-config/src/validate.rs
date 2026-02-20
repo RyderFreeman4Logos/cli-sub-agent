@@ -29,6 +29,7 @@ fn validate_loaded_config(config: Option<ProjectConfig>) -> Result<()> {
 
     validate_project_meta(&config)?;
     validate_resources(&config)?;
+    validate_acp(&config)?;
     validate_tools(&config)?;
     validate_review(&config)?;
     validate_debate(&config)?;
@@ -54,6 +55,12 @@ fn validate_project_meta(config: &ProjectConfig) -> Result<()> {
 fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if config.resources.idle_timeout_seconds == 0 {
         bail!("resources.idle_timeout_seconds must be > 0 (got 0)");
+    }
+    if config.resources.slot_wait_timeout_seconds == 0 {
+        bail!("resources.slot_wait_timeout_seconds must be > 0 (got 0)");
+    }
+    if config.resources.stdin_write_timeout_seconds == 0 {
+        bail!("resources.stdin_write_timeout_seconds must be > 0 (got 0)");
     }
     if let Some(mem) = config.resources.memory_max_mb {
         if mem < 256 {
@@ -92,6 +99,13 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
             "resources.enforcement_mode = \"required\" but resources.memory_max_mb is not set. \
              Required mode needs an explicit memory limit to enforce."
         );
+    }
+    Ok(())
+}
+
+fn validate_acp(config: &ProjectConfig) -> Result<()> {
+    if config.acp.init_timeout_seconds == 0 {
+        bail!("acp.init_timeout_seconds must be > 0 (got 0)");
     }
     Ok(())
 }

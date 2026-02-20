@@ -34,6 +34,7 @@ pub struct AcpOutputIoOptions<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct AcpRunOptions<'a> {
     pub idle_timeout: Duration,
+    pub init_timeout: Duration,
     pub io: AcpOutputIoOptions<'a>,
 }
 
@@ -41,9 +42,20 @@ impl Default for AcpRunOptions<'_> {
     fn default() -> Self {
         Self {
             idle_timeout: Duration::from_secs(300),
+            init_timeout: Duration::from_secs(60),
             io: AcpOutputIoOptions::default(),
         }
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct AcpSessionCreate<'a> {
+    pub command: &'a str,
+    pub args: &'a [String],
+    pub working_dir: &'a Path,
+    pub env: &'a HashMap<String, String>,
+    pub session_start: AcpSessionStart<'a>,
+    pub init_timeout: Duration,
 }
 
 pub struct AcpSession {
@@ -52,18 +64,25 @@ pub struct AcpSession {
 }
 
 impl AcpSession {
-    pub async fn new(
-        command: &str,
-        args: &[String],
-        working_dir: &Path,
-        env: &HashMap<String, String>,
-        system_prompt: Option<&str>,
-        resume_session_id: Option<&str>,
-        meta: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> AcpResult<Self> {
-        let connection = AcpConnection::spawn(command, args, working_dir, env).await?;
+    pub async fn new(create: AcpSessionCreate<'_>) -> AcpResult<Self> {
+        let AcpSessionCreate {
+            command,
+            args,
+            working_dir,
+            env,
+            session_start,
+            init_timeout,
+        } = create;
+        let connection = AcpConnection::spawn_with_options(
+            command,
+            args,
+            working_dir,
+            env,
+            crate::connection::AcpConnectionOptions { init_timeout },
+        )
+        .await?;
         connection.initialize().await?;
-        let session_id = if let Some(resume_id) = resume_session_id {
+        let session_id = if let Some(resume_id) = session_start.resume_session_id {
             tracing::debug!(resume_session_id = resume_id, "loading ACP session");
             match connection.load_session(resume_id, Some(working_dir)).await {
                 Ok(id) => {
@@ -77,14 +96,22 @@ impl AcpSession {
                         "Failed to resume ACP session, creating new session"
                     );
                     connection
-                        .new_session(system_prompt, Some(working_dir), meta.clone())
+                        .new_session(
+                            session_start.system_prompt,
+                            Some(working_dir),
+                            session_start.meta.clone(),
+                        )
                         .await?
                 }
             }
         } else {
             tracing::debug!("creating new ACP session");
             connection
-                .new_session(system_prompt, Some(working_dir), meta.clone())
+                .new_session(
+                    session_start.system_prompt,
+                    Some(working_dir),
+                    session_start.meta.clone(),
+                )
                 .await?
         };
 
@@ -148,6 +175,7 @@ pub async fn run_prompt(
         prompt,
         AcpRunOptions {
             idle_timeout,
+            init_timeout: Duration::from_secs(60),
             io: AcpOutputIoOptions::default(),
         },
     )
@@ -163,15 +191,15 @@ pub async fn run_prompt_with_io(
     prompt: &str,
     options: AcpRunOptions<'_>,
 ) -> AcpResult<AcpOutput> {
-    let session = AcpSession::new(
+    let has_resume_session = session_start.resume_session_id.is_some();
+    let session = AcpSession::new(AcpSessionCreate {
         command,
         args,
         working_dir,
         env,
-        session_start.system_prompt,
-        session_start.resume_session_id,
-        session_start.meta,
-    )
+        session_start,
+        init_timeout: options.init_timeout,
+    })
     .await?;
     let result = session
         .prompt_with_idle_timeout_and_io(
@@ -203,7 +231,7 @@ pub async fn run_prompt_with_io(
 
     // Kill ACP process immediately for single-prompt usage (no session resumption).
     // In session mode (resume_session_id is Some), the process stays alive for reuse.
-    if session_start.resume_session_id.is_none() {
+    if !has_resume_session {
         let _ = session.connection().kill();
     }
 

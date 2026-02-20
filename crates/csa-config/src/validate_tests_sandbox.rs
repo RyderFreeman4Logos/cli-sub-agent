@@ -15,6 +15,7 @@ fn test_validate_memory_max_mb_too_low() {
             memory_max_mb: Some(100),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -50,6 +51,7 @@ fn test_validate_memory_max_mb_at_minimum() {
             memory_max_mb: Some(256),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -79,6 +81,7 @@ fn test_validate_pids_max_too_low() {
             pids_max: Some(5),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -114,6 +117,7 @@ fn test_validate_pids_max_at_minimum() {
             pids_max: Some(10),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -143,6 +147,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
             node_heap_limit_mb: Some(256),
             ..Default::default()
         },
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -184,6 +189,7 @@ fn test_validate_per_tool_required_enforcement_without_memory_fails() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -229,6 +235,7 @@ fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -268,6 +275,7 @@ fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
             memory_max_mb: Some(4096),
             ..Default::default()
         },
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -307,6 +315,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,

@@ -17,6 +17,7 @@ fn empty_config() -> ProjectConfig {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,

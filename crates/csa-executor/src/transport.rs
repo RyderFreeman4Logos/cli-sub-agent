@@ -5,7 +5,7 @@ use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use csa_acp::{SessionConfig, SessionEvent};
 use csa_process::{
-    ExecutionResult, StreamMode, spawn_tool, spawn_tool_sandboxed,
+    ExecutionResult, SpawnOptions, StreamMode, spawn_tool_sandboxed, spawn_tool_with_options,
     wait_and_capture_with_idle_timeout,
 };
 use csa_resource::cgroup::SandboxConfig;
@@ -15,11 +15,6 @@ use crate::executor::Executor;
 
 const SUMMARY_MAX_CHARS: usize = 200;
 
-/// Sandbox configuration passed through the transport layer.
-///
-/// Carries cgroup/rlimit limits together with identifiers needed for
-/// scope naming.  This is the transport-layer counterpart of
-/// [`crate::executor::SandboxContext`].
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
     /// Resource limits to apply (memory, swap, PIDs).
@@ -32,14 +27,12 @@ pub struct SandboxTransportConfig {
     pub session_id: String,
 }
 
-/// Bundled execution options passed through the transport layer.
-///
-/// Groups stream mode, idle timeout, and optional sandbox config into a single
-/// parameter to keep the `Transport::execute` signature within clippy's argument limit.
 #[derive(Debug, Clone)]
 pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub stdin_write_timeout_seconds: u64,
+    pub acp_init_timeout_seconds: u64,
     pub output_spool: Option<&'a Path>,
     /// Selective MCP/setting sources for ACP session meta.
     /// `Some(sources)` → inject `settingSources` into session meta.
@@ -48,14 +41,8 @@ pub struct TransportOptions<'a> {
     pub sandbox: Option<&'a SandboxTransportConfig>,
 }
 
-/// Transport abstraction for executing prompts via different protocols.
-/// Implementations: LegacyTransport (CLI non-interactive) and AcpTransport (ACP protocol).
 #[async_trait]
 pub trait Transport: Send + Sync {
-    /// Execute a prompt and return the result.
-    ///
-    /// When `options.sandbox` is provided, the spawned tool process will be wrapped
-    /// in resource isolation (cgroup scope or setrlimit fallback).
     async fn execute(
         &self,
         prompt: &str,
@@ -69,7 +56,6 @@ pub trait Transport: Send + Sync {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-/// Result from transport execution, extending ExecutionResult with transport-specific data.
 #[derive(Debug, Clone)]
 pub struct TransportResult {
     pub execution: ExecutionResult,
@@ -100,7 +86,16 @@ impl LegacyTransport {
         let (cmd, stdin_data) = self
             .executor
             .build_execute_in_command(prompt, work_dir, extra_env);
-        let child = spawn_tool(cmd, stdin_data).await?;
+        let child = spawn_tool_with_options(
+            cmd,
+            stdin_data,
+            SpawnOptions {
+                stdin_write_timeout: std::time::Duration::from_secs(
+                    csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
+                ),
+            },
+        )
+        .await?;
         let execution = wait_and_capture_with_idle_timeout(
             child,
             stream_mode,
@@ -141,6 +136,11 @@ impl Transport for LegacyTransport {
         let (child, _sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
             stdin_data.clone(),
+            SpawnOptions {
+                stdin_write_timeout: std::time::Duration::from_secs(
+                    options.stdin_write_timeout_seconds,
+                ),
+            },
             sandbox_cfg,
             tool_name,
             session_id,
@@ -152,11 +152,16 @@ impl Transport for LegacyTransport {
                 tracing::warn!(
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
-                let child = spawn_tool(
+                let child = spawn_tool_with_options(
                     self.executor
                         .build_command(prompt, tool_state, session, extra_env)
                         .0,
                     stdin_data,
+                    SpawnOptions {
+                        stdin_write_timeout: std::time::Duration::from_secs(
+                            options.stdin_write_timeout_seconds,
+                        ),
+                    },
                 )
                 .await?;
                 (child, csa_process::SandboxHandle::None)
@@ -371,6 +376,7 @@ impl Transport for AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
+        let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
         let session_meta = Self::build_session_meta(
             options.setting_sources.as_deref(),
             self.session_config.as_ref(),
@@ -402,6 +408,7 @@ impl Transport for AcpTransport {
                         session_meta.clone(),
                         &prompt,
                         std::time::Duration::from_secs(idle_timeout_seconds),
+                        std::time::Duration::from_secs(acp_init_timeout_seconds),
                         cfg,
                         tool_name,
                         sess_id,
@@ -428,6 +435,9 @@ impl Transport for AcpTransport {
                                     idle_timeout: std::time::Duration::from_secs(
                                         idle_timeout_seconds,
                                     ),
+                                    init_timeout: std::time::Duration::from_secs(
+                                        acp_init_timeout_seconds,
+                                    ),
                                     io: csa_acp::transport::AcpOutputIoOptions {
                                         stream_stdout_to_stderr,
                                         output_spool: output_spool.as_deref(),
@@ -452,6 +462,9 @@ impl Transport for AcpTransport {
                         &prompt,
                         csa_acp::transport::AcpRunOptions {
                             idle_timeout: std::time::Duration::from_secs(idle_timeout_seconds),
+                            init_timeout: std::time::Duration::from_secs(
+                                acp_init_timeout_seconds,
+                            ),
                             io: csa_acp::transport::AcpOutputIoOptions {
                                 stream_stdout_to_stderr,
                                 output_spool: output_spool.as_deref(),
@@ -524,6 +537,7 @@ async fn run_acp_sandboxed(
     meta: Option<serde_json::Map<String, serde_json::Value>>,
     prompt: &str,
     idle_timeout: std::time::Duration,
+    init_timeout: std::time::Duration,
     sandbox_config: &SandboxConfig,
     tool_name: &str,
     session_id: &str,
@@ -531,15 +545,21 @@ async fn run_acp_sandboxed(
     output_spool: Option<&Path>,
 ) -> csa_acp::AcpResult<csa_acp::transport::AcpOutput> {
     use csa_acp::AcpConnection;
+    use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
 
     let (connection, _sandbox_handle) = AcpConnection::spawn_sandboxed(
-        command,
-        args,
-        working_dir,
-        env,
-        Some(sandbox_config),
-        tool_name,
-        session_id,
+        AcpSpawnRequest {
+            command,
+            args,
+            working_dir,
+            env,
+            options: AcpConnectionOptions { init_timeout },
+        },
+        Some(AcpSandboxRequest {
+            config: sandbox_config,
+            tool_name,
+            session_id,
+        }),
     )
     .await?;
 

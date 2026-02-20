@@ -222,6 +222,7 @@ mod tests {
                 max_recursion_depth: 5,
             },
             resources: Default::default(),
+            acp: Default::default(),
             tools,
             review: None,
             debate: None,
