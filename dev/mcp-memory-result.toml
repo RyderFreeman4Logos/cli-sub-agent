@@ -1,0 +1,41 @@
+# MCP Memory Baseline Measurement — Issue #191
+# Generated: 2026-02-20T13:40:00Z
+# Method: Manual pstree + /proc/PID/status measurement
+
+[measurement]
+method = "manual_pstree"
+settle_seconds = 8
+note = "Measured live ephemeral session process tree"
+
+[results]
+# Base: csa (9 MB) + claude core (430 MB) + claude MainThread (79 MB) = 518 MB
+base_rss_mb = 518
+
+# MCP servers: rust-analyzer (36) + repomix npm×2 (149+150) + repomix server×2 (104+100)
+mcp_servers_rss_mb = 539
+
+# Total per instance
+total_per_instance_mb = 1057
+
+# Delta (MCP overhead per instance)
+delta_per_instance_mb = 539
+
+# Projected waste for 3 concurrent instances
+projected_instances = 3
+total_projected_waste_mb = 1617
+
+[breakdown]
+csa_container_mb = 9
+claude_core_mb = 430
+claude_main_thread_mb = 79
+rust_analyzer_mcp_mb = 36
+repomix_npm_1_mb = 149
+repomix_npm_2_mb = 150
+repomix_server_1_mb = 104
+repomix_server_2_mb = 100
+
+[gate]
+threshold_mb = 200
+passed = true
+recommendation = "proceed_to_phase_1"
+rationale = "539 MB MCP overhead per instance (2.7x threshold). 1.6 GB projected waste for 3 instances."
