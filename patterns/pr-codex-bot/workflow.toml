@@ -3,6 +3,9 @@ name = "pr-codex-bot"
 description = "Iterative PR review loop with cloud codex bot: local review, push, bot trigger, false-positive arbitration, fix, merge"
 
 [[workflow.variables]]
+name = "CLOUD_BOT"
+
+[[workflow.variables]]
 name = "BOT_COMMENTS"
 
 [[workflow.variables]]
@@ -91,6 +94,24 @@ PR_NUM=$(gh pr view --json number -q '.number')
 on_fail = "abort"
 
 [[workflow.steps]]
+id = 6
+title = "Check Cloud Bot Configuration"
+tool = "bash"
+prompt = """
+Check whether cloud bot review is enabled for this project.
+If disabled, set BOT_UNAVAILABLE and run supplementary local review.
+
+```bash
+CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
+if [ "${CLOUD_BOT}" = "false" ]; then
+  BOT_UNAVAILABLE=true
+  echo "Cloud bot disabled via project config. Running local review instead."
+  csa review --range main...HEAD 2>/dev/null || true
+fi
+```"""
+on_fail = "skip"
+
+[[workflow.steps]]
 id = 5
 title = "Trigger Cloud Bot Review and Poll for Response"
 tool = "bash"
@@ -99,7 +120,7 @@ Trigger @codex review (idempotent — skip if already commented on this HEAD),
 then poll for bot response with bounded timeout (max 10 min, 30s interval).
 If bot times out, set BOT_UNAVAILABLE and fall through — local review
 (Step 2) already covers main...HEAD. On timeout, run fallback local review:
-csa review --range main..HEAD.
+csa review --range main...HEAD.
 
 ```bash
 # --- Trigger @codex review (idempotent) ---
@@ -129,7 +150,7 @@ done
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "Bot timed out after ${MAX_WAIT}s. Falling back to local review."
-  csa review --range main..HEAD 2>/dev/null || true
+  csa review --range main...HEAD 2>/dev/null || true
 fi
 ```"""
 on_fail = "skip"
