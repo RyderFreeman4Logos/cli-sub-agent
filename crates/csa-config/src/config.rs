@@ -21,6 +21,25 @@ pub enum EnforcementMode {
     Off,
 }
 
+/// Resource profile for a tool, determining default sandbox behavior.
+///
+/// Auto-assigned based on tool runtime characteristics. Lightweight tools
+/// (native binaries) skip sandbox overhead; heavyweight tools (Node.js with
+/// plugin loading) get enforced limits.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum ToolResourceProfile {
+    /// Native binary (Rust/Go). Predictable memory, no sandbox needed.
+    /// Default enforcement: `Off`, no memory/swap limits.
+    Lightweight,
+    /// Node.js or similar runtime with dynamic plugin loading.
+    /// Default enforcement: `BestEffort` with memory and swap limits.
+    #[default]
+    Heavyweight,
+    /// User-specified limits override all profile defaults.
+    Custom,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierConfig {
     pub description: String,
@@ -117,6 +136,9 @@ pub struct ToolConfig {
     /// Suppress notification hooks (default: true). Injects `CSA_SUPPRESS_NOTIFY=1`.
     #[serde(default = "default_true")]
     pub suppress_notify: bool,
+    /// Per-tool sandbox enforcement mode override. Takes precedence over project resources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforcement_mode: Option<EnforcementMode>,
     /// Per-tool memory limit override (MB). Takes precedence over project resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_max_mb: Option<u64>,
@@ -137,6 +159,7 @@ impl Default for ToolConfig {
             enabled: true,
             restrictions: None,
             suppress_notify: true,
+            enforcement_mode: None,
             memory_max_mb: None,
             memory_swap_max_mb: None,
             node_heap_limit_mb: None,

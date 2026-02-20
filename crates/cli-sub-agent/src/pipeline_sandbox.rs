@@ -39,7 +39,8 @@ pub(crate) fn resolve_sandbox_options(
 
     execute_options = execute_options.with_lean_mode(cfg.tool_lean_mode(tool_name));
 
-    let enforcement = cfg.enforcement_mode();
+    // Use per-tool enforcement mode (profile-aware) instead of global-only.
+    let enforcement = cfg.tool_enforcement_mode(tool_name);
     if matches!(enforcement, csa_config::EnforcementMode::Off) {
         return SandboxResolution::Ok(execute_options);
     }

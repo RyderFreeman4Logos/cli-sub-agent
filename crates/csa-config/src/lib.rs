@@ -9,7 +9,7 @@ pub mod validate;
 
 pub use config::{
     EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
-    ToolRestrictions,
+    ToolResourceProfile, ToolRestrictions,
 };
 pub use global::{GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};
