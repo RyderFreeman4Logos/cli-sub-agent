@@ -201,6 +201,61 @@ git-push-all:
     git submodule foreach 'git push origin --all'
     git push origin --all
 
+# Show the release tag and commands without creating or pushing anything.
+release-dry-run:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(cargo metadata --no-deps --format-version 1 \
+        | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
+    tag="v${version}"
+    echo "Release dry run only (no changes made)."
+    echo "Version: ${version}"
+    echo "Tag: ${tag}"
+    echo "Would run:"
+    echo "  git tag ${tag}"
+    echo "  git push origin ${tag}"
+
+# Create local release tag only (no push).
+release-tag-local:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(cargo metadata --no-deps --format-version 1 \
+        | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
+    tag="v${version}"
+
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        echo "Local tag already exists: ${tag}"
+        exit 1
+    fi
+
+    git tag "${tag}"
+    echo "Created local tag: ${tag}"
+    echo "To publish release artifacts, push manually after verification:"
+    echo "  git push origin ${tag}"
+
+# Create tag if missing, print push command, and require explicit confirmation before push.
+release-tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(cargo metadata --no-deps --format-version 1 \
+        | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')
+    tag="v${version}"
+
+    if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+        echo "Using existing local tag: ${tag}"
+    else
+        git tag "${tag}"
+        echo "Created local tag: ${tag}"
+    fi
+
+    echo "About to run: git push origin ${tag}"
+    read -r -p "Type 'yes' to confirm push: " confirm
+    if [ "${confirm}" != "yes" ]; then
+        echo "Push cancelled. Local tag remains: ${tag}"
+        exit 1
+    fi
+    git push origin "${tag}"
+
 # ==============================================================================
 # 📦 Installation
 # ==============================================================================
