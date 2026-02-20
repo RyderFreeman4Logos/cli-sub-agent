@@ -45,7 +45,7 @@ Tier 1 (claude-code) will:
 4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
 
 ```bash
-csa run --tool claude-code < "${PROMPT_FILE}"
+csa run < "${PROMPT_FILE}"
 ```
 
 ## Step 4: Parse Planning Result
@@ -87,7 +87,7 @@ Tier 1 will: implement → delegate errors to Tier 2 → review → commit.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
-csa run --tool claude-code --session "${SESSION_ID}" < "${IMPL_FILE}"
+csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
 ```
 
 ## ELSE
@@ -102,7 +102,7 @@ Resume Tier 1 with user's revision feedback.
 
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
-csa run --tool claude-code --session "${SESSION_ID}" < "${RESUME_FILE}"
+csa run --session "${SESSION_ID}" < "${RESUME_FILE}"
 ```
 
 ## ELSE

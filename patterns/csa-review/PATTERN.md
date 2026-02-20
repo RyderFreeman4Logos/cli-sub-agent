@@ -66,6 +66,9 @@ Review prompt instructs agent to:
 Tool: csa
 Tier: tier-2-standard
 
+The review tool is resolved from `[review] tool` in config (Step 2).
+If `review.tool = "auto"`, CSA selects a heterogeneous counterpart automatically.
+
 ```bash
 csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
 ```

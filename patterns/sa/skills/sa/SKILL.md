@@ -23,7 +23,7 @@ This skill exists to keep the main agent out of code-level work.
 │ Forbidden: code reading/writing/testing/investigation        │
 └─────────────────────────────┬────────────────────────────────┘
                               │
-                              │ csa run --tool <tool> < prompt_file
+                              │ csa run < prompt_file
                               v
 ┌──────────────────────────────────────────────────────────────┐
 │ Tier 1: Senior Employee (Planner / Implementer)             │
@@ -35,7 +35,7 @@ This skill exists to keep the main agent out of code-level work.
 │ • Return complete result.toml                                │
 └─────────────────────────────┬────────────────────────────────┘
                               │
-                              │ csa run --tool <tool> "sub-task"
+                              │ csa run "sub-task"
                               v
 ┌──────────────────────────────────────────────────────────────┐
 │ Tier 2: Employee Worker                                     │
@@ -267,7 +267,7 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
-csa run --tool codex --thinking medium < "$PROMPT_FILE"
+csa run < "$PROMPT_FILE"
 ```
 
 ### Template B: Implementation Dispatch (Manager -> Tier 1)
@@ -302,7 +302,7 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml exists and is self-contained for manager decision
 IMPL_EOF
 
-csa run --tool codex --thinking medium --session "$SESSION_ID" < "$PROMPT_FILE"
+csa run --session "$SESSION_ID" < "$PROMPT_FILE"
 ```
 
 ### Template C: Trust Verification Dispatch (Manager -> Reviewer Employee)
@@ -336,14 +336,15 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
-csa run --tool claude-code --thinking xhigh < "$PROMPT_FILE"
+csa run < "$PROMPT_FILE"
 ```
 
 ## Model Selection Guidelines
 
-- Default execution: `codex` with `--thinking medium`.
-- Escalate to `claude-code` for high-risk design/security verification.
-- Cross-review should prefer a different model family than the original author.
+- Tool and thinking budget are determined by the tier system in
+  `~/.config/cli-sub-agent/config.toml`. Do NOT hardcode `--tool` or `--thinking`.
+- Cross-review should prefer a different model family than the original author
+  (configured via `[review] tool = "auto"`).
 
 ## Forbidden Behaviors (Enforced)
 

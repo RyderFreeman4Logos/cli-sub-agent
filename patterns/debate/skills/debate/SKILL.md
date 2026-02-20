@@ -50,7 +50,7 @@ csa debate "Should we use gRPC or REST for our new microservice API?"
 # Continue debate — pass counterargument in existing session
 csa debate --session <SESSION_ID> "I disagree because gRPC adds complexity for our small team"
 
-# Override tool selection (bypass auto routing)
+# Override tool selection (bypass auto routing — only when necessary)
 csa debate --tool codex "How should we handle distributed transactions?"
 
 # Override model within selected tool (use models from `csa tiers list`)
