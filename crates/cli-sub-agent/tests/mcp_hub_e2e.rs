@@ -168,6 +168,9 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_5ms() -> Result<()> 
 
     let test_result = (|| -> Result<()> {
         wait_for_socket(&socket_path, Duration::from_secs(5))?;
+        // Allow extra time for the hub to connect to its MCP backend servers
+        // after the socket becomes connectable (macOS CI runners are slower).
+        std::thread::sleep(Duration::from_millis(500));
 
         let list_response = connect_and_request(
             &socket_path,
