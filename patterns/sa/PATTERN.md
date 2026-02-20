@@ -42,7 +42,7 @@ Tier 1 (claude-code) will:
 1. Spawn up to 3 parallel Tier 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
-4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path`)
+4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
 
 ```bash
 csa run --tool claude-code < "${PROMPT_FILE}"

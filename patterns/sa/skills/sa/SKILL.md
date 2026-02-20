@@ -140,7 +140,7 @@ author_tool = "claude-code"
 reviewer_tool = "codex"
 
 [artifacts]
-todo_path = "artifacts/TODO.md"
+todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"
 commit_hash = "abc1234"
 review_result = "CLEAN"
 ```
@@ -252,7 +252,7 @@ INPUT:
 [user requirements and constraints]
 
 OUTPUT FORMAT:
-- Write TODO artifact to artifacts/TODO.md
+- Write TODO artifact to $CSA_SESSION_DIR/artifacts/TODO.md
 - Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
 - Print ONLY the result.toml path
 
@@ -261,7 +261,7 @@ SCOPE:
 - You own implementation strategy decisions.
 
 DONE WHEN:
-- artifacts/TODO.md exists
+- $CSA_SESSION_DIR/artifacts/TODO.md exists
 - $CSA_SESSION_DIR/result.toml exists with status in {success, partial, needs_clarification, error}
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
