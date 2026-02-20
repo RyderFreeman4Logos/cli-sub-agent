@@ -1,4 +1,5 @@
 use tempfile::TempDir;
+use std::process::Command;
 
 use super::*;
 
@@ -157,6 +158,64 @@ fn cas_dir_differs_for_different_urls() {
     let d1 = cas_dir_for(root, "https://github.com/user/repo-a.git");
     let d2 = cas_dir_for(root, "https://github.com/user/repo-b.git");
     assert_ne!(d1, d2);
+}
+
+#[test]
+fn ensure_cached_fetch_updates_default_head_commit() {
+    fn run_git(current_dir: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(current_dir)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {:?} failed: {}",
+            args,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+
+    let tmp = TempDir::new().unwrap();
+    let work = tmp.path().join("work");
+    let remote = tmp.path().join("remote.git");
+    let cache = tmp.path().join("cache");
+    std::fs::create_dir_all(&work).unwrap();
+
+    run_git(&work, &["init", "--quiet"]);
+    run_git(&work, &["config", "user.email", "test@example.com"]);
+    run_git(&work, &["config", "user.name", "Test User"]);
+    std::fs::write(work.join("README.md"), "v1\n").unwrap();
+    run_git(&work, &["add", "README.md"]);
+    run_git(&work, &["commit", "--quiet", "-m", "initial"]);
+    run_git(&work, &["branch", "-M", "main"]);
+
+    let clone_status = Command::new("git")
+        .args(["clone", "--bare", "--quiet"])
+        .arg(&work)
+        .arg(&remote)
+        .status()
+        .unwrap();
+    assert!(clone_status.success(), "failed to clone bare remote");
+
+    run_git(&work, &["remote", "add", "origin", remote.to_str().unwrap()]);
+
+    let cas = ensure_cached(&cache, remote.to_str().unwrap()).unwrap();
+    let first = resolve_commit(&cas, None).unwrap();
+
+    std::fs::write(work.join("README.md"), "v2\n").unwrap();
+    run_git(&work, &["add", "README.md"]);
+    run_git(&work, &["commit", "--quiet", "-m", "second"]);
+    let expected = run_git(&work, &["rev-parse", "HEAD"]);
+    run_git(&work, &["push", "--quiet", "origin", "main"]);
+
+    let cas_after = ensure_cached(&cache, remote.to_str().unwrap()).unwrap();
+    assert_eq!(cas_after, cas);
+    let second = resolve_commit(&cas, None).unwrap();
+
+    assert_ne!(first, second);
+    assert_eq!(second, expected);
 }
 
 #[test]
