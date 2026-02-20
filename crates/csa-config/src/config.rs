@@ -206,6 +206,9 @@ pub struct ResourcesConfig {
     /// Maximum time to write prompt payload to child stdin.
     #[serde(default = "default_stdin_write_timeout_seconds")]
     pub stdin_write_timeout_seconds: u64,
+    /// Grace period between SIGTERM and SIGKILL during forced termination.
+    #[serde(default = "default_termination_grace_period_seconds")]
+    pub termination_grace_period_seconds: u64,
     #[serde(default)]
     pub initial_estimates: HashMap<String, u64>,
     /// Sandbox enforcement mode for resource limits.
@@ -241,6 +244,10 @@ fn default_stdin_write_timeout_seconds() -> u64 {
     30
 }
 
+fn default_termination_grace_period_seconds() -> u64 {
+    5
+}
+
 impl Default for ResourcesConfig {
     fn default() -> Self {
         Self {
@@ -248,6 +255,7 @@ impl Default for ResourcesConfig {
             idle_timeout_seconds: default_idle_timeout_seconds(),
             slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
             stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
+            termination_grace_period_seconds: default_termination_grace_period_seconds(),
             initial_estimates: HashMap::new(),
             enforcement_mode: None,
             memory_max_mb: None,
@@ -267,6 +275,7 @@ impl ResourcesConfig {
             && self.idle_timeout_seconds == default_idle_timeout_seconds()
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
+            && self.termination_grace_period_seconds == default_termination_grace_period_seconds()
             && self.initial_estimates.is_empty()
             && self.enforcement_mode.is_none()
             && self.memory_max_mb.is_none()
@@ -535,6 +544,8 @@ idle_timeout_seconds = 120
 slot_wait_timeout_seconds = 300
 # Maximum seconds to write prompt payload to child stdin.
 stdin_write_timeout_seconds = 30
+# Grace period between SIGTERM and SIGKILL for forced shutdown.
+termination_grace_period_seconds = 5
 
 [acp]
 # Timeout for ACP initialize/session setup calls.

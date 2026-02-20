@@ -23,6 +23,8 @@ fn make_test_session() -> MetaSessionState {
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
+
+        termination_reason: None,
     }
 }
 

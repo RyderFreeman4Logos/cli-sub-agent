@@ -62,6 +62,9 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if config.resources.stdin_write_timeout_seconds == 0 {
         bail!("resources.stdin_write_timeout_seconds must be > 0 (got 0)");
     }
+    if config.resources.termination_grace_period_seconds == 0 {
+        bail!("resources.termination_grace_period_seconds must be > 0 (got 0)");
+    }
     if let Some(mem) = config.resources.memory_max_mb {
         if mem < 256 {
             bail!(

@@ -144,6 +144,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");
@@ -171,6 +173,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let score = compute_relevance_score(&session, "review", "gemini-cli");
@@ -198,6 +202,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let score = compute_relevance_score(&session, "fix", "gemini-cli");
@@ -225,6 +231,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let score = compute_relevance_score(&session, "deploy", "gemini-cli");
@@ -250,6 +258,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");

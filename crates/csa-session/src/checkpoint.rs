@@ -350,6 +350,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         // Should deterministically pick "codex" (alphabetically first)
@@ -484,6 +486,8 @@ mod tests {
             turn_count: 5,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let note = note_from_session(&session);

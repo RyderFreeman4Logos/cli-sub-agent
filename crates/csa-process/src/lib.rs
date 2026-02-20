@@ -68,6 +68,7 @@ pub struct ExecutionResult {
 
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_STDIN_WRITE_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Spawn-time process control options.
@@ -359,6 +360,7 @@ pub async fn wait_and_capture(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await
@@ -377,6 +379,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     mut child: tokio::process::Child,
     stream_mode: StreamMode,
     idle_timeout: Duration,
+    termination_grace_period: Duration,
     output_spool: Option<&Path>,
 ) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
@@ -473,7 +476,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     if last_activity.elapsed() >= idle_timeout {
                         idle_timed_out = true;
                         warn!(timeout_secs = idle_timeout.as_secs(), "Killing child due to idle timeout");
-                        kill_child_process_group(&mut child);
+                        terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
                 }
@@ -511,7 +514,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     if last_activity.elapsed() >= idle_timeout {
                         idle_timed_out = true;
                         warn!(timeout_secs = idle_timeout.as_secs(), "Killing child due to idle timeout");
-                        kill_child_process_group(&mut child);
+                        terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
                 }
@@ -576,6 +579,7 @@ pub async fn run_and_capture_with_stdin(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await
@@ -644,14 +648,26 @@ fn flush_stderr_buf(line_buf: &mut String, stderr_output: &mut String) {
     }
 }
 
-fn kill_child_process_group(child: &mut tokio::process::Child) {
+async fn terminate_child_process_group(
+    child: &mut tokio::process::Child,
+    termination_grace_period: Duration,
+) {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
             // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
             unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            tokio::time::sleep(termination_grace_period).await;
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
+            unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
+            let _ = child.start_kill();
             return;
         }
     }

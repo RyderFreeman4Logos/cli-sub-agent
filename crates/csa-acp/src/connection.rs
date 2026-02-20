@@ -77,18 +77,22 @@ pub struct AcpConnection {
     stderr_buf: Rc<RefCell<String>>,
     default_working_dir: PathBuf,
     init_timeout: Duration,
+    termination_grace_period: Duration,
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct AcpConnectionOptions {
     /// Timeout for ACP initialization/session setup operations.
     pub init_timeout: Duration,
+    /// Grace period between SIGTERM and SIGKILL for forced termination.
+    pub termination_grace_period: Duration,
 }
 
 impl Default for AcpConnectionOptions {
     fn default() -> Self {
         Self {
             init_timeout: Duration::from_secs(60),
+            termination_grace_period: Duration::from_secs(5),
         }
     }
 }
@@ -425,6 +429,7 @@ impl AcpConnection {
             stderr_buf,
             default_working_dir: working_dir.to_path_buf(),
             init_timeout: options.init_timeout,
+            termination_grace_period: options.termination_grace_period,
         })
     }
 
@@ -447,7 +452,7 @@ impl AcpConnection {
             Some(Err(err)) => Err(AcpError::InitializationFailed(err.to_string())),
             None => {
                 let stderr = self.stderr();
-                let _ = self.kill();
+                let _ = self.kill().await;
                 Err(AcpError::InitializationFailed(format!(
                     "ACP initialize timed out after {}s{}",
                     self.init_timeout.as_secs(),
@@ -488,7 +493,7 @@ impl AcpConnection {
             Some(Err(err)) => Err(AcpError::SessionFailed(err.to_string())),
             None => {
                 let stderr = self.stderr();
-                let _ = self.kill();
+                let _ = self.kill().await;
                 Err(AcpError::SessionFailed(format!(
                     "ACP session/new timed out after {}s{}",
                     self.init_timeout.as_secs(),
@@ -617,7 +622,7 @@ impl AcpConnection {
             }),
             PromptOutcome::Completed(Err(err)) => Err(AcpError::PromptFailed(err.to_string())),
             PromptOutcome::IdleTimeout => {
-                let _ = self.kill();
+                let _ = self.kill().await;
                 Ok(PromptResult {
                     output,
                     events,
@@ -636,17 +641,37 @@ impl AcpConnection {
         Ok(status.and_then(|s| s.code()))
     }
 
-    pub fn kill(&self) -> AcpResult<()> {
-        let mut child = self.child.borrow_mut();
+    pub async fn kill(&self) -> AcpResult<()> {
+        let termination_grace_period = self.termination_grace_period;
+        let child_pid = {
+            let child = self.child.borrow();
+            child.id()
+        };
         #[cfg(unix)]
-        if let Some(pid) = child.id() {
+        if let Some(pid) = child_pid {
+            // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
+            unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            tokio::time::sleep(termination_grace_period).await;
+            let exited = self
+                .child
+                .borrow_mut()
+                .try_wait()
+                .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
+                .is_some();
+            if exited {
+                return Ok(());
+            }
             // SAFETY: kill() is async-signal-safe. Negative PID targets process group.
             unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
+            let _ = self.child.borrow_mut().start_kill();
             return Ok(());
         }
 
+        let mut child = self.child.borrow_mut();
         child
             .start_kill()
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))

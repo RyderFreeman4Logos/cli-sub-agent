@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use crate::executor::Executor;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use csa_acp::{SessionConfig, SessionEvent};
@@ -11,18 +12,11 @@ use csa_process::{
 use csa_resource::cgroup::SandboxConfig;
 use csa_session::state::{MetaSessionState, ToolState};
 
-use crate::executor::Executor;
-
 const SUMMARY_MAX_CHARS: usize = 200;
-
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
-    /// Resource limits to apply (memory, swap, PIDs).
     pub config: SandboxConfig,
-    /// Tool name for cgroup scope naming (e.g. "claude-code").
     pub tool_name: String,
-    /// Session ID for cgroup scope naming.
-    /// When true, sandbox spawn failures fall back to unsandboxed spawn.
     pub best_effort: bool,
     pub session_id: String,
 }
@@ -33,10 +27,8 @@ pub struct TransportOptions<'a> {
     pub idle_timeout_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,
+    pub termination_grace_period_seconds: u64,
     pub output_spool: Option<&'a Path>,
-    /// Selective MCP/setting sources for ACP session meta.
-    /// `Some(sources)` → inject `settingSources` into session meta.
-    /// `None` → no override (load everything).
     pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
 }
@@ -59,9 +51,7 @@ pub trait Transport: Send + Sync {
 #[derive(Debug, Clone)]
 pub struct TransportResult {
     pub execution: ExecutionResult,
-    /// Provider session ID (if protocol transport provided one directly).
     pub provider_session_id: Option<String>,
-    /// ACP session events for audit (if ACP transport was used).
     pub events: Vec<SessionEvent>,
 }
 
@@ -69,7 +59,6 @@ pub struct TransportResult {
 pub struct LegacyTransport {
     executor: Executor,
 }
-
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
@@ -100,6 +89,7 @@ impl LegacyTransport {
             child,
             stream_mode,
             std::time::Duration::from_secs(idle_timeout_seconds),
+            std::time::Duration::from_secs(csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
             None,
         )
         .await?;
@@ -173,6 +163,7 @@ impl Transport for LegacyTransport {
             child,
             options.stream_mode,
             std::time::Duration::from_secs(options.idle_timeout_seconds),
+            std::time::Duration::from_secs(options.termination_grace_period_seconds),
             options.output_spool,
         )
         .await?;
@@ -195,11 +186,8 @@ impl Transport for LegacyTransport {
 #[derive(Debug, Clone)]
 pub struct AcpTransport {
     tool_name: String,
-    /// ACP command to spawn (e.g., "claude", "codex")
     acp_command: String,
-    /// ACP command args
     acp_args: Vec<String>,
-    /// Session config from .skill.toml
     session_config: Option<SessionConfig>,
 }
 
@@ -377,6 +365,7 @@ impl Transport for AcpTransport {
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
+        let termination_grace_period_seconds = options.termination_grace_period_seconds;
         let session_meta = Self::build_session_meta(
             options.setting_sources.as_deref(),
             self.session_config.as_ref(),
@@ -409,6 +398,7 @@ impl Transport for AcpTransport {
                         &prompt,
                         std::time::Duration::from_secs(idle_timeout_seconds),
                         std::time::Duration::from_secs(acp_init_timeout_seconds),
+                        std::time::Duration::from_secs(termination_grace_period_seconds),
                         cfg,
                         tool_name,
                         sess_id,
@@ -438,6 +428,9 @@ impl Transport for AcpTransport {
                                     init_timeout: std::time::Duration::from_secs(
                                         acp_init_timeout_seconds,
                                     ),
+                                    termination_grace_period: std::time::Duration::from_secs(
+                                        termination_grace_period_seconds,
+                                    ),
                                     io: csa_acp::transport::AcpOutputIoOptions {
                                         stream_stdout_to_stderr,
                                         output_spool: output_spool.as_deref(),
@@ -464,6 +457,9 @@ impl Transport for AcpTransport {
                             idle_timeout: std::time::Duration::from_secs(idle_timeout_seconds),
                             init_timeout: std::time::Duration::from_secs(
                                 acp_init_timeout_seconds,
+                            ),
+                            termination_grace_period: std::time::Duration::from_secs(
+                                termination_grace_period_seconds,
                             ),
                             io: csa_acp::transport::AcpOutputIoOptions {
                                 stream_stdout_to_stderr,
@@ -538,6 +534,7 @@ async fn run_acp_sandboxed(
     prompt: &str,
     idle_timeout: std::time::Duration,
     init_timeout: std::time::Duration,
+    termination_grace_period: std::time::Duration,
     sandbox_config: &SandboxConfig,
     tool_name: &str,
     session_id: &str,
@@ -553,7 +550,10 @@ async fn run_acp_sandboxed(
             args,
             working_dir,
             env,
-            options: AcpConnectionOptions { init_timeout },
+            options: AcpConnectionOptions {
+                init_timeout,
+                termination_grace_period,
+            },
         },
         Some(AcpSandboxRequest {
             config: sandbox_config,

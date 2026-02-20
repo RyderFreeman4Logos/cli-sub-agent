@@ -25,6 +25,7 @@ pub struct ExecuteOptions {
     pub idle_timeout_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,
+    pub termination_grace_period_seconds: u64,
     pub output_spool: Option<PathBuf>,
     /// Selective MCP/setting sources for ACP session meta.
     /// `Some(sources)` → inject `settingSources` into session meta.
@@ -58,6 +59,7 @@ impl ExecuteOptions {
             idle_timeout_seconds,
             stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
             acp_init_timeout_seconds: 60,
+            termination_grace_period_seconds: csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS,
             output_spool: None,
             setting_sources: None,
             sandbox: None,
@@ -73,6 +75,12 @@ impl ExecuteOptions {
     /// Override ACP initialization timeout (seconds).
     pub fn with_acp_init_timeout_seconds(mut self, seconds: u64) -> Self {
         self.acp_init_timeout_seconds = seconds;
+        self
+    }
+
+    /// Override termination grace period (seconds) for forced shutdown.
+    pub fn with_termination_grace_period_seconds(mut self, seconds: u64) -> Self {
+        self.termination_grace_period_seconds = seconds;
         self
     }
 
@@ -330,6 +338,7 @@ impl Executor {
             idle_timeout_seconds: options.idle_timeout_seconds,
             stdin_write_timeout_seconds: options.stdin_write_timeout_seconds,
             acp_init_timeout_seconds: options.acp_init_timeout_seconds,
+            termination_grace_period_seconds: options.termination_grace_period_seconds,
             output_spool: options.output_spool.as_deref(),
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),

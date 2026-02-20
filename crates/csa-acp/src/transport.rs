@@ -35,6 +35,7 @@ pub struct AcpOutputIoOptions<'a> {
 pub struct AcpRunOptions<'a> {
     pub idle_timeout: Duration,
     pub init_timeout: Duration,
+    pub termination_grace_period: Duration,
     pub io: AcpOutputIoOptions<'a>,
 }
 
@@ -43,6 +44,7 @@ impl Default for AcpRunOptions<'_> {
         Self {
             idle_timeout: Duration::from_secs(300),
             init_timeout: Duration::from_secs(60),
+            termination_grace_period: Duration::from_secs(5),
             io: AcpOutputIoOptions::default(),
         }
     }
@@ -56,6 +58,7 @@ pub struct AcpSessionCreate<'a> {
     pub env: &'a HashMap<String, String>,
     pub session_start: AcpSessionStart<'a>,
     pub init_timeout: Duration,
+    pub termination_grace_period: Duration,
 }
 
 pub struct AcpSession {
@@ -72,13 +75,17 @@ impl AcpSession {
             env,
             session_start,
             init_timeout,
+            termination_grace_period,
         } = create;
         let connection = AcpConnection::spawn_with_options(
             command,
             args,
             working_dir,
             env,
-            crate::connection::AcpConnectionOptions { init_timeout },
+            crate::connection::AcpConnectionOptions {
+                init_timeout,
+                termination_grace_period,
+            },
         )
         .await?;
         connection.initialize().await?;
@@ -176,6 +183,7 @@ pub async fn run_prompt(
         AcpRunOptions {
             idle_timeout,
             init_timeout: Duration::from_secs(60),
+            termination_grace_period: Duration::from_secs(5),
             io: AcpOutputIoOptions::default(),
         },
     )
@@ -199,6 +207,7 @@ pub async fn run_prompt_with_io(
         env,
         session_start,
         init_timeout: options.init_timeout,
+        termination_grace_period: options.termination_grace_period,
     })
     .await?;
     let result = session
@@ -232,7 +241,7 @@ pub async fn run_prompt_with_io(
     // Kill ACP process immediately for single-prompt usage (no session resumption).
     // In session mode (resume_session_id is Some), the process stays alive for reuse.
     if !has_resume_session {
-        let _ = session.connection().kill();
+        let _ = session.connection().kill().await;
     }
 
     Ok(AcpOutput {

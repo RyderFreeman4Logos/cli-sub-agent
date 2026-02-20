@@ -27,6 +27,8 @@ fn test_session(
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
+
+        termination_reason: None,
     }
 }
 
