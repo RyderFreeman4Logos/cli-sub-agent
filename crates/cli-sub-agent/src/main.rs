@@ -38,6 +38,8 @@ use cli::{
 };
 use csa_core::types::OutputFormat;
 
+mod migrate_cmd;
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Read current depth from env
@@ -55,6 +57,31 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
     let output_format = cli.format.clone();
+
+    // Check weave.lock version alignment (non-fatal).
+    if let Ok(cwd) = std::env::current_dir() {
+        let registry = csa_config::MigrationRegistry::new();
+        match csa_config::check_version(
+            &cwd,
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_VERSION"),
+            &registry,
+        ) {
+            Ok(csa_config::VersionCheckResult::MigrationNeeded { pending_count }) => {
+                eprintln!(
+                    "WARNING: weave.lock is outdated ({pending_count} pending migration(s)). \
+                     Run `csa migrate` to update."
+                );
+            }
+            Ok(csa_config::VersionCheckResult::AutoUpdated) => {
+                tracing::debug!("weave.lock auto-updated to match binary version");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!("weave.lock version check failed: {e:#}");
+            }
+        }
+    }
 
     match cli.command {
         Commands::Run {
@@ -292,6 +319,9 @@ async fn main() -> Result<()> {
                 plan_cmd::handle_plan_run(file, vars, dry_run, cd, current_depth).await?;
             }
         },
+        Commands::Migrate { dry_run, status } => {
+            migrate_cmd::handle_migrate(dry_run, status)?;
+        }
         Commands::SelfUpdate { check } => {
             self_update::handle_self_update(check)?;
         }

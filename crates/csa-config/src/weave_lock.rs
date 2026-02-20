@@ -109,6 +109,64 @@ impl WeaveLock {
     }
 }
 
+/// Result of comparing the running binary version against weave.lock.
+pub enum VersionCheckResult {
+    /// No weave.lock exists yet; nothing to do.
+    NoLockFile,
+    /// Versions match — everything is current.
+    UpToDate,
+    /// Version changed but no migrations are pending.
+    /// The lock file has already been silently updated.
+    AutoUpdated,
+    /// Migrations are pending; user should run `csa migrate`.
+    MigrationNeeded { pending_count: usize },
+}
+
+/// Compare the running binary version against `weave.lock` and take
+/// the appropriate action:
+///
+/// - No lock file → return `NoLockFile` (caller may create one).
+/// - Versions match → return `UpToDate`.
+/// - Version differs, no pending migrations → silently update lock, return `AutoUpdated`.
+/// - Version differs, pending migrations → return `MigrationNeeded`.
+pub fn check_version(
+    project_dir: &Path,
+    binary_csa_version: &str,
+    binary_weave_version: &str,
+    registry: &crate::MigrationRegistry,
+) -> Result<VersionCheckResult> {
+    let Some(mut lock) = WeaveLock::load(project_dir)? else {
+        return Ok(VersionCheckResult::NoLockFile);
+    };
+
+    let lock_csa = &lock.versions.csa;
+    if lock_csa == binary_csa_version {
+        return Ok(VersionCheckResult::UpToDate);
+    }
+
+    // Parse versions to check for pending migrations.
+    let current: crate::Version = lock_csa
+        .parse()
+        .with_context(|| format!("parsing lock csa version {lock_csa:?}"))?;
+    let target: crate::Version = binary_csa_version
+        .parse()
+        .with_context(|| format!("parsing binary csa version {binary_csa_version:?}"))?;
+
+    let pending = registry.pending(&current, &target, &lock.migrations.applied);
+
+    if pending.is_empty() {
+        // No migrations needed — just a patch bump. Auto-update the lock.
+        lock.versions.csa = binary_csa_version.to_string();
+        lock.versions.weave = binary_weave_version.to_string();
+        lock.save(project_dir)?;
+        return Ok(VersionCheckResult::AutoUpdated);
+    }
+
+    Ok(VersionCheckResult::MigrationNeeded {
+        pending_count: pending.len(),
+    })
+}
+
 fn lock_path(project_dir: &Path) -> PathBuf {
     project_dir.join(LOCK_FILENAME)
 }
@@ -181,6 +239,62 @@ mod tests {
         assert_eq!(loaded.migrations.applied.len(), 2);
         assert!(loaded.is_migration_applied("0.12.0-plan-to-workflow"));
         assert!(loaded.is_migration_applied("0.12.1-rename-config"));
+    }
+
+    #[test]
+    fn test_check_version_no_lock_file() {
+        let dir = TempDir::new().unwrap();
+        let registry = crate::MigrationRegistry::new();
+        let result = check_version(dir.path(), "0.2.0", "0.2.0", &registry).unwrap();
+        assert!(matches!(result, VersionCheckResult::NoLockFile));
+    }
+
+    #[test]
+    fn test_check_version_up_to_date() {
+        let dir = TempDir::new().unwrap();
+        let lock = WeaveLock::new("0.1.0", "0.1.0");
+        lock.save(dir.path()).unwrap();
+
+        let registry = crate::MigrationRegistry::new();
+        let result = check_version(dir.path(), "0.1.0", "0.1.0", &registry).unwrap();
+        assert!(matches!(result, VersionCheckResult::UpToDate));
+    }
+
+    #[test]
+    fn test_check_version_auto_updates_when_no_migrations() {
+        let dir = TempDir::new().unwrap();
+        let lock = WeaveLock::new("0.1.0", "0.1.0");
+        lock.save(dir.path()).unwrap();
+
+        let registry = crate::MigrationRegistry::new();
+        let result = check_version(dir.path(), "0.1.1", "0.1.1", &registry).unwrap();
+        assert!(matches!(result, VersionCheckResult::AutoUpdated));
+
+        // Verify lock was actually updated.
+        let loaded = WeaveLock::load(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded.versions.csa, "0.1.1");
+    }
+
+    #[test]
+    fn test_check_version_migration_needed() {
+        let dir = TempDir::new().unwrap();
+        let lock = WeaveLock::new("0.1.0", "0.1.0");
+        lock.save(dir.path()).unwrap();
+
+        let mut registry = crate::MigrationRegistry::new();
+        registry.register(crate::Migration {
+            id: "0.1.0-test-migration".to_string(),
+            from_version: crate::Version::new(0, 1, 0),
+            to_version: crate::Version::new(0, 2, 0),
+            description: "Test migration".to_string(),
+            steps: vec![],
+        });
+
+        let result = check_version(dir.path(), "0.2.0", "0.2.0", &registry).unwrap();
+        assert!(matches!(
+            result,
+            VersionCheckResult::MigrationNeeded { pending_count: 1 }
+        ));
     }
 
     #[test]

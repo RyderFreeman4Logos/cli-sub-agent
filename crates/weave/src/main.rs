@@ -196,6 +196,31 @@ fn main() -> Result<()> {
             .init();
     }
 
+    // Check weave.lock version alignment (non-fatal).
+    if let Ok(cwd) = std::env::current_dir() {
+        let registry = csa_config::MigrationRegistry::new();
+        match csa_config::check_version(
+            &cwd,
+            env!("CARGO_PKG_VERSION"),
+            env!("CARGO_PKG_VERSION"),
+            &registry,
+        ) {
+            Ok(csa_config::VersionCheckResult::MigrationNeeded { pending_count }) => {
+                eprintln!(
+                    "WARNING: weave.lock is outdated ({pending_count} pending migration(s)). \
+                     Run `csa migrate` to update."
+                );
+            }
+            Ok(csa_config::VersionCheckResult::AutoUpdated) => {
+                tracing::debug!("weave.lock auto-updated to match binary version");
+            }
+            Ok(_) => {}
+            Err(e) => {
+                tracing::debug!("weave.lock version check failed: {e:#}");
+            }
+        }
+    }
+
     match cli.command {
         Commands::Compile { input, output } => {
             let content = std::fs::read_to_string(&input)
