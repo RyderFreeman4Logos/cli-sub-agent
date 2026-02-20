@@ -638,22 +638,140 @@ fn resolve_step_tool_all_explicit_tools() {
 
 #[tokio::test]
 async fn run_with_heartbeat_returns_success_exit_code() {
-    let code = run_with_heartbeat(
+    let (code, output) = run_with_heartbeat(
         "[1/heartbeat]",
-        async { Ok::<i32, anyhow::Error>(0) },
+        async { Ok::<(i32, Option<String>), anyhow::Error>((0, Some("ok".into()))) },
         Instant::now(),
     )
     .await;
     assert_eq!(code, 0);
+    assert_eq!(output.as_deref(), Some("ok"));
 }
 
 #[tokio::test]
 async fn run_with_heartbeat_maps_errors_to_exit_code_one() {
-    let code = run_with_heartbeat(
+    let (code, output) = run_with_heartbeat(
         "[1/heartbeat]",
-        async { Err::<i32, anyhow::Error>(anyhow::anyhow!("boom")) },
+        async { Err::<(i32, Option<String>), anyhow::Error>(anyhow::anyhow!("boom")) },
         Instant::now(),
     )
     .await;
     assert_eq!(code, 1);
+    assert!(output.is_none());
+}
+
+#[tokio::test]
+async fn execute_step_bash_captures_stdout_in_output() {
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "capture output".into(),
+        tool: Some("bash".into()),
+        prompt: "```bash\necho captured_value\n```".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let vars = HashMap::new();
+    let result = execute_step(&step, &vars, tmp.path(), None).await;
+    assert_eq!(result.exit_code, 0);
+    assert!(
+        result.output.is_some(),
+        "bash step stdout must be captured in output"
+    );
+    assert_eq!(result.output.as_deref().unwrap().trim(), "captured_value");
+}
+
+#[tokio::test]
+async fn execute_plan_injects_step_output_variables() {
+    // Step 1 produces output; Step 2 uses ${STEP_1_OUTPUT} to write it to a file.
+    let tmp = tempfile::tempdir().unwrap();
+    let plan = ExecutionPlan {
+        name: "output-forwarding".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "produce output".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho step_one_result\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "consume output".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nprintf '%s' \"${STEP_1_OUTPUT}\" > output.txt\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].exit_code, 0);
+    assert_eq!(results[1].exit_code, 0);
+    // Verify step 2 received step 1's output via variable substitution
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(
+        content.trim(),
+        "step_one_result",
+        "STEP_1_OUTPUT must be injected and usable by step 2"
+    );
+}
+
+#[tokio::test]
+async fn execute_plan_skipped_step_injects_empty_output() {
+    // A condition-false step should inject empty STEP_N_OUTPUT.
+    let tmp = tempfile::tempdir().unwrap();
+    let plan = ExecutionPlan {
+        name: "skipped-output".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "skipped step".into(),
+                tool: Some("bash".into()),
+                prompt: "echo should_not_run".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: Some("${NEVER_SET}".into()),
+                loop_var: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "check empty".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\nprintf '%s' \"[${STEP_1_OUTPUT}]\" > output.txt\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let results = execute_plan(&plan, &vars, tmp.path(), None).await.unwrap();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].skipped);
+    assert_eq!(results[1].exit_code, 0);
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(
+        content, "[]",
+        "skipped step must inject empty STEP_1_OUTPUT"
+    );
 }

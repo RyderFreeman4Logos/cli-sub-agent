@@ -27,6 +27,7 @@ use csa_process::check_tool_installed;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep, plan_from_toml};
 
 use crate::pipeline::{determine_project_root, execute_with_session};
+use crate::plan_display::{print_plan, print_summary};
 use crate::run_helpers::build_executor;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
@@ -36,7 +37,7 @@ const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
 /// Separates direct shell execution from AI tool dispatch so the routing
 /// is type-safe — `tool = "bash"` can never accidentally fall through to
 /// an AI tool's interactive confirmation flow.
-enum StepTarget {
+pub(crate) enum StepTarget {
     /// Execute bash code block directly via `tokio::process::Command`.
     DirectBash,
     /// Skip this step (compile-time INCLUDE directive from weave).
@@ -58,13 +59,16 @@ impl StepTarget {
 }
 
 /// Result of executing a single step.
-struct StepResult {
-    step_id: usize,
-    title: String,
-    exit_code: i32,
-    duration_secs: f64,
-    skipped: bool,
-    error: Option<String>,
+pub(crate) struct StepResult {
+    pub(crate) step_id: usize,
+    pub(crate) title: String,
+    pub(crate) exit_code: i32,
+    pub(crate) duration_secs: f64,
+    pub(crate) skipped: bool,
+    pub(crate) error: Option<String>,
+    /// Captured output from step execution (stdout for bash, output/summary for CSA).
+    /// Available to subsequent steps as `${STEP_<id>_OUTPUT}`.
+    pub(crate) output: Option<String>,
 }
 
 /// Handle `csa plan run <file>`.
@@ -211,7 +215,10 @@ fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
 /// 1. `step.tool` — explicit tool name (e.g. "bash", "claude-code", "codex")
 /// 2. `step.tier` — tier name looked up in config's `tiers` map
 /// 3. Fallback: "bash" (safest default for v1)
-fn resolve_step_tool(step: &PlanStep, config: Option<&ProjectConfig>) -> Result<StepTarget> {
+pub(crate) fn resolve_step_tool(
+    step: &PlanStep,
+    config: Option<&ProjectConfig>,
+) -> Result<StepTarget> {
     // 1. Explicit tool annotation
     if let Some(ref tool_str) = step.tool {
         let tool_lower = tool_str.to_lowercase();
@@ -303,6 +310,9 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
 // --- Execution ---
 
 /// Execute all steps in the plan sequentially.
+///
+/// After each successful step, injects `STEP_<id>_OUTPUT` into the variables
+/// map so subsequent steps can reference prior outputs via `${STEP_1_OUTPUT}`.
 async fn execute_plan(
     plan: &ExecutionPlan,
     variables: &HashMap<String, String>,
@@ -310,10 +320,16 @@ async fn execute_plan(
     config: Option<&ProjectConfig>,
 ) -> Result<Vec<StepResult>> {
     let mut results = Vec::with_capacity(plan.steps.len());
+    let mut vars = variables.clone();
 
     for step in &plan.steps {
-        let result = execute_step(step, variables, project_root, config).await;
+        let result = execute_step(step, &vars, project_root, config).await;
         let is_failure = !result.skipped && result.exit_code != 0;
+
+        // Inject step output for subsequent steps (successful steps only).
+        let var_key = format!("STEP_{}_OUTPUT", result.step_id);
+        let var_value = result.output.as_deref().unwrap_or("").to_string();
+        vars.insert(var_key, var_value);
 
         // Abort on failure when: on_fail=abort, or retry exhausted (retries
         // already happened inside execute_step; reaching here means all failed),
@@ -365,6 +381,7 @@ async fn execute_step(
                 duration_secs: 0.0,
                 skipped: true,
                 error: None,
+                output: None,
             };
         }
         info!("{} - Condition '{}' met, proceeding", label, condition);
@@ -378,6 +395,7 @@ async fn execute_step(
             duration_secs: 0.0,
             skipped: true,
             error: Some("Loop steps not supported in v1".to_string()),
+            output: None,
         };
     }
 
@@ -393,6 +411,7 @@ async fn execute_step(
                 duration_secs: start.elapsed().as_secs_f64(),
                 skipped: false,
                 error: Some(format!("Tool resolution failed: {}", e)),
+                output: None,
             };
         }
     };
@@ -407,6 +426,7 @@ async fn execute_step(
             duration_secs: 0.0,
             skipped: true,
             error: None,
+            output: None,
         };
     }
 
@@ -427,7 +447,7 @@ async fn execute_step(
             eprintln!("{} - RETRY {}/{}", label, attempt, max_attempts);
         }
 
-        let exit_code = match &target {
+        let (exit_code, step_output) = match &target {
             StepTarget::DirectBash => {
                 run_with_heartbeat(
                     &label,
@@ -471,6 +491,7 @@ async fn execute_step(
                 duration_secs: start.elapsed().as_secs_f64(),
                 skipped: false,
                 error: None,
+                output: step_output,
             };
         }
 
@@ -495,6 +516,7 @@ async fn execute_step(
                 duration_secs: duration,
                 skipped: true,
                 error: Some(format!("Skipped after failure (exit code {})", exit_code)),
+                output: None,
             }
         }
         FailAction::Delegate(target) => {
@@ -516,6 +538,7 @@ async fn execute_step(
                     "Delegate('{}') not supported in v1; step failed with exit code {}",
                     target, exit_code
                 )),
+                output: None,
             }
         }
         _ => {
@@ -529,15 +552,20 @@ async fn execute_step(
                 duration_secs: duration,
                 skipped: false,
                 error: Some(format!("Exit code {}", exit_code)),
+                output: None,
             }
         }
     }
 }
 
 /// Keep workflow output alive for parents that enforce inactivity timeouts.
-async fn run_with_heartbeat<F>(label: &str, execution: F, step_started_at: Instant) -> i32
+async fn run_with_heartbeat<F>(
+    label: &str,
+    execution: F,
+    step_started_at: Instant,
+) -> (i32, Option<String>)
 where
-    F: std::future::Future<Output = Result<i32>>,
+    F: std::future::Future<Output = Result<(i32, Option<String>)>>,
 {
     let mut execution = std::pin::pin!(execution);
     let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -548,10 +576,10 @@ where
         tokio::select! {
             result = &mut execution => {
                 return match result {
-                    Ok(code) => code,
+                    Ok(pair) => pair,
                     Err(err) => {
                         error!("{label} - Execution failed: {err}");
-                        1
+                        (1, None)
                     }
                 };
             }
@@ -566,7 +594,11 @@ where
 }
 
 /// Execute a bash step by extracting the code block from the prompt.
-async fn execute_bash_step(label: &str, prompt: &str, project_root: &Path) -> Result<i32> {
+async fn execute_bash_step(
+    label: &str,
+    prompt: &str,
+    project_root: &Path,
+) -> Result<(i32, Option<String>)> {
     let script = extract_bash_code_block(prompt).unwrap_or(prompt);
     info!("{} - Executing bash: {}", label, truncate(script, 80));
 
@@ -574,13 +606,23 @@ async fn execute_bash_step(label: &str, prompt: &str, project_root: &Path) -> Re
         .arg("-c")
         .arg(script)
         .current_dir(project_root)
-        .stdout(std::process::Stdio::inherit())
+        .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
         .output()
         .await
         .context("Failed to spawn bash")?;
 
-    Ok(output.status.code().unwrap_or(1))
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    // Tee stdout so callers still see it (backward compat).
+    if !stdout.is_empty() {
+        eprint!("{}", stdout);
+    }
+    let captured = if stdout.is_empty() {
+        None
+    } else {
+        Some(stdout)
+    };
+    Ok((output.status.code().unwrap_or(1), captured))
 }
 
 /// Execute a step via CSA tool (codex, claude-code, gemini-cli, opencode).
@@ -591,7 +633,7 @@ async fn execute_csa_step(
     model_spec: Option<&str>,
     project_root: &Path,
     config: Option<&ProjectConfig>,
-) -> Result<i32> {
+) -> Result<(i32, Option<String>)> {
     info!("{} - Dispatching to {} ...", label, tool_name.as_str());
 
     // Build executor
@@ -651,7 +693,15 @@ async fn execute_csa_step(
     )
     .await?;
 
-    Ok(result.exit_code)
+    // Prefer output; fall back to summary if output is empty.
+    let captured = if !result.output.is_empty() {
+        Some(result.output)
+    } else if !result.summary.is_empty() {
+        Some(result.summary)
+    } else {
+        None
+    };
+    Ok((result.exit_code, captured))
 }
 
 // --- Helpers ---
@@ -684,110 +734,7 @@ fn truncate(s: &str, max_len: usize) -> String {
     }
 }
 
-// --- Display ---
-
-/// Print the execution plan for dry-run mode.
-fn print_plan(
-    plan: &ExecutionPlan,
-    variables: &HashMap<String, String>,
-    config: Option<&ProjectConfig>,
-) {
-    println!("Workflow: {}", plan.name);
-    if !plan.description.is_empty() {
-        println!("  {}", plan.description);
-    }
-    println!();
-
-    if !variables.is_empty() {
-        println!("Variables:");
-        for (k, v) in variables {
-            println!("  ${{{k}}} = {v}");
-        }
-        println!();
-    }
-
-    println!("Steps ({}):", plan.steps.len());
-    for step in &plan.steps {
-        let tool_info = match resolve_step_tool(step, config) {
-            Ok(StepTarget::DirectBash) => "bash (direct)".into(),
-            Ok(StepTarget::WeaveInclude) => "weave (include)".into(),
-            Ok(StepTarget::CsaTool {
-                tool_name,
-                model_spec,
-            }) => match model_spec {
-                Some(s) => format!("{} ({})", tool_name.as_str(), s),
-                None => tool_name.as_str().to_string(),
-            },
-            Err(e) => format!("<error: {e}>"),
-        };
-
-        let on_fail = match &step.on_fail {
-            FailAction::Abort => "abort",
-            FailAction::Skip => "skip",
-            FailAction::Retry(n) => &format!("retry({})", n),
-            FailAction::Delegate(t) => &format!("delegate({})", t),
-        };
-
-        let flags = [
-            step.condition.as_ref().map(|c| format!("IF {}", c)),
-            step.loop_var
-                .as_ref()
-                .map(|l| format!("FOR {}", l.variable)),
-        ];
-        let flag_str: Vec<String> = flags.into_iter().flatten().collect();
-        let flag_display = if flag_str.is_empty() {
-            String::new()
-        } else {
-            format!(" [{}]", flag_str.join(", "))
-        };
-
-        println!(
-            "  {}. {} [tool={}, on_fail={}]{}",
-            step.id, step.title, tool_info, on_fail, flag_display,
-        );
-    }
-}
-
-/// Print execution summary.
-fn print_summary(results: &[StepResult], total_duration: f64) {
-    println!();
-    println!("=== Workflow Execution Summary ===");
-    println!();
-
-    let mut pass = 0;
-    let mut fail = 0;
-    let mut skip = 0;
-
-    for r in results {
-        let status = if r.skipped {
-            skip += 1;
-            "- SKIP"
-        } else if r.exit_code == 0 {
-            pass += 1;
-            "✓ PASS"
-        } else {
-            fail += 1;
-            "✗ FAIL"
-        };
-
-        println!(
-            "{:8} Step {} - {} ({:.2}s){}",
-            status,
-            r.step_id,
-            r.title,
-            r.duration_secs,
-            r.error
-                .as_ref()
-                .map(|e| format!(" — {}", e))
-                .unwrap_or_default(),
-        );
-    }
-
-    println!();
-    println!("Total: {} steps", results.len());
-    println!("Passed: {pass}, Failed: {fail}, Skipped: {skip}");
-    println!("Duration: {:.2}s", total_duration);
-}
+// --- Display (see plan_display.rs) ---
 
 #[cfg(test)]
 #[path = "plan_cmd_tests.rs"]
