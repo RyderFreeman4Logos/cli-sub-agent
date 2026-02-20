@@ -149,11 +149,44 @@ impl ProjectConfig {
     /// Resolve lean_mode for a tool.
     ///
     /// Defaults to `true` for Heavyweight tools, `false` otherwise.
+    ///
+    /// Deprecated: prefer [`tool_setting_sources`] which provides finer control.
     pub fn tool_lean_mode(&self, tool: &str) -> bool {
         self.tools
             .get(tool)
             .and_then(|t| t.lean_mode)
             .unwrap_or_else(|| matches!(default_profile(tool), ToolResourceProfile::Heavyweight))
+    }
+
+    /// Resolve setting_sources for a tool.
+    ///
+    /// Priority: `setting_sources` (explicit) > `lean_mode` (deprecated compat) > profile default.
+    /// - `Some(sources)` → pass `settingSources: sources` in ACP session meta.
+    /// - `None` → no override (load everything).
+    ///
+    /// Heavyweight tools default to `Some(vec![])` (lean/load nothing).
+    /// Lightweight tools default to `None` (load everything).
+    pub fn tool_setting_sources(&self, tool: &str) -> Option<Vec<String>> {
+        if let Some(tc) = self.tools.get(tool) {
+            // Explicit setting_sources takes priority.
+            if let Some(ref sources) = tc.setting_sources {
+                return Some(sources.clone());
+            }
+            // Deprecated lean_mode fallback.
+            if let Some(lean) = tc.lean_mode {
+                eprintln!(
+                    "warning: config: tool '{tool}': 'lean_mode' is deprecated; \
+                     use 'setting_sources' instead"
+                );
+                return if lean { Some(vec![]) } else { None };
+            }
+        }
+        // Profile-based default: Heavyweight → lean (empty sources), Lightweight → None.
+        if matches!(default_profile(tool), ToolResourceProfile::Heavyweight) {
+            Some(vec![])
+        } else {
+            None
+        }
     }
 
     /// Check if a tool is allowed to edit existing files.
@@ -173,7 +206,9 @@ pub struct DefaultSandboxOptions {
     pub enforcement: EnforcementMode,
     pub memory_max_mb: Option<u64>,
     pub memory_swap_max_mb: Option<u64>,
-    pub lean_mode: bool,
+    /// Selective MCP/setting sources for ACP session meta.
+    /// `Some(vec![])` = lean mode (load nothing). `None` = load everything.
+    pub setting_sources: Option<Vec<String>>,
     pub node_heap_limit_mb: Option<u64>,
 }
 
@@ -186,7 +221,11 @@ pub fn default_sandbox_for_tool(tool: &str) -> DefaultSandboxOptions {
         enforcement: defaults.enforcement,
         memory_max_mb: defaults.memory_max_mb,
         memory_swap_max_mb: defaults.memory_swap_max_mb,
-        lean_mode: matches!(profile, ToolResourceProfile::Heavyweight),
+        setting_sources: if matches!(profile, ToolResourceProfile::Heavyweight) {
+            Some(vec![])
+        } else {
+            None
+        },
         node_heap_limit_mb: match profile {
             ToolResourceProfile::Heavyweight => Some(2048),
             _ => None,

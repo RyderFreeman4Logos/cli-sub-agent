@@ -36,7 +36,7 @@ pub(crate) fn resolve_sandbox_options(
     let Some(cfg) = config else {
         // No project config — apply profile-based defaults for heavyweight tools.
         let defaults = csa_config::default_sandbox_for_tool(tool_name);
-        execute_options = execute_options.with_lean_mode(defaults.lean_mode);
+        execute_options = execute_options.with_setting_sources(defaults.setting_sources);
 
         if matches!(defaults.enforcement, csa_config::EnforcementMode::Off) {
             return SandboxResolution::Ok(execute_options);
@@ -71,7 +71,7 @@ pub(crate) fn resolve_sandbox_options(
         return SandboxResolution::Ok(execute_options);
     };
 
-    execute_options = execute_options.with_lean_mode(cfg.tool_lean_mode(tool_name));
+    execute_options = execute_options.with_setting_sources(cfg.tool_setting_sources(tool_name));
 
     // Use per-tool enforcement mode (profile-aware) instead of global-only.
     let enforcement = cfg.tool_enforcement_mode(tool_name);

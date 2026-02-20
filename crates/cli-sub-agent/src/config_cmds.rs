@@ -131,6 +131,9 @@ max_recursion_depth = 5
 # pids_max = 512                     # Max PIDs per tool process tree (>= 10)
 
 # ─── Tool Configuration ────────────────────────────────────────
+# setting_sources: controls which MCP settings to load for ACP-backed tools.
+#   [] = load nothing (lean mode), ["project"] = project only, omit = load all.
+#
 # [tools.codex]
 # enabled = true
 # suppress_notify = true
@@ -138,6 +141,7 @@ max_recursion_depth = 5
 # [tools.claude-code]
 # enabled = true
 # suppress_notify = true
+# setting_sources = ["project"]    # load only project-level settings
 #
 # [tools.gemini-cli]
 # enabled = true
