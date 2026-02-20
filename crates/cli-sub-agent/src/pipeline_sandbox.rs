@@ -39,12 +39,20 @@ pub(crate) fn resolve_sandbox_options(
 
     execute_options = execute_options.with_lean_mode(cfg.tool_lean_mode(tool_name));
 
-    let enforcement = cfg.enforcement_mode();
+    // Use per-tool enforcement mode (profile-aware) instead of global-only.
+    let enforcement = cfg.tool_enforcement_mode(tool_name);
     if matches!(enforcement, csa_config::EnforcementMode::Off) {
         return SandboxResolution::Ok(execute_options);
     }
 
     let Some(memory_max_mb) = cfg.sandbox_memory_max_mb(tool_name) else {
+        if matches!(enforcement, csa_config::EnforcementMode::Required) {
+            return SandboxResolution::RequiredButUnavailable(format!(
+                "Sandbox enforcement is required for tool '{}' but no memory_max_mb is configured. \
+                 Set resources.memory_max_mb or tools.{}.memory_max_mb in config.",
+                tool_name, tool_name
+            ));
+        }
         info!(
             tool = %tool_name,
             enforcement = ?enforcement,
