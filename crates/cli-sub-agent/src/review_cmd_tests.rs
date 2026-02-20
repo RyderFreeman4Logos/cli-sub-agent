@@ -234,6 +234,7 @@ fn derive_scope_uncommitted() {
         idle_timeout: None,
         stream_stdout: false,
         no_stream_stdout: false,
+        allow_fallback: false,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -259,6 +260,7 @@ fn derive_scope_commit() {
         idle_timeout: None,
         stream_stdout: false,
         no_stream_stdout: false,
+        allow_fallback: false,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -284,6 +286,7 @@ fn derive_scope_range() {
         idle_timeout: None,
         stream_stdout: false,
         no_stream_stdout: false,
+        allow_fallback: false,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -309,6 +312,7 @@ fn derive_scope_files() {
         idle_timeout: None,
         stream_stdout: false,
         no_stream_stdout: false,
+        allow_fallback: false,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -334,20 +338,14 @@ fn derive_scope_default_branch() {
         idle_timeout: None,
         stream_stdout: false,
         no_stream_stdout: false,
+        allow_fallback: false,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }
 
 #[test]
 fn review_cli_rejects_commit_with_range() {
-    let err = parse_review_error(&[
-        "csa",
-        "review",
-        "--commit",
-        "abc",
-        "--range",
-        "v1...v2",
-    ]);
+    let err = parse_review_error(&["csa", "review", "--commit", "abc", "--range", "v1...v2"]);
     assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
 }
 
@@ -553,6 +551,13 @@ fn review_cli_defaults_no_timeout() {
     assert_eq!(args.idle_timeout, None);
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
+    assert!(!args.allow_fallback);
+}
+
+#[test]
+fn review_cli_parses_allow_fallback_flag() {
+    let args = parse_review_args(&["csa", "review", "--diff", "--allow-fallback"]);
+    assert!(args.allow_fallback);
 }
 
 #[test]
@@ -594,15 +599,19 @@ fn stream_mode_explicit_no_stream() {
 #[test]
 fn verify_review_skill_missing_returns_actionable_error() {
     let tmp = tempfile::TempDir::new().unwrap();
-    let err = verify_review_skill_available(tmp.path()).unwrap_err();
+    let err = verify_review_skill_available(tmp.path(), false).unwrap_err();
     let msg = err.to_string();
     assert!(
         msg.contains("Review pattern not found"),
         "should mention missing pattern: {msg}"
     );
     assert!(
-        msg.contains("csa skill install"),
+        msg.contains("weave install"),
         "should include install guidance: {msg}"
+    );
+    assert!(
+        msg.contains("does NOT install"),
+        "should clarify skill install vs pattern install: {msg}"
     );
     assert!(
         msg.contains("patterns/csa-review"),
@@ -628,7 +637,7 @@ fn verify_review_skill_present_succeeds() {
     )
     .unwrap();
 
-    assert!(verify_review_skill_available(tmp.path()).is_ok());
+    assert!(verify_review_skill_available(tmp.path(), false).is_ok());
 }
 
 #[test]
@@ -636,9 +645,19 @@ fn verify_review_skill_no_fallback_without_skill() {
     // Ensure no execution path silently downgrades when skill is missing.
     // The verify function must return Err — it must NOT return Ok with a warning.
     let tmp = tempfile::TempDir::new().unwrap();
-    let result = verify_review_skill_available(tmp.path());
+    let result = verify_review_skill_available(tmp.path(), false);
     assert!(
         result.is_err(),
         "missing skill must be a hard error, not a warning"
+    );
+}
+
+#[test]
+fn verify_review_skill_allow_fallback_without_skill() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let result = verify_review_skill_available(tmp.path(), true);
+    assert!(
+        result.is_ok(),
+        "missing skill should downgrade to warning when fallback is enabled"
     );
 }

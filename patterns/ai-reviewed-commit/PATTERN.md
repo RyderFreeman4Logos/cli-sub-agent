@@ -35,7 +35,7 @@ git diff --stat --staged
 
 Determine who authored the staged code:
 - Self-authored (generated in this session) → use csa debate
-- Other tool/human authored → use csa review --diff
+- Other tool/human authored → use csa review --diff --allow-fallback
 
 ## IF ${SELF_AUTHORED}
 
@@ -54,7 +54,7 @@ csa debate "Review my staged changes for correctness, security, and test gaps. R
 Tool: bash
 
 ```bash
-csa review --diff
+csa review --diff --allow-fallback
 ```
 
 ## ENDIF
@@ -85,7 +85,7 @@ Tool: bash
 Loop back to review. Maximum 3 review-fix cycles.
 
 ```bash
-csa review --diff
+csa review --diff --allow-fallback
 ```
 
 ## ENDIF
