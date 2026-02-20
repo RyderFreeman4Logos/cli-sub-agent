@@ -81,7 +81,5 @@ strix_runs
 .csa/
 
 # Review artifacts
-review-findings.json
-review-findings.json.tmp
-review-report.md
+result.toml
 .letta/
