@@ -3,8 +3,9 @@ use serde_json::json;
 use super::AcpTransport;
 
 #[test]
-fn test_build_lean_mode_meta_enabled() {
-    let meta = AcpTransport::build_lean_mode_meta(true).expect("meta should exist");
+fn test_build_session_meta_with_empty_sources() {
+    let sources: Vec<String> = vec![];
+    let meta = AcpTransport::build_session_meta(Some(&sources)).expect("meta should exist");
     assert_eq!(
         serde_json::Value::Object(meta),
         json!({"claudeCode": {"options": {"settingSources": []}}})
@@ -12,9 +13,19 @@ fn test_build_lean_mode_meta_enabled() {
 }
 
 #[test]
-fn test_build_lean_mode_meta_disabled() {
+fn test_build_session_meta_with_project_source() {
+    let sources = vec!["project".to_string()];
+    let meta = AcpTransport::build_session_meta(Some(&sources)).expect("meta should exist");
+    assert_eq!(
+        serde_json::Value::Object(meta),
+        json!({"claudeCode": {"options": {"settingSources": ["project"]}}})
+    );
+}
+
+#[test]
+fn test_build_session_meta_none_returns_none() {
     assert!(
-        AcpTransport::build_lean_mode_meta(false).is_none(),
-        "meta should be absent when lean mode is off"
+        AcpTransport::build_session_meta(None).is_none(),
+        "meta should be absent when setting_sources is None"
     );
 }

@@ -372,7 +372,7 @@ fn legacy_enforcement_mode_defaults_to_off() {
     assert_eq!(cfg.enforcement_mode(), EnforcementMode::Off);
 }
 
-// ── Lean mode defaults ─────────────────────────────────────────────────
+// ── Lean mode defaults (deprecated, kept for backward compat) ──────────
 
 #[test]
 fn lean_mode_heavyweight_defaults_to_true() {
@@ -408,6 +408,89 @@ fn lean_mode_explicit_false_overrides_default() {
     );
 }
 
+// ── setting_sources resolution ──────────────────────────────────────────
+
+#[test]
+fn setting_sources_heavyweight_defaults_to_empty_vec() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.tool_setting_sources("claude-code"),
+        Some(vec![]),
+        "Heavyweight tools should default to Some(vec![]) (lean mode)"
+    );
+}
+
+#[test]
+fn setting_sources_lightweight_defaults_to_none() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.tool_setting_sources("codex"),
+        None,
+        "Lightweight tools should default to None (load everything)"
+    );
+}
+
+#[test]
+fn setting_sources_explicit_wins_over_lean_mode() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            lean_mode: Some(true),
+            setting_sources: Some(vec!["project".to_string()]),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_setting_sources("claude-code"),
+        Some(vec!["project".to_string()]),
+        "setting_sources should take priority over lean_mode"
+    );
+}
+
+#[test]
+fn setting_sources_lean_mode_true_maps_to_empty_vec() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            lean_mode: Some(true),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_setting_sources("codex"),
+        Some(vec![]),
+        "lean_mode=true should map to Some(vec![])"
+    );
+}
+
+#[test]
+fn setting_sources_lean_mode_false_maps_to_none() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            lean_mode: Some(false),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_setting_sources("claude-code"),
+        None,
+        "lean_mode=false should map to None (load everything)"
+    );
+}
+
+#[test]
+fn setting_sources_neither_set_uses_profile_default() {
+    let cfg = empty_config();
+    // Heavyweight → Some(vec![])
+    assert_eq!(cfg.tool_setting_sources("claude-code"), Some(vec![]));
+    // Lightweight → None
+    assert_eq!(cfg.tool_setting_sources("codex"), None);
+}
+
 // ── Node heap limit defaults ───────────────────────────────────────────
 
 #[test]
@@ -428,7 +511,11 @@ fn default_sandbox_for_tool_claude_code() {
     assert_eq!(opts.enforcement, EnforcementMode::BestEffort);
     assert_eq!(opts.memory_max_mb, Some(2048));
     assert_eq!(opts.memory_swap_max_mb, Some(0));
-    assert!(opts.lean_mode);
+    assert_eq!(
+        opts.setting_sources,
+        Some(vec![]),
+        "Heavyweight should default to lean (empty setting_sources)"
+    );
     assert_eq!(opts.node_heap_limit_mb, Some(2048));
 }
 
@@ -438,6 +525,9 @@ fn default_sandbox_for_tool_codex() {
     assert_eq!(opts.enforcement, EnforcementMode::Off);
     assert_eq!(opts.memory_max_mb, None);
     assert_eq!(opts.memory_swap_max_mb, None);
-    assert!(!opts.lean_mode);
+    assert_eq!(
+        opts.setting_sources, None,
+        "Lightweight should default to None (load everything)"
+    );
     assert_eq!(opts.node_heap_limit_mb, None);
 }

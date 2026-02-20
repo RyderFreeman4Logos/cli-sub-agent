@@ -41,7 +41,10 @@ pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
     pub output_spool: Option<&'a Path>,
-    pub lean_mode: bool,
+    /// Selective MCP/setting sources for ACP session meta.
+    /// `Some(sources)` → inject `settingSources` into session meta.
+    /// `None` → no override (load everything).
+    pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
 }
 
@@ -253,14 +256,16 @@ impl AcpTransport {
         }
     }
 
-    pub(crate) fn build_lean_mode_meta(
-        lean_mode: bool,
+    /// Build ACP session meta from setting_sources config.
+    ///
+    /// `Some(sources)` → `{"claudeCode":{"options":{"settingSources": sources}}}`.
+    /// `None` → no meta (load everything).
+    pub(crate) fn build_session_meta(
+        setting_sources: Option<&[String]>,
     ) -> Option<serde_json::Map<String, serde_json::Value>> {
-        if !lean_mode {
-            return None;
-        }
+        let sources = setting_sources?;
         let serde_json::Value::Object(meta) =
-            serde_json::json!({"claudeCode": {"options": {"settingSources": []}}})
+            serde_json::json!({"claudeCode": {"options": {"settingSources": sources}}})
         else {
             return None;
         };
@@ -337,7 +342,7 @@ impl Transport for AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
-        let session_meta = Self::build_lean_mode_meta(options.lean_mode);
+        let session_meta = Self::build_session_meta(options.setting_sources.as_deref());
         let stream_stdout_to_stderr = options.stream_mode != StreamMode::BufferOnly;
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
 

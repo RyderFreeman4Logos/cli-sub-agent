@@ -1,8 +1,8 @@
 use super::*;
 
-/// Heavyweight tools (claude-code) with no project config should get lean_mode=true.
+/// Heavyweight tools (claude-code) with no project config should get setting_sources=Some(vec![]).
 #[test]
-fn test_none_config_sets_lean_mode_for_heavyweight() {
+fn test_none_config_sets_setting_sources_for_heavyweight() {
     let result = resolve_sandbox_options(
         None,
         "claude-code",
@@ -15,9 +15,10 @@ fn test_none_config_sets_lean_mode_for_heavyweight() {
         panic!("Expected SandboxResolution::Ok");
     };
 
-    assert!(
-        opts.lean_mode,
-        "Heavyweight tool should have lean_mode=true"
+    assert_eq!(
+        opts.setting_sources,
+        Some(vec![]),
+        "Heavyweight tool should have setting_sources=Some(vec![]) (lean mode)"
     );
 }
 
@@ -31,9 +32,9 @@ fn test_none_config_lightweight_skips_sandbox() {
         panic!("Expected SandboxResolution::Ok");
     };
 
-    assert!(
-        !opts.lean_mode,
-        "Lightweight tool should have lean_mode=false"
+    assert_eq!(
+        opts.setting_sources, None,
+        "Lightweight tool should have setting_sources=None (load everything)"
     );
     assert!(
         opts.sandbox.is_none(),
@@ -42,7 +43,7 @@ fn test_none_config_lightweight_skips_sandbox() {
 }
 
 /// Heavyweight tools (claude-code) with no project config should get a sandbox context
-/// when sandbox capability is available, or at least lean_mode when it is not.
+/// when sandbox capability is available, or at least setting_sources when it is not.
 #[test]
 fn test_none_config_heavyweight_gets_sandbox() {
     let result = resolve_sandbox_options(
@@ -57,10 +58,11 @@ fn test_none_config_heavyweight_gets_sandbox() {
         panic!("Expected SandboxResolution::Ok");
     };
 
-    // lean_mode is always set for heavyweight regardless of sandbox capability
-    assert!(
-        opts.lean_mode,
-        "Heavyweight tool should have lean_mode=true"
+    // setting_sources is always set for heavyweight regardless of sandbox capability
+    assert_eq!(
+        opts.setting_sources,
+        Some(vec![]),
+        "Heavyweight tool should have setting_sources=Some(vec![])"
     );
 
     let capability = csa_resource::detect_sandbox_capability();

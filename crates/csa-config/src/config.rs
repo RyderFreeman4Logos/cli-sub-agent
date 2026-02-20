@@ -148,9 +148,17 @@ pub struct ToolConfig {
     /// Per-tool Node.js heap size limit (MB). Takes precedence over project resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_heap_limit_mb: Option<u64>,
-    /// Opt-in lean mode for ACP-backed tools.
+    /// Deprecated: use `setting_sources` instead.
+    /// When `true`, equivalent to `setting_sources = []` (load nothing).
+    /// When `false` or absent, no override.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lean_mode: Option<bool>,
+    /// Selective MCP/setting sources to load for ACP-backed tools.
+    /// `Some(vec![])` = load nothing (equivalent to old `lean_mode = true`).
+    /// `Some(vec!["project"])` = load only project-level settings.
+    /// `None` = default (load everything).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setting_sources: Option<Vec<String>>,
 }
 
 impl Default for ToolConfig {
@@ -164,6 +172,7 @@ impl Default for ToolConfig {
             memory_swap_max_mb: None,
             node_heap_limit_mb: None,
             lean_mode: None,
+            setting_sources: None,
         }
     }
 }
