@@ -62,11 +62,19 @@ id = 2
 title = "Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"
 tool = "bash"
 prompt = """
-Run cumulative local review covering all commits since main.
-This is the FOUNDATION — without it, bot unavailability cannot safely merge.
+Run cumulative local review covering all commits since main, with SHA-verified
+fast-path. This is the FOUNDATION — without it, bot unavailability cannot
+safely merge.
 
 ```bash
-csa review --branch main
+CURRENT_HEAD="$(git rev-parse HEAD)"
+REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
+  echo "Fast-path: latest local review already covers HEAD ${CURRENT_HEAD}; skip Step 2 review."
+else
+  echo "No matching review HEAD found (or HEAD drift detected). Running full local review."
+  csa review --branch main
+fi
 ```"""
 on_fail = "abort"
 
@@ -99,14 +107,21 @@ title = "Check Cloud Bot Configuration"
 tool = "bash"
 prompt = """
 Check whether cloud bot review is enabled for this project.
-If disabled, set BOT_UNAVAILABLE and run supplementary local review.
+If disabled, set BOT_UNAVAILABLE and apply the same SHA-verified fast-path
+before deciding whether supplementary local review is needed.
 
 ```bash
 CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
-  echo "Cloud bot disabled via project config. Running local review instead."
-  csa review --range main...HEAD 2>/dev/null || true
+  CURRENT_HEAD="$(git rev-parse HEAD)"
+  REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+  if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
+    echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
+  else
+    echo "Cloud bot disabled and fast-path invalid. Running full local review."
+    csa review --branch main
+  fi
 fi
 ```"""
 on_fail = "skip"
