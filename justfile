@@ -192,6 +192,14 @@ install:
     @csa --version
     @weave --version
 
+# Bump patch version of all workspace crates atomically.
+# All crates inherit version.workspace, so a single workspace bump suffices.
+# Requires: cargo-edit (cargo install cargo-edit)
+bump-patch:
+    cargo set-version --bump patch -p cli-sub-agent
+    @echo "Bumped workspace version:"
+    @cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent" or .name == "weave") | "  \(.name) = \(.version)"'
+
 # Generate CHANGELOG.md from Conventional Commits (requires git-cliff).
 changelog:
     git cliff --output CHANGELOG.md

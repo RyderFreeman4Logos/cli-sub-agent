@@ -5,8 +5,22 @@ use csa_core::types::{OutputFormat, ToolArg, ToolName};
 mod cli_todo;
 pub use cli_todo::*;
 
+/// Build version string combining Cargo.toml version and git describe.
+fn build_version() -> &'static str {
+    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    VERSION.get_or_init(|| {
+        let cargo_ver = env!("CARGO_PKG_VERSION");
+        let git_desc = env!("CSA_GIT_DESCRIBE");
+        if git_desc.is_empty() {
+            cargo_ver.to_string()
+        } else {
+            format!("{cargo_ver} ({git_desc})")
+        }
+    })
+}
+
 #[derive(Parser)]
-#[command(name = "csa", version)]
+#[command(name = "csa", version = build_version())]
 #[command(about = "CLI Sub-Agent: Recursive Agent Container")]
 pub struct Cli {
     #[command(subcommand)]
