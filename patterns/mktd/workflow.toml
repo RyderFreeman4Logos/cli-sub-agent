@@ -66,6 +66,19 @@ id = 4
 title = "Phase 2 — DRAFT TODO"
 prompt = """
 Synthesize CSA findings into a structured TODO plan.
+
+## RECON Findings (from prior steps)
+
+### Structure (Step 1)
+${STEP_1_OUTPUT}
+
+### Patterns (Step 2)
+${STEP_2_OUTPUT}
+
+### Constraints (Step 3)
+${STEP_3_OUTPUT}
+
+## Instructions
 Each item is a [ ] checkbox with executor tag.
 Write all TODO descriptions, section headers, and task names in ${USER_LANGUAGE}.
 Technical terms, code snippets, commit scope strings, and executor tags remain in English.
@@ -93,7 +106,18 @@ id = 7
 title = "Revise TODO"
 prompt = """
 Incorporate debate feedback. Update plan based on valid criticisms.
-Concede valid points, defend sound decisions with evidence."""
+Concede valid points, defend sound decisions with evidence.
+
+## Prior Context
+
+### Draft TODO (Step 4)
+${STEP_4_OUTPUT}
+
+### Adversarial Debate (Step 5)
+${STEP_5_OUTPUT}
+
+### Debate Include (Step 6)
+${STEP_6_OUTPUT}"""
 on_fail = "abort"
 
 [[workflow.steps]]

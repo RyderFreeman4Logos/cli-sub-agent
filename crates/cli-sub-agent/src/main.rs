@@ -18,6 +18,7 @@ mod pipeline_execute;
 mod pipeline_sandbox;
 mod plan_cmd;
 mod plan_condition;
+mod plan_display;
 mod process_tree;
 mod review_cmd;
 mod review_consensus;
