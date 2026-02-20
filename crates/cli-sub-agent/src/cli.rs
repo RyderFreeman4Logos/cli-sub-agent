@@ -216,6 +216,17 @@ pub enum Commands {
         cmd: PlanCommands,
     },
 
+    /// Run pending config/state migrations
+    Migrate {
+        /// Show pending migrations without applying
+        #[arg(long)]
+        dry_run: bool,
+
+        /// Show current vs latest version and pending migration count
+        #[arg(long, conflicts_with = "dry_run")]
+        status: bool,
+    },
+
     /// Update CSA to the latest release
     SelfUpdate {
         /// Check for updates without installing
