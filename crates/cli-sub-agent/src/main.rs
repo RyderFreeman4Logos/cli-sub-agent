@@ -10,6 +10,7 @@ mod config_cmds;
 mod debate_cmd;
 mod doctor;
 mod gc;
+mod mcp_hub;
 mod mcp_server;
 mod pattern_resolver;
 mod pipeline;
@@ -34,8 +35,8 @@ mod tiers_cmd;
 mod todo_cmd;
 
 use cli::{
-    Cli, Commands, ConfigCommands, PlanCommands, SessionCommands, SetupCommands, SkillCommands,
-    TiersCommands, TodoCommands,
+    Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SessionCommands, SetupCommands,
+    SkillCommands, TiersCommands, TodoCommands,
 };
 use csa_core::types::OutputFormat;
 
@@ -234,6 +235,23 @@ async fn main() -> Result<()> {
         Commands::McpServer => {
             mcp_server::run_mcp_server().await?;
         }
+        Commands::McpHub { cmd } => match cmd {
+            McpHubCommands::Serve {
+                background,
+                foreground,
+                socket,
+                systemd_activation,
+            } => {
+                mcp_hub::handle_serve_command(background, foreground, socket, systemd_activation)
+                    .await?;
+            }
+            McpHubCommands::Status { socket } => {
+                mcp_hub::handle_status_command(socket).await?;
+            }
+            McpHubCommands::Stop { socket } => {
+                mcp_hub::handle_stop_command(socket).await?;
+            }
+        },
         Commands::Skill { cmd } => match cmd {
             SkillCommands::Install { source, target } => {
                 skill_cmds::handle_skill_install(source, target)?;

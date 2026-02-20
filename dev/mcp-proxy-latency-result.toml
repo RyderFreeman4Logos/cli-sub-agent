@@ -1,0 +1,13 @@
+# MCP Hub latency validation for issue #191
+# Generated from test: hub_forwards_requests_and_proxy_latency_budget_is_within_5ms
+# Timestamp: 2026-02-20T00:00:00Z
+
+[measurement]
+proxy_budget_ms = 5.0
+method = "cargo test -p cli-sub-agent hub_forwards_requests_and_proxy_latency_budget_is_within_5ms -- --nocapture"
+
+[results]
+direct_p95_ms = 1.362
+proxy_p95_ms = 1.328
+overhead_p95_ms = -0.035
+budget_passed = true

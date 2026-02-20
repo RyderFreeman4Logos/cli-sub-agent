@@ -186,6 +186,12 @@ pub enum Commands {
     /// Run as MCP server (JSON-RPC over stdio)
     McpServer,
 
+    /// Manage shared MCP Hub daemon
+    McpHub {
+        #[command(subcommand)]
+        cmd: McpHubCommands,
+    },
+
     /// Manage skills (install, list)
     Skill {
         #[command(subcommand)]
@@ -680,6 +686,42 @@ pub enum SetupCommands {
 
     /// Setup MCP integration for OpenCode
     OpenCode,
+}
+
+#[derive(Subcommand)]
+pub enum McpHubCommands {
+    /// Start MCP Hub service
+    Serve {
+        /// Launch in background and return immediately
+        #[arg(long, conflicts_with = "foreground")]
+        background: bool,
+
+        /// Run in foreground mode (default)
+        #[arg(long)]
+        foreground: bool,
+
+        /// Override hub socket path
+        #[arg(long)]
+        socket: Option<String>,
+
+        /// Use systemd socket activation (Linux only)
+        #[arg(long)]
+        systemd_activation: bool,
+    },
+
+    /// Check MCP Hub status
+    Status {
+        /// Override hub socket path
+        #[arg(long)]
+        socket: Option<String>,
+    },
+
+    /// Stop MCP Hub gracefully
+    Stop {
+        /// Override hub socket path
+        #[arg(long)]
+        socket: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

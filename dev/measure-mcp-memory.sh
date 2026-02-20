@@ -6,7 +6,7 @@
 # memory overhead per claude-code instance.
 #
 # Usage:
-#   ./dev/measure-mcp-memory.sh [--instances N] [--settle-secs S]
+#   ./dev/measure-mcp-memory.sh [--instances N] [--settle-secs S] [--proxy] [--proxy-socket PATH]
 #
 # Requirements:
 #   - claude-code-acp on PATH
@@ -20,14 +20,18 @@ set -euo pipefail
 INSTANCES=3                  # concurrent instances to project savings for
 SETTLE_SECS=15               # seconds to wait for tool to fully initialize
 SAMPLES=3                    # number of measurement samples per mode
+PROXY_MODE=false             # when true, measure with mcp-hub proxy injection
+PROXY_SOCKET="${XDG_RUNTIME_DIR:-/tmp/csa-${UID}}/mcp-hub.sock"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --instances) INSTANCES="$2"; shift 2 ;;
         --settle-secs) SETTLE_SECS="$2"; shift 2 ;;
         --samples) SAMPLES="$2"; shift 2 ;;
+        --proxy) PROXY_MODE=true; shift ;;
+        --proxy-socket) PROXY_SOCKET="$2"; shift 2 ;;
         -h|--help)
-            printf 'Usage: %s [--instances N] [--settle-secs S] [--samples N]\n' "$0"
+            printf 'Usage: %s [--instances N] [--settle-secs S] [--samples N] [--proxy] [--proxy-socket PATH]\n' "$0"
             exit 0 ;;
         *) printf 'Unknown option: %s\n' "$1" >&2; exit 1 ;;
     esac
@@ -228,7 +232,10 @@ measure_via_csa() {
 
 main() {
     log "=== MCP Memory Baseline Measurement (Issue #191) ==="
-    log "Configuration: instances=$INSTANCES settle=${SETTLE_SECS}s samples=$SAMPLES"
+    log "Configuration: instances=$INSTANCES settle=${SETTLE_SECS}s samples=$SAMPLES proxy_mode=$PROXY_MODE"
+    if [[ "$PROXY_MODE" == "true" ]]; then
+        log "Proxy socket: $PROXY_SOCKET"
+    fi
     log ""
 
     local use_csa=false
@@ -258,7 +265,10 @@ Or build csa: cargo build --release -p cli-sub-agent"
 
     # --- Full mode (settingSources: ["user","project"]) — all MCPs loaded ---
     local full_rss_kb
-    if [[ "$use_csa" == "true" ]]; then
+    if [[ "$PROXY_MODE" == "true" ]]; then
+        # Proxy mode: inject a single mcp-hub endpoint to avoid per-tool MCP duplication.
+        full_rss_kb=$(measure_mode "proxy" "{\"claudeCode\":{\"options\":{\"settingSources\":[\"user\",\"project\"],\"mcpServers\":{\"csa-mcp-hub\":{\"transport\":\"unix\",\"socketPath\":\"$PROXY_SOCKET\"}}}}}")
+    elif [[ "$use_csa" == "true" ]]; then
         full_rss_kb=$(measure_via_csa "full" "")
     else
         full_rss_kb=$(measure_mode "full" '{"claudeCode":{"options":{"settingSources":["user","project"]}}}')
@@ -271,6 +281,11 @@ Or build csa: cargo build --release -p cli-sub-agent"
     local delta_kb=$((full_rss_kb - lean_rss_kb))
     local delta_mb=$((delta_kb / 1024))
     local total_waste_mb=$((delta_mb * INSTANCES))
+    local total_concurrent_rss_mb=$((full_rss_mb * INSTANCES))
+    local under_4gb=false
+    if [[ $total_concurrent_rss_mb -lt 4096 ]]; then
+        under_4gb=true
+    fi
 
     log ""
     log "================================================================"
@@ -281,6 +296,8 @@ Or build csa: cargo build --release -p cli-sub-agent"
     log "  Full mode (all MCPs):   ${full_rss_mb} MB"
     log "  Delta per instance:     ${delta_mb} MB"
     log "  Projected waste (×${INSTANCES}): ${total_waste_mb} MB"
+    log "  Projected concurrent RSS (×${INSTANCES}): ${total_concurrent_rss_mb} MB"
+    log "  Concurrent RSS < 4GB:   ${under_4gb}"
     log ""
 
     if [[ $delta_mb -ge 200 ]]; then
@@ -304,6 +321,8 @@ Or build csa: cargo build --release -p cli-sub-agent"
 samples = $SAMPLES
 settle_seconds = $SETTLE_SECS
 projected_instances = $INSTANCES
+proxy_mode = $PROXY_MODE
+proxy_socket = "$PROXY_SOCKET"
 
 [results]
 lean_mode_rss_kb = $lean_rss_kb
@@ -313,6 +332,8 @@ full_mode_rss_mb = $full_rss_mb
 delta_per_instance_kb = $delta_kb
 delta_per_instance_mb = $delta_mb
 total_projected_waste_mb = $total_waste_mb
+total_projected_rss_mb = $total_concurrent_rss_mb
+projected_under_4gb = $under_4gb
 
 [gate]
 threshold_mb = 200

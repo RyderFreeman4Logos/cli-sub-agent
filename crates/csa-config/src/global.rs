@@ -41,6 +41,12 @@ pub struct GlobalConfig {
     /// for same-name servers).
     #[serde(default)]
     pub mcp: GlobalMcpConfig,
+    /// Optional MCP hub unix socket path for shared proxy mode.
+    ///
+    /// When set, ACP sessions may inject a single mcp-hub endpoint instead of
+    /// individual MCP server entries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_proxy_socket: Option<String>,
 }
 
 /// User preferences for tool selection and routing.
@@ -457,6 +463,9 @@ cloud_review_exhausted = "ask-user"
 # name = "deepwiki"
 # command = "npx"
 # args = ["-y", "@anthropic/deepwiki-mcp"]
+#
+# Optional shared MCP hub socket path.
+# mcp_proxy_socket = "/run/user/1000/csa/mcp-hub.sock"
 "#
         .to_string()
     }

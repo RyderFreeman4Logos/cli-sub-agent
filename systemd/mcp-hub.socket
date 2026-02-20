@@ -1,0 +1,11 @@
+[Unit]
+Description=CSA MCP Hub Socket
+
+[Socket]
+ListenStream=%t/csa/mcp-hub.sock
+SocketMode=0600
+DirectoryMode=0700
+Service=mcp-hub.service
+
+[Install]
+WantedBy=sockets.target

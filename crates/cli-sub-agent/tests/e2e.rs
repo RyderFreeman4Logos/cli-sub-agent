@@ -5,7 +5,7 @@
 mod cli_defs;
 
 use clap::Parser;
-use cli_defs::{AuditCommands, Cli, Commands};
+use cli_defs::{AuditCommands, Cli, Commands, McpHubCommands};
 use csa_core::types::OutputFormat;
 use std::process::Command;
 
@@ -72,6 +72,37 @@ fn run_help_shows_tool_options() {
     assert!(stdout.contains("--session"));
     assert!(stdout.contains("--ephemeral"));
     assert!(stdout.contains("--model"));
+}
+
+#[test]
+fn mcp_hub_serve_parse_with_background_and_socket() {
+    let cli = Cli::try_parse_from([
+        "csa",
+        "mcp-hub",
+        "serve",
+        "--background",
+        "--socket",
+        "/tmp/csa-1000/mcp-hub.sock",
+    ])
+    .expect("mcp-hub serve args should parse");
+
+    match cli.command {
+        Commands::McpHub {
+            cmd:
+                McpHubCommands::Serve {
+                    background,
+                    foreground,
+                    socket,
+                    systemd_activation,
+                },
+        } => {
+            assert!(background);
+            assert!(!foreground);
+            assert_eq!(socket.as_deref(), Some("/tmp/csa-1000/mcp-hub.sock"));
+            assert!(!systemd_activation);
+        }
+        _ => panic!("expected mcp-hub serve subcommand"),
+    }
 }
 
 #[test]
