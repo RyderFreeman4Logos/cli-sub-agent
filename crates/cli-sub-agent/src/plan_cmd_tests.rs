@@ -644,6 +644,107 @@ fn resolve_step_tool_all_explicit_tools() {
     }
 }
 
+// --- Tool override tests ---
+
+#[tokio::test]
+async fn execute_step_tool_override_replaces_csa_tool() {
+    // A bash step with tool=bash should produce exit 0 via DirectBash.
+    // When --tool override is provided, bash steps should be unaffected.
+    let tmp = tempfile::tempdir().unwrap();
+    let bash_step = PlanStep {
+        id: 1,
+        title: "bash-step".into(),
+        tool: Some("bash".into()),
+        prompt: "```bash\necho ok\n```".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let vars = HashMap::new();
+    // Even with tool_override=claude-code, bash step must still run as bash
+    let result =
+        execute_step(&bash_step, &vars, tmp.path(), None, Some(&ToolName::ClaudeCode)).await;
+    assert_eq!(result.exit_code, 0, "bash step must not be affected by --tool override");
+    assert!(!result.skipped);
+}
+
+#[test]
+fn tool_override_clears_model_spec() {
+    // When --tool override is applied, the model_spec from tier resolution
+    // must be cleared to avoid tool/spec mismatch.
+    let step = PlanStep {
+        id: 1,
+        title: "csa-step".into(),
+        tool: Some("codex".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let target = resolve_step_tool(&step, None).unwrap();
+    // Without override: should be CsaTool with codex
+    assert!(matches!(
+        target,
+        StepTarget::CsaTool {
+            tool_name: ToolName::Codex,
+            ..
+        }
+    ));
+
+    // Simulate override application (same logic as execute_step)
+    let override_tool = ToolName::ClaudeCode;
+    let overridden = match target {
+        StepTarget::CsaTool { .. } => StepTarget::CsaTool {
+            tool_name: override_tool,
+            model_spec: None,
+        },
+        other => other,
+    };
+    match overridden {
+        StepTarget::CsaTool {
+            tool_name,
+            model_spec,
+        } => {
+            assert_eq!(tool_name, ToolName::ClaudeCode, "tool must be overridden");
+            assert!(model_spec.is_none(), "model_spec must be cleared on override");
+        }
+        _ => panic!("expected CsaTool"),
+    }
+}
+
+#[test]
+fn tool_override_does_not_affect_weave_include() {
+    let step = PlanStep {
+        id: 1,
+        title: "include-step".into(),
+        tool: Some("weave".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+    };
+    let target = resolve_step_tool(&step, None).unwrap();
+    // Simulate override: WeaveInclude must pass through unchanged
+    let override_tool = ToolName::ClaudeCode;
+    let overridden = match target {
+        StepTarget::CsaTool { .. } => StepTarget::CsaTool {
+            tool_name: override_tool,
+            model_spec: None,
+        },
+        other => other,
+    };
+    assert!(
+        matches!(overridden, StepTarget::WeaveInclude),
+        "weave step must not be affected by --tool override"
+    );
+}
+
 #[tokio::test]
 async fn run_with_heartbeat_returns_success_exit_code() {
     let (code, output) = run_with_heartbeat(

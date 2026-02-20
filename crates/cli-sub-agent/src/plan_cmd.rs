@@ -429,10 +429,11 @@ async fn execute_step(
         }
     };
 
-    // Apply --tool override: replace tool for all CSA steps (bash/weave unaffected)
+    // Apply --tool override: replace tool for all CSA steps (bash/weave unaffected).
+    // Clear model_spec since the tier-resolved spec may reference a different tool.
     let target = if let Some(override_tool) = tool_override {
         match target {
-            StepTarget::CsaTool { model_spec, .. } => {
+            StepTarget::CsaTool { .. } => {
                 info!(
                     "{} - Tool override: {} → {}",
                     label,
@@ -441,7 +442,7 @@ async fn execute_step(
                 );
                 StepTarget::CsaTool {
                     tool_name: *override_tool,
-                    model_spec,
+                    model_spec: None,
                 }
             }
             other => other,
