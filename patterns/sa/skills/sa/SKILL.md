@@ -1,9 +1,9 @@
-# sa: Manager-Employee Orchestration (Three-Tier Model)
+# sa: Manager-Employee Orchestration (Three-Layer Model)
 
-Three-tier recursive delegation for planning and implementation with strict role boundaries.
+Three-layer recursive delegation for planning and implementation with strict role boundaries.
 
-- Tier 0 is the **Department Manager**: dispatches work, reads structured reports, makes approval decisions.
-- Tier 1/Tier 2 are **Employees**: execute work autonomously and return self-contained reports.
+- Layer 0 is the **Department Manager**: dispatches work, reads structured reports, makes approval decisions.
+- Layer 1/Layer 2 are **Employees**: execute work autonomously and return self-contained reports.
 
 This skill exists to keep the main agent out of code-level work.
 
@@ -11,7 +11,7 @@ This skill exists to keep the main agent out of code-level work.
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│ Tier 0: Department Manager (Main Agent)                     │
+│ Layer 0: Department Manager (Main Agent)                     │
 │                                                              │
 │ Responsibilities:                                            │
 │ • Define WHAT to do (objective, scope, done condition)       │
@@ -26,38 +26,38 @@ This skill exists to keep the main agent out of code-level work.
                               │ csa run < prompt_file
                               v
 ┌──────────────────────────────────────────────────────────────┐
-│ Tier 1: Senior Employee (Planner / Implementer)             │
+│ Layer 1: Senior Employee (Planner / Implementer)             │
 │                                                              │
 │ Responsibilities:                                            │
 │ • Plan, implement, review, validate                          │
 │ • Decide HOW to execute                                      │
-│ • Spawn Tier 2 workers when needed                           │
+│ • Spawn Layer 2 workers when needed                           │
 │ • Return complete result.toml                                │
 └─────────────────────────────┬────────────────────────────────┘
                               │
                               │ csa run "sub-task"
                               v
 ┌──────────────────────────────────────────────────────────────┐
-│ Tier 2: Employee Worker                                     │
+│ Layer 2: Employee Worker                                     │
 │                                                              │
 │ Responsibilities:                                            │
 │ • Focused exploration/fixes/review support                   │
-│ • Reports back to Tier 1                                     │
+│ • Reports back to Layer 1                                     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
 ## Operating Contract
 
-### Tier 0 Manager: What You MUST Do
+### Layer 0 Manager: What You MUST Do
 
 1. Dispatch work with clear task contracts.
 2. Require self-contained `result.toml` from every employee run.
 3. Base decisions on reports, not direct code inspection.
 4. Gate transitions: APPROVE / MODIFY / REJECT / ESCALATE.
 5. If confidence is low, trigger cross-review by another employee.
-6. **After PR creation, invoke `/pr-codex-bot`** — this is MANDATORY. The pr-codex-bot skill handles `@codex review` triggering, polling (10 min timeout), fallback to local review, and the full bot review loop. Tier 1 executors MUST invoke this skill; it is NOT optional.
+6. **After PR creation, invoke `/pr-codex-bot`** — this is MANDATORY. The pr-codex-bot skill handles `@codex review` triggering, polling (10 min timeout), fallback to local review, and the full bot review loop. Layer 1 executors MUST invoke this skill; it is NOT optional.
 
-### Tier 0 Manager: What You MUST NEVER Do
+### Layer 0 Manager: What You MUST NEVER Do
 
 Absolute prohibitions (SOP breach):
 
@@ -71,7 +71,7 @@ Absolute prohibitions (SOP breach):
 - NEVER run `csa review` or `csa debate` as self-investigation.
 - NEVER replace employee verification with personal inspection.
 
-Tier 0 may only:
+Layer 0 may only:
 
 - Run `csa run` to dispatch employee tasks.
 - Read manager-facing structured report files (`result.toml` from primary/verification runs).
@@ -81,7 +81,7 @@ Tier 0 may only:
 - Present artifact **paths** only (never artifact content).
 - Summarize report conclusions to the user; never forward raw artifact content.
 
-### Tier 1/Tier 2 Employees: Autonomy Rules
+### Layer 1/Layer 2 Employees: Autonomy Rules
 
 Employees are professionals with subjective agency.
 
@@ -204,9 +204,9 @@ Manager still MUST NOT inspect source code or diffs directly.
 ```
 User request
   -> Manager writes planning prompt file
-  -> Manager dispatches Tier 1 (csa run)
-  -> Tier 1 explores/plans (can spawn Tier 2)
-  -> Tier 1 writes TODO + result.toml
+  -> Manager dispatches Layer 1 (csa run)
+  -> Layer 1 explores/plans (can spawn Layer 2)
+  -> Layer 1 writes TODO + result.toml
   -> Manager reads result.toml only
   -> Manager reports summary + TODO path to user
   -> User: APPROVE / MODIFY / REJECT
@@ -217,10 +217,10 @@ User request
 ```
 User APPROVE
   -> Manager writes implementation prompt file
-  -> Manager dispatches Tier 1 with session continuity
-  -> Tier 1 implements autonomously
-  -> Tier 1 performs validation/review/commit workflow
-  -> Tier 1 returns result.toml (commit_hash, review_result, summary)
+  -> Manager dispatches Layer 1 with session continuity
+  -> Layer 1 implements autonomously
+  -> Layer 1 performs validation/review/commit workflow
+  -> Layer 1 returns result.toml (commit_hash, review_result, summary)
   -> Manager reads result.toml only
   -> Manager reports outcome to user
 ```
@@ -237,12 +237,12 @@ Manager not fully confident
 
 ## Practical Dispatch Templates
 
-### Template A: Planning Dispatch (Manager -> Tier 1)
+### Template A: Planning Dispatch (Manager -> Layer 1)
 
 ```bash
 PROMPT_FILE=$(mktemp /tmp/sa-plan-XXXXXX.txt)
 cat > "$PROMPT_FILE" <<'PLAN_EOF'
-You are Tier 1 Employee in sa manager-employee mode.
+You are Layer 1 Employee in sa manager-employee mode.
 
 Read and follow AGENTS.md and CLAUDE.md.
 
@@ -258,7 +258,7 @@ OUTPUT FORMAT:
 - Print ONLY the result.toml path
 
 SCOPE:
-- You may read code, analyze architecture, and spawn Tier 2 workers.
+- You may read code, analyze architecture, and spawn Layer 2 workers.
 - You own implementation strategy decisions.
 
 DONE WHEN:
@@ -270,12 +270,12 @@ PLAN_EOF
 csa run < "$PROMPT_FILE"
 ```
 
-### Template B: Implementation Dispatch (Manager -> Tier 1)
+### Template B: Implementation Dispatch (Manager -> Layer 1)
 
 ```bash
 PROMPT_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 cat > "$PROMPT_FILE" <<'IMPL_EOF'
-You are Tier 1 Employee in sa manager-employee mode.
+You are Layer 1 Employee in sa manager-employee mode.
 
 Read and follow AGENTS.md and CLAUDE.md.
 
@@ -294,7 +294,7 @@ OUTPUT FORMAT:
 
 SCOPE:
 - You choose HOW to implement.
-- You may spawn Tier 2 workers.
+- You may spawn Layer 2 workers.
 - You must perform appropriate review before reporting success.
 
 DONE WHEN:
@@ -348,7 +348,7 @@ csa run < "$PROMPT_FILE"
 
 ## Forbidden Behaviors (Enforced)
 
-### Tier 0 Manager
+### Layer 0 Manager
 
 - No code reading
 - No code editing
@@ -358,16 +358,16 @@ csa run < "$PROMPT_FILE"
 - No artifact content inspection
 - No self-verification by technical investigation
 
-### Tier 1 Senior Employee
+### Layer 1 Senior Employee
 
 - No under-specified reports (must be self-contained)
 - No hiding risks in vague wording
 - No success status without explicit validation outcome
 
-### Tier 2 Worker
+### Layer 2 Worker
 
 - No unilateral scope expansion
-- No irreversible architectural changes without Tier 1 approval
+- No irreversible architectural changes without Layer 1 approval
 
 ## Success Criteria for This Skill
 

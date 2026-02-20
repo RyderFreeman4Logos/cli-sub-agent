@@ -22,16 +22,16 @@ debating stale comments without staleness check.
 
 ## Dispatcher Model Note
 
-This pattern follows a 3-tier dispatcher architecture:
-- **Tier 0 (Orchestrator)**: The main agent dispatches steps -- never touches code directly.
-- **Tier 1 (Executors)**: CSA sub-agents and Task tool agents perform actual work.
-- **Tier 2 (Sub-sub-agents)**: Spawned by Tier 1 for specific sub-tasks (invisible to Tier 0).
+This pattern follows a 3-layer dispatcher architecture:
+- **Layer 0 (Orchestrator)**: The main agent dispatches steps -- never touches code directly.
+- **Layer 1 (Executors)**: CSA sub-agents and Task tool agents perform actual work.
+- **Layer 2 (Sub-sub-agents)**: Spawned by Layer 1 for specific sub-tasks (invisible to Layer 0).
 
-Each step below is annotated with its execution tier.
+Each step below is annotated with its execution layer.
 
 ## Step 1: Commit Changes
 
-> **Tier**: 0 (Orchestrator) -- lightweight shell command, no code reading.
+> **Layer**: 0 (Orchestrator) -- lightweight shell command, no code reading.
 
 Tool: bash
 
@@ -44,8 +44,8 @@ WORKFLOW_BRANCH="$(git branch --show-current)"
 
 ## Step 2: Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)
 
-> **Tier**: 1 (CSA executor) -- Tier 0 dispatches `csa review`, which spawns
-> Tier 2 reviewer model(s) internally. Orchestrator waits for result.
+> **Layer**: 1 (CSA executor) -- Layer 0 dispatches `csa review`, which spawns
+> Layer 2 reviewer model(s) internally. Orchestrator waits for result.
 
 Tool: bash
 OnFail: abort
@@ -61,7 +61,7 @@ csa review --branch main
 
 ## Step 3: Fix Local Review Issues
 
-> **Tier**: 1 (CSA executor) -- Tier 0 dispatches fix task to CSA. CSA reads
+> **Layer**: 1 (CSA executor) -- Layer 0 dispatches fix task to CSA. CSA reads
 > code, applies fixes, and returns results. Orchestrator reviews outcome.
 
 Tool: csa
@@ -74,7 +74,7 @@ Fix issues found by local review. Loop until clean (max 3 rounds).
 
 ## Step 4: Push and Create PR
 
-> **Tier**: 0 (Orchestrator) -- shell commands only, no code reading/writing.
+> **Layer**: 0 (Orchestrator) -- shell commands only, no code reading/writing.
 
 Tool: bash
 OnFail: abort
@@ -87,7 +87,7 @@ PR_NUM=$(gh pr view --json number -q '.number')
 
 ## Step 4a: Check Cloud Bot Configuration
 
-> **Tier**: 0 (Orchestrator) -- config check, lightweight.
+> **Layer**: 0 (Orchestrator) -- config check, lightweight.
 
 Tool: bash
 
@@ -106,7 +106,7 @@ If `CLOUD_BOT` is `false`:
 
 ## Step 5: Trigger Cloud Bot Review and Poll for Response
 
-> **Tier**: 0 (Orchestrator) -- trigger + polling loop, no code analysis.
+> **Layer**: 0 (Orchestrator) -- trigger + polling loop, no code analysis.
 > This step is SELF-CONTAINED: trigger and poll are atomic. The orchestrator
 > MUST NOT split these into separate manual actions.
 
@@ -155,7 +155,7 @@ fi
 
 ## Step 6a: Merge Without Bot
 
-> **Tier**: 0 (Orchestrator) -- merge command, no code analysis.
+> **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
 
 Tool: bash
 
@@ -173,7 +173,7 @@ git checkout main && git pull origin main
 
 ## Step 7: Evaluate Each Bot Comment
 
-> **Tier**: 1 (claude-code / Task tool) -- Tier 0 dispatches comment
+> **Layer**: 1 (claude-code / Task tool) -- Layer 0 dispatches comment
 > classification to a sub-agent. The sub-agent reads PR comments and code
 > context to classify each one. Orchestrator uses classifications to route
 > to Step 8 (debate) or Step 9 (fix).
@@ -215,8 +215,8 @@ arbitration step, preventing wasted cycles debating already-fixed issues.
 
 ## Step 8: Arbitrate via Debate
 
-> **Tier**: 1 (CSA debate) -- Tier 0 dispatches to `csa debate`, which
-> internally spawns Tier 2 independent models for adversarial evaluation.
+> **Layer**: 1 (CSA debate) -- Layer 0 dispatches to `csa debate`, which
+> internally spawns Layer 2 independent models for adversarial evaluation.
 > Orchestrator receives the verdict and posts audit trail to PR.
 
 Tool: csa
@@ -238,7 +238,7 @@ csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
 
 ## Step 9: Fix Real Issue
 
-> **Tier**: 1 (CSA executor) -- Tier 0 dispatches fix to CSA sub-agent.
+> **Layer**: 1 (CSA executor) -- Layer 0 dispatches fix to CSA sub-agent.
 > CSA reads code, applies fix, commits. Orchestrator verifies result.
 
 Tool: csa
@@ -253,7 +253,7 @@ Fix the real issue (non-stale, non-false-positive). Commit the fix.
 
 ## Step 10: Push Fixes and Re-trigger
 
-> **Tier**: 0 (Orchestrator) -- shell commands to push and re-trigger bot.
+> **Layer**: 0 (Orchestrator) -- shell commands to push and re-trigger bot.
 
 Tool: bash
 
@@ -283,7 +283,7 @@ No issues found by bot. Proceed to merge.
 
 ## Step 11: Clean Resubmission (if needed)
 
-> **Tier**: 0 (Orchestrator) -- git branch management, no code reading.
+> **Layer**: 0 (Orchestrator) -- git branch management, no code reading.
 
 Tool: bash
 
@@ -298,7 +298,7 @@ gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "
 
 ## Step 12: Final Merge
 
-> **Tier**: 0 (Orchestrator) -- final merge command, no code analysis.
+> **Layer**: 0 (Orchestrator) -- final merge command, no code analysis.
 
 Tool: bash
 OnFail: abort
@@ -314,7 +314,7 @@ git checkout main && git pull origin main
 
 ## Step 12b: Final Merge (Direct)
 
-> **Tier**: 0 (Orchestrator) -- direct merge, no code analysis needed.
+> **Layer**: 0 (Orchestrator) -- direct merge, no code analysis needed.
 
 Tool: bash
 OnFail: abort
