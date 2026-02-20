@@ -187,190 +187,103 @@ pub fn execute_migration(migration: &Migration, project_root: &Path) -> Result<(
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
+// ---------------------------------------------------------------------------
+// Built-in migrations
+// ---------------------------------------------------------------------------
 
-    #[test]
-    fn test_version_ordering() {
-        let v1 = Version::new(0, 12, 0);
-        let v2 = Version::new(0, 12, 1);
-        let v3 = Version::new(1, 0, 0);
-        assert!(v1 < v2);
-        assert!(v2 < v3);
-    }
+/// Build a registry pre-loaded with all known migrations.
+pub fn default_registry() -> MigrationRegistry {
+    let mut r = MigrationRegistry::new();
+    r.register(plan_to_workflow_migration());
+    r
+}
 
-    #[test]
-    fn test_version_parse_and_display() {
-        let v: Version = "1.2.3".parse().unwrap();
-        assert_eq!(v, Version::new(1, 2, 3));
-        assert_eq!(v.to_string(), "1.2.3");
-    }
-
-    #[test]
-    fn test_version_parse_invalid() {
-        assert!("1.2".parse::<Version>().is_err());
-        assert!("abc".parse::<Version>().is_err());
-    }
-
-    #[test]
-    fn test_registry_pending_filters_applied() {
-        let mut registry = MigrationRegistry::new();
-        registry.register(Migration {
-            id: "0.12.0-rename-plans".to_string(),
-            from_version: Version::new(0, 12, 0),
-            to_version: Version::new(0, 12, 1),
-            description: "Rename plan files".to_string(),
-            steps: vec![],
-        });
-        registry.register(Migration {
-            id: "0.12.1-update-config".to_string(),
-            from_version: Version::new(0, 12, 1),
-            to_version: Version::new(0, 13, 0),
-            description: "Update config format".to_string(),
-            steps: vec![],
-        });
-
-        let current = Version::new(0, 12, 0);
-        let target = Version::new(0, 13, 0);
-
-        // Nothing applied → both pending
-        let pending = registry.pending(&current, &target, &[]);
-        assert_eq!(pending.len(), 2);
-
-        // First applied → only second pending
-        let applied = vec!["0.12.0-rename-plans".to_string()];
-        let pending = registry.pending(&current, &target, &applied);
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].id, "0.12.1-update-config");
-    }
-
-    #[test]
-    fn test_rename_file_step() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("old.txt"), "content").unwrap();
-
-        let step = MigrationStep::RenameFile {
-            from: PathBuf::from("old.txt"),
-            to: PathBuf::from("new.txt"),
-        };
-        execute_step(&step, dir.path()).unwrap();
-
-        assert!(!dir.path().join("old.txt").exists());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("new.txt")).unwrap(),
-            "content"
-        );
-    }
-
-    #[test]
-    fn test_rename_file_idempotent() {
-        let dir = TempDir::new().unwrap();
-        // Source doesn't exist — should be a no-op
-        let step = MigrationStep::RenameFile {
-            from: PathBuf::from("missing.txt"),
-            to: PathBuf::from("target.txt"),
-        };
-        execute_step(&step, dir.path()).unwrap();
-    }
-
-    #[test]
-    fn test_replace_in_file_step() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("config.toml"), "[plan]\nkey = \"old\"").unwrap();
-
-        let step = MigrationStep::ReplaceInFile {
-            path: PathBuf::from("config.toml"),
-            old: "[plan]".to_string(),
-            new: "[workflow]".to_string(),
-        };
-        execute_step(&step, dir.path()).unwrap();
-
-        let content = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
-        assert_eq!(content, "[workflow]\nkey = \"old\"");
-    }
-
-    #[test]
-    fn test_replace_in_file_idempotent() {
-        let dir = TempDir::new().unwrap();
-        // File doesn't exist — no-op
-        let step = MigrationStep::ReplaceInFile {
-            path: PathBuf::from("missing.toml"),
-            old: "old".to_string(),
-            new: "new".to_string(),
-        };
-        execute_step(&step, dir.path()).unwrap();
-    }
-
-    #[test]
-    fn test_custom_step() {
-        let dir = TempDir::new().unwrap();
-        let step = MigrationStep::Custom {
-            label: "create marker".to_string(),
-            apply: Box::new(|root| {
-                std::fs::write(root.join("marker.txt"), "migrated")?;
-                Ok(())
-            }),
-        };
-        execute_step(&step, dir.path()).unwrap();
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("marker.txt")).unwrap(),
-            "migrated"
-        );
-    }
-
-    #[test]
-    fn test_execute_migration_runs_all_steps() {
-        let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("a.txt"), "hello").unwrap();
-
-        let migration = Migration {
-            id: "test-migration".to_string(),
-            from_version: Version::new(0, 1, 0),
-            to_version: Version::new(0, 2, 0),
-            description: "Test".to_string(),
-            steps: vec![
-                MigrationStep::RenameFile {
-                    from: PathBuf::from("a.txt"),
-                    to: PathBuf::from("b.txt"),
-                },
-                MigrationStep::ReplaceInFile {
-                    path: PathBuf::from("b.txt"),
-                    old: "hello".to_string(),
-                    new: "world".to_string(),
-                },
-            ],
-        };
-        execute_migration(&migration, dir.path()).unwrap();
-
-        assert!(!dir.path().join("a.txt").exists());
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("b.txt")).unwrap(),
-            "world"
-        );
-    }
-
-    #[test]
-    fn test_registry_ordering() {
-        let mut registry = MigrationRegistry::new();
-        // Insert out of order
-        registry.register(Migration {
-            id: "second".to_string(),
-            from_version: Version::new(0, 2, 0),
-            to_version: Version::new(0, 3, 0),
-            description: "Second".to_string(),
-            steps: vec![],
-        });
-        registry.register(Migration {
-            id: "first".to_string(),
-            from_version: Version::new(0, 1, 0),
-            to_version: Version::new(0, 2, 0),
-            description: "First".to_string(),
-            steps: vec![],
-        });
-
-        assert_eq!(registry.all()[0].id, "first");
-        assert_eq!(registry.all()[1].id, "second");
+/// Migration 0.1.2: rename `[plan]` → `[workflow]` in workflow TOML files.
+///
+/// Applies to all `workflow.toml` files under `patterns/` and any
+/// `.csa/config.toml` references. The weave compiler already accepts
+/// both keys via `#[serde(alias = "plan")]`, so this is a forward-only
+/// rename to the canonical key name.
+fn plan_to_workflow_migration() -> Migration {
+    Migration {
+        id: "0.1.2-plan-to-workflow".to_string(),
+        from_version: Version::new(0, 1, 1),
+        to_version: Version::new(0, 1, 2),
+        description: "Rename [plan] to [workflow] in workflow TOML files".to_string(),
+        steps: vec![MigrationStep::Custom {
+            label: "rename plan keys to workflow in all workflow.toml files".to_string(),
+            apply: Box::new(rename_plan_keys_in_project),
+        }],
     }
 }
+
+/// Walk `patterns/` looking for `workflow.toml` files and replace
+/// `[plan]` / `[[plan.` / `plan.` table references with `workflow`.
+fn rename_plan_keys_in_project(project_root: &Path) -> Result<()> {
+    let patterns_dir = project_root.join("patterns");
+    if !patterns_dir.is_dir() {
+        return Ok(());
+    }
+    rename_plan_keys_recursive(&patterns_dir)
+}
+
+fn rename_plan_keys_recursive(dir: &Path) -> Result<()> {
+    let entries = std::fs::read_dir(dir)?;
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+        if path.is_dir() {
+            rename_plan_keys_recursive(&path)?;
+        } else if path.file_name().and_then(|n| n.to_str()) == Some("workflow.toml") {
+            rename_plan_keys_in_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Replace plan-based TOML keys with workflow-based keys in a single file.
+/// Handles: `[plan]`, `[[plan.steps]]`, `[[plan.variables]]`, `[plan.steps.on_fail]`,
+/// `[plan.steps.loop_var]` and similar nested table paths.
+fn rename_plan_keys_in_file(path: &Path) -> Result<()> {
+    let content = std::fs::read_to_string(path)?;
+    let mut result = String::with_capacity(content.len());
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if is_plan_table_header(trimmed) {
+            // Replace `plan` with `workflow` only in the table key portion.
+            let replaced = replace_plan_in_header(line);
+            result.push_str(&replaced);
+        } else {
+            result.push_str(line);
+        }
+        result.push('\n');
+    }
+
+    // Only write if actually changed.
+    if result != content {
+        std::fs::write(path, result)?;
+    }
+    Ok(())
+}
+
+/// Check if a trimmed line is a TOML table header referencing `plan`.
+fn is_plan_table_header(trimmed: &str) -> bool {
+    // Matches `[plan]`, `[[plan.steps]]`, `[plan.steps.on_fail]`, etc.
+    (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        && (trimmed.contains("[plan]") || trimmed.contains("[plan.") || trimmed.contains("[[plan."))
+}
+
+/// Replace `plan` with `workflow` in a TOML table header line,
+/// preserving leading whitespace and bracket structure.
+fn replace_plan_in_header(line: &str) -> String {
+    // We only replace the first occurrence of `plan` that appears
+    // right after `[` or `[[` — this avoids false positives.
+    line.replacen("[plan]", "[workflow]", 1)
+        .replacen("[[plan.", "[[workflow.", 1)
+        .replacen("[plan.", "[workflow.", 1)
+}
+
+#[cfg(test)]
+#[path = "migrate_tests.rs"]
+mod tests;

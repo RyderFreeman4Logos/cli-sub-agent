@@ -8,8 +8,7 @@ pub fn handle_migrate(dry_run: bool, status: bool) -> Result<()> {
     let csa_version = env!("CARGO_PKG_VERSION");
     let weave_version = env!("CARGO_PKG_VERSION");
 
-    let registry = csa_config::MigrationRegistry::new();
-    // TODO: register real migrations here as they are defined.
+    let registry = csa_config::default_registry();
 
     if status {
         return print_status(&project_dir, csa_version, &registry);
@@ -109,8 +108,6 @@ fn run_migrations(
     lock.versions.weave = weave_version.to_string();
     lock.save(project_dir)?;
 
-    eprintln!(
-        "All migrations applied. weave.lock updated to {csa_version}."
-    );
+    eprintln!("All migrations applied. weave.lock updated to {csa_version}.");
     Ok(())
 }

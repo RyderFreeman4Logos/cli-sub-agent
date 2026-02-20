@@ -466,23 +466,28 @@ fn compile_include(path: &str, ctx: &mut CompileCtx) {
 // TOML serialization wrapper
 // ---------------------------------------------------------------------------
 
-/// Wrapper for TOML serialization of the execution plan.
+/// Wrapper for TOML serialization — uses `[workflow]` as primary key,
+/// with `[plan]` accepted as a legacy alias for backward compatibility.
 #[derive(Serialize, Deserialize)]
-struct PlanWrapper {
-    plan: ExecutionPlan,
+struct WorkflowWrapper {
+    #[serde(alias = "plan")]
+    workflow: ExecutionPlan,
 }
 
-/// Serialize an execution plan to TOML.
+/// Serialize an execution plan to TOML (uses `[workflow]` key).
 pub fn plan_to_toml(plan: &ExecutionPlan) -> Result<String> {
-    let wrapper = PlanWrapper { plan: plan.clone() };
+    let wrapper = WorkflowWrapper {
+        workflow: plan.clone(),
+    };
     toml::to_string_pretty(&wrapper).map_err(|e| anyhow::anyhow!("TOML serialization failed: {e}"))
 }
 
 /// Deserialize an execution plan from TOML.
+/// Accepts both `[workflow]` (current) and `[plan]` (legacy) as the top-level key.
 pub fn plan_from_toml(toml_str: &str) -> Result<ExecutionPlan> {
-    let wrapper: PlanWrapper = toml::from_str(toml_str)
+    let wrapper: WorkflowWrapper = toml::from_str(toml_str)
         .map_err(|e| anyhow::anyhow!("TOML deserialization failed: {e}"))?;
-    Ok(wrapper.plan)
+    Ok(wrapper.workflow)
 }
 
 #[cfg(test)]

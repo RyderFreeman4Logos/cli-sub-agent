@@ -1,23 +1,23 @@
-[plan]
+[workflow]
 name = "ai-reviewed-commit"
 description = "Pre-commit code review loop: stage → size check → csa review → fix → re-review → commit"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "COMMIT_MSG"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FILES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "FIXED_FILES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REVIEW_HAS_ISSUES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SELF_AUTHORED"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Stage Changes"
 tool = "bash"
@@ -27,7 +27,7 @@ git add ${FILES}
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Size Check"
 tool = "bash"
@@ -39,7 +39,7 @@ git diff --stat --staged
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Authorship-Aware Review Strategy"
 prompt = """
@@ -48,7 +48,7 @@ Determine who authored the staged code:
 - Other tool/human authored → use csa review --diff"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Step 4a: Run Debate Review"
 tool = "bash"
@@ -59,7 +59,7 @@ csa debate "Review my staged changes for correctness, security, and test gaps. R
 on_fail = "abort"
 condition = "${SELF_AUTHORED}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Step 4b: Run CSA Review"
 tool = "bash"
@@ -70,7 +70,7 @@ csa review --diff
 on_fail = "abort"
 condition = "!(${SELF_AUTHORED})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Dispatch Fix Sub-Agent"
 tool = "claude-code"
@@ -80,10 +80,10 @@ Preserve original code intent. Do NOT delete code to silence warnings."""
 tier = "tier-2-standard"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[plan.steps.on_fail]
+[workflow.steps.on_fail]
 retry = 3
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Re-stage Fixed Files"
 tool = "bash"
@@ -94,7 +94,7 @@ git add ${FIXED_FILES}
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Re-review"
 tool = "bash"
@@ -107,7 +107,7 @@ csa review --diff
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "AGENTS.md Compliance Check"
 prompt = """
@@ -117,7 +117,7 @@ The review MUST include AGENTS.md compliance checklist:
 - Zero unchecked items before proceeding to commit"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Generate Commit Message"
 tool = "csa"
@@ -130,7 +130,7 @@ csa run "Run 'git diff --staged' and generate a Conventional Commits message"
 tier = "tier-1-quick"
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Commit"
 tool = "bash"

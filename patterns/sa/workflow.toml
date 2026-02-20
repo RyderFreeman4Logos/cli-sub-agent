@@ -1,32 +1,32 @@
-[plan]
+[workflow]
 name = "sa"
 description = "Three-tier recursive delegation: Tier 0 dispatches, Tier 1 plans/implements, Tier 2 explores/fixes"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "IMPL_FILE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "LAST_LINE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "PROMPT_FILE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "RESUME_FILE"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "REVIEW_IS_CLEAN"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "SESSION_ID"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "USER_APPROVES"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "USER_MODIFIES"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Validate Task Scope"
 prompt = """
@@ -37,7 +37,7 @@ Determine if sa is appropriate:
 - Single well-defined task → use csa run directly instead"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Prepare Planning Prompt"
 prompt = """
@@ -50,7 +50,7 @@ PROMPT_FILE=$(mktemp /tmp/sa-planning-XXXXXX.txt)
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Dispatch Planning to Tier 1"
 tool = "bash"
@@ -66,7 +66,7 @@ csa run --tool claude-code < "${PROMPT_FILE}"
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Parse Planning Result"
 tool = "bash"
@@ -89,13 +89,13 @@ TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: $
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Present TODO to User"
 prompt = "Present the TODO path to user. Let them read and approve/modify."
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Dispatch Implementation to Tier 1"
 tool = "bash"
@@ -110,7 +110,7 @@ csa run --tool claude-code --session "${SESSION_ID}" < "${IMPL_FILE}"
 on_fail = "abort"
 condition = "${USER_APPROVES}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Step 6a: Resume with Feedback"
 tool = "bash"
@@ -124,14 +124,14 @@ csa run --tool claude-code --session "${SESSION_ID}" < "${RESUME_FILE}"
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (${USER_MODIFIES})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Step 6b: Abandon Plan"
 prompt = "User rejected. Stop and ask for new direction."
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (!(${USER_MODIFIES}))"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Parse Implementation Result"
 tool = "bash"
@@ -149,7 +149,7 @@ REVIEW=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Report to User"
 prompt = """
@@ -157,14 +157,14 @@ Present implementation results: commit hash, review status,
 number of tasks completed. If HAS_ISSUES, iterate."""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 11
 title = "Auto PR"
 prompt = ""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 12
 title = "Include commit"
 tool = "weave"

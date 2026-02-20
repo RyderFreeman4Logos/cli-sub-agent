@@ -1,23 +1,23 @@
-[plan]
+[workflow]
 name = "security-audit"
 description = "Pre-commit security audit with test completeness verification and adversarial vulnerability scan"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "NEEDS_CSA_DELEGATION"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "VERDICT_IS_FAIL"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "VERDICT_IS_PASS_DEFERRED"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "base"
 
-[[plan.variables]]
+[[workflow.variables]]
 name = "dir"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 1
 title = "Discover Changed Files"
 tool = "bash"
@@ -29,7 +29,7 @@ git diff --cached --name-only || git diff HEAD --name-only
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 2
 title = "Assess Module Size"
 tool = "bash"
@@ -42,7 +42,7 @@ git diff --cached --name-only | xargs wc -l 2>/dev/null | tail -1
 ```"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 3
 title = "Step 3a: Delegate Audit to CSA"
 tool = "csa"
@@ -59,7 +59,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${NEEDS_CSA_DELEGATION}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 4
 title = "Step 3b: Discover Tests"
 tool = "bash"
@@ -81,7 +81,7 @@ done
 on_fail = "abort"
 condition = "!(${NEEDS_CSA_DELEGATION})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 5
 title = "Phase 1 — Test Completeness Check"
 tool = "claude-code"
@@ -96,7 +96,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "!(${NEEDS_CSA_DELEGATION})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 6
 title = "Phase 2 — Security Vulnerability Scan"
 tool = "claude-code"
@@ -112,7 +112,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "!(${NEEDS_CSA_DELEGATION})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 7
 title = "Phase 3 — Code Quality Check"
 tool = "claude-code"
@@ -127,7 +127,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 condition = "!(${NEEDS_CSA_DELEGATION})"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 8
 title = "Generate Audit Report"
 tool = "claude-code"
@@ -140,14 +140,14 @@ Produce structured report with tables for each phase:
 Final verdict: PASS | PASS_DEFERRED | FAIL"""
 on_fail = "abort"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 9
 title = "Report Blocking Issues"
 prompt = "List all blocking issues. Commit is rejected until resolved."
 on_fail = "abort"
 condition = "${VERDICT_IS_FAIL}"
 
-[[plan.steps]]
+[[workflow.steps]]
 id = 10
 title = "Record Deferred Issues"
 prompt = """
