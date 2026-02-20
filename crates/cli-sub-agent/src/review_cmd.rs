@@ -3,7 +3,7 @@ use std::io::IsTerminal;
 use anyhow::{Context, Result};
 use std::path::Path;
 use tokio::task::JoinSet;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
@@ -37,7 +37,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     };
 
     // 2b. Verify review skill is available (fail fast before any execution)
-    verify_review_skill_available(&project_root)?;
+    verify_review_skill_available(&project_root, args.allow_fallback)?;
 
     // 3. Derive scope and mode from CLI args
     let scope = derive_scope(&args);
@@ -302,9 +302,10 @@ async fn execute_review(
 
 /// Verify the review pattern is installed before attempting execution.
 ///
-/// Fails fast with actionable install guidance if the pattern is missing,
-/// preventing silent degradation where the tool runs without skill context.
-fn verify_review_skill_available(project_root: &Path) -> Result<()> {
+/// By default this fails fast with actionable install guidance if the pattern
+/// is missing. When `allow_fallback` is true, it downgrades to warning and
+/// lets review continue without the structured pattern protocol.
+fn verify_review_skill_available(project_root: &Path, allow_fallback: bool) -> Result<()> {
     match crate::pattern_resolver::resolve_pattern("csa-review", project_root) {
         Ok(resolved) => {
             debug!(
@@ -317,12 +318,21 @@ fn verify_review_skill_available(project_root: &Path) -> Result<()> {
             Ok(())
         }
         Err(resolve_err) => {
+            if allow_fallback {
+                warn!(
+                    "Review pattern not found; continuing because --allow-fallback is set. \
+                     Install with `weave install RyderFreeman4Logos/cli-sub-agent` for structured review protocol."
+                );
+                return Ok(());
+            }
+
             anyhow::bail!(
                 "Review pattern not found — `csa review` requires the 'csa-review' pattern.\n\n\
                  {resolve_err}\n\n\
                  Install the review pattern with one of:\n\
-                 1) csa skill install RyderFreeman4Logos/cli-sub-agent\n\
+                 1) weave install RyderFreeman4Logos/cli-sub-agent\n\
                  2) Manually place skills/csa-review/SKILL.md (or PATTERN.md) inside .csa/patterns/csa-review/ or patterns/csa-review/\n\n\
+                 Note: `csa skill install` only installs `.claude/skills/*`; it does NOT install `.csa/patterns/*`.\n\n\
                  Without the pattern, the review tool cannot follow the structured review protocol."
             )
         }

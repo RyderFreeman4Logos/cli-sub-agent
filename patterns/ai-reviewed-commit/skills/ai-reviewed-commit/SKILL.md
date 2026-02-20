@@ -27,7 +27,7 @@ triggers:
 
 ## Purpose
 
-Ensure every commit is reviewed by an independent model before creation. Uses authorship-aware strategy: self-authored code gets adversarial debate review (`csa debate`), while other-authored code gets standard `csa review --diff`. Includes automated fix-and-retry loop (max 3 rounds), mandatory AGENTS.md compliance checking, and Conventional Commits message generation.
+Ensure every commit is reviewed by an independent model before creation. Uses authorship-aware strategy: self-authored code gets adversarial debate review (`csa debate`), while other-authored code gets standard `csa review --diff --allow-fallback`. Includes automated fix-and-retry loop (max 3 rounds), mandatory AGENTS.md compliance checking, and Conventional Commits message generation.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -49,7 +49,7 @@ csa run --skill ai-reviewed-commit "Review and commit the staged changes"
 3. **Authorship detection**: Determine if staged code is self-authored (generated in this session) or by another tool/human.
 4. **Review**:
    - Self-authored: `csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself."`
-   - Other-authored: `csa review --diff`
+   - Other-authored: `csa review --diff --allow-fallback`
 5. **Fix loop** (if issues found, max 3 rounds): Dispatch sub-agent to fix issues, re-stage, re-review. Preserve original code intent -- do NOT delete code to silence warnings.
 6. **AGENTS.md compliance**: Discover AGENTS.md chain for each staged file. Check every applicable rule. Zero unchecked items before proceeding.
 7. **Generate commit message**: `csa run "Run 'git diff --staged' and generate a Conventional Commits message"` (tier-1).

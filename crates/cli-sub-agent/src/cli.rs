@@ -318,6 +318,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub no_stream_stdout: bool,
 
+    /// Continue without csa-review pattern (warn instead of hard error)
+    #[arg(long)]
+    pub allow_fallback: bool,
+
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,

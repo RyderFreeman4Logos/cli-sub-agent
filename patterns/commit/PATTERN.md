@@ -122,7 +122,7 @@ Tier: tier-2-standard
 
 ## INCLUDE ai-reviewed-commit
 
-Run csa review --diff (or csa debate if self-authored).
+Run csa review --diff --allow-fallback (or csa debate if self-authored).
 MUST include AGENTS.md compliance checklist.
 Fix-and-retry loop (max 3 rounds).
 

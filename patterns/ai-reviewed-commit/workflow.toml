@@ -45,7 +45,7 @@ title = "Authorship-Aware Review Strategy"
 prompt = """
 Determine who authored the staged code:
 - Self-authored (generated in this session) → use csa debate
-- Other tool/human authored → use csa review --diff"""
+- Other tool/human authored → use csa review --diff --allow-fallback"""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -65,7 +65,7 @@ title = "Step 4b: Run CSA Review"
 tool = "bash"
 prompt = """
 ```bash
-csa review --diff
+csa review --diff --allow-fallback
 ```"""
 on_fail = "abort"
 condition = "!(${SELF_AUTHORED})"
@@ -102,7 +102,7 @@ prompt = """
 Loop back to review. Maximum 3 review-fix cycles.
 
 ```bash
-csa review --diff
+csa review --diff --allow-fallback
 ```"""
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
