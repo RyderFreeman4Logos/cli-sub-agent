@@ -222,8 +222,9 @@ install-hooks:
 
 # Install latest local build to /usr/local/bin (requires cargo-auditable).
 install:
-    CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/cli-sub-agent
-    CARGO_HOME=/usr/local cargo auditable install --all-features --path crates/weave
+    cargo build --release -p cli-sub-agent -p weave
+    install -m 755 target/release/csa /usr/local/bin/csa
+    install -m 755 target/release/weave /usr/local/bin/weave
     @echo "Verifying installation..."
     @csa --version
     @weave --version
