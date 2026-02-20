@@ -119,7 +119,11 @@ cloud_bot = false   # skip @codex cloud review, use local codex instead
 
 When `cloud_bot = false`:
 - Steps 4-9 (cloud bot trigger, poll, classify, arbitrate, fix) are **skipped entirely**
-- An additional local review (`csa review --range main...HEAD`) replaces the cloud review
+- A SHA-verified fast-path check is applied before supplementary local review:
+  compare current `git rev-parse HEAD` with HEAD SHA from latest `csa review`
+  session metadata
+- If SHA matches, supplementary review is skipped; if SHA mismatches (or metadata
+  is missing), run full `csa review --branch main`
 - The workflow proceeds directly to merge after local review passes
 - This avoids the 10-minute polling timeout and GitHub API dependency
 
@@ -132,11 +136,13 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 ### Step-by-Step
 
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
-2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): Run `csa review --branch main` covering all commits since main. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds).
+2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA). If matched, skip review; if mismatched/missing, run full `csa review --branch main`. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds).
 3. **Push and create PR**: `git push -u origin`, `gh pr create --base main`.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
-    If `false` → skip Steps 4-9. Run `csa review --range main...HEAD` for supplementary
-    local coverage, then jump to Step 11 (merge).
+    If `false` → skip Steps 4-9. Apply the same SHA-verified fast-path before
+    supplementary review. If SHA matches, skip review and jump to Step 11; if
+    SHA mismatches/missing (HEAD drift fallback), run full `csa review --branch main`,
+    then jump to Step 11 (merge).
 4. **Trigger cloud bot and poll** (SELF-CONTAINED -- trigger + poll are atomic):
    - Trigger `@codex review` (idempotent: skip if already commented on this HEAD).
    - Poll for bot response (max 10 minutes, 30s interval).
@@ -167,12 +173,16 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 
 ## Done Criteria
 
-1. Local pre-PR review (`csa review --branch main`) completed synchronously (not backgrounded).
-2. All local review issues fixed before PR creation.
+1. Step 2 completed synchronously (not backgrounded) via one of:
+   - full path: `csa review --branch main`, or
+   - fast-path: current HEAD SHA matches latest reviewed session HEAD SHA.
+2. Any local review issues are fixed before PR creation.
 3. PR created.
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
 5. **If cloud_bot enabled (default)**: cloud bot triggered, response received or timeout handled.
-6. **If cloud_bot disabled**: supplementary local review (`csa review --range main...HEAD`) run instead.
+6. **If cloud_bot disabled**: supplementary check completed via one of:
+   - fast-path: SHA match, review skipped, or
+   - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch main` executed.
 7. Every bot comment classified (A/B/C) and actioned appropriately (cloud_bot enabled only).
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).

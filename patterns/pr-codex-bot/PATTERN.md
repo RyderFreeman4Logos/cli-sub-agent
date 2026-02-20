@@ -18,7 +18,8 @@ already-fixed issues.
 
 FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration,
 running Step 2 in background, creating PR without Step 2 completion,
-debating stale comments without staleness check.
+debating stale comments without staleness check, trusting `reviewed=true`
+without SHA verification.
 
 ## Dispatcher Model Note
 
@@ -53,8 +54,20 @@ OnFail: abort
 Run cumulative local review covering all commits since main.
 This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 
+> Fast-path (SHA-verified): compare `git rev-parse HEAD` with the HEAD SHA
+> stored in the latest `csa review` session metadata. If they match, skip
+> Step 2 review. If they do not match (or metadata is missing), run full
+> `csa review --branch main`. Any HEAD drift (including amend) auto-invalidates
+> the fast-path.
+
 ```bash
-csa review --branch main
+CURRENT_HEAD="$(git rev-parse HEAD)"
+REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
+  echo "Fast-path: local review already covers current HEAD."
+else
+  csa review --branch main
+fi
 ```
 
 ## IF ${LOCAL_REVIEW_HAS_ISSUES}
@@ -99,7 +112,9 @@ CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 
 If `CLOUD_BOT` is `false`:
 - Skip Steps 5 through 10 (cloud bot trigger, poll, classify, arbitrate, fix).
-- Run supplementary local review: `csa review --range main...HEAD`.
+- Reuse the same SHA-verified fast-path before supplementary review:
+  - If current `HEAD` matches latest reviewed session HEAD SHA → skip review.
+  - Otherwise run full `csa review --branch main`.
 - Jump directly to Step 12b (Final Merge — Direct).
 
 ## IF ${CLOUD_BOT} != "false"
