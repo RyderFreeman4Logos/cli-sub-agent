@@ -122,26 +122,29 @@ on_fail = "abort"
 id = 7
 title = "Security Audit"
 tool = "csa"
-prompt = ""
+prompt = """
+Perform a three-phase security audit on the staged changes.
+Run 'git diff --staged' yourself to see all changes.
+
+Phase 1 — Test Completeness: For each public function in changed files,
+verify tests exist for normal path, edge cases, and error paths.
+Phase 2 — Vulnerability Scan: Check for injection, hardcoded secrets,
+unsafe patterns, missing input validation, panic-prone code on untrusted input.
+Phase 3 — Code Quality: No debug code, proper error handling, no commented-out code.
+
+Output: structured report with PASS/FAIL per phase. If any phase FAIL, list specific issues."""
 tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 8
-title = "Include security-audit"
-tool = "weave"
-prompt = "security-audit"
-on_fail = "abort"
-
-[[workflow.steps]]
-id = 9
 title = "Step 7a: Fix Audit Issues"
 prompt = "Fix blocking issues and re-run from Step 2."
 on_fail = "abort"
 condition = "${AUDIT_FAIL}"
 
 [[workflow.steps]]
-id = 10
+id = 9
 title = "Step 7b: Record Deferred Issues"
 prompt = """
 Record deferred issues (other modules) via TaskCreate for
@@ -150,22 +153,23 @@ on_fail = "abort"
 condition = "${AUDIT_PASS_DEFERRED}"
 
 [[workflow.steps]]
-id = 11
+id = 10
 title = "Pre-Commit Review"
 tool = "csa"
-prompt = ""
+prompt = """
+Review all staged changes for correctness, security, and code quality.
+Run 'git diff --staged' yourself to see the full patch.
+
+Check each modified file against its AGENTS.md rules (discover the chain from
+repository root to the file's directory). Violations of MUST/CRITICAL rules are P1.
+
+Output: structured review with issues categorized as P0 (blocking), P1 (must fix),
+P2 (should fix). Set REVIEW_HAS_ISSUES if any P0/P1 issues found."""
 tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 12
-title = "Include ai-reviewed-commit"
-tool = "weave"
-prompt = "ai-reviewed-commit"
-on_fail = "abort"
-
-[[workflow.steps]]
-id = 13
+id = 11
 title = "Fix Review Issues"
 tool = "csa"
 prompt = """
@@ -181,7 +185,7 @@ condition = "${REVIEW_HAS_ISSUES}"
 retry = 3
 
 [[workflow.steps]]
-id = 14
+id = 12
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
@@ -191,7 +195,7 @@ tier = "tier-1-quick"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 15
+id = 13
 title = "Commit"
 tool = "bash"
 prompt = """
@@ -201,12 +205,12 @@ git commit -m "${COMMIT_MSG}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 16
+id = 14
 title = "Auto PR"
 tool = "bash"
 prompt = """
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 12-14 are ATOMIC — do not stop after PR creation.
+Steps 14-15 are ATOMIC — do not stop after PR creation.
 
 ```bash
 git push -u origin "${BRANCH}"
@@ -216,25 +220,24 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 17
+id = 15
 title = "Invoke PR Codex Bot"
-prompt = ""
+prompt = """
+Trigger the pr-codex-bot workflow on the newly created PR:
+1. Trigger @codex review on the PR
+2. Poll for bot response (max 10 min timeout)
+3. Classify and action each bot comment
+4. Arbitrate false positives via debate
+5. Fix real issues and re-trigger
+6. Merge when all issues resolved"""
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 18
-title = "Include pr-codex-bot"
-tool = "weave"
-prompt = "pr-codex-bot"
-on_fail = "abort"
-condition = "${IS_MILESTONE}"
-
-[[workflow.steps]]
-id = 19
+id = 16
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-11)."""
+Each fix goes through full commit workflow (Steps 1-10)."""
 on_fail = "abort"
 condition = "${HAS_DEFERRED_ISSUES}"

@@ -153,7 +153,14 @@ condition = "${BOT_UNAVAILABLE}"
 id = 8
 title = "Evaluate Each Bot Comment"
 tool = "claude-code"
-prompt = ""
+prompt = """
+Classify each bot review comment on PR #${PR_NUM} as:
+- Category A (already fixed): the issue was addressed in subsequent commits
+- Category B (suspected false positive): the bot misunderstood the code or context
+- Category C (real issue): a genuine problem that needs fixing
+
+For each comment, read the referenced code at the current HEAD and compare with
+the bot's suggestion. Output a classification table with reasoning."""
 tier = "tier-3-complex"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
@@ -186,7 +193,17 @@ collection = "${BOT_COMMENTS}"
 id = 10
 title = "Arbitrate via Debate"
 tool = "csa"
-prompt = ""
+prompt = """
+Evaluate this bot review comment independently to determine if it is a
+false positive or a real issue.
+
+Read the referenced code at the current HEAD. Consider:
+1. Does the code actually have the problem the bot describes?
+2. Is the bot's suggestion appropriate for this context?
+3. Are there project-specific patterns that justify the current code?
+
+Output: CONFIRMED (real issue) or DISMISSED (false positive) with reasoning.
+Post the full audit trail as a PR comment."""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
@@ -197,18 +214,6 @@ collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
 id = 11
-title = "Include debate"
-tool = "weave"
-prompt = "debate"
-on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
-
-[workflow.steps.loop_var]
-variable = "comment"
-collection = "${BOT_COMMENTS}"
-
-[[workflow.steps]]
-id = 12
 title = "Fix Real Issue"
 tool = "csa"
 prompt = "Fix the real issue. Commit the fix."
@@ -223,7 +228,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
-id = 13
+id = 12
 title = "Push Fixes and Re-trigger"
 tool = "bash"
 prompt = """
@@ -232,19 +237,19 @@ git push origin "${WORKFLOW_BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 
-Loop back to Step 6 (poll). Max 10 total iterations."""
+Loop back to Step 5 (poll). Max 10 total iterations."""
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[workflow.steps]]
-id = 14
+id = 13
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to merge."
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 15
+id = 14
 title = "Clean Resubmission (if needed)"
 tool = "bash"
 prompt = """
@@ -260,7 +265,7 @@ on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[workflow.steps]]
-id = 16
+id = 15
 title = "Final Merge"
 tool = "bash"
 prompt = """
@@ -274,7 +279,7 @@ on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[workflow.steps]]
-id = 17
+id = 16
 title = "Step 12b: Final Merge (Direct)"
 tool = "bash"
 prompt = """

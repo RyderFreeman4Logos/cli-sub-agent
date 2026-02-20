@@ -160,20 +160,15 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 11
 title = "Auto PR"
-prompt = ""
+prompt = """
+Push the feature branch to origin and create a PR targeting main.
+Run the full commit workflow: format, lint, test, security audit, review, commit.
+Then create the PR via gh CLI."""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 
 [[workflow.steps]]
 id = 12
-title = "Include commit"
-tool = "weave"
-prompt = "commit"
-on_fail = "abort"
-condition = "${REVIEW_IS_CLEAN}"
-
-[[workflow.steps]]
-id = 13
 title = "Invoke pr-codex-bot (MANDATORY)"
 tool = "skill"
 prompt = """
