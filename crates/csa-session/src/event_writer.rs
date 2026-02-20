@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -68,7 +68,17 @@ impl EventWriter {
         };
 
         let (writer, write_failures) = match open_transcript_file(output_path) {
-            Ok(file) => (Some(BufWriter::new(file)), 0),
+            Ok(mut file) => match truncate_partial_trailing_line(output_path, &mut file) {
+                Ok(()) => (Some(BufWriter::new(file)), 0),
+                Err(err) => {
+                    warn!(
+                        path = %output_path.display(),
+                        error = %err,
+                        "failed to truncate partial trailing ACP transcript line"
+                    );
+                    (None, 1)
+                }
+            },
             Err(err) => {
                 warn!(
                     path = %output_path.display(),
@@ -213,13 +223,43 @@ fn open_transcript_file(path: &Path) -> std::io::Result<File> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let file = OpenOptions::new().create(true).append(true).open(path)?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .read(true)
+        .open(path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
     Ok(file)
+}
+
+fn truncate_partial_trailing_line(path: &Path, file: &mut File) -> std::io::Result<()> {
+    let file_len = file.metadata()?.len();
+    if file_len == 0 {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::End(-1))?;
+    let mut last_byte = [0_u8; 1];
+    file.read_exact(&mut last_byte)?;
+
+    if last_byte[0] == b'\n' {
+        file.seek(SeekFrom::End(0))?;
+        return Ok(());
+    }
+
+    let bytes = std::fs::read(path)?;
+    let truncate_len = bytes
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or(0_u64, |pos| pos as u64 + 1);
+
+    file.set_len(truncate_len)?;
+    file.seek(SeekFrom::End(0))?;
+    Ok(())
 }
 
 fn load_resume_state(path: &Path) -> std::io::Result<ResumeState> {
@@ -383,6 +423,55 @@ mod tests {
             })
             .collect();
         assert_eq!(valid_seqs, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn test_writer_truncates_partial_trailing_line_before_appending() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("output").join("acp-events.jsonl");
+
+        {
+            let mut first = EventWriter::new(&path);
+            first.append(&SessionEvent::AgentMessage("hello".to_string()));
+            first.append(&SessionEvent::AgentThought("thinking".to_string()));
+            first.flush();
+        }
+
+        {
+            let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+            file.write_all(br#"{"v":1,"seq":999,"marker":"PARTIAL-TAIL-DO-NOT-KEEP""#)
+                .unwrap();
+        }
+
+        let mut resumed = EventWriter::new(&path);
+        resumed.append(&SessionEvent::PlanUpdate(
+            "{\"step\":\"resume-after-partial-tail\"}".to_string(),
+        ));
+        resumed.flush();
+
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.last(), Some(&b'\n'));
+
+        let content = String::from_utf8(bytes).unwrap();
+        assert!(!content.contains("PARTIAL-TAIL-DO-NOT-KEEP"));
+
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3);
+
+        let seqs: Vec<u64> = lines
+            .iter()
+            .map(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .unwrap()
+                    .get("seq")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(seqs, vec![0, 1, 2]);
+
+        let stats = resumed.stats();
+        assert_eq!(stats.lines_written, 3);
     }
 
     #[test]
