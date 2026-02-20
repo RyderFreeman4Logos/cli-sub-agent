@@ -64,7 +64,7 @@ pub(crate) fn build_multi_reviewer_instruction(
     reviewer_index: usize,
     tool: ToolName,
 ) -> String {
-    let output_dir = format!(".csa/reviewers/reviewer-{reviewer_index}");
+    let output_dir = format!("$CSA_SESSION_DIR/reviewer-{reviewer_index}");
     format!(
         "{base_prompt}\n\
 You are reviewer {reviewer_index}. Emit exactly one final verdict token: {CLEAN} or {HAS_ISSUES}.\n\

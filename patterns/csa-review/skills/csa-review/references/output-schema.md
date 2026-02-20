@@ -134,4 +134,4 @@ Mandatory AGENTS.md compliance evidence:
 - [ ] <checklist items>
 ```
 
-Write both files to the current working directory (or a designated output location).
+Write both files to `$CSA_SESSION_DIR` (or a designated output location).
