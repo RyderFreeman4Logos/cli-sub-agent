@@ -127,6 +127,22 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
                 );
             }
         }
+        // Per-tool required enforcement demands a resolvable memory_max_mb.
+        if matches!(
+            tool_config.enforcement_mode,
+            Some(crate::config::EnforcementMode::Required)
+        ) {
+            let has_memory =
+                tool_config.memory_max_mb.is_some() || config.resources.memory_max_mb.is_some();
+            if !has_memory {
+                bail!(
+                    "tools.{}.enforcement_mode = \"required\" but no memory_max_mb is set \
+                     (neither tools.{0}.memory_max_mb nor resources.memory_max_mb). \
+                     Required mode needs an explicit memory limit to enforce.",
+                    tool_name
+                );
+            }
+        }
     }
     Ok(())
 }

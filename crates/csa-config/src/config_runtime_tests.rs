@@ -239,6 +239,72 @@ fn memory_swap_lightweight_gets_none() {
     );
 }
 
+// ── P1: Custom profile inherits inherent enforcement ──────────────────
+
+#[test]
+fn enforcement_memory_override_inherits_heavyweight_best_effort() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            memory_max_mb: Some(8192),
+            ..Default::default()
+        },
+    );
+    // Profile resolves to Custom, but enforcement should inherit from
+    // Heavyweight (BestEffort), not Custom's Off.
+    assert_eq!(
+        cfg.tool_resource_profile("claude-code"),
+        ToolResourceProfile::Custom,
+        "Profile should be Custom due to memory override"
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("claude-code"),
+        EnforcementMode::BestEffort,
+        "Custom profile must inherit inherent Heavyweight enforcement, not default to Off"
+    );
+}
+
+#[test]
+fn enforcement_memory_override_inherits_lightweight_off() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            memory_max_mb: Some(512),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_resource_profile("codex"),
+        ToolResourceProfile::Custom,
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("codex"),
+        EnforcementMode::Off,
+        "Custom profile on Lightweight tool should inherit Off"
+    );
+}
+
+#[test]
+fn enforcement_explicit_off_on_tool_disables_sandbox() {
+    let mut cfg = empty_config();
+    cfg.resources.enforcement_mode = Some(EnforcementMode::BestEffort);
+    cfg.tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(EnforcementMode::Off),
+            memory_max_mb: Some(8192),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("claude-code"),
+        EnforcementMode::Off,
+        "Explicit enforcement_mode = off on tool should override everything"
+    );
+}
+
 // ── Backward compatibility ─────────────────────────────────────────────
 
 #[test]

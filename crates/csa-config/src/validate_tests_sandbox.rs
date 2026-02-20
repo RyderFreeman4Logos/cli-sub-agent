@@ -164,6 +164,129 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
 }
 
 #[test]
+fn test_validate_per_tool_required_enforcement_without_memory_fails() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(crate::config::EnforcementMode::Required),
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    // Use validate_config_with_paths to bypass user-level config that may
+    // supply memory_max_mb for claude-code, masking the validation error.
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &project_path);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("enforcement_mode = \"required\" but no memory_max_mb")
+    );
+}
+
+#[test]
+fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(crate::config::EnforcementMode::Required),
+            memory_max_mb: Some(4096),
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &project_path);
+    assert!(result.is_ok(), "Required + memory_max_mb should pass");
+}
+
+#[test]
+fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
+    let dir = tempdir().unwrap();
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(crate::config::EnforcementMode::Required),
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            memory_max_mb: Some(4096),
+            ..Default::default()
+        },
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+    };
+
+    config.save(dir.path()).unwrap();
+    let project_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &project_path);
+    assert!(
+        result.is_ok(),
+        "Required + global memory_max_mb should pass"
+    );
+}
+
+#[test]
 fn test_validate_node_heap_limit_mb_too_low_in_tool() {
     let dir = tempdir().unwrap();
 

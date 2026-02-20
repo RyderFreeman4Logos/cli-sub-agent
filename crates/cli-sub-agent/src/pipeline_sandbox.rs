@@ -46,6 +46,13 @@ pub(crate) fn resolve_sandbox_options(
     }
 
     let Some(memory_max_mb) = cfg.sandbox_memory_max_mb(tool_name) else {
+        if matches!(enforcement, csa_config::EnforcementMode::Required) {
+            return SandboxResolution::RequiredButUnavailable(format!(
+                "Sandbox enforcement is required for tool '{}' but no memory_max_mb is configured. \
+                 Set resources.memory_max_mb or tools.{}.memory_max_mb in config.",
+                tool_name, tool_name
+            ));
+        }
         info!(
             tool = %tool_name,
             enforcement = ?enforcement,

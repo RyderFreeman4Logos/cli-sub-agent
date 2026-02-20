@@ -59,7 +59,13 @@ impl ProjectConfig {
 
     /// Resolve sandbox enforcement mode for a specific tool.
     ///
-    /// Priority: tool-level override > project resources > profile default.
+    /// Priority: tool-level override > project resources > inherent profile default.
+    ///
+    /// The inherent profile is the tool's *runtime-based* profile (Lightweight or
+    /// Heavyweight), NOT the resolved profile. A tool that resolves to `Custom`
+    /// because it has `memory_max_mb` overrides should still inherit the enforcement
+    /// mode of its inherent profile (e.g. Heavyweight → BestEffort) rather than
+    /// falling back to `Off`.
     pub fn tool_enforcement_mode(&self, tool: &str) -> EnforcementMode {
         // 1. Explicit per-tool override
         if let Some(mode) = self.tools.get(tool).and_then(|t| t.enforcement_mode) {
@@ -69,9 +75,8 @@ impl ProjectConfig {
         if let Some(mode) = self.resources.enforcement_mode {
             return mode;
         }
-        // 3. Profile default
-        let profile = self.tool_resource_profile(tool);
-        profile_defaults(profile).enforcement
+        // 3. Inherent profile default (runtime-based, ignoring Custom overrides)
+        profile_defaults(default_profile(tool)).enforcement
     }
 
     /// Resolve sandbox enforcement mode (defaults to `Off`).
