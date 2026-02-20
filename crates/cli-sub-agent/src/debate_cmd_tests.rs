@@ -21,6 +21,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         schema_version: 1,
         project: ProjectMeta::default(),
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: tool_map,
         review: None,
         debate: None,
@@ -309,29 +310,6 @@ fn debate_cli_rejects_zero_idle_timeout() {
     let result =
         crate::cli::Cli::try_parse_from(["csa", "debate", "--idle-timeout", "0", "question"]);
     assert!(result.is_err(), "idle_timeout=0 should be rejected");
-}
-
-#[test]
-fn debate_timeout_uses_global_default_when_cli_missing() {
-    let config = GlobalConfig::default();
-    assert_eq!(resolve_debate_timeout_seconds(None, &config), 1800);
-}
-
-#[test]
-fn debate_timeout_prefers_cli_override() {
-    let config = GlobalConfig::default();
-    assert_eq!(resolve_debate_timeout_seconds(Some(900), &config), 900);
-}
-
-#[test]
-fn debate_timeout_falls_back_when_global_config_is_zero() {
-    let mut config = GlobalConfig::default();
-    config.debate.timeout_seconds = 0;
-
-    assert_eq!(
-        resolve_debate_timeout_seconds(None, &config),
-        GlobalConfig::default().debate.timeout_seconds
-    );
 }
 
 // --- CLI parse tests for --rounds flag (#138) ---

@@ -200,6 +200,7 @@ mod tests {
             schema_version: 1,
             project: ProjectMeta::default(),
             resources: ResourcesConfig::default(),
+            acp: Default::default(),
             tools: tool_map,
             review: None,
             debate: None,

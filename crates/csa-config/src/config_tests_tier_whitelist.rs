@@ -15,6 +15,7 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,
         project: ProjectMeta::default(),
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,

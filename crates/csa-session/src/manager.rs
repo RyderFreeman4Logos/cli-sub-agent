@@ -135,6 +135,8 @@ pub(crate) fn create_session_in(
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
+
+        termination_reason: None,
     };
 
     // Write state file
@@ -320,6 +322,8 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     turn_count: 0,
                     token_budget: None,
                     sandbox_info: None,
+
+                    termination_reason: None,
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
                     tracing::warn!(

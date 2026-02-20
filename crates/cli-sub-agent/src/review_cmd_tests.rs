@@ -33,6 +33,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         schema_version: 1,
         project: ProjectMeta::default(),
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: tool_map,
         review: None,
         debate: None,

@@ -1,4 +1,4 @@
-//! Transport execution helpers for pipeline, including SIGTERM-safe interruption handling.
+//! Transport execution helpers for pipeline, including signal-safe interruption handling.
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
@@ -29,9 +29,14 @@ pub(crate) async fn execute_transport_with_signal(
             let mut sigterm =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
                     .context("Failed to register SIGTERM handler")?;
+            let mut sigint =
+                tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
+                    .context("Failed to register SIGINT handler")?;
             tokio::select! {
                 _ = sigterm.recv() => {
                     let interrupted_at = chrono::Utc::now();
+                    let mut interrupted_session = session.clone();
+                    interrupted_session.termination_reason = Some("sigterm".to_string());
                     let interrupted_result = SessionResult {
                         status: "interrupted".to_string(),
                         exit_code: 143,
@@ -44,13 +49,37 @@ pub(crate) async fn execute_transport_with_signal(
                     if let Err(e) = save_result(project_root, &session.meta_session_id, &interrupted_result) {
                         warn!("Failed to save interrupted session result: {}", e);
                     }
-                    if let Err(e) = save_session(session) {
+                    if let Err(e) = save_session(&interrupted_session) {
                         warn!("Failed to save session state after SIGTERM: {}", e);
                     }
                     if let Some(cg) = cleanup_guard {
                         cg.defuse();
                     }
                     return Err(anyhow::anyhow!("Execution interrupted by SIGTERM"));
+                }
+                _ = sigint.recv() => {
+                    let interrupted_at = chrono::Utc::now();
+                    let mut interrupted_session = session.clone();
+                    interrupted_session.termination_reason = Some("sigint".to_string());
+                    let interrupted_result = SessionResult {
+                        status: "interrupted".to_string(),
+                        exit_code: 130,
+                        summary: "Execution interrupted by SIGINT".to_string(),
+                        tool: executor.tool_name().to_string(),
+                        started_at: execution_start_time,
+                        completed_at: interrupted_at,
+                        artifacts: Vec::new(),
+                    };
+                    if let Err(e) = save_result(project_root, &session.meta_session_id, &interrupted_result) {
+                        warn!("Failed to save interrupted session result: {}", e);
+                    }
+                    if let Err(e) = save_session(&interrupted_session) {
+                        warn!("Failed to save session state after SIGINT: {}", e);
+                    }
+                    if let Some(cg) = cleanup_guard {
+                        cg.defuse();
+                    }
+                    return Err(anyhow::anyhow!("Execution interrupted by SIGINT"));
                 }
                 exec = executor.execute_with_transport(
                     effective_prompt,

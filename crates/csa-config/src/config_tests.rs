@@ -35,6 +35,7 @@ fn test_save_and_load_roundtrip() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -71,6 +72,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: Some(crate::global::ReviewConfig {
             tool: "codex".to_string(),
@@ -105,6 +107,7 @@ fn test_is_tool_enabled_configured_enabled() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -138,6 +141,7 @@ fn test_is_tool_enabled_configured_disabled() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -160,6 +164,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -196,6 +201,7 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -246,6 +252,7 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -283,6 +290,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -308,6 +316,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -330,6 +339,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -373,6 +383,7 @@ fn test_resolve_tier_default_selection() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -413,6 +424,7 @@ fn test_resolve_tier_fallback_to_tier3() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -469,6 +481,7 @@ fn test_resolve_tier_skips_disabled_tools() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools,
         review: None,
         debate: None,
@@ -505,6 +518,7 @@ fn test_resolve_alias() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -544,6 +558,7 @@ fn test_max_recursion_depth_override() {
             max_recursion_depth: 10,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -579,12 +594,12 @@ created_at = "2024-01-01T00:00:00Z"
     std::fs::create_dir_all(&config_dir).unwrap();
     std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
 
-    let loaded = ProjectConfig::load(dir.path()).unwrap();
+    let loaded = ProjectConfig::load_with_paths(None, &config_dir.join("config.toml")).unwrap();
     assert!(loaded.is_some());
     let loaded = loaded.unwrap();
 
     assert_eq!(loaded.project.max_recursion_depth, 5);
-    assert_eq!(loaded.resources.idle_timeout_seconds, 120);
+    assert_eq!(loaded.resources.idle_timeout_seconds, 300);
 }
 
 #[test]
@@ -670,6 +685,7 @@ fn test_schema_version_current_is_ok() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -693,6 +709,7 @@ fn test_schema_version_older_is_ok() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,
@@ -715,6 +732,7 @@ fn test_schema_version_newer_fails() {
             max_recursion_depth: 5,
         },
         resources: ResourcesConfig::default(),
+        acp: Default::default(),
         tools: HashMap::new(),
         review: None,
         debate: None,

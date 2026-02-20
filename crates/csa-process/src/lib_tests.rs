@@ -157,6 +157,7 @@ async fn test_wait_and_capture_with_idle_timeout_kills_silent_process() {
         child,
         StreamMode::BufferOnly,
         Duration::from_secs(1),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await
@@ -176,6 +177,7 @@ async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
         child,
         StreamMode::BufferOnly,
         Duration::from_secs(1),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await
@@ -200,6 +202,7 @@ async fn test_idle_timeout_detects_partial_output_without_newlines() {
         child,
         StreamMode::BufferOnly,
         Duration::from_secs(1),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await

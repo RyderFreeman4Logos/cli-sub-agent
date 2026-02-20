@@ -67,7 +67,24 @@ pub struct ExecutionResult {
 }
 
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_STDIN_WRITE_TIMEOUT_SECS: u64 = 30;
+pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
+
+/// Spawn-time process control options.
+#[derive(Debug, Clone, Copy)]
+pub struct SpawnOptions {
+    /// Max duration allowed for writing prompt payload to child stdin.
+    pub stdin_write_timeout: Duration,
+}
+
+impl Default for SpawnOptions {
+    fn default() -> Self {
+        Self {
+            stdin_write_timeout: Duration::from_secs(DEFAULT_STDIN_WRITE_TIMEOUT_SECS),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum PreExecPolicy {
@@ -96,13 +113,23 @@ pub async fn spawn_tool(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,
 ) -> Result<tokio::process::Child> {
-    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::SetsidOnly).await
+    spawn_tool_with_options(cmd, stdin_data, SpawnOptions::default()).await
+}
+
+/// Spawn a tool process with explicit spawn options.
+pub async fn spawn_tool_with_options(
+    cmd: Command,
+    stdin_data: Option<Vec<u8>>,
+    spawn_options: SpawnOptions,
+) -> Result<tokio::process::Child> {
+    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::SetsidOnly, spawn_options).await
 }
 
 async fn spawn_tool_with_pre_exec(
     mut cmd: Command,
     stdin_data: Option<Vec<u8>>,
     pre_exec_policy: PreExecPolicy,
+    spawn_options: SpawnOptions,
 ) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -136,8 +163,9 @@ async fn spawn_tool_with_pre_exec(
 
     if let Some(data) = stdin_data {
         if let Some(mut stdin) = child.stdin.take() {
+            let stdin_write_timeout = spawn_options.stdin_write_timeout;
             tokio::spawn(async move {
-                match tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                match tokio::time::timeout(stdin_write_timeout, async {
                     stdin.write_all(&data).await?;
                     stdin.shutdown().await?;
                     Ok::<_, std::io::Error>(())
@@ -146,7 +174,10 @@ async fn spawn_tool_with_pre_exec(
                 {
                     Ok(Ok(())) => {}
                     Ok(Err(e)) => warn!("stdin write error: {}", e),
-                    Err(_) => warn!("stdin write timed out after 30s"),
+                    Err(_) => warn!(
+                        timeout_secs = stdin_write_timeout.as_secs(),
+                        "stdin write timed out"
+                    ),
                 }
             });
         } else {
@@ -189,23 +220,34 @@ async fn spawn_tool_with_pre_exec(
 pub async fn spawn_tool_sandboxed(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,
+    spawn_options: SpawnOptions,
     sandbox: Option<&SandboxConfig>,
     tool_name: &str,
     session_id: &str,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
     let Some(config) = sandbox else {
-        let child = spawn_tool(cmd, stdin_data).await?;
+        let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
         return Ok((child, SandboxHandle::None));
     };
 
     match detect_sandbox_capability() {
         SandboxCapability::CgroupV2 => {
-            spawn_with_cgroup(cmd, stdin_data, config, tool_name, session_id).await
+            spawn_with_cgroup(
+                cmd,
+                stdin_data,
+                spawn_options,
+                config,
+                tool_name,
+                session_id,
+            )
+            .await
         }
-        SandboxCapability::Setrlimit => spawn_with_rlimit(cmd, stdin_data, config).await,
+        SandboxCapability::Setrlimit => {
+            spawn_with_rlimit(cmd, stdin_data, spawn_options, config).await
+        }
         SandboxCapability::None => {
             debug!("no sandbox capability detected; spawning without isolation");
-            let child = spawn_tool(cmd, stdin_data).await?;
+            let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
             Ok((child, SandboxHandle::None))
         }
     }
@@ -218,6 +260,7 @@ pub async fn spawn_tool_sandboxed(
 async fn spawn_with_cgroup(
     original_cmd: Command,
     stdin_data: Option<Vec<u8>>,
+    spawn_options: SpawnOptions,
     config: &SandboxConfig,
     tool_name: &str,
     session_id: &str,
@@ -245,7 +288,7 @@ async fn spawn_with_cgroup(
         tokio_cmd.current_dir(dir);
     }
 
-    let child = spawn_tool(tokio_cmd, stdin_data).await?;
+    let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
     let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
 
     debug!(
@@ -264,6 +307,7 @@ async fn spawn_with_cgroup(
 async fn spawn_with_rlimit(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,
+    spawn_options: SpawnOptions,
     config: &SandboxConfig,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
     let memory_max_mb = config.memory_max_mb;
@@ -276,6 +320,7 @@ async fn spawn_with_rlimit(
             memory_max_mb,
             pids_max,
         },
+        spawn_options,
     )
     .await?;
 
@@ -315,6 +360,7 @@ pub async fn wait_and_capture(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await
@@ -333,6 +379,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     mut child: tokio::process::Child,
     stream_mode: StreamMode,
     idle_timeout: Duration,
+    termination_grace_period: Duration,
     output_spool: Option<&Path>,
 ) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
@@ -429,7 +476,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     if last_activity.elapsed() >= idle_timeout {
                         idle_timed_out = true;
                         warn!(timeout_secs = idle_timeout.as_secs(), "Killing child due to idle timeout");
-                        kill_child_process_group(&mut child);
+                        terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
                 }
@@ -467,7 +514,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                     if last_activity.elapsed() >= idle_timeout {
                         idle_timed_out = true;
                         warn!(timeout_secs = idle_timeout.as_secs(), "Killing child due to idle timeout");
-                        kill_child_process_group(&mut child);
+                        terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
                 }
@@ -532,6 +579,7 @@ pub async fn run_and_capture_with_stdin(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
     .await
@@ -600,14 +648,26 @@ fn flush_stderr_buf(line_buf: &mut String, stderr_output: &mut String) {
     }
 }
 
-fn kill_child_process_group(child: &mut tokio::process::Child) {
+async fn terminate_child_process_group(
+    child: &mut tokio::process::Child,
+    termination_grace_period: Duration,
+) {
     #[cfg(unix)]
     {
         if let Some(pid) = child.id() {
             // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
             unsafe {
+                libc::kill(-(pid as i32), libc::SIGTERM);
+            }
+            tokio::time::sleep(termination_grace_period).await;
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
+            unsafe {
                 libc::kill(-(pid as i32), libc::SIGKILL);
             }
+            let _ = child.start_kill();
             return;
         }
     }

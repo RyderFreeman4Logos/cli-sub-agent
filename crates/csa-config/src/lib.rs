@@ -1,6 +1,8 @@
 //! Project configuration loading and validation (.csa/config.toml).
 
+pub mod acp;
 pub mod config;
+mod config_merge;
 mod config_runtime;
 pub mod global;
 pub mod init;
@@ -9,6 +11,7 @@ pub mod migrate;
 pub mod validate;
 pub mod weave_lock;
 
+pub use acp::AcpConfig;
 pub use config::{
     EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
     ToolResourceProfile, ToolRestrictions,

@@ -31,7 +31,20 @@ pub(crate) fn resolve_sandbox_options(
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
 ) -> SandboxResolution {
-    let mut execute_options = ExecuteOptions::new(stream_mode, idle_timeout_seconds);
+    let default_resources = csa_config::ResourcesConfig::default();
+    let stdin_write_timeout_seconds = config
+        .map(|cfg| cfg.resources.stdin_write_timeout_seconds)
+        .unwrap_or(default_resources.stdin_write_timeout_seconds);
+    let acp_init_timeout_seconds = config
+        .map(|cfg| cfg.acp.init_timeout_seconds)
+        .unwrap_or(csa_config::AcpConfig::default().init_timeout_seconds);
+    let termination_grace_period_seconds = config
+        .map(|cfg| cfg.resources.termination_grace_period_seconds)
+        .unwrap_or(default_resources.termination_grace_period_seconds);
+    let mut execute_options = ExecuteOptions::new(stream_mode, idle_timeout_seconds)
+        .with_stdin_write_timeout_seconds(stdin_write_timeout_seconds)
+        .with_acp_init_timeout_seconds(acp_init_timeout_seconds)
+        .with_termination_grace_period_seconds(termination_grace_period_seconds);
 
     let Some(cfg) = config else {
         // No project config — apply profile-based defaults for heavyweight tools.

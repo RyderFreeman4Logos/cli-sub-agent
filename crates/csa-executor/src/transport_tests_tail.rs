@@ -22,6 +22,8 @@
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let mut extra = HashMap::new();
@@ -64,6 +66,8 @@
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let env = transport.build_env(&session, None);

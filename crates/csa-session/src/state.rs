@@ -57,6 +57,10 @@ pub struct MetaSessionState {
     /// Resource sandbox telemetry for this session.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sandbox_info: Option<SandboxInfo>,
+
+    /// Why the last run terminated early (e.g. sigint, sigterm, idle_timeout).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub termination_reason: Option<String>,
 }
 
 /// Lightweight telemetry about the resource sandbox applied to a session.
@@ -485,6 +489,8 @@ mod tests {
             turn_count: 0,
             token_budget: None,
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -677,6 +683,8 @@ mod tests {
             turn_count: 3,
             token_budget: Some(budget.clone()),
             sandbox_info: None,
+
+            termination_reason: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");

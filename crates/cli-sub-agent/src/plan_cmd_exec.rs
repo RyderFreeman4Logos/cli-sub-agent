@@ -3,7 +3,7 @@ use std::path::Path;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
@@ -20,13 +20,13 @@ pub(super) struct StepExecutionOutcome {
     pub(super) session_id: Option<String>,
 }
 
-pub(super) async fn run_with_heartbeat<F>(
+pub(super) async fn run_with_heartbeat<F, T>(
     label: &str,
     execution: F,
     step_started_at: Instant,
-) -> StepExecutionOutcome
+) -> Result<T>
 where
-    F: std::future::Future<Output = Result<StepExecutionOutcome>>,
+    F: std::future::Future<Output = Result<T>>,
 {
     let mut execution = std::pin::pin!(execution);
     let mut ticker = tokio::time::interval(HEARTBEAT_INTERVAL);
@@ -36,17 +36,7 @@ where
     loop {
         tokio::select! {
             result = &mut execution => {
-                return match result {
-                    Ok(outcome) => outcome,
-                    Err(err) => {
-                        error!("{label} - Execution failed: {err}");
-                        StepExecutionOutcome {
-                            exit_code: 1,
-                            output: String::new(),
-                            session_id: None,
-                        }
-                    }
-                };
+                return result;
             }
             _ = ticker.tick() => {
                 eprintln!(

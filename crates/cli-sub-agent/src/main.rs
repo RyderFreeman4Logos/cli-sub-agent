@@ -103,6 +103,7 @@ async fn main() -> Result<()> {
             no_failover,
             wait,
             idle_timeout,
+            no_idle_timeout,
             stream_stdout,
             no_stream_stdout,
         } => {
@@ -133,6 +134,7 @@ async fn main() -> Result<()> {
                 no_failover,
                 wait,
                 idle_timeout,
+                no_idle_timeout,
                 current_depth,
                 output_format,
                 stream_mode,
