@@ -103,12 +103,13 @@ Every task prompt MUST include:
 
 Example DONE WHEN:
 
-- `DONE WHEN: result.toml exists at artifacts/plan-result.toml and status is success.`
+- `DONE WHEN: result.toml exists at $CSA_SESSION_DIR/result.toml and status is success.`
 - `DONE WHEN: just pre-commit exits 0 and result.toml status is success.`
 
 ### Employee -> Manager (`result.toml`)
 
 Employees MUST return a self-contained report that allows manager decision without opening any source/artifact content.
+Employees MUST write this file to `$CSA_SESSION_DIR/result.toml` and print that path only.
 
 Required schema:
 
@@ -252,7 +253,7 @@ INPUT:
 
 OUTPUT FORMAT:
 - Write TODO artifact to artifacts/TODO.md
-- Write manager-facing result.toml using required schema
+- Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
 - Print ONLY the result.toml path
 
 SCOPE:
@@ -261,8 +262,8 @@ SCOPE:
 
 DONE WHEN:
 - artifacts/TODO.md exists
-- result.toml exists with status in {success, partial, needs_clarification, error}
-- result.toml contains [result], [report], [timing], [tool], [artifacts]
+- $CSA_SESSION_DIR/result.toml exists with status in {success, partial, needs_clarification, error}
+- $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
 csa run --tool codex --thinking medium < "$PROMPT_FILE"
@@ -286,7 +287,7 @@ INPUT:
 
 OUTPUT FORMAT:
 - Perform implementation and validation autonomously
-- Write manager-facing result.toml using required schema
+- Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
 - Include commit_hash/review_result in [artifacts] when available
 - Print ONLY the result.toml path
 
@@ -297,7 +298,7 @@ SCOPE:
 
 DONE WHEN:
 - Implementation tasks are complete or explicitly marked partial/error
-- result.toml exists and is self-contained for manager decision
+- $CSA_SESSION_DIR/result.toml exists and is self-contained for manager decision
 IMPL_EOF
 
 csa run --tool codex --thinking medium --session "$SESSION_ID" < "$PROMPT_FILE"
@@ -321,7 +322,7 @@ INPUT:
 
 OUTPUT FORMAT:
 - Run independent verification (e.g. csa review --diff or csa debate)
-- Write manager-facing result.toml
+- Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml
 - In [report], clearly state agreement/disagreement and why
 - Print ONLY the result.toml path
 
@@ -331,7 +332,7 @@ SCOPE:
 
 DONE WHEN:
 - Verification completed
-- result.toml includes clear verdict in summary/report
+- $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
 csa run --tool claude-code --thinking xhigh < "$PROMPT_FILE"
