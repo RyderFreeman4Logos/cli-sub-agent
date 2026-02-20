@@ -122,11 +122,8 @@ id = 10
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
-Delegate commit message generation to cheaper tool.
-
-```bash
-csa run "Run 'git diff --staged' and generate a Conventional Commits message"
-```"""
+Run 'git diff --staged' and generate a Conventional Commits message.
+Output ONLY the commit message, nothing else."""
 tier = "tier-1-quick"
 on_fail = "abort"
 

@@ -47,14 +47,10 @@ id = 3
 title = "Step 3a: Delegate Audit to CSA"
 tool = "csa"
 prompt = """
-Module too large for local audit. Delegate entire audit to CSA.
-
-```bash
-csa run "Perform security audit following security-audit skill protocol.
-         Review changed files and associated tests.
-         Three phases: test completeness, vulnerability scan, code quality.
-         Output structured audit report."
-```"""
+Perform security audit following security-audit skill protocol.
+Review changed files and associated tests.
+Three phases: test completeness, vulnerability scan, code quality.
+Output structured audit report."""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${NEEDS_CSA_DELEGATION}"

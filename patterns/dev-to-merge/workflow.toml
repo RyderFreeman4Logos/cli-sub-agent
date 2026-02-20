@@ -151,11 +151,6 @@ tool = "csa"
 prompt = """
 Run heterogeneous code review on all uncommitted changes versus HEAD.
 The reviewer MUST be a different model family than the code author.
-
-```bash
-csa review --diff
-```
-
 Review output includes AGENTS.md compliance checklist."""
 tier = "tier-2-standard"
 on_fail = "abort"
@@ -191,7 +186,7 @@ id = 11
 title = "Re-review"
 tool = "csa"
 prompt = """
-Run `csa review --diff` again to verify all issues are resolved.
+Re-review all changes to verify all issues are resolved.
 Loop back to Step 9 if issues persist (max 3 rounds)."""
 tier = "tier-2-standard"
 on_fail = "abort"
@@ -202,12 +197,9 @@ id = 12
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
-Generate a Conventional Commits message from the staged diff.
+Run 'git diff --staged' and generate a Conventional Commits message.
 The message must follow the format: `type(${SCOPE}): description`.
-
-```bash
-csa run "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}"
-```"""
+Output ONLY the commit message, nothing else."""
 tier = "tier-1-quick"
 on_fail = "abort"
 
@@ -327,12 +319,11 @@ id = 20
 title = "Arbitrate False Positive"
 tool = "csa"
 prompt = """
-Run `csa debate` to get an independent second opinion on the suspected
-false positive. The arbiter MUST be a different model family.
+Evaluate the following code reviewer finding independently.
+The arbiter MUST be a different model family.
 
-```bash
-csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
-```"""
+A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently.
+Is this a real issue or a false positive? Provide reasoning."""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"

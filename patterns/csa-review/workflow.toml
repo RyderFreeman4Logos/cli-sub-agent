@@ -81,9 +81,9 @@ id = 5
 title = "Execute Review via CSA"
 tool = "csa"
 prompt = """
-```bash
-csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
-```"""
+Perform code review: ${SCOPE}.
+
+${REVIEW_PROMPT}"""
 tier = "tier-2-standard"
 on_fail = "abort"
 
@@ -101,14 +101,12 @@ id = 7
 title = "Fix Mode"
 tool = "csa"
 prompt = """
-Resume same CSA session to fix all P0 and P1 issues.
+Fix all P0 and P1 issues from the review.
 Generate $CSA_SESSION_DIR/reviewer-{N}/fix-summary.md and
 $CSA_SESSION_DIR/reviewer-{N}/post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
-```bash
-csa run --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}"
-```"""
+${FIX_PROMPT}"""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${MODE_IS_REVIEW_AND_FIX}"
