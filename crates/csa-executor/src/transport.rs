@@ -282,6 +282,19 @@ impl AcpTransport {
             (session.genealogy.depth + 1).to_string(),
         );
         env.insert("CSA_PROJECT_ROOT".to_string(), session.project_path.clone());
+        // CSA_SESSION_DIR: absolute path to the session state directory
+        if let Ok(dir) = csa_session::manager::get_session_dir(
+            Path::new(&session.project_path),
+            &session.meta_session_id,
+        ) {
+            env.insert(
+                "CSA_SESSION_DIR".to_string(),
+                dir.to_string_lossy().into_owned(),
+            );
+        } else {
+            tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
+        }
+
         env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
         if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
             env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
@@ -762,6 +775,44 @@ mod tests {
             env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
             None,
             "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
+        );
+    }
+
+    #[test]
+    fn test_acp_build_env_includes_csa_session_dir() {
+        let transport = AcpTransport::new("claude-code", None);
+        let now = chrono::Utc::now();
+        let session = csa_session::state::MetaSessionState {
+            meta_session_id: "01HTEST000000000000000000".to_string(),
+            description: Some("test".to_string()),
+            project_path: "/tmp/test".to_string(),
+            created_at: now,
+            last_accessed: now,
+            genealogy: csa_session::state::Genealogy {
+                parent_session_id: None,
+                depth: 0,
+            },
+            tools: HashMap::new(),
+            context_status: csa_session::state::ContextStatus::default(),
+            total_token_usage: None,
+            phase: csa_session::state::SessionPhase::Active,
+            task_context: csa_session::state::TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+        };
+
+        let env = transport.build_env(&session, None);
+        let session_dir = env
+            .get("CSA_SESSION_DIR")
+            .expect("CSA_SESSION_DIR should be present in env");
+        assert!(
+            session_dir.contains("/sessions/"),
+            "CSA_SESSION_DIR should contain /sessions/ path segment, got: {session_dir}"
+        );
+        assert!(
+            session_dir.contains("01HTEST000000000000000000"),
+            "CSA_SESSION_DIR should contain the session ID, got: {session_dir}"
         );
     }
 
