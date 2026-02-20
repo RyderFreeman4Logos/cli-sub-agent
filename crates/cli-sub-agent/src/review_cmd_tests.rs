@@ -1,6 +1,6 @@
 use super::*;
 use crate::cli::{Cli, Commands};
-use clap::Parser;
+use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use std::collections::HashMap;
 
@@ -48,6 +48,13 @@ fn parse_review_args(argv: &[&str]) -> ReviewArgs {
     match cli.command {
         Commands::Review(args) => args,
         _ => panic!("expected review subcommand"),
+    }
+}
+
+fn parse_review_error(argv: &[&str]) -> clap::Error {
+    match Cli::try_parse_from(argv) {
+        Ok(_) => panic!("review CLI args should fail to parse"),
+        Err(err) => err,
     }
 }
 
@@ -213,7 +220,7 @@ fn derive_scope_uncommitted() {
         session: None,
         model: None,
         diff: true,
-        branch: "main".to_string(),
+        branch: None,
         commit: None,
         range: None,
         files: None,
@@ -238,7 +245,7 @@ fn derive_scope_commit() {
         session: None,
         model: None,
         diff: false,
-        branch: "main".to_string(),
+        branch: None,
         commit: Some("abc123".to_string()),
         range: None,
         files: None,
@@ -263,7 +270,7 @@ fn derive_scope_range() {
         session: None,
         model: None,
         diff: false,
-        branch: "main".to_string(),
+        branch: None,
         commit: None,
         range: Some("main...HEAD".to_string()),
         files: None,
@@ -288,7 +295,7 @@ fn derive_scope_files() {
         session: None,
         model: None,
         diff: false,
-        branch: "main".to_string(),
+        branch: None,
         commit: None,
         range: None,
         files: Some("src/**/*.rs".to_string()),
@@ -313,7 +320,7 @@ fn derive_scope_default_branch() {
         session: None,
         model: None,
         diff: false,
-        branch: "develop".to_string(),
+        branch: Some("develop".to_string()),
         commit: None,
         range: None,
         files: None,
@@ -332,29 +339,71 @@ fn derive_scope_default_branch() {
 }
 
 #[test]
-fn derive_scope_range_takes_priority_over_commit() {
-    let args = ReviewArgs {
-        tool: None,
-        session: None,
-        model: None,
-        diff: true,
-        branch: "main".to_string(),
-        commit: Some("abc".to_string()),
-        range: Some("v1...v2".to_string()),
-        files: None,
-        fix: false,
-        security_mode: "auto".to_string(),
-        context: None,
-        reviewers: 1,
-        consensus: "majority".to_string(),
-        cd: None,
-        timeout: None,
-        idle_timeout: None,
-        stream_stdout: false,
-        no_stream_stdout: false,
-    };
-    // --range has highest priority
-    assert_eq!(derive_scope(&args), "range:v1...v2");
+fn review_cli_rejects_commit_with_range() {
+    let err = parse_review_error(&[
+        "csa",
+        "review",
+        "--commit",
+        "abc",
+        "--range",
+        "v1...v2",
+    ]);
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn review_cli_rejects_diff_with_commit() {
+    let err = parse_review_error(&["csa", "review", "--diff", "--commit", "abc"]);
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn review_cli_rejects_diff_with_range() {
+    let err = parse_review_error(&["csa", "review", "--diff", "--range", "main...HEAD"]);
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn review_cli_rejects_files_with_diff() {
+    let err = parse_review_error(&["csa", "review", "--files", "src/", "--diff"]);
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn review_cli_rejects_branch_with_range() {
+    let err = parse_review_error(&[
+        "csa",
+        "review",
+        "--branch",
+        "develop",
+        "--range",
+        "main...HEAD",
+    ]);
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn review_cli_rejects_branch_with_diff() {
+    let err = parse_review_error(&["csa", "review", "--branch", "develop", "--diff"]);
+    assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
+}
+
+#[test]
+fn review_cli_accepts_single_scope_flags() {
+    let diff = parse_review_args(&["csa", "review", "--diff"]);
+    assert_eq!(derive_scope(&diff), "uncommitted");
+
+    let commit = parse_review_args(&["csa", "review", "--commit", "abc123"]);
+    assert_eq!(derive_scope(&commit), "commit:abc123");
+
+    let range = parse_review_args(&["csa", "review", "--range", "main...HEAD"]);
+    assert_eq!(derive_scope(&range), "range:main...HEAD");
+
+    let files = parse_review_args(&["csa", "review", "--files", "src/"]);
+    assert_eq!(derive_scope(&files), "files:src/");
+
+    let branch = parse_review_args(&["csa", "review", "--branch", "develop"]);
+    assert_eq!(derive_scope(&branch), "base:develop");
 }
 
 #[test]

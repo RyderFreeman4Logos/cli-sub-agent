@@ -528,7 +528,7 @@ fn derive_scope(args: &ReviewArgs) -> String {
     if args.diff {
         return "uncommitted".to_string();
     }
-    format!("base:{}", args.branch)
+    format!("base:{}", args.branch.as_deref().unwrap_or("main"))
 }
 
 /// Build a concise review instruction that tells the tool to use the csa-review skill.
