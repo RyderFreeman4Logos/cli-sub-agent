@@ -389,6 +389,8 @@ impl AcpConnection {
 
     // `NewSessionRequest` does not support system_prompt.
     // System prompts are prepended to the first prompt at a higher layer.
+    // TODO(acp-notify): Expose an ACP-level codex notify suppression option
+    // (equivalent to legacy `-c notify=[]`) when protocol support exists.
     pub async fn new_session(
         &self,
         _system_prompt: Option<&str>,
