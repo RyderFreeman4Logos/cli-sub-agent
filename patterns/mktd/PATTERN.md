@@ -50,6 +50,10 @@ Technical terms, code snippets, commit scope strings, and executor tags ([Main],
 If USER_LANGUAGE is empty or unset, default to the language used in the FEATURE description.
 Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool].
 
+**Output**: Print the COMPLETE TODO plan as text to stdout.
+Do NOT write files to the project directory.
+The output is captured as `${STEP_4_OUTPUT}` for subsequent steps.
+
 ## Step 5: Phase 3 — Adversarial Debate
 
 Tool: csa
@@ -65,17 +69,22 @@ No exceptions — even "simple" plans benefit from challenge.
 Incorporate debate feedback. Update plan based on valid criticisms.
 Concede valid points, defend sound decisions with evidence.
 
+**Output**: Print the COMPLETE revised TODO plan as text to stdout.
+Do NOT write files to the project directory.
+The output is captured as `${STEP_6_OUTPUT}` for the save step.
+
 ## Step 7: Save TODO
 
 Tool: bash
 
 Save finalized TODO using csa todo for git-tracked lifecycle.
+Uses `${STEP_6_OUTPUT}` (the revised TODO from Step 6).
 
 ```bash
-[[ -n "${FINALIZED_TODO_CONTENT:-}" ]] || { echo "FINALIZED_TODO_CONTENT is empty — agent must produce content in Steps 4-6" >&2; exit 1; }
+[[ -n "${STEP_6_OUTPUT:-}" ]] || { echo "STEP_6_OUTPUT is empty — Step 6 (revise) must output the finalized TODO as text" >&2; exit 1; }
 TODO_TS=$(csa todo create --branch "$(git branch --show-current)" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
-printf '%s\n' "${FINALIZED_TODO_CONTENT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+printf '%s\n' "${STEP_6_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 ```
 

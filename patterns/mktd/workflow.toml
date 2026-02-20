@@ -9,9 +9,6 @@ name = "CWD"
 name = "FEATURE"
 
 [[workflow.variables]]
-name = "FINALIZED_TODO_CONTENT"
-
-[[workflow.variables]]
 name = "USER_LANGUAGE"
 description = "Primary language for TODO content (auto-detected from conversation or FEATURE description; e.g. 'Chinese (Simplified)', 'English', 'Japanese')"
 
@@ -70,7 +67,12 @@ Each item is a [ ] checkbox with executor tag.
 Write all TODO descriptions, section headers, and task names in ${USER_LANGUAGE}.
 Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 If USER_LANGUAGE is empty or unset, default to the language used in the FEATURE description.
-Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool]."""
+Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool].
+
+## Output
+Output the COMPLETE TODO plan as text to stdout.
+Do NOT write files to the project directory.
+The output will be captured as ${STEP_4_OUTPUT} for subsequent steps."""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -112,7 +114,12 @@ Concede valid points and revise accordingly. Defend sound decisions with evidenc
 ${STEP_4_OUTPUT}
 
 ### Adversarial Critique (Step 5)
-${STEP_5_OUTPUT}"""
+${STEP_5_OUTPUT}
+
+## Output
+Output the COMPLETE revised TODO plan as text to stdout.
+Do NOT write files to the project directory.
+The output will be captured as ${STEP_6_OUTPUT} for the save step."""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -121,12 +128,13 @@ title = "Save TODO"
 tool = "bash"
 prompt = """
 Save finalized TODO using csa todo for git-tracked lifecycle.
+Uses ${STEP_6_OUTPUT} (the revised TODO from the revise step).
 
 ```bash
-[[ -n "${FINALIZED_TODO_CONTENT:-}" ]] || { echo "FINALIZED_TODO_CONTENT is empty — agent must produce content in Steps 4-6 (draft, debate, revise)" >&2; exit 1; }
+[[ -n "${STEP_6_OUTPUT:-}" ]] || { echo "STEP_6_OUTPUT is empty — Step 6 (revise) must output the finalized TODO as text" >&2; exit 1; }
 TODO_TS=$(csa todo create --branch "$(git branch --show-current)" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
-printf '%s\\n' "${FINALIZED_TODO_CONTENT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+printf '%s\n' "${STEP_6_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 ```"""
 on_fail = "abort"
