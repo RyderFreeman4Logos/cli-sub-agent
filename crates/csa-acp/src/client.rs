@@ -7,7 +7,7 @@ use agent_client_protocol::{
 };
 
 /// Streaming session events collected from ACP notifications.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum SessionEvent {
     AgentMessage(String),
     AgentThought(String),

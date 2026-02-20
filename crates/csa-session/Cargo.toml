@@ -7,9 +7,11 @@ license.workspace = true
 
 [dependencies]
 csa-core.workspace = true
+csa-acp = { path = "../csa-acp" }
 csa-lock.workspace = true
 toml.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
 ulid.workspace = true
 directories.workspace = true
