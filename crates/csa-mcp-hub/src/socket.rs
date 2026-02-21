@@ -8,9 +8,13 @@ use tokio::net::{UnixListener, UnixStream};
 
 pub(crate) async fn bind_listener(socket_path: &Path) -> Result<UnixListener> {
     if let Some(parent) = socket_path.parent() {
+        let parent_existed = parent.exists();
         tokio::fs::create_dir_all(parent)
             .await
             .with_context(|| format!("failed to create socket parent: {}", parent.display()))?;
+        if !parent_existed {
+            set_permissions(parent, 0o700).await?;
+        }
     }
 
     if socket_path.exists() {
@@ -19,8 +23,10 @@ pub(crate) async fn bind_listener(socket_path: &Path) -> Result<UnixListener> {
             .with_context(|| format!("failed to remove stale socket: {}", socket_path.display()))?;
     }
 
-    UnixListener::bind(socket_path)
-        .with_context(|| format!("failed to bind unix socket: {}", socket_path.display()))
+    let listener = UnixListener::bind(socket_path)
+        .with_context(|| format!("failed to bind unix socket: {}", socket_path.display()))?;
+    set_permissions(socket_path, 0o600).await?;
+    Ok(listener)
 }
 
 pub(crate) async fn connect(socket_path: &Path) -> Result<UnixStream> {
@@ -36,6 +42,14 @@ pub(crate) async fn cleanup_socket_file(socket_path: &Path) -> Result<()> {
             .with_context(|| format!("failed to cleanup socket: {}", socket_path.display()))?;
     }
     Ok(())
+}
+
+#[cfg(unix)]
+async fn set_permissions(path: &Path, mode: u32) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    tokio::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+        .await
+        .with_context(|| format!("failed to chmod {:o}: {}", mode, path.display()))
 }
 
 #[cfg(target_os = "linux")]
@@ -128,6 +142,40 @@ mod tests {
         super::cleanup_socket_file(&socket_path).await?;
         assert!(!socket_path.exists());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bind_listener_sets_restrictive_permissions() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir()?;
+        let socket_path = dir.path().join("private").join("mcp-hub.sock");
+        let _listener = super::bind_listener(&socket_path).await?;
+
+        let socket_mode = std::fs::metadata(&socket_path)?.permissions().mode() & 0o777;
+        let parent = socket_path.parent().expect("socket parent");
+        let parent_mode = std::fs::metadata(parent)?.permissions().mode() & 0o777;
+
+        assert_eq!(socket_mode, 0o600);
+        assert_eq!(parent_mode, 0o700);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bind_listener_does_not_chmod_existing_parent_directory() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir()?;
+        let shared_parent = dir.path().join("shared");
+        std::fs::create_dir(&shared_parent)?;
+        std::fs::set_permissions(&shared_parent, std::fs::Permissions::from_mode(0o755))?;
+
+        let socket_path = shared_parent.join("mcp-hub.sock");
+        let _listener = super::bind_listener(&socket_path).await?;
+
+        let parent_mode = std::fs::metadata(&shared_parent)?.permissions().mode() & 0o777;
+        assert_eq!(parent_mode, 0o755);
         Ok(())
     }
 }

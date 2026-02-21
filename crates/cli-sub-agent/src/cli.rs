@@ -708,6 +708,14 @@ pub enum McpHubCommands {
         #[arg(long)]
         socket: Option<String>,
 
+        /// HTTP bind host for SSE endpoint
+        #[arg(long)]
+        http_bind: Option<String>,
+
+        /// HTTP bind port for SSE endpoint (0 = random)
+        #[arg(long)]
+        http_port: Option<u16>,
+
         /// Use systemd socket activation (Linux only)
         #[arg(long)]
         systemd_activation: bool,

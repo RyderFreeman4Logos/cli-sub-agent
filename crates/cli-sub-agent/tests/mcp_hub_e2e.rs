@@ -15,8 +15,13 @@ fn write_mock_mcp_script(dir: &Path) -> Result<PathBuf> {
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
   case "$line" in
+    *\"initialize\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mock","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
     *\"tools/list\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool"}]}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool","description":"echo","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
       ;;
     *\"tools/call\"*)
       printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
@@ -134,6 +139,95 @@ fn p95_ms(samples: &[Duration]) -> f64 {
     sorted[idx]
 }
 
+fn reserve_local_port() -> Result<u16> {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).context("bind localhost ephemeral port")?;
+    let port = listener.local_addr()?.port();
+    drop(listener);
+    Ok(port)
+}
+
+fn start_sse_stream(base_url: &str) -> Result<(Child, std::sync::mpsc::Receiver<String>)> {
+    let mut child = Command::new("curl")
+        .args(["-sS", "-N", base_url])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .with_context(|| format!("spawn curl SSE stream: {base_url}"))?;
+
+    let stdout = child.stdout.take().context("capture curl SSE stdout")?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            let Ok(bytes) = reader.read_line(&mut line) else {
+                break;
+            };
+            if bytes == 0 {
+                break;
+            }
+            let _ = tx.send(line.trim().to_string());
+        }
+    });
+
+    Ok((child, rx))
+}
+
+fn recv_line_until<F>(
+    rx: &std::sync::mpsc::Receiver<String>,
+    timeout: Duration,
+    predicate: F,
+) -> Result<String>
+where
+    F: Fn(&str) -> bool,
+{
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        match rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(line) if predicate(&line) => return Ok(line),
+            Ok(_) => continue,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(error) => bail!("failed to read SSE stream line: {error}"),
+        }
+    }
+    bail!("timed out waiting for expected SSE line")
+}
+
+fn http_post_json(url: &str, payload: &Value) -> Result<()> {
+    let payload_str = serde_json::to_string(payload)?;
+    let output = Command::new("curl")
+        .args([
+            "-sS",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "-X",
+            "POST",
+            "-H",
+            "content-type: application/json",
+            "--data",
+            &payload_str,
+            url,
+        ])
+        .output()
+        .with_context(|| format!("POST {url}"))?;
+
+    if !output.status.success() {
+        bail!(
+            "curl POST failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if code != "202" {
+        bail!("expected HTTP 202 from SSE message endpoint, got {code}");
+    }
+    Ok(())
+}
+
 // macOS CI: hub spawns the mock MCP backend but sh/sed differences prevent
 // the backend from registering tools.  Hub itself is Linux-first (UDS + systemd),
 // so restrict the E2E test to Linux.  Unit tests still cover logic on all platforms.
@@ -249,6 +343,121 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_5ms() -> Result<()> 
             "proxy p95 overhead must be <= 5ms, got overhead={overhead:.3}ms (direct={direct_p95:.3}ms, proxy={proxy_p95:.3}ms)"
         );
 
+        Ok(())
+    })();
+
+    let _ = connect_and_request(
+        &socket_path,
+        &serde_json::json!({"jsonrpc":"2.0","id":9999,"method":"hub/stop"}),
+    );
+    let _ = hub.kill();
+    let _ = hub.wait();
+
+    test_result
+}
+
+#[test]
+#[cfg_attr(not(target_os = "linux"), ignore)]
+fn hub_http_sse_transport_forwards_requests() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let home = temp.path().join("home");
+    let config_home = home.join(".config");
+    let runtime_dir = temp.path().join("runtime");
+    fs::create_dir_all(&config_home)?;
+    fs::create_dir_all(&runtime_dir)?;
+
+    let script_path = write_mock_mcp_script(temp.path())?;
+    write_global_config(&config_home, &script_path)?;
+
+    let socket_path = runtime_dir.join("mcp-hub.sock");
+    let http_port = reserve_local_port()?;
+
+    let mut hub = Command::new(env!("CARGO_BIN_EXE_csa"))
+        .args([
+            "mcp-hub",
+            "serve",
+            "--foreground",
+            "--socket",
+            socket_path
+                .to_str()
+                .context("socket path should be valid UTF-8")?,
+            "--http-bind",
+            "127.0.0.1",
+            "--http-port",
+            &http_port.to_string(),
+        ])
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", &config_home)
+        .env("XDG_RUNTIME_DIR", &runtime_dir)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("spawn hub")?;
+
+    let test_result = (|| -> Result<()> {
+        wait_for_socket(&socket_path, Duration::from_secs(5))?;
+
+        let sse_url = format!("http://127.0.0.1:{http_port}/");
+        let base_url = format!("http://127.0.0.1:{http_port}");
+        let mut endpoint_line = None;
+        let mut sse_child = None;
+        let mut sse_rx = None;
+        for _ in 0..20 {
+            let (mut child, rx) = start_sse_stream(&sse_url)?;
+            match recv_line_until(&rx, Duration::from_secs(1), |line| {
+                line.starts_with("data: /message?sessionId=")
+            }) {
+                Ok(line) => {
+                    endpoint_line = Some(line);
+                    sse_rx = Some(rx);
+                    sse_child = Some(child);
+                    break;
+                }
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        let endpoint_line = endpoint_line.context("timed out waiting for SSE endpoint line")?;
+        let mut sse_child = sse_child.context("missing SSE process")?;
+        let rx = sse_rx.context("missing SSE output channel")?;
+
+        let post_path = endpoint_line
+            .strip_prefix("data: ")
+            .context("missing SSE endpoint data prefix")?;
+        let post_url = format!("{base_url}{post_path}");
+
+        http_post_json(
+            &post_url,
+            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+        )?;
+        let tools_line = recv_line_until(&rx, Duration::from_secs(5), |line| {
+            line.contains("\"echo_tool\"")
+        })?;
+        assert!(
+            tools_line.contains("\"echo_tool\""),
+            "unexpected tools/list SSE payload: {tools_line}"
+        );
+
+        http_post_json(
+            &post_url,
+            &serde_json::json!({
+                "jsonrpc":"2.0",
+                "id":2,
+                "method":"tools/call",
+                "params":{"name":"echo_tool","arguments":{}}
+            }),
+        )?;
+        let call_line = recv_line_until(&rx, Duration::from_secs(5), |line| line.contains("pong"))?;
+        assert!(
+            call_line.contains("pong"),
+            "unexpected tools/call SSE payload: {call_line}"
+        );
+
+        let _ = sse_child.kill();
+        let _ = sse_child.wait();
         Ok(())
     })();
 

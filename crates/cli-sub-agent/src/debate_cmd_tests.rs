@@ -278,7 +278,10 @@ fn extract_key_points_reads_bullets_and_numbers() {
 2) Third key point
 "#;
     let points = extract_key_points(output, "fallback");
-    assert_eq!(points, vec!["First key point", "Second key point", "Third key point"]);
+    assert_eq!(
+        points,
+        vec!["First key point", "Second key point", "Third key point"]
+    );
 }
 
 #[test]
@@ -341,10 +344,16 @@ fn extract_debate_summary_does_not_leak_provider_session_id() {
     let sanitized = raw_output.replace(provider_id, meta_id);
     let summary = extract_debate_summary(&sanitized, "fallback");
 
-    assert!(!summary.summary.contains(provider_id), "summary must not contain provider id");
+    assert!(
+        !summary.summary.contains(provider_id),
+        "summary must not contain provider id"
+    );
     assert!(!summary.verdict.contains(provider_id));
     for point in &summary.key_points {
-        assert!(!point.contains(provider_id), "key_point must not contain provider id");
+        assert!(
+            !point.contains(provider_id),
+            "key_point must not contain provider id"
+        );
     }
     // Verify meta_id is present (or harmless if not matched by extraction heuristics)
     assert_eq!(summary.verdict, "APPROVE");

@@ -1,19 +1,26 @@
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow};
 use csa_config::McpServerConfig;
-use serde_json::Value;
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter};
-use tokio::process::{Child, ChildStdin, ChildStdout, Command};
+use csa_process::{SandboxHandle, SpawnOptions, spawn_tool_sandboxed};
+use csa_resource::{SandboxCapability, SandboxConfig, apply_rlimits, detect_sandbox_capability};
+use rmcp::RoleClient;
+use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
+use rmcp::service::{RunningService, ServiceExt};
+use tokio::process::Command;
 use tokio::sync::Mutex;
 
 const RESTART_BACKOFF_INITIAL_MS: u64 = 100;
 const RESTART_BACKOFF_MAX_MS: u64 = 30_000;
+const MCP_SANDBOX_MEMORY_MAX_MB: u64 = 2048;
+const MCP_SANDBOX_MEMORY_SWAP_MAX_MB: Option<u64> = Some(0);
+const MCP_SANDBOX_PIDS_MAX: Option<u32> = None;
+const MCP_SANDBOX_SESSION_ID: &str = "mcp-hub";
+const SHUTDOWN_GRACE_SECS: u64 = 3;
 
-#[derive(Debug)]
 pub(crate) struct McpRegistry {
     servers: HashMap<String, Arc<Mutex<ManagedServer>>>,
 }
@@ -34,14 +41,28 @@ impl McpRegistry {
         self.servers.keys().cloned().collect()
     }
 
-    pub(crate) async fn request(&self, server_name: &str, request: &Value) -> Result<Value> {
+    pub(crate) async fn list_tools(&self, server_name: &str) -> Result<Vec<Tool>> {
         let server = self
             .servers
             .get(server_name)
             .with_context(|| format!("unknown MCP server: {server_name}"))?
             .clone();
         let mut guard = server.lock().await;
-        guard.request(request).await
+        guard.list_tools().await
+    }
+
+    pub(crate) async fn call_tool(
+        &self,
+        server_name: &str,
+        request: CallToolRequestParam,
+    ) -> Result<CallToolResult> {
+        let server = self
+            .servers
+            .get(server_name)
+            .with_context(|| format!("unknown MCP server: {server_name}"))?
+            .clone();
+        let mut guard = server.lock().await;
+        guard.call_tool(request).await
     }
 
     pub(crate) async fn shutdown_all(&self) -> Result<()> {
@@ -53,7 +74,6 @@ impl McpRegistry {
     }
 }
 
-#[derive(Debug)]
 struct ManagedServer {
     config: McpServerConfig,
     process: Option<ServerProcess>,
@@ -69,13 +89,58 @@ impl ManagedServer {
         }
     }
 
-    async fn request(&mut self, request: &Value) -> Result<Value> {
+    async fn list_tools(&mut self) -> Result<Vec<Tool>> {
         let mut last_err: Option<anyhow::Error> = None;
 
-        for _ in 0..2 {
-            self.ensure_running().await?;
-            if let Some(process) = self.process.as_mut() {
-                match process.round_trip(request).await {
+        for _ in 0..3 {
+            if let Err(error) = self.ensure_running().await {
+                tracing::warn!(
+                    server = %self.config.name,
+                    error = %error,
+                    "MCP spawn/list_tools failed, restarting"
+                );
+                last_err = Some(error);
+                self.restart_after_failure().await?;
+                continue;
+            }
+            if let Some(process) = self.process.as_ref() {
+                match process.service.list_tools(None).await {
+                    Ok(response) => {
+                        self.restart_backoff = Duration::from_millis(RESTART_BACKOFF_INITIAL_MS);
+                        return Ok(response.tools);
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            server = %self.config.name,
+                            error = %error,
+                            "MCP list_tools failed, restarting"
+                        );
+                        last_err = Some(anyhow!(error));
+                        self.restart_after_failure().await?;
+                    }
+                }
+            }
+        }
+
+        Err(last_err.unwrap_or_else(|| anyhow!("MCP list_tools failed without explicit error")))
+    }
+
+    async fn call_tool(&mut self, request: CallToolRequestParam) -> Result<CallToolResult> {
+        let mut last_err: Option<anyhow::Error> = None;
+
+        for _ in 0..3 {
+            if let Err(error) = self.ensure_running().await {
+                tracing::warn!(
+                    server = %self.config.name,
+                    error = %error,
+                    "MCP spawn/call_tool failed, restarting"
+                );
+                last_err = Some(error);
+                self.restart_after_failure().await?;
+                continue;
+            }
+            if let Some(process) = self.process.as_ref() {
+                match process.service.call_tool(request.clone()).await {
                     Ok(response) => {
                         self.restart_backoff = Duration::from_millis(RESTART_BACKOFF_INITIAL_MS);
                         return Ok(response);
@@ -84,30 +149,20 @@ impl ManagedServer {
                         tracing::warn!(
                             server = %self.config.name,
                             error = %error,
-                            "MCP server request failed, restarting"
+                            "MCP call_tool failed, restarting"
                         );
-                        last_err = Some(error);
+                        last_err = Some(anyhow!(error));
                         self.restart_after_failure().await?;
                     }
                 }
             }
         }
 
-        Err(last_err.unwrap_or_else(|| anyhow!("MCP request failed without explicit error")))
+        Err(last_err.unwrap_or_else(|| anyhow!("MCP call_tool failed without explicit error")))
     }
 
     async fn ensure_running(&mut self) -> Result<()> {
-        let is_running = if let Some(process) = self.process.as_mut() {
-            process
-                .child
-                .try_wait()
-                .context("failed to query MCP child status")?
-                .is_none()
-        } else {
-            false
-        };
-
-        if is_running {
+        if self.process.is_some() {
             return Ok(());
         }
 
@@ -116,11 +171,9 @@ impl ManagedServer {
     }
 
     async fn restart_after_failure(&mut self) -> Result<()> {
-        if let Some(process) = self.process.as_mut() {
-            let _ = process.child.start_kill();
-            let _ = process.child.wait().await;
+        if let Some(process) = self.process.take() {
+            process.shutdown().await;
         }
-        self.process = None;
 
         tokio::time::sleep(self.restart_backoff).await;
         self.restart_backoff =
@@ -129,94 +182,134 @@ impl ManagedServer {
     }
 
     async fn shutdown(&mut self) -> Result<()> {
-        if let Some(process) = self.process.as_mut() {
-            let _ = process.child.start_kill();
-            let _ = process.child.wait().await;
+        if let Some(process) = self.process.take() {
+            process.shutdown().await;
         }
-        self.process = None;
         Ok(())
     }
 }
 
-#[derive(Debug)]
 struct ServerProcess {
-    child: Child,
-    stdin: BufWriter<ChildStdin>,
-    stdout: BufReader<ChildStdout>,
+    service: RunningService<RoleClient, ()>,
+    child: tokio::process::Child,
+    _sandbox: Option<SandboxHandle>,
 }
 
 impl ServerProcess {
     async fn spawn(config: &McpServerConfig) -> Result<Self> {
         let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
-
+        cmd.args(&config.args);
         for (key, value) in &config.env {
             cmd.env(key, value);
         }
 
-        let mut child = cmd
-            .spawn()
-            .with_context(|| format!("failed to spawn MCP server '{}'", config.name))?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("failed to capture MCP server stdin"))?;
+        let sandbox_config = SandboxConfig {
+            memory_max_mb: MCP_SANDBOX_MEMORY_MAX_MB,
+            memory_swap_max_mb: MCP_SANDBOX_MEMORY_SWAP_MAX_MB,
+            pids_max: MCP_SANDBOX_PIDS_MAX,
+        };
+
+        let capability = detect_sandbox_capability();
+        let (mut child, sandbox) = match capability {
+            SandboxCapability::CgroupV2 => {
+                // `systemd-run --scope` does not preserve interactive stdio semantics
+                // required by MCP child-process transport. Use rlimit sandboxing.
+                let child = spawn_with_rlimit_interactive(cmd, &sandbox_config)
+                    .with_context(|| format!("failed to sandbox MCP server '{}'", config.name))?;
+                (child, None)
+            }
+            SandboxCapability::Setrlimit | SandboxCapability::None => {
+                let (child, sandbox) = spawn_tool_sandboxed(
+                    cmd,
+                    None,
+                    SpawnOptions {
+                        stdin_write_timeout: Duration::from_secs(
+                            csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
+                        ),
+                        keep_stdin_open: true,
+                    },
+                    Some(&sandbox_config),
+                    &config.name,
+                    MCP_SANDBOX_SESSION_ID,
+                )
+                .await
+                .with_context(|| format!("failed to sandbox MCP server '{}'", config.name))?;
+                (child, Some(sandbox))
+            }
+        };
+
         let stdout = child
             .stdout
             .take()
-            .ok_or_else(|| anyhow!("failed to capture MCP server stdout"))?;
+            .ok_or_else(|| anyhow!("failed to capture stdout for MCP server '{}'", config.name))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture stdin for MCP server '{}'", config.name))?;
+        if let Some(mut stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut sink = tokio::io::sink();
+                let _ = tokio::io::copy(&mut stderr, &mut sink).await;
+            });
+        }
+
+        let service = ()
+            .serve((stdout, stdin))
+            .await
+            .with_context(|| format!("failed to spawn MCP server '{}'", config.name))?;
 
         Ok(Self {
+            service,
             child,
-            stdin: BufWriter::new(stdin),
-            stdout: BufReader::new(stdout),
+            _sandbox: sandbox,
         })
     }
 
-    async fn round_trip(&mut self, request: &Value) -> Result<Value> {
-        let payload = serde_json::to_string(request).context("failed to serialize MCP request")?;
-        self.stdin
-            .write_all(payload.as_bytes())
+    async fn shutdown(mut self) {
+        let _ = self.service.cancel().await;
+        match tokio::time::timeout(Duration::from_secs(SHUTDOWN_GRACE_SECS), self.child.wait())
             .await
-            .context("failed to write MCP request")?;
-        self.stdin
-            .write_all(b"\n")
-            .await
-            .context("failed to write MCP request delimiter")?;
-        self.stdin
-            .flush()
-            .await
-            .context("failed to flush MCP request")?;
-
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let bytes = self
-                .stdout
-                .read_line(&mut line)
-                .await
-                .context("failed to read MCP response")?;
-            if bytes == 0 {
-                bail!("MCP server closed stdout unexpectedly");
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::debug!(error = %error, "failed to wait MCP child process");
             }
-            if line.trim().is_empty() {
-                continue;
+            Err(_) => {
+                let _ = self.child.kill().await;
             }
-
-            let response: Value = serde_json::from_str(line.trim())
-                .context("failed to parse MCP response JSON line")?;
-            return Ok(response);
         }
     }
+}
+
+fn spawn_with_rlimit_interactive(
+    mut cmd: Command,
+    config: &SandboxConfig,
+) -> Result<tokio::process::Child> {
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let memory_max_mb = config.memory_max_mb;
+    let pids_max = config.pids_max.map(u64::from);
+    // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(move || {
+            libc::setsid();
+            apply_rlimits(memory_max_mb, pids_max).map_err(io::Error::other)
+        });
+    }
+
+    cmd.spawn()
+        .context("failed to spawn interactive rlimit child")
 }
 
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
     use csa_config::McpServerConfig;
+    use rmcp::model::CallToolRequestParam;
     use serde_json::json;
     use std::collections::HashMap;
     use std::fs;
@@ -237,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn registry_forwards_json_rpc_request() -> Result<()> {
+    async fn registry_forwards_tools_list_and_call_tool() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let script_path = write_script(
             temp.path(),
@@ -245,8 +338,16 @@ mod tests {
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
   case "$line" in
+    *\"initialize\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mock","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
     *\"tools/list\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool"}]}}\n' "$id"
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool","description":"echo","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
+      ;;
+    *\"tools/call\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
       ;;
     *)
       printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
@@ -263,14 +364,30 @@ done
             env: HashMap::new(),
         }]);
 
+        let tools = registry.list_tools("mock").await?;
+        assert_eq!(tools[0].name.as_ref(), "echo_tool");
+
         let response = registry
-            .request(
+            .call_tool(
                 "mock",
-                &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+                CallToolRequestParam {
+                    name: "echo_tool".into(),
+                    arguments: Some(
+                        json!({
+                            "value": "hello"
+                        })
+                        .as_object()
+                        .cloned()
+                        .unwrap_or_default(),
+                    ),
+                },
             )
             .await?;
 
-        assert_eq!(response["result"]["tools"][0]["name"], "echo_tool");
+        assert_eq!(
+            response.content[0].as_text().map(|t| t.text.as_str()),
+            Some("pong")
+        );
         registry.shutdown_all().await?;
         Ok(())
     }
@@ -278,19 +395,28 @@ done
     #[tokio::test]
     async fn registry_restarts_server_after_crash() -> Result<()> {
         let temp = tempfile::tempdir()?;
-        let stamp = temp.path().join("first-run.stamp");
+        let stamp = temp.path().join("first-list.stamp");
         let script_path = write_script(
             temp.path(),
             &format!(
                 r#"#!/bin/sh
 stamp="{}"
-if [ ! -f "$stamp" ]; then
-  touch "$stamp"
-  exit 1
-fi
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}}]*\).*/\1/p')
-  printf '{{"jsonrpc":"2.0","id":%s,"result":{{"ok":true}}}}\n' "$id"
+  case "$line" in
+    *\"initialize\"*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"mock","version":"0.1.0"}}}}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
+    *\"tools/list\"*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"echo_tool","description":"echo","inputSchema":{{"type":"object","properties":{{}}}}}}]}}}}\n' "$id"
+      if [ ! -f "$stamp" ]; then
+        touch "$stamp"
+        exit 1
+      fi
+      ;;
+  esac
 done
 "#,
                 stamp.to_string_lossy()
@@ -304,11 +430,12 @@ done
             env: HashMap::new(),
         }]);
 
-        let response = registry
-            .request("flaky", &json!({"jsonrpc":"2.0","id":9,"method":"ping"}))
-            .await?;
+        let first = registry.list_tools("flaky").await?;
+        assert_eq!(first[0].name.as_ref(), "echo_tool");
 
-        assert_eq!(response["result"]["ok"], true);
+        let second = registry.list_tools("flaky").await?;
+        assert_eq!(second[0].name.as_ref(), "echo_tool");
+
         registry.shutdown_all().await?;
         Ok(())
     }

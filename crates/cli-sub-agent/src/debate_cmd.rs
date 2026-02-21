@@ -117,10 +117,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         execution.provider_session_id.as_deref(),
     );
 
-    let debate_summary = extract_debate_summary(
-        &output,
-        execution.execution.summary.as_str(),
-    );
+    let debate_summary = extract_debate_summary(&output, execution.execution.summary.as_str());
     let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
     append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
@@ -211,7 +208,11 @@ fn append_debate_artifacts_to_result(
         .ok_or_else(|| anyhow::anyhow!("Missing result.toml for debate session {session_id}"))?;
 
     for artifact in debate_artifacts {
-        if !result.artifacts.iter().any(|existing| existing.path == artifact.path) {
+        if !result
+            .artifacts
+            .iter()
+            .any(|existing| existing.path == artifact.path)
+        {
             result.artifacts.push(artifact.clone());
         }
     }
@@ -301,7 +302,10 @@ fn extract_one_line_summary(output: &str, fallback_summary: &str) -> String {
 
         let lower = trimmed.to_ascii_lowercase();
         if lower.starts_with("summary:") || lower.starts_with("conclusion:") {
-            let value = trimmed.split_once(':').map(|(_, rhs)| rhs).unwrap_or(trimmed);
+            let value = trimmed
+                .split_once(':')
+                .map(|(_, rhs)| rhs)
+                .unwrap_or(trimmed);
             let cleaned = normalize_whitespace(value);
             if !cleaned.is_empty() {
                 return truncate_chars(cleaned.as_str(), 200);

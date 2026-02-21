@@ -243,10 +243,19 @@ async fn main() -> Result<()> {
                 background,
                 foreground,
                 socket,
+                http_bind,
+                http_port,
                 systemd_activation,
             } => {
-                mcp_hub::handle_serve_command(background, foreground, socket, systemd_activation)
-                    .await?;
+                mcp_hub::handle_serve_command(
+                    background,
+                    foreground,
+                    socket,
+                    http_bind,
+                    http_port,
+                    systemd_activation,
+                )
+                .await?;
             }
             McpHubCommands::Status { socket } => {
                 mcp_hub::handle_status_command(socket).await?;

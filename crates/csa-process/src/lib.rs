@@ -76,12 +76,18 @@ const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 pub struct SpawnOptions {
     /// Max duration allowed for writing prompt payload to child stdin.
     pub stdin_write_timeout: Duration,
+    /// Keep child stdin piped open even when `stdin_data` is `None`.
+    ///
+    /// Use this for long-lived interactive processes (e.g. JSON-RPC over stdio)
+    /// that require writable stdin beyond initial spawn.
+    pub keep_stdin_open: bool,
 }
 
 impl Default for SpawnOptions {
     fn default() -> Self {
         Self {
             stdin_write_timeout: Duration::from_secs(DEFAULT_STDIN_WRITE_TIMEOUT_SECS),
+            keep_stdin_open: false,
         }
     }
 }
@@ -133,7 +139,7 @@ async fn spawn_tool_with_pre_exec(
 ) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
-    if stdin_data.is_some() {
+    if stdin_data.is_some() || spawn_options.keep_stdin_open {
         cmd.stdin(std::process::Stdio::piped());
     } else {
         cmd.stdin(std::process::Stdio::null());
