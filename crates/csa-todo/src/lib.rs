@@ -1,12 +1,12 @@
 //! TODO plan management for CSA projects.
 //!
-//! Each project has a todos directory at `~/.local/state/csa/{project_path}/todos/`,
+//! Each project has a todos directory at `~/.local/state/cli-sub-agent/{project_path}/todos/`,
 //! organized as a single git repository tracking all plans as timestamped subdirectories.
 //!
 //! # Directory Layout
 //!
 //! ```text
-//! ~/.local/state/csa/{project_path}/todos/
+//! ~/.local/state/cli-sub-agent/{project_path}/todos/
 //! ├── .git/              (single git repo, managed by `csa todo save/history`)
 //! ├── .lock              (flock for concurrent write protection)
 //! ├── 20260211T023000/
@@ -147,7 +147,7 @@ impl TodoManager {
     /// Create a manager for the given project path.
     ///
     /// Resolves the todos directory via `csa-session`'s project root:
-    /// `~/.local/state/csa/{encoded_project_path}/todos/`
+    /// `~/.local/state/cli-sub-agent/{encoded_project_path}/todos/`
     pub fn new(project_path: &Path) -> Result<Self> {
         let session_root = csa_session::manager::get_session_root(project_path)?;
         Ok(Self {

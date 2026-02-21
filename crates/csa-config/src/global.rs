@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use csa_core::types::ToolName;
 
 use crate::mcp::McpServerConfig;
+use crate::paths;
 
 /// Default maximum concurrent instances per tool.
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
@@ -307,9 +308,9 @@ impl GlobalConfig {
     /// Returns `Default` if the file does not exist or if the config
     /// directory cannot be determined (e.g., no HOME in containers).
     pub fn load() -> Result<Self> {
-        let path = match Self::config_path() {
-            Ok(p) => p,
-            Err(_) => return Ok(Self::default()),
+        let path = match paths::config_dir() {
+            Some(dir) => dir.join("config.toml"),
+            None => return Ok(Self::default()),
         };
         if !path.exists() {
             return Ok(Self::default());
@@ -355,37 +356,30 @@ impl GlobalConfig {
 
     /// Path to the global config file: `~/.config/cli-sub-agent/config.toml`.
     pub fn config_path() -> Result<PathBuf> {
-        let dirs = directories::ProjectDirs::from("", "", "cli-sub-agent")
-            .context("Failed to determine config directory")?;
-        Ok(dirs.config_dir().join("config.toml"))
+        let dir = paths::config_dir_write().context("Failed to determine config directory")?;
+        Ok(dir.join("config.toml"))
     }
 
     /// Path to the global slots directory.
     ///
-    /// Base state directory for all CSA data (`~/.local/state/csa/`).
+    /// Base state directory for all CSA data (`~/.local/state/cli-sub-agent/`).
     ///
     /// Used by `--global` GC to scan all project session trees.
     pub fn state_base_dir() -> Result<PathBuf> {
-        let base = directories::ProjectDirs::from("", "", "csa")
-            .map(|dirs| {
-                // Mirror get_session_root fallback: state_dir → data_local_dir
-                dirs.state_dir()
-                    .unwrap_or_else(|| dirs.data_local_dir())
-                    .to_path_buf()
-            })
-            .unwrap_or_else(|| std::env::temp_dir().join("csa-state"));
+        let base = paths::state_dir().unwrap_or_else(paths::state_dir_fallback);
         Ok(base)
     }
 
     /// Resolution order:
-    /// 1. `~/.local/state/csa/slots/` (XDG state dir on Linux)
+    /// 1. `~/.local/state/cli-sub-agent/slots/` (XDG state dir on Linux)
     /// 2. Platform-equivalent state dir (macOS/Windows)
-    /// 3. `$TMPDIR/csa-state/slots/` (fallback when state_dir unavailable)
-    /// 4. `$TMPDIR/csa-state/slots/` (fallback when HOME/XDG unset, e.g. containers)
+    /// 3. `$TMPDIR/cli-sub-agent-state/slots/` (fallback when state_dir unavailable)
+    /// 4. `$TMPDIR/cli-sub-agent-state/slots/` (fallback when HOME/XDG unset, e.g. containers)
     ///
     /// This function never fails — it always returns a usable path.
     pub fn slots_dir() -> Result<PathBuf> {
-        Ok(Self::state_base_dir()?.join("slots"))
+        let base = paths::state_dir_write().unwrap_or_else(paths::state_dir_fallback);
+        Ok(base.join("slots"))
     }
 
     /// Generate default config TOML with comments as a template.
@@ -473,7 +467,7 @@ cloud_review_exhausted = "ask-user"
 # args = ["-y", "@anthropic/deepwiki-mcp"]
 #
 # Optional shared MCP hub socket path.
-# mcp_proxy_socket = "/run/user/1000/csa/mcp-hub.sock"
+# mcp_proxy_socket = "/run/user/1000/cli-sub-agent/mcp-hub.sock"
 "#
         .to_string()
     }

@@ -2,7 +2,8 @@
 Description=CSA MCP Hub Socket
 
 [Socket]
-ListenStream=%t/csa/mcp-hub.sock
+# Legacy `%t/csa` path remains compatible via migration-created symlink.
+ListenStream=%t/cli-sub-agent/mcp-hub.sock
 SocketMode=0600
 DirectoryMode=0700
 Service=mcp-hub.service

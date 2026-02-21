@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::acp::AcpConfig;
 use crate::config_merge::{enforce_global_tool_disables, merge_toml_values, warn_deprecated_keys};
 use crate::global::{PreferencesConfig, ReviewConfig};
+use crate::paths;
 
 /// Sandbox enforcement mode for resource limits (cgroups, rlimits).
 ///
@@ -326,8 +327,8 @@ impl ResourcesConfig {
 impl ProjectConfig {
     /// Load config with fallback chain:
     ///
-    /// 1. If both `.csa/config.toml` (project) and `~/.config/cli-sub-agent/config.toml` (user)
-    ///    exist, deep-merge them with project settings overriding user settings.
+    /// 1. If both `.csa/config.toml` (project) and user config exist, deep-merge
+    ///    them with project settings overriding user settings.
     /// 2. If only project config exists, use it directly.
     /// 3. If only user config exists, use it as fallback.
     /// 4. If neither exists, return None.
@@ -430,13 +431,19 @@ impl ProjectConfig {
         Ok(Some(config))
     }
 
-    /// Path to user-level config: `~/.config/cli-sub-agent/config.toml`.
+    /// Path to user-level config for reads.
+    ///
+    /// Prefers `~/.config/cli-sub-agent/config.toml`, and falls back to
+    /// `~/.config/csa/config.toml` when the canonical `~/.config/cli-sub-agent/config.toml` path is absent.
     ///
     /// Returns None if the config directory cannot be determined
     /// (e.g., no HOME in containers).
     pub fn user_config_path() -> Option<PathBuf> {
-        directories::ProjectDirs::from("", "", "cli-sub-agent")
-            .map(|dirs| dirs.config_dir().join("config.toml"))
+        paths::config_dir().map(|dir| dir.join("config.toml"))
+    }
+
+    fn user_config_write_path() -> Option<PathBuf> {
+        paths::config_dir_write().map(|dir| dir.join("config.toml"))
     }
 
     /// Check if the config schema version is compatible with the current binary.
@@ -548,7 +555,7 @@ impl ProjectConfig {
     /// Creates the directory if needed. Returns the path written, or None
     /// if the config directory cannot be determined.
     pub fn save_user_config_template() -> Result<Option<PathBuf>> {
-        let path = match Self::user_config_path() {
+        let path = match Self::user_config_write_path() {
             Some(p) => p,
             None => return Ok(None),
         };

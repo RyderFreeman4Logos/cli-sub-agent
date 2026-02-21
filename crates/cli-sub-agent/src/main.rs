@@ -87,6 +87,22 @@ async fn main() -> Result<()> {
         }
     }
 
+    let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
+    if !legacy_xdg_paths.is_empty() {
+        eprintln!(
+            "WARNING: legacy XDG paths detected ({}). Run `csa migrate` to unify paths.",
+            legacy_xdg_paths.len()
+        );
+        for path in &legacy_xdg_paths {
+            eprintln!(
+                "  - {}: legacy={} -> new={}",
+                path.label,
+                path.legacy_path.display(),
+                path.new_path.display()
+            );
+        }
+    }
+
     match cli.command {
         Commands::Run {
             tool,

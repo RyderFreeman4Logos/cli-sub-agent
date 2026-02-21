@@ -153,7 +153,7 @@ pub enum Commands {
         #[arg(long)]
         max_age_days: Option<u64>,
 
-        /// Scan all projects under ~/.local/state/csa/ (not just current project)
+        /// Scan all projects under ~/.local/state/cli-sub-agent/ (not just current project)
         #[arg(long)]
         global: bool,
     },

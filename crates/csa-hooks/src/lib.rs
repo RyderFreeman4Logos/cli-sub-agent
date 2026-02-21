@@ -11,7 +11,7 @@
 //!
 //! Hook configuration is loaded with 4-tier priority:
 //! 1. Runtime overrides (CLI params) — highest
-//! 2. Project config (`~/.local/state/csa/{project}/hooks.toml`)
+//! 2. Project config (`~/.local/state/cli-sub-agent/{project}/hooks.toml`)
 //! 3. Global config (`~/.config/cli-sub-agent/hooks.toml`)
 //! 4. Built-in defaults — lowest
 //!

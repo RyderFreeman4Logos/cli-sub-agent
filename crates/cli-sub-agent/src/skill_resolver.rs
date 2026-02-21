@@ -6,6 +6,7 @@
 //! 3. `<global_store>/<name>/<commit>/`          (weave global store)
 
 use anyhow::{Context, Result, bail};
+use csa_config::paths;
 use std::path::{Path, PathBuf};
 
 use weave::package::{self, SourceKind};
@@ -81,19 +82,14 @@ fn search_paths_with_store(
     project_root: &Path,
     store_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut paths = Vec::with_capacity(3);
+    let mut search_roots = Vec::with_capacity(3);
 
     // 1. Project-local: .csa/skills/<name>/
-    paths.push(project_root.join(".csa").join("skills").join(name));
+    search_roots.push(project_root.join(".csa").join("skills").join(name));
 
-    // 2. Global user: ~/.config/cli-sub-agent/skills/<name>/
-    if let Some(base) = directories::BaseDirs::new() {
-        paths.push(
-            base.config_dir()
-                .join("cli-sub-agent")
-                .join("skills")
-                .join(name),
-        );
+    // 2. Global user: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
+    if let Some(config_dir) = paths::config_dir() {
+        search_roots.push(config_dir.join("skills").join(name));
     }
 
     // 3. Weave global store: match locked packages by name.
@@ -110,14 +106,14 @@ fn search_paths_with_store(
                         SourceKind::Git => &pkg.commit,
                     };
                     if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
-                        paths.push(pkg_dir);
+                        search_roots.push(pkg_dir);
                     }
                 }
             }
         }
     }
 
-    paths
+    search_roots
 }
 
 /// Load `.skill.toml` from a skill directory (optional file).

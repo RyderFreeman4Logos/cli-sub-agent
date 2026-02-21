@@ -1,4 +1,11 @@
 use super::*;
+use crate::paths::XdgPathPair;
+#[cfg(unix)]
+use std::sync::mpsc;
+#[cfg(unix)]
+use std::thread;
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 #[test]
@@ -531,4 +538,109 @@ fn test_migration_step_debug_format() {
     };
     let debug = format!("{step:?}");
     assert!(debug.contains("custom-label"));
+}
+
+#[test]
+fn test_xdg_migration_legacy_to_new_with_symlink() {
+    let dir = TempDir::new().unwrap();
+    let admin_dir = dir.path().join("admin");
+    let legacy = dir.path().join("csa-state");
+    let new_path = dir.path().join("cli-sub-agent-state");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("state.toml"), "hello").unwrap();
+
+    let pairs = vec![XdgPathPair {
+        label: "state",
+        new_path: new_path.clone(),
+        legacy_path: legacy.clone(),
+    }];
+
+    migrate_xdg_paths_for_pairs(pairs, &admin_dir).unwrap();
+
+    assert!(new_path.join("state.toml").exists());
+    let meta = std::fs::symlink_metadata(&legacy).unwrap();
+    assert!(meta.file_type().is_symlink());
+    assert_eq!(std::fs::read_link(&legacy).unwrap(), new_path);
+}
+
+#[test]
+fn test_xdg_migration_new_path_already_exists_noop_when_legacy_absent() {
+    let dir = TempDir::new().unwrap();
+    let admin_dir = dir.path().join("admin");
+    let legacy = dir.path().join("csa-state");
+    let new_path = dir.path().join("cli-sub-agent-state");
+    std::fs::create_dir_all(&new_path).unwrap();
+    std::fs::write(new_path.join("existing.txt"), "keep").unwrap();
+
+    let pairs = vec![XdgPathPair {
+        label: "state",
+        new_path: new_path.clone(),
+        legacy_path: legacy.clone(),
+    }];
+
+    migrate_xdg_paths_for_pairs(pairs, &admin_dir).unwrap();
+
+    assert!(new_path.join("existing.txt").exists());
+    assert!(!legacy.exists());
+}
+
+#[test]
+fn test_xdg_migration_recovers_from_marker_and_rolls_back() {
+    let dir = TempDir::new().unwrap();
+    let admin_dir = dir.path().join("admin");
+    std::fs::create_dir_all(&admin_dir).unwrap();
+
+    let legacy = dir.path().join("csa-state");
+    let new_path = dir.path().join("cli-sub-agent-state");
+    std::fs::create_dir_all(&legacy).unwrap();
+    std::fs::write(legacy.join("state.toml"), "legacy").unwrap();
+    std::fs::rename(&legacy, &new_path).unwrap();
+
+    let marker = XdgMigrationMarker {
+        operations: vec![XdgMigrationOperation::MoveLegacyToNew {
+            legacy: legacy.clone(),
+            new_path: new_path.clone(),
+        }],
+    };
+    write_marker(&marker_path(&admin_dir), &marker).unwrap();
+
+    recover_incomplete_xdg_migration(&admin_dir).unwrap();
+
+    assert!(legacy.join("state.toml").exists());
+    assert!(!new_path.exists());
+    assert!(!marker_path(&admin_dir).exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_xdg_migration_concurrent_flock_blocks_second_migration() {
+    let dir = TempDir::new().unwrap();
+    let admin_dir = dir.path().join("admin");
+    std::fs::create_dir_all(&admin_dir).unwrap();
+
+    let lock = GlobalMigrationLock::acquire(&admin_dir).unwrap();
+    let (tx, rx) = mpsc::channel();
+    let admin_clone = admin_dir.clone();
+
+    let handle = thread::spawn(move || {
+        let started = Instant::now();
+        let _guard = GlobalMigrationLock::acquire(&admin_clone).unwrap();
+        tx.send(started.elapsed()).unwrap();
+    });
+
+    thread::sleep(Duration::from_millis(200));
+    assert!(
+        rx.try_recv().is_err(),
+        "second migration lock should still be blocked"
+    );
+
+    drop(lock);
+    let elapsed = rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(
+        elapsed >= Duration::from_millis(150),
+        "expected lock blocking, got {:?}",
+        elapsed
+    );
+
+    handle.join().unwrap();
 }

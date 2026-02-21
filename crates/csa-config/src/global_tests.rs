@@ -561,7 +561,11 @@ fn test_state_base_dir_returns_ok() {
     let dir = GlobalConfig::state_base_dir();
     assert!(dir.is_ok());
     let path = dir.unwrap();
-    assert!(path.to_string_lossy().contains("csa"));
+    let path_str = path.to_string_lossy();
+    assert!(
+        path_str.contains("cli-sub-agent") || path_str.contains("csa"),
+        "unexpected state dir path: {path_str}"
+    );
 }
 
 // --- Tool Priority Tests ---

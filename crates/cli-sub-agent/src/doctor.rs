@@ -1,7 +1,7 @@
 //! Environment diagnostics for CSA.
 
 use anyhow::Result;
-use csa_config::ProjectConfig;
+use csa_config::{ProjectConfig, paths};
 use csa_core::types::OutputFormat;
 use csa_resource::rlimit::{current_rlimit_as, current_rlimit_nproc};
 use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability, systemd_version};
@@ -67,8 +67,8 @@ async fn run_doctor_json() -> Result<()> {
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
 
-    let state_dir = directories::ProjectDirs::from("", "", "csa")
-        .and_then(|p| p.state_dir().map(|d| d.display().to_string()))
+    let state_dir = paths::state_dir()
+        .map(|d| d.display().to_string())
         .unwrap_or_default();
 
     // Check tools
@@ -180,12 +180,8 @@ fn print_platform_info() {
 
 /// Print CSA state directory path.
 fn print_state_dir() {
-    if let Some(proj_dirs) = directories::ProjectDirs::from("", "", "csa") {
-        if let Some(state_dir) = proj_dirs.state_dir() {
-            println!("State Dir:   {}", state_dir.display());
-        } else {
-            println!("State Dir:   (unable to determine)");
-        }
+    if let Some(state_dir) = paths::state_dir() {
+        println!("State Dir:   {}", state_dir.display());
     } else {
         println!("State Dir:   (unable to determine)");
     }

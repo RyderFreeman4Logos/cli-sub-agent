@@ -82,7 +82,7 @@ fn mcp_hub_serve_parse_with_background_and_socket() {
         "serve",
         "--background",
         "--socket",
-        "/tmp/csa-1000/mcp-hub.sock",
+        "/tmp/cli-sub-agent-1000/mcp-hub.sock",
     ])
     .expect("mcp-hub serve args should parse");
 
@@ -100,7 +100,10 @@ fn mcp_hub_serve_parse_with_background_and_socket() {
         } => {
             assert!(background);
             assert!(!foreground);
-            assert_eq!(socket.as_deref(), Some("/tmp/csa-1000/mcp-hub.sock"));
+            assert_eq!(
+                socket.as_deref(),
+                Some("/tmp/cli-sub-agent-1000/mcp-hub.sock")
+            );
             assert!(http_bind.is_none());
             assert!(http_port.is_none());
             assert!(!systemd_activation);
@@ -116,7 +119,7 @@ fn mcp_hub_gen_skill_parse_with_socket() {
         "mcp-hub",
         "gen-skill",
         "--socket",
-        "/tmp/csa-1000/mcp-hub.sock",
+        "/tmp/cli-sub-agent-1000/mcp-hub.sock",
     ])
     .expect("mcp-hub gen-skill args should parse");
 
@@ -124,7 +127,10 @@ fn mcp_hub_gen_skill_parse_with_socket() {
         Commands::McpHub {
             cmd: McpHubCommands::GenSkill { socket },
         } => {
-            assert_eq!(socket.as_deref(), Some("/tmp/csa-1000/mcp-hub.sock"));
+            assert_eq!(
+                socket.as_deref(),
+                Some("/tmp/cli-sub-agent-1000/mcp-hub.sock")
+            );
         }
         _ => panic!("expected mcp-hub gen-skill subcommand"),
     }

@@ -552,6 +552,7 @@ dependencies = [
  "chrono",
  "csa-core",
  "directories",
+ "libc",
  "serde",
  "tempfile",
  "toml",
@@ -601,7 +602,7 @@ name = "csa-hooks"
 version = "0.1.27"
 dependencies = [
  "anyhow",
- "directories",
+ "csa-config",
  "libc",
  "serde",
  "serde_json",
@@ -698,9 +699,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "csa-acp",
+ "csa-config",
  "csa-core",
  "csa-lock",
- "directories",
  "regex",
  "serde",
  "serde_json",
