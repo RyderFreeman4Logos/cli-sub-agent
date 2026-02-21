@@ -1,5 +1,9 @@
-//! Shared MCP hub library crate.
+//! Shared MCP hub implementation used by the csa CLI wrapper.
 
-pub fn version_banner() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
+mod config;
+mod proxy;
+mod registry;
+mod serve;
+mod socket;
+
+pub use serve::{handle_serve_command, handle_status_command, handle_stop_command};

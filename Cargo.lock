@@ -408,6 +408,7 @@ dependencies = [
  "csa-executor",
  "csa-hooks",
  "csa-lock",
+ "csa-mcp-hub",
  "csa-process",
  "csa-resource",
  "csa-scheduler",

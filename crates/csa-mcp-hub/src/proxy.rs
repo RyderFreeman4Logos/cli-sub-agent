@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::{RwLock, watch};
 
-use crate::mcp_hub::registry::McpRegistry;
+use crate::registry::McpRegistry;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct JsonRpcRequest {
@@ -260,8 +260,8 @@ mod tests {
     use serde_json::json;
     use tokio::sync::watch;
 
-    use crate::mcp_hub::proxy::{JsonRpcRequest, ProxyRouter};
-    use crate::mcp_hub::registry::McpRegistry;
+    use crate::proxy::{JsonRpcRequest, ProxyRouter};
+    use crate::registry::McpRegistry;
 
     fn write_script(dir: &std::path::Path) -> Result<std::path::PathBuf> {
         let path = dir.join("mock-mcp.sh");
