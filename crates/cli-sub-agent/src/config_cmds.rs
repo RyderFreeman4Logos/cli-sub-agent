@@ -116,6 +116,7 @@ max_recursion_depth = 5
 # [resources]
 # min_free_memory_mb = 4096
 # idle_timeout_seconds = 120
+# liveness_dead_seconds = 600
 #
 # [resources.initial_estimates]
 # gemini-cli = 150

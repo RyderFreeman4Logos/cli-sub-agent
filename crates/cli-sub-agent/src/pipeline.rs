@@ -29,6 +29,7 @@ use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
+pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -37,6 +38,12 @@ pub(crate) fn resolve_idle_timeout_seconds(
     cli_override
         .or_else(|| config.map(|cfg| cfg.resources.idle_timeout_seconds))
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECONDS)
+}
+
+pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {
+    config
+        .and_then(|cfg| cfg.resources.liveness_dead_seconds)
+        .unwrap_or(DEFAULT_LIVENESS_DEAD_SECONDS)
 }
 
 pub(crate) fn context_load_options_with_skips(
@@ -563,12 +570,14 @@ pub(crate) async fn execute_with_session_and_meta(
     }
 
     // Resolve sandbox configuration from project config and enforcement mode.
+    let liveness_dead_seconds = resolve_liveness_dead_seconds(config);
     let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
         config,
         executor.tool_name(),
         &session.meta_session_id,
         stream_mode,
         idle_timeout_seconds,
+        liveness_dead_seconds,
     ) {
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {

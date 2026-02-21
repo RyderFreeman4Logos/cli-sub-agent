@@ -208,6 +208,37 @@ fn resolve_idle_timeout_uses_config_then_default() {
     );
 }
 
+#[test]
+fn resolve_liveness_dead_seconds_uses_config_then_default() {
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            liveness_dead_seconds: Some(42),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    assert_eq!(resolve_liveness_dead_seconds(Some(&cfg)), 42);
+    assert_eq!(
+        resolve_liveness_dead_seconds(None),
+        DEFAULT_LIVENESS_DEAD_SECONDS
+    );
+}
+
 fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectConfig {
     ProjectConfig {
         schema_version: CURRENT_SCHEMA_VERSION,

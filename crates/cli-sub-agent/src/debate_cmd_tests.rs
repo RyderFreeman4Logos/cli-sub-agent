@@ -507,6 +507,36 @@ fn resolve_debate_thinking_defaults_none_for_backward_compatibility() {
     assert_eq!(thinking, None);
 }
 
+#[test]
+fn resolve_debate_timeout_prefers_cli_over_global() {
+    let timeout = resolve_debate_timeout_seconds(Some(120), Some(600));
+    assert_eq!(timeout, Some(120));
+}
+
+#[test]
+fn resolve_debate_timeout_uses_global_then_none() {
+    assert_eq!(resolve_debate_timeout_seconds(None, Some(600)), Some(600));
+    assert_eq!(resolve_debate_timeout_seconds(None, None), None);
+}
+
+#[test]
+fn retry_policy_only_retries_transient_once() {
+    use crate::debate_errors::DebateErrorKind;
+
+    assert!(should_retry_debate_after_error(
+        &DebateErrorKind::Transient("oom".to_string()),
+        0
+    ));
+    assert!(!should_retry_debate_after_error(
+        &DebateErrorKind::Transient("oom".to_string()),
+        1
+    ));
+    assert!(!should_retry_debate_after_error(
+        &DebateErrorKind::Deterministic("arg".to_string()),
+        0
+    ));
+}
+
 // --- verify_debate_skill_available tests (#140) ---
 
 #[test]

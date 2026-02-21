@@ -8,6 +8,7 @@ mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;
 mod debate_cmd;
+mod debate_errors;
 mod doctor;
 mod gc;
 mod mcp_hub;
@@ -163,6 +164,10 @@ async fn main() -> Result<()> {
             }
             SessionCommands::Logs { session, tail, cd } => {
                 session_cmds::handle_session_logs(session, tail, cd)?;
+            }
+            SessionCommands::IsAlive { session, cd } => {
+                let alive = session_cmds::handle_session_is_alive(session, cd)?;
+                std::process::exit(if alive { 0 } else { 1 });
             }
             SessionCommands::Result { session, json, cd } => {
                 session_cmds::handle_session_result(session, json, cd)?;

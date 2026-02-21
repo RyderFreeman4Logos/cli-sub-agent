@@ -228,6 +228,10 @@ pub struct ResourcesConfig {
     /// Kill child if no streamed output for this many consecutive seconds.
     #[serde(default = "default_idle_timeout_seconds")]
     pub idle_timeout_seconds: u64,
+    /// After entering idle liveness mode, terminate only after this many
+    /// consecutive seconds with no positive liveness signal.
+    #[serde(default = "default_liveness_dead_seconds")]
+    pub liveness_dead_seconds: Option<u64>,
     /// Maximum time to block when waiting for a free global tool slot.
     #[serde(default = "default_slot_wait_timeout_seconds")]
     pub slot_wait_timeout_seconds: u64,
@@ -268,6 +272,10 @@ fn default_slot_wait_timeout_seconds() -> u64 {
     300
 }
 
+fn default_liveness_dead_seconds() -> Option<u64> {
+    Some(600)
+}
+
 fn default_stdin_write_timeout_seconds() -> u64 {
     30
 }
@@ -281,6 +289,7 @@ impl Default for ResourcesConfig {
         Self {
             min_free_memory_mb: default_min_mem(),
             idle_timeout_seconds: default_idle_timeout_seconds(),
+            liveness_dead_seconds: default_liveness_dead_seconds(),
             slot_wait_timeout_seconds: default_slot_wait_timeout_seconds(),
             stdin_write_timeout_seconds: default_stdin_write_timeout_seconds(),
             termination_grace_period_seconds: default_termination_grace_period_seconds(),
@@ -301,6 +310,7 @@ impl ResourcesConfig {
     pub fn is_default(&self) -> bool {
         self.min_free_memory_mb == default_min_mem()
             && self.idle_timeout_seconds == default_idle_timeout_seconds()
+            && self.liveness_dead_seconds == default_liveness_dead_seconds()
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.termination_grace_period_seconds == default_termination_grace_period_seconds()
@@ -562,6 +572,7 @@ transcript_redaction = true
 [resources]
 min_free_memory_mb = 4096
 idle_timeout_seconds = 300
+liveness_dead_seconds = 600
 slot_wait_timeout_seconds = 300
 stdin_write_timeout_seconds = 30
 termination_grace_period_seconds = 5

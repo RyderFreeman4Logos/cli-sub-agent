@@ -23,6 +23,7 @@ pub const MAX_ARGV_PROMPT_LEN: usize = 100 * 1024;
 pub struct ExecuteOptions {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,
     pub termination_grace_period_seconds: u64,
@@ -57,6 +58,7 @@ impl ExecuteOptions {
         Self {
             stream_mode,
             idle_timeout_seconds,
+            liveness_dead_seconds: csa_process::DEFAULT_LIVENESS_DEAD_SECS,
             stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
             acp_init_timeout_seconds: 60,
             termination_grace_period_seconds: csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS,
@@ -69,6 +71,12 @@ impl ExecuteOptions {
     /// Override stdin write timeout (seconds) for spawned child processes.
     pub fn with_stdin_write_timeout_seconds(mut self, seconds: u64) -> Self {
         self.stdin_write_timeout_seconds = seconds;
+        self
+    }
+
+    /// Override liveness dead timeout (seconds) for idle-timeout liveness mode.
+    pub fn with_liveness_dead_seconds(mut self, seconds: u64) -> Self {
+        self.liveness_dead_seconds = seconds;
         self
     }
 
@@ -336,6 +344,7 @@ impl Executor {
         let transport_options = TransportOptions {
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
+            liveness_dead_seconds: options.liveness_dead_seconds,
             stdin_write_timeout_seconds: options.stdin_write_timeout_seconds,
             acp_init_timeout_seconds: options.acp_init_timeout_seconds,
             termination_grace_period_seconds: options.termination_grace_period_seconds,

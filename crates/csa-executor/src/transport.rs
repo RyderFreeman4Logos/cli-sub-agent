@@ -12,6 +12,7 @@ use csa_process::{
 use csa_resource::cgroup::SandboxConfig;
 use csa_session::state::{MetaSessionState, ToolState};
 const SUMMARY_MAX_CHARS: usize = 200;
+
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
     pub config: SandboxConfig,
@@ -24,6 +25,7 @@ pub struct SandboxTransportConfig {
 pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,
     pub termination_grace_period_seconds: u64,
@@ -88,6 +90,7 @@ impl LegacyTransport {
             child,
             stream_mode,
             std::time::Duration::from_secs(idle_timeout_seconds),
+            std::time::Duration::from_secs(csa_process::DEFAULT_LIVENESS_DEAD_SECS),
             std::time::Duration::from_secs(csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
             None,
         )
@@ -163,6 +166,7 @@ impl Transport for LegacyTransport {
             child,
             options.stream_mode,
             std::time::Duration::from_secs(options.idle_timeout_seconds),
+            std::time::Duration::from_secs(options.liveness_dead_seconds),
             std::time::Duration::from_secs(options.termination_grace_period_seconds),
             options.output_spool,
         )
@@ -373,8 +377,6 @@ impl Transport for AcpTransport {
         let stream_stdout_to_stderr = options.stream_mode != StreamMode::BufferOnly;
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
 
-        // csa-acp currently relies on !Send internals (LocalSet/Rc). Run it on a
-        // dedicated current-thread runtime so callers can stay Send-safe.
         let output =
             tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
                 let rt = tokio::runtime::Builder::new_current_thread()
@@ -383,8 +385,6 @@ impl Transport for AcpTransport {
                     .map_err(|e| anyhow!("failed to build ACP runtime: {e}"))?;
 
                 if let Some(ref cfg) = sandbox_config {
-                    // Sandboxed path: use AcpConnection::spawn_sandboxed directly,
-                    // then replicate the session setup from run_prompt.
                     let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
                     let sess_id = sandbox_session_id.as_deref().unwrap_or("");
                     match rt.block_on(run_acp_sandboxed(

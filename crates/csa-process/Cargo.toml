@@ -13,3 +13,6 @@ libc.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

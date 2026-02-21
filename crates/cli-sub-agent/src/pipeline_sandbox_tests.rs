@@ -9,6 +9,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         "test-session",
         StreamMode::BufferOnly,
         120,
+        600,
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -25,8 +26,14 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
 /// Lightweight tools (codex) with no project config should NOT get a sandbox context.
 #[test]
 fn test_none_config_lightweight_skips_sandbox() {
-    let result =
-        resolve_sandbox_options(None, "codex", "test-session", StreamMode::BufferOnly, 120);
+    let result = resolve_sandbox_options(
+        None,
+        "codex",
+        "test-session",
+        StreamMode::BufferOnly,
+        120,
+        600,
+    );
 
     let SandboxResolution::Ok(opts) = result else {
         panic!("Expected SandboxResolution::Ok");
@@ -52,6 +59,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         "test-session",
         StreamMode::BufferOnly,
         120,
+        600,
     );
 
     let SandboxResolution::Ok(opts) = result else {

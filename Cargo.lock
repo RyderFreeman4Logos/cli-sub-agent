@@ -653,6 +653,7 @@ dependencies = [
  "csa-resource",
  "libc",
  "serde",
+ "tempfile",
  "tokio",
  "tracing",
 ]

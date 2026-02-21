@@ -56,6 +56,9 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if config.resources.idle_timeout_seconds == 0 {
         bail!("resources.idle_timeout_seconds must be > 0 (got 0)");
     }
+    if config.resources.liveness_dead_seconds == Some(0) {
+        bail!("resources.liveness_dead_seconds must be > 0 when set (got 0)");
+    }
     if config.resources.slot_wait_timeout_seconds == 0 {
         bail!("resources.slot_wait_timeout_seconds must be > 0 (got 0)");
     }

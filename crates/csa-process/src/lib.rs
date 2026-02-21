@@ -11,6 +11,10 @@ use tracing::{debug, warn};
 use csa_resource::cgroup::SandboxConfig;
 use csa_resource::rlimit::RssWatcher;
 use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
+mod idle_watchdog;
+use idle_watchdog::should_terminate_for_idle;
+mod tool_liveness;
+pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
 /// Controls whether stdout is forwarded to stderr in real-time.
 ///
@@ -366,6 +370,7 @@ pub async fn wait_and_capture(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
@@ -385,6 +390,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     mut child: tokio::process::Child,
     stream_mode: StreamMode,
     idle_timeout: Duration,
+    liveness_dead_timeout: Duration,
     termination_grace_period: Duration,
     output_spool: Option<&Path>,
 ) -> Result<ExecutionResult> {
@@ -402,6 +408,12 @@ pub async fn wait_and_capture_with_idle_timeout(
             }
         }
     });
+    let session_dir = output_spool.and_then(Path::parent);
+    let mut stderr_spool_file = session_dir.and_then(|dir| {
+        use std::fs::OpenOptions;
+        let path = dir.join("stderr.log");
+        OpenOptions::new().create(true).append(true).open(path).ok()
+    });
 
     // Use byte-level reads instead of read_line() to detect partial output
     // (e.g., progress bars with \r, streaming dots without \n). This prevents
@@ -414,10 +426,13 @@ pub async fn wait_and_capture_with_idle_timeout(
 
     let mut stderr_output = String::new();
     let mut last_activity = Instant::now();
+    let mut liveness_dead_since: Option<Instant> = None;
+    let mut next_liveness_poll_at: Option<Instant> = None;
     let mut idle_timed_out = false;
     let timeout_note = format!(
-        "idle timeout: no stdout/stderr output for {}s; process killed",
-        idle_timeout.as_secs()
+        "idle timeout: no stdout/stderr output for {}s; liveness false for {}s; process killed",
+        idle_timeout.as_secs(),
+        liveness_dead_timeout.as_secs()
     );
 
     if let Some(stderr_handle) = stderr {
@@ -441,6 +456,8 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                         Ok(n) => {
                             last_activity = Instant::now();
+                            liveness_dead_since = None;
+                            next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             // Spool to disk for crash recovery
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
@@ -465,7 +482,10 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                         Ok(n) => {
                             last_activity = Instant::now();
+                            liveness_dead_since = None;
+                            next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stderr_buf[..n]);
+                            spool_chunk(&mut stderr_spool_file, &stderr_buf[..n]);
                             accumulate_and_flush_stderr(
                                 &chunk,
                                 &mut stderr_line_buf,
@@ -479,9 +499,20 @@ pub async fn wait_and_capture_with_idle_timeout(
                     }
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
-                    if last_activity.elapsed() >= idle_timeout {
+                    if should_terminate_for_idle(
+                        last_activity,
+                        idle_timeout,
+                        liveness_dead_timeout,
+                        session_dir,
+                        &mut liveness_dead_since,
+                        &mut next_liveness_poll_at,
+                    ) {
                         idle_timed_out = true;
-                        warn!(timeout_secs = idle_timeout.as_secs(), "Killing child due to idle timeout");
+                        warn!(
+                            timeout_secs = idle_timeout.as_secs(),
+                            liveness_dead_timeout_secs = liveness_dead_timeout.as_secs(),
+                            "Killing child due to idle timeout after liveness polling"
+                        );
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
@@ -501,6 +532,8 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                         Ok(n) => {
                             last_activity = Instant::now();
+                            liveness_dead_since = None;
+                            next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
                             accumulate_and_flush_lines(
@@ -517,9 +550,20 @@ pub async fn wait_and_capture_with_idle_timeout(
                     }
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
-                    if last_activity.elapsed() >= idle_timeout {
+                    if should_terminate_for_idle(
+                        last_activity,
+                        idle_timeout,
+                        liveness_dead_timeout,
+                        session_dir,
+                        &mut liveness_dead_since,
+                        &mut next_liveness_poll_at,
+                    ) {
                         idle_timed_out = true;
-                        warn!(timeout_secs = idle_timeout.as_secs(), "Killing child due to idle timeout");
+                        warn!(
+                            timeout_secs = idle_timeout.as_secs(),
+                            liveness_dead_timeout_secs = liveness_dead_timeout.as_secs(),
+                            "Killing child due to idle timeout after liveness polling"
+                        );
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
                     }
@@ -585,6 +629,7 @@ pub async fn run_and_capture_with_stdin(
         child,
         stream_mode,
         Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )

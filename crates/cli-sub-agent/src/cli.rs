@@ -479,6 +479,17 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
+    /// Check whether a session is still alive using filesystem liveness signals
+    IsAlive {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
     /// Show the last execution result for a session
     Result {
         /// Session ID or prefix

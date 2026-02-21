@@ -340,6 +340,16 @@ pub(crate) fn handle_session_logs(
     Ok(())
 }
 
+pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Result<bool> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
+    let resolved_id = resolve_session_prefix(&sessions_dir, &session)?;
+    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    let alive = csa_process::ToolLiveness::is_alive(&session_dir);
+    println!("{}", if alive { "alive" } else { "not alive" });
+    Ok(alive)
+}
+
 pub(crate) fn handle_session_clean(
     days: u64,
     dry_run: bool,
