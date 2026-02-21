@@ -354,6 +354,10 @@ pub struct DebateArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Thinking budget (low, medium, high, xhigh)
+    #[arg(long)]
+    pub thinking: Option<String>,
+
     /// Number of debate rounds (default: 3)
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
     pub rounds: u32,

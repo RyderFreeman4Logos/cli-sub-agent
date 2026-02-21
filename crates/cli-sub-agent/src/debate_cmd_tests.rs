@@ -407,6 +407,12 @@ fn debate_cli_parses_stream_stdout_flag() {
 }
 
 #[test]
+fn debate_cli_parses_thinking_flag() {
+    let args = parse_debate_args(&["csa", "debate", "--thinking", "high", "question"]);
+    assert_eq!(args.thinking.as_deref(), Some("high"));
+}
+
+#[test]
 fn debate_cli_parses_no_stream_stdout_flag() {
     let args = parse_debate_args(&["csa", "debate", "--no-stream-stdout", "question"]);
     assert!(!args.stream_stdout);
@@ -418,6 +424,7 @@ fn debate_cli_defaults_no_timeout() {
     let args = parse_debate_args(&["csa", "debate", "question"]);
     assert_eq!(args.timeout, None);
     assert_eq!(args.idle_timeout, None);
+    assert_eq!(args.thinking, None);
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
 }
@@ -478,6 +485,26 @@ fn debate_stream_mode_explicit_stream() {
 fn debate_stream_mode_explicit_no_stream() {
     let mode = resolve_debate_stream_mode(false, true);
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+// --- resolve_debate_thinking tests ---
+
+#[test]
+fn resolve_debate_thinking_prefers_cli_over_config() {
+    let thinking = resolve_debate_thinking(Some("low"), Some("high"));
+    assert_eq!(thinking.as_deref(), Some("low"));
+}
+
+#[test]
+fn resolve_debate_thinking_uses_config_when_cli_missing() {
+    let thinking = resolve_debate_thinking(None, Some("medium"));
+    assert_eq!(thinking.as_deref(), Some("medium"));
+}
+
+#[test]
+fn resolve_debate_thinking_defaults_none_for_backward_compatibility() {
+    let thinking = resolve_debate_thinking(None, None);
+    assert_eq!(thinking, None);
 }
 
 // --- verify_debate_skill_available tests (#140) ---

@@ -105,6 +105,11 @@ pub struct DebateConfig {
     /// `csa debate --timeout <N>` overrides this per invocation.
     #[serde(default = "default_debate_timeout_seconds")]
     pub timeout_seconds: u64,
+    /// Default thinking budget for `csa debate` (`low`, `medium`, `high`, `xhigh`).
+    ///
+    /// `csa debate --thinking <LEVEL>` overrides this per invocation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 fn default_debate_tool() -> String {
@@ -120,6 +125,7 @@ impl Default for DebateConfig {
         Self {
             tool: default_debate_tool(),
             timeout_seconds: default_debate_timeout_seconds(),
+            thinking: None,
         }
     }
 }
@@ -437,6 +443,8 @@ tool = "auto"
 tool = "auto"
 # Default wall-clock timeout for `csa debate` (30 minutes).
 timeout_seconds = 1800
+# Optional default thinking budget for `csa debate`.
+# thinking = "high"
 
 # Fallback behavior when external services are unavailable.
 # cloud_review_exhausted: what to do when cloud review bot is unavailable.

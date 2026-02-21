@@ -45,13 +45,17 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         parent_tool.as_deref(),
         &project_root,
     )?;
+    let thinking = resolve_debate_thinking(
+        args.thinking.as_deref(),
+        global_config.debate.thinking.as_deref(),
+    );
 
     // 6. Build executor and validate tool
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         None,
         args.model.as_deref(),
-        None,
+        thinking.as_deref(),
         config.as_ref(),
         false, // skip tier whitelist for debate tool selection
     )
@@ -617,6 +621,15 @@ fn resolve_debate_stream_mode(
     } else {
         csa_process::StreamMode::BufferOnly
     }
+}
+
+fn resolve_debate_thinking(
+    cli_thinking: Option<&str>,
+    config_thinking: Option<&str>,
+) -> Option<String> {
+    cli_thinking
+        .map(str::to_string)
+        .or_else(|| config_thinking.map(str::to_string))
 }
 
 /// Build a debate instruction that passes parameters to the debate skill.
