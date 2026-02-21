@@ -1,8 +1,3 @@
-use std::collections::HashMap;
-use std::io;
-use std::sync::Arc;
-use std::time::Duration;
-
 use anyhow::{Context, Result, anyhow};
 use csa_config::McpServerConfig;
 use csa_process::{SandboxHandle, SpawnOptions, spawn_tool_sandboxed};
@@ -10,8 +5,13 @@ use csa_resource::{SandboxCapability, SandboxConfig, apply_rlimits, detect_sandb
 use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
 use rmcp::service::{RunningService, ServiceExt};
+use std::collections::HashMap;
+use std::io;
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::process::Command;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
 const RESTART_BACKOFF_INITIAL_MS: u64 = 100;
@@ -22,19 +22,52 @@ const MCP_SANDBOX_PIDS_MAX: Option<u32> = None;
 const MCP_SANDBOX_SESSION_ID: &str = "mcp-hub";
 const SHUTDOWN_GRACE_SECS: u64 = 3;
 const REQUEST_QUEUE_CAPACITY: usize = 64;
+const DEFAULT_WARM_TTL_SECS: u64 = 10 * 60;
+const DEFAULT_MAX_WARM_POOLS: usize = 16;
+const DEFAULT_MAX_ACTIVE_POOLS: usize = 64;
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ToolCallRoute {
+    pub(crate) project_root: Option<PathBuf>,
+    pub(crate) toolchain_hash: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct PoolKey {
+    pub(crate) project_root: PathBuf,
+    pub(crate) toolchain_hash: u64,
+}
+
+impl PoolKey {
+    fn from_route(route: ToolCallRoute) -> Result<Self> {
+        let project_root = route
+            .project_root
+            .ok_or_else(|| anyhow!("stateful MCP call missing required parameter: project_root"))?;
+        Ok(Self {
+            project_root,
+            toolchain_hash: route.toolchain_hash.unwrap_or_default(),
+        })
+    }
+}
 
 pub(crate) struct McpRegistry {
-    servers: HashMap<String, Arc<ServerQueueHandle>>,
+    servers: HashMap<String, ServerEntry>,
+}
+
+enum ServerEntry {
+    Stateless(Arc<ServerQueueHandle>),
+    Stateful(Arc<StatefulServerPool>),
 }
 
 impl McpRegistry {
     pub(crate) fn new(configs: Vec<McpServerConfig>) -> Self {
         let mut servers = HashMap::new();
         for config in configs {
-            servers.insert(
-                config.name.clone(),
-                Arc::new(ServerQueueHandle::spawn(config)),
-            );
+            let entry = if config.stateful {
+                ServerEntry::Stateful(Arc::new(StatefulServerPool::new(config)))
+            } else {
+                ServerEntry::Stateless(Arc::new(ServerQueueHandle::spawn(config, None)))
+            };
+            servers.insert(entry.name().to_string(), entry);
         }
         Self { servers }
     }
@@ -48,33 +81,56 @@ impl McpRegistry {
         server_name: &str,
         cancellation: CancellationToken,
     ) -> Result<Vec<Tool>> {
-        let server = self
+        let entry = self
             .servers
             .get(server_name)
-            .with_context(|| format!("unknown MCP server: {server_name}"))?
-            .clone();
-        server.list_tools(cancellation).await
+            .with_context(|| format!("unknown MCP server: {server_name}"))?;
+
+        match entry {
+            ServerEntry::Stateless(queue) => queue.list_tools(cancellation).await,
+            ServerEntry::Stateful(pool) => pool.list_tools(cancellation).await,
+        }
     }
 
     pub(crate) async fn call_tool(
         &self,
         server_name: &str,
         request: CallToolRequestParam,
+        route: ToolCallRoute,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult> {
-        let server = self
+        let entry = self
             .servers
             .get(server_name)
-            .with_context(|| format!("unknown MCP server: {server_name}"))?
-            .clone();
-        server.call_tool(request, cancellation).await
+            .with_context(|| format!("unknown MCP server: {server_name}"))?;
+
+        match entry {
+            ServerEntry::Stateless(queue) => queue.call_tool(request, cancellation).await,
+            ServerEntry::Stateful(pool) => pool.call_tool(request, route, cancellation).await,
+        }
     }
 
     pub(crate) async fn shutdown_all(&self) -> Result<()> {
-        for server in self.servers.values() {
-            server.shutdown().await?;
+        for entry in self.servers.values() {
+            entry.shutdown().await?;
         }
         Ok(())
+    }
+}
+
+impl ServerEntry {
+    fn name(&self) -> &str {
+        match self {
+            Self::Stateless(queue) => &queue.server_name,
+            Self::Stateful(pool) => &pool.server_name,
+        }
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        match self {
+            Self::Stateless(queue) => queue.shutdown().await,
+            Self::Stateful(pool) => pool.shutdown().await,
+        }
     }
 }
 
@@ -103,7 +159,7 @@ enum QueueResponse {
 }
 
 impl ServerQueueHandle {
-    fn spawn(config: McpServerConfig) -> Self {
+    fn spawn(config: McpServerConfig, pool_key: Option<PoolKey>) -> Self {
         let server_name = config.name.clone();
         let (sender, mut receiver) = mpsc::channel::<QueueCommand>(REQUEST_QUEUE_CAPACITY);
         let queue_server_name = server_name.clone();
@@ -136,6 +192,15 @@ impl ServerQueueHandle {
 
             if let Err(error) = server.shutdown().await {
                 tracing::warn!(server = %queue_server_name, error = %error, "failed to shutdown MCP server queue");
+            }
+
+            if let Some(key) = pool_key {
+                tracing::debug!(
+                    server = %queue_server_name,
+                    project_root = %key.project_root.display(),
+                    toolchain_hash = key.toolchain_hash,
+                    "stateful MCP pool worker stopped"
+                );
             }
         });
 
@@ -221,6 +286,281 @@ impl ServerQueueHandle {
                 response.context("MCP queue worker dropped response channel")?
             }
         }
+    }
+}
+
+struct StatefulServerPool {
+    server_name: String,
+    config: McpServerConfig,
+    max_warm_pools: usize,
+    max_active_pools: usize,
+    inner: Mutex<StatefulPoolInner>,
+}
+
+struct StatefulPoolInner {
+    queues: HashMap<PoolKey, Arc<ServerQueueHandle>>,
+    leases: LeaseTracker,
+}
+
+impl StatefulServerPool {
+    fn new(config: McpServerConfig) -> Self {
+        let warm_ttl = Duration::from_secs(DEFAULT_WARM_TTL_SECS);
+        Self {
+            server_name: config.name.clone(),
+            config,
+            max_warm_pools: DEFAULT_MAX_WARM_POOLS,
+            max_active_pools: DEFAULT_MAX_ACTIVE_POOLS,
+            inner: Mutex::new(StatefulPoolInner {
+                queues: HashMap::new(),
+                leases: LeaseTracker::new(warm_ttl),
+            }),
+        }
+    }
+
+    async fn list_tools(&self, cancellation: CancellationToken) -> Result<Vec<Tool>> {
+        let queue = self.default_queue().await;
+        queue.list_tools(cancellation).await
+    }
+
+    async fn default_queue(&self) -> Arc<ServerQueueHandle> {
+        let default_key = PoolKey {
+            project_root: PathBuf::from("/"),
+            toolchain_hash: 0,
+        };
+
+        let mut inner = self.inner.lock().await;
+        if let Some(existing) = inner.queues.get(&default_key) {
+            return existing.clone();
+        }
+
+        let queue = Arc::new(ServerQueueHandle::spawn(
+            self.config.clone(),
+            Some(default_key.clone()),
+        ));
+        inner.leases.acquire(&default_key, Instant::now());
+        inner.leases.release(&default_key, Instant::now());
+        inner.queues.insert(default_key, queue.clone());
+        queue
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        route: ToolCallRoute,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult> {
+        let key = PoolKey::from_route(route)?;
+
+        let (queue, reclaim_handles) = {
+            let mut inner = self.inner.lock().await;
+            let now = Instant::now();
+            let mut reclaim_keys = inner.leases.expire(now);
+            let mut reclaim_handles = Vec::new();
+
+            if reclaim_keys.iter().any(|expired_key| expired_key == &key) {
+                reclaim_keys.retain(|expired_key| expired_key != &key);
+                if let Some(stale_queue) = inner.queues.remove(&key) {
+                    reclaim_handles.push(stale_queue);
+                }
+            }
+
+            let queue = if let Some(existing) = inner.queues.get(&key).cloned() {
+                inner.leases.acquire(&key, now);
+                existing
+            } else {
+                if inner.leases.active_pool_count() >= self.max_active_pools {
+                    return Err(anyhow!(
+                        "stateful MCP pool limit reached: max_active_pools={} server={}",
+                        self.max_active_pools,
+                        self.server_name
+                    ));
+                }
+
+                let queue = Arc::new(ServerQueueHandle::spawn(
+                    self.config.clone(),
+                    Some(key.clone()),
+                ));
+                inner.queues.insert(key.clone(), queue.clone());
+                inner.leases.acquire(&key, now);
+                queue
+            };
+
+            let pool_count = inner.queues.len();
+            reclaim_keys.extend(inner.leases.reclaim_for_pressure(
+                pool_count,
+                self.max_warm_pools,
+                &key,
+            ));
+
+            reclaim_handles.extend(inner.take_handles(&reclaim_keys));
+            Ok::<_, anyhow::Error>((queue, reclaim_handles))
+        }?;
+
+        for handle in reclaim_handles {
+            let _ = handle.shutdown().await;
+        }
+
+        let call_result = queue.call_tool(request, cancellation).await;
+
+        let expire_handles = {
+            let mut inner = self.inner.lock().await;
+            inner.leases.release(&key, Instant::now());
+            let expire_keys = inner.leases.expire(Instant::now());
+            inner.take_handles(&expire_keys)
+        };
+
+        for handle in expire_handles {
+            let _ = handle.shutdown().await;
+        }
+
+        call_result
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        let handles = {
+            let mut inner = self.inner.lock().await;
+            inner.leases.clear();
+            inner
+                .queues
+                .drain()
+                .map(|(_, handle)| handle)
+                .collect::<Vec<_>>()
+        };
+
+        for handle in handles {
+            let _ = handle.shutdown().await;
+        }
+
+        Ok(())
+    }
+}
+
+impl StatefulPoolInner {
+    fn take_handles(&mut self, keys: &[PoolKey]) -> Vec<Arc<ServerQueueHandle>> {
+        let mut handles = Vec::new();
+        for key in keys {
+            if let Some(handle) = self.queues.remove(key) {
+                handles.push(handle);
+            }
+        }
+        handles
+    }
+}
+
+struct LeaseTracker {
+    warm_ttl: Duration,
+    leases: HashMap<PoolKey, LeaseState>,
+}
+
+#[derive(Clone, Copy)]
+struct LeaseState {
+    active_leases: usize,
+    last_release: Instant,
+}
+
+impl LeaseTracker {
+    fn new(warm_ttl: Duration) -> Self {
+        Self {
+            warm_ttl,
+            leases: HashMap::new(),
+        }
+    }
+
+    fn acquire(&mut self, key: &PoolKey, now: Instant) {
+        let lease = self.leases.entry(key.clone()).or_insert(LeaseState {
+            active_leases: 0,
+            last_release: now,
+        });
+        lease.active_leases = lease.active_leases.saturating_add(1);
+    }
+
+    fn release(&mut self, key: &PoolKey, now: Instant) {
+        if let Some(lease) = self.leases.get_mut(key) {
+            if lease.active_leases > 0 {
+                lease.active_leases -= 1;
+            }
+            if lease.active_leases == 0 {
+                lease.last_release = now;
+            }
+        }
+    }
+
+    fn active_pool_count(&self) -> usize {
+        self.leases
+            .values()
+            .filter(|lease| lease.active_leases > 0)
+            .count()
+    }
+
+    #[cfg(test)]
+    fn active_leases(&self, key: &PoolKey) -> usize {
+        self.leases
+            .get(key)
+            .map(|lease| lease.active_leases)
+            .unwrap_or_default()
+    }
+
+    fn expire(&mut self, now: Instant) -> Vec<PoolKey> {
+        let expired = self
+            .leases
+            .iter()
+            .filter_map(|(key, lease)| {
+                if lease.active_leases == 0
+                    && now.saturating_duration_since(lease.last_release) >= self.warm_ttl
+                {
+                    Some(key.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        for key in &expired {
+            self.leases.remove(key);
+        }
+
+        expired
+    }
+
+    fn reclaim_for_pressure(
+        &mut self,
+        pool_count: usize,
+        max_warm_pools: usize,
+        protected_key: &PoolKey,
+    ) -> Vec<PoolKey> {
+        if pool_count <= max_warm_pools {
+            return Vec::new();
+        }
+
+        let mut candidates = self
+            .leases
+            .iter()
+            .filter_map(|(key, lease)| {
+                if key == protected_key || lease.active_leases > 0 {
+                    return None;
+                }
+                Some((key.clone(), lease.last_release))
+            })
+            .collect::<Vec<_>>();
+
+        candidates.sort_by_key(|(_, last_release)| *last_release);
+
+        let reclaim_count = pool_count.saturating_sub(max_warm_pools);
+        let reclaimed = candidates
+            .into_iter()
+            .take(reclaim_count)
+            .map(|(key, _)| key)
+            .collect::<Vec<_>>();
+
+        for key in &reclaimed {
+            self.leases.remove(key);
+        }
+
+        reclaimed
+    }
+
+    fn clear(&mut self) {
+        self.leases.clear();
     }
 }
 

@@ -19,6 +19,8 @@ pub struct McpServerConfig {
     pub args: Vec<String>,
     #[serde(default)]
     pub env: HashMap<String, String>,
+    #[serde(default)]
+    pub stateful: bool,
 }
 
 impl McpRegistry {
@@ -147,6 +149,7 @@ env = { MEMORY_DIR = "~/.claude/memory" }
                     command: "npx".to_string(),
                     args: vec!["-y".to_string(), "repomix-mcp".to_string()],
                     env: HashMap::new(),
+                    stateful: false,
                 },
                 McpServerConfig {
                     name: "memory".to_string(),
@@ -155,6 +158,7 @@ env = { MEMORY_DIR = "~/.claude/memory" }
                     env: [("MEMORY_DIR".to_string(), "~/.claude/memory".to_string())]
                         .into_iter()
                         .collect(),
+                    stateful: false,
                 },
             ],
         };
@@ -191,6 +195,7 @@ env = { MEMORY_DIR = "~/.claude/memory" }
             command: "npx".to_string(),
             args: vec![format!("-y {name}")],
             env: HashMap::new(),
+            stateful: false,
         }
     }
 

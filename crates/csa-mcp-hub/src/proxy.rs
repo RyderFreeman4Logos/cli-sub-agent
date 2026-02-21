@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,7 +14,7 @@ use tokio::sync::RwLock;
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use crate::registry::McpRegistry;
+use crate::registry::{McpRegistry, ToolCallRoute};
 
 #[derive(Clone)]
 pub(crate) struct ProxyRouter {
@@ -96,11 +97,12 @@ impl ProxyRouter {
             ));
         };
 
+        let route = call_route_from_request(&request);
         let cancellation = CancellationToken::new();
         match timeout(
             self.request_timeout,
             self.registry
-                .call_tool(&server_name, request, cancellation.clone()),
+                .call_tool(&server_name, request, route, cancellation.clone()),
         )
         .await
         {
@@ -125,6 +127,40 @@ impl ProxyRouter {
     async fn lookup_tool_owner(&self, tool_name: &str) -> Option<String> {
         self.tool_routes.read().await.get(tool_name).cloned()
     }
+}
+
+fn call_route_from_request(request: &CallToolRequestParam) -> ToolCallRoute {
+    let Some(arguments) = request.arguments.as_ref() else {
+        return ToolCallRoute::default();
+    };
+
+    ToolCallRoute {
+        project_root: get_string_argument(arguments, &["project_root", "projectRoot"])
+            .map(PathBuf::from),
+        toolchain_hash: get_u64_argument(arguments, &["toolchain_hash", "toolchainHash"]),
+    }
+}
+
+fn get_string_argument(
+    arguments: &serde_json::Map<String, Value>,
+    keys: &[&str],
+) -> Option<String> {
+    keys.iter().find_map(|key| {
+        arguments
+            .get(*key)
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    })
+}
+
+fn get_u64_argument(arguments: &serde_json::Map<String, Value>, keys: &[&str]) -> Option<u64> {
+    keys.iter().find_map(|key| {
+        arguments.get(*key).and_then(|value| match value {
+            Value::Number(number) => number.as_u64(),
+            Value::String(text) => text.parse::<u64>().ok(),
+            _ => None,
+        })
+    })
 }
 
 impl ServerHandler for ProxyRouter {
@@ -213,6 +249,7 @@ done
             command: "sh".to_string(),
             args: vec![script.to_string_lossy().into_owned()],
             env: HashMap::new(),
+            stateful: false,
         }]));
         let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
 

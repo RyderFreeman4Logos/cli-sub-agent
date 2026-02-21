@@ -4,12 +4,13 @@ use rmcp::model::CallToolRequestParam;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::time::timeout;
 use tokio_util::sync::CancellationToken;
 
-use super::McpRegistry;
+use super::{LeaseTracker, McpRegistry, PoolKey, StatefulServerPool, ToolCallRoute};
 
 fn write_script(dir: &std::path::Path, body: &str) -> Result<std::path::PathBuf> {
     let path = dir.join("mock-mcp.sh");
@@ -24,12 +25,23 @@ fn write_script(dir: &std::path::Path, body: &str) -> Result<std::path::PathBuf>
     Ok(path)
 }
 
-fn config(script_path: &std::path::Path, name: &str) -> McpServerConfig {
+fn stateless_config(script_path: &std::path::Path) -> McpServerConfig {
     McpServerConfig {
-        name: name.to_string(),
+        name: "mock".to_string(),
         command: "sh".to_string(),
         args: vec![script_path.to_string_lossy().into_owned()],
         env: HashMap::new(),
+        stateful: false,
+    }
+}
+
+fn stateful_config(script_path: &std::path::Path) -> McpServerConfig {
+    McpServerConfig {
+        name: "stateful".to_string(),
+        command: "sh".to_string(),
+        args: vec![script_path.to_string_lossy().into_owned()],
+        env: HashMap::new(),
+        stateful: true,
     }
 }
 
@@ -61,7 +73,7 @@ done
 "#,
     )?;
 
-    let registry = McpRegistry::new(vec![config(&script_path, "mock")]);
+    let registry = McpRegistry::new(vec![stateless_config(&script_path)]);
 
     let tools = registry
         .list_tools("mock", CancellationToken::new())
@@ -82,6 +94,7 @@ done
                     .unwrap_or_default(),
                 ),
             },
+            ToolCallRoute::default(),
             CancellationToken::new(),
         )
         .await?;
@@ -125,7 +138,13 @@ done
         ),
     )?;
 
-    let registry = McpRegistry::new(vec![config(&script_path, "flaky")]);
+    let registry = McpRegistry::new(vec![McpServerConfig {
+        name: "flaky".to_string(),
+        command: "sh".to_string(),
+        args: vec![script_path.to_string_lossy().into_owned()],
+        env: HashMap::new(),
+        stateful: false,
+    }]);
 
     let first = registry
         .list_tools("flaky", CancellationToken::new())
@@ -167,7 +186,7 @@ done
 "#,
     )?;
 
-    let registry = Arc::new(McpRegistry::new(vec![config(&script_path, "mock")]));
+    let registry = Arc::new(McpRegistry::new(vec![stateless_config(&script_path)]));
 
     let registry_first = registry.clone();
     let first = tokio::spawn(async move {
@@ -178,6 +197,7 @@ done
                     name: "echo_tool".into(),
                     arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
                 },
+                ToolCallRoute::default(),
                 CancellationToken::new(),
             )
             .await
@@ -196,6 +216,7 @@ done
                     name: "echo_tool".into(),
                     arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
                 },
+                ToolCallRoute::default(),
                 cancellation_clone,
             )
             .await
@@ -228,5 +249,254 @@ done
     );
 
     registry.shutdown_all().await?;
+    Ok(())
+}
+
+#[test]
+fn lease_tracker_acquire_release_and_expire() {
+    let warm_ttl = Duration::from_secs(600);
+    let mut tracker = LeaseTracker::new(warm_ttl);
+    let start = Instant::now();
+    let key = PoolKey {
+        project_root: PathBuf::from("/workspace/app"),
+        toolchain_hash: 7,
+    };
+
+    tracker.acquire(&key, start);
+    assert_eq!(tracker.active_leases(&key), 1);
+
+    tracker.release(&key, start + Duration::from_secs(1));
+    assert_eq!(tracker.active_leases(&key), 0);
+
+    let expired = tracker.expire(start + warm_ttl + Duration::from_secs(1));
+    assert_eq!(expired, vec![key]);
+}
+
+#[test]
+fn lease_tracker_reclaims_idle_pools_under_pressure() {
+    let mut tracker = LeaseTracker::new(Duration::from_secs(600));
+    let start = Instant::now();
+
+    let key_a = PoolKey {
+        project_root: PathBuf::from("/workspace/a"),
+        toolchain_hash: 1,
+    };
+    let key_b = PoolKey {
+        project_root: PathBuf::from("/workspace/b"),
+        toolchain_hash: 1,
+    };
+    let protected = PoolKey {
+        project_root: PathBuf::from("/workspace/c"),
+        toolchain_hash: 1,
+    };
+
+    tracker.acquire(&key_a, start);
+    tracker.release(&key_a, start + Duration::from_secs(1));
+
+    tracker.acquire(&key_b, start);
+    tracker.release(&key_b, start + Duration::from_secs(2));
+
+    tracker.acquire(&protected, start);
+    tracker.release(&protected, start + Duration::from_secs(3));
+
+    let reclaimed = tracker.reclaim_for_pressure(3, 2, &protected);
+
+    assert_eq!(reclaimed.len(), 1);
+    assert_eq!(reclaimed[0], key_a);
+    assert!(!reclaimed.contains(&protected));
+}
+
+#[tokio::test]
+async fn stateful_server_requires_project_root_route() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let script_path = write_script(
+        temp.path(),
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
+  case "$line" in
+    *\"initialize\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"stateful","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
+    *\"tools/list\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool","description":"echo","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
+      ;;
+    *\"tools/call\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )?;
+
+    let registry = McpRegistry::new(vec![McpServerConfig {
+        name: "stateful".to_string(),
+        command: "sh".to_string(),
+        args: vec![script_path.to_string_lossy().into_owned()],
+        env: HashMap::new(),
+        stateful: true,
+    }]);
+
+    let result = registry
+        .call_tool(
+            "stateful",
+            CallToolRequestParam {
+                name: "echo_tool".into(),
+                arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
+            },
+            ToolCallRoute::default(),
+            CancellationToken::new(),
+        )
+        .await;
+
+    assert!(result.is_err());
+    assert!(
+        result
+            .expect_err("stateful call should require project_root")
+            .to_string()
+            .contains("project_root")
+    );
+
+    registry.shutdown_all().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_stateful_pool_request_after_expiry_succeeds() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let script_path = write_script(
+        temp.path(),
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
+  case "$line" in
+    *\"initialize\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"stateful","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
+    *\"tools/call\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
+      ;;
+    *)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )?;
+
+    let pool = StatefulServerPool::new(stateful_config(&script_path));
+    {
+        let mut inner = pool.inner.lock().await;
+        inner.leases.warm_ttl = Duration::ZERO;
+    }
+
+    let route = ToolCallRoute {
+        project_root: Some(PathBuf::from("/workspace/app")),
+        toolchain_hash: Some(7),
+    };
+    let request = CallToolRequestParam {
+        name: "echo_tool".into(),
+        arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
+    };
+
+    let first = pool
+        .call_tool(request.clone(), route.clone(), CancellationToken::new())
+        .await?;
+    assert_eq!(
+        first.content[0].as_text().map(|t| t.text.as_str()),
+        Some("pong")
+    );
+
+    let second = pool
+        .call_tool(request, route, CancellationToken::new())
+        .await?;
+    assert_eq!(
+        second.content[0].as_text().map(|t| t.text.as_str()),
+        Some("pong")
+    );
+
+    pool.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_stateful_pool_max_active_limit() -> Result<()> {
+    let temp = tempfile::tempdir()?;
+    let script_path = write_script(
+        temp.path(),
+        r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
+  case "$line" in
+    *\"initialize\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"stateful","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
+    *\"tools/call\"*)
+      sleep 1
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
+      ;;
+    *)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+    )?;
+
+    let mut pool = StatefulServerPool::new(stateful_config(&script_path));
+    pool.max_active_pools = 1;
+    let pool = Arc::new(pool);
+
+    let request = CallToolRequestParam {
+        name: "echo_tool".into(),
+        arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
+    };
+
+    let first_pool = pool.clone();
+    let first_request = request.clone();
+    let first = tokio::spawn(async move {
+        first_pool
+            .call_tool(
+                first_request,
+                ToolCallRoute {
+                    project_root: Some(PathBuf::from("/workspace/a")),
+                    toolchain_hash: Some(1),
+                },
+                CancellationToken::new(),
+            )
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    let second = pool
+        .call_tool(
+            request,
+            ToolCallRoute {
+                project_root: Some(PathBuf::from("/workspace/b")),
+                toolchain_hash: Some(1),
+            },
+            CancellationToken::new(),
+        )
+        .await;
+    let second_error = second.expect_err("new key should fail after max_active_pools is reached");
+    assert!(
+        second_error.to_string().contains("max_active_pools"),
+        "unexpected error: {second_error}"
+    );
+
+    let first_result = first.await.expect("join failed")?;
+    assert_eq!(
+        first_result.content[0].as_text().map(|t| t.text.as_str()),
+        Some("pong")
+    );
+
+    pool.shutdown().await?;
     Ok(())
 }
