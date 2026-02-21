@@ -11,7 +11,8 @@ use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
 use rmcp::service::{RunningService, ServiceExt};
 use tokio::process::Command;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, oneshot};
+use tokio_util::sync::CancellationToken;
 
 const RESTART_BACKOFF_INITIAL_MS: u64 = 100;
 const RESTART_BACKOFF_MAX_MS: u64 = 30_000;
@@ -20,9 +21,10 @@ const MCP_SANDBOX_MEMORY_SWAP_MAX_MB: Option<u64> = Some(0);
 const MCP_SANDBOX_PIDS_MAX: Option<u32> = None;
 const MCP_SANDBOX_SESSION_ID: &str = "mcp-hub";
 const SHUTDOWN_GRACE_SECS: u64 = 3;
+const REQUEST_QUEUE_CAPACITY: usize = 64;
 
 pub(crate) struct McpRegistry {
-    servers: HashMap<String, Arc<Mutex<ManagedServer>>>,
+    servers: HashMap<String, Arc<ServerQueueHandle>>,
 }
 
 impl McpRegistry {
@@ -31,7 +33,7 @@ impl McpRegistry {
         for config in configs {
             servers.insert(
                 config.name.clone(),
-                Arc::new(Mutex::new(ManagedServer::new(config))),
+                Arc::new(ServerQueueHandle::spawn(config)),
             );
         }
         Self { servers }
@@ -41,36 +43,184 @@ impl McpRegistry {
         self.servers.keys().cloned().collect()
     }
 
-    pub(crate) async fn list_tools(&self, server_name: &str) -> Result<Vec<Tool>> {
+    pub(crate) async fn list_tools(
+        &self,
+        server_name: &str,
+        cancellation: CancellationToken,
+    ) -> Result<Vec<Tool>> {
         let server = self
             .servers
             .get(server_name)
             .with_context(|| format!("unknown MCP server: {server_name}"))?
             .clone();
-        let mut guard = server.lock().await;
-        guard.list_tools().await
+        server.list_tools(cancellation).await
     }
 
     pub(crate) async fn call_tool(
         &self,
         server_name: &str,
         request: CallToolRequestParam,
+        cancellation: CancellationToken,
     ) -> Result<CallToolResult> {
         let server = self
             .servers
             .get(server_name)
             .with_context(|| format!("unknown MCP server: {server_name}"))?
             .clone();
-        let mut guard = server.lock().await;
-        guard.call_tool(request).await
+        server.call_tool(request, cancellation).await
     }
 
     pub(crate) async fn shutdown_all(&self) -> Result<()> {
         for server in self.servers.values() {
-            let mut guard = server.lock().await;
-            guard.shutdown().await?;
+            server.shutdown().await?;
         }
         Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct ServerQueueHandle {
+    server_name: String,
+    sender: mpsc::Sender<QueueCommand>,
+}
+
+enum QueueCommandKind {
+    ListTools,
+    CallTool(CallToolRequestParam),
+    Shutdown,
+}
+
+struct QueueCommand {
+    kind: QueueCommandKind,
+    cancellation: CancellationToken,
+    response: oneshot::Sender<Result<QueueResponse>>,
+}
+
+enum QueueResponse {
+    ListTools(Vec<Tool>),
+    CallTool(CallToolResult),
+    Shutdown,
+}
+
+impl ServerQueueHandle {
+    fn spawn(config: McpServerConfig) -> Self {
+        let server_name = config.name.clone();
+        let (sender, mut receiver) = mpsc::channel::<QueueCommand>(REQUEST_QUEUE_CAPACITY);
+        let queue_server_name = server_name.clone();
+
+        tokio::spawn(async move {
+            let mut server = ManagedServer::new(config);
+
+            while let Some(command) = receiver.recv().await {
+                match command.kind {
+                    QueueCommandKind::Shutdown => {
+                        let _ = command.response.send(Ok(QueueResponse::Shutdown));
+                        break;
+                    }
+                    QueueCommandKind::ListTools => {
+                        let result = Self::run_queue_dispatch(command.cancellation, async {
+                            server.list_tools().await.map(QueueResponse::ListTools)
+                        })
+                        .await;
+                        let _ = command.response.send(result);
+                    }
+                    QueueCommandKind::CallTool(request) => {
+                        let result = Self::run_queue_dispatch(command.cancellation, async {
+                            server.call_tool(request).await.map(QueueResponse::CallTool)
+                        })
+                        .await;
+                        let _ = command.response.send(result);
+                    }
+                }
+            }
+
+            if let Err(error) = server.shutdown().await {
+                tracing::warn!(server = %queue_server_name, error = %error, "failed to shutdown MCP server queue");
+            }
+        });
+
+        Self {
+            server_name,
+            sender,
+        }
+    }
+
+    async fn run_queue_dispatch<F>(
+        cancellation: CancellationToken,
+        action: F,
+    ) -> Result<QueueResponse>
+    where
+        F: std::future::Future<Output = Result<QueueResponse>>,
+    {
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(anyhow!("MCP request cancelled before dispatch")),
+            response = action => response,
+        }
+    }
+
+    async fn list_tools(&self, cancellation: CancellationToken) -> Result<Vec<Tool>> {
+        match self
+            .request(QueueCommandKind::ListTools, cancellation)
+            .await?
+        {
+            QueueResponse::ListTools(tools) => Ok(tools),
+            QueueResponse::CallTool(_) => Err(anyhow!("unexpected queue response: call_tool")),
+            QueueResponse::Shutdown => Err(anyhow!("unexpected queue response: shutdown")),
+        }
+    }
+
+    async fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        cancellation: CancellationToken,
+    ) -> Result<CallToolResult> {
+        match self
+            .request(QueueCommandKind::CallTool(request), cancellation)
+            .await?
+        {
+            QueueResponse::CallTool(response) => Ok(response),
+            QueueResponse::ListTools(_) => Err(anyhow!("unexpected queue response: list_tools")),
+            QueueResponse::Shutdown => Err(anyhow!("unexpected queue response: shutdown")),
+        }
+    }
+
+    async fn shutdown(&self) -> Result<()> {
+        let cancellation = CancellationToken::new();
+        let _ = self.request(QueueCommandKind::Shutdown, cancellation).await;
+        Ok(())
+    }
+
+    async fn request(
+        &self,
+        kind: QueueCommandKind,
+        cancellation: CancellationToken,
+    ) -> Result<QueueResponse> {
+        if cancellation.is_cancelled() {
+            return Err(anyhow!("MCP request cancelled before enqueue"));
+        }
+
+        let (response_tx, response_rx) = oneshot::channel();
+        let command = QueueCommand {
+            kind,
+            cancellation: cancellation.clone(),
+            response: response_tx,
+        };
+
+        tokio::select! {
+            _ = cancellation.cancelled() => {
+                return Err(anyhow!("MCP request cancelled while waiting for queue slot"));
+            }
+            send_result = self.sender.send(command) => {
+                send_result.with_context(|| format!("MCP server queue stopped: {}", self.server_name))?;
+            }
+        }
+
+        tokio::select! {
+            _ = cancellation.cancelled() => Err(anyhow!("MCP request cancelled while waiting for response")),
+            response = response_rx => {
+                response.context("MCP queue worker dropped response channel")?
+            }
+        }
     }
 }
 
@@ -306,137 +456,5 @@ fn spawn_with_rlimit_interactive(
 }
 
 #[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use csa_config::McpServerConfig;
-    use rmcp::model::CallToolRequestParam;
-    use serde_json::json;
-    use std::collections::HashMap;
-    use std::fs;
-
-    use super::McpRegistry;
-
-    fn write_script(dir: &std::path::Path, body: &str) -> Result<std::path::PathBuf> {
-        let path = dir.join("mock-mcp.sh");
-        fs::write(&path, body)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&path)?.permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&path, perms)?;
-        }
-        Ok(path)
-    }
-
-    #[tokio::test]
-    async fn registry_forwards_tools_list_and_call_tool() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let script_path = write_script(
-            temp.path(),
-            r#"#!/bin/sh
-while IFS= read -r line; do
-  id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
-  case "$line" in
-    *\"initialize\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mock","version":"0.1.0"}}}\n' "$id"
-      ;;
-    *\"notifications/initialized\"*)
-      ;;
-    *\"tools/list\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool","description":"echo","inputSchema":{"type":"object","properties":{}}}]}}\n' "$id"
-      ;;
-    *\"tools/call\"*)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"pong"}]}}\n' "$id"
-      ;;
-    *)
-      printf '{"jsonrpc":"2.0","id":%s,"result":{}}\n' "$id"
-      ;;
-  esac
-done
-"#,
-        )?;
-
-        let registry = McpRegistry::new(vec![McpServerConfig {
-            name: "mock".to_string(),
-            command: "sh".to_string(),
-            args: vec![script_path.to_string_lossy().into_owned()],
-            env: HashMap::new(),
-        }]);
-
-        let tools = registry.list_tools("mock").await?;
-        assert_eq!(tools[0].name.as_ref(), "echo_tool");
-
-        let response = registry
-            .call_tool(
-                "mock",
-                CallToolRequestParam {
-                    name: "echo_tool".into(),
-                    arguments: Some(
-                        json!({
-                            "value": "hello"
-                        })
-                        .as_object()
-                        .cloned()
-                        .unwrap_or_default(),
-                    ),
-                },
-            )
-            .await?;
-
-        assert_eq!(
-            response.content[0].as_text().map(|t| t.text.as_str()),
-            Some("pong")
-        );
-        registry.shutdown_all().await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn registry_restarts_server_after_crash() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let stamp = temp.path().join("first-list.stamp");
-        let script_path = write_script(
-            temp.path(),
-            &format!(
-                r#"#!/bin/sh
-stamp="{}"
-while IFS= read -r line; do
-  id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}}]*\).*/\1/p')
-  case "$line" in
-    *\"initialize\"*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocolVersion":"2024-11-05","capabilities":{{"tools":{{}}}},"serverInfo":{{"name":"mock","version":"0.1.0"}}}}}}\n' "$id"
-      ;;
-    *\"notifications/initialized\"*)
-      ;;
-    *\"tools/list\"*)
-      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"echo_tool","description":"echo","inputSchema":{{"type":"object","properties":{{}}}}}}]}}}}\n' "$id"
-      if [ ! -f "$stamp" ]; then
-        touch "$stamp"
-        exit 1
-      fi
-      ;;
-  esac
-done
-"#,
-                stamp.to_string_lossy()
-            ),
-        )?;
-
-        let registry = McpRegistry::new(vec![McpServerConfig {
-            name: "flaky".to_string(),
-            command: "sh".to_string(),
-            args: vec![script_path.to_string_lossy().into_owned()],
-            env: HashMap::new(),
-        }]);
-
-        let first = registry.list_tools("flaky").await?;
-        assert_eq!(first[0].name.as_ref(), "echo_tool");
-
-        let second = registry.list_tools("flaky").await?;
-        assert_eq!(second[0].name.as_ref(), "echo_tool");
-
-        registry.shutdown_all().await?;
-        Ok(())
-    }
-}
+#[path = "registry_tests.rs"]
+mod tests;

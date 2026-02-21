@@ -11,6 +11,7 @@ use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
+use tokio_util::sync::CancellationToken;
 
 use crate::registry::McpRegistry;
 
@@ -45,7 +46,13 @@ impl ProxyRouter {
         let mut routes = HashMap::new();
 
         for server in self.registry.server_names() {
-            match timeout(self.request_timeout, self.registry.list_tools(&server)).await {
+            let cancellation = CancellationToken::new();
+            match timeout(
+                self.request_timeout,
+                self.registry.list_tools(&server, cancellation.clone()),
+            )
+            .await
+            {
                 Ok(Ok(server_tools)) => {
                     for tool in server_tools {
                         routes.insert(tool.name.to_string(), server.clone());
@@ -55,11 +62,14 @@ impl ProxyRouter {
                 Ok(Err(error)) => {
                     tracing::warn!(server = %server, error = %error, "tools/list forwarding failed");
                 }
-                Err(_) => tracing::warn!(
-                    server = %server,
-                    timeout_secs = self.request_timeout.as_secs(),
-                    "tools/list forwarding timed out"
-                ),
+                Err(_) => {
+                    cancellation.cancel();
+                    tracing::warn!(
+                        server = %server,
+                        timeout_secs = self.request_timeout.as_secs(),
+                        "tools/list forwarding timed out"
+                    );
+                }
             }
         }
 
@@ -86,9 +96,11 @@ impl ProxyRouter {
             ));
         };
 
+        let cancellation = CancellationToken::new();
         match timeout(
             self.request_timeout,
-            self.registry.call_tool(&server_name, request),
+            self.registry
+                .call_tool(&server_name, request, cancellation.clone()),
         )
         .await
         {
@@ -97,13 +109,16 @@ impl ProxyRouter {
                 format!("forwarding to MCP server '{server_name}' failed: {error}"),
                 None,
             )),
-            Err(_) => Err(McpError::internal_error(
-                format!(
-                    "forwarding to MCP server '{server_name}' timed out after {}s",
-                    self.request_timeout.as_secs()
-                ),
-                None,
-            )),
+            Err(_) => {
+                cancellation.cancel();
+                Err(McpError::internal_error(
+                    format!(
+                        "forwarding to MCP server '{server_name}' timed out after {}s",
+                        self.request_timeout.as_secs()
+                    ),
+                    None,
+                ))
+            }
         }
     }
 
