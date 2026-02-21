@@ -8,6 +8,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
@@ -81,11 +82,14 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     );
     let timeout_seconds =
         resolve_debate_timeout_seconds(args.timeout, Some(global_config.debate.timeout_seconds));
+    let wall_clock_start = Instant::now();
     let mut retry_count = 0u8;
     let mut first_error_context: Option<String> = None;
     let mut resume_session = args.session.clone();
 
     let execution = loop {
+        ensure_debate_wall_clock_within_timeout(wall_clock_start, timeout_seconds)?;
+
         let execute_future = crate::pipeline::execute_with_session_and_meta(
             &executor,
             &tool,
@@ -724,6 +728,18 @@ fn resolve_debate_timeout_seconds(
     global_timeout_seconds: Option<u64>,
 ) -> Option<u64> {
     cli_timeout_seconds.or(global_timeout_seconds)
+}
+
+fn ensure_debate_wall_clock_within_timeout(
+    wall_clock_start: Instant,
+    timeout_seconds: Option<u64>,
+) -> Result<()> {
+    if let Some(timeout_secs) = timeout_seconds
+        && wall_clock_start.elapsed() > Duration::from_secs(timeout_secs)
+    {
+        anyhow::bail!("Wall-clock timeout exceeded ({timeout_secs}s)");
+    }
+    Ok(())
 }
 
 fn should_retry_debate_after_error(kind: &DebateErrorKind, retry_count: u8) -> bool {

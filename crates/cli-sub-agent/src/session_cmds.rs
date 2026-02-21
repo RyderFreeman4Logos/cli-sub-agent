@@ -1,4 +1,6 @@
 use anyhow::Result;
+use csa_session::checkpoint::CheckpointNote;
+use std::collections::HashSet;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -7,9 +9,8 @@ use tracing::info;
 use csa_config::paths;
 use csa_core::types::OutputFormat;
 use csa_session::{
-    MetaSessionState, SessionPhase, SessionResult, delete_session, find_sessions, get_session_dir,
-    list_artifacts, list_sessions, list_sessions_tree_filtered, load_result, load_session,
-    resolve_session_prefix,
+    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_artifacts,
+    list_sessions, list_sessions_tree_filtered, load_result, load_session, resolve_session_prefix,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
@@ -82,7 +83,14 @@ fn select_sessions_for_list(
     branch: Option<&str>,
     tool_filter: Option<&[&str]>,
 ) -> Result<Vec<MetaSessionState>> {
-    find_sessions(project_root, branch, None, None, tool_filter)
+    let mut sessions = list_sessions(project_root, tool_filter)?;
+
+    if let Some(branch_filter) = branch {
+        sessions.retain(|session| session.branch.as_deref() == Some(branch_filter));
+    }
+
+    sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    Ok(sessions)
 }
 
 fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_json::Value {
@@ -209,6 +217,28 @@ fn legacy_sessions_dir_from_primary_root(primary_root: &Path) -> Option<PathBuf>
     let relative_root = primary_root.strip_prefix(primary_state_dir).ok()?;
     let legacy_root = legacy_state_dir.join(relative_root);
     (legacy_root != primary_root).then(|| legacy_root.join("sessions"))
+}
+
+fn list_checkpoints_from_dirs(
+    primary_sessions_dir: &Path,
+    legacy_sessions_dir: Option<&Path>,
+) -> Result<Vec<(String, CheckpointNote)>> {
+    let mut checkpoints = csa_session::checkpoint::list_checkpoints(primary_sessions_dir)?;
+    let mut seen_ids: HashSet<String> = checkpoints
+        .iter()
+        .map(|(_, note)| note.session_id.clone())
+        .collect();
+
+    if let Some(legacy_dir) = legacy_sessions_dir {
+        for (commit, note) in csa_session::checkpoint::list_checkpoints(legacy_dir)? {
+            if seen_ids.insert(note.session_id.clone()) {
+                checkpoints.push((commit, note));
+            }
+        }
+    }
+
+    checkpoints.sort_by(|a, b| b.1.completed_at.cmp(&a.1.completed_at));
+    Ok(checkpoints)
 }
 
 pub(crate) fn handle_session_list(
@@ -595,9 +625,11 @@ pub(crate) fn handle_session_checkpoint(session: String, cd: Option<String>) -> 
 
 pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let sessions_dir = csa_session::get_session_root(&project_root)?.join("sessions");
-
-    let checkpoints = csa_session::checkpoint::list_checkpoints(&sessions_dir)?;
+    let primary_root = csa_session::get_session_root(&project_root)?;
+    let primary_sessions_dir = primary_root.join("sessions");
+    let legacy_sessions_dir = legacy_sessions_dir_from_primary_root(&primary_root);
+    let checkpoints =
+        list_checkpoints_from_dirs(&primary_sessions_dir, legacy_sessions_dir.as_deref())?;
     if checkpoints.is_empty() {
         eprintln!("No checkpoint notes found.");
         return Ok(());

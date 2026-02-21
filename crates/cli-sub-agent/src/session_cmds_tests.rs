@@ -167,6 +167,19 @@ fn session_list_branch_filter_returns_matching_sessions() {
 }
 
 #[test]
+fn session_list_selection_not_truncated_to_ten() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    for _ in 0..12 {
+        let _ = create_session(project, Some("bulk"), None, None).unwrap();
+    }
+
+    let sessions = select_sessions_for_list(project, None, None).unwrap();
+    assert_eq!(sessions.len(), 12);
+}
+
+#[test]
 fn session_list_cli_parses_branch_filter() {
     let cli = Cli::try_parse_from(["csa", "session", "list", "--branch", "feature/x"]).unwrap();
     match cli.command {

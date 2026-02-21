@@ -520,6 +520,19 @@ fn resolve_debate_timeout_uses_global_then_none() {
 }
 
 #[test]
+fn wall_clock_timeout_guard_allows_within_budget() {
+    let start = tokio::time::Instant::now();
+    assert!(ensure_debate_wall_clock_within_timeout(start, Some(1)).is_ok());
+}
+
+#[test]
+fn wall_clock_timeout_guard_rejects_elapsed_budget() {
+    let start = tokio::time::Instant::now() - std::time::Duration::from_secs(2);
+    let err = ensure_debate_wall_clock_within_timeout(start, Some(1)).unwrap_err();
+    assert!(err.to_string().contains("Wall-clock timeout exceeded (1s)"));
+}
+
+#[test]
 fn retry_policy_only_retries_transient_once() {
     use crate::debate_errors::DebateErrorKind;
 

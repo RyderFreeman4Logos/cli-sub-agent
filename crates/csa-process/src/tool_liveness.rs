@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
+const LOCK_FILE_STALE_SECS: u64 = 60;
 const OUTPUT_LOG_FILE: &str = "output.log";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
@@ -44,6 +45,7 @@ impl ToolLiveness {
 }
 
 fn has_live_pid_signal(session_dir: &Path) -> bool {
+    let now = SystemTime::now();
     let locks_dir = session_dir.join("locks");
     let entries = match fs::read_dir(&locks_dir) {
         Ok(entries) => entries,
@@ -52,16 +54,56 @@ fn has_live_pid_signal(session_dir: &Path) -> bool {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "lock")
-            && fs::read_to_string(&path)
-                .ok()
-                .and_then(|content| extract_pid(&content))
-                .is_some_and(is_process_alive)
+        if path.extension().is_none_or(|ext| ext != "lock") {
+            continue;
+        }
+
+        let Some(content) = fs::read_to_string(&path).ok() else {
+            continue;
+        };
+        let Some(pid) = extract_pid(&content) else {
+            continue;
+        };
+        if !is_process_alive(pid) {
+            continue;
+        }
+
+        if lock_file_is_recent(&path, now) || process_matches_lock_context(pid, &path, session_dir)
         {
             return true;
         }
     }
     false
+}
+
+fn lock_file_is_recent(lock_path: &Path, now: SystemTime) -> bool {
+    let modified = match fs::metadata(lock_path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified,
+        Err(_) => return false,
+    };
+    let elapsed = now.duration_since(modified).unwrap_or(Duration::ZERO);
+    elapsed <= Duration::from_secs(LOCK_FILE_STALE_SECS)
+}
+
+fn process_matches_lock_context(pid: u32, lock_path: &Path, session_dir: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        let cmdline_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
+        let Ok(raw_cmdline) = fs::read(cmdline_path) else {
+            return false;
+        };
+        let cmdline = String::from_utf8_lossy(&raw_cmdline).replace('\0', " ");
+        let tool_name = lock_path.file_stem().and_then(|stem| stem.to_str());
+        let session_id = session_dir.file_name().and_then(|name| name.to_str());
+
+        tool_name.is_some_and(|tool| cmdline.contains(tool))
+            || session_id.is_some_and(|id| cmdline.contains(id))
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pid, lock_path, session_dir);
+        false
+    }
 }
 
 fn has_output_growth_signal(
@@ -248,5 +290,29 @@ fn is_process_alive(pid: u32) -> bool {
     #[cfg(not(unix))]
     {
         std::path::Path::new(&format!("/proc/{pid}/stat")).exists()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_file_is_recent_false_when_stale() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let lock_path = tmp.path().join("codex.lock");
+        fs::write(&lock_path, "{\"pid\": 1}").expect("write lock");
+
+        let stale_now = SystemTime::now() + Duration::from_secs(LOCK_FILE_STALE_SECS + 1);
+        assert!(!lock_file_is_recent(&lock_path, stale_now));
+    }
+
+    #[test]
+    fn lock_file_is_recent_true_when_fresh() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let lock_path = tmp.path().join("codex.lock");
+        fs::write(&lock_path, "{\"pid\": 1}").expect("write lock");
+
+        assert!(lock_file_is_recent(&lock_path, SystemTime::now()));
     }
 }
