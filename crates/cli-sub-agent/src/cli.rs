@@ -734,6 +734,13 @@ pub enum McpHubCommands {
         #[arg(long)]
         socket: Option<String>,
     },
+
+    /// Regenerate mcp-hub routing-guide skill
+    GenSkill {
+        /// Override hub socket path
+        #[arg(long)]
+        socket: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]

@@ -21,7 +21,11 @@ INSTANCES=3                  # concurrent instances to project savings for
 SETTLE_SECS=15               # seconds to wait for tool to fully initialize
 SAMPLES=3                    # number of measurement samples per mode
 PROXY_MODE=false             # when true, measure with mcp-hub proxy injection
-PROXY_SOCKET="${XDG_RUNTIME_DIR:-/tmp/csa-${UID}}/mcp-hub.sock"
+if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
+    PROXY_SOCKET="${XDG_RUNTIME_DIR}/csa/mcp-hub.sock"
+else
+    PROXY_SOCKET="/tmp/csa-${UID}/mcp-hub.sock"
+fi
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
