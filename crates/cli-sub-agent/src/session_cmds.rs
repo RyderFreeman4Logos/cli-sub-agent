@@ -6,8 +6,9 @@ use tracing::info;
 
 use csa_core::types::OutputFormat;
 use csa_session::{
-    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_artifacts,
-    list_sessions, list_sessions_tree, load_result, load_session, resolve_session_prefix,
+    MetaSessionState, SessionPhase, SessionResult, delete_session, find_sessions, get_session_dir,
+    list_artifacts, list_sessions, list_sessions_tree_filtered, load_result, load_session,
+    resolve_session_prefix,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
@@ -75,6 +76,28 @@ fn resolve_session_status(project_root: &Path, session: &MetaSessionState) -> St
     }
 }
 
+fn select_sessions_for_list(
+    project_root: &Path,
+    branch: Option<&str>,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    find_sessions(project_root, branch, None, None, tool_filter)
+}
+
+fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_json::Value {
+    serde_json::json!({
+        "session_id": session.meta_session_id,
+        "last_accessed": session.last_accessed,
+        "description": session.description.as_deref().unwrap_or(""),
+        "tools": session.tools.keys().collect::<Vec<_>>(),
+        "status": resolve_session_status(project_root, session),
+        "phase": format!("{:?}", session.phase),
+        "branch": session.branch,
+        "task_type": session.task_context.task_type,
+        "total_token_usage": session.total_token_usage,
+    })
+}
+
 #[derive(Debug, Clone)]
 struct TranscriptSummary {
     event_count: u64,
@@ -129,6 +152,7 @@ fn extract_transcript_timestamp(line: &str) -> Option<String> {
 
 pub(crate) fn handle_session_list(
     cd: Option<String>,
+    branch: Option<String>,
     tool: Option<String>,
     tree: bool,
     format: OutputFormat,
@@ -137,10 +161,12 @@ pub(crate) fn handle_session_list(
     let tool_filter: Option<Vec<&str>> = tool.as_ref().map(|t| t.split(',').collect());
 
     if tree {
-        let tree_output = list_sessions_tree(&project_root, tool_filter.as_deref())?;
+        let tree_output =
+            list_sessions_tree_filtered(&project_root, tool_filter.as_deref(), branch.as_deref())?;
         print!("{}", tree_output);
     } else {
-        let sessions = list_sessions(&project_root, tool_filter.as_deref())?;
+        let sessions =
+            select_sessions_for_list(&project_root, branch.as_deref(), tool_filter.as_deref())?;
         if sessions.is_empty() {
             match format {
                 OutputFormat::Json => {
@@ -158,27 +184,17 @@ pub(crate) fn handle_session_list(
                 // Serialize sessions as JSON array
                 let json_sessions: Vec<_> = sessions
                     .iter()
-                    .map(|s| {
-                        serde_json::json!({
-                            "session_id": s.meta_session_id,
-                            "last_accessed": s.last_accessed,
-                            "description": s.description.as_deref().unwrap_or(""),
-                            "tools": s.tools.keys().collect::<Vec<_>>(),
-                            "status": resolve_session_status(&project_root, s),
-                            "phase": format!("{:?}", s.phase),
-                            "total_token_usage": s.total_token_usage,
-                        })
-                    })
+                    .map(|s| session_to_json(&project_root, s))
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&json_sessions)?);
             }
             OutputFormat::Text => {
                 // Print table header
                 println!(
-                    "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  TOKENS",
-                    "SESSION", "LAST ACCESSED", "STATUS", "DESCRIPTION", "TOOLS"
+                    "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
+                    "SESSION", "LAST ACCESSED", "STATUS", "DESCRIPTION", "TOOLS", "BRANCH"
                 );
-                println!("{}", "-".repeat(110));
+                println!("{}", "-".repeat(130));
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
                     let short_id =
@@ -201,6 +217,7 @@ pub(crate) fn handle_session_list(
                             .collect::<Vec<_>>()
                             .join(", ")
                     };
+                    let branch_str = session.branch.as_deref().unwrap_or("-");
 
                     // Format token usage
                     let tokens_str = if let Some(ref usage) = session.total_token_usage {
@@ -227,12 +244,13 @@ pub(crate) fn handle_session_list(
                     };
 
                     println!(
-                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {}",
+                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}",
                         short_id,
                         session.last_accessed.format("%Y-%m-%d %H:%M"),
                         status_str,
                         desc_display,
                         tools_str,
+                        branch_str,
                         tokens_str,
                     );
                 }
@@ -539,9 +557,19 @@ pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{status_from_phase_and_result, truncate_with_ellipsis};
+    use super::{
+        select_sessions_for_list, session_to_json, status_from_phase_and_result,
+        truncate_with_ellipsis,
+    };
+    use crate::cli::{Cli, Commands, SessionCommands};
     use chrono::Utc;
-    use csa_session::{SessionPhase, SessionResult};
+    use clap::Parser;
+    use csa_session::{
+        ContextStatus, Genealogy, MetaSessionState, SessionPhase, SessionResult, TaskContext,
+        TokenUsage, create_session, delete_session, load_session, save_session,
+    };
+    use std::collections::HashMap;
+    use tempfile::tempdir;
 
     #[test]
     fn truncate_with_ellipsis_preserves_ascii_short_input() {
@@ -624,5 +652,87 @@ mod tests {
             status_from_phase_and_result(&SessionPhase::Retired, Some(&failure)),
             "Retired"
         );
+    }
+
+    fn sample_session_state() -> MetaSessionState {
+        let now = Utc::now();
+        MetaSessionState {
+            meta_session_id: "01J6F5W0M6Q7BW7Q3T0J4A8V45".to_string(),
+            description: Some("Plan".to_string()),
+            project_path: "/tmp/project".to_string(),
+            branch: Some("feature/x".to_string()),
+            created_at: now,
+            last_accessed: now,
+            genealogy: Genealogy {
+                parent_session_id: None,
+                depth: 0,
+            },
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: Some(TokenUsage {
+                input_tokens: Some(10),
+                output_tokens: Some(20),
+                total_tokens: Some(30),
+                estimated_cost_usd: None,
+            }),
+            phase: SessionPhase::Available,
+            task_context: TaskContext {
+                task_type: Some("plan".to_string()),
+                tier_name: None,
+            },
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+        }
+    }
+
+    #[test]
+    fn session_to_json_includes_branch_and_task_type() {
+        let session = sample_session_state();
+        let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+        assert_eq!(
+            value.get("branch").and_then(|v| v.as_str()),
+            Some("feature/x")
+        );
+        assert_eq!(
+            value.get("task_type").and_then(|v| v.as_str()),
+            Some("plan")
+        );
+    }
+
+    #[test]
+    fn session_list_branch_filter_returns_matching_sessions() {
+        let td = tempdir().unwrap();
+        let project = td.path();
+
+        let s1 = create_session(project, Some("S1"), None, None).unwrap();
+        let s2 = create_session(project, Some("S2"), None, None).unwrap();
+
+        let mut session1 = load_session(project, &s1.meta_session_id).unwrap();
+        session1.branch = Some("feature/x".to_string());
+        save_session(&session1).unwrap();
+
+        let mut session2 = load_session(project, &s2.meta_session_id).unwrap();
+        session2.branch = Some("feature/y".to_string());
+        save_session(&session2).unwrap();
+
+        let filtered = select_sessions_for_list(project, Some("feature/x"), None).unwrap();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].meta_session_id, s1.meta_session_id);
+
+        delete_session(project, &s1.meta_session_id).unwrap();
+        delete_session(project, &s2.meta_session_id).unwrap();
+    }
+
+    #[test]
+    fn session_list_cli_parses_branch_filter() {
+        let cli = Cli::try_parse_from(["csa", "session", "list", "--branch", "feature/x"]).unwrap();
+        match cli.command {
+            Commands::Session {
+                cmd: SessionCommands::List { branch, .. },
+            } => assert_eq!(branch.as_deref(), Some("feature/x")),
+            _ => panic!("expected session list command"),
+        }
     }
 }

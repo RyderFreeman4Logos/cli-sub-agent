@@ -11,6 +11,7 @@ fn sample_session_state() -> MetaSessionState {
         meta_session_id: "01HTEST000000000000000000".to_string(),
         description: Some("debate".to_string()),
         project_path: "/tmp".to_string(),
+        branch: None,
         created_at: Utc::now(),
         last_accessed: Utc::now(),
         genealogy: Genealogy::default(),

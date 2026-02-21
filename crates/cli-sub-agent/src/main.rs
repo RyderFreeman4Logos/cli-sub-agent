@@ -145,8 +145,13 @@ async fn main() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Session { cmd } => match cmd {
-            SessionCommands::List { cd, tool, tree } => {
-                session_cmds::handle_session_list(cd, tool, tree, output_format)?;
+            SessionCommands::List {
+                cd,
+                branch,
+                tool,
+                tree,
+            } => {
+                session_cmds::handle_session_list(cd, branch, tool, tree, output_format)?;
             }
             SessionCommands::Compress { session, cd } => {
                 session_cmds::handle_session_compress(session, cd)?;

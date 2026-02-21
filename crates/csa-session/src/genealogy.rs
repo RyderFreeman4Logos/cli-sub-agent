@@ -35,18 +35,36 @@ fn find_children_in(base_dir: &Path, session_id: &str) -> Result<Vec<String>> {
 /// Format: `{prefix}{short_id}  {tools}  {description}`
 /// where short_id is the first 11 characters of the ULID
 pub fn list_sessions_tree(project_path: &Path, tool_filter: Option<&[&str]>) -> Result<String> {
+    list_sessions_tree_filtered(project_path, tool_filter, None)
+}
+
+/// Build a tree representation of sessions with optional branch filtering.
+pub fn list_sessions_tree_filtered(
+    project_path: &Path,
+    tool_filter: Option<&[&str]>,
+    branch_filter: Option<&str>,
+) -> Result<String> {
     use crate::manager::get_session_root;
     let base_dir = get_session_root(project_path)?;
-    list_sessions_tree_in(&base_dir, tool_filter)
+    list_sessions_tree_in(&base_dir, tool_filter, branch_filter)
 }
 
 /// Internal implementation: build tree from explicit base directory
-fn list_sessions_tree_in(base_dir: &Path, tool_filter: Option<&[&str]>) -> Result<String> {
+fn list_sessions_tree_in(
+    base_dir: &Path,
+    tool_filter: Option<&[&str]>,
+    branch_filter: Option<&str>,
+) -> Result<String> {
     let mut all_sessions = list_all_sessions_in(base_dir)?;
 
     // Apply tool filter if specified
     if let Some(tools) = tool_filter {
         all_sessions.retain(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)));
+    }
+
+    // Apply branch filter if specified
+    if let Some(branch) = branch_filter {
+        all_sessions.retain(|session| session.branch.as_deref() == Some(branch));
     }
 
     // Sort by created_at for consistent ordering
@@ -182,7 +200,8 @@ mod tests {
         )
         .expect("Failed to create root");
 
-        let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
 
         assert!(tree.contains(&root.meta_session_id[..11]));
         assert!(tree.contains("Root session"));
@@ -206,7 +225,8 @@ mod tests {
         )
         .expect("Failed to create child");
 
-        let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
 
         assert!(tree.contains(&root.meta_session_id[..11]));
         assert!(tree.contains(&child.meta_session_id[..11]));
@@ -224,7 +244,8 @@ mod tests {
         let root2 = create_session_in(temp_dir.path(), project_path, Some("Root 2"), None, None)
             .expect("Failed to create root 2");
 
-        let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
 
         assert!(tree.contains(&root1.meta_session_id[..11]));
         assert!(tree.contains(&root2.meta_session_id[..11]));

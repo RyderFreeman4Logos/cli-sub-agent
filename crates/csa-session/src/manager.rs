@@ -1,13 +1,14 @@
 //! Session CRUD operations
 
 use crate::result::{RESULT_FILE_NAME, SessionResult};
-use crate::state::MetaSessionState;
+use crate::state::{MetaSessionState, SessionPhase};
 use crate::validate::{new_session_id, resolve_session_prefix, validate_session_id};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 const STATE_FILE_NAME: &str = "state.toml";
 const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
@@ -117,11 +118,13 @@ pub(crate) fn create_session_in(
     }
 
     let now = Utc::now();
+    let branch = detect_current_branch(project_path);
 
     let state = MetaSessionState {
         meta_session_id: session_id,
         description: description.map(|s| s.to_string()),
         project_path: project_path.to_string_lossy().to_string(),
+        branch,
         created_at: now,
         last_accessed: now,
         genealogy: crate::state::Genealogy {
@@ -136,7 +139,6 @@ pub(crate) fn create_session_in(
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
-
         termination_reason: None,
     };
 
@@ -144,6 +146,26 @@ pub(crate) fn create_session_in(
     save_session_in(base_dir, &state)?;
 
     Ok(state)
+}
+
+fn detect_current_branch(project_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let branch = String::from_utf8(output.stdout).ok()?;
+    let trimmed = branch.trim();
+    if trimmed.is_empty() || trimmed == "HEAD" {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 /// Load an existing session
@@ -309,6 +331,7 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     meta_session_id: session_id.clone(),
                     description: Some("(recovered from corrupt state)".to_string()),
                     project_path: "(unknown)".to_string(),
+                    branch: None,
                     created_at: now,
                     last_accessed: now,
                     genealogy: crate::state::Genealogy {
@@ -323,7 +346,6 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     turn_count: 0,
                     token_budget: None,
                     sandbox_info: None,
-
                     termination_reason: None,
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
@@ -368,6 +390,63 @@ pub(crate) fn list_sessions_in(
     } else {
         Ok(all_sessions)
     }
+}
+
+/// Find sessions by multiple optional filters.
+pub fn find_sessions(
+    project_path: &Path,
+    branch: Option<&str>,
+    task_type: Option<&str>,
+    phase: Option<SessionPhase>,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let base_dir = get_session_root(project_path)?;
+    find_sessions_in(
+        &base_dir,
+        Some(project_path),
+        branch,
+        task_type,
+        phase,
+        tool_filter,
+    )
+}
+
+/// Internal implementation of [`find_sessions`] for tests.
+pub(crate) fn find_sessions_in(
+    base_dir: &Path,
+    project_path: Option<&Path>,
+    branch: Option<&str>,
+    task_type: Option<&str>,
+    phase: Option<SessionPhase>,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let mut sessions = list_all_sessions_in(base_dir)?;
+
+    if let Some(path) = project_path {
+        let project_key = path.to_string_lossy();
+        sessions.retain(|session| session.project_path == project_key);
+    }
+
+    if let Some(branch_filter) = branch {
+        sessions.retain(|session| session.branch.as_deref() == Some(branch_filter));
+    }
+
+    if let Some(task_type_filter) = task_type {
+        sessions
+            .retain(|session| session.task_context.task_type.as_deref() == Some(task_type_filter));
+    }
+
+    if let Some(phase_filter) = phase {
+        sessions.retain(|session| session.phase == phase_filter);
+    }
+
+    if let Some(tools) = tool_filter {
+        sessions.retain(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)));
+    }
+
+    sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    sessions.truncate(10);
+    Ok(sessions)
 }
 
 /// Resolve a user-provided session reference for resume.

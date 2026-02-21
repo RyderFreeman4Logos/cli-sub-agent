@@ -8,6 +8,7 @@
             meta_session_id: "01HTEST000000000000000000".to_string(),
             description: Some("test".to_string()),
             project_path: "/tmp/test".to_string(),
+            branch: None,
             created_at: now,
             last_accessed: now,
             genealogy: csa_session::state::Genealogy {
@@ -52,6 +53,7 @@
             meta_session_id: "01HTEST000000000000000000".to_string(),
             description: Some("test".to_string()),
             project_path: "/tmp/test".to_string(),
+            branch: None,
             created_at: now,
             last_accessed: now,
             genealogy: csa_session::state::Genealogy {

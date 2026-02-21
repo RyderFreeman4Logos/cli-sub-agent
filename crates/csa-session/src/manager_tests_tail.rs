@@ -152,3 +152,157 @@ fn test_operations_with_invalid_session_id() {
     assert!(load_metadata_in(td.path(), bad).is_err());
     assert!(validate_tool_access_in(td.path(), bad, "codex").is_err());
 }
+
+fn run_git(dir: &std::path::Path, args: &[&str]) {
+    let status = std::process::Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .status()
+        .unwrap();
+    assert!(status.success(), "git {:?} failed", args);
+}
+
+#[test]
+fn test_create_session_records_branch_in_git_repo() {
+    let td = tempdir().unwrap();
+    run_git(td.path(), &["init"]);
+    run_git(td.path(), &["config", "user.email", "test@example.com"]);
+    run_git(td.path(), &["config", "user.name", "Test User"]);
+    std::fs::write(td.path().join("README.md"), "test").unwrap();
+    run_git(td.path(), &["add", "README.md"]);
+    run_git(td.path(), &["commit", "-m", "init"]);
+    run_git(td.path(), &["checkout", "-b", "feat/session-discovery"]);
+
+    let state = create_session_in(td.path(), td.path(), Some("git"), None, None).unwrap();
+    assert_eq!(state.branch.as_deref(), Some("feat/session-discovery"));
+}
+
+#[test]
+fn test_find_sessions_multi_condition_filtering() {
+    let td = tempdir().unwrap();
+    let mut s1 = create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
+    s1.branch = Some("feature/a".to_string());
+    s1.phase = SessionPhase::Available;
+    s1.task_context.task_type = Some("plan".to_string());
+    s1.last_accessed = Utc::now() - chrono::Duration::minutes(5);
+    s1.tools.insert(
+        "codex".to_string(),
+        crate::state::ToolState {
+            provider_session_id: None,
+            last_action_summary: "Plan".to_string(),
+            last_exit_code: 0,
+            updated_at: Utc::now(),
+            token_usage: None,
+        },
+    );
+    save_session_in(td.path(), &s1).unwrap();
+
+    let mut s2 = create_session_in(td.path(), td.path(), Some("S2"), None, None).unwrap();
+    s2.branch = Some("feature/a".to_string());
+    s2.phase = SessionPhase::Available;
+    s2.task_context.task_type = Some("review".to_string());
+    s2.last_accessed = Utc::now();
+    s2.tools.insert(
+        "codex".to_string(),
+        crate::state::ToolState {
+            provider_session_id: None,
+            last_action_summary: "Review".to_string(),
+            last_exit_code: 0,
+            updated_at: Utc::now(),
+            token_usage: None,
+        },
+    );
+    save_session_in(td.path(), &s2).unwrap();
+
+    let mut s3 = create_session_in(td.path(), td.path(), Some("S3"), None, None).unwrap();
+    s3.branch = Some("feature/b".to_string());
+    s3.phase = SessionPhase::Available;
+    s3.task_context.task_type = Some("plan".to_string());
+    s3.last_accessed = Utc::now() - chrono::Duration::minutes(1);
+    s3.tools.insert(
+        "gemini-cli".to_string(),
+        crate::state::ToolState {
+            provider_session_id: None,
+            last_action_summary: "Plan".to_string(),
+            last_exit_code: 0,
+            updated_at: Utc::now(),
+            token_usage: None,
+        },
+    );
+    save_session_in(td.path(), &s3).unwrap();
+
+    let sessions = find_sessions_in(
+        td.path(),
+        Some(td.path()),
+        Some("feature/a"),
+        Some("plan"),
+        Some(SessionPhase::Available),
+        Some(&["codex"]),
+    )
+    .unwrap();
+
+    assert_eq!(sessions.len(), 1);
+    assert_eq!(sessions[0].meta_session_id, s1.meta_session_id);
+}
+
+#[test]
+fn test_find_sessions_sorts_desc_and_limits_to_ten() {
+    let td = tempdir().unwrap();
+    for i in 0..12 {
+        let mut session = create_session_in(td.path(), td.path(), Some("S"), None, None).unwrap();
+        session.branch = Some("feature/a".to_string());
+        session.task_context.task_type = Some("plan".to_string());
+        session.phase = SessionPhase::Available;
+        session.last_accessed = Utc::now() - chrono::Duration::minutes(i);
+        save_session_in(td.path(), &session).unwrap();
+    }
+
+    let sessions = find_sessions_in(
+        td.path(),
+        Some(td.path()),
+        Some("feature/a"),
+        Some("plan"),
+        Some(SessionPhase::Available),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(sessions.len(), 10);
+    assert!(
+        sessions
+            .windows(2)
+            .all(|pair| pair[0].last_accessed >= pair[1].last_accessed)
+    );
+}
+
+#[test]
+fn test_find_sessions_backward_compat_without_branch_field() {
+    let td = tempdir().unwrap();
+    let mut legacy = create_session_in(td.path(), td.path(), Some("legacy"), None, None).unwrap();
+    legacy.phase = SessionPhase::Available;
+    legacy.task_context.task_type = Some("plan".to_string());
+    save_session_in(td.path(), &legacy).unwrap();
+
+    let matched = find_sessions_in(
+        td.path(),
+        Some(td.path()),
+        None,
+        Some("plan"),
+        Some(SessionPhase::Available),
+        None,
+    )
+    .unwrap();
+    assert_eq!(matched.len(), 1);
+    assert_eq!(matched[0].meta_session_id, legacy.meta_session_id);
+
+    let no_match = find_sessions_in(
+        td.path(),
+        Some(td.path()),
+        Some("feature/a"),
+        Some("plan"),
+        Some(SessionPhase::Available),
+        None,
+    )
+    .unwrap();
+    assert!(no_match.is_empty());
+}

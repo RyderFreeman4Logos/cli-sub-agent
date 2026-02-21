@@ -416,6 +416,10 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
 
+        /// Filter by git branch
+        #[arg(long)]
+        branch: Option<String>,
+
         /// Filter by tool (comma-separated)
         #[arg(long)]
         tool: Option<String>,

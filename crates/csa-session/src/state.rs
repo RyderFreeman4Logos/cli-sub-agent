@@ -16,6 +16,10 @@ pub struct MetaSessionState {
     /// Absolute path to the project directory
     pub project_path: String,
 
+    /// Git branch at session creation time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub branch: Option<String>,
+
     /// When this session was created
     pub created_at: DateTime<Utc>,
 
@@ -472,6 +476,7 @@ mod tests {
             meta_session_id: ulid::Ulid::new().to_string(),
             description: Some("Round-trip test".to_string()),
             project_path: "/tmp/test".to_string(),
+            branch: Some("feat/session-branch".to_string()),
             created_at: now,
             last_accessed: now,
             genealogy: Genealogy {
@@ -499,9 +504,34 @@ mod tests {
 
         assert_eq!(loaded.meta_session_id, state.meta_session_id);
         assert_eq!(loaded.description, state.description);
+        assert_eq!(loaded.branch, state.branch);
         assert_eq!(loaded.phase, SessionPhase::Available);
         assert_eq!(loaded.task_context.task_type, Some("review".to_string()));
         assert_eq!(loaded.task_context.tier_name, Some("quick".to_string()));
+    }
+
+    #[test]
+    fn test_meta_session_state_backward_compat_without_branch() {
+        let toml_str = r#"
+meta_session_id = "01J6F5W0M6Q7BW7Q3T0J4A8V45"
+description = "Legacy session"
+project_path = "/tmp/test"
+created_at = "2026-01-01T00:00:00Z"
+last_accessed = "2026-01-01T00:00:00Z"
+turn_count = 0
+
+[genealogy]
+depth = 0
+
+[tools]
+
+[context_status]
+is_compacted = false
+"#;
+
+        let loaded: MetaSessionState =
+            toml::from_str(toml_str).expect("Deserialize legacy state should succeed");
+        assert_eq!(loaded.branch, None);
     }
 
     // ── Retired is terminal ────────────────────────────────────────
@@ -669,6 +699,7 @@ mod tests {
             meta_session_id: ulid::Ulid::new().to_string(),
             description: Some("Budget test".to_string()),
             project_path: "/tmp/test".to_string(),
+            branch: None,
             created_at: now,
             last_accessed: now,
             genealogy: Genealogy {
