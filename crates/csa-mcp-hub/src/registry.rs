@@ -1,21 +1,26 @@
 use std::collections::HashMap;
-use std::process::Stdio;
+use std::io;
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use csa_config::McpServerConfig;
+use csa_process::{SandboxHandle, SpawnOptions, spawn_tool_sandboxed};
+use csa_resource::{SandboxCapability, SandboxConfig, apply_rlimits, detect_sandbox_capability};
 use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
 use rmcp::service::{RunningService, ServiceExt};
-use rmcp::transport::TokioChildProcess;
 use tokio::process::Command;
 use tokio::sync::Mutex;
 
 const RESTART_BACKOFF_INITIAL_MS: u64 = 100;
 const RESTART_BACKOFF_MAX_MS: u64 = 30_000;
+const MCP_SANDBOX_MEMORY_MAX_MB: u64 = 2048;
+const MCP_SANDBOX_MEMORY_SWAP_MAX_MB: Option<u64> = Some(0);
+const MCP_SANDBOX_PIDS_MAX: Option<u32> = None;
+const MCP_SANDBOX_SESSION_ID: &str = "mcp-hub";
+const SHUTDOWN_GRACE_SECS: u64 = 3;
 
-#[derive(Debug)]
 pub(crate) struct McpRegistry {
     servers: HashMap<String, Arc<Mutex<ManagedServer>>>,
 }
@@ -69,7 +74,6 @@ impl McpRegistry {
     }
 }
 
-#[derive(Debug)]
 struct ManagedServer {
     config: McpServerConfig,
     process: Option<ServerProcess>,
@@ -88,7 +92,7 @@ impl ManagedServer {
     async fn list_tools(&mut self) -> Result<Vec<Tool>> {
         let mut last_err: Option<anyhow::Error> = None;
 
-        for _ in 0..2 {
+        for _ in 0..3 {
             if let Err(error) = self.ensure_running().await {
                 tracing::warn!(
                     server = %self.config.name,
@@ -124,7 +128,7 @@ impl ManagedServer {
     async fn call_tool(&mut self, request: CallToolRequestParam) -> Result<CallToolResult> {
         let mut last_err: Option<anyhow::Error> = None;
 
-        for _ in 0..2 {
+        for _ in 0..3 {
             if let Err(error) = self.ensure_running().await {
                 tracing::warn!(
                     server = %self.config.name,
@@ -185,33 +189,120 @@ impl ManagedServer {
     }
 }
 
-#[derive(Debug)]
 struct ServerProcess {
     service: RunningService<RoleClient, ()>,
+    child: tokio::process::Child,
+    _sandbox: Option<SandboxHandle>,
 }
 
 impl ServerProcess {
     async fn spawn(config: &McpServerConfig) -> Result<Self> {
         let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args).stderr(Stdio::null());
+        cmd.args(&config.args);
         for (key, value) in &config.env {
             cmd.env(key, value);
         }
 
-        let (transport, _stderr) = TokioChildProcess::builder(cmd)
-            .stderr(Stdio::null())
-            .spawn()
-            .with_context(|| format!("failed to spawn MCP server '{}'", config.name))?;
+        let sandbox_config = SandboxConfig {
+            memory_max_mb: MCP_SANDBOX_MEMORY_MAX_MB,
+            memory_swap_max_mb: MCP_SANDBOX_MEMORY_SWAP_MAX_MB,
+            pids_max: MCP_SANDBOX_PIDS_MAX,
+        };
+
+        let capability = detect_sandbox_capability();
+        let (mut child, sandbox) = match capability {
+            SandboxCapability::CgroupV2 => {
+                // `systemd-run --scope` does not preserve interactive stdio semantics
+                // required by MCP child-process transport. Use rlimit sandboxing.
+                let child = spawn_with_rlimit_interactive(cmd, &sandbox_config)
+                    .with_context(|| format!("failed to sandbox MCP server '{}'", config.name))?;
+                (child, None)
+            }
+            SandboxCapability::Setrlimit | SandboxCapability::None => {
+                let (child, sandbox) = spawn_tool_sandboxed(
+                    cmd,
+                    None,
+                    SpawnOptions {
+                        stdin_write_timeout: Duration::from_secs(
+                            csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
+                        ),
+                        keep_stdin_open: true,
+                    },
+                    Some(&sandbox_config),
+                    &config.name,
+                    MCP_SANDBOX_SESSION_ID,
+                )
+                .await
+                .with_context(|| format!("failed to sandbox MCP server '{}'", config.name))?;
+                (child, Some(sandbox))
+            }
+        };
+
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture stdout for MCP server '{}'", config.name))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("failed to capture stdin for MCP server '{}'", config.name))?;
+        if let Some(mut stderr) = child.stderr.take() {
+            tokio::spawn(async move {
+                let mut sink = tokio::io::sink();
+                let _ = tokio::io::copy(&mut stderr, &mut sink).await;
+            });
+        }
+
         let service = ()
-            .serve(transport)
+            .serve((stdout, stdin))
             .await
-            .with_context(|| format!("failed to initialize MCP server '{}'", config.name))?;
-        Ok(Self { service })
+            .with_context(|| format!("failed to spawn MCP server '{}'", config.name))?;
+
+        Ok(Self {
+            service,
+            child,
+            _sandbox: sandbox,
+        })
     }
 
-    async fn shutdown(self) {
+    async fn shutdown(mut self) {
         let _ = self.service.cancel().await;
+        match tokio::time::timeout(Duration::from_secs(SHUTDOWN_GRACE_SECS), self.child.wait())
+            .await
+        {
+            Ok(Ok(_)) => {}
+            Ok(Err(error)) => {
+                tracing::debug!(error = %error, "failed to wait MCP child process");
+            }
+            Err(_) => {
+                let _ = self.child.kill().await;
+            }
+        }
     }
+}
+
+fn spawn_with_rlimit_interactive(
+    mut cmd: Command,
+    config: &SandboxConfig,
+) -> Result<tokio::process::Child> {
+    cmd.stdout(std::process::Stdio::piped());
+    cmd.stderr(std::process::Stdio::piped());
+    cmd.stdin(std::process::Stdio::piped());
+    cmd.kill_on_drop(true);
+
+    let memory_max_mb = config.memory_max_mb;
+    let pids_max = config.pids_max.map(u64::from);
+    // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(move || {
+            libc::setsid();
+            apply_rlimits(memory_max_mb, pids_max).map_err(io::Error::other)
+        });
+    }
+
+    cmd.spawn()
+        .context("failed to spawn interactive rlimit child")
 }
 
 #[cfg(test)]
@@ -304,16 +395,12 @@ done
     #[tokio::test]
     async fn registry_restarts_server_after_crash() -> Result<()> {
         let temp = tempfile::tempdir()?;
-        let stamp = temp.path().join("first-run.stamp");
+        let stamp = temp.path().join("first-list.stamp");
         let script_path = write_script(
             temp.path(),
             &format!(
                 r#"#!/bin/sh
 stamp="{}"
-if [ ! -f "$stamp" ]; then
-  touch "$stamp"
-  exit 1
-fi
 while IFS= read -r line; do
   id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}}]*\).*/\1/p')
   case "$line" in
@@ -324,6 +411,10 @@ while IFS= read -r line; do
       ;;
     *\"tools/list\"*)
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"tools":[{{"name":"echo_tool","description":"echo","inputSchema":{{"type":"object","properties":{{}}}}}}]}}}}\n' "$id"
+      if [ ! -f "$stamp" ]; then
+        touch "$stamp"
+        exit 1
+      fi
       ;;
   esac
 done
@@ -339,8 +430,11 @@ done
             env: HashMap::new(),
         }]);
 
-        let tools = registry.list_tools("flaky").await?;
-        assert_eq!(tools[0].name.as_ref(), "echo_tool");
+        let first = registry.list_tools("flaky").await?;
+        assert_eq!(first[0].name.as_ref(), "echo_tool");
+
+        let second = registry.list_tools("flaky").await?;
+        assert_eq!(second[0].name.as_ref(), "echo_tool");
 
         registry.shutdown_all().await?;
         Ok(())

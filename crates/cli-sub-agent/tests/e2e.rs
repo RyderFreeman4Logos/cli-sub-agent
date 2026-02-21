@@ -93,12 +93,16 @@ fn mcp_hub_serve_parse_with_background_and_socket() {
                     background,
                     foreground,
                     socket,
+                    http_bind,
+                    http_port,
                     systemd_activation,
                 },
         } => {
             assert!(background);
             assert!(!foreground);
             assert_eq!(socket.as_deref(), Some("/tmp/csa-1000/mcp-hub.sock"));
+            assert!(http_bind.is_none());
+            assert!(http_port.is_none());
             assert!(!systemd_activation);
         }
         _ => panic!("expected mcp-hub serve subcommand"),

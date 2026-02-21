@@ -11,7 +11,6 @@ use csa_process::{
 };
 use csa_resource::cgroup::SandboxConfig;
 use csa_session::state::{MetaSessionState, ToolState};
-
 const SUMMARY_MAX_CHARS: usize = 200;
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
@@ -54,7 +53,6 @@ pub struct TransportResult {
     pub provider_session_id: Option<String>,
     pub events: Vec<SessionEvent>,
 }
-
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
     executor: Executor,
@@ -82,6 +80,7 @@ impl LegacyTransport {
                 stdin_write_timeout: std::time::Duration::from_secs(
                     csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
                 ),
+                keep_stdin_open: false,
             },
         )
         .await?;
@@ -93,7 +92,6 @@ impl LegacyTransport {
             None,
         )
         .await?;
-
         Ok(TransportResult {
             execution,
             provider_session_id: None,
@@ -130,6 +128,7 @@ impl Transport for LegacyTransport {
                 stdin_write_timeout: std::time::Duration::from_secs(
                     options.stdin_write_timeout_seconds,
                 ),
+                keep_stdin_open: false,
             },
             sandbox_cfg,
             tool_name,
@@ -151,6 +150,7 @@ impl Transport for LegacyTransport {
                         stdin_write_timeout: std::time::Duration::from_secs(
                             options.stdin_write_timeout_seconds,
                         ),
+                        keep_stdin_open: false,
                     },
                 )
                 .await?;

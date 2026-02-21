@@ -627,6 +627,7 @@ name = "csa-mcp-hub"
 version = "0.1.23"
 dependencies = [
  "anyhow",
+ "axum",
  "csa-config",
  "csa-process",
  "csa-resource",
@@ -636,6 +637,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing",
 ]
 

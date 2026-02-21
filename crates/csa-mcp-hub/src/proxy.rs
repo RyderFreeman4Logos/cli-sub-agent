@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use rmcp::model::{
     CallToolRequestParam, CallToolResult, ListToolsResult, PaginatedRequestParam,
@@ -9,6 +10,7 @@ use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
+use tokio::time::timeout;
 
 use crate::registry::McpRegistry;
 
@@ -16,13 +18,15 @@ use crate::registry::McpRegistry;
 pub(crate) struct ProxyRouter {
     registry: Arc<McpRegistry>,
     tool_routes: Arc<RwLock<HashMap<String, String>>>,
+    request_timeout: Duration,
 }
 
 impl ProxyRouter {
-    pub(crate) fn new(registry: Arc<McpRegistry>) -> Self {
+    pub(crate) fn new(registry: Arc<McpRegistry>, request_timeout: Duration) -> Self {
         Self {
             registry,
             tool_routes: Arc::new(RwLock::new(HashMap::new())),
+            request_timeout,
         }
     }
 
@@ -41,16 +45,21 @@ impl ProxyRouter {
         let mut routes = HashMap::new();
 
         for server in self.registry.server_names() {
-            match self.registry.list_tools(&server).await {
-                Ok(server_tools) => {
+            match timeout(self.request_timeout, self.registry.list_tools(&server)).await {
+                Ok(Ok(server_tools)) => {
                     for tool in server_tools {
                         routes.insert(tool.name.to_string(), server.clone());
                         tools.push(tool);
                     }
                 }
-                Err(error) => {
+                Ok(Err(error)) => {
                     tracing::warn!(server = %server, error = %error, "tools/list forwarding failed");
                 }
+                Err(_) => tracing::warn!(
+                    server = %server,
+                    timeout_secs = self.request_timeout.as_secs(),
+                    "tools/list forwarding timed out"
+                ),
             }
         }
 
@@ -77,15 +86,25 @@ impl ProxyRouter {
             ));
         };
 
-        self.registry
-            .call_tool(&server_name, request)
-            .await
-            .map_err(|error| {
-                McpError::internal_error(
-                    format!("forwarding to MCP server '{server_name}' failed: {error}"),
-                    None,
-                )
-            })
+        match timeout(
+            self.request_timeout,
+            self.registry.call_tool(&server_name, request),
+        )
+        .await
+        {
+            Ok(Ok(response)) => Ok(response),
+            Ok(Err(error)) => Err(McpError::internal_error(
+                format!("forwarding to MCP server '{server_name}' failed: {error}"),
+                None,
+            )),
+            Err(_) => Err(McpError::internal_error(
+                format!(
+                    "forwarding to MCP server '{server_name}' timed out after {}s",
+                    self.request_timeout.as_secs()
+                ),
+                None,
+            )),
+        }
     }
 
     async fn lookup_tool_owner(&self, tool_name: &str) -> Option<String> {
@@ -124,6 +143,7 @@ mod tests {
     use std::collections::HashMap;
     use std::fs;
     use std::sync::Arc;
+    use std::time::Duration;
 
     use anyhow::Result;
     use csa_config::McpServerConfig;
@@ -179,7 +199,7 @@ done
             args: vec![script.to_string_lossy().into_owned()],
             env: HashMap::new(),
         }]));
-        let router = ProxyRouter::new(registry.clone());
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
 
         let list_response = router.list_tools_internal().await?;
         assert_eq!(list_response.tools[0].name.as_ref(), "echo_tool");
