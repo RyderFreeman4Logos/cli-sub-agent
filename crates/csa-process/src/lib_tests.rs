@@ -169,6 +169,33 @@ async fn test_wait_and_capture_with_idle_timeout_kills_silent_process() {
 }
 
 #[tokio::test]
+async fn test_wait_and_capture_with_idle_timeout_without_session_dir_does_not_wait_liveness_dead_timeout()
+ {
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "sleep 30"]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let start = Instant::now();
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        None,
+    )
+    .await
+    .expect("Failed to wait");
+    let elapsed = start.elapsed();
+
+    assert_eq!(result.exit_code, 137);
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "session_dir=None should terminate near idle-timeout, elapsed={elapsed:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
     let mut cmd = Command::new("bash");
     cmd.args(["-c", "for _ in 1 2 3; do echo tick; sleep 0.4; done"]);

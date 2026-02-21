@@ -537,6 +537,24 @@ fn retry_policy_only_retries_transient_once() {
     ));
 }
 
+#[test]
+fn still_working_backoff_uses_five_seconds() {
+    assert_eq!(STILL_WORKING_BACKOFF, std::time::Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn still_working_backoff_waits_before_retry() {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        wait_for_still_working_backoff(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "StillWorking backoff should not complete immediately"
+    );
+}
+
 // --- verify_debate_skill_available tests (#140) ---
 
 #[test]

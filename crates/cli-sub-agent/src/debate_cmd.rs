@@ -7,6 +7,7 @@ use serde::Serialize;
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
@@ -124,7 +125,10 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
                     csa_session::get_session_dir(&project_root, session_id).ok()
                 });
                 match classify_execution_error(&err, session_dir.as_deref()) {
-                    DebateErrorKind::StillWorking => continue,
+                    DebateErrorKind::StillWorking => {
+                        wait_for_still_working_backoff().await;
+                        continue;
+                    }
                     DebateErrorKind::Transient(reason)
                         if should_retry_debate_after_error(
                             &DebateErrorKind::Transient(reason.clone()),
@@ -156,7 +160,10 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
             csa_session::load_session(&project_root, &executed.meta_session_id).ok();
         match classify_execution_outcome(&executed.execution, session_state.as_ref(), &session_dir)
         {
-            DebateErrorKind::StillWorking => continue,
+            DebateErrorKind::StillWorking => {
+                wait_for_still_working_backoff().await;
+                continue;
+            }
             DebateErrorKind::Transient(reason)
                 if should_retry_debate_after_error(
                     &DebateErrorKind::Transient(reason.clone()),
@@ -213,6 +220,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
 
 const DEBATE_VERDICT_REL_PATH: &str = "output/debate-verdict.json";
 const DEBATE_TRANSCRIPT_REL_PATH: &str = "output/debate-transcript.md";
+const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 struct DebateVerdict {
@@ -720,6 +728,11 @@ fn resolve_debate_timeout_seconds(
 
 fn should_retry_debate_after_error(kind: &DebateErrorKind, retry_count: u8) -> bool {
     matches!(kind, DebateErrorKind::Transient(_)) && retry_count < 1
+}
+
+async fn wait_for_still_working_backoff() {
+    tracing::info!("Tool still working, waiting before next attempt...");
+    tokio::time::sleep(STILL_WORKING_BACKOFF).await;
 }
 
 /// Build a debate instruction that passes parameters to the debate skill.
