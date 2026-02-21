@@ -10,6 +10,7 @@
 //! 3. `<global_store>/<pkg>/<commit>/patterns/<name>/`  (weave global store)
 
 use anyhow::{Context, Result, bail};
+use csa_config::paths;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
@@ -151,13 +152,13 @@ fn search_paths_with_store(
     project_root: &Path,
     store_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut paths = Vec::with_capacity(4);
+    let mut search_roots = Vec::with_capacity(4);
 
     // 1. Project-local fork: .csa/patterns/<name>/
-    paths.push(project_root.join(".csa").join("patterns").join(name));
+    search_roots.push(project_root.join(".csa").join("patterns").join(name));
 
     // 2. Repo-shipped: patterns/<name>/
-    paths.push(project_root.join("patterns").join(name));
+    search_roots.push(project_root.join("patterns").join(name));
 
     // 3. Weave global store: <store_root>/<pkg>/<commit>/patterns/<name>/
     if let Some(store) = store_root {
@@ -170,14 +171,14 @@ fn search_paths_with_store(
                         SourceKind::Git => &pkg.commit,
                     };
                     if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
-                        paths.push(pkg_dir.join("patterns").join(name));
+                        search_roots.push(pkg_dir.join("patterns").join(name));
                     }
                 }
             }
         }
     }
 
-    paths
+    search_roots
 }
 
 /// Load `.skill.toml` with a three-tier config cascade.
@@ -205,7 +206,7 @@ fn load_skill_config(
 
 /// Return `~/.config/cli-sub-agent` (or platform equivalent).
 fn user_config_dir() -> Option<PathBuf> {
-    directories::BaseDirs::new().map(|b| b.config_dir().join("cli-sub-agent"))
+    paths::config_dir()
 }
 
 /// Testable inner function that accepts an explicit user config directory.

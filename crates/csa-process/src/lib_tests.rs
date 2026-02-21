@@ -157,6 +157,7 @@ async fn test_wait_and_capture_with_idle_timeout_kills_silent_process() {
         child,
         StreamMode::BufferOnly,
         Duration::from_secs(1),
+        Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
@@ -168,6 +169,33 @@ async fn test_wait_and_capture_with_idle_timeout_kills_silent_process() {
 }
 
 #[tokio::test]
+async fn test_wait_and_capture_with_idle_timeout_without_session_dir_does_not_wait_liveness_dead_timeout()
+ {
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "sleep 30"]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let start = Instant::now();
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        None,
+    )
+    .await
+    .expect("Failed to wait");
+    let elapsed = start.elapsed();
+
+    assert_eq!(result.exit_code, 137);
+    assert!(
+        elapsed < Duration::from_secs(8),
+        "session_dir=None should terminate near idle-timeout, elapsed={elapsed:?}"
+    );
+}
+
+#[tokio::test]
 async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
     let mut cmd = Command::new("bash");
     cmd.args(["-c", "for _ in 1 2 3; do echo tick; sleep 0.4; done"]);
@@ -176,6 +204,7 @@ async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
     let result = wait_and_capture_with_idle_timeout(
         child,
         StreamMode::BufferOnly,
+        Duration::from_secs(1),
         Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
@@ -202,6 +231,7 @@ async fn test_idle_timeout_detects_partial_output_without_newlines() {
         child,
         StreamMode::BufferOnly,
         Duration::from_secs(1),
+        Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
     )
@@ -217,6 +247,92 @@ async fn test_idle_timeout_detects_partial_output_without_newlines() {
         "Output should contain dots followed by 'done', got: {:?}",
         result.output
     );
+}
+
+#[test]
+fn test_tool_liveness_true_for_live_pid_and_output_growth() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!("{{\"pid\": {}}}", std::process::id()),
+    )
+    .expect("write lock");
+
+    let output_path = tmp.path().join("output.log");
+    std::fs::write(&output_path, "a").expect("seed output");
+    assert!(ToolLiveness::is_alive(tmp.path()));
+    std::fs::write(&output_path, "ab").expect("grow output");
+    assert!(ToolLiveness::is_alive(tmp.path()));
+}
+
+#[test]
+fn test_tool_liveness_false_when_no_signals() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    assert!(!ToolLiveness::is_alive(tmp.path()));
+}
+
+#[tokio::test]
+async fn test_idle_timeout_enters_liveness_mode_before_kill() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!("{{\"pid\": {}}}", std::process::id()),
+    )
+    .expect("write lock");
+
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "sleep 2"]);
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        Some(&tmp.path().join("output.log")),
+    )
+    .await
+    .expect("wait");
+
+    assert_eq!(result.exit_code, 0);
+}
+
+#[test]
+fn test_liveness_true_resets_death_timer() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!("{{\"pid\": {}}}", std::process::id()),
+    )
+    .expect("write lock");
+
+    let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
+    let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
+    let terminate = should_terminate_for_idle(
+        Instant::now() - Duration::from_secs(2),
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        Some(tmp.path()),
+        &mut dead_since,
+        &mut next_poll,
+    );
+
+    assert!(!terminate);
+    assert!(
+        dead_since.is_none(),
+        "liveness=true should reset death timer"
+    );
+}
+
+#[test]
+fn test_default_liveness_dead_timeout_constant() {
+    assert_eq!(DEFAULT_LIVENESS_DEAD_SECS, 600);
 }
 
 #[tokio::test]

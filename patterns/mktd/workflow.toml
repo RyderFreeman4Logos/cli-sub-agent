@@ -13,9 +13,58 @@ name = "USER_LANGUAGE"
 description = "Primary language for TODO content (auto-detected from conversation or FEATURE description; e.g. 'Chinese (Simplified)', 'English', 'Japanese')"
 
 [[workflow.steps]]
+id = 0
+title = "Phase 0.5 — Auto Session Discovery"
+tool = "bash"
+prompt = """
+Find a reusable mktd session for the current project/branch.
+Rules:
+- Match branch + task_type=plan + phase=Available
+- If found, output only the most recent session_id
+- If not found (or not in git/detached HEAD), output empty string
+
+```bash
+command -v python3 >/dev/null 2>&1 || { echo ""; exit 0; }
+python3 - <<'PY'
+import json
+import subprocess
+import sys
+
+def run(cmd):
+    return subprocess.check_output(cmd, text=True).strip()
+
+try:
+    branch = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+except Exception:
+    print("")
+    sys.exit(0)
+
+if not branch or branch == "HEAD":
+    print("")
+    sys.exit(0)
+
+try:
+    output = run(["csa", "session", "list", "--branch", branch, "--format", "json"])
+    sessions = json.loads(output)
+except Exception:
+    print("")
+    sys.exit(0)
+
+for session in sessions:
+    if session.get("task_type") == "plan" and session.get("phase") == "Available":
+        print(session.get("session_id", ""))
+        break
+else:
+    print("")
+PY
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
 id = 1
 title = "Phase 1 — RECON Dimension 1 (Structure)"
 tool = "csa"
+session = "${STEP_0_OUTPUT}"
 prompt = """
 Analyze codebase structure relevant to ${FEATURE}.
 Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
@@ -27,6 +76,7 @@ on_fail = "abort"
 id = 2
 title = "Phase 1 — RECON Dimension 2 (Patterns)"
 tool = "csa"
+session = "${STEP_0_OUTPUT}"
 prompt = """
 Find existing patterns or similar features to ${FEATURE} in this codebase.
 Report: file paths with approach, reusable components, conventions to follow.
@@ -38,6 +88,7 @@ on_fail = "abort"
 id = 3
 title = "Phase 1 — RECON Dimension 3 (Constraints)"
 tool = "csa"
+session = "${STEP_0_OUTPUT}"
 prompt = """
 Identify constraints and risks for implementing ${FEATURE}.
 Report: potential breaking changes, security considerations, performance, compatibility.

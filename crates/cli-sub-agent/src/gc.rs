@@ -284,7 +284,7 @@ pub(crate) fn handle_gc(
     Ok(())
 }
 
-/// Global GC: scan all project session roots under `~/.local/state/csa/`.
+/// Global GC: scan all project session roots under `~/.local/state/cli-sub-agent/`.
 ///
 /// Discovers project roots by recursively finding directories that contain
 /// a `sessions/` subdirectory, then applies the same cleanup criteria as

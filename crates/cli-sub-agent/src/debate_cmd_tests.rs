@@ -407,6 +407,12 @@ fn debate_cli_parses_stream_stdout_flag() {
 }
 
 #[test]
+fn debate_cli_parses_thinking_flag() {
+    let args = parse_debate_args(&["csa", "debate", "--thinking", "high", "question"]);
+    assert_eq!(args.thinking.as_deref(), Some("high"));
+}
+
+#[test]
 fn debate_cli_parses_no_stream_stdout_flag() {
     let args = parse_debate_args(&["csa", "debate", "--no-stream-stdout", "question"]);
     assert!(!args.stream_stdout);
@@ -418,6 +424,7 @@ fn debate_cli_defaults_no_timeout() {
     let args = parse_debate_args(&["csa", "debate", "question"]);
     assert_eq!(args.timeout, None);
     assert_eq!(args.idle_timeout, None);
+    assert_eq!(args.thinking, None);
     assert!(!args.stream_stdout);
     assert!(!args.no_stream_stdout);
 }
@@ -478,6 +485,87 @@ fn debate_stream_mode_explicit_stream() {
 fn debate_stream_mode_explicit_no_stream() {
     let mode = resolve_debate_stream_mode(false, true);
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+// --- resolve_debate_thinking tests ---
+
+#[test]
+fn resolve_debate_thinking_prefers_cli_over_config() {
+    let thinking = resolve_debate_thinking(Some("low"), Some("high"));
+    assert_eq!(thinking.as_deref(), Some("low"));
+}
+
+#[test]
+fn resolve_debate_thinking_uses_config_when_cli_missing() {
+    let thinking = resolve_debate_thinking(None, Some("medium"));
+    assert_eq!(thinking.as_deref(), Some("medium"));
+}
+
+#[test]
+fn resolve_debate_thinking_defaults_none_for_backward_compatibility() {
+    let thinking = resolve_debate_thinking(None, None);
+    assert_eq!(thinking, None);
+}
+
+#[test]
+fn resolve_debate_timeout_prefers_cli_over_global() {
+    let timeout = resolve_debate_timeout_seconds(Some(120), Some(600));
+    assert_eq!(timeout, Some(120));
+}
+
+#[test]
+fn resolve_debate_timeout_uses_global_then_none() {
+    assert_eq!(resolve_debate_timeout_seconds(None, Some(600)), Some(600));
+    assert_eq!(resolve_debate_timeout_seconds(None, None), None);
+}
+
+#[test]
+fn wall_clock_timeout_guard_allows_within_budget() {
+    let start = tokio::time::Instant::now();
+    assert!(ensure_debate_wall_clock_within_timeout(start, Some(1)).is_ok());
+}
+
+#[test]
+fn wall_clock_timeout_guard_rejects_elapsed_budget() {
+    let start = tokio::time::Instant::now() - std::time::Duration::from_secs(2);
+    let err = ensure_debate_wall_clock_within_timeout(start, Some(1)).unwrap_err();
+    assert!(err.to_string().contains("Wall-clock timeout exceeded (1s)"));
+}
+
+#[test]
+fn retry_policy_only_retries_transient_once() {
+    use crate::debate_errors::DebateErrorKind;
+
+    assert!(should_retry_debate_after_error(
+        &DebateErrorKind::Transient("oom".to_string()),
+        0
+    ));
+    assert!(!should_retry_debate_after_error(
+        &DebateErrorKind::Transient("oom".to_string()),
+        1
+    ));
+    assert!(!should_retry_debate_after_error(
+        &DebateErrorKind::Deterministic("arg".to_string()),
+        0
+    ));
+}
+
+#[test]
+fn still_working_backoff_uses_five_seconds() {
+    assert_eq!(STILL_WORKING_BACKOFF, std::time::Duration::from_secs(5));
+}
+
+#[tokio::test]
+async fn still_working_backoff_waits_before_retry() {
+    let result = tokio::time::timeout(
+        std::time::Duration::from_millis(50),
+        wait_for_still_working_backoff(),
+    )
+    .await;
+    assert!(
+        result.is_err(),
+        "StillWorking backoff should not complete immediately"
+    );
 }
 
 // --- verify_debate_skill_available tests (#140) ---

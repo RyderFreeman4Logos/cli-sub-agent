@@ -1,6 +1,43 @@
 // Sandbox resource validation tests (split from validate_tests.rs).
 
 #[test]
+fn test_validate_liveness_dead_seconds_zero_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            liveness_dead_seconds: Some(0),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("resources.liveness_dead_seconds must be > 0")
+    );
+}
+
+#[test]
 fn test_validate_memory_max_mb_too_low() {
     let dir = tempdir().unwrap();
 

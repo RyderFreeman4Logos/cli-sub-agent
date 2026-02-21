@@ -13,6 +13,7 @@ fn test_session(
         meta_session_id: meta_session_id.to_string(),
         description: None,
         project_path: "/tmp/project".to_string(),
+        branch: None,
         created_at: last_accessed,
         last_accessed,
         genealogy: Genealogy {

@@ -725,7 +725,7 @@ fn now_timestamp() -> String {
 const HUB_CONNECTION_REFERENCE: &str = r#"# Hub Connection
 
 ## Connection Methods
-- Unix socket (default): `$XDG_RUNTIME_DIR/csa/mcp-hub.sock` or `/tmp/csa-$UID/mcp-hub.sock`
+- Unix socket (default): `$XDG_RUNTIME_DIR/cli-sub-agent/mcp-hub.sock` or `/tmp/cli-sub-agent-$UID/mcp-hub.sock`
 - HTTP/SSE endpoint: start hub with `--http-bind` and `--http-port`
 - Systemd socket activation: `systemctl --user enable --now mcp-hub.socket`
 

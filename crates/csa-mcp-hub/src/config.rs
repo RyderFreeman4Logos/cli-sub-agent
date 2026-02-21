@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use csa_config::{GlobalConfig, McpServerConfig};
+use csa_config::{GlobalConfig, McpServerConfig, paths};
 
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1";
 const DEFAULT_HTTP_PORT: u16 = 0;
@@ -151,10 +151,7 @@ fn read_string_list(value: &toml::Value, key: &str) -> Vec<String> {
 }
 
 pub(crate) fn default_socket_path() -> PathBuf {
-    socket_path_from_runtime_dir(
-        std::env::var("XDG_RUNTIME_DIR").ok().as_deref(),
-        effective_uid(),
-    )
+    paths::runtime_dir_write().join("mcp-hub.sock")
 }
 
 pub(crate) fn pid_path_for_socket(socket_path: &Path) -> PathBuf {
@@ -163,26 +160,16 @@ pub(crate) fn pid_path_for_socket(socket_path: &Path) -> PathBuf {
     PathBuf::from(buf)
 }
 
-fn effective_uid() -> u32 {
-    #[cfg(unix)]
-    {
-        // SAFETY: `geteuid` has no preconditions and returns caller effective UID.
-        unsafe { libc::geteuid() }
-    }
-
-    #[cfg(not(unix))]
-    {
-        0
-    }
-}
-
+#[cfg(test)]
 fn socket_path_from_runtime_dir(runtime_dir: Option<&str>, uid: u32) -> PathBuf {
     if let Some(runtime_dir) = runtime_dir {
-        return PathBuf::from(runtime_dir).join("csa").join("mcp-hub.sock");
+        return PathBuf::from(runtime_dir)
+            .join(paths::APP_NAME)
+            .join("mcp-hub.sock");
     }
 
     PathBuf::from("/tmp")
-        .join(format!("csa-{uid}"))
+        .join(format!("{}-{uid}", paths::APP_NAME))
         .join("mcp-hub.sock")
 }
 
@@ -197,7 +184,10 @@ mod tests {
     fn default_socket_path_prefers_xdg_runtime_dir() {
         let path = socket_path_from_runtime_dir(Some("/tmp/xdg-test"), 1000);
 
-        assert_eq!(path, std::path::Path::new("/tmp/xdg-test/csa/mcp-hub.sock"));
+        assert_eq!(
+            path,
+            std::path::Path::new("/tmp/xdg-test/cli-sub-agent/mcp-hub.sock")
+        );
     }
 
     #[test]
@@ -206,7 +196,7 @@ mod tests {
 
         let path_string = path.to_string_lossy();
         assert!(
-            path_string.contains("/tmp/csa-"),
+            path_string.contains("/tmp/cli-sub-agent-"),
             "expected /tmp fallback path, got {path_string}"
         );
         assert!(path_string.ends_with("/mcp-hub.sock"));
@@ -214,9 +204,12 @@ mod tests {
 
     #[test]
     fn pid_path_appends_pid_suffix() {
-        let socket = std::path::Path::new("/tmp/csa-1000/mcp-hub.sock");
+        let socket = std::path::Path::new("/tmp/cli-sub-agent-1000/mcp-hub.sock");
         let pid = pid_path_for_socket(socket);
-        assert_eq!(pid, std::path::Path::new("/tmp/csa-1000/mcp-hub.sock.pid"));
+        assert_eq!(
+            pid,
+            std::path::Path::new("/tmp/cli-sub-agent-1000/mcp-hub.sock.pid")
+        );
     }
 
     #[test]

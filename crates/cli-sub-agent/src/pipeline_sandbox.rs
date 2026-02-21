@@ -30,6 +30,7 @@ pub(crate) fn resolve_sandbox_options(
     session_id: &str,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
+    liveness_dead_seconds: u64,
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -42,6 +43,7 @@ pub(crate) fn resolve_sandbox_options(
         .map(|cfg| cfg.resources.termination_grace_period_seconds)
         .unwrap_or(default_resources.termination_grace_period_seconds);
     let mut execute_options = ExecuteOptions::new(stream_mode, idle_timeout_seconds)
+        .with_liveness_dead_seconds(liveness_dead_seconds)
         .with_stdin_write_timeout_seconds(stdin_write_timeout_seconds)
         .with_acp_init_timeout_seconds(acp_init_timeout_seconds)
         .with_termination_grace_period_seconds(termination_grace_period_seconds);

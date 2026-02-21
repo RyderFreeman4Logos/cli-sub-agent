@@ -3,6 +3,7 @@
 use crate::event::HookEvent;
 use crate::guard::PromptGuardEntry;
 use crate::guard::builtin_prompt_guards;
+use csa_config::paths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -117,7 +118,7 @@ impl HooksConfig {
 
 /// Load hooks config with 4-tier priority:
 /// 1. runtime_overrides (CLI params) — highest
-/// 2. project config (~/.local/state/csa/{project}/hooks.toml)
+/// 2. project config (~/.local/state/cli-sub-agent/{project}/hooks.toml)
 /// 3. global config (~/.config/cli-sub-agent/hooks.toml)
 /// 4. built-in defaults — lowest
 ///
@@ -167,8 +168,7 @@ pub fn load_hooks_config(
 
 /// Resolve the global hooks config path
 pub fn global_hooks_path() -> Option<std::path::PathBuf> {
-    directories::ProjectDirs::from("", "", "cli-sub-agent")
-        .map(|dirs| dirs.config_dir().join("hooks.toml"))
+    paths::config_dir().map(|dir| dir.join("hooks.toml"))
 }
 
 #[cfg(test)]

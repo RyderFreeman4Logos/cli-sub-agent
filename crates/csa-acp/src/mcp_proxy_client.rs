@@ -122,14 +122,14 @@ mod tests {
     #[test]
     fn proxy_client_from_session_config_round_trip_path() {
         let cfg = SessionConfig {
-            mcp_proxy_socket: Some("/tmp/csa-1000/mcp-hub.sock".to_string()),
+            mcp_proxy_socket: Some("/tmp/cli-sub-agent-1000/mcp-hub.sock".to_string()),
             ..Default::default()
         };
 
         let proxy = McpProxyClient::from_session_config(&cfg).expect("proxy should exist");
         assert_eq!(
             proxy.socket_path().to_string_lossy(),
-            "/tmp/csa-1000/mcp-hub.sock"
+            "/tmp/cli-sub-agent-1000/mcp-hub.sock"
         );
     }
 }

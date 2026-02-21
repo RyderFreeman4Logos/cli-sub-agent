@@ -252,6 +252,7 @@ mod tests {
             meta_session_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
             description: None,
             project_path: "/tmp".to_string(),
+            branch: None,
             created_at: Utc::now(),
             last_accessed: Utc::now(),
             genealogy: Default::default(),

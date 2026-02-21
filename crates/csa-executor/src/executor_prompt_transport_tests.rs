@@ -9,6 +9,7 @@ fn make_test_session() -> MetaSessionState {
         meta_session_id: "01HTEST000000000000000000".to_string(),
         description: Some("test session".to_string()),
         project_path: "/tmp/test-project".to_string(),
+        branch: None,
         created_at: now,
         last_accessed: now,
         genealogy: csa_session::state::Genealogy {

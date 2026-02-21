@@ -8,6 +8,7 @@ mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;
 mod debate_cmd;
+mod debate_errors;
 mod doctor;
 mod gc;
 mod mcp_hub;
@@ -86,6 +87,22 @@ async fn main() -> Result<()> {
         }
     }
 
+    let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
+    if !legacy_xdg_paths.is_empty() {
+        eprintln!(
+            "WARNING: legacy XDG paths detected ({}). Run `csa migrate` to unify paths.",
+            legacy_xdg_paths.len()
+        );
+        for path in &legacy_xdg_paths {
+            eprintln!(
+                "  - {}: legacy={} -> new={}",
+                path.label,
+                path.legacy_path.display(),
+                path.new_path.display()
+            );
+        }
+    }
+
     match cli.command {
         Commands::Run {
             tool,
@@ -144,8 +161,13 @@ async fn main() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Session { cmd } => match cmd {
-            SessionCommands::List { cd, tool, tree } => {
-                session_cmds::handle_session_list(cd, tool, tree, output_format)?;
+            SessionCommands::List {
+                cd,
+                branch,
+                tool,
+                tree,
+            } => {
+                session_cmds::handle_session_list(cd, branch, tool, tree, output_format)?;
             }
             SessionCommands::Compress { session, cd } => {
                 session_cmds::handle_session_compress(session, cd)?;
@@ -163,6 +185,10 @@ async fn main() -> Result<()> {
             }
             SessionCommands::Logs { session, tail, cd } => {
                 session_cmds::handle_session_logs(session, tail, cd)?;
+            }
+            SessionCommands::IsAlive { session, cd } => {
+                let alive = session_cmds::handle_session_is_alive(session, cd)?;
+                std::process::exit(if alive { 0 } else { 1 });
             }
             SessionCommands::Result { session, json, cd } => {
                 session_cmds::handle_session_result(session, json, cd)?;

@@ -2,7 +2,7 @@
 //!
 //! Each tool has a configurable number of "slots" (default: 3).
 //! A slot is a `flock(2)` advisory lock on a numbered file under
-//! `~/.local/state/csa/slots/{tool}/slot-{NN}.lock`.
+//! `~/.local/state/cli-sub-agent/slots/{tool}/slot-{NN}.lock`.
 //!
 //! Acquiring a slot means trying `flock(LOCK_EX | LOCK_NB)` on each file
 //! in order until one succeeds. If all are occupied, the caller receives

@@ -141,6 +141,7 @@ fn test_debate_config_default() {
     let config = GlobalConfig::default();
     assert_eq!(config.debate.tool, "auto");
     assert_eq!(config.debate.timeout_seconds, 1800);
+    assert_eq!(config.debate.thinking, None);
 }
 
 #[test]
@@ -225,10 +226,12 @@ fn test_parse_debate_config() {
 [debate]
 tool = "codex"
 timeout_seconds = 2400
+thinking = "high"
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.debate.tool, "codex");
     assert_eq!(config.debate.timeout_seconds, 2400);
+    assert_eq!(config.debate.thinking.as_deref(), Some("high"));
 }
 
 #[test]
@@ -494,6 +497,7 @@ diff_command = "delta"
     assert_eq!(config.review.tool, "codex");
     assert_eq!(config.debate.tool, "claude-code");
     assert_eq!(config.debate.timeout_seconds, 1800);
+    assert_eq!(config.debate.thinking, None);
     assert_eq!(config.fallback.cloud_review_exhausted, "auto-local");
     assert_eq!(config.todo.show_command.as_deref(), Some("bat -l md"));
     assert_eq!(config.todo.diff_command.as_deref(), Some("delta"));
@@ -508,6 +512,7 @@ fn test_parse_empty_toml() {
     assert_eq!(config.review.tool, "auto");
     assert_eq!(config.debate.tool, "auto");
     assert_eq!(config.debate.timeout_seconds, 1800);
+    assert_eq!(config.debate.thinking, None);
     assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
 }
 
@@ -556,7 +561,11 @@ fn test_state_base_dir_returns_ok() {
     let dir = GlobalConfig::state_base_dir();
     assert!(dir.is_ok());
     let path = dir.unwrap();
-    assert!(path.to_string_lossy().contains("csa"));
+    let path_str = path.to_string_lossy();
+    assert!(
+        path_str.contains("cli-sub-agent") || path_str.contains("csa"),
+        "unexpected state dir path: {path_str}"
+    );
 }
 
 // --- Tool Priority Tests ---

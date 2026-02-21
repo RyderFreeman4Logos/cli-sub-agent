@@ -260,6 +260,49 @@ models = ["codex/openai/o3/high"]
 }
 
 #[test]
+fn test_liveness_dead_seconds_priority_project_over_user_over_default() {
+    let tmp = tempfile::tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[resources]
+liveness_dead_seconds = 700
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[resources]
+liveness_dead_seconds = 120
+"#,
+    )
+    .unwrap();
+
+    let merged = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .unwrap();
+    assert_eq!(merged.resources.liveness_dead_seconds, Some(120));
+
+    // user/global fallback
+    let user_only =
+        ProjectConfig::load_with_paths(Some(&user_path), &tmp.path().join("missing.toml"))
+            .unwrap()
+            .unwrap();
+    assert_eq!(user_only.resources.liveness_dead_seconds, Some(700));
+
+    // built-in default fallback
+    let default = ResourcesConfig::default();
+    assert_eq!(default.liveness_dead_seconds, Some(600));
+}
+
+#[test]
 fn test_global_disable_wins_over_project_enable() {
     // Global config disables gemini-cli; project config enables it.
     // After merge, gemini-cli must remain disabled.

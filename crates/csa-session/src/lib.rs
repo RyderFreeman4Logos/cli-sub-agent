@@ -25,17 +25,17 @@ pub use result::{SessionArtifact, SessionResult};
 
 // Re-export manager functions
 pub use manager::{
-    complete_session, create_session, delete_session, delete_session_from_root, get_session_dir,
-    get_session_root, list_all_sessions, list_artifacts, list_sessions, list_sessions_from_root,
-    list_sessions_from_root_readonly, load_metadata, load_result, load_session,
-    resolve_resume_session, save_result, save_session, save_session_in, update_last_accessed,
-    validate_tool_access,
+    complete_session, create_session, delete_session, delete_session_from_root, find_sessions,
+    get_session_dir, get_session_root, list_all_sessions, list_artifacts, list_sessions,
+    list_sessions_from_root, list_sessions_from_root_readonly, load_metadata, load_result,
+    load_session, resolve_resume_session, save_result, save_session, save_session_in,
+    update_last_accessed, validate_tool_access,
 };
 
 pub use manager::ResumeSessionResolution;
 
 // Re-export genealogy functions
-pub use genealogy::{find_children, list_sessions_tree};
+pub use genealogy::{find_children, list_sessions_tree, list_sessions_tree_filtered};
 
 // Re-export validation functions
 pub use validate::{new_session_id, resolve_session_prefix, validate_session_id};

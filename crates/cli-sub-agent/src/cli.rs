@@ -153,7 +153,7 @@ pub enum Commands {
         #[arg(long)]
         max_age_days: Option<u64>,
 
-        /// Scan all projects under ~/.local/state/csa/ (not just current project)
+        /// Scan all projects under ~/.local/state/cli-sub-agent/ (not just current project)
         #[arg(long)]
         global: bool,
     },
@@ -354,6 +354,10 @@ pub struct DebateArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Thinking budget (low, medium, high, xhigh)
+    #[arg(long)]
+    pub thinking: Option<String>,
+
     /// Number of debate rounds (default: 3)
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
     pub rounds: u32,
@@ -412,6 +416,10 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
 
+        /// Filter by git branch
+        #[arg(long)]
+        branch: Option<String>,
+
         /// Filter by tool (comma-separated)
         #[arg(long)]
         tool: Option<String>,
@@ -469,6 +477,17 @@ pub enum SessionCommands {
         /// Show only last N lines
         #[arg(long)]
         tail: Option<usize>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Check whether a session is still alive using filesystem liveness signals
+    IsAlive {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
 
         /// Working directory
         #[arg(long)]

@@ -3,7 +3,8 @@
 use crate::manager::list_all_sessions_in;
 use crate::state::MetaSessionState;
 use anyhow::Result;
-use std::path::Path;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 
 /// Find all child sessions of a given session
 pub fn find_children(project_path: &Path, session_id: &str) -> Result<Vec<String>> {
@@ -35,18 +36,77 @@ fn find_children_in(base_dir: &Path, session_id: &str) -> Result<Vec<String>> {
 /// Format: `{prefix}{short_id}  {tools}  {description}`
 /// where short_id is the first 11 characters of the ULID
 pub fn list_sessions_tree(project_path: &Path, tool_filter: Option<&[&str]>) -> Result<String> {
-    use crate::manager::get_session_root;
-    let base_dir = get_session_root(project_path)?;
-    list_sessions_tree_in(&base_dir, tool_filter)
+    list_sessions_tree_filtered(project_path, tool_filter, None)
+}
+
+/// Build a tree representation of sessions with optional branch filtering.
+pub fn list_sessions_tree_filtered(
+    project_path: &Path,
+    tool_filter: Option<&[&str]>,
+    branch_filter: Option<&str>,
+) -> Result<String> {
+    let roots = session_roots_with_legacy(project_path)?;
+    let root_refs: Vec<&Path> = roots.iter().map(PathBuf::as_path).collect();
+    list_sessions_tree_in_roots(&root_refs, tool_filter, branch_filter)
 }
 
 /// Internal implementation: build tree from explicit base directory
-fn list_sessions_tree_in(base_dir: &Path, tool_filter: Option<&[&str]>) -> Result<String> {
-    let mut all_sessions = list_all_sessions_in(base_dir)?;
+#[cfg(test)]
+fn list_sessions_tree_in(
+    base_dir: &Path,
+    tool_filter: Option<&[&str]>,
+    branch_filter: Option<&str>,
+) -> Result<String> {
+    list_sessions_tree_in_roots(&[base_dir], tool_filter, branch_filter)
+}
+
+fn session_roots_with_legacy(project_path: &Path) -> Result<Vec<PathBuf>> {
+    use crate::manager::get_session_root;
+
+    let primary_root = get_session_root(project_path)?;
+    let mut roots = vec![primary_root.clone()];
+
+    let Some(primary_state_dir) = csa_config::paths::state_dir_write() else {
+        return Ok(roots);
+    };
+    let Some(legacy_state_dir) = csa_config::paths::legacy_state_dir() else {
+        return Ok(roots);
+    };
+    let Ok(relative_root) = primary_root.strip_prefix(&primary_state_dir) else {
+        return Ok(roots);
+    };
+
+    let legacy_root = legacy_state_dir.join(relative_root);
+    if legacy_root != primary_root {
+        roots.push(legacy_root);
+    }
+
+    Ok(roots)
+}
+
+fn list_sessions_tree_in_roots(
+    base_dirs: &[&Path],
+    tool_filter: Option<&[&str]>,
+    branch_filter: Option<&str>,
+) -> Result<String> {
+    let mut all_sessions = Vec::new();
+    let mut seen_ids = HashSet::new();
+    for base_dir in base_dirs {
+        for session in list_all_sessions_in(base_dir)? {
+            if seen_ids.insert(session.meta_session_id.clone()) {
+                all_sessions.push(session);
+            }
+        }
+    }
 
     // Apply tool filter if specified
     if let Some(tools) = tool_filter {
         all_sessions.retain(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)));
+    }
+
+    // Apply branch filter if specified
+    if let Some(branch) = branch_filter {
+        all_sessions.retain(|session| session.branch.as_deref() == Some(branch));
     }
 
     // Sort by created_at for consistent ordering
@@ -118,6 +178,7 @@ fn format_session_tree(
 mod tests {
     use super::*;
     use crate::manager::create_session_in;
+    use std::fs;
     use tempfile::tempdir;
 
     #[test]
@@ -182,7 +243,8 @@ mod tests {
         )
         .expect("Failed to create root");
 
-        let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
 
         assert!(tree.contains(&root.meta_session_id[..11]));
         assert!(tree.contains("Root session"));
@@ -206,7 +268,8 @@ mod tests {
         )
         .expect("Failed to create child");
 
-        let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
 
         assert!(tree.contains(&root.meta_session_id[..11]));
         assert!(tree.contains(&child.meta_session_id[..11]));
@@ -224,7 +287,8 @@ mod tests {
         let root2 = create_session_in(temp_dir.path(), project_path, Some("Root 2"), None, None)
             .expect("Failed to create root 2");
 
-        let tree = list_sessions_tree_in(temp_dir.path(), None).expect("Failed to build tree");
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
 
         assert!(tree.contains(&root1.meta_session_id[..11]));
         assert!(tree.contains(&root2.meta_session_id[..11]));
@@ -286,5 +350,34 @@ mod tests {
                 .join(&root.meta_session_id)
                 .exists()
         );
+    }
+
+    #[test]
+    fn test_list_sessions_tree_in_roots_deduplicates_by_session_id() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let primary_root = temp_dir.path().join("primary");
+        let legacy_root = temp_dir.path().join("legacy");
+        fs::create_dir_all(&primary_root).expect("create primary root");
+        fs::create_dir_all(&legacy_root).expect("create legacy root");
+
+        let project_path = temp_dir.path();
+        let session = create_session_in(&primary_root, project_path, Some("Shared"), None, None)
+            .expect("Failed to create primary session");
+
+        let primary_session_dir = primary_root.join("sessions").join(&session.meta_session_id);
+        let legacy_session_dir = legacy_root.join("sessions").join(&session.meta_session_id);
+        fs::create_dir_all(legacy_session_dir.join("input")).expect("create legacy input dir");
+        fs::create_dir_all(legacy_session_dir.join("output")).expect("create legacy output dir");
+        fs::copy(
+            primary_session_dir.join("state.toml"),
+            legacy_session_dir.join("state.toml"),
+        )
+        .expect("copy state.toml");
+
+        let tree = list_sessions_tree_in_roots(&[&primary_root, &legacy_root], None, None)
+            .expect("Failed to build tree");
+        let short_id = &session.meta_session_id[..11];
+
+        assert_eq!(tree.matches(short_id).count(), 1);
     }
 }
