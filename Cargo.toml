@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.21"
+version = "0.1.22"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -20,6 +20,7 @@ csa-resource = { path = "crates/csa-resource" }
 csa-scheduler = { path = "crates/csa-scheduler" }
 csa-todo = { path = "crates/csa-todo" }
 csa-hooks = { path = "crates/csa-hooks" }
+csa-mcp-hub = { path = "crates/csa-mcp-hub" }
 weave = { path = "crates/weave" }
 agent-teams = { git = "https://github.com/ZhangHanDong/agent-teams-rs.git", default-features = false }
 

@@ -7,12 +7,12 @@ use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-use crate::mcp_hub::config::{HubConfig, default_socket_path};
-use crate::mcp_hub::proxy::{JsonRpcRequest, ProxyRouter, error_response};
-use crate::mcp_hub::registry::McpRegistry;
-use crate::mcp_hub::socket;
+use crate::config::{HubConfig, default_socket_path};
+use crate::proxy::{JsonRpcRequest, ProxyRouter, error_response};
+use crate::registry::McpRegistry;
+use crate::socket;
 
-pub(crate) async fn handle_serve_command(
+pub async fn handle_serve_command(
     background: bool,
     foreground: bool,
     socket_override: Option<String>,
@@ -28,7 +28,7 @@ pub(crate) async fn handle_serve_command(
     run_hub(cfg, systemd_activation).await
 }
 
-pub(crate) async fn handle_status_command(socket_override: Option<String>) -> Result<()> {
+pub async fn handle_status_command(socket_override: Option<String>) -> Result<()> {
     let socket_path = socket_override
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
@@ -57,7 +57,7 @@ pub(crate) async fn handle_status_command(socket_override: Option<String>) -> Re
     Ok(())
 }
 
-pub(crate) async fn handle_stop_command(socket_override: Option<String>) -> Result<()> {
+pub async fn handle_stop_command(socket_override: Option<String>) -> Result<()> {
     let socket_path = socket_override
         .map(PathBuf::from)
         .unwrap_or_else(default_socket_path);
