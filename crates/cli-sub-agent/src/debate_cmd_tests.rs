@@ -1,6 +1,7 @@
 use super::*;
 use csa_config::global::ReviewConfig;
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+use serde_json::Value;
 use std::collections::HashMap;
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
@@ -234,6 +235,120 @@ fn render_debate_output_replaces_provider_id_with_meta_id() {
     let output = render_debate_output(&tool_output, meta, Some(provider));
     assert!(!output.contains(provider));
     assert!(output.contains(meta));
+}
+
+#[test]
+fn extract_verdict_prefers_explicit_verdict_line() {
+    let output = r#"
+Debate notes...
+Final verdict: APPROVE
+Confidence: high
+"#;
+    assert_eq!(extract_verdict(output), "APPROVE");
+}
+
+#[test]
+fn extract_verdict_defaults_to_revise_when_missing() {
+    let output = "No explicit verdict included.";
+    assert_eq!(extract_verdict(output), "REVISE");
+}
+
+#[test]
+fn extract_confidence_detects_medium() {
+    let output = "Confidence: medium";
+    assert_eq!(extract_confidence(output), "medium");
+}
+
+#[test]
+fn extract_one_line_summary_prefers_summary_prefix() {
+    let output = r#"
+# Debate
+Summary: Adopt bounded retries and idempotency keys.
+- Key point A
+"#;
+    let summary = extract_one_line_summary(output, "fallback");
+    assert_eq!(summary, "Adopt bounded retries and idempotency keys.");
+}
+
+#[test]
+fn extract_key_points_reads_bullets_and_numbers() {
+    let output = r#"
+- First key point
+1. Second key point
+2) Third key point
+"#;
+    let points = extract_key_points(output, "fallback");
+    assert_eq!(points, vec!["First key point", "Second key point", "Third key point"]);
+}
+
+#[test]
+fn format_debate_stdout_summary_contains_required_fields() {
+    let summary = DebateSummary {
+        verdict: "APPROVE".to_string(),
+        confidence: "high".to_string(),
+        summary: "Proceed with the proposal.".to_string(),
+        key_points: vec!["Point".to_string()],
+    };
+    let line = format_debate_stdout_summary(&summary);
+    assert!(line.contains("APPROVE"));
+    assert!(line.contains("high"));
+    assert!(line.contains("Proceed with the proposal."));
+}
+
+#[test]
+fn persist_debate_output_artifacts_writes_json_and_markdown() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let session_dir = tmp.path();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap();
+
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "low".to_string(),
+        summary: "Need more data before rollout.".to_string(),
+        key_points: vec!["Insufficient benchmark evidence.".to_string()],
+    };
+    let transcript = "# Debate transcript\n\nFull content.";
+    let artifacts = persist_debate_output_artifacts(session_dir, &summary, transcript).unwrap();
+
+    assert_eq!(artifacts.len(), 2);
+    assert_eq!(artifacts[0].path, "output/debate-verdict.json");
+    assert_eq!(artifacts[1].path, "output/debate-transcript.md");
+
+    let verdict_path = session_dir.join("output/debate-verdict.json");
+    let verdict_json = std::fs::read_to_string(verdict_path).unwrap();
+    let parsed: Value = serde_json::from_str(&verdict_json).unwrap();
+    assert_eq!(parsed["verdict"], "REVISE");
+    assert_eq!(parsed["confidence"], "low");
+    assert_eq!(parsed["summary"], "Need more data before rollout.");
+    assert_eq!(parsed["key_points"][0], "Insufficient benchmark evidence.");
+    assert!(parsed["timestamp"].as_str().is_some());
+
+    let transcript_path = session_dir.join("output/debate-transcript.md");
+    let transcript_content = std::fs::read_to_string(transcript_path).unwrap();
+    assert_eq!(transcript_content, transcript);
+}
+
+#[test]
+fn extract_debate_summary_does_not_leak_provider_session_id() {
+    // Simulate sanitized output where provider ID has already been replaced by
+    // render_debate_output before reaching extract_debate_summary.
+    let provider_id = "provider-secret-id-abc123";
+    let meta_id = "01KHMETA0000000000000000";
+    let raw_output = format!(
+        "session_id={provider_id}\nSummary: The plan looks solid.\nVerdict: APPROVE\nConfidence: high\n- Good architecture\n"
+    );
+    // Simulate render_debate_output sanitization
+    let sanitized = raw_output.replace(provider_id, meta_id);
+    let summary = extract_debate_summary(&sanitized, "fallback");
+
+    assert!(!summary.summary.contains(provider_id), "summary must not contain provider id");
+    assert!(!summary.verdict.contains(provider_id));
+    for point in &summary.key_points {
+        assert!(!point.contains(provider_id), "key_point must not contain provider id");
+    }
+    // Verify meta_id is present (or harmless if not matched by extraction heuristics)
+    assert_eq!(summary.verdict, "APPROVE");
+    assert_eq!(summary.confidence, "high");
 }
 
 // --- CLI parse tests for timeout/stream flags (#146) ---

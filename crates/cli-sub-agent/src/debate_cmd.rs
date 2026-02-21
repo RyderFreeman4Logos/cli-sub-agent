@@ -1,6 +1,11 @@
 use std::io::IsTerminal;
 
 use anyhow::{Context, Result};
+use chrono::Utc;
+use csa_session::SessionArtifact;
+use serde::Serialize;
+use std::collections::HashSet;
+use std::fs;
 use std::path::Path;
 use tracing::{debug, error};
 
@@ -112,10 +117,294 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         execution.provider_session_id.as_deref(),
     );
 
-    // 10. Print result
-    print!("{output}");
+    let debate_summary = extract_debate_summary(
+        &output,
+        execution.execution.summary.as_str(),
+    );
+    let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;
+    let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
+    append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
+
+    // 10. Print brief summary only.
+    println!("{}", format_debate_stdout_summary(&debate_summary));
 
     Ok(execution.execution.exit_code)
+}
+
+const DEBATE_VERDICT_REL_PATH: &str = "output/debate-verdict.json";
+const DEBATE_TRANSCRIPT_REL_PATH: &str = "output/debate-transcript.md";
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct DebateVerdict {
+    verdict: String,
+    confidence: String,
+    summary: String,
+    key_points: Vec<String>,
+    timestamp: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DebateSummary {
+    verdict: String,
+    confidence: String,
+    summary: String,
+    key_points: Vec<String>,
+}
+
+fn extract_debate_summary(tool_output: &str, fallback_summary: &str) -> DebateSummary {
+    let summary = extract_one_line_summary(tool_output, fallback_summary);
+    let key_points = extract_key_points(tool_output, summary.as_str());
+    DebateSummary {
+        verdict: extract_verdict(tool_output).to_string(),
+        confidence: extract_confidence(tool_output).to_string(),
+        summary,
+        key_points,
+    }
+}
+
+fn persist_debate_output_artifacts(
+    session_dir: &Path,
+    summary: &DebateSummary,
+    transcript: &str,
+) -> Result<Vec<SessionArtifact>> {
+    let output_dir = session_dir.join("output");
+    fs::create_dir_all(&output_dir).with_context(|| {
+        format!(
+            "Failed to create debate output directory: {}",
+            output_dir.display()
+        )
+    })?;
+
+    let verdict = DebateVerdict {
+        verdict: summary.verdict.clone(),
+        confidence: summary.confidence.clone(),
+        summary: summary.summary.clone(),
+        key_points: summary.key_points.clone(),
+        timestamp: Utc::now().to_rfc3339(),
+    };
+    let verdict_path = output_dir.join("debate-verdict.json");
+    let verdict_json = serde_json::to_string_pretty(&verdict)
+        .context("Failed to serialize debate verdict JSON")?;
+    fs::write(&verdict_path, verdict_json)
+        .with_context(|| format!("Failed to write debate verdict: {}", verdict_path.display()))?;
+
+    let transcript_path = output_dir.join("debate-transcript.md");
+    fs::write(&transcript_path, transcript).with_context(|| {
+        format!(
+            "Failed to write debate transcript: {}",
+            transcript_path.display()
+        )
+    })?;
+
+    Ok(vec![
+        SessionArtifact::new(DEBATE_VERDICT_REL_PATH),
+        SessionArtifact::new(DEBATE_TRANSCRIPT_REL_PATH),
+    ])
+}
+
+fn append_debate_artifacts_to_result(
+    project_root: &Path,
+    session_id: &str,
+    debate_artifacts: &[SessionArtifact],
+) -> Result<()> {
+    let mut result = csa_session::load_result(project_root, session_id)?
+        .ok_or_else(|| anyhow::anyhow!("Missing result.toml for debate session {session_id}"))?;
+
+    for artifact in debate_artifacts {
+        if !result.artifacts.iter().any(|existing| existing.path == artifact.path) {
+            result.artifacts.push(artifact.clone());
+        }
+    }
+
+    csa_session::save_result(project_root, session_id, &result)
+        .with_context(|| format!("Failed to update result.toml for debate session {session_id}"))?;
+    Ok(())
+}
+
+fn format_debate_stdout_summary(summary: &DebateSummary) -> String {
+    format!(
+        "Debate verdict: {} (confidence: {}) - {}",
+        summary.verdict, summary.confidence, summary.summary
+    )
+}
+
+fn extract_verdict(output: &str) -> &'static str {
+    let mut matched = None;
+    for line in output.lines() {
+        let normalized = line.trim().to_ascii_uppercase();
+        if normalized.is_empty() {
+            continue;
+        }
+
+        let has_verdict_hint = normalized.contains("VERDICT")
+            || normalized.contains("FINAL DECISION")
+            || normalized.contains("DECISION")
+            || normalized.contains("CONCLUSION");
+
+        if has_verdict_hint {
+            if normalized.contains("APPROVE") {
+                matched = Some("APPROVE");
+            } else if normalized.contains("REJECT") {
+                matched = Some("REJECT");
+            } else if normalized.contains("REVISE") {
+                matched = Some("REVISE");
+            }
+            if matched.is_some() {
+                continue;
+            }
+        }
+
+        match normalized.as_str() {
+            "APPROVE" => matched = Some("APPROVE"),
+            "REVISE" => matched = Some("REVISE"),
+            "REJECT" => matched = Some("REJECT"),
+            _ => {}
+        }
+    }
+
+    matched.unwrap_or("REVISE")
+}
+
+fn extract_confidence(output: &str) -> &'static str {
+    for line in output.lines() {
+        let normalized = line.trim().to_ascii_lowercase();
+        if !normalized.contains("confidence") {
+            continue;
+        }
+        if normalized.contains("high") {
+            return "high";
+        }
+        if normalized.contains("low") {
+            return "low";
+        }
+        if normalized.contains("medium") {
+            return "medium";
+        }
+    }
+
+    let whole = output.to_ascii_lowercase();
+    if whole.contains("high confidence") {
+        "high"
+    } else if whole.contains("low confidence") {
+        "low"
+    } else {
+        "medium"
+    }
+}
+
+fn extract_one_line_summary(output: &str, fallback_summary: &str) -> String {
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let lower = trimmed.to_ascii_lowercase();
+        if lower.starts_with("summary:") || lower.starts_with("conclusion:") {
+            let value = trimmed.split_once(':').map(|(_, rhs)| rhs).unwrap_or(trimmed);
+            let cleaned = normalize_whitespace(value);
+            if !cleaned.is_empty() {
+                return truncate_chars(cleaned.as_str(), 200);
+            }
+        }
+    }
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || is_non_summary_line(trimmed) {
+            continue;
+        }
+
+        let cleaned = normalize_whitespace(trimmed);
+        if !cleaned.is_empty() {
+            return truncate_chars(cleaned.as_str(), 200);
+        }
+    }
+
+    let fallback = normalize_whitespace(fallback_summary);
+    if fallback.is_empty() {
+        "No summary provided.".to_string()
+    } else {
+        truncate_chars(fallback.as_str(), 200)
+    }
+}
+
+fn extract_key_points(output: &str, fallback_summary: &str) -> Vec<String> {
+    let mut points = Vec::new();
+    let mut dedupe = HashSet::new();
+
+    for line in output.lines() {
+        let trimmed = line.trim();
+        let candidate = if let Some(item) = trimmed.strip_prefix("- ") {
+            Some(item)
+        } else if let Some(item) = trimmed.strip_prefix("* ") {
+            Some(item)
+        } else if let Some((prefix, rest)) = trimmed.split_once(". ") {
+            if prefix.chars().all(|ch| ch.is_ascii_digit()) {
+                Some(rest)
+            } else {
+                None
+            }
+        } else if let Some((prefix, rest)) = trimmed.split_once(") ") {
+            if prefix.chars().all(|ch| ch.is_ascii_digit()) {
+                Some(rest)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let Some(candidate) = candidate else {
+            continue;
+        };
+        let cleaned = truncate_chars(normalize_whitespace(candidate).as_str(), 240);
+        if cleaned.is_empty() {
+            continue;
+        }
+        if dedupe.insert(cleaned.to_ascii_lowercase()) {
+            points.push(cleaned);
+        }
+        if points.len() >= 5 {
+            break;
+        }
+    }
+
+    if points.is_empty() {
+        let fallback = normalize_whitespace(fallback_summary);
+        if !fallback.is_empty() {
+            points.push(truncate_chars(fallback.as_str(), 240));
+        }
+    }
+
+    points
+}
+
+fn is_non_summary_line(line: &str) -> bool {
+    line.starts_with('#')
+        || line.starts_with("```")
+        || line.starts_with("- ")
+        || line.starts_with("* ")
+        || line.starts_with("Position:")
+        || line.starts_with("Key Arguments:")
+        || line.starts_with("Implementation:")
+        || line.starts_with("Anticipated Counterarguments:")
+}
+
+fn normalize_whitespace(input: &str) -> String {
+    input.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn truncate_chars(input: &str, max_chars: usize) -> String {
+    let count = input.chars().count();
+    if count <= max_chars {
+        return input.to_string();
+    }
+
+    let keep = max_chars.saturating_sub(3);
+    let mut out: String = input.chars().take(keep).collect();
+    out.push_str("...");
+    out
 }
 
 fn resolve_debate_tool(
