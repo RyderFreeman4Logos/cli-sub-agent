@@ -263,6 +263,9 @@ async fn main() -> Result<()> {
             McpHubCommands::Stop { socket } => {
                 mcp_hub::handle_stop_command(socket).await?;
             }
+            McpHubCommands::GenSkill { socket } => {
+                mcp_hub::handle_gen_skill_command(socket).await?;
+            }
         },
         Commands::Skill { cmd } => match cmd {
             SkillCommands::Install { source, target } => {

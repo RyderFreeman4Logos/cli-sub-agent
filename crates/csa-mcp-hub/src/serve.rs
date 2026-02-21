@@ -10,12 +10,16 @@ use axum::extract::DefaultBodyLimit;
 use rmcp::transport::{SseServer, sse_server::SseServerConfig};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::Semaphore;
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{HubConfig, default_socket_path};
 use crate::proxy::ProxyRouter;
 use crate::registry::McpRegistry;
+use crate::skill_writer::{
+    SkillRefreshSignal, parse_tools_list_changed_signal, regenerate_routing_skill_once,
+    spawn_skill_sync_task,
+};
 use crate::socket;
 
 const SSE_PATH: &str = "/";
@@ -94,6 +98,31 @@ pub async fn handle_stop_command(socket_override: Option<String>) -> Result<()> 
     Ok(())
 }
 
+pub async fn handle_gen_skill_command(socket_override: Option<String>) -> Result<()> {
+    let socket_path = socket_override
+        .map(PathBuf::from)
+        .unwrap_or_else(default_socket_path);
+
+    match send_control_request(&socket_path, "hub/gen-skill").await {
+        Ok(response) => {
+            if response.get("error").is_some() {
+                bail!("mcp-hub returned an error while regenerating skill: {response}");
+            }
+            println!(
+                "requested routing-guide skill regeneration via running hub at {}",
+                socket_path.display()
+            );
+            Ok(())
+        }
+        Err(_) => {
+            let cfg = HubConfig::load(None, None, None)?;
+            regenerate_routing_skill_once(cfg).await?;
+            println!("generated routing-guide skill via one-shot mcp-hub run");
+            Ok(())
+        }
+    }
+}
+
 pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<()> {
     let mut activated_by_systemd = false;
     let listener = if systemd_activation {
@@ -112,6 +141,8 @@ pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<
     let registry = Arc::new(McpRegistry::new(cfg.mcp_servers.clone()));
     let router = Arc::new(ProxyRouter::new(registry.clone(), cfg.request_timeout()));
     let http_endpoint = HttpEndpoint::start(&cfg, router.clone()).await?;
+    let skill_sync = spawn_skill_sync_task(cfg.clone(), registry.clone());
+    let skill_notify_tx = skill_sync.notifier();
     let next_client_id = Arc::new(AtomicU64::new(1));
     let max_connections = cfg.max_connections.max(1);
     let connection_slots = Arc::new(Semaphore::new(max_connections));
@@ -155,6 +186,7 @@ pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<
                 let client_id = next_client_id.fetch_add(1, Ordering::Relaxed);
                 let client_router = router.clone();
                 let client_shutdown_tx = shutdown_tx.clone();
+                let client_skill_notify_tx = skill_notify_tx.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
                     if let Err(error) = handle_client_connection(
@@ -163,6 +195,7 @@ pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<
                         client_router,
                         client_shutdown_tx,
                         connection_policy,
+                        client_skill_notify_tx,
                     )
                     .await
                     {
@@ -173,6 +206,7 @@ pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<
         }
     }
 
+    skill_sync.shutdown().await;
     http_endpoint.shutdown().await;
     registry.shutdown_all().await?;
     cleanup_pid_file(&cfg.pid_path).await?;
@@ -307,6 +341,7 @@ async fn handle_client_connection(
     router: Arc<ProxyRouter>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     policy: ConnectionPolicy,
+    skill_notify_tx: mpsc::UnboundedSender<SkillRefreshSignal>,
 ) -> Result<()> {
     let peer_uid = stream
         .peer_cred()
@@ -368,6 +403,7 @@ async fn handle_client_connection(
 
     let method = first_message.get("method").and_then(Value::as_str);
     let request_id = first_message.get("id").cloned();
+    maybe_notify_tools_list_changed(first_line.trim(), &skill_notify_tx);
 
     if method == Some("hub/status") {
         let result = router.status_payload().await;
@@ -397,9 +433,33 @@ async fn handle_client_connection(
         return Ok(());
     }
 
+    if method == Some("hub/gen-skill") {
+        if peer_uid != policy.current_uid {
+            write_json_line(
+                &mut write_half,
+                &jsonrpc_error(
+                    request_id,
+                    -32004,
+                    "permission denied: peer uid does not match hub uid".to_string(),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        let _ = skill_notify_tx.send(SkillRefreshSignal::RegenerateAll);
+        write_json_line(
+            &mut write_half,
+            &jsonrpc_result(request_id, json!({"queued": true})),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let mut forwarding_reader = reader;
     let first_forward_line = first_line;
     let (prefill_read, mut prefill_write) = tokio::io::duplex(64 * 1024);
+    let notify_tx = skill_notify_tx.clone();
 
     let copy_task = tokio::spawn(async move {
         if prefill_write
@@ -435,6 +495,7 @@ async fn handle_client_connection(
             if bytes == 0 {
                 break;
             }
+            maybe_notify_tools_list_changed(line.trim(), &notify_tx);
             if line.len() > policy.max_request_body_bytes {
                 tracing::warn!(client_id, "closing connection: request body too large");
                 break;
@@ -494,6 +555,15 @@ fn jsonrpc_error(id: Option<Value>, code: i64, message: String) -> Value {
             "message": message,
         }
     })
+}
+
+fn maybe_notify_tools_list_changed(
+    payload: &str,
+    notify_tx: &mpsc::UnboundedSender<SkillRefreshSignal>,
+) {
+    if let Some(signal) = parse_tools_list_changed_signal(payload) {
+        let _ = notify_tx.send(signal);
+    }
 }
 
 async fn send_control_request(socket_path: &Path, method: &str) -> Result<Value> {
@@ -665,6 +735,7 @@ mod tests {
             request_timeout: Duration::from_secs(2),
             current_uid: super::current_uid(),
         };
+        let (skill_notify_tx, _skill_notify_rx) = tokio::sync::mpsc::unbounded_channel();
 
         let server_task = tokio::spawn(super::handle_client_connection(
             server,
@@ -672,6 +743,7 @@ mod tests {
             router,
             shutdown_tx,
             policy,
+            skill_notify_tx,
         ));
 
         let (client_read, mut client_write) = client.into_split();

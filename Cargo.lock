@@ -628,6 +628,7 @@ version = "0.1.25"
 dependencies = [
  "anyhow",
  "axum",
+ "chrono",
  "csa-config",
  "csa-process",
  "csa-resource",
@@ -635,9 +636,11 @@ dependencies = [
  "rmcp",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "tokio-util",
+ "toml",
  "tracing",
 ]
 

@@ -110,6 +110,27 @@ fn mcp_hub_serve_parse_with_background_and_socket() {
 }
 
 #[test]
+fn mcp_hub_gen_skill_parse_with_socket() {
+    let cli = Cli::try_parse_from([
+        "csa",
+        "mcp-hub",
+        "gen-skill",
+        "--socket",
+        "/tmp/csa-1000/mcp-hub.sock",
+    ])
+    .expect("mcp-hub gen-skill args should parse");
+
+    match cli.command {
+        Commands::McpHub {
+            cmd: McpHubCommands::GenSkill { socket },
+        } => {
+            assert_eq!(socket.as_deref(), Some("/tmp/csa-1000/mcp-hub.sock"));
+        }
+        _ => panic!("expected mcp-hub gen-skill subcommand"),
+    }
+}
+
+#[test]
 fn review_help_shows_options() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())

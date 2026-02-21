@@ -2,7 +2,7 @@ use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use csa_config::{GlobalConfig, McpServerConfig};
 
 const DEFAULT_HTTP_BIND: &str = "127.0.0.1";
@@ -14,9 +14,12 @@ const DEFAULT_REQUEST_TIMEOUT_SECS: u64 = 30;
 
 #[derive(Debug, Clone)]
 pub(crate) struct HubConfig {
+    pub(crate) project_root: PathBuf,
     pub(crate) socket_path: PathBuf,
     pub(crate) pid_path: PathBuf,
     pub(crate) mcp_servers: Vec<McpServerConfig>,
+    pub(crate) mcp_whitelist: Vec<String>,
+    pub(crate) mcp_blacklist: Vec<String>,
     pub(crate) http_bind: String,
     pub(crate) http_port: u16,
     pub(crate) max_connections: usize,
@@ -32,28 +35,60 @@ impl HubConfig {
         http_port_override: Option<u16>,
     ) -> Result<Self> {
         let global = GlobalConfig::load()?;
-        Ok(Self::from_global_config(
+        let cwd = std::env::current_dir().context("failed to resolve current working directory")?;
+        let project_root = discover_project_root(&cwd);
+        let (mcp_whitelist, mcp_blacklist) = load_project_mcp_visibility(&project_root)?;
+        Ok(Self::from_parts(
             &global,
+            project_root,
             socket_override,
             http_bind_override,
             http_port_override,
+            mcp_whitelist,
+            mcp_blacklist,
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn from_global_config(
         global: &GlobalConfig,
         socket_override: Option<PathBuf>,
         http_bind_override: Option<String>,
         http_port_override: Option<u16>,
     ) -> Self {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let project_root = discover_project_root(&cwd);
+        Self::from_parts(
+            global,
+            project_root,
+            socket_override,
+            http_bind_override,
+            http_port_override,
+            Vec::new(),
+            Vec::new(),
+        )
+    }
+
+    fn from_parts(
+        global: &GlobalConfig,
+        project_root: PathBuf,
+        socket_override: Option<PathBuf>,
+        http_bind_override: Option<String>,
+        http_port_override: Option<u16>,
+        mcp_whitelist: Vec<String>,
+        mcp_blacklist: Vec<String>,
+    ) -> Self {
         let socket_path = socket_override
             .or_else(|| global.mcp_proxy_socket.clone().map(PathBuf::from))
             .unwrap_or_else(default_socket_path);
         let pid_path = pid_path_for_socket(&socket_path);
         Self {
+            project_root,
             socket_path,
             pid_path,
             mcp_servers: global.mcp_servers().to_vec(),
+            mcp_whitelist,
+            mcp_blacklist,
             http_bind: http_bind_override.unwrap_or_else(|| DEFAULT_HTTP_BIND.to_string()),
             http_port: http_port_override.unwrap_or(DEFAULT_HTTP_PORT),
             max_connections: DEFAULT_MAX_CONNECTIONS,
@@ -66,6 +101,46 @@ impl HubConfig {
     pub(crate) fn request_timeout(&self) -> Duration {
         Duration::from_secs(self.request_timeout_secs)
     }
+}
+
+fn discover_project_root(start: &Path) -> PathBuf {
+    for candidate in start.ancestors() {
+        if candidate.join(".csa").join("config.toml").exists() {
+            return candidate.to_path_buf();
+        }
+    }
+    start.to_path_buf()
+}
+
+fn load_project_mcp_visibility(project_root: &Path) -> Result<(Vec<String>, Vec<String>)> {
+    let path = project_root.join(".csa").join("config.toml");
+    if !path.exists() {
+        return Ok((Vec::new(), Vec::new()));
+    }
+
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read project config: {}", path.display()))?;
+    let value: toml::Value = toml::from_str(&raw)
+        .with_context(|| format!("failed to parse project config: {}", path.display()))?;
+
+    Ok((
+        read_string_list(&value, "mcp_whitelist"),
+        read_string_list(&value, "mcp_blacklist"),
+    ))
+}
+
+fn read_string_list(value: &toml::Value, key: &str) -> Vec<String> {
+    let Some(items) = value.get(key).and_then(toml::Value::as_array) else {
+        return Vec::new();
+    };
+
+    items
+        .iter()
+        .filter_map(toml::Value::as_str)
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect()
 }
 
 pub(crate) fn default_socket_path() -> PathBuf {
@@ -107,8 +182,8 @@ fn socket_path_from_runtime_dir(runtime_dir: Option<&str>, uid: u32) -> PathBuf 
 #[cfg(test)]
 mod tests {
     use super::{
-        DEFAULT_HTTP_BIND, DEFAULT_HTTP_PORT, HubConfig, pid_path_for_socket,
-        socket_path_from_runtime_dir,
+        DEFAULT_HTTP_BIND, DEFAULT_HTTP_PORT, HubConfig, discover_project_root,
+        load_project_mcp_visibility, pid_path_for_socket, socket_path_from_runtime_dir,
     };
 
     #[test]
@@ -155,5 +230,38 @@ mod tests {
         );
         assert_eq!(cfg.http_bind, "127.0.0.2");
         assert_eq!(cfg.http_port, 61234);
+    }
+
+    #[test]
+    fn discover_project_root_walks_ancestor_chain() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let nested = project_root.join("a").join("b");
+        std::fs::create_dir_all(project_root.join(".csa")).expect("create .csa");
+        std::fs::write(project_root.join(".csa/config.toml"), "").expect("write config");
+        std::fs::create_dir_all(&nested).expect("create nested");
+
+        let resolved = discover_project_root(&nested);
+        assert_eq!(resolved, project_root);
+    }
+
+    #[test]
+    fn load_project_mcp_visibility_reads_filters() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        std::fs::create_dir_all(project_root.join(".csa")).expect("create .csa");
+        std::fs::write(
+            project_root.join(".csa/config.toml"),
+            r#"
+mcp_whitelist = ["repomix", "deepwiki"]
+mcp_blacklist = ["memory"]
+"#,
+        )
+        .expect("write config");
+
+        let (whitelist, blacklist) =
+            load_project_mcp_visibility(&project_root).expect("load visibility");
+        assert_eq!(whitelist, vec!["repomix", "deepwiki"]);
+        assert_eq!(blacklist, vec!["memory"]);
     }
 }
