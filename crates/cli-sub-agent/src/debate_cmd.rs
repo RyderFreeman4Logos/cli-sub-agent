@@ -118,7 +118,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     );
 
     let debate_summary = extract_debate_summary(
-        &execution.execution.output,
+        &output,
         execution.execution.summary.as_str(),
     );
     let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;

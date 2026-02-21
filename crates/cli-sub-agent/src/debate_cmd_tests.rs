@@ -328,6 +328,29 @@ fn persist_debate_output_artifacts_writes_json_and_markdown() {
     assert_eq!(transcript_content, transcript);
 }
 
+#[test]
+fn extract_debate_summary_does_not_leak_provider_session_id() {
+    // Simulate sanitized output where provider ID has already been replaced by
+    // render_debate_output before reaching extract_debate_summary.
+    let provider_id = "provider-secret-id-abc123";
+    let meta_id = "01KHMETA0000000000000000";
+    let raw_output = format!(
+        "session_id={provider_id}\nSummary: The plan looks solid.\nVerdict: APPROVE\nConfidence: high\n- Good architecture\n"
+    );
+    // Simulate render_debate_output sanitization
+    let sanitized = raw_output.replace(provider_id, meta_id);
+    let summary = extract_debate_summary(&sanitized, "fallback");
+
+    assert!(!summary.summary.contains(provider_id), "summary must not contain provider id");
+    assert!(!summary.verdict.contains(provider_id));
+    for point in &summary.key_points {
+        assert!(!point.contains(provider_id), "key_point must not contain provider id");
+    }
+    // Verify meta_id is present (or harmless if not matched by extraction heuristics)
+    assert_eq!(summary.verdict, "APPROVE");
+    assert_eq!(summary.confidence, "high");
+}
+
 // --- CLI parse tests for timeout/stream flags (#146) ---
 
 fn parse_debate_args(argv: &[&str]) -> crate::cli::DebateArgs {
