@@ -10,15 +10,15 @@ use axum::extract::DefaultBodyLimit;
 use rmcp::transport::{SseServer, sse_server::SseServerConfig};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{HubConfig, default_socket_path};
 use crate::proxy::ProxyRouter;
 use crate::registry::McpRegistry;
 use crate::skill_writer::{
-    SkillRefreshSignal, parse_tools_list_changed_signal, regenerate_routing_skill_once,
-    spawn_skill_sync_task,
+    SkillRefreshNotifier, SkillRefreshSignal, parse_tools_list_changed_signal,
+    regenerate_routing_skill_once, spawn_skill_sync_task,
 };
 use crate::socket;
 
@@ -341,7 +341,7 @@ async fn handle_client_connection(
     router: Arc<ProxyRouter>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
     policy: ConnectionPolicy,
-    skill_notify_tx: mpsc::UnboundedSender<SkillRefreshSignal>,
+    skill_notify_tx: SkillRefreshNotifier,
 ) -> Result<()> {
     let peer_uid = stream
         .peer_cred()
@@ -447,7 +447,7 @@ async fn handle_client_connection(
             return Ok(());
         }
 
-        let _ = skill_notify_tx.send(SkillRefreshSignal::RegenerateAll);
+        skill_notify_tx.notify(SkillRefreshSignal::RegenerateAll);
         write_json_line(
             &mut write_half,
             &jsonrpc_result(request_id, json!({"queued": true})),
@@ -557,12 +557,9 @@ fn jsonrpc_error(id: Option<Value>, code: i64, message: String) -> Value {
     })
 }
 
-fn maybe_notify_tools_list_changed(
-    payload: &str,
-    notify_tx: &mpsc::UnboundedSender<SkillRefreshSignal>,
-) {
+fn maybe_notify_tools_list_changed(payload: &str, notify_tx: &SkillRefreshNotifier) {
     if let Some(signal) = parse_tools_list_changed_signal(payload) {
-        let _ = notify_tx.send(signal);
+        notify_tx.notify(signal);
     }
 }
 
@@ -735,7 +732,8 @@ mod tests {
             request_timeout: Duration::from_secs(2),
             current_uid: super::current_uid(),
         };
-        let (skill_notify_tx, _skill_notify_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (skill_notify_tx, _skill_notify_rx) = tokio::sync::mpsc::channel(1);
+        let skill_notify_tx = super::SkillRefreshNotifier::new(skill_notify_tx);
 
         let server_task = tokio::spawn(super::handle_client_connection(
             server,

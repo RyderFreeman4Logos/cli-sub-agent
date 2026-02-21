@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
@@ -22,6 +23,7 @@ const ROUTING_SKILL_NAME: &str = "mcp-hub-routing-guide";
 const STARTUP_LIST_RETRIES: u32 = 20;
 const STARTUP_LIST_RETRY_DELAY_MS: u64 = 300;
 const PERIODIC_REFRESH_SECS: u64 = 20;
+const SKILL_REFRESH_CHANNEL_CAPACITY: usize = 16;
 
 #[derive(Debug, Clone)]
 pub(crate) struct McpServerSnapshot {
@@ -38,13 +40,13 @@ pub(crate) enum SkillRefreshSignal {
 
 #[derive(Debug)]
 pub(crate) struct SkillSyncHandle {
-    signal_tx: mpsc::UnboundedSender<SkillRefreshSignal>,
+    notifier: SkillRefreshNotifier,
     join_handle: JoinHandle<()>,
 }
 
 impl SkillSyncHandle {
-    pub(crate) fn notifier(&self) -> mpsc::UnboundedSender<SkillRefreshSignal> {
-        self.signal_tx.clone()
+    pub(crate) fn notifier(&self) -> SkillRefreshNotifier {
+        self.notifier.clone()
     }
 
     pub(crate) async fn shutdown(self) {
@@ -53,16 +55,54 @@ impl SkillSyncHandle {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct SkillRefreshNotifier {
+    signal_tx: mpsc::Sender<SkillRefreshSignal>,
+    refresh_pending: Arc<AtomicBool>,
+}
+
+impl SkillRefreshNotifier {
+    pub(crate) fn new(signal_tx: mpsc::Sender<SkillRefreshSignal>) -> Self {
+        Self {
+            signal_tx,
+            refresh_pending: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub(crate) fn notify(&self, signal: SkillRefreshSignal) {
+        if self.refresh_pending.swap(true, Ordering::AcqRel) {
+            tracing::debug!("skipping duplicate skill refresh signal while one is pending");
+            return;
+        }
+
+        match self.signal_tx.try_send(signal) {
+            Ok(()) => {}
+            Err(mpsc::error::TrySendError::Full(_)) => {
+                self.refresh_pending.store(false, Ordering::Release);
+                tracing::warn!("dropping skill refresh signal because queue is full");
+            }
+            Err(mpsc::error::TrySendError::Closed(_)) => {
+                self.refresh_pending.store(false, Ordering::Release);
+                tracing::debug!("dropping skill refresh signal because queue is closed");
+            }
+        }
+    }
+}
+
 pub(crate) fn spawn_skill_sync_task(cfg: HubConfig, registry: Arc<McpRegistry>) -> SkillSyncHandle {
-    let (signal_tx, signal_rx) = mpsc::unbounded_channel();
+    let (signal_tx, signal_rx) = mpsc::channel(SKILL_REFRESH_CHANNEL_CAPACITY);
+    let notifier = SkillRefreshNotifier::new(signal_tx);
+    let refresh_pending_for_loop = Arc::clone(&notifier.refresh_pending);
     let join_handle = tokio::spawn(async move {
-        if let Err(error) = run_skill_sync_loop(cfg, registry, signal_rx).await {
+        if let Err(error) =
+            run_skill_sync_loop(cfg, registry, signal_rx, refresh_pending_for_loop).await
+        {
             tracing::warn!(error = %error, "mcp-hub routing-guide sync loop stopped");
         }
     });
 
     SkillSyncHandle {
-        signal_tx,
+        notifier,
         join_handle,
     }
 }
@@ -110,7 +150,8 @@ pub(crate) fn parse_tools_list_changed_signal(payload: &str) -> Option<SkillRefr
 async fn run_skill_sync_loop(
     cfg: HubConfig,
     registry: Arc<McpRegistry>,
-    mut signal_rx: mpsc::UnboundedReceiver<SkillRefreshSignal>,
+    mut signal_rx: mpsc::Receiver<SkillRefreshSignal>,
+    refresh_pending: Arc<AtomicBool>,
 ) -> Result<()> {
     let writer = SkillWriter::new(cfg.project_root, cfg.mcp_whitelist, cfg.mcp_blacklist);
 
@@ -152,6 +193,7 @@ async fn run_skill_sync_loop(
                 if let Err(error) = writer.regenerate(snapshots, force_full).await {
                     tracing::warn!(error = %error, "signal-triggered routing-guide refresh failed");
                 }
+                refresh_pending.store(false, Ordering::Release);
             }
         }
     }
@@ -490,7 +532,7 @@ fn sanitize_name(name: &str) -> String {
         if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' {
             normalized.push(ch);
         } else {
-            normalized.push('-');
+            normalized.push('_');
         }
     }
 

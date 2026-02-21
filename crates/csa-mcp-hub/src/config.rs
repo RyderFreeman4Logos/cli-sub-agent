@@ -105,11 +105,18 @@ impl HubConfig {
 
 fn discover_project_root(start: &Path) -> PathBuf {
     for candidate in start.ancestors() {
-        if candidate.join(".csa").join("config.toml").exists() {
+        if is_project_root_marker(candidate) {
             return candidate.to_path_buf();
         }
     }
     start.to_path_buf()
+}
+
+fn is_project_root_marker(candidate: &Path) -> bool {
+    candidate.join(".csa").join("config.toml").is_file()
+        || candidate.join(".csa").is_dir()
+        || candidate.join(".git").is_dir()
+        || candidate.join("Cargo.toml").is_file()
 }
 
 fn load_project_mcp_visibility(project_root: &Path) -> Result<(Vec<String>, Vec<String>)> {
@@ -240,6 +247,46 @@ mod tests {
         std::fs::create_dir_all(project_root.join(".csa")).expect("create .csa");
         std::fs::write(project_root.join(".csa/config.toml"), "").expect("write config");
         std::fs::create_dir_all(&nested).expect("create nested");
+
+        let resolved = discover_project_root(&nested);
+        assert_eq!(resolved, project_root);
+    }
+
+    #[test]
+    fn discover_project_root_accepts_csa_directory_marker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let nested = project_root.join("nested");
+        std::fs::create_dir_all(project_root.join(".csa")).expect("create .csa");
+        std::fs::create_dir_all(&nested).expect("create nested");
+
+        let resolved = discover_project_root(&nested);
+        assert_eq!(resolved, project_root);
+    }
+
+    #[test]
+    fn discover_project_root_accepts_git_directory_marker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let nested = project_root.join("nested");
+        std::fs::create_dir_all(project_root.join(".git")).expect("create .git");
+        std::fs::create_dir_all(&nested).expect("create nested");
+
+        let resolved = discover_project_root(&nested);
+        assert_eq!(resolved, project_root);
+    }
+
+    #[test]
+    fn discover_project_root_accepts_cargo_toml_marker() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path().join("project");
+        let nested = project_root.join("nested");
+        std::fs::create_dir_all(&nested).expect("create nested");
+        std::fs::write(
+            project_root.join("Cargo.toml"),
+            "[package]\nname = \"x\"\nversion = \"0.1.0\"\n",
+        )
+        .expect("write Cargo.toml");
 
         let resolved = discover_project_root(&nested);
         assert_eq!(resolved, project_root);

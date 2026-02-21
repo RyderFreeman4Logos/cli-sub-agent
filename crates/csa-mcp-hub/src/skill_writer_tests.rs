@@ -143,3 +143,32 @@ async fn skill_writer_applies_visibility_filters() -> Result<()> {
     assert!(!skill_root.join("mcps/deepwiki.md").exists());
     Ok(())
 }
+
+#[tokio::test]
+async fn skill_writer_generates_distinct_doc_names_for_similar_server_names() -> Result<()> {
+    let tmp = tempfile::tempdir()?;
+    let writer = SkillWriter::new(tmp.path().to_path_buf(), Vec::new(), Vec::new());
+
+    writer
+        .regenerate(
+            vec![
+                McpServerSnapshot {
+                    name: "a.b".to_string(),
+                    status: "ready".to_string(),
+                    tools: vec![tool("x", "x")],
+                },
+                McpServerSnapshot {
+                    name: "a-b".to_string(),
+                    status: "ready".to_string(),
+                    tools: vec![tool("y", "y")],
+                },
+            ],
+            true,
+        )
+        .await?;
+
+    let skill_root = tmp.path().join(".claude/skills/mcp-hub-routing-guide");
+    assert!(skill_root.join("mcps/a_b.md").exists());
+    assert!(skill_root.join("mcps/a-b.md").exists());
+    Ok(())
+}
