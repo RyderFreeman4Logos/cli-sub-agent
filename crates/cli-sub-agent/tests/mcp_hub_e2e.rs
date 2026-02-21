@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result, bail};
 use serde_json::Value;
 
+// TODO(manual-e2e): Run a live Haiku end-to-end validation with real API credentials.
+// This suite intentionally uses local mock MCP backends and does not hit external APIs.
+
 fn write_mock_mcp_script(dir: &Path) -> Result<PathBuf> {
     let script_path = dir.join("mock-mcp.sh");
     fs::write(
