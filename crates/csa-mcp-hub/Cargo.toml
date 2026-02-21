@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 
 [features]
-default = []
+default = ["rmcp-sdk"]
 rmcp-sdk = ["dep:rmcp"]
 
 [dependencies]

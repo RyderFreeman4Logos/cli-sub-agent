@@ -5,10 +5,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Value, json};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 
 use crate::config::{HubConfig, default_socket_path};
-use crate::proxy::{JsonRpcRequest, ProxyRouter, error_response};
+use crate::proxy::ProxyRouter;
 use crate::registry::McpRegistry;
 use crate::socket;
 
@@ -135,61 +135,107 @@ async fn handle_client_connection(
 ) -> Result<()> {
     let (read_half, mut write_half) = stream.into_split();
     let mut reader = BufReader::new(read_half);
-    let mut line = String::new();
+    let mut first_line = String::new();
 
-    loop {
-        line.clear();
-        let bytes = reader
-            .read_line(&mut line)
-            .await
-            .context("failed to read client request line")?;
-        if bytes == 0 {
-            return Ok(());
-        }
-        if line.trim().is_empty() {
-            continue;
-        }
-
-        let request: JsonRpcRequest = match serde_json::from_str(line.trim()) {
-            Ok(req) => req,
-            Err(error) => {
-                let response =
-                    error_response(None, -32700, format!("invalid JSON-RPC request: {error}"));
-                let payload = serde_json::to_string(&response)
-                    .context("failed to serialize parse-error response")?;
-                write_half
-                    .write_all(payload.as_bytes())
-                    .await
-                    .context("failed to write parse-error response")?;
-                write_half.write_all(b"\n").await?;
-                continue;
-            }
-        };
-
-        if let Some(response) = router
-            .handle_request(client_id, request, &shutdown_tx)
-            .await
-        {
-            let payload = serde_json::to_string(&response)
-                .context("failed to serialize JSON-RPC response")?;
-            write_half
-                .write_all(payload.as_bytes())
-                .await
-                .context("failed to write JSON-RPC response")?;
-            write_half
-                .write_all(b"\n")
-                .await
-                .context("failed to write response delimiter")?;
-            write_half
-                .flush()
-                .await
-                .context("failed to flush response")?;
-        }
-
-        if *shutdown_tx.borrow() {
-            return Ok(());
-        }
+    let bytes = reader
+        .read_line(&mut first_line)
+        .await
+        .context("failed to read client request line")?;
+    if bytes == 0 || first_line.trim().is_empty() {
+        return Ok(());
     }
+
+    let first_message: Value = match serde_json::from_str(first_line.trim()) {
+        Ok(value) => value,
+        Err(error) => {
+            write_json_line(
+                &mut write_half,
+                &jsonrpc_error(None, -32700, format!("invalid JSON-RPC request: {error}")),
+            )
+            .await?;
+            return Ok(());
+        }
+    };
+
+    let method = first_message.get("method").and_then(Value::as_str);
+    let request_id = first_message.get("id").cloned();
+
+    if method == Some("hub/status") {
+        let result = router.status_payload().await;
+        write_json_line(&mut write_half, &jsonrpc_result(request_id, result)).await?;
+        return Ok(());
+    }
+
+    if method == Some("hub/stop") {
+        let _ = shutdown_tx.send(true);
+        write_json_line(
+            &mut write_half,
+            &jsonrpc_result(request_id, json!({"stopping": true})),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let mut forwarding_reader = reader;
+    let (prefill_read, mut prefill_write) = tokio::io::duplex(64 * 1024);
+    prefill_write
+        .write_all(first_line.as_bytes())
+        .await
+        .context("failed to prefill first MCP message")?;
+
+    let copy_task = tokio::spawn(async move {
+        let copy_result = tokio::io::copy(&mut forwarding_reader, &mut prefill_write).await;
+        let _ = prefill_write.shutdown().await;
+        copy_result
+    });
+
+    let running =
+        rmcp::service::serve_directly((*router).clone(), (prefill_read, write_half), None);
+    let waiting_result = running.waiting().await;
+    let copy_result = copy_task
+        .await
+        .context("failed to join MCP stream forwarding task")?;
+    if let Err(error) = copy_result {
+        tracing::debug!(client_id, error = %error, "upstream stream copy terminated");
+    }
+
+    let _ = waiting_result.context("failed to join rmcp server task")?;
+    Ok(())
+}
+
+async fn write_json_line<W: AsyncWrite + Unpin>(writer: &mut W, value: &Value) -> Result<()> {
+    let payload = serde_json::to_string(value).context("failed to serialize JSON-RPC payload")?;
+    writer
+        .write_all(payload.as_bytes())
+        .await
+        .context("failed to write JSON-RPC payload")?;
+    writer
+        .write_all(b"\n")
+        .await
+        .context("failed to write JSON-RPC delimiter")?;
+    writer
+        .flush()
+        .await
+        .context("failed to flush JSON-RPC payload")
+}
+
+fn jsonrpc_result(id: Option<Value>, result: Value) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    })
+}
+
+fn jsonrpc_error(id: Option<Value>, code: i64, message: String) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "error": {
+            "code": code,
+            "message": message,
+        }
+    })
 }
 
 async fn send_control_request(socket_path: &Path, method: &str) -> Result<Value> {
