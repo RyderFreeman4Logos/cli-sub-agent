@@ -70,8 +70,12 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
         if path.extension().is_none_or(|ext| ext != "lock") {
             continue;
         }
-        let content = fs::read_to_string(&path).ok()?;
-        let pid = extract_pid(&content)?;
+        let Some(content) = fs::read_to_string(&path).ok() else {
+            continue;
+        };
+        let Some(pid) = extract_pid(&content) else {
+            continue;
+        };
         if is_process_alive(pid) {
             return Some(pid);
         }
