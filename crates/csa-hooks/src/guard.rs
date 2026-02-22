@@ -343,11 +343,22 @@ fn kill_cached_descendants(#[cfg(target_os = "linux")] cached: &[u32], pgid: u32
 /// Returns built-in prompt guards that inject branch safety reminders.
 ///
 /// These guards are shell snippets executed before tool runs:
+/// - `branch-context`: tells the tool which feature branch the caller is on,
+///   preventing the tool from creating new branches or running git stash.
 /// - `branch-protection`: warns when running on protected branches.
 /// - `dirty-tree-reminder`: reminds when uncommitted changes exist.
 /// - `commit-workflow`: reminds about unpushed commits on feature branches.
 pub fn builtin_prompt_guards() -> Vec<PromptGuardEntry> {
     vec![
+        PromptGuardEntry {
+            name: "branch-context".to_string(),
+            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+case "$branch" in main|master|dev|develop|release/*) exit 0 ;; esac
+echo "BRANCH CONTEXT: The caller is on feature branch '${branch}'. Stay on this branch. Do NOT create a new branch or switch branches unless the task prompt explicitly requests it. Do NOT run git stash."
+exit 0"#
+                .to_string(),
+            timeout_secs: 5,
+        },
         PromptGuardEntry {
             name: "branch-protection".to_string(),
             command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
