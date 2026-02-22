@@ -29,6 +29,7 @@ const SKILL_REFRESH_CHANNEL_CAPACITY: usize = 16;
 pub(crate) struct McpServerSnapshot {
     pub(crate) name: String,
     pub(crate) status: String,
+    pub(crate) transport_type: String,
     pub(crate) tools: Vec<Tool>,
 }
 
@@ -223,6 +224,7 @@ async fn collect_single_snapshot(
     attempts: u32,
     retry_delay: Duration,
 ) -> McpServerSnapshot {
+    let transport_type = registry.transport_label(server_name).to_string();
     let mut last_error = String::new();
 
     for attempt in 0..attempts {
@@ -232,6 +234,7 @@ async fn collect_single_snapshot(
                 return McpServerSnapshot {
                     name: server_name.to_string(),
                     status: "ready".to_string(),
+                    transport_type,
                     tools,
                 };
             }
@@ -252,6 +255,7 @@ async fn collect_single_snapshot(
     McpServerSnapshot {
         name: server_name.to_string(),
         status: "error".to_string(),
+        transport_type,
         tools: Vec::new(),
     }
 }
@@ -344,6 +348,7 @@ impl SkillWriter {
             entries.push(RegistryMcpEntry {
                 name: doc.name,
                 status: doc.status,
+                transport: doc.transport_type,
                 tool_count: doc.tools.len(),
                 updated_at,
                 purpose: doc.purpose,
@@ -428,6 +433,8 @@ struct RegistryFile {
 struct RegistryMcpEntry {
     name: String,
     status: String,
+    #[serde(default)]
+    transport: String,
     tool_count: usize,
     updated_at: String,
     purpose: String,
@@ -440,6 +447,7 @@ struct RegistryMcpEntry {
 struct ServerDoc {
     name: String,
     status: String,
+    transport_type: String,
     purpose: String,
     doc_file: String,
     tool_digest: String,
@@ -471,6 +479,7 @@ impl ServerDoc {
         Self {
             name: snapshot.name,
             status: snapshot.status,
+            transport_type: snapshot.transport_type,
             purpose,
             doc_file,
             tool_digest,
@@ -561,7 +570,15 @@ fn render_skill_markdown(entries: &[RegistryMcpEntry]) -> String {
         lines.push("- No MCP servers are currently visible to this project.".to_string());
     } else {
         for entry in entries {
-            lines.push(format!("- `{}`: {}", entry.name, entry.purpose));
+            let transport_tag = if entry.transport.is_empty() || entry.transport == "stdio" {
+                String::new()
+            } else {
+                format!(" [{}]", entry.transport)
+            };
+            lines.push(format!(
+                "- `{}`: {}{}",
+                entry.name, entry.purpose, transport_tag
+            ));
         }
     }
 
@@ -582,6 +599,7 @@ fn render_mcp_doc(doc: &ServerDoc, updated_at: &str) -> String {
         String::new(),
         format!("Purpose: {}", doc.purpose),
         format!("Status: {}", doc.status),
+        format!("Transport: {}", doc.transport_type),
         format!("Updated At: {}", updated_at),
         String::new(),
         format!("Tools ({}):", doc.tools.len()),

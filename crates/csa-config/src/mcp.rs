@@ -77,6 +77,17 @@ pub struct McpServerConfig {
     pub memory_max_mb: Option<u64>,
 }
 
+impl McpTransport {
+    /// Short human-readable label for the transport type.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Stdio { .. } => "stdio",
+            Self::Http { .. } => "http",
+            Self::Sse { .. } => "sse",
+        }
+    }
+}
+
 impl McpServerConfig {
     /// Returns true if this server uses stdio transport.
     pub fn is_stdio(&self) -> bool {

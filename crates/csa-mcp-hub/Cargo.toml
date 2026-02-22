@@ -8,6 +8,7 @@ license.workspace = true
 [features]
 default = ["rmcp-sdk"]
 rmcp-sdk = ["dep:rmcp"]
+transport-http-client = ["rmcp-sdk", "rmcp/transport-streamable-http-client-reqwest"]
 
 [dependencies]
 csa-config.workspace = true
