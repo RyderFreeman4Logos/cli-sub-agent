@@ -597,7 +597,14 @@ impl AcpConnection {
                                 &mut output_spool,
                             );
                             if self.last_activity.borrow().elapsed() >= idle_timeout {
-                                break PromptOutcome::IdleTimeout;
+                                // Check if the child process is still working before
+                                // killing.  Model thinking phases produce no output
+                                // but the process is still alive.
+                                if is_child_working(&self.child) {
+                                    *self.last_activity.borrow_mut() = Instant::now();
+                                } else {
+                                    break PromptOutcome::IdleTimeout;
+                                }
                             }
                         }
                     }
@@ -768,6 +775,41 @@ fn collect_agent_output(events: &[SessionEvent]) -> String {
         }
     }
     output
+}
+
+/// Check if the ACP child process is still actively working.
+///
+/// Reads `/proc/{pid}/stat` for the process state. States R (running),
+/// S (sleeping), D (disk sleep) indicate the process is working (e.g. model
+/// thinking). Falls back to `kill(pid, 0)` when `/proc` is unavailable.
+fn is_child_working(child: &Rc<RefCell<Child>>) -> bool {
+    let child_ref = child.borrow();
+    let Some(pid) = child_ref.id() else {
+        return false;
+    };
+
+    #[cfg(unix)]
+    {
+        use std::fs;
+        let stat_path = format!("/proc/{pid}/stat");
+        if let Ok(content) = fs::read_to_string(&stat_path) {
+            if let Some(close_paren) = content.rfind(')') {
+                let after_comm = &content[close_paren + 1..];
+                let state = after_comm.trim_start().chars().next().unwrap_or('X');
+                return matches!(state, 'R' | 'S' | 'D');
+            }
+        }
+        // Fallback: kill(pid, 0) probes process existence.
+        // SAFETY: kill() with signal 0 is a pure existence/permission probe.
+        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
+        ret == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn stop_reason_to_string(reason: StopReason) -> String {

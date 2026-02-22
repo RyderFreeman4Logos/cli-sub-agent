@@ -314,8 +314,10 @@ fn test_liveness_true_resets_death_timer() {
 
     let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
     let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
+    let mut last_activity = Instant::now() - Duration::from_secs(2);
+    let before = last_activity;
     let terminate = should_terminate_for_idle(
-        Instant::now() - Duration::from_secs(2),
+        &mut last_activity,
         Duration::from_secs(1),
         Duration::from_secs(1),
         Some(tmp.path()),
@@ -327,6 +329,10 @@ fn test_liveness_true_resets_death_timer() {
     assert!(
         dead_since.is_none(),
         "liveness=true should reset death timer"
+    );
+    assert!(
+        last_activity > before,
+        "liveness=true should reset idle timer"
     );
 }
 
@@ -627,4 +633,141 @@ async fn test_run_and_capture_with_stdin_passes_stream_mode() {
 
     assert_eq!(result.exit_code, 0);
     assert!(result.output.contains("stream-mode-test"));
+}
+
+// --- idle timeout + liveness integration tests ---
+
+#[test]
+fn test_should_terminate_resets_last_activity_on_liveness_true() {
+    // When liveness returns true, both the death timer AND the idle timer
+    // (last_activity) should be reset, giving the tool another full window.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!("{{\"pid\": {}}}", std::process::id()),
+    )
+    .expect("write lock");
+
+    let mut dead_since = Some(Instant::now() - Duration::from_secs(999));
+    let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
+    let mut last_activity = Instant::now() - Duration::from_secs(120);
+    let stale_activity = last_activity;
+
+    let terminate = should_terminate_for_idle(
+        &mut last_activity,
+        Duration::from_secs(1),
+        Duration::from_secs(1),
+        Some(tmp.path()),
+        &mut dead_since,
+        &mut next_poll,
+    );
+
+    assert!(!terminate, "alive process should not be terminated");
+    assert!(dead_since.is_none(), "death timer should be cleared");
+    assert!(
+        last_activity > stale_activity,
+        "last_activity should be reset to now (was {stale_activity:?}, now {last_activity:?})"
+    );
+}
+
+#[tokio::test]
+async fn test_idle_timeout_with_alive_process_does_not_kill() {
+    // A silent process (sleep) with a live lock file for our own PID should
+    // NOT be killed by idle timeout — liveness keeps it alive.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!("{{\"pid\": {}}}", std::process::id()),
+    )
+    .expect("write lock");
+
+    // "sleep 2" produces no output, but our PID in lock makes liveness=true.
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "sleep 2"]);
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1),   // idle_timeout: fires quickly
+        Duration::from_secs(600), // liveness_dead_timeout: very long
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        Some(&tmp.path().join("output.log")),
+    )
+    .await
+    .expect("wait");
+
+    assert_eq!(
+        result.exit_code, 0,
+        "process should exit naturally, not be killed (exit={})",
+        result.exit_code
+    );
+}
+
+#[tokio::test]
+async fn test_idle_timeout_with_dead_process_kills_after_dead_timeout() {
+    // A silent process without any liveness signals should be killed once
+    // the liveness_dead_timeout expires.  Use output_spool=None so session_dir
+    // is None, bypassing liveness checks — this tests the legacy kill path.
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "sleep 30"]);
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let start = Instant::now();
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1), // idle_timeout
+        Duration::from_secs(2), // liveness_dead_timeout
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        None, // no session_dir → immediate kill after idle
+    )
+    .await
+    .expect("wait");
+    let elapsed = start.elapsed();
+
+    assert_eq!(
+        result.exit_code, 137,
+        "process should be killed by idle timeout"
+    );
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "should terminate near idle_timeout, elapsed={elapsed:?}"
+    );
+}
+
+#[test]
+fn test_is_working_reads_proc_stat() {
+    // Our own process should be in R or S state.
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    std::fs::write(
+        locks_dir.join("tool.lock"),
+        format!("{{\"pid\": {}}}", std::process::id()),
+    )
+    .expect("write lock");
+
+    assert!(
+        ToolLiveness::is_working(tmp.path()),
+        "is_working should return true for our own running process"
+    );
+}
+
+#[test]
+fn test_is_working_false_for_nonexistent_pid() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    // Use PID 1 (init) — we cannot send signal 0 to it without CAP_KILL,
+    // and our lock file context won't match, so is_process_alive will fail
+    // for most test environments. Use a clearly dead PID instead.
+    std::fs::write(locks_dir.join("tool.lock"), "{\"pid\": 999999999}").expect("write lock");
+
+    assert!(
+        !ToolLiveness::is_working(tmp.path()),
+        "is_working should return false for non-existent PID"
+    );
 }

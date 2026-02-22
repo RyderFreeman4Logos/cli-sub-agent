@@ -42,6 +42,74 @@ impl ToolLiveness {
 
         process_alive || output_growth || session_write || stderr_activity
     }
+
+    /// Zero-cost observation of whether the tool process is actively working.
+    ///
+    /// Reads `/proc/{pid}/stat` for the PID found in session lock files and
+    /// checks the process state field:
+    /// - **R** (running), **S** (sleeping), **D** (disk sleep) → working
+    /// - **Z** (zombie), **T** (stopped), **X** (dead) → not working
+    ///
+    /// Falls back to `kill(pid, 0)` when `/proc` is unavailable.
+    /// Does NOT consume tokens or context window.
+    pub fn is_working(session_dir: &Path) -> bool {
+        let Some(pid) = find_session_pid(session_dir) else {
+            return false;
+        };
+        is_pid_working(pid)
+    }
+}
+
+/// Extract the first live PID from session lock files.
+fn find_session_pid(session_dir: &Path) -> Option<u32> {
+    let locks_dir = session_dir.join("locks");
+    let entries = fs::read_dir(&locks_dir).ok()?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().is_none_or(|ext| ext != "lock") {
+            continue;
+        }
+        let content = fs::read_to_string(&path).ok()?;
+        let pid = extract_pid(&content)?;
+        if is_process_alive(pid) {
+            return Some(pid);
+        }
+    }
+    None
+}
+
+/// Check if a process is actively working by reading `/proc/{pid}/stat`.
+///
+/// Process state field (3rd field in `/proc/{pid}/stat`):
+/// - R = running on CPU
+/// - S = sleeping (interruptible, e.g. waiting for I/O or network)
+/// - D = disk sleep (uninterruptible, e.g. waiting for disk I/O)
+/// - Z = zombie (terminated but not reaped)
+/// - T = stopped (e.g. by SIGSTOP)
+/// - X = dead
+fn is_pid_working(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        let stat_path = format!("/proc/{pid}/stat");
+        let Ok(content) = fs::read_to_string(&stat_path) else {
+            // /proc not available; fall back to kill(pid, 0) existence check.
+            return is_process_alive(pid);
+        };
+        // Format: "pid (comm) state ..."
+        // The comm field can contain spaces and parens, so find the last ')'.
+        let Some(close_paren) = content.rfind(')') else {
+            return is_process_alive(pid);
+        };
+        let after_comm = &content[close_paren + 1..];
+        let state = after_comm.trim_start().chars().next().unwrap_or('X');
+        matches!(state, 'R' | 'S' | 'D')
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 fn has_live_pid_signal(session_dir: &Path) -> bool {
@@ -314,5 +382,47 @@ mod tests {
         fs::write(&lock_path, "{\"pid\": 1}").expect("write lock");
 
         assert!(lock_file_is_recent(&lock_path, SystemTime::now()));
+    }
+
+    #[test]
+    fn is_working_returns_true_for_own_process() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let locks_dir = tmp.path().join("locks");
+        fs::create_dir_all(&locks_dir).expect("create locks dir");
+        fs::write(
+            locks_dir.join("codex.lock"),
+            format!("{{\"pid\": {}}}", std::process::id()),
+        )
+        .expect("write lock");
+
+        // Our own process is running (state R or S), so is_working should return true.
+        assert!(ToolLiveness::is_working(tmp.path()));
+    }
+
+    #[test]
+    fn is_working_returns_false_for_empty_session() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(!ToolLiveness::is_working(tmp.path()));
+    }
+
+    #[test]
+    fn is_pid_working_returns_true_for_self() {
+        // Our own process should always be in R or S state.
+        assert!(is_pid_working(std::process::id()));
+    }
+
+    #[test]
+    fn find_session_pid_returns_own_pid() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let locks_dir = tmp.path().join("locks");
+        fs::create_dir_all(&locks_dir).expect("create locks dir");
+        let own_pid = std::process::id();
+        fs::write(
+            locks_dir.join("tool.lock"),
+            format!("{{\"pid\": {}}}", own_pid),
+        )
+        .expect("write lock");
+
+        assert_eq!(find_session_pid(tmp.path()), Some(own_pid));
     }
 }

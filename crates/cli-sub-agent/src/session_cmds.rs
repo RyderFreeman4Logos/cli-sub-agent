@@ -455,7 +455,16 @@ pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Re
     let resolved_id = resolved.session_id;
     let session_dir = get_session_dir(&project_root, &resolved_id)?;
     let alive = csa_process::ToolLiveness::is_alive(&session_dir);
-    println!("{}", if alive { "alive" } else { "not alive" });
+    let working = csa_process::ToolLiveness::is_working(&session_dir);
+
+    let label = if alive && working {
+        "alive (working)"
+    } else if alive {
+        "alive (idle)"
+    } else {
+        "not alive"
+    };
+    println!("{label}");
     Ok(alive)
 }
 
