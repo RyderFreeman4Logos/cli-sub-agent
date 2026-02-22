@@ -1,327 +1,221 @@
-# Architecture Overview
+# Architecture
 
-CSA (CLI Sub-Agent) is a recursive agent container designed to orchestrate multiple AI CLI tools with session management, resource control, and process isolation.
+CSA is a recursive agent container built as a Rust workspace with 14 crates,
+each encapsulating a distinct domain concern.
 
-## Core Design Principles
+## Design Principles
 
-### 1. Fractal & Recursive
+### Fractal Recursion
 
-CSA implements a recursive agent model where any agent running inside CSA can spawn sub-agents by invoking CSA again. This creates a fractal tree structure:
-
-```
-csa (depth=0)
-  └─ gemini-cli task A
-       └─ csa (depth=1) spawned by gemini-cli
-            └─ codex subtask A1
-                 └─ csa (depth=2)
-                      └─ ...
-```
-
-**Recursion Control:**
-- Maximum recursion depth: Configurable via `max_recursion_depth` in config (default: 5)
-- Depth tracking: `CSA_DEPTH` environment variable propagated to child processes
-- Safety: Sub-agents cannot operate on parent sessions (enforced isolation)
-
-### 2. Flat Physical Storage, Logical Tree Structure
-
-**Storage Location:** `~/.local/state/csa/{project_path}/sessions/{session_id}/`
-
-Sessions are stored physically at the same level (flat directory structure) but maintain logical parent-child relationships through genealogy metadata.
+Any agent running inside CSA can spawn sub-agents by invoking `csa` again.
+This creates a tree of independent Unix processes:
 
 ```
-~/.local/state/csa/
-└── home/obj/project/my-app/
-    └── sessions/
-        ├── 01JH4QWERT1234567890ABCDEF/    # Root session (depth=0)
-        │   ├── state.toml
-        │   └── locks/
-        ├── 01JH4QWERT9876543210ZYXWVU/    # Child session (depth=1)
-        │   ├── state.toml
-        │   └── locks/
-        └── ...
+csa run (depth=0, claude-code)
+  +-- csa run (depth=1, codex)          # review sub-agent
+  |   +-- csa run (depth=2, gemini)     # deep analysis
+  +-- csa run (depth=1, codex)          # debate sub-agent
+      +-- csa run (depth=2, claude)     # adversary
 ```
 
-**Why Flat Storage:**
-- Simplifies session lookup by ULID
-- Avoids deep nesting issues
-- Enables efficient prefix matching
-- Facilitates garbage collection
+**Recursion control:**
 
-### 3. Session Isolation & Locking
+- Maximum depth is configurable via `max_recursion_depth` (default: 5)
+- Tracked via `CSA_DEPTH` environment variable, incremented per level
+- Sub-agents cannot operate on parent sessions (enforced isolation)
 
-**Tool-Level Locking:**
-- Each tool within a session has its own lock file
-- Lock path: `{session_dir}/locks/{tool_name}.lock`
-- Implementation: `flock` via `fd-lock` crate (non-blocking write locks)
-- Diagnostic info: Lock files contain JSON with PID, tool name, and acquisition timestamp
+### Flat Storage, Logical Tree
 
-**Isolation Guarantees:**
-- Sub-agents cannot access parent session state
-- Each session has independent tool state
-- Concurrent runs of different tools in the same session are prevented per-tool
+Sessions are stored physically at the same level but maintain a logical
+parent-child tree through genealogy metadata:
+
+```
+~/.local/state/csa/{project_path}/sessions/
+  +-- 01JH4QWERT1234.../ (depth=0, root)
+  |   +-- state.toml
+  +-- 01JH4QWERT9876.../ (depth=1, parent=01JH4Q...)
+  |   +-- state.toml
+  +-- ...
+```
+
+**Why flat?** Simplifies ULID lookup, enables prefix matching, avoids deep
+nesting, and makes garbage collection straightforward.
+
+### Closed Enum for Tools
+
+CSA uses a closed enum (`Executor`) for the four supported tools rather than
+trait-based polymorphism:
+
+```rust
+pub enum Executor {
+    GeminiCli { model_override, thinking_budget },
+    Opencode  { model_override, agent, thinking_budget },
+    Codex     { model_override, thinking_budget },
+    ClaudeCode { model_override, thinking_budget },
+}
+```
+
+**Rationale:** Fixed tool set, direct pattern matching, compile-time
+exhaustiveness, zero vtable overhead.
+
+### Heterogeneous Execution
+
+CSA detects the parent tool via `/proc` filesystem inspection
+(`detect_parent_tool()` in `run_helpers.rs`). In `--tool auto` mode, it
+selects a tool from a **different model family** than the parent. If no
+heterogeneous tool is available, CSA fails with an explicit error rather
+than silently degrading.
+
+| Parent Tool | Auto-selected Review Tool |
+|-------------|--------------------------|
+| claude-code | codex or gemini-cli |
+| codex | claude-code or gemini-cli |
+| gemini-cli | claude-code or codex |
 
 ## Crate Structure
 
-CSA is organized into 9 crates following domain separation:
-
 ```
 crates/
-├── cli-sub-agent/      # Main CLI binary and orchestration
-├── csa-config/         # Configuration management (TOML-based)
-├── csa-core/           # Core types and utilities
-├── csa-executor/       # Tool execution (4-variant enum)
-├── csa-lock/           # File-based locking (flock)
-├── csa-process/        # Process spawning and signal handling
-├── csa-resource/       # Memory monitoring and scheduling
-├── csa-scheduler/      # Tier rotation and 429 failover decisions
-└── csa-session/        # Session CRUD and genealogy tracking
+  +-- cli-sub-agent/   # Main CLI binary (csa)
+  +-- csa-core/        # Core types: ToolName, ULID, OutputFormat, ConsensusStrategy
+  +-- csa-acp/         # ACP transport: AcpConnection, AcpSession, run_prompt()
+  +-- csa-session/     # Session CRUD, genealogy, transcripts, event writer
+  +-- csa-executor/    # Tool executor: closed enum, Transport trait
+  +-- csa-process/     # Process spawning, setsid, signals, sandbox integration
+  +-- csa-config/      # Config loading: global + project merge, migrations, registry
+  +-- csa-resource/    # ResourceGuard, MemoryMonitor, cgroup, rlimit, sandbox
+  +-- csa-scheduler/   # Tier rotation, 429 failover, concurrency slot management
+  +-- csa-mcp-hub/     # MCP server fan-out daemon, FIFO queue, stateful pooling
+  +-- csa-hooks/       # Lifecycle hooks (pre_run, post_run, etc.) and prompt guards
+  +-- csa-todo/        # Git-tracked TODO/plan management with DAG visualization
+  +-- csa-lock/        # flock-based locking (session locks, global slot locks)
+  +-- weave/           # skill-lang compiler: parse, compile, execute (weave binary)
 ```
 
 ### Dependency Graph
 
 ```
 cli-sub-agent
-    ├─> csa-config
-    ├─> csa-core
-    ├─> csa-executor
-    │     ├─> csa-core
-    │     ├─> csa-process
-    │     └─> csa-session
-    ├─> csa-lock (independent)
-    ├─> csa-process
-    ├─> csa-resource
-    │     └─> csa-core (optional)
-    ├─> csa-scheduler
-    │     ├─> csa-config
-    │     └─> csa-session
-    └─> csa-session
-          └─> csa-core (optional)
+  +-> csa-config
+  +-> csa-core
+  +-> csa-executor
+  |     +-> csa-core
+  |     +-> csa-process
+  |     +-> csa-session
+  +-> csa-acp
+  +-> csa-lock (independent, no internal deps)
+  +-> csa-process
+  +-> csa-resource
+  |     +-> csa-core
+  +-> csa-scheduler
+  |     +-> csa-config
+  |     +-> csa-session
+  +-> csa-session
+  |     +-> csa-core
+  |     +-> csa-acp
+  +-> csa-hooks
+  +-> csa-todo
+  +-> csa-mcp-hub
+  +-> weave
 ```
 
-**Design Note:** `csa-lock` is intentionally independent with no internal CSA dependencies, making it reusable.
+`csa-lock` is intentionally independent with zero internal dependencies,
+making it reusable outside the CSA workspace.
 
 ## Data Flow
 
-### 1. CLI Invocation
+### Command Execution
 
 ```
-User
-  │
-  ├─> csa run --tool gemini-cli "analyze code"
-  │
-  ▼
-cli-sub-agent
-  │
-  ├─> Load config (.csa/config.toml)
-  ├─> Resolve tool/tier/alias
-  ├─> Create or load session
-  ├─> Check resource availability
-  │
-  ▼
-Executor (enum)
-  │
-  ├─> Build command with environment
-  ├─> Acquire lock
-  ├─> Spawn child process
-  │
-  ▼
-Child Process (gemini/codex/opencode/claude)
-  │
-  ├─> Execute task (with yolo mode)
-  ├─> Write to stdout (captured)
-  │
-  ▼
-Process Monitor
-  │
-  ├─> Track peak memory
-  ├─> Wait for completion
-  ├─> Extract session ID from output
-  │
-  ▼
-Session Update
-  │
-  ├─> Update tool state
-  ├─> Record resource usage
-  ├─> Save state.toml
-  │
-  ▼
-Return Result
+User -> csa run "prompt"
+  |
+  +-> Load config (global + project merge)
+  +-> Resolve tool / tier / alias
+  +-> Create or load session
+  +-> Pre-flight resource check (P95 memory estimation)
+  +-> Acquire session lock (flock)
+  +-> Select transport (ACP or Legacy)
+  |
+  +-> [ACP path]
+  |   +-> AcpConnection::spawn() -> child process
+  |   +-> AcpSession::new() with SessionConfig (context injection)
+  |   +-> AcpSession::run_prompt() -> stream events
+  |
+  +-> [Legacy path]
+  |   +-> Build tool command with yolo flags
+  |   +-> tokio::process::Command::spawn()
+  |
+  +-> MemoryMonitor: sample RSS every 500ms, track peak
+  +-> StreamMode: tee stdout to stderr (TTY default)
+  +-> Wait for completion
+  +-> Update session state.toml
+  +-> Record peak memory in usage_stats.toml
+  +-> Fire hooks: post_run -> session_complete
+  +-> Return result
 ```
 
-### 2. Session State Management
+### Transport Routing
 
-**State File:** `{session_dir}/state.toml`
+| Tool | Transport | ACP Command |
+|------|-----------|-------------|
+| claude-code | ACP | `claude-code-acp` |
+| codex | ACP | `codex-acp` |
+| gemini-cli | Legacy | CLI process |
+| opencode | Legacy | CLI process |
 
-```toml
-meta_session_id = "01JH4QWERT1234567890ABCDEF"
-description = "Main development session"
-project_path = "/home/user/project"
-created_at = 2024-02-06T10:00:00Z
-last_accessed = 2024-02-06T14:30:00Z
+The `Transport` trait abstracts both modes. `TransportFactory` routes based
+on tool type and config. ACP fallback to Legacy is allowed only during
+connection initialization; during prompt execution, automatic fallback is
+forbidden.
 
-[genealogy]
-parent_session_id = "01JH4QWERT0000000000000000"  # Optional
-depth = 1
+## Environment Variables
 
-[context_status]
-is_compacted = false
-last_compacted_at = "2024-02-06T12:00:00Z"  # Optional
+CSA propagates session context to child processes:
 
-[tools.gemini-cli]
-provider_session_id = "session_abc123"
-last_action_summary = "Analyzed authentication module"
-last_exit_code = 0
-updated_at = 2024-02-06T14:30:00Z
-```
+| Variable | Description |
+|----------|-------------|
+| `CSA_SESSION_ID` | Current session ULID |
+| `CSA_DEPTH` | Recursion depth (0 = root) |
+| `CSA_PROJECT_ROOT` | Absolute project directory path |
+| `CSA_PARENT_SESSION` | Parent session ULID (optional) |
+| `CSA_TOOL` | Current tool name |
+| `CSA_PARENT_TOOL` | Parent's tool name |
+| `CSA_SESSION_DIR` | Absolute path to session directory |
 
-### 3. Resource Monitoring Flow
-
-```
-Pre-Flight Check
-  │
-  ├─> Load usage_stats.toml
-  ├─> Calculate P95 memory estimate
-  ├─> Check available RAM + swap
-  │
-  ├─ [Insufficient] ──> Abort with OOM risk message
-  │
-  └─ [Sufficient] ──> Continue
-           │
-           ▼
-     Spawn Tool
-           │
-           ├─> Get child PID
-           ├─> Monitor memory usage
-           ├─> Record peak memory
-           │
-           ▼
-     Wait for Completion
-           │
-           ├─> Extract exit code
-           ├─> Update usage_stats.toml
-           └─> Return result
-```
-
-**Stats File:** `{session_dir}/usage_stats.toml`
-
-```toml
-[history]
-gemini-cli = [1024, 1536, 1280, 1792, ...]  # Last 20 runs (MB)
-codex = [2048, 2304, 2176, ...]
-```
+CSA automatically strips `CLAUDECODE` and `CLAUDE_CODE_ENTRYPOINT` when
+spawning child processes, so no manual `env -u` prefix is needed.
 
 ## Process Model
 
-### 1. Process Isolation
+### Process Group Isolation
 
-**Process Group Isolation:**
-- Child processes run in separate process groups via `setsid()`
-- Prevents signal inheritance from parent
-- Enables clean termination of entire subprocess tree
+Child processes run in separate process groups via `setsid()`. This prevents
+signal inheritance from the parent and enables clean termination of the
+entire subprocess tree.
 
-**Signal Handling:**
-- `SIGTERM` and `SIGINT` propagated to child process groups
+### Signal Handling
+
+- `SIGTERM` and `SIGINT` propagate to child process groups
 - `kill_on_drop` enabled as safety net
-- Ensures no zombie processes
+- Two-phase termination: SIGTERM first, SIGKILL after configurable grace period
 
-### 2. Yolo Mode
+### Yolo Mode
 
-All tools run with automatic approvals to enable non-interactive sub-agent execution:
+All tools run with automatic approvals for non-interactive sub-agent execution:
 
 | Tool | Yolo Flag |
 |------|-----------|
 | gemini-cli | `-y` |
 | codex | `--dangerously-bypass-approvals-and-sandbox` |
 | claude-code | `--dangerously-skip-permissions` |
-| opencode | (none, non-interactive by design) |
-
-**Safety Trade-off:** Yolo mode is necessary for sub-agents but requires careful prompt construction and validation at the orchestration layer.
-
-## Environment Variables
-
-CSA propagates session context via environment variables:
-
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `CSA_SESSION_ID` | ULID | Current session identifier |
-| `CSA_DEPTH` | Integer | Recursion depth (0 = root) |
-| `CSA_PROJECT_ROOT` | Absolute path | Project directory |
-| `CSA_PARENT_SESSION` | ULID | Parent session ID (optional) |
-
-**Usage by Child Tools:**
-- Tools can read `CSA_DEPTH` to self-limit recursion
-- `CSA_SESSION_ID` enables session resumption
-- `CSA_PROJECT_ROOT` provides workspace context
-
-## Executor Architecture
-
-### Closed Enum Design
-
-Rather than using trait-based polymorphism, CSA uses a closed enum for the 4 supported tools:
-
-```rust
-pub enum Executor {
-    GeminiCli { model_override: Option<String>, thinking_budget: Option<ThinkingBudget> },
-    Opencode { model_override: Option<String>, agent: Option<String>, thinking_budget: Option<ThinkingBudget> },
-    Codex { model_override: Option<String>, thinking_budget: Option<ThinkingBudget> },
-    ClaudeCode { model_override: Option<String>, thinking_budget: Option<ThinkingBudget> },
-}
-```
-
-**Rationale:**
-- Fixed set of tools (not extensible at runtime)
-- Direct pattern matching (better than dynamic dispatch for this case)
-- Compile-time exhaustiveness checking
-- Zero overhead (no vtables)
-
-### Command Building
-
-Each executor variant implements tool-specific command construction:
-
-```rust
-impl Executor {
-    pub fn build_command(&self, prompt: &str, tool_state: Option<&ToolState>, session: &MetaSessionState) -> Command {
-        let mut cmd = self.build_base_command(session);  // Set env vars, working dir
-        self.append_tool_args(&mut cmd, prompt, tool_state);  // Tool-specific args
-        cmd
-    }
-}
-```
-
-**Separation of Concerns:**
-- Base command: Session environment setup
-- Tool args: Provider-specific flags and session resumption
-- Restrictions: Applied via prompt modification (not args)
-
-## Context Compression Mapping
-
-Different tools have different compression commands:
-
-| Tool | Compression Command |
-|------|---------------------|
-| gemini-cli | `/compress` |
-| codex | `/compact` |
-| claude-code | `/compact` |
-| opencode | (not supported) |
-
-**Implementation:** Session manager maps tool name to appropriate compression command when `csa session compress` is invoked.
+| opencode | (non-interactive by design) |
 
 ## Garbage Collection
 
-CSA implements garbage collection for orphaned and stale sessions:
+`csa gc` removes orphaned and stale sessions:
 
-**Orphan Detection:**
-- Sessions with missing or corrupt `state.toml`
-- Sessions with no parent when `parent_session_id` is set but parent doesn't exist
-
-**Staleness Heuristic:**
-- Sessions not accessed for > 30 days (configurable)
-- Sessions with depth > 0 and no recent activity
-
-**GC Process:**
-1. Scan all session directories
-2. Load each `state.toml` (recover corrupt files if possible)
-3. Identify orphans and stale sessions
-4. Optionally delete (with confirmation)
-
-**Command:** `csa gc [--dry-run] [--max-age-days N]`
+- **Orphan detection:** sessions with missing `state.toml` or broken parent refs
+- **Staleness:** sessions not accessed within N days (default: 30)
+- **Transcript GC:** expired JSONL transcripts are cleaned alongside sessions
+- **Dry-run:** `csa gc --dry-run` shows what would be removed
+- **Global:** `csa gc --global` scans all projects under `~/.local/state/csa/`

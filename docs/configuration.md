@@ -1,270 +1,167 @@
-# Configuration Reference
+# Configuration
 
-CSA uses TOML-based configuration stored in `.csa/config.toml` within the project root.
+CSA uses TOML-based configuration with a two-level merge: global defaults
+and per-project overrides.
 
-## Configuration File Location
+## Configuration Precedence
 
-**Path:** `{PROJECT_ROOT}/.csa/config.toml`
+```
+Global config (~/.config/cli-sub-agent/config.toml)
+  | lowest priority
+Project config ({PROJECT_ROOT}/.csa/config.toml)
+  | higher priority
+CLI arguments (--tool, --model, --thinking, etc.)
+  | highest priority
+Final merged config
+```
 
-**Initialization:** Created automatically by `csa init` command.
+## File Locations
 
-## Complete Configuration Schema
+| File | Purpose |
+|------|---------|
+| `~/.config/cli-sub-agent/config.toml` | Global: API keys, concurrency limits, tool defaults |
+| `{PROJECT_ROOT}/.csa/config.toml` | Project: tiers, aliases, tool restrictions |
+
+**Initialization:** `csa init` creates the project config. Variants:
+
+- `csa init` -- minimal config with `[project]` metadata only
+- `csa init --full` -- auto-detect tools, generate tier configs
+- `csa init --template` -- fully-commented reference config
+
+## Global Config
 
 ```toml
-[project]
-name = "my-project"
-created_at = 2024-02-06T10:00:00Z
-max_recursion_depth = 5  # Default: 5
+# ~/.config/cli-sub-agent/config.toml
 
+[defaults]
+max_concurrent = 3
+tool = "claude-code"             # Fallback for --tool auto
+
+[review]
+tool = "auto"                    # Enforce heterogeneous review
+
+[debate]
+tool = "auto"                    # Enforce heterogeneous debate
+timeout_secs = 1800              # 30 minute default
+
+[tools.codex]
+max_concurrent = 5
+[tools.codex.env]
+OPENAI_API_KEY = "sk-..."
+
+[tools.claude-code]
+max_concurrent = 3
+
+[todo]
+show_command = "bat -l md --paging=always"
+diff_command = "delta"
+```
+
+## Project Config
+
+### `[project]` -- Metadata
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | String | required | Human-readable project name |
+| `created_at` | DateTime | auto | ISO 8601 creation timestamp |
+| `max_recursion_depth` | Integer | 5 | Maximum recursive sub-agent depth |
+
+### `[resources]` -- Resource Limits
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `min_free_memory_mb` | Integer | 4096 | Minimum combined free memory (physical + swap) |
+
+```toml
 [resources]
-min_free_memory_mb = 4096      # Default: 4096 (combined physical + swap)
+min_free_memory_mb = 4096
 
 [resources.initial_estimates]
-gemini-cli = 1024    # Initial memory estimate in MB
+gemini-cli = 1024       # MB, used until P95 data available
 codex = 2048
 opencode = 1536
 claude-code = 2048
+```
 
+See [Resource Control](resource-control.md) for P95 estimation details.
+
+### `[tools.{name}]` -- Tool Configuration
+
+```toml
 [tools.gemini-cli]
 enabled = true
 
 [tools.gemini-cli.restrictions]
-allow_edit_existing_files = false
+allow_edit_existing_files = false    # Inject read-only restriction into prompt
+```
 
-[tools.codex]
-enabled = true
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | Boolean | `true` | Whether this tool is available |
+| `restrictions.allow_edit_existing_files` | Boolean | `true` | Allow modifying existing files |
 
-[tools.opencode]
-enabled = true
+Unconfigured tools default to enabled with no restrictions. Setting
+`enabled = false` excludes the tool from tier resolution and auto mode.
 
-[tools.claude-code]
-enabled = true
+### `[review]` -- Review Tool Selection
 
-# Optional: per-project override for `csa review` tool selection.
+```toml
 [review]
-tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
+tool = "auto"    # or "codex", "claude-code", "gemini-cli", "opencode"
+```
 
-[tiers.tier1]
+Overrides the global review tool for this project. In `auto` mode, CSA
+enforces heterogeneity based on parent tool detection.
+
+### `[tiers.{name}]` -- Model Tiers
+
+Tiers group models by quality/cost/speed for automatic selection:
+
+```toml
+[tiers.tier-1-quick]
 description = "Quick tasks (low thinking budget)"
 models = [
     "gemini-cli/google/gemini-3-flash-preview/low",
     "opencode/google/gemini-2.5-pro/minimal",
 ]
 
-[tiers.tier2]
-description = "Standard tasks (medium thinking)"
+[tiers.tier-2-standard]
+description = "Standard development work"
 models = [
     "codex/anthropic/claude-sonnet/medium",
     "gemini-cli/google/gemini-3-pro-preview/medium",
 ]
 
-[tiers.tier3]
-description = "Complex reasoning (high thinking)"
+[tiers.tier-3-complex]
+description = "Complex reasoning, security audits"
 models = [
     "codex/anthropic/claude-opus/high",
     "claude-code/anthropic/claude-opus/xhigh",
 ]
-
-[tier_mapping]
-default = "tier3"
-quick = "tier1"
-analysis = "tier2"
-code-review = "tier2"
-complex-reasoning = "tier3"
-
-[aliases]
-fast = "gemini-cli/google/gemini-3-flash-preview/low"
-smart = "codex/anthropic/claude-opus/xhigh"
-balanced = "codex/anthropic/claude-sonnet/medium"
 ```
 
-## Section Details
+**Model spec format:** `tool/provider/model/thinking_budget`
 
-### `[project]` - Project Metadata
+Thinking budget values: `low`, `medium`, `high`, `xhigh`, or a custom
+token count.
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `name` | String | Yes | - | Human-readable project name |
-| `created_at` | DateTime | Yes | Current time | ISO 8601 timestamp of project initialization |
-| `max_recursion_depth` | Integer | No | 5 | Maximum depth for recursive sub-agent spawning |
+**Selection logic:** Iterate models in order, return the first whose
+tool is enabled.
 
-**Example:**
-```toml
-[project]
-name = "backend-api"
-created_at = 2024-02-06T10:00:00Z
-max_recursion_depth = 3
-```
-
-**Notes:**
-- `max_recursion_depth` prevents infinite recursion loops
-- Depth is tracked via `CSA_DEPTH` environment variable
-- Depth 0 = root session, each sub-agent increments by 1
-
-### `[resources]` - Resource Limits
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `min_free_memory_mb` | Integer | No | 4096 | Minimum combined (physical + swap) free memory in MB before launching tools |
-
-**Initial Estimates:**
-
-```toml
-[resources.initial_estimates]
-gemini-cli = 1024
-codex = 2048
-opencode = 1536
-claude-code = 2048
-```
-
-**Purpose:**
-- Pre-flight resource checks prevent OOM kills
-- Initial estimates used until P95 historical data is available
-- Historical P95 estimates override initial values after 20+ runs
-
-**Resource Check Formula:**
-```
-required_memory = min_free_memory_mb + P95_estimate(tool)
-available_memory = (physical_free + swap_free) / 1024 / 1024  # bytes → MB
-if available_memory < required_memory:
-    abort with OOM risk warning
-```
-
-### `[tools.{tool_name}]` - Tool Configuration
-
-Each tool has an optional configuration section:
-
-```toml
-[tools.gemini-cli]
-enabled = true
-
-[tools.gemini-cli.restrictions]
-allow_edit_existing_files = false
-```
-
-**Fields:**
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| `enabled` | Boolean | No | `true` | Whether this tool is available |
-| `restrictions.allow_edit_existing_files` | Boolean | No | `true` | Allow modifying existing files |
-
-**Behavior:**
-- **Unconfigured tools:** Default to enabled with no restrictions
-- **`enabled = false`:** Tool is skipped during tier resolution
-- **`allow_edit_existing_files = false`:** Prompt is modified to inject restriction message
-
-**Example Restriction Injection:**
-
-When `allow_edit_existing_files = false`:
-
-```
-Original Prompt:
-    "Refactor the authentication module"
-
-Modified Prompt:
-    "IMPORTANT RESTRICTION: You MUST NOT edit or modify any existing files.
-     You may only create new files or perform read-only analysis.
-
-     Refactor the authentication module"
-```
-
-**Supported Tools:**
-- `gemini-cli`
-- `codex`
-- `opencode`
-- `claude-code`
-
-### `[review]` - Review Tool Selection (Optional)
-
-Configure which tool `csa review` uses for the current project.
-
-```toml
-[review]
-tool = "auto"  # or "codex", "claude-code", "opencode", "gemini-cli"
-```
-
-**Notes:**
-- This section overrides the user-level global review tool selection (`~/.config/cli-sub-agent/config.toml`) for this project.
-- In `auto` mode, CSA enforces heterogeneity and refuses to fall back when parent tool context is missing or unsupported.
-- Auto mode mapping: `claude-code` parent -> `codex`, `codex` parent -> `claude-code`.
-
-### `[tiers.{tier_name}]` - Model Tiers
-
-Tiers group models by quality/cost/speed for automatic selection.
-
-**Structure:**
-```toml
-[tiers.tier1]
-description = "Quick tasks (low thinking budget)"
-models = [
-    "gemini-cli/google/gemini-3-flash-preview/low",
-    "opencode/google/gemini-2.5-pro/minimal",
-]
-```
-
-**Fields:**
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| `description` | String | Yes | Human-readable tier purpose |
-| `models` | Array[String] | Yes | List of model specs in priority order |
-
-**Model Spec Format:**
-
-```
-tool/provider/model/thinking_budget
-```
-
-**Components:**
-1. **Tool:** `gemini-cli`, `codex`, `opencode`, `claude-code`
-2. **Provider:** `google`, `anthropic`, `openai`, etc.
-3. **Model:** Full model name (e.g., `gemini-3-pro-preview`, `claude-opus`)
-4. **Thinking Budget:** `low`, `medium`, `high`, `xhigh`, or custom token count
-
-**Selection Logic:**
-1. Iterate through `models` in order
-2. Parse tool name from each spec
-3. Return first model where tool is enabled
-4. Return `None` if no enabled tools in tier
-
-**Recommended Tiers:**
-
-| Tier | Use Case | Budget | Example Models |
-|------|----------|--------|----------------|
-| tier1 | Quick tasks, simple queries | low | gemini-flash, opencode-minimal |
-| tier2 | Standard development work | medium | claude-sonnet, gemini-pro |
-| tier3 | Complex reasoning, security audits | high/xhigh | claude-opus |
-
-### `[tier_mapping]` - Task to Tier Mapping
-
-Maps task types to tier names for semantic selection:
+### `[tier_mapping]` -- Task to Tier Mapping
 
 ```toml
 [tier_mapping]
-default = "tier3"
-quick = "tier1"
-analysis = "tier2"
-code-review = "tier2"
-complex-reasoning = "tier3"
+default = "tier-2-standard"
+quick = "tier-1-quick"
+analysis = "tier-2-standard"
+code-review = "tier-2-standard"
+complex-reasoning = "tier-3-complex"
+security = "tier-3-complex"
 ```
 
-**Usage:**
-
-```bash
-# Uses tier_mapping["default"] (fallback when --tool and --model-spec are omitted)
-csa run "Implement new feature"
-
-# Inspect available tier configuration
-csa tiers list
-```
-
-**Fallback Behavior:**
-1. Look up task type in `tier_mapping`
-2. If not found, try to find tier named `tier3` or `tier-3-*`
-3. If still not found, return `None` (error)
-
-### `[aliases]` - Model Aliases
+### `[aliases]` -- Model Aliases
 
 Shorthand names for frequently used model specs:
 
@@ -275,248 +172,102 @@ smart = "codex/anthropic/claude-opus/xhigh"
 balanced = "codex/anthropic/claude-sonnet/medium"
 ```
 
-**Usage:**
+Usage: `csa run --model fast "quick check"`
+
+## Configuration Commands
 
 ```bash
-# Resolves to gemini-cli/google/gemini-3-flash-preview/low
-csa run --model fast "Quick check"
-
-# Resolves to codex/anthropic/claude-opus/xhigh
-csa run --model smart "Complex refactoring"
+csa config show                  # Show effective merged config
+csa config get review.tool       # Query a single key
+csa config get tools.codex.enabled --default true
+csa config edit                  # Open project config in $EDITOR
+csa config validate              # Validate config syntax and references
+csa tiers list                   # View tier definitions
 ```
 
-**Resolution Priority:**
-1. Check if input is an alias key → return alias value
-2. Otherwise, return input unchanged (treat as direct model spec)
+## Configuration Validation
 
-## Configuration Examples
+CSA validates on load:
 
-### Example 1: Research Project (Read-Only Gemini)
+1. **Model spec format:** Each model must be `tool/provider/model/budget`
+2. **Tier references:** All `tier_mapping` values must reference existing tiers
+3. **Tool names:** Must be one of `gemini-cli`, `codex`, `opencode`, `claude-code`
+4. **Thinking budget:** Must be `low`, `medium`, `high`, `xhigh`, or a number
+
+## Migrations
+
+Config schema evolves between CSA versions. The migration system handles
+this automatically:
+
+```bash
+csa migrate --status     # Check pending migrations
+csa migrate --dry-run    # Preview changes
+csa migrate              # Apply pending migrations
+```
+
+`weave.lock` version alignment is checked on startup. If outdated,
+CSA prints a warning: `Run 'csa migrate' to update`.
+
+## Examples
+
+### Research Project (Read-Only)
 
 ```toml
 [project]
 name = "research-analysis"
 max_recursion_depth = 3
 
-[resources]
-min_free_memory_mb = 1536  # combined physical + swap
-
 [tools.gemini-cli]
 enabled = true
-
 [tools.gemini-cli.restrictions]
 allow_edit_existing_files = false
 
 [tools.codex]
 enabled = false
-
-[tools.opencode]
-enabled = false
-
 [tools.claude-code]
 enabled = false
 
-[tiers.tier1]
-description = "Analysis only"
+[tiers.analysis]
+description = "Read-only analysis"
 models = ["gemini-cli/google/gemini-3-pro-preview/medium"]
 
 [tier_mapping]
-default = "tier1"
-
-[aliases]
-analyze = "gemini-cli/google/gemini-3-pro-preview/medium"
+default = "analysis"
 ```
 
-### Example 2: Full-Stack Development
-
-```toml
-[project]
-name = "webapp-backend"
-max_recursion_depth = 5
-
-[resources]
-min_free_memory_mb = 5120  # combined physical + swap
-
-[resources.initial_estimates]
-gemini-cli = 1536
-codex = 2560
-opencode = 2048
-claude-code = 2560
-
-[tools.gemini-cli]
-enabled = true
-
-[tools.codex]
-enabled = true
-
-[tools.opencode]
-enabled = true
-
-[tools.claude-code]
-enabled = true
-
-[tiers.tier-1-quick]
-description = "Quick iterations and simple tasks"
-models = [
-    "gemini-cli/google/gemini-3-flash-preview/low",
-    "opencode/google/gemini-2.5-pro/minimal",
-]
-
-[tiers.tier-2-standard]
-description = "Standard development work"
-models = [
-    "codex/anthropic/claude-sonnet/medium",
-    "opencode/google/gemini-2.5-pro/medium",
-]
-
-[tiers.tier-3-complex]
-description = "Complex refactoring and architecture"
-models = [
-    "codex/anthropic/claude-opus/high",
-    "claude-code/anthropic/claude-opus/xhigh",
-]
-
-[tier_mapping]
-default = "tier-2-standard"
-quick = "tier-1-quick"
-simple = "tier-1-quick"
-standard = "tier-2-standard"
-refactor = "tier-3-complex"
-architecture = "tier-3-complex"
-security = "tier-3-complex"
-
-[aliases]
-fast = "gemini-cli/google/gemini-3-flash-preview/low"
-dev = "codex/anthropic/claude-sonnet/medium"
-expert = "codex/anthropic/claude-opus/xhigh"
-```
-
-### Example 3: Cost-Conscious Setup
+### Cost-Conscious Setup
 
 ```toml
 [project]
 name = "budget-project"
-max_recursion_depth = 4
-
-[resources]
-min_free_memory_mb = 2560  # combined physical + swap
-
-[tools.gemini-cli]
-enabled = true
 
 [tools.codex]
-enabled = false  # Anthropic models disabled to save costs
-
-[tools.opencode]
-enabled = true
-
+enabled = false        # Anthropic models disabled
 [tools.claude-code]
 enabled = false
 
-[tiers.tier1]
-description = "Primary tier (Google models only)"
+[tiers.primary]
+description = "Google models only"
 models = [
     "gemini-cli/google/gemini-3-flash-preview/low",
     "opencode/google/gemini-2.5-pro/medium",
 ]
 
-[tiers.tier2]
-description = "Higher quality for critical tasks"
-models = [
-    "opencode/google/gemini-2.5-pro/high",
-    "gemini-cli/google/gemini-3-pro-preview/high",
-]
-
 [tier_mapping]
-default = "tier1"
-critical = "tier2"
-
-[aliases]
-cheap = "gemini-cli/google/gemini-3-flash-preview/low"
-quality = "opencode/google/gemini-2.5-pro/high"
+default = "primary"
 ```
-
-## CLI Integration
-
-### Using Tiers
-
-```bash
-# Auto-select tool from default tier
-csa run "Implement user authentication"
-
-# Inspect configured tiers and model order
-csa tiers list
-
-# Force a specific model spec from a tier
-csa run --model-spec "codex/openai/gpt-5.3-codex/xhigh" "Review PR #123"
-```
-
-### Using Aliases
-
-```bash
-# Use alias
-csa run --model fast "Check for errors"
-
-# Use full model spec (must be configured in tiers)
-csa run --model "codex/anthropic/claude-opus/xhigh" "Complex task"
-```
-
-### Using Direct Tool Selection
-
-```bash
-# Use tool name (no model override)
-csa run --tool gemini-cli "Analyze code"
-
-# Combine tool and session
-csa run --tool codex --session 01JH4Q "Continue previous work"
-```
-
-## Configuration Validation
-
-CSA performs the following validations on load:
-
-1. **Model Spec Format:** Each model must be `tool/provider/model/budget`
-2. **Tier References:** All `tier_mapping` values must reference existing tiers
-3. **Tool Names:** All tool names in model specs must be valid (`gemini-cli`, `codex`, `opencode`, `claude-code`)
-4. **Thinking Budget:** Budget must be `low`, `medium`, `high`, `xhigh`, or a number
-
-**Error Example:**
-
-```toml
-[tier_mapping]
-default = "nonexistent-tier"  # Error: Tier 'nonexistent-tier' not defined
-```
-
-## Best Practices
-
-1. **Start with defaults:** Use `csa init` to generate a template, then customize
-2. **Define tiers semantically:** Name tiers by use case, not by model names
-3. **Use aliases for frequently used specs:** Avoid typing long model paths
-4. **Set appropriate resource limits:** Leave headroom for system operations
-5. **Disable unused tools:** Set `enabled = false` for tools you don't have access to
-6. **Document restrictions:** Use comments to explain why certain tools have restrictions
-7. **Version control:** Commit `.csa/config.toml` to share settings with team
 
 ## Troubleshooting
 
-**Problem:** "OOM Risk Prevention" error
+| Problem | Solution |
+|---------|----------|
+| "OOM Risk Prevention" error | Reduce `min_free_memory_mb` or wait for agents to finish |
+| "Tool 'codex' is not enabled" | Set `tools.codex.enabled = true` or remove section |
+| "No enabled tools found in tier" | Ensure at least one tool in the tier's models is enabled |
+| Tier resolution always falls back | Check that `tier_mapping.default` exists |
 
-**Solution:** Reduce `min_free_memory_mb` or wait for running agents to finish
+## Related
 
----
-
-**Problem:** "Tool 'codex' is not enabled"
-
-**Solution:** Set `tools.codex.enabled = true` or remove tool-specific config section
-
----
-
-**Problem:** "No enabled tools found in tier"
-
-**Solution:** Ensure at least one tool in the tier's models list is enabled
-
----
-
-**Problem:** Tier resolution always falls back to tier3
-
-**Solution:** Check that `tier_mapping` keys match your usage (e.g., `default` exists)
+- [Getting Started](getting-started.md) -- initial setup
+- [Resource Control](resource-control.md) -- memory limits and P95 estimation
+- [Commands](commands.md) -- `csa config` reference

@@ -1,46 +1,46 @@
-# Hooks Reference
+# Hooks
 
-This document lists all supported hook events and the template variables available for each event.
+CSA supports lifecycle hooks and prompt guards configured in
+`hooks.toml`. Hooks fire at specific points during execution;
+prompt guards inject context into tool prompts.
 
-Template variables use `{name}` syntax in `hooks.toml` command strings. CSA shell-escapes substituted values. Unknown placeholders are left unchanged.
+## Configuration File
 
-## `pre_run`
+Hooks are configured in `.csa/hooks.toml` (project-level) or
+`~/.config/cli-sub-agent/hooks.toml` (global). Project-level
+hooks take precedence.
+
+## Lifecycle Hooks
+
+### `pre_run`
 
 Fires before a tool execution starts in `csa run`.
 
-Available variables:
+**Available variables:**
 
 | Variable | Description |
-|---|---|
-| `{session_id}` | Session ULID (`meta_session_id`) |
-| `{session_dir}` | Absolute path to this session directory |
-| `{sessions_root}` | Parent directory containing all sessions for this project |
-| `{tool}` | Tool name for this execution (`codex`, `claude-code`, etc.) |
-
-Example:
+|----------|-------------|
+| `{session_id}` | Session ULID |
+| `{session_dir}` | Absolute path to session directory |
+| `{sessions_root}` | Parent directory containing all project sessions |
+| `{tool}` | Tool name (`codex`, `claude-code`, etc.) |
 
 ```toml
 [pre_run]
 enabled = true
-command = "echo pre-run: session={session_id} tool={tool} dir={session_dir}"
+command = "echo pre-run: session={session_id} tool={tool}"
 timeout_secs = 30
 ```
 
-## `post_run`
+### `post_run`
 
 Fires after tool execution completes and session state has been saved.
 
-Available variables:
+**Additional variables (beyond `pre_run`):**
 
 | Variable | Description |
-|---|---|
-| `{session_id}` | Session ULID (`meta_session_id`) |
-| `{session_dir}` | Absolute path to this session directory |
-| `{sessions_root}` | Parent directory containing all sessions for this project |
-| `{tool}` | Tool name for this execution (`codex`, `claude-code`, etc.) |
+|----------|-------------|
 | `{exit_code}` | Tool process exit code |
-
-Example:
 
 ```toml
 [post_run]
@@ -49,21 +49,12 @@ command = "echo post-run: session={session_id} exit={exit_code}"
 timeout_secs = 30
 ```
 
-## `session_complete`
+### `session_complete`
 
 Fires after `post_run`, at the end of `csa run` execution.
 
-Available variables:
-
-| Variable | Description |
-|---|---|
-| `{session_id}` | Session ULID (`meta_session_id`) |
-| `{session_dir}` | Absolute path to this session directory |
-| `{sessions_root}` | Parent directory containing all sessions for this project |
-| `{tool}` | Tool name for this execution (`codex`, `claude-code`, etc.) |
-| `{exit_code}` | Tool process exit code |
-
-Built-in default command (used when `[session_complete].command` is not set):
+Has the same variables as `post_run`. Default command (when not
+configured) commits session state to git:
 
 ```toml
 [session_complete]
@@ -72,67 +63,66 @@ command = "cd {sessions_root} && git add {session_id}/ && git commit -m 'session
 timeout_secs = 30
 ```
 
-## `todo_create`
+### `todo_create`
 
-Fires after `csa todo create` has created a plan and committed it to the TODO git repository.
-
-Available variables:
+Fires after `csa todo create` commits a new plan.
 
 | Variable | Description |
-|---|---|
+|----------|-------------|
 | `{plan_id}` | TODO plan ULID/timestamp |
 | `{plan_dir}` | Absolute path to the plan directory |
 | `{todo_root}` | Absolute path to TODO repository root |
-
-Example:
 
 ```toml
 [todo_create]
 enabled = true
-command = "echo todo-create: plan={plan_id} dir={plan_dir}"
+command = "echo created plan={plan_id}"
 timeout_secs = 30
 ```
 
-## `todo_save`
+### `todo_save`
 
-Fires after `csa todo save` has committed updated plan content (only when there are changes to save).
+Fires after `csa todo save` commits updated plan content.
 
-Available variables:
+**Additional variables (beyond `todo_create`):**
 
 | Variable | Description |
-|---|---|
-| `{plan_id}` | TODO plan ULID/timestamp |
-| `{plan_dir}` | Absolute path to the plan directory |
-| `{todo_root}` | Absolute path to TODO repository root |
-| `{version}` | Number of saved versions for this plan after save |
-| `{message}` | Commit message used for this save |
-
-Example:
+|----------|-------------|
+| `{version}` | Number of saved versions after this save |
+| `{message}` | Commit message used |
 
 ```toml
 [todo_save]
 enabled = true
-command = "echo todo-save: plan={plan_id} version={version} msg={message}"
+command = "echo saved plan={plan_id} v{version}: {message}"
 timeout_secs = 30
 ```
 
-## `prompt_guard`
+## Template Variables
 
-Prompt guards are user-configurable shell scripts that inject text into the tool's prompt before execution. Unlike regular hooks (fire-and-forget), prompt guards **capture stdout** and append it to the `effective_prompt` as `<prompt-guard>` XML blocks.
+Template variables use `{name}` syntax. CSA shell-escapes all substituted
+values for safety. Unknown placeholders are left unchanged.
 
-This enables "reverse prompt injection" — reminding tools (including those without native hook systems like codex, opencode, gemini-cli) to follow AGENTS.md rules such as branch protection, timely commits, and timely PRs.
+## Prompt Guards
 
-### How it works
+Prompt guards are user-configurable shell scripts that inject text into
+the tool's prompt before execution. Unlike lifecycle hooks (fire-and-forget),
+prompt guards **capture stdout** and append it to the prompt as
+`<prompt-guard>` XML blocks.
+
+This enables "reverse prompt injection" -- reminding tools (including those
+without native hook systems like codex, opencode, gemini-cli) to follow
+project rules such as branch protection and timely commits.
+
+### How It Works
 
 1. CSA loads `[[prompt_guard]]` entries from `hooks.toml`
-2. Before tool execution, CSA runs each guard script sequentially
-3. Each script receives a JSON context on **stdin** and writes injection text to **stdout**
-4. Non-empty stdout is wrapped in `<prompt-guard name="...">` XML and appended to the prompt
+2. Before tool execution, runs each guard script sequentially
+3. Each script receives a JSON context on **stdin**
+4. Non-empty stdout is wrapped in `<prompt-guard name="...">` XML
 5. Non-zero exit or timeout = warn + skip (never blocks execution)
 
-### Guard context (stdin JSON)
-
-Each guard script receives the following JSON object on stdin:
+### Guard Context (stdin JSON)
 
 ```json
 {
@@ -144,22 +134,14 @@ Each guard script receives the following JSON object on stdin:
 }
 ```
 
-| Field | Type | Description |
-|---|---|---|
-| `project_root` | string | Absolute path to the project root |
-| `session_id` | string | Current session ULID |
-| `tool` | string | Tool being executed (`codex`, `claude-code`, `gemini-cli`, `opencode`) |
-| `is_resume` | bool | `true` if resuming a session (`--session` / `--last`) |
-| `cwd` | string | Current working directory |
-
-### Script protocol
+### Script Protocol
 
 | Aspect | Behavior |
-|---|---|
+|--------|----------|
 | **stdin** | JSON `GuardContext` |
 | **stdout** | Injection text (empty = no injection) |
 | **stderr** | Ignored |
-| **exit 0** | Success — stdout captured |
+| **exit 0** | Success -- stdout captured |
 | **exit non-zero** | Warning logged, guard skipped |
 | **timeout** | Warning logged, guard killed and skipped |
 
@@ -178,92 +160,71 @@ timeout_secs = 10
 ```
 
 | Field | Type | Default | Description |
-|---|---|---|---|
-| `name` | string | required | Human-readable name (used in XML tag and logs) |
+|-------|------|---------|-------------|
+| `name` | string | required | Human-readable name (used in XML tag) |
 | `command` | string | required | Shell command (run via `sh -c`) |
 | `timeout_secs` | integer | 10 | Max execution time in seconds |
 
-### Execution order and merge
+### Output Format
 
-- Guards execute in array order (first `[[prompt_guard]]` entry runs first)
-- Config merge: project-level `[[prompt_guard]]` **replaces** global-level entirely (non-empty wins)
-- Multiple guards produce multiple `<prompt-guard>` blocks in the prompt
-
-### Output format
-
-Guard output is injected as XML blocks in the effective prompt:
+Guard output is injected as XML in the effective prompt:
 
 ```xml
 <prompt-guard name="branch-protection">
-You are on branch main. Do NOT commit directly to this branch.
+You are on branch main. Do NOT commit directly.
 Create a feature branch first: git checkout -b feat/description
-</prompt-guard>
-<prompt-guard name="commit-reminder">
-You have 3 uncommitted files. Remember to commit your work.
 </prompt-guard>
 ```
 
-### Example guard scripts
+### Merge Behavior
 
-#### Branch protection guard
+- Guards execute in array order (first entry runs first)
+- Project-level `[[prompt_guard]]` **replaces** global-level entirely
+- Multiple guards produce multiple `<prompt-guard>` blocks
+
+### Example: Branch Protection Guard
 
 ```bash
 #!/bin/sh
-# guard-branch.sh — Warn when on protected branches
-# Reads GuardContext JSON from stdin, outputs warning text on stdout
-
+# guard-branch.sh
 set -e
-
-# Parse project_root from stdin JSON
 CONTEXT=$(cat)
 PROJECT_ROOT=$(echo "$CONTEXT" | jq -r '.project_root')
-
 cd "$PROJECT_ROOT" 2>/dev/null || exit 0
 
 BRANCH=$(git branch --show-current 2>/dev/null) || exit 0
-
 case "$BRANCH" in
   main|master|dev|develop)
     echo "WARNING: You are on protected branch '$BRANCH'."
-    echo "Do NOT commit directly. Create a feature branch first:"
-    echo "  git checkout -b feat/<description>"
-    echo "  git checkout -b fix/<description>"
+    echo "Create a feature branch first."
     ;;
 esac
-# Empty stdout on non-protected branches = no injection
 ```
 
-#### Commit reminder guard
+### Example: Commit Reminder Guard
 
 ```bash
 #!/bin/sh
-# remind-commit.sh — Remind about uncommitted changes and unpushed commits
-# Reads GuardContext JSON from stdin, outputs reminder text on stdout
-
+# remind-commit.sh
 set -e
-
 CONTEXT=$(cat)
 PROJECT_ROOT=$(echo "$CONTEXT" | jq -r '.project_root')
 IS_RESUME=$(echo "$CONTEXT" | jq -r '.is_resume')
-
 cd "$PROJECT_ROOT" 2>/dev/null || exit 0
 
-# Skip reminders on fresh sessions (no work done yet)
-if [ "$IS_RESUME" = "false" ]; then
-  exit 0
-fi
+[ "$IS_RESUME" = "false" ] && exit 0
 
 DIRTY=$(git status --porcelain 2>/dev/null | wc -l)
 UNPUSHED=$(git rev-list @{upstream}..HEAD 2>/dev/null | wc -l)
 
 if [ "$DIRTY" -gt 0 ] || [ "$UNPUSHED" -gt 0 ]; then
-  echo "REMINDER: Before stopping, ensure your work is properly saved:"
-  [ "$DIRTY" -gt 0 ] && echo "  - $DIRTY uncommitted file(s) — commit your changes"
-  [ "$UNPUSHED" -gt 0 ] && echo "  - $UNPUSHED unpushed commit(s) — push and create a PR"
+  echo "REMINDER: Save your work before stopping:"
+  [ "$DIRTY" -gt 0 ] && echo "  - $DIRTY uncommitted file(s)"
+  [ "$UNPUSHED" -gt 0 ] && echo "  - $UNPUSHED unpushed commit(s)"
 fi
 ```
 
-## Full example
+## Full Example
 
 ```toml
 [pre_run]
@@ -283,12 +244,12 @@ timeout_secs = 30
 
 [todo_create]
 enabled = true
-command = "echo created {plan_id} at {plan_dir}"
+command = "echo created {plan_id}"
 timeout_secs = 30
 
 [todo_save]
 enabled = true
-command = "echo saved {plan_id} v{version}: {message}"
+command = "echo saved {plan_id} v{version}"
 timeout_secs = 30
 
 [[prompt_guard]]
@@ -301,3 +262,9 @@ name = "commit-reminder"
 command = "/path/to/remind-commit.sh"
 timeout_secs = 10
 ```
+
+## Related
+
+- [Configuration](configuration.md) -- config file locations
+- [Skills & Patterns](skills-patterns.md) -- prompt guards complement skills
+- [Commands](commands.md) -- `csa run` execution lifecycle
