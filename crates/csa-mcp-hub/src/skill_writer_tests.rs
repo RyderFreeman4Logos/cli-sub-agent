@@ -36,11 +36,13 @@ async fn skill_writer_generates_routing_guide_files() -> Result<()> {
         .regenerate(
             vec![
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "echo".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("echo_tool", "Echo input")],
                 },
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "deepwiki".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("ask_question", "Ask DeepWiki")],
@@ -73,11 +75,13 @@ async fn skill_writer_generates_routing_guide_files() -> Result<()> {
         .regenerate(
             vec![
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "echo".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("echo_tool", "Echo input")],
                 },
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "deepwiki".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("ask_question", "Ask DeepWiki")],
@@ -111,16 +115,19 @@ async fn skill_writer_applies_visibility_filters() -> Result<()> {
         .regenerate(
             vec![
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "echo".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("echo_tool", "Echo input")],
                 },
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "memory".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("remember", "Store notes")],
                 },
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "deepwiki".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("ask_question", "Ask DeepWiki")],
@@ -153,11 +160,13 @@ async fn skill_writer_generates_distinct_doc_names_for_similar_server_names() ->
         .regenerate(
             vec![
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "a.b".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("x", "x")],
                 },
                 McpServerSnapshot {
+                    transport_type: "stdio".to_string(),
                     name: "a-b".to_string(),
                     status: "ready".to_string(),
                     tools: vec![tool("y", "y")],

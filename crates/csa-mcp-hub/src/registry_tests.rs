@@ -1,5 +1,5 @@
 use anyhow::Result;
-use csa_config::McpServerConfig;
+use csa_config::{McpServerConfig, McpTransport};
 use rmcp::model::CallToolRequestParam;
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,20 +28,26 @@ fn write_script(dir: &std::path::Path, body: &str) -> Result<std::path::PathBuf>
 fn stateless_config(script_path: &std::path::Path) -> McpServerConfig {
     McpServerConfig {
         name: "mock".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: false,
+        memory_max_mb: None,
     }
 }
 
 fn stateful_config(script_path: &std::path::Path) -> McpServerConfig {
     McpServerConfig {
         name: "stateful".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: true,
+        memory_max_mb: None,
     }
 }
 
@@ -140,10 +146,13 @@ done
 
     let registry = McpRegistry::new(vec![McpServerConfig {
         name: "flaky".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: false,
+        memory_max_mb: None,
     }]);
 
     let first = registry
@@ -333,10 +342,13 @@ done
 
     let registry = McpRegistry::new(vec![McpServerConfig {
         name: "stateful".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: true,
+        memory_max_mb: None,
     }]);
 
     let result = registry
@@ -499,4 +511,181 @@ done
 
     pool.shutdown().await?;
     Ok(())
+}
+
+// ── Transport label tests ───────────────────────────────────────────
+
+#[tokio::test]
+async fn registry_tracks_transport_labels() {
+    let stdio_config = McpServerConfig {
+        name: "local-mcp".to_string(),
+        transport: McpTransport::Stdio {
+            command: "false".to_string(),
+            args: vec![],
+            env: HashMap::new(),
+        },
+        stateful: false,
+        memory_max_mb: None,
+    };
+    let http_config = McpServerConfig {
+        name: "remote-mcp".to_string(),
+        transport: McpTransport::Http {
+            url: "https://mcp.example.com/v1".to_string(),
+            headers: HashMap::new(),
+            allow_insecure: false,
+        },
+        stateful: false,
+        memory_max_mb: None,
+    };
+    let sse_config = McpServerConfig {
+        name: "sse-mcp".to_string(),
+        transport: McpTransport::Sse {
+            url: "https://mcp.example.com/sse".to_string(),
+            headers: HashMap::new(),
+            allow_insecure: false,
+        },
+        stateful: false,
+        memory_max_mb: None,
+    };
+
+    let registry = McpRegistry::new(vec![stdio_config, http_config, sse_config]);
+
+    assert_eq!(registry.transport_label("local-mcp"), "stdio");
+    assert_eq!(registry.transport_label("remote-mcp"), "http");
+    assert_eq!(registry.transport_label("sse-mcp"), "sse");
+    assert_eq!(registry.transport_label("nonexistent"), "stdio"); // default fallback
+}
+
+// ── HTTP URL safety tests ───────────────────────────────────────────
+
+#[cfg(feature = "transport-http-client")]
+mod http_safety {
+    use super::super::{is_ssrf_dangerous_ip, parse_host_port, validate_http_url};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn validate_https_url_passes() {
+        assert!(validate_http_url("https://mcp.example.com/v1", false, "test").is_ok());
+    }
+
+    #[test]
+    fn validate_http_url_rejected_by_default() {
+        let err = validate_http_url("http://mcp.example.com/v1", false, "test").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("HTTPS"), "expected HTTPS enforcement: {msg}");
+    }
+
+    #[test]
+    fn validate_http_url_allowed_when_insecure() {
+        assert!(validate_http_url("http://mcp.example.com/v1", true, "test").is_ok());
+    }
+
+    #[test]
+    fn validate_file_scheme_rejected() {
+        let err = validate_http_url("file:///etc/passwd", false, "test").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unsupported URL scheme"), "{msg}");
+    }
+
+    #[test]
+    fn validate_data_scheme_rejected() {
+        // data: URLs have no "://" so they are caught by the no-scheme check
+        let err = validate_http_url("data:text/plain,hello", false, "test").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no scheme"), "{msg}");
+    }
+
+    #[test]
+    fn validate_gopher_scheme_rejected() {
+        let err = validate_http_url("gopher://evil.com/1", false, "test").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("unsupported URL scheme"), "{msg}");
+    }
+
+    #[test]
+    fn validate_no_scheme_rejected() {
+        let err = validate_http_url("mcp.example.com/v1", false, "test").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("no scheme"), "{msg}");
+    }
+
+    #[test]
+    fn ssrf_loopback_v4_blocked() {
+        assert!(is_ssrf_dangerous_ip(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn ssrf_loopback_v6_blocked() {
+        assert!(is_ssrf_dangerous_ip(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+    }
+
+    #[test]
+    fn ssrf_private_10_blocked() {
+        assert!(is_ssrf_dangerous_ip(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))));
+    }
+
+    #[test]
+    fn ssrf_private_172_blocked() {
+        assert!(is_ssrf_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            172, 16, 0, 1
+        ))));
+    }
+
+    #[test]
+    fn ssrf_private_192_blocked() {
+        assert!(is_ssrf_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 1
+        ))));
+    }
+
+    #[test]
+    fn ssrf_metadata_ip_blocked() {
+        assert!(is_ssrf_dangerous_ip(IpAddr::V4(Ipv4Addr::new(
+            169, 254, 169, 254
+        ))));
+    }
+
+    #[test]
+    fn ssrf_public_ip_allowed() {
+        assert!(!is_ssrf_dangerous_ip(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8))));
+    }
+
+    #[test]
+    fn ssrf_ipv4_mapped_v6_loopback_blocked() {
+        // ::ffff:127.0.0.1
+        let v6 = Ipv6Addr::new(0, 0, 0, 0, 0, 0xffff, 0x7f00, 0x0001);
+        assert!(is_ssrf_dangerous_ip(IpAddr::V6(v6)));
+    }
+
+    #[test]
+    fn parse_host_port_basic() {
+        assert_eq!(
+            parse_host_port("https://mcp.example.com:9090/v1"),
+            Some(("mcp.example.com".to_string(), 9090))
+        );
+    }
+
+    #[test]
+    fn parse_host_port_default_https() {
+        assert_eq!(
+            parse_host_port("https://mcp.example.com/v1"),
+            Some(("mcp.example.com".to_string(), 443))
+        );
+    }
+
+    #[test]
+    fn parse_host_port_default_http() {
+        assert_eq!(
+            parse_host_port("http://mcp.example.com/v1"),
+            Some(("mcp.example.com".to_string(), 80))
+        );
+    }
+
+    #[test]
+    fn parse_host_port_ipv6() {
+        assert_eq!(
+            parse_host_port("https://[::1]:8080/v1"),
+            Some(("[::1]".to_string(), 8080))
+        );
+    }
 }

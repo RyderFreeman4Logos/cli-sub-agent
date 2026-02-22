@@ -101,28 +101,43 @@ pub(crate) fn resolve_mcp_servers(
         Ok(Some(registry)) => registry,
         Ok(None) => {
             // No project MCP config; use global servers only
-            return global_servers.iter().map(config_to_acp_mcp).collect();
+            return global_servers
+                .iter()
+                .filter_map(config_to_acp_mcp)
+                .collect();
         }
         Err(e) => {
             warn!("Failed to load project MCP registry: {e}");
-            return global_servers.iter().map(config_to_acp_mcp).collect();
+            return global_servers
+                .iter()
+                .filter_map(config_to_acp_mcp)
+                .collect();
         }
     };
 
     let merged = McpRegistry::merge(global_servers, &project_registry);
-    merged.servers.iter().map(config_to_acp_mcp).collect()
+    merged
+        .servers
+        .iter()
+        .filter_map(config_to_acp_mcp)
+        .collect()
 }
 
 /// Convert `csa_config::McpServerConfig` to [`AcpMcpServerConfig`].
 ///
-/// The two types have identical fields but live in separate crates to avoid
-/// coupling `csa-acp` (protocol layer) to `csa-config` (user config layer).
-fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> AcpMcpServerConfig {
-    AcpMcpServerConfig {
-        name: cfg.name.clone(),
-        command: cfg.command.clone(),
-        args: cfg.args.clone(),
-        env: cfg.env.clone(),
+/// Only stdio transport servers can be injected into ACP sessions (tools
+/// launch subprocesses directly). Remote transport servers are filtered out.
+fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> Option<AcpMcpServerConfig> {
+    match &cfg.transport {
+        csa_config::McpTransport::Stdio {
+            command, args, env, ..
+        } => Some(AcpMcpServerConfig {
+            name: cfg.name.clone(),
+            command: command.clone(),
+            args: args.clone(),
+            env: env.clone(),
+        }),
+        _ => None,
     }
 }
 

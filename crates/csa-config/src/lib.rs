@@ -22,7 +22,7 @@ pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
 pub use global::{GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};
-pub use mcp::{McpFilter, McpRegistry, McpServerConfig};
+pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version, default_registry};
 pub use paths::{APP_NAME, LEGACY_APP_NAME};
 pub use validate::validate_config;
