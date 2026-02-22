@@ -434,10 +434,11 @@ command = "echo project-pre"
     #[test]
     fn test_builtin_guards_loaded_by_default() {
         let config = load_hooks_config(None, None, None);
-        assert_eq!(config.prompt_guard.len(), 3);
-        assert_eq!(config.prompt_guard[0].name, "branch-protection");
-        assert_eq!(config.prompt_guard[1].name, "dirty-tree-reminder");
-        assert_eq!(config.prompt_guard[2].name, "commit-workflow");
+        assert_eq!(config.prompt_guard.len(), 4);
+        assert_eq!(config.prompt_guard[0].name, "branch-context");
+        assert_eq!(config.prompt_guard[1].name, "branch-protection");
+        assert_eq!(config.prompt_guard[2].name, "dirty-tree-reminder");
+        assert_eq!(config.prompt_guard[3].name, "commit-workflow");
         assert_eq!(config.builtin_guards, None); // None = default to true
     }
 
@@ -457,12 +458,13 @@ timeout_secs = 10
         .unwrap();
 
         let config = load_hooks_config(Some(&hooks_path), None, None);
-        // Builtins (3) prepended + user guard (1) = 4 total
-        assert_eq!(config.prompt_guard.len(), 4);
-        assert_eq!(config.prompt_guard[0].name, "branch-protection");
-        assert_eq!(config.prompt_guard[1].name, "dirty-tree-reminder");
-        assert_eq!(config.prompt_guard[2].name, "commit-workflow");
-        assert_eq!(config.prompt_guard[3].name, "custom-guard");
+        // Builtins (4) prepended + user guard (1) = 5 total
+        assert_eq!(config.prompt_guard.len(), 5);
+        assert_eq!(config.prompt_guard[0].name, "branch-context");
+        assert_eq!(config.prompt_guard[1].name, "branch-protection");
+        assert_eq!(config.prompt_guard[2].name, "dirty-tree-reminder");
+        assert_eq!(config.prompt_guard[3].name, "commit-workflow");
+        assert_eq!(config.prompt_guard[4].name, "custom-guard");
     }
 
     #[test]
@@ -517,7 +519,7 @@ builtin_guards = false
 
         // Project explicitly re-enables after global disable
         let config = load_hooks_config(Some(&project_path), Some(&global_path), None);
-        assert_eq!(config.prompt_guard.len(), 3);
+        assert_eq!(config.prompt_guard.len(), 4);
         assert_eq!(config.builtin_guards, Some(true));
     }
 

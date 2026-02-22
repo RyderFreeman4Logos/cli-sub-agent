@@ -475,15 +475,117 @@ mod unix_tests {
     }
 
     #[test]
-    fn test_builtin_prompt_guards_returns_three_entries() {
+    fn test_builtin_prompt_guards_returns_four_entries() {
         let guards = builtin_prompt_guards();
-        assert_eq!(guards.len(), 3);
-        assert_eq!(guards[0].name, "branch-protection");
-        assert_eq!(guards[1].name, "dirty-tree-reminder");
-        assert_eq!(guards[2].name, "commit-workflow");
-        assert_eq!(guards[0].timeout_secs, 5);
-        assert_eq!(guards[1].timeout_secs, 5);
-        assert_eq!(guards[2].timeout_secs, 5);
+        assert_eq!(guards.len(), 4);
+        assert_eq!(guards[0].name, "branch-context");
+        assert_eq!(guards[1].name, "branch-protection");
+        assert_eq!(guards[2].name, "dirty-tree-reminder");
+        assert_eq!(guards[3].name, "commit-workflow");
+        for guard in &guards {
+            assert_eq!(guard.timeout_secs, 5);
+        }
+    }
+
+    #[test]
+    fn test_builtin_branch_context_executes_successfully() {
+        // Verify the guard runs without error. On feature branches it
+        // produces a "BRANCH CONTEXT" preamble; on protected branches
+        // or non-git dirs it produces empty output. Both are valid.
+        let guards = builtin_prompt_guards();
+        let context_guard = &guards[0];
+        let results = run_prompt_guards(std::slice::from_ref(context_guard), &test_context());
+        assert!(
+            results.len() <= 1,
+            "branch-context should produce at most one result, got {}",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn test_builtin_branch_context_on_feature_branch() {
+        // Simulate a feature branch by running the guard command directly
+        // in a temporary git repo on a feature branch.
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_path = tmp.path();
+
+        // Initialize a git repo with a commit and create a feature branch.
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["checkout", "-b", "feat/test-branch"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+
+        let guards = builtin_prompt_guards();
+        let context_guard = &guards[0];
+        let ctx = GuardContext {
+            project_root: tmp_path.to_string_lossy().to_string(),
+            session_id: "01TEST000000000000000000000".to_string(),
+            tool: "claude-code".to_string(),
+            is_resume: false,
+            cwd: tmp_path.to_string_lossy().to_string(),
+        };
+        let results = run_prompt_guards(std::slice::from_ref(context_guard), &ctx);
+        assert_eq!(results.len(), 1, "Should produce output on feature branch");
+        assert!(
+            results[0].output.contains("BRANCH CONTEXT"),
+            "Output should contain 'BRANCH CONTEXT', got: {}",
+            results[0].output
+        );
+        assert!(
+            results[0].output.contains("feat/test-branch"),
+            "Output should contain branch name, got: {}",
+            results[0].output
+        );
+        assert!(
+            results[0].output.contains("Do NOT create a new branch"),
+            "Output should warn against branch creation, got: {}",
+            results[0].output
+        );
+    }
+
+    #[test]
+    fn test_builtin_branch_context_silent_on_main() {
+        // Verify the guard produces no output on a protected branch (main).
+        let tmp = tempfile::tempdir().unwrap();
+        let tmp_path = tmp.path();
+
+        std::process::Command::new("git")
+            .args(["init", "-b", "main"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "--allow-empty", "-m", "init"])
+            .current_dir(tmp_path)
+            .output()
+            .unwrap();
+
+        let guards = builtin_prompt_guards();
+        let context_guard = &guards[0];
+        let ctx = GuardContext {
+            project_root: tmp_path.to_string_lossy().to_string(),
+            session_id: "01TEST000000000000000000000".to_string(),
+            tool: "claude-code".to_string(),
+            is_resume: false,
+            cwd: tmp_path.to_string_lossy().to_string(),
+        };
+        let results = run_prompt_guards(std::slice::from_ref(context_guard), &ctx);
+        assert!(
+            results.is_empty(),
+            "branch-context should be silent on main, got {} result(s)",
+            results.len()
+        );
     }
 
     #[test]
@@ -492,7 +594,7 @@ mod unix_tests {
         // On protected branches (main/dev) it produces a warning; on feature
         // branches it produces empty output. Both are valid outcomes.
         let guards = builtin_prompt_guards();
-        let branch_guard = &guards[0];
+        let branch_guard = &guards[1];
         let _results = run_prompt_guards(std::slice::from_ref(branch_guard), &test_context());
         // No assertion on output content — just verify no panic/timeout.
     }
@@ -503,7 +605,7 @@ mod unix_tests {
         // produces no output (0 results); on dirty trees it produces a
         // reminder (1 result). Both are valid.
         let guards = builtin_prompt_guards();
-        let dirty_guard = &guards[1];
+        let dirty_guard = &guards[2];
         let results = run_prompt_guards(std::slice::from_ref(dirty_guard), &test_context());
         assert!(
             results.len() <= 1,
@@ -518,7 +620,7 @@ mod unix_tests {
         // exits early (0 results); on feature branches it may report
         // unpushed commits (0 or 1 result). Both are valid.
         let guards = builtin_prompt_guards();
-        let workflow_guard = &guards[2];
+        let workflow_guard = &guards[3];
         let results = run_prompt_guards(std::slice::from_ref(workflow_guard), &test_context());
         assert!(
             results.len() <= 1,
