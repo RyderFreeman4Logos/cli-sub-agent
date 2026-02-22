@@ -456,11 +456,22 @@ cloud_review_exhausted = "ask-user"
 # MCP (Model Context Protocol) servers injected into all tool sessions.
 # Project-level .csa/mcp.toml servers override global ones with the same name.
 #
+# Stdio transport (local process, default):
 # [[mcp.servers]]
 # name = "repomix"
+# type = "stdio"
 # command = "npx"
 # args = ["-y", "repomix", "--mcp"]
 #
+# HTTP transport (remote server, requires transport-http-client feature):
+# [[mcp.servers]]
+# name = "remote-mcp"
+# type = "http"
+# url = "https://mcp.example.com/mcp"
+# # headers = { Authorization = "Bearer ..." }
+# # allow_insecure = false  # Set true for http:// (not recommended)
+#
+# Legacy format (auto-detected as stdio, backward-compatible):
 # [[mcp.servers]]
 # name = "deepwiki"
 # command = "npx"
