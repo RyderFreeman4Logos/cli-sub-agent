@@ -1,5 +1,5 @@
 use anyhow::Result;
-use csa_config::McpServerConfig;
+use csa_config::{McpServerConfig, McpTransport};
 use rmcp::model::CallToolRequestParam;
 use serde_json::json;
 use std::collections::HashMap;
@@ -28,20 +28,26 @@ fn write_script(dir: &std::path::Path, body: &str) -> Result<std::path::PathBuf>
 fn stateless_config(script_path: &std::path::Path) -> McpServerConfig {
     McpServerConfig {
         name: "mock".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: false,
+        memory_max_mb: None,
     }
 }
 
 fn stateful_config(script_path: &std::path::Path) -> McpServerConfig {
     McpServerConfig {
         name: "stateful".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: true,
+        memory_max_mb: None,
     }
 }
 
@@ -140,10 +146,13 @@ done
 
     let registry = McpRegistry::new(vec![McpServerConfig {
         name: "flaky".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: false,
+        memory_max_mb: None,
     }]);
 
     let first = registry
@@ -333,10 +342,13 @@ done
 
     let registry = McpRegistry::new(vec![McpServerConfig {
         name: "stateful".to_string(),
-        command: "sh".to_string(),
-        args: vec![script_path.to_string_lossy().into_owned()],
-        env: HashMap::new(),
+        transport: McpTransport::Stdio {
+            command: "sh".to_string(),
+            args: vec![script_path.to_string_lossy().into_owned()],
+            env: HashMap::new(),
+        },
         stateful: true,
+        memory_max_mb: None,
     }]);
 
     let result = registry

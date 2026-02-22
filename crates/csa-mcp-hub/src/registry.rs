@@ -687,14 +687,26 @@ struct ServerProcess {
 
 impl ServerProcess {
     async fn spawn(config: &McpServerConfig) -> Result<Self> {
-        let mut cmd = Command::new(&config.command);
-        cmd.args(&config.args);
-        for (key, value) in &config.env {
+        let (command, args, env) = match &config.transport {
+            csa_config::McpTransport::Stdio {
+                command, args, env, ..
+            } => (command.as_str(), args.as_slice(), env),
+            _ => {
+                anyhow::bail!(
+                    "ServerProcess::spawn() only supports stdio transport, \
+                     but server '{}' uses a remote transport",
+                    config.name
+                );
+            }
+        };
+        let mut cmd = Command::new(command);
+        cmd.args(args);
+        for (key, value) in env {
             cmd.env(key, value);
         }
 
         let sandbox_config = SandboxConfig {
-            memory_max_mb: MCP_SANDBOX_MEMORY_MAX_MB,
+            memory_max_mb: config.memory_max_mb.unwrap_or(MCP_SANDBOX_MEMORY_MAX_MB),
             memory_swap_max_mb: MCP_SANDBOX_MEMORY_SWAP_MAX_MB,
             pids_max: MCP_SANDBOX_PIDS_MAX,
         };

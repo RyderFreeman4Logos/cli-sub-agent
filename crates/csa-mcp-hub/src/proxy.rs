@@ -197,7 +197,7 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::Result;
-    use csa_config::McpServerConfig;
+    use csa_config::{McpServerConfig, McpTransport};
     use rmcp::model::CallToolRequestParam;
     use serde_json::json;
 
@@ -246,10 +246,13 @@ done
 
         let registry = Arc::new(McpRegistry::new(vec![McpServerConfig {
             name: "mock".to_string(),
-            command: "sh".to_string(),
-            args: vec![script.to_string_lossy().into_owned()],
-            env: HashMap::new(),
+            transport: McpTransport::Stdio {
+                command: "sh".to_string(),
+                args: vec![script.to_string_lossy().into_owned()],
+                env: HashMap::new(),
+            },
             stateful: false,
+            memory_max_mb: None,
         }]));
         let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
 
