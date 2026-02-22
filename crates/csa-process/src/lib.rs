@@ -500,7 +500,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
                     if should_terminate_for_idle(
-                        last_activity,
+                        &mut last_activity,
                         idle_timeout,
                         liveness_dead_timeout,
                         session_dir,
@@ -551,7 +551,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
                     if should_terminate_for_idle(
-                        last_activity,
+                        &mut last_activity,
                         idle_timeout,
                         liveness_dead_timeout,
                         session_dir,
