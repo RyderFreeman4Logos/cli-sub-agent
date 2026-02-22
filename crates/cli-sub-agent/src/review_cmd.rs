@@ -62,6 +62,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &global_config,
         parent_tool.as_deref(),
         &project_root,
+        args.force_override_user_config,
     )?;
 
     // Resolve stream mode from CLI flags (default: BufferOnly for review)
@@ -85,6 +86,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &global_config,
             stream_mode,
             idle_timeout_seconds,
+            args.force_override_user_config,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -142,6 +144,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             crate::run_helpers::truncate_prompt(&scope, 80)
         );
 
+        let reviewer_force_override = args.force_override_user_config;
         join_set.spawn(async move {
             let result = execute_review(
                 reviewer_tool,
@@ -154,6 +157,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &reviewer_global,
                 stream_mode,
                 idle_timeout_seconds,
+                reviewer_force_override,
             )
             .await?;
             Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
@@ -257,6 +261,7 @@ async fn execute_review(
     global_config: &GlobalConfig,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    force_override_user_config: bool,
 ) -> Result<csa_process::ExecutionResult> {
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
@@ -265,6 +270,7 @@ async fn execute_review(
         None,
         project_config,
         false, // skip tier whitelist for review tool selection
+        force_override_user_config,
     )
     .await?;
 
@@ -365,8 +371,13 @@ fn resolve_review_tool(
     global_config: &GlobalConfig,
     parent_tool: Option<&str>,
     project_root: &Path,
+    force_override_user_config: bool,
 ) -> Result<ToolName> {
     if let Some(tool) = arg_tool {
+        // Enforce tool enablement when user explicitly selects a tool
+        if let Some(cfg) = project_config {
+            cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
+        }
         return Ok(tool);
     }
 

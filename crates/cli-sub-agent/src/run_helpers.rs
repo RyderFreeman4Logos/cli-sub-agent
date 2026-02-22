@@ -24,11 +24,16 @@ pub(crate) fn resolve_tool_and_model(
     config: Option<&ProjectConfig>,
     project_root: &Path,
     force: bool,
+    force_override_user_config: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         let tool_name = parse_tool_name(&parsed.tool)?;
+        // Enforce tool enablement from user config
+        if let Some(cfg) = config {
+            cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
+        }
         // Enforce tier whitelist: model-spec must appear in tiers
         if !force {
             if let Some(cfg) = config {
@@ -40,6 +45,10 @@ pub(crate) fn resolve_tool_and_model(
 
     // Case 2: tool provided → use it with optional model (apply alias resolution)
     if let Some(tool_name) = tool {
+        // Enforce tool enablement from user config
+        if let Some(cfg) = config {
+            cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
+        }
         let resolved_model = model.map(|m| {
             config
                 .map(|cfg| cfg.resolve_alias(m))
@@ -726,5 +735,136 @@ mod tests {
             debug.contains("Xhigh"),
             "model_spec thinking missing: {debug}"
         );
+    }
+
+    // --- resolve_tool_and_model enablement guard tests ---
+
+    #[test]
+    fn resolve_tool_and_model_disabled_tool_explicit_errors() {
+        use csa_config::{ProjectConfig, ToolConfig};
+        use std::collections::HashMap;
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            "codex".to_string(),
+            ToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let config = ProjectConfig {
+            schema_version: 1,
+            project: Default::default(),
+            resources: Default::default(),
+            acp: Default::default(),
+            tools,
+            review: None,
+            debate: None,
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+        };
+
+        let result = super::resolve_tool_and_model(
+            Some(ToolName::Codex),
+            None,
+            None,
+            Some(&config),
+            std::path::Path::new("/tmp"),
+            true,  // force tier bypass
+            false, // no override
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("disabled in user configuration"), "{msg}");
+    }
+
+    #[test]
+    fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
+        use csa_config::{ProjectConfig, ToolConfig};
+        use std::collections::HashMap;
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            "codex".to_string(),
+            ToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let config = ProjectConfig {
+            schema_version: 1,
+            project: Default::default(),
+            resources: Default::default(),
+            acp: Default::default(),
+            tools,
+            review: None,
+            debate: None,
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+        };
+
+        let result = super::resolve_tool_and_model(
+            Some(ToolName::Codex),
+            None,
+            None,
+            Some(&config),
+            std::path::Path::new("/tmp"),
+            true, // force tier bypass
+            true, // override enabled
+        );
+        assert!(result.is_ok());
+        let (tool, _, _) = result.unwrap();
+        assert_eq!(tool, ToolName::Codex);
+    }
+
+    #[test]
+    fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
+        use csa_config::{ProjectConfig, ToolConfig};
+        use std::collections::HashMap;
+
+        let mut tools = HashMap::new();
+        tools.insert(
+            "codex".to_string(),
+            ToolConfig {
+                enabled: false,
+                ..Default::default()
+            },
+        );
+
+        let config = ProjectConfig {
+            schema_version: 1,
+            project: Default::default(),
+            resources: Default::default(),
+            acp: Default::default(),
+            tools,
+            review: None,
+            debate: None,
+            tiers: HashMap::new(),
+            tier_mapping: HashMap::new(),
+            aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+        };
+
+        let result = super::resolve_tool_and_model(
+            None,
+            Some("codex/openai/gpt-5.3-codex/high"),
+            None,
+            Some(&config),
+            std::path::Path::new("/tmp"),
+            true,
+            false,
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("disabled in user configuration"), "{msg}");
     }
 }

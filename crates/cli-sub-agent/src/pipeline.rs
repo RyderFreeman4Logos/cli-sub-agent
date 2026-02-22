@@ -141,19 +141,14 @@ pub(crate) async fn build_and_validate_executor(
     thinking_budget: Option<&str>,
     config: Option<&ProjectConfig>,
     enforce_tier: bool,
+    force_override_user_config: bool,
 ) -> Result<Executor> {
     let executor =
         crate::run_helpers::build_executor(tool, model_spec, model, thinking_budget, config)?;
 
-    // Check tool is enabled in config (before checking installation)
+    // Defense-in-depth: enforce tool enablement from user config
     if let Some(cfg) = config {
-        if !cfg.is_tool_enabled(executor.tool_name()) {
-            error!(
-                "Tool '{}' is disabled in project config",
-                executor.tool_name()
-            );
-            anyhow::bail!("Tool disabled in config");
-        }
+        cfg.enforce_tool_enabled(executor.tool_name(), force_override_user_config)?;
 
         if enforce_tier {
             // Defense-in-depth: enforce tier whitelist at execution boundary

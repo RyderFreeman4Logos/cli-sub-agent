@@ -477,6 +477,30 @@ impl ProjectConfig {
         self.tools.get(tool).map(|t| t.enabled).unwrap_or(true)
     }
 
+    /// Enforce that a tool is enabled in user configuration.
+    ///
+    /// Returns `Ok(())` when the tool is enabled or not configured (defaults to enabled).
+    /// Returns an error with a prompt-injection-aware message when `enabled = false`
+    /// is set explicitly in config.
+    ///
+    /// The `force_override` parameter allows callers to bypass the check when the
+    /// user has explicitly passed `--force-override-user-config`.
+    pub fn enforce_tool_enabled(&self, tool: &str, force_override: bool) -> anyhow::Result<()> {
+        if force_override {
+            return Ok(());
+        }
+        if !self.is_tool_enabled(tool) {
+            anyhow::bail!(
+                "Error: tool '{}' is disabled in user configuration.\n\
+                 The user may have temporarily disabled this tool. Respect their preference.\n\
+                 To override, use --force-override-user-config (not recommended unless\n\
+                 the user explicitly requested this specific tool).",
+                tool
+            );
+        }
+        Ok(())
+    }
+
     /// Check whether a tool appears in at least one tier model spec.
     pub fn is_tool_configured_in_tiers(&self, tool: &str) -> bool {
         self.tiers.values().any(|tier| {

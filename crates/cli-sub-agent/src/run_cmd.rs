@@ -113,6 +113,7 @@ pub(crate) async fn handle_run(
     model: Option<String>,
     thinking: Option<String>,
     force: bool,
+    force_override_user_config: bool,
     no_failover: bool,
     wait: bool,
     idle_timeout: Option<u64>,
@@ -226,6 +227,7 @@ pub(crate) async fn handle_run(
             config.as_ref(),
             &project_root,
             force,
+            force_override_user_config,
         )?,
         ToolSelectionStrategy::AnyAvailable => resolve_tool_and_model(
             None,
@@ -234,6 +236,7 @@ pub(crate) async fn handle_run(
             config.as_ref(),
             &project_root,
             force,
+            force_override_user_config,
         )?,
         ToolSelectionStrategy::HeterogeneousPreferred => {
             let detected_parent_tool = crate::run_helpers::detect_parent_tool();
@@ -272,6 +275,7 @@ pub(crate) async fn handle_run(
                             config.as_ref(),
                             &project_root,
                             force,
+                            force_override_user_config,
                         )?
                     }
                     None => {
@@ -287,6 +291,7 @@ pub(crate) async fn handle_run(
                             config.as_ref(),
                             &project_root,
                             force,
+                            force_override_user_config,
                         )?
                     }
                 }
@@ -301,6 +306,7 @@ pub(crate) async fn handle_run(
                     config.as_ref(),
                     &project_root,
                     force,
+                    force_override_user_config,
                 )?
             }
         }
@@ -336,6 +342,7 @@ pub(crate) async fn handle_run(
                         config.as_ref(),
                         &project_root,
                         force,
+                        force_override_user_config,
                     )?,
                     None => {
                         anyhow::bail!(
@@ -358,6 +365,7 @@ pub(crate) async fn handle_run(
                     config.as_ref(),
                     &project_root,
                     force,
+                    force_override_user_config,
                 )?
             }
         }
@@ -442,6 +450,7 @@ pub(crate) async fn handle_run(
             thinking.as_deref(),
             config.as_ref(),
             !force, // enforce tier whitelist unless --force
+            force_override_user_config,
         )
         .await?;
 

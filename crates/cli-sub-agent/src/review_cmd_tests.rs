@@ -65,13 +65,14 @@ fn parse_review_error(argv: &[&str]) -> clap::Error {
 #[test]
 fn resolve_review_tool_prefers_cli_override() {
     let global = GlobalConfig::default();
-    let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let tool = resolve_review_tool(
         Some(ToolName::Codex),
         Some(&cfg),
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -87,6 +88,7 @@ fn resolve_review_tool_uses_global_review_config_with_parent_tool() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -102,6 +104,7 @@ fn resolve_review_tool_errors_without_parent_tool_context() {
         &global,
         None,
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap_err();
     assert!(
@@ -121,6 +124,7 @@ fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
         &global,
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap_err();
     assert!(
@@ -144,6 +148,7 @@ fn resolve_review_tool_prefers_project_override() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -164,6 +169,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -186,6 +192,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
         &global,
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -208,6 +215,7 @@ fn resolve_review_tool_ignores_unknown_priority_entries() {
         &global,
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::ClaudeCode));
@@ -237,6 +245,7 @@ fn derive_scope_uncommitted() {
         stream_stdout: false,
         no_stream_stdout: false,
         allow_fallback: false,
+        force_override_user_config: false,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -263,6 +272,7 @@ fn derive_scope_commit() {
         stream_stdout: false,
         no_stream_stdout: false,
         allow_fallback: false,
+        force_override_user_config: false,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -289,6 +299,7 @@ fn derive_scope_range() {
         stream_stdout: false,
         no_stream_stdout: false,
         allow_fallback: false,
+        force_override_user_config: false,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -315,6 +326,7 @@ fn derive_scope_files() {
         stream_stdout: false,
         no_stream_stdout: false,
         allow_fallback: false,
+        force_override_user_config: false,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -341,6 +353,7 @@ fn derive_scope_default_branch() {
         stream_stdout: false,
         no_stream_stdout: false,
         allow_fallback: false,
+        force_override_user_config: false,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }

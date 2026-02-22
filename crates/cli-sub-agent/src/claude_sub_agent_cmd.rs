@@ -42,6 +42,7 @@ pub(crate) async fn handle_claude_sub_agent(
             config.as_ref(),
             &project_root,
             false, // claude-sub-agent does not support --force
+            false, // claude-sub-agent does not support --force-override-user-config
         )?;
 
     // 8. Build executor and validate tool
@@ -51,7 +52,8 @@ pub(crate) async fn handle_claude_sub_agent(
         resolved_model.as_deref(),
         None, // thinking budget
         config.as_ref(),
-        true, // enforce tier whitelist for sub-agent execution
+        true,  // enforce tier whitelist for sub-agent execution
+        false, // claude-sub-agent does not support --force-override-user-config
     )
     .await?;
 

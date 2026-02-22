@@ -86,6 +86,10 @@ pub enum Commands {
         #[arg(long)]
         force: bool,
 
+        /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
+        #[arg(long)]
+        force_override_user_config: bool,
+
         /// Disable automatic 429 failover to alternative tools
         #[arg(long)]
         no_failover: bool,
@@ -260,6 +264,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub tool: Option<ToolName>,
 
+    /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
+    #[arg(long)]
+    pub force_override_user_config: bool,
+
     /// Resume existing review session
     #[arg(short, long)]
     pub session: Option<String>,
@@ -345,6 +353,10 @@ pub struct DebateArgs {
     /// Tool to use for debate (overrides auto heterogeneous selection)
     #[arg(long)]
     pub tool: Option<ToolName>,
+
+    /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
+    #[arg(long)]
+    pub force_override_user_config: bool,
 
     /// Resume existing debate session (ULID or prefix match)
     #[arg(short, long)]
