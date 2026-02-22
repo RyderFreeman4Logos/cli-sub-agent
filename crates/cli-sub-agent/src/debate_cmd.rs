@@ -47,6 +47,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         &global_config,
         parent_tool.as_deref(),
         &project_root,
+        args.force_override_user_config,
     )?;
     let thinking = resolve_debate_thinking(
         args.thinking.as_deref(),
@@ -61,6 +62,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         thinking.as_deref(),
         config.as_ref(),
         false, // skip tier whitelist for debate tool selection
+        args.force_override_user_config,
     )
     .await?;
 
@@ -512,9 +514,14 @@ fn resolve_debate_tool(
     global_config: &GlobalConfig,
     parent_tool: Option<&str>,
     project_root: &Path,
+    force_override_user_config: bool,
 ) -> Result<ToolName> {
     // CLI --tool override always wins
     if let Some(tool) = arg_tool {
+        // Enforce tool enablement when user explicitly selects a tool
+        if let Some(cfg) = project_config {
+            cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
+        }
         return Ok(tool);
     }
 

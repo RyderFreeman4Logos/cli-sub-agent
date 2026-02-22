@@ -479,6 +479,7 @@ async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_s
         None,
         Some(&cfg),
         true,
+        false,
     )
     .await;
 
@@ -506,6 +507,7 @@ async fn build_and_validate_executor_enforce_tier_false_skips_whitelist_check() 
         None,
         None,
         Some(&cfg),
+        false,
         false,
     )
     .await;
@@ -537,6 +539,7 @@ async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_m
         None,
         Some(&cfg),
         true,
+        false,
     )
     .await;
 
@@ -563,6 +566,7 @@ async fn build_and_validate_executor_enforce_tier_false_skips_model_name_check()
         Some("unknown-model-xyz"), // not in tier, but won't be checked
         None,
         Some(&cfg),
+        false,
         false,
     )
     .await;
@@ -604,6 +608,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         None,
         Some(&cfg),
         true,
+        false,
     )
     .await;
 
@@ -613,6 +618,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         None,
         None,
         Some(&cfg),
+        false,
         false,
     )
     .await;

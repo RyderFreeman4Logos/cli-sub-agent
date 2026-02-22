@@ -44,6 +44,7 @@ fn resolve_debate_tool_prefers_cli_override() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -59,6 +60,7 @@ fn resolve_debate_tool_auto_maps_heterogeneous() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -74,6 +76,7 @@ fn resolve_debate_tool_auto_maps_reverse() {
         &global,
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::ClaudeCode));
@@ -89,6 +92,7 @@ fn resolve_debate_tool_errors_without_parent_context() {
         &global,
         None,
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap_err();
     assert!(
@@ -107,6 +111,7 @@ fn resolve_debate_tool_errors_on_unknown_parent() {
         &global,
         Some("opencode"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap_err();
     assert!(
@@ -129,6 +134,7 @@ fn resolve_debate_tool_prefers_project_override() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -148,6 +154,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
         &global,
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -169,6 +176,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
         &global,
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -190,6 +198,7 @@ fn resolve_debate_tool_ignores_unknown_priority_entries() {
         &global,
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
+        false,
     )
     .unwrap();
     assert!(matches!(tool, ToolName::ClaudeCode));

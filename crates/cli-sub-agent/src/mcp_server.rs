@@ -487,6 +487,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             config.as_ref(),
             &project_root,
             false, // MCP server does not support --force
+            false, // MCP server does not support --force-override-user-config
         )?;
 
     // Build executor

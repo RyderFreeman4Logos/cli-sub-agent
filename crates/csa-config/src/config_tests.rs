@@ -785,5 +785,117 @@ created_at = "2024-01-01T00:00:00Z"
     assert!(loaded.check_schema_version().is_ok());
 }
 
+#[test]
+fn test_enforce_tool_enabled_disabled_tool_returns_error() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    let result = config.enforce_tool_enabled("codex", false);
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(msg.contains("codex"), "error must name the tool: {msg}");
+    assert!(
+        msg.contains("disabled in user configuration"),
+        "error must mention disabled: {msg}"
+    );
+    assert!(
+        msg.contains("--force-override-user-config"),
+        "error must mention override flag: {msg}"
+    );
+}
+
+#[test]
+fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
+    let mut tools = HashMap::new();
+    tools.insert("codex".to_string(), ToolConfig::default());
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    assert!(config.enforce_tool_enabled("codex", false).is_ok());
+}
+
+#[test]
+fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    assert!(config.enforce_tool_enabled("codex", false).is_ok());
+}
+
+#[test]
+fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    assert!(config.enforce_tool_enabled("codex", true).is_ok());
+}
+
 #[path = "config_tests_tier_whitelist.rs"]
 mod tier_whitelist;
