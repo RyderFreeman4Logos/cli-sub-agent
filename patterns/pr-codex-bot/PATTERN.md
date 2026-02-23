@@ -164,12 +164,20 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   # Fallback: run local csa review for coverage confirmation.
   # Non-zero exit means review found issues -- block merge and route to fix cycle.
   if ! csa review --range main...HEAD 2>/dev/null; then
-    echo "Fallback review found issues. Routing to fix cycle."
+    echo "BLOCKED: Fallback review found issues. Routing to fix cycle."
     FALLBACK_REVIEW_HAS_ISSUES=true
-    # The orchestrator MUST treat this identically to BOT_HAS_ISSUES:
-    # loop back to Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10.
-    # FORBIDDEN: Proceeding to merge while FALLBACK_REVIEW_HAS_ISSUES=true.
   fi
+fi
+
+# --- Gate: fallback review failure blocks all downstream paths ---
+# This check runs unconditionally after the bot-timeout block.
+# When FALLBACK_REVIEW_HAS_ISSUES=true, the orchestrator MUST route to
+# Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10 (push/re-trigger).
+# FORBIDDEN: Reaching any merge step while FALLBACK_REVIEW_HAS_ISSUES=true.
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "Fallback review found issues. Entering fix cycle (Step 7)."
+  # Control flow: orchestrator jumps to Step 7.
+  # This is NOT a merge path — execution MUST NOT fall through.
 fi
 ```
 
@@ -182,11 +190,18 @@ fi
 Tool: bash
 
 Bot unavailable. Local fallback review ran in Step 5.
-Proceed to merge ONLY if FALLBACK_REVIEW_HAS_ISSUES is not true.
-If fallback review found issues, the orchestrator MUST route to the fix cycle
-(Step 7 → Step 8/9 → Step 10) before reaching this point.
+This step is ONLY reachable when FALLBACK_REVIEW_HAS_ISSUES is NOT true.
+The gate in Step 5 ensures that fallback review failures route to the fix
+cycle before execution can reach this merge command.
 
 ```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
@@ -395,14 +410,16 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   else
     echo "Post-rebase bot timed out. Falling back to local review."
     if ! csa review --range main...HEAD 2>/dev/null; then
-      echo "Fallback review found issues. Routing back to fix cycle."
-      # FALLBACK_REVIEW_HAS_ISSUES=true
-      # Loop back to Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10.
-      # Fallback review failure MUST be treated identically to bot review
-      # failure -- merge is blocked until the review passes clean.
+      echo "BLOCKED: Post-rebase fallback review found issues."
+      FALLBACK_REVIEW_HAS_ISSUES=true
     fi
-    # Local review substitutes for bot review. Non-zero exit blocks merge
-    # and routes into the fix cycle, same as a bot review with issues.
+    # Gate: fallback review failure blocks merge, routes to fix cycle.
+    # This check is unconditional — runs whether csa review passed or failed.
+    if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+      echo "Routing to fix cycle (Step 7). Merge is blocked."
+      # Orchestrator MUST jump to Step 7 (classify) → Step 8/9 → Step 10.
+      # FORBIDDEN: Falling through to merge from this path.
+    fi
   fi
 fi
 ```
@@ -443,6 +460,13 @@ OnFail: abort
 Squash-merge and update local main.
 
 ```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
@@ -459,6 +483,13 @@ OnFail: abort
 First-pass clean review: merge the existing PR directly.
 
 ```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
