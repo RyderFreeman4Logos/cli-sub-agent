@@ -19,7 +19,7 @@ already-fixed issues.
 FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration,
 running Step 2 in background, creating PR without Step 2 completion,
 debating stale comments without staleness check, trusting `reviewed=true`
-without SHA verification.
+without SHA verification, auto-merging or auto-aborting at round limit.
 
 ## Dispatcher Model Note
 
@@ -277,13 +277,70 @@ git push origin "${WORKFLOW_BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 
-Loop back to Step 6 (poll). Max 10 total iterations.
+Loop back to Step 5 (poll). Track iteration count via `REVIEW_ROUND`.
+When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and
+present options to the user:
+
+- **Option A**: Merge now (review is good enough)
+- **Option B**: Continue for `MAX_REVIEW_ROUNDS` more rounds
+- **Option C**: Abort and investigate manually
+
+The workflow MUST NOT auto-merge or auto-abort at the round limit.
+The user MUST explicitly choose an option before proceeding.
+
+```bash
+REVIEW_ROUND=$((REVIEW_ROUND + 1))
+MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
+if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
+  echo "Reached MAX_REVIEW_ROUNDS (${MAX_REVIEW_ROUNDS})."
+  echo "Options:"
+  echo "  A) Merge now (review is good enough)"
+  echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
+  echo "  C) Abort and investigate manually"
+  # MUST pause and ask user -- do NOT proceed automatically
+fi
+```
 
 ## ELSE
 
 ## Step 10a: Bot Review Clean
 
-No issues found by bot. Proceed to merge.
+No issues found by bot. Proceed to Step 10.5 (rebase) then merge.
+
+## Step 10.5: Rebase for Clean History
+
+> **Layer**: 0 (Orchestrator) -- git history cleanup before merge.
+
+Tool: bash
+
+When the branch has accumulated fix commits from review iterations,
+reorganize them into logical groups before merging.
+
+**Skip this step if**:
+- The branch has <= 3 commits (already clean enough)
+- All commits already follow a logical grouping
+
+```bash
+COMMIT_COUNT=$(git rev-list --count main..HEAD)
+if [ "${COMMIT_COUNT}" -gt 3 ]; then
+  # 1. Create backup branch
+  git branch "backup-${PR_NUM}-pre-rebase"
+
+  # 2. Soft reset to base
+  git reset --soft main
+
+  # 3. Create logical commits by selectively staging files per phase/concern
+  #    (Orchestrator delegates commit grouping to the executor)
+
+  # 4. Force push
+  git push --force-with-lease
+
+  # 5. Trigger one final @codex review to verify rebased code
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+  # Poll for response (reuse Step 5 polling logic)
+  # Only proceed to merge after this final review passes clean
+fi
+```
 
 ## ENDIF
 
