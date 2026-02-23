@@ -341,7 +341,7 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  C) Abort and investigate manually"
   echo ""
   echo "ROUND_LIMIT_HALT: Awaiting user decision."
-  exit 1
+  exit 0
 fi
 
 # --- Push fixes and re-trigger bot review ---
