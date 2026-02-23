@@ -373,9 +373,15 @@ MUST then use `AskUserQuestion` to present options A/B/C and collect the
 user's choice. Based on the answer, set `ROUND_LIMIT_ACTION` and re-enter
 this step. The action handler at the TOP of the script processes the user's
 choice BEFORE the round cap check, so the chosen action always takes effect:
-- **A**: Set `ROUND_LIMIT_ACTION=merge` → prints `ROUND_LIMIT_MERGE`, exits 0. Orchestrator routes to Step 12/12b.
-- **B**: Set `ROUND_LIMIT_ACTION=continue` → extends `MAX_REVIEW_ROUNDS`, falls through to push/re-trigger.
-- **C**: Set `ROUND_LIMIT_ACTION=abort` → prints `ROUND_LIMIT_ABORT`, exits 1.
+- **A**: Set `ROUND_LIMIT_ACTION=merge` → clears `ROUND_LIMIT_REACHED`, prints `ROUND_LIMIT_MERGE`, exits 0. Orchestrator routes to Step 12/12b.
+- **B**: Set `ROUND_LIMIT_ACTION=continue` → clears `ROUND_LIMIT_REACHED`, extends `MAX_REVIEW_ROUNDS`, falls through to push/re-trigger.
+- **C**: Set `ROUND_LIMIT_ACTION=abort` → leaves `ROUND_LIMIT_REACHED=true`, prints `ROUND_LIMIT_ABORT`, exits 1.
+
+**CRITICAL**: The `merge` and `continue` branches MUST clear `ROUND_LIMIT_REACHED=false`
+before proceeding. Steps 10.5, 11, and 12 are gated by `!(${ROUND_LIMIT_REACHED})`,
+so a stale `true` value blocks all downstream merge/rebase paths even after the user
+explicitly chose to proceed. The `abort` branch intentionally leaves the flag set,
+as it halts the workflow.
 
 **Signal disambiguation**: The orchestrator distinguishes re-entry outcomes by
 output markers, NOT exit codes alone. `ROUND_LIMIT_HALT` (exit 0) = ask user.
@@ -397,6 +403,7 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
   case "${ROUND_LIMIT_ACTION}" in
     merge)
       echo "User chose: Merge now. Pushing local commits before merge."
+      ROUND_LIMIT_REACHED=false  # Clear so Steps 10.5/11/12 are unblocked
       # Push any Category C fixes from Step 9 so remote HEAD includes them.
       # Without this, gh pr merge merges the stale remote head.
       git push origin "${WORKFLOW_BRANCH}"
@@ -407,6 +414,7 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       ;;
     continue)
       echo "User chose: Continue. Extending by ${MAX_REVIEW_ROUNDS} rounds."
+      ROUND_LIMIT_REACHED=false  # Clear so review loop and downstream steps are unblocked
       MAX_REVIEW_ROUNDS=$((REVIEW_ROUND + MAX_REVIEW_ROUNDS))
       unset ROUND_LIMIT_ACTION
       # Fall through to push/re-trigger below (bypasses round cap check)

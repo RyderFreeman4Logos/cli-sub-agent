@@ -314,12 +314,14 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
   case "${ROUND_LIMIT_ACTION}" in
     merge)
       echo "User chose: Merge now. Pushing local commits before merge."
+      ROUND_LIMIT_REACHED=false
       git push origin "${WORKFLOW_BRANCH}"
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
       exit 0
       ;;
     continue)
       echo "User chose: Continue. Extending by ${MAX_REVIEW_ROUNDS} rounds."
+      ROUND_LIMIT_REACHED=false
       MAX_REVIEW_ROUNDS=$((REVIEW_ROUND + MAX_REVIEW_ROUNDS))
       unset ROUND_LIMIT_ACTION
       ;;
