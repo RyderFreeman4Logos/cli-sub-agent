@@ -971,6 +971,7 @@ pub(crate) async fn handle_run(
                 // a fresh fork for the new tool if is_fork is set.
                 fork_resolution = None;
                 effective_session_arg = None;
+                cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
                 continue;
             }
         }
@@ -1052,6 +1053,10 @@ pub(crate) async fn handle_run(
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
                         effective_session_arg = None;
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            &project_root,
+                        );
                         continue;
                     }
                     csa_scheduler::FailoverAction::ReportError { reason, .. } => {
