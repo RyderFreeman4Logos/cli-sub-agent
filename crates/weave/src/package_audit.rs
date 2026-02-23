@@ -6,9 +6,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use super::{
-    Lockfile, SourceKind, detect_skill_md_case_mismatch, load_project_lockfile, package_dir,
-};
+use super::{SourceKind, detect_skill_md_case_mismatch, load_project_lockfile, package_dir};
 
 /// Audit result for a single package.
 #[derive(Debug)]
@@ -84,9 +82,7 @@ impl std::fmt::Display for AuditIssue {
 ///
 /// Checks packages in the lockfile against the global store at `store_root`.
 pub fn audit(project_root: &Path, store_root: &Path) -> Result<Vec<AuditResult>> {
-    let lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
+    let lockfile = load_project_lockfile(project_root).unwrap_or_default();
 
     let mut results = Vec::new();
 

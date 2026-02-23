@@ -63,6 +63,30 @@ pub struct SessionConfig {
     /// Redact sensitive content before writing transcript events to disk.
     #[serde(default = "default_true")]
     pub transcript_redaction: bool,
+    /// Inject structured output section markers into prompts.
+    /// When enabled, agents are instructed to wrap output in
+    /// `<!-- CSA:SECTION:<id> -->` delimiters for machine-readable parsing.
+    #[serde(default = "default_true")]
+    pub structured_output: bool,
+    /// Maximum age (seconds) for a seed session to remain valid.
+    /// Sessions older than this are not eligible as fork sources.
+    #[serde(default = "default_seed_max_age_secs")]
+    pub seed_max_age_secs: u64,
+    /// Automatically fork from a warm seed session instead of cold starting.
+    #[serde(default = "default_true")]
+    pub auto_seed_fork: bool,
+    /// Maximum number of seed sessions retained per tool×project combination.
+    /// Oldest seeds beyond this limit are retired (LRU eviction).
+    #[serde(default = "default_max_seed_sessions")]
+    pub max_seed_sessions: u32,
+}
+
+fn default_seed_max_age_secs() -> u64 {
+    86400 // 24 hours
+}
+
+fn default_max_seed_sessions() -> u32 {
+    2
 }
 
 impl Default for SessionConfig {
@@ -70,13 +94,22 @@ impl Default for SessionConfig {
         Self {
             transcript_enabled: false,
             transcript_redaction: true,
+            structured_output: true,
+            seed_max_age_secs: default_seed_max_age_secs(),
+            auto_seed_fork: true,
+            max_seed_sessions: default_max_seed_sessions(),
         }
     }
 }
 
 impl SessionConfig {
     pub fn is_default(&self) -> bool {
-        !self.transcript_enabled && self.transcript_redaction
+        !self.transcript_enabled
+            && self.transcript_redaction
+            && self.structured_output
+            && self.seed_max_age_secs == default_seed_max_age_secs()
+            && self.auto_seed_fork
+            && self.max_seed_sessions == default_max_seed_sessions()
     }
 }
 
@@ -654,6 +687,27 @@ init_timeout_seconds = 60
         self.tiers
             .values()
             .any(|tier| tier.models.iter().any(|m| m == spec))
+    }
+
+    /// Return tier models filtered to only include enabled tools.
+    ///
+    /// For each tier, model specs whose tool component (first `/`-delimited
+    /// segment) maps to a disabled tool are excluded. Useful for display
+    /// commands (`csa tiers list`, `csa config show --effective`) where the
+    /// user expects to see only actionable entries.
+    pub fn enabled_tier_models(&self, tier_name: &str) -> Vec<String> {
+        let Some(tier) = self.tiers.get(tier_name) else {
+            return Vec::new();
+        };
+        tier.models
+            .iter()
+            .filter(|spec| {
+                spec.split('/')
+                    .next()
+                    .is_some_and(|tool| self.is_tool_enabled(tool))
+            })
+            .cloned()
+            .collect()
     }
 
     /// Return all model specs from tiers that use the given tool.

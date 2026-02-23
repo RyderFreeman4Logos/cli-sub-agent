@@ -15,11 +15,21 @@ use serde::{Deserialize, Serialize};
 const LOCK_FILENAME: &str = "weave.lock";
 
 /// Top-level weave.lock structure.
+///
+/// The lock file may contain both CSA version/migration tracking (`[versions]`,
+/// `[migrations]`) and weave package entries (`[[package]]`). Each section is
+/// optional so that the parser can read files written by either subsystem
+/// without "missing field" errors.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct WeaveLock {
-    pub versions: LockVersions,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<LockVersions>,
     #[serde(default)]
     pub migrations: LockMigrations,
+    /// Weave package entries — preserved across load/save so that CSA version
+    /// updates do not discard package data written by `weave install`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub package: Vec<toml::Value>,
 }
 
 /// Version snapshot recorded in the lock file.
@@ -72,13 +82,38 @@ impl WeaveLock {
     /// Create a fresh lock with current versions and no applied migrations.
     pub fn new(csa_version: &str, weave_version: &str) -> Self {
         Self {
-            versions: LockVersions {
+            versions: Some(LockVersions {
                 csa: csa_version.to_string(),
                 weave: weave_version.to_string(),
                 last_migrated_at: None,
-            },
+            }),
             migrations: LockMigrations::default(),
+            package: Vec::new(),
         }
+    }
+
+    /// Returns the versions section, if present.
+    pub fn versions(&self) -> Option<&LockVersions> {
+        self.versions.as_ref()
+    }
+
+    /// Returns a mutable reference to the versions section, if present.
+    pub fn versions_mut(&mut self) -> Option<&mut LockVersions> {
+        self.versions.as_mut()
+    }
+
+    /// Ensures a versions section exists, creating one with the given values
+    /// if absent.
+    pub fn versions_or_init(
+        &mut self,
+        csa_version: &str,
+        weave_version: &str,
+    ) -> &mut LockVersions {
+        self.versions.get_or_insert_with(|| LockVersions {
+            csa: csa_version.to_string(),
+            weave: weave_version.to_string(),
+            last_migrated_at: None,
+        })
     }
 
     /// Write atomically to `{project_dir}/weave.lock`.
@@ -100,7 +135,9 @@ impl WeaveLock {
         if !self.migrations.applied.contains(&migration_id.to_string()) {
             self.migrations.applied.push(migration_id.to_string());
         }
-        self.versions.last_migrated_at = Some(Utc::now());
+        if let Some(v) = self.versions.as_mut() {
+            v.last_migrated_at = Some(Utc::now());
+        }
     }
 
     /// Check whether a migration has already been applied.
@@ -139,7 +176,14 @@ pub fn check_version(
         return Ok(VersionCheckResult::NoLockFile);
     };
 
-    let lock_csa = &lock.versions.csa;
+    // If the lock file exists but has no [versions] section (e.g. a
+    // package-only lockfile written by `weave install`), treat it the same
+    // as "no lock file" for version-tracking purposes.
+    let Some(versions) = lock.versions.as_ref() else {
+        return Ok(VersionCheckResult::NoLockFile);
+    };
+
+    let lock_csa = &versions.csa;
     if lock_csa == binary_csa_version {
         return Ok(VersionCheckResult::UpToDate);
     }
@@ -156,8 +200,9 @@ pub fn check_version(
 
     if pending.is_empty() {
         // No migrations needed — just a patch bump. Auto-update the lock.
-        lock.versions.csa = binary_csa_version.to_string();
-        lock.versions.weave = binary_weave_version.to_string();
+        let v = lock.versions_or_init(binary_csa_version, binary_weave_version);
+        v.csa = binary_csa_version.to_string();
+        v.weave = binary_weave_version.to_string();
         lock.save(project_dir)?;
         return Ok(VersionCheckResult::AutoUpdated);
     }
@@ -198,8 +243,8 @@ mod tests {
         lock.save(dir.path()).unwrap();
 
         let loaded = WeaveLock::load(dir.path()).unwrap().unwrap();
-        assert_eq!(loaded.versions.csa, "0.12.1");
-        assert_eq!(loaded.versions.weave, "0.8.3");
+        assert_eq!(loaded.versions().unwrap().csa, "0.12.1");
+        assert_eq!(loaded.versions().unwrap().weave, "0.8.3");
         assert!(loaded.migrations.applied.is_empty());
     }
 
@@ -207,7 +252,7 @@ mod tests {
     fn test_load_or_init_creates_file() {
         let dir = TempDir::new().unwrap();
         let lock = WeaveLock::load_or_init(dir.path(), "1.0.0", "2.0.0").unwrap();
-        assert_eq!(lock.versions.csa, "1.0.0");
+        assert_eq!(lock.versions().unwrap().csa, "1.0.0");
 
         // File should now exist
         assert!(dir.path().join("weave.lock").exists());
@@ -220,7 +265,7 @@ mod tests {
 
         lock.record_migration("0.12.0-plan-to-workflow");
         assert!(lock.is_migration_applied("0.12.0-plan-to-workflow"));
-        assert!(lock.versions.last_migrated_at.is_some());
+        assert!(lock.versions().unwrap().last_migrated_at.is_some());
 
         // Duplicate should not add twice
         lock.record_migration("0.12.0-plan-to-workflow");
@@ -272,7 +317,7 @@ mod tests {
 
         // Verify lock was actually updated.
         let loaded = WeaveLock::load(dir.path()).unwrap().unwrap();
-        assert_eq!(loaded.versions.csa, "0.1.1");
+        assert_eq!(loaded.versions().unwrap().csa, "0.1.1");
     }
 
     #[test]
@@ -309,9 +354,91 @@ last_migrated_at = "2026-02-20T00:00:00Z"
 applied = ["0.12.0-plan-to-workflow"]
 "#;
         let lock: WeaveLock = toml::from_str(toml_str).unwrap();
-        assert_eq!(lock.versions.csa, "0.12.1");
-        assert_eq!(lock.versions.weave, "0.8.3");
-        assert!(lock.versions.last_migrated_at.is_some());
+        assert_eq!(lock.versions().unwrap().csa, "0.12.1");
+        assert_eq!(lock.versions().unwrap().weave, "0.8.3");
+        assert!(lock.versions().unwrap().last_migrated_at.is_some());
         assert_eq!(lock.migrations.applied, vec!["0.12.0-plan-to-workflow"]);
+    }
+
+    #[test]
+    fn test_parse_package_only_format() {
+        // A weave.lock written by `weave install` has only [[package]] entries
+        // and no [versions] section. WeaveLock must parse it without error.
+        let toml_str = r#"
+[[package]]
+name = "my-skill"
+repo = "https://github.com/org/my-skill.git"
+commit = "abc123def456"
+"#;
+        let lock: WeaveLock = toml::from_str(toml_str).unwrap();
+        assert!(lock.versions.is_none());
+        assert!(lock.migrations.applied.is_empty());
+        assert_eq!(lock.package.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_mixed_format() {
+        // A weave.lock that contains both [versions] and [[package]] sections.
+        let toml_str = r#"
+[versions]
+csa = "0.1.32"
+weave = "0.1.32"
+
+[migrations]
+applied = []
+
+[[package]]
+name = "audit"
+repo = "https://github.com/org/audit.git"
+commit = "abc123"
+"#;
+        let lock: WeaveLock = toml::from_str(toml_str).unwrap();
+        assert_eq!(lock.versions().unwrap().csa, "0.1.32");
+        assert!(lock.migrations.applied.is_empty());
+        assert_eq!(lock.package.len(), 1);
+    }
+
+    #[test]
+    fn test_save_preserves_package_entries() {
+        // When WeaveLock saves, it must preserve [[package]] entries.
+        let dir = TempDir::new().unwrap();
+        let toml_str = r#"
+[versions]
+csa = "0.1.0"
+weave = "0.1.0"
+
+[[package]]
+name = "my-skill"
+repo = "https://github.com/org/my-skill.git"
+commit = "abc123"
+"#;
+        let lock: WeaveLock = toml::from_str(toml_str).unwrap();
+        assert_eq!(lock.package.len(), 1);
+        lock.save(dir.path()).unwrap();
+
+        // Re-read and verify package data survives.
+        let loaded = WeaveLock::load(dir.path()).unwrap().unwrap();
+        assert_eq!(loaded.versions().unwrap().csa, "0.1.0");
+        assert_eq!(loaded.package.len(), 1);
+    }
+
+    #[test]
+    fn test_check_version_no_versions_section() {
+        // When weave.lock exists but has no [versions], treat as NoLockFile.
+        let dir = TempDir::new().unwrap();
+        std::fs::write(
+            dir.path().join("weave.lock"),
+            r#"
+[[package]]
+name = "pkg"
+repo = "https://example.com/pkg.git"
+commit = "abc"
+"#,
+        )
+        .unwrap();
+
+        let registry = crate::MigrationRegistry::new();
+        let result = check_version(dir.path(), "0.2.0", "0.2.0", &registry).unwrap();
+        assert!(matches!(result, VersionCheckResult::NoLockFile));
     }
 }

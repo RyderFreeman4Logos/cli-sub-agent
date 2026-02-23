@@ -16,6 +16,9 @@ use idle_watchdog::should_terminate_for_idle;
 mod tool_liveness;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
+#[cfg(feature = "codex-pty-fork")]
+pub mod pty_fork;
+
 /// Controls whether stdout is forwarded to stderr in real-time.
 ///
 /// By default, stdout is both buffered and forwarded to stderr with a

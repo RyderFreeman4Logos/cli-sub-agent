@@ -482,6 +482,135 @@ fn is_stale_link_returns_false_for_non_symlink() {
 }
 
 // ---------------------------------------------------------------------------
+// LinkReport deduplication tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn unique_created_count_deduplicates_across_dirs() {
+    let report = LinkReport {
+        outcomes: vec![
+            LinkOutcome::Created {
+                name: "skill-a".to_string(),
+                target: "/dir1/skill-a".into(),
+            },
+            LinkOutcome::Created {
+                name: "skill-b".to_string(),
+                target: "/dir1/skill-b".into(),
+            },
+            // Same skills linked in a second directory:
+            LinkOutcome::Skipped {
+                name: "skill-a".to_string(),
+            },
+            LinkOutcome::Created {
+                name: "skill-b".to_string(),
+                target: "/dir2/skill-b".into(),
+            },
+        ],
+        errors: Vec::new(),
+    };
+
+    // Raw counts include duplicates across directories.
+    assert_eq!(report.created_count(), 3);
+    // Unique counts deduplicate by skill name.
+    assert_eq!(report.unique_created_count(), 2);
+}
+
+#[test]
+fn unique_skipped_count_excludes_created() {
+    let report = LinkReport {
+        outcomes: vec![
+            // skill-a: created in dir1, skipped in dir2
+            LinkOutcome::Created {
+                name: "skill-a".to_string(),
+                target: "/dir1/skill-a".into(),
+            },
+            LinkOutcome::Skipped {
+                name: "skill-a".to_string(),
+            },
+            // skill-b: skipped in both dirs (already up-to-date everywhere)
+            LinkOutcome::Skipped {
+                name: "skill-b".to_string(),
+            },
+            LinkOutcome::Skipped {
+                name: "skill-b".to_string(),
+            },
+        ],
+        errors: Vec::new(),
+    };
+
+    // skill-a was created somewhere, so it's counted as created, not skipped.
+    assert_eq!(report.unique_created_count(), 1);
+    // Only skill-b was never created in any directory.
+    assert_eq!(report.unique_skipped_count(), 1);
+}
+
+#[test]
+fn unique_created_names_preserves_order_and_deduplicates() {
+    let report = LinkReport {
+        outcomes: vec![
+            LinkOutcome::Created {
+                name: "commit".to_string(),
+                target: "/d1/commit".into(),
+            },
+            LinkOutcome::Created {
+                name: "mktd".to_string(),
+                target: "/d1/mktd".into(),
+            },
+            LinkOutcome::Created {
+                name: "commit".to_string(),
+                target: "/d2/commit".into(),
+            },
+            LinkOutcome::Replaced {
+                name: "sa".to_string(),
+                target: "/d1/sa".into(),
+            },
+            LinkOutcome::Skipped {
+                name: "mktd".to_string(),
+            },
+        ],
+        errors: Vec::new(),
+    };
+
+    let names = report.unique_created_names();
+    assert_eq!(names, vec!["commit", "mktd", "sa"]);
+}
+
+#[test]
+fn unique_counts_with_four_dirs_simulation() {
+    // Simulate the real scenario: 3 unique skills × 4 directories.
+    let mut outcomes = Vec::new();
+    let skill_names = ["commit", "mktd", "sa"];
+    let dirs = [
+        ".claude/skills",
+        ".codex/skills",
+        ".agents/skills",
+        ".gemini/skills",
+    ];
+
+    for dir in &dirs {
+        for name in &skill_names {
+            outcomes.push(LinkOutcome::Skipped {
+                name: name.to_string(),
+            });
+            // Pretend the second directory gets Created instead of Skipped for "sa".
+            // (This is simplified; real scenario would be all Skipped on repeat install.)
+            let _ = dir; // used only for iteration count
+        }
+    }
+
+    let report = LinkReport {
+        outcomes,
+        errors: Vec::new(),
+    };
+
+    // Raw count: 3 skills × 4 dirs = 12
+    assert_eq!(report.skipped_count(), 12);
+    // Unique: only 3 distinct skills
+    assert_eq!(report.unique_skipped_count(), 3);
+    assert_eq!(report.unique_created_count(), 0);
+}
+
+// ---------------------------------------------------------------------------
 // Helper function tests
 // ---------------------------------------------------------------------------
 

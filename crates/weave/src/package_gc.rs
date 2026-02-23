@@ -165,7 +165,10 @@ mod tests {
 
     /// Helper: write a minimal lockfile referencing given packages.
     fn write_lockfile(project: &Path, packages: Vec<LockedPackage>) {
-        let lockfile = Lockfile { package: packages };
+        let lockfile = Lockfile {
+            package: packages,
+            ..Default::default()
+        };
         let lock_path = project.join("weave.lock");
         save_lockfile(&lock_path, &lockfile).unwrap();
     }

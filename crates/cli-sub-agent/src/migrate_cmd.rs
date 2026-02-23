@@ -30,7 +30,13 @@ fn print_status(
             eprintln!("Run any csa command to create weave.lock.");
         }
         Some(lock) => {
-            let lock_version = &lock.versions.csa;
+            let Some(versions) = lock.versions() else {
+                eprintln!("weave.lock exists but has no [versions] section.");
+                eprintln!("Binary version: {csa_version}");
+                eprintln!("Run `csa migrate` to initialize version tracking.");
+                return Ok(());
+            };
+            let lock_version = &versions.csa;
             let current: csa_config::Version = lock_version
                 .parse()
                 .with_context(|| format!("parsing lock version {lock_version:?}"))?;
@@ -63,7 +69,10 @@ fn run_migrations(
 ) -> Result<()> {
     let mut lock = csa_config::WeaveLock::load_or_init(project_dir, csa_version, weave_version)?;
 
-    let lock_version = lock.versions.csa.clone();
+    let lock_version = lock
+        .versions_or_init(csa_version, weave_version)
+        .csa
+        .clone();
     let current: csa_config::Version = lock_version
         .parse()
         .with_context(|| format!("parsing lock version {lock_version:?}"))?;
@@ -76,9 +85,10 @@ fn run_migrations(
     if pending.is_empty() {
         eprintln!("No pending migrations. Lock is up to date.");
         // Still update version stamp if different.
-        if lock.versions.csa != csa_version {
-            lock.versions.csa = csa_version.to_string();
-            lock.versions.weave = weave_version.to_string();
+        let v = lock.versions_or_init(csa_version, weave_version);
+        if v.csa != csa_version {
+            v.csa = csa_version.to_string();
+            v.weave = weave_version.to_string();
             lock.save(project_dir)?;
             eprintln!("Updated weave.lock version to {csa_version}.");
         }
@@ -104,8 +114,9 @@ fn run_migrations(
     }
 
     // Update version in lock after all migrations.
-    lock.versions.csa = csa_version.to_string();
-    lock.versions.weave = weave_version.to_string();
+    let v = lock.versions_or_init(csa_version, weave_version);
+    v.csa = csa_version.to_string();
+    v.weave = weave_version.to_string();
     lock.save(project_dir)?;
 
     eprintln!("All migrations applied. weave.lock updated to {csa_version}.");

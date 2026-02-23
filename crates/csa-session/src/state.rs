@@ -65,6 +65,15 @@ pub struct MetaSessionState {
     /// Why the last run terminated early (e.g. sigint, sigterm, idle_timeout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub termination_reason: Option<String>,
+
+    /// Whether this session is a seed candidate for future fork-from-seed.
+    #[serde(default)]
+    pub is_seed_candidate: bool,
+
+    /// Git HEAD commit hash at session creation time.
+    /// Used for seed invalidation: if HEAD changed, the seed is stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_head_at_creation: Option<String>,
 }
 
 /// Lightweight telemetry about the resource sandbox applied to a session.
@@ -85,7 +94,27 @@ pub struct Genealogy {
 
     /// Depth in the genealogy tree (0 for root sessions)
     pub depth: u32,
+
+    /// The CSA session that was forked FROM (distinguishes fork-child from spawn-child).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_of_session_id: Option<String>,
+
+    /// Provider-level session ID used for the fork (e.g., Claude Code's internal session ID).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork_provider_session_id: Option<String>,
     // Note: Children are discovered dynamically via scanning, not stored here
+}
+
+impl Genealogy {
+    /// Returns `true` if this session was created by forking another session.
+    pub fn is_fork(&self) -> bool {
+        self.fork_of_session_id.is_some()
+    }
+
+    /// Returns the CSA session ID this session was forked from, if any.
+    pub fn fork_source(&self) -> Option<&str> {
+        self.fork_of_session_id.as_deref()
+    }
 }
 
 /// Per-tool state within a session
@@ -479,10 +508,7 @@ mod tests {
             branch: Some("feat/session-branch".to_string()),
             created_at: now,
             last_accessed: now,
-            genealogy: Genealogy {
-                parent_session_id: None,
-                depth: 0,
-            },
+            genealogy: Genealogy::default(),
             tools: HashMap::new(),
             context_status: ContextStatus::default(),
             total_token_usage: None,
@@ -496,6 +522,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -702,10 +730,7 @@ is_compacted = false
             branch: None,
             created_at: now,
             last_accessed: now,
-            genealogy: Genealogy {
-                parent_session_id: None,
-                depth: 0,
-            },
+            genealogy: Genealogy::default(),
             tools: HashMap::new(),
             context_status: ContextStatus::default(),
             total_token_usage: None,
@@ -716,6 +741,8 @@ is_compacted = false
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -724,5 +751,79 @@ is_compacted = false
 
         assert_eq!(loaded.turn_count, 3);
         assert_eq!(loaded.token_budget, Some(budget));
+    }
+
+    // ── Genealogy fork fields ──────────────────────────────────────
+
+    #[test]
+    fn test_genealogy_backward_compat_without_fork_fields() {
+        let toml_str = r#"
+depth = 1
+parent_session_id = "01PARENT"
+"#;
+        let genealogy: Genealogy =
+            toml::from_str(toml_str).expect("should deserialize without fork fields");
+        assert_eq!(genealogy.parent_session_id, Some("01PARENT".to_string()));
+        assert_eq!(genealogy.depth, 1);
+        assert_eq!(genealogy.fork_of_session_id, None);
+        assert_eq!(genealogy.fork_provider_session_id, None);
+        assert!(!genealogy.is_fork());
+        assert_eq!(genealogy.fork_source(), None);
+    }
+
+    #[test]
+    fn test_genealogy_with_fork_fields_roundtrip() {
+        let genealogy = Genealogy {
+            parent_session_id: Some("01PARENT".to_string()),
+            depth: 1,
+            fork_of_session_id: Some("01SOURCE".to_string()),
+            fork_provider_session_id: Some("provider-abc-123".to_string()),
+        };
+
+        let serialized = toml::to_string(&genealogy).expect("serialize");
+        let deserialized: Genealogy = toml::from_str(&serialized).expect("deserialize");
+
+        assert_eq!(deserialized.parent_session_id, Some("01PARENT".to_string()));
+        assert_eq!(deserialized.depth, 1);
+        assert_eq!(
+            deserialized.fork_of_session_id,
+            Some("01SOURCE".to_string())
+        );
+        assert_eq!(
+            deserialized.fork_provider_session_id,
+            Some("provider-abc-123".to_string())
+        );
+    }
+
+    #[test]
+    fn test_genealogy_is_fork_true() {
+        let genealogy = Genealogy {
+            fork_of_session_id: Some("01SOURCE".to_string()),
+            ..Default::default()
+        };
+        assert!(genealogy.is_fork());
+        assert_eq!(genealogy.fork_source(), Some("01SOURCE"));
+    }
+
+    #[test]
+    fn test_genealogy_is_fork_false_for_spawn_child() {
+        let genealogy = Genealogy {
+            parent_session_id: Some("01PARENT".to_string()),
+            depth: 1,
+            ..Default::default()
+        };
+        assert!(!genealogy.is_fork());
+        assert_eq!(genealogy.fork_source(), None);
+    }
+
+    #[test]
+    fn test_genealogy_skip_serializing_none_fork_fields() {
+        let genealogy = Genealogy::default();
+        let serialized = toml::to_string(&genealogy).expect("serialize");
+        assert!(
+            !serialized.contains("fork_of_session_id"),
+            "None fork fields should be skipped in serialization"
+        );
+        assert!(!serialized.contains("fork_provider_session_id"));
     }
 }

@@ -24,6 +24,7 @@ chrono.workspace = true
 regex.workspace = true
 
 [features]
+codex-pty-fork = ["csa-process/codex-pty-fork"]
 
 [dev-dependencies]
 tempfile.workspace = true

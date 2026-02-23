@@ -170,6 +170,7 @@ pub(crate) fn create_session_in(
         genealogy: crate::state::Genealogy {
             parent_session_id,
             depth,
+            ..Default::default()
         },
         tools: HashMap::new(),
         context_status: Default::default(),
@@ -180,12 +181,35 @@ pub(crate) fn create_session_in(
         token_budget: None,
         sandbox_info: None,
         termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: detect_git_head(project_path),
     };
 
     // Write state file
     save_session_in(base_dir, &state)?;
 
     Ok(state)
+}
+
+/// Detect the current git HEAD commit hash (full SHA) for seed invalidation.
+pub fn detect_git_head(project_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let head = String::from_utf8(output.stdout).ok()?;
+    let trimmed = head.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn detect_current_branch(project_path: &Path) -> Option<String> {
@@ -374,10 +398,7 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     branch: None,
                     created_at: now,
                     last_accessed: now,
-                    genealogy: crate::state::Genealogy {
-                        parent_session_id: None,
-                        depth: 0,
-                    },
+                    genealogy: crate::state::Genealogy::default(),
                     tools: HashMap::new(),
                     context_status: Default::default(),
                     total_token_usage: None,
@@ -387,6 +408,8 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     token_budget: None,
                     sandbox_info: None,
                     termination_reason: None,
+                    is_seed_candidate: false,
+                    git_head_at_creation: None,
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
                     tracing::warn!(
@@ -589,6 +612,50 @@ pub(crate) fn load_metadata_in(
         .with_context(|| format!("Failed to parse metadata: {}", metadata_path.display()))?;
 
     Ok(Some(metadata))
+}
+
+/// Resolve a session reference as a fork source without tool-lock enforcement.
+///
+/// Unlike [`resolve_resume_session`], this function does NOT check `tool_locked`
+/// because soft forks only read context from the parent session and do not require
+/// tool ownership. The returned `provider_session_id` is from the *source* tool
+/// (not the fork target), which native forks may need.
+pub fn resolve_fork_source(
+    project_path: &Path,
+    session_ref: &str,
+) -> Result<ResumeSessionResolution> {
+    let primary = get_session_root(project_path)?;
+    match resolve_fork_source_in(&primary, session_ref) {
+        Ok(resolution) => Ok(resolution),
+        Err(primary_error) => {
+            let Some(legacy) = legacy_session_root(project_path) else {
+                return Err(primary_error);
+            };
+            if !legacy.join("sessions").exists() {
+                return Err(primary_error);
+            }
+            resolve_fork_source_in(&legacy, session_ref).map_err(|_| primary_error)
+        }
+    }
+}
+
+/// Internal implementation: resolve fork source IDs without tool-lock check.
+fn resolve_fork_source_in(base_dir: &Path, session_ref: &str) -> Result<ResumeSessionResolution> {
+    let sessions_dir = base_dir.join("sessions");
+    let meta_session_id = resolve_session_prefix(&sessions_dir, session_ref)?;
+
+    // Load session to find the source tool's provider session ID (for native fork).
+    // We take the first tool entry that has a provider_session_id.
+    let session = load_session_in(base_dir, &meta_session_id)?;
+    let provider_session_id = session
+        .tools
+        .values()
+        .find_map(|state| state.provider_session_id.clone());
+
+    Ok(ResumeSessionResolution {
+        meta_session_id,
+        provider_session_id,
+    })
 }
 
 /// Validate that the given tool can access this session.

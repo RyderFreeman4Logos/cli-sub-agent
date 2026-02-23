@@ -79,9 +79,10 @@ fn resolve_review_tool_prefers_cli_override() {
 }
 
 #[test]
-fn resolve_review_tool_uses_global_review_config_with_parent_tool() {
+fn resolve_review_tool_uses_global_auto_with_enabled_counterpart() {
     let global = GlobalConfig::default();
-    let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    // Enable codex so heterogeneous_counterpart(claude-code) → codex succeeds
+    let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let tool = resolve_review_tool(
         None,
         Some(&cfg),
@@ -92,6 +93,26 @@ fn resolve_review_tool_uses_global_review_config_with_parent_tool() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
+}
+
+#[test]
+fn resolve_review_tool_skips_disabled_counterpart_from_global_auto() {
+    let global = GlobalConfig::default();
+    // Only gemini-cli enabled — codex is disabled
+    let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    let err = resolve_review_tool(
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("AUTO review tool selection failed")
+    );
 }
 
 #[test]

@@ -14,6 +14,7 @@
             genealogy: csa_session::state::Genealogy {
                 parent_session_id: None,
                 depth: 0,
+                ..Default::default()
             },
             tools: HashMap::new(),
             context_status: csa_session::state::ContextStatus::default(),
@@ -25,6 +26,8 @@
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let mut extra = HashMap::new();
@@ -59,6 +62,7 @@
             genealogy: csa_session::state::Genealogy {
                 parent_session_id: None,
                 depth: 0,
+                ..Default::default()
             },
             tools: HashMap::new(),
             context_status: csa_session::state::ContextStatus::default(),
@@ -70,6 +74,8 @@
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let env = transport.build_env(&session, None);

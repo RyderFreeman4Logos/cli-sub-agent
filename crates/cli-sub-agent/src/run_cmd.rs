@@ -2,16 +2,21 @@
 //!
 //! Extracted from main.rs to keep file sizes manageable.
 
+use std::path::Path;
+
 use anyhow::Result;
 use tempfile::TempDir;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
+use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
-use csa_session::{MetaSessionState, SessionPhase, load_session, resolve_session_prefix};
+use csa_session::{
+    MetaSessionState, SessionPhase, ToolState, load_session, resolve_session_prefix,
+};
 
 use crate::pipeline;
 use crate::run_helpers::{
@@ -92,10 +97,133 @@ fn take_next_runtime_fallback_tool(
     None
 }
 
+/// Remove a pre-created fork session when execution fails or tool failover
+/// occurs. Takes the session ID by `&mut Option` so it is consumed (set to
+/// `None`) after cleanup, preventing double-delete on subsequent error paths.
+fn cleanup_pre_created_fork_session(session_id: &mut Option<String>, project_root: &Path) {
+    if let Some(sid) = session_id.take() {
+        match csa_session::delete_session(project_root, &sid) {
+            Ok(()) => {
+                info!(session = %sid, "Cleaned up pre-created fork session after failure");
+            }
+            Err(e) => {
+                warn!(session = %sid, error = %e, "Failed to clean up pre-created fork session");
+            }
+        }
+    }
+}
+
 fn resolve_slot_wait_timeout_seconds(config: Option<&ProjectConfig>) -> u64 {
     config
         .map(|cfg| cfg.resources.slot_wait_timeout_seconds)
         .unwrap_or(csa_config::ResourcesConfig::default().slot_wait_timeout_seconds)
+}
+
+/// Result of resolving a fork request before execution.
+struct ForkResolution {
+    /// The forked provider session ID (Native fork only).
+    provider_session_id: Option<String>,
+    /// Context summary to prepend to prompt (Soft fork only).
+    context_prefix: Option<String>,
+    /// The CSA session ID that was forked from.
+    source_session_id: String,
+    /// The provider session ID of the source (used to set fork_provider_session_id in genealogy).
+    source_provider_session_id: Option<String>,
+}
+
+/// Resolve a fork from a source session: run the transport-level fork and return
+/// the information needed to create a new CSA session with fork genealogy.
+///
+/// For soft forks (cross-tool or non-claude-code targets), tool-lock is NOT enforced
+/// because soft forks only copy context from the parent session and do not require
+/// tool ownership. Native forks (same tool) still enforce tool-lock via
+/// `resolve_resume_session`.
+async fn resolve_fork(
+    source_session_id: &str,
+    tool_name: &str,
+    project_root: &Path,
+) -> Result<ForkResolution> {
+    // Determine if source session uses a different tool than the target.
+    // Cross-tool forks must always use soft fork (context summary injection)
+    // because native fork requires the same tool's provider session.
+    // When metadata is missing (older/migrated sessions), default to cross-tool
+    // (soft fork) as the safe fallback — native fork would fail without metadata.
+    let source_tool = csa_session::load_metadata(project_root, source_session_id)
+        .ok()
+        .flatten()
+        .map(|m| m.tool);
+    let is_cross_tool = source_tool.as_deref() != Some(tool_name);
+
+    let fork_method = if is_cross_tool {
+        ForkMethod::Soft
+    } else {
+        TransportFactory::fork_method_for_tool(tool_name)
+    };
+
+    let resolution = match fork_method {
+        ForkMethod::Native => {
+            // Native fork requires the same tool's provider session — enforce tool-lock.
+            csa_session::resolve_resume_session(project_root, source_session_id, tool_name)?
+        }
+        ForkMethod::Soft => {
+            // Soft fork only reads context files — skip tool-lock enforcement.
+            csa_session::resolve_fork_source(project_root, source_session_id)?
+        }
+    };
+    let source_csa_id = resolution.meta_session_id.clone();
+    let source_provider_id = resolution.provider_session_id.clone();
+
+    let session_dir = csa_session::get_session_dir(project_root, &source_csa_id)?;
+
+    let fork_request = ForkRequest {
+        tool_name: tool_name.to_string(),
+        fork_method: Some(fork_method),
+        provider_session_id: source_provider_id.clone(),
+        parent_csa_session_id: source_csa_id.clone(),
+        parent_session_dir: session_dir.clone(),
+        working_dir: project_root.to_path_buf(),
+        timeout: std::time::Duration::from_secs(60),
+    };
+
+    let fork_info = TransportFactory::fork_session(&fork_request).await;
+
+    if !fork_info.success {
+        let notes = fork_info.notes.unwrap_or_default();
+        anyhow::bail!(
+            "Fork failed for session {} ({:?}): {}",
+            source_csa_id,
+            fork_info.method,
+            notes
+        );
+    }
+
+    info!(
+        source = %source_csa_id,
+        method = ?fork_info.method,
+        new_provider_session = ?fork_info.new_session_id,
+        notes = ?fork_info.notes,
+        "Session fork completed"
+    );
+
+    // For soft fork, we need to read the context summary to prepend to the prompt
+    let context_prefix = if matches!(fork_info.method, ForkMethod::Soft) {
+        match csa_session::soft_fork_session(&session_dir, &source_csa_id) {
+            Ok(ctx) => Some(ctx.context_summary),
+            Err(e) => {
+                warn!("Soft fork context extraction failed (non-fatal): {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(ForkResolution {
+        provider_session_id: fork_info.new_session_id,
+        context_prefix,
+        source_session_id: source_csa_id,
+        source_provider_session_id: source_provider_id,
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -105,6 +233,8 @@ pub(crate) async fn handle_run(
     prompt: Option<String>,
     session_arg: Option<String>,
     last: bool,
+    fork_from: Option<String>,
+    fork_last: bool,
     description: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
@@ -125,8 +255,34 @@ pub(crate) async fn handle_run(
     // 1. Determine project root
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
 
-    // 2. Resolve --last flag to session ID
-    let session_arg = if last {
+    // Emit deprecation warnings for legacy resume flags
+    if last {
+        warn!("--last is deprecated: use --fork-last instead (fork-first architecture)");
+        eprintln!(
+            "warning: --last is deprecated and will be removed in a future release. Use --fork-last instead."
+        );
+    }
+    if session_arg.is_some() {
+        warn!("--session is deprecated: use --fork-from instead (fork-first architecture)");
+        eprintln!(
+            "warning: --session is deprecated and will be removed in a future release. Use --fork-from instead."
+        );
+    }
+
+    // 2. Resolve fork flags or legacy resume flags to session ID
+    let is_fork = fork_from.is_some() || fork_last;
+    let session_arg = if fork_last {
+        info!("Resolving --fork-last to most recent session");
+        let sessions = csa_session::list_sessions(&project_root, None)?;
+        let (selected_id, ambiguity_warning) = resolve_last_session_selection(sessions)?;
+        if let Some(warning) = ambiguity_warning {
+            eprintln!("{warning}");
+        }
+        Some(selected_id)
+    } else if fork_from.is_some() {
+        info!(fork_from = ?fork_from, "Forking from specified session");
+        fork_from
+    } else if last {
         let sessions = csa_session::list_sessions(&project_root, None)?;
         let (selected_id, ambiguity_warning) = resolve_last_session_selection(sessions)?;
         if let Some(warning) = ambiguity_warning {
@@ -373,8 +529,76 @@ pub(crate) async fn handle_run(
 
     let resolved_tool = initial_tool;
 
-    // Hint: suggest reusable sessions when creating a new session
-    if session_arg.is_none() {
+    // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
+    let mut is_auto_seed_fork = false;
+    let (mut is_fork, mut session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
+        let auto_seed_enabled = config
+            .as_ref()
+            .map(|c| c.session.auto_seed_fork)
+            .unwrap_or(true);
+        if auto_seed_enabled {
+            let seed_max_age = config
+                .as_ref()
+                .map(|c| c.session.seed_max_age_secs)
+                .unwrap_or(86400);
+            let current_git_head = csa_session::detect_git_head(&project_root);
+            let needs_native_fork = matches!(
+                TransportFactory::fork_method_for_tool(resolved_tool.as_str()),
+                ForkMethod::Native,
+            );
+            let seed_result = if needs_native_fork {
+                csa_scheduler::find_seed_session_for_native_fork(
+                    &project_root,
+                    resolved_tool.as_str(),
+                    seed_max_age,
+                    current_git_head.as_deref(),
+                )
+            } else {
+                csa_scheduler::find_seed_session(
+                    &project_root,
+                    resolved_tool.as_str(),
+                    seed_max_age,
+                    current_git_head.as_deref(),
+                )
+            };
+            match seed_result {
+                Ok(Some(seed)) => {
+                    info!(
+                        seed_session = %seed.session_id,
+                        tool = %seed.tool_name,
+                        "Auto fork-from-seed: warm session found"
+                    );
+                    is_auto_seed_fork = true;
+                    (true, Some(seed.session_id))
+                }
+                Ok(None) => {
+                    debug!("No seed session available, cold start");
+                    (is_fork, session_arg)
+                }
+                Err(e) => {
+                    debug!(error = %e, "Seed session lookup failed, falling back to cold start");
+                    (is_fork, session_arg)
+                }
+            }
+        } else {
+            (is_fork, session_arg)
+        }
+    } else {
+        (is_fork, session_arg)
+    };
+
+    // Fork resolution is deferred until after slot acquisition and pre-execution
+    // guards to avoid orphaning transport-level forks when a pre-run check fails.
+    let mut fork_resolution: Option<ForkResolution> = None;
+
+    // When forking, don't pass session_arg to execute_with_session (that would resume
+    // the *source* session). Instead, create a new session with fork genealogy.
+    // For native forks, the provider_session_id is pre-populated before execution so
+    // that ACP can resume from the forked provider session on the first turn.
+    let mut effective_session_arg = if is_fork { None } else { session_arg.clone() };
+
+    // Hint: suggest reusable sessions when creating a new session (only if not auto-forking)
+    if effective_session_arg.is_none() && !is_fork {
         let tool_names = vec![resolved_tool.as_str().to_string()];
         match csa_scheduler::session_reuse::find_reusable_sessions(
             &project_root,
@@ -384,7 +608,7 @@ pub(crate) async fn handle_run(
             Ok(candidates) if !candidates.is_empty() => {
                 let best = &candidates[0];
                 eprintln!(
-                    "hint: reusable session available for {}: --session {}",
+                    "hint: reusable session available for {}: --fork-from {}",
                     best.tool_name,
                     best.session_id.get(..8).unwrap_or(&best.session_id),
                 );
@@ -439,6 +663,9 @@ pub(crate) async fn handle_run(
         matches!(strategy, ToolSelectionStrategy::HeterogeneousPreferred) && !no_failover;
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
+    let mut executed_session_id: Option<String> = None;
+    // Track pre-created fork session IDs so we can clean them up on failure.
+    let mut pre_created_fork_session_id: Option<String> = None;
 
     let result = loop {
         attempts += 1;
@@ -504,6 +731,17 @@ pub(crate) async fn handle_run(
                         current_tool = parse_tool_name(&alt.tool_name)?;
                         current_model_spec = None;
                         current_model = None;
+                        // Clear fork metadata: forks are tool-specific and cannot
+                        // transfer across tools. The next iteration will resolve
+                        // a fresh fork for the new tool if is_fork is set.
+                        fork_resolution = None;
+                        // Only reset session arg for fork flows -- fork-created
+                        // sessions are tool-specific and cannot transfer. Non-fork
+                        // resumed sessions (--session/--last) must keep their
+                        // session context to maintain continuity.
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
                         continue;
                     }
                 }
@@ -536,7 +774,95 @@ pub(crate) async fn handle_run(
             }
         }
 
+        // Resolve fork lazily: only after slot acquisition confirms we will proceed.
+        // This prevents orphaning transport-level forks when pre-run checks fail.
+        if is_fork && fork_resolution.is_none() {
+            if let Some(ref source_id) = session_arg {
+                match resolve_fork(source_id, current_tool.as_str(), &project_root).await {
+                    Ok(res) => fork_resolution = Some(res),
+                    Err(e) if is_auto_seed_fork => {
+                        // Auto seed forks are best-effort: degrade to cold start.
+                        // Clear all fork intent so retries don't re-enter fork resolution.
+                        warn!(
+                            error = %e,
+                            source = %source_id,
+                            "Auto seed fork resolution failed, falling back to cold start"
+                        );
+                        is_auto_seed_fork = false;
+                        is_fork = false;
+                        session_arg = None;
+                        // fall through with fork_resolution = None; handled below
+                    }
+                    Err(e) => return Err(e),
+                }
+            } else if !is_auto_seed_fork {
+                anyhow::bail!("Fork requested but no source session resolved");
+            }
+        }
+
+        // For native forks: pre-create a session with the forked provider_session_id
+        // in tool state so that execute_with_session_and_meta can resume ACP from the
+        // forked provider session on the very first execution.
+        if effective_session_arg.is_none() {
+            if let Some(ref fork_res) = fork_resolution {
+                if let Some(ref new_provider_id) = fork_res.provider_session_id {
+                    let fork_desc = description.clone().unwrap_or_else(|| {
+                        format!(
+                            "fork of {}",
+                            fork_res
+                                .source_session_id
+                                .get(..8)
+                                .unwrap_or(&fork_res.source_session_id)
+                        )
+                    });
+                    let mut pre_session = csa_session::create_session(
+                        &project_root,
+                        Some(&fork_desc),
+                        Some(&fork_res.source_session_id),
+                        Some(current_tool.as_str()),
+                    )?;
+                    pre_session.genealogy.fork_of_session_id =
+                        Some(fork_res.source_session_id.clone());
+                    pre_session.genealogy.fork_provider_session_id =
+                        fork_res.source_provider_session_id.clone();
+                    pre_session.tools.insert(
+                        current_tool.as_str().to_string(),
+                        ToolState {
+                            provider_session_id: Some(new_provider_id.clone()),
+                            last_action_summary: String::new(),
+                            last_exit_code: 0,
+                            updated_at: chrono::Utc::now(),
+                            token_usage: None,
+                        },
+                    );
+                    csa_session::save_session(&pre_session)?;
+                    info!(
+                        session = %pre_session.meta_session_id,
+                        provider_session = %new_provider_id,
+                        "Pre-created session with forked provider session for ACP resume"
+                    );
+                    pre_created_fork_session_id = Some(pre_session.meta_session_id.clone());
+                    effective_session_arg = Some(pre_session.meta_session_id.clone());
+                }
+            }
+        }
+
         let extra_env = global_config.env_vars(tool_name_str).cloned();
+
+        // Prepend soft fork context to prompt if applicable
+        let effective_prompt = if let Some(ref fork_res) = fork_resolution {
+            if let Some(ref ctx) = fork_res.context_prefix {
+                info!(
+                    context_len = ctx.len(),
+                    "Prepending soft fork context to prompt"
+                );
+                format!("{ctx}\n\n---\n\n{prompt_text}")
+            } else {
+                prompt_text.clone()
+            }
+        } else {
+            prompt_text.clone()
+        };
 
         // Execute
         let exec_result = if ephemeral {
@@ -544,7 +870,7 @@ pub(crate) async fn handle_run(
             info!("Ephemeral session in: {:?}", temp_dir.path());
             executor
                 .execute_in(
-                    &prompt_text,
+                    &effective_prompt,
                     temp_dir.path(),
                     extra_env.as_ref(),
                     stream_mode,
@@ -552,13 +878,33 @@ pub(crate) async fn handle_run(
                 )
                 .await
         } else {
-            match pipeline::execute_with_session(
+            // Build fork-aware description and parent
+            let effective_description = if let Some(ref fork_res) = fork_resolution {
+                description.clone().or_else(|| {
+                    Some(format!(
+                        "fork of {}",
+                        fork_res
+                            .source_session_id
+                            .get(..8)
+                            .unwrap_or(&fork_res.source_session_id)
+                    ))
+                })
+            } else {
+                description.clone()
+            };
+            let effective_parent = if let Some(ref fork_res) = fork_resolution {
+                Some(fork_res.source_session_id.clone())
+            } else {
+                parent.clone()
+            };
+
+            match pipeline::execute_with_session_and_meta(
                 &executor,
                 &current_tool,
-                &prompt_text,
-                session_arg.clone(),
-                description.clone(),
-                parent.clone(),
+                &effective_prompt,
+                effective_session_arg.clone(),
+                effective_description,
+                effective_parent,
                 &project_root,
                 config.as_ref(),
                 extra_env.as_ref(),
@@ -571,15 +917,22 @@ pub(crate) async fn handle_run(
             )
             .await
             {
-                Ok(result) => Ok(result),
+                Ok(session_result) => {
+                    executed_session_id = Some(session_result.meta_session_id);
+                    Ok(session_result.execution)
+                }
                 Err(e) => {
                     let error_msg = e.to_string();
                     if error_msg.contains("Session locked by PID")
                         && matches!(output_format, OutputFormat::Json)
                     {
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            &project_root,
+                        );
                         let json_error = serde_json::json!({
                             "error": "session_locked",
-                            "session_id": session_arg.unwrap_or_else(|| "(new)".to_string()),
+                            "session_id": effective_session_arg.unwrap_or_else(|| "(new)".to_string()),
                             "tool": current_tool.as_str(),
                             "message": error_msg
                         });
@@ -615,9 +968,21 @@ pub(crate) async fn handle_run(
                         current_tool = next_tool;
                         current_model_spec = None;
                         current_model = None;
+                        // Clear fork metadata: forks are tool-specific and cannot
+                        // transfer across tools. The next iteration will resolve
+                        // a fresh fork for the new tool if is_fork is set.
+                        fork_resolution = None;
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            &project_root,
+                        );
                         continue;
                     }
                 }
+                cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
                 return Err(e);
             }
         };
@@ -646,6 +1011,14 @@ pub(crate) async fn handle_run(
                 current_tool = next_tool;
                 current_model_spec = None;
                 current_model = None;
+                // Clear fork metadata: forks are tool-specific and cannot
+                // transfer across tools. The next iteration will resolve
+                // a fresh fork for the new tool if is_fork is set.
+                fork_resolution = None;
+                if is_fork {
+                    effective_session_arg = None;
+                }
+                cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
                 continue;
             }
         }
@@ -675,8 +1048,14 @@ pub(crate) async fn handle_run(
 
             tried_tools.push(tool_name_str.to_string());
 
+            // Prefer the actually-executed session (important for forks where
+            // effective_session_arg starts as None) so decide_failover evaluates
+            // the fork session's context, not the parent session.
+            let failover_session_ref = executed_session_id
+                .as_ref()
+                .or(effective_session_arg.as_ref());
             let session_state = if !ephemeral {
-                session_arg.as_ref().and_then(|sid| {
+                failover_session_ref.and_then(|sid| {
                     let sessions_dir = csa_session::get_session_root(&project_root)
                         .ok()?
                         .join("sessions");
@@ -722,6 +1101,17 @@ pub(crate) async fn handle_run(
                         current_tool = parse_tool_name(&new_tool)?;
                         current_model_spec = Some(new_model_spec);
                         current_model = None;
+                        // Clear fork metadata: forks are tool-specific and cannot
+                        // transfer across tools. The next iteration will resolve
+                        // a fresh fork for the new tool if is_fork is set.
+                        fork_resolution = None;
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            &project_root,
+                        );
                         continue;
                     }
                     csa_scheduler::FailoverAction::ReportError { reason, .. } => {
@@ -736,6 +1126,88 @@ pub(crate) async fn handle_run(
             break exec_result;
         }
     };
+
+    // Update fork genealogy on the executed session (post-execution).
+    // Use the actual executed session ID instead of a global "newest" lookup.
+    if let Some(ref fork_res) = fork_resolution {
+        if let Some(ref sid) = executed_session_id {
+            match csa_session::load_session(&project_root, sid) {
+                Ok(mut session) => {
+                    session.genealogy.fork_of_session_id = Some(fork_res.source_session_id.clone());
+                    session.genealogy.fork_provider_session_id =
+                        fork_res.source_provider_session_id.clone();
+                    if session.genealogy.parent_session_id.is_none() {
+                        session.genealogy.parent_session_id =
+                            Some(fork_res.source_session_id.clone());
+                    }
+                    // For native fork: store the forked provider session ID in
+                    // ToolState so future `--session` resumes can use it.
+                    if let Some(ref new_provider_id) = fork_res.provider_session_id {
+                        if let Some(tool_state) = session.tools.get_mut(current_tool.as_str()) {
+                            tool_state.provider_session_id = Some(new_provider_id.clone());
+                        }
+                    }
+                    if let Err(e) = csa_session::save_session(&session) {
+                        warn!("Failed to update fork genealogy on session: {e}");
+                    } else {
+                        info!(
+                            session = %session.meta_session_id,
+                            fork_of = %fork_res.source_session_id,
+                            "Updated session genealogy with fork fields"
+                        );
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to load session for fork genealogy update: {e}");
+                }
+            }
+        }
+    }
+
+    // Mark successful non-fork sessions as seed candidates and run LRU eviction.
+    // Use the actual executed session ID to avoid tagging an unrelated newer session.
+    if result.exit_code == 0 && fork_resolution.is_none() && !ephemeral {
+        if let Some(ref sid) = executed_session_id {
+            match csa_session::load_session(&project_root, sid) {
+                Ok(mut session) => {
+                    if !session.is_seed_candidate {
+                        session.is_seed_candidate = true;
+                        if let Err(e) = csa_session::save_session(&session) {
+                            warn!("Failed to mark session as seed candidate: {e}");
+                        } else {
+                            info!(
+                                session = %session.meta_session_id,
+                                tool = %current_tool.as_str(),
+                                "Marked session as seed candidate"
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    debug!(error = %e, "Failed to load session for seed marking");
+                }
+            }
+        }
+
+        // LRU eviction: retire excess seed sessions for this tool×project
+        let max_seeds = config
+            .as_ref()
+            .map(|c| c.session.max_seed_sessions)
+            .unwrap_or(2);
+        match csa_scheduler::evict_excess_seeds(&project_root, current_tool.as_str(), max_seeds) {
+            Ok(retired) if !retired.is_empty() => {
+                info!(
+                    count = retired.len(),
+                    tool = %current_tool.as_str(),
+                    "Evicted excess seed sessions"
+                );
+            }
+            Err(e) => {
+                debug!(error = %e, "Seed eviction check failed");
+            }
+            _ => {}
+        }
+    }
 
     // Print result
     match output_format {

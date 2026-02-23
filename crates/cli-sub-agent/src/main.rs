@@ -110,6 +110,8 @@ async fn main() -> Result<()> {
             prompt,
             session,
             last,
+            fork_from,
+            fork_last,
             description,
             parent,
             ephemeral,
@@ -142,6 +144,8 @@ async fn main() -> Result<()> {
                 prompt,
                 session,
                 last,
+                fork_from,
+                fork_last,
                 description,
                 parent,
                 ephemeral,
@@ -185,15 +189,36 @@ async fn main() -> Result<()> {
             } => {
                 session_cmds::handle_session_clean(days, dry_run, tool, cd)?;
             }
-            SessionCommands::Logs { session, tail, cd } => {
-                session_cmds::handle_session_logs(session, tail, cd)?;
+            SessionCommands::Logs {
+                session,
+                tail,
+                events,
+                cd,
+            } => {
+                session_cmds::handle_session_logs(session, tail, events, cd)?;
             }
             SessionCommands::IsAlive { session, cd } => {
                 let alive = session_cmds::handle_session_is_alive(session, cd)?;
                 std::process::exit(if alive { 0 } else { 1 });
             }
-            SessionCommands::Result { session, json, cd } => {
-                session_cmds::handle_session_result(session, json, cd)?;
+            SessionCommands::Result {
+                session,
+                json,
+                summary,
+                section,
+                full,
+                cd,
+            } => {
+                session_cmds::handle_session_result(
+                    session,
+                    json,
+                    cd,
+                    session_cmds::StructuredOutputOpts {
+                        summary,
+                        section,
+                        full,
+                    },
+                )?;
             }
             SessionCommands::Artifacts { session, cd } => {
                 session_cmds::handle_session_artifacts(session, cd)?;
@@ -206,6 +231,9 @@ async fn main() -> Result<()> {
             }
             SessionCommands::Checkpoints { cd } => {
                 session_cmds::handle_session_checkpoints(cd)?;
+            }
+            SessionCommands::Measure { session, json, cd } => {
+                session_cmds::handle_session_measure(session, json, cd)?;
             }
         },
         Commands::Audit { command } => {

@@ -1,8 +1,11 @@
 use super::*;
 use chrono::{TimeZone, Utc};
+use clap::Parser;
 use csa_core::types::ToolName;
 use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};
 use std::collections::HashMap;
+
+use crate::cli::Cli;
 
 fn test_session(
     meta_session_id: &str,
@@ -19,6 +22,7 @@ fn test_session(
         genealogy: Genealogy {
             parent_session_id: None,
             depth: 0,
+            ..Default::default()
         },
         tools: HashMap::new(),
         context_status: Default::default(),
@@ -30,6 +34,8 @@ fn test_session(
         sandbox_info: None,
 
         termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
     }
 }
 
@@ -121,4 +127,118 @@ fn test_take_next_runtime_fallback_tool_skips_current_and_tried() {
 
     assert_eq!(selected, ToolName::Codex);
     assert_eq!(candidates, vec![ToolName::Opencode]);
+}
+
+// ── CLI flag parsing tests for fork-first architecture ──────────────
+
+fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
+    Cli::try_parse_from(args)
+}
+
+#[test]
+fn test_cli_fork_from_parses_ulid() {
+    let cli = try_parse_cli(&["csa", "run", "--fork-from", "01ABC", "do stuff"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { fork_from, .. } => {
+            assert_eq!(fork_from, Some("01ABC".to_string()));
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_last_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--fork-last", "do stuff"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { fork_last, .. } => {
+            assert!(fork_last);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_from_conflicts_with_session() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from",
+        "01ABC",
+        "--session",
+        "01DEF",
+        "prompt",
+    ]);
+    assert!(result.is_err(), "fork-from and session should conflict");
+}
+
+#[test]
+fn test_cli_fork_from_conflicts_with_last() {
+    let result = try_parse_cli(&["csa", "run", "--fork-from", "01ABC", "--last", "prompt"]);
+    assert!(result.is_err(), "fork-from and last should conflict");
+}
+
+#[test]
+fn test_cli_fork_last_conflicts_with_session() {
+    let result = try_parse_cli(&["csa", "run", "--fork-last", "--session", "01DEF", "prompt"]);
+    assert!(result.is_err(), "fork-last and session should conflict");
+}
+
+#[test]
+fn test_cli_fork_last_conflicts_with_last() {
+    let result = try_parse_cli(&["csa", "run", "--fork-last", "--last", "prompt"]);
+    assert!(result.is_err(), "fork-last and last should conflict");
+}
+
+#[test]
+fn test_cli_fork_from_conflicts_with_fork_last() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from",
+        "01ABC",
+        "--fork-last",
+        "prompt",
+    ]);
+    assert!(result.is_err(), "fork-from and fork-last should conflict");
+}
+
+#[test]
+fn test_cli_fork_from_conflicts_with_ephemeral() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-from",
+        "01ABC",
+        "--ephemeral",
+        "prompt",
+    ]);
+    assert!(result.is_err(), "fork-from and ephemeral should conflict");
+}
+
+#[test]
+fn test_cli_fork_last_conflicts_with_ephemeral() {
+    let result = try_parse_cli(&["csa", "run", "--fork-last", "--ephemeral", "prompt"]);
+    assert!(result.is_err(), "fork-last and ephemeral should conflict");
+}
+
+#[test]
+fn test_cli_legacy_session_still_works() {
+    let cli = try_parse_cli(&["csa", "run", "--session", "01ABC", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { session, .. } => {
+            assert_eq!(session, Some("01ABC".to_string()));
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_legacy_last_still_works() {
+    let cli = try_parse_cli(&["csa", "run", "--last", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { last, .. } => {
+            assert!(last);
+        }
+        _ => panic!("expected Run command"),
+    }
 }

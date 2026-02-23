@@ -897,5 +897,199 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
     assert!(config.enforce_tool_enabled("codex", true).is_ok());
 }
 
+// ── enabled_tier_models filtering ────────────────────────────────────
+
+#[test]
+fn enabled_tier_models_returns_all_when_no_tools_disabled() {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-1".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec![
+                "codex/openai/o3/high".to_string(),
+                "claude-code/anthropic/default/xhigh".to_string(),
+            ],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(), // no explicit tool config → all enabled by default
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    let models = config.enabled_tier_models("tier-1");
+    assert_eq!(models.len(), 2);
+    assert!(models.contains(&"codex/openai/o3/high".to_string()));
+    assert!(models.contains(&"claude-code/anthropic/default/xhigh".to_string()));
+}
+
+#[test]
+fn enabled_tier_models_excludes_disabled_tool() {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-3".to_string(),
+        TierConfig {
+            description: "complex".to_string(),
+            models: vec![
+                "codex/openai/gpt-5.3-codex/xhigh".to_string(),
+                "claude-code/anthropic/default/xhigh".to_string(),
+                "gemini-cli/google/gemini-2.5-pro/high".to_string(),
+            ],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    let models = config.enabled_tier_models("tier-3");
+    assert_eq!(models.len(), 2);
+    assert!(!models.iter().any(|m| m.starts_with("codex/")));
+    assert!(models.contains(&"claude-code/anthropic/default/xhigh".to_string()));
+    assert!(models.contains(&"gemini-cli/google/gemini-2.5-pro/high".to_string()));
+}
+
+#[test]
+fn enabled_tier_models_returns_empty_for_unknown_tier() {
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    assert!(config.enabled_tier_models("nonexistent").is_empty());
+}
+
+#[test]
+fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-1".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec![
+                "codex/openai/o3/high".to_string(),
+                "claude-code/anthropic/default/xhigh".to_string(),
+            ],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+    tools.insert(
+        "claude-code".to_string(),
+        ToolConfig {
+            enabled: false,
+            ..Default::default()
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+    };
+
+    assert!(config.enabled_tier_models("tier-1").is_empty());
+}
+
+// ── SessionConfig tests ──────────────────────────────────────────
+
+#[test]
+fn test_session_config_default_has_structured_output_enabled() {
+    let cfg = SessionConfig::default();
+    assert!(cfg.structured_output);
+}
+
+#[test]
+fn test_session_config_is_default_reflects_structured_output() {
+    let mut cfg = SessionConfig::default();
+    assert!(cfg.is_default());
+
+    cfg.structured_output = false;
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_session_config_deserializes_structured_output() {
+    let toml_str = r#"
+transcript_enabled = false
+transcript_redaction = true
+structured_output = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.structured_output);
+}
+
+#[test]
+fn test_session_config_defaults_structured_output_when_missing() {
+    let toml_str = r#"
+transcript_enabled = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert!(cfg.structured_output);
+}
+
 #[path = "config_tests_tier_whitelist.rs"]
 mod tier_whitelist;

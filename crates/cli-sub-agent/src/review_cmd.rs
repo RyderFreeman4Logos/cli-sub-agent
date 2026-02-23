@@ -416,12 +416,20 @@ fn resolve_review_tool(
     }
 
     match global_config.resolve_review_tool(parent_tool) {
-        Ok(tool_name) => crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
-            anyhow::anyhow!(
-                "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
-                tool_name
-            )
-        }),
+        Ok(tool_name) => {
+            // Skip disabled tools from global auto-resolution
+            if let Some(cfg) = project_config {
+                if !cfg.is_tool_enabled(&tool_name) {
+                    return Err(review_auto_resolution_error(parent_tool, project_root));
+                }
+            }
+            crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
+                anyhow::anyhow!(
+                    "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
+                    tool_name
+                )
+            })
+        }
         Err(_) => Err(review_auto_resolution_error(parent_tool, project_root)),
     }
 }
@@ -449,14 +457,19 @@ fn resolve_review_tool_from_value(
             }
         }
 
-        // Try old heterogeneous_counterpart first for backward compatibility
+        // Try old heterogeneous_counterpart first for backward compatibility,
+        // but only if the counterpart tool is enabled.
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
-            return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
-                anyhow::anyhow!(
-                    "BUG: auto review tool resolution returned invalid tool '{}'",
-                    resolved
-                )
-            });
+            let counterpart_enabled =
+                project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
+            if counterpart_enabled {
+                return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
+                    anyhow::anyhow!(
+                        "BUG: auto review tool resolution returned invalid tool '{}'",
+                        resolved
+                    )
+                });
+            }
         }
 
         // Fallback to ModelFamily-based selection (filtered by enabled tools)

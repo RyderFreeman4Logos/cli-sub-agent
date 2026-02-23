@@ -111,6 +111,15 @@ pub struct DebateConfig {
     /// `csa debate --thinking <LEVEL>` overrides this per invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    /// Allow same-model adversarial fallback when heterogeneous models are unavailable.
+    ///
+    /// When enabled (default), `csa debate` falls back to running two independent
+    /// sub-agents of the same tool as Proposer and Critic. The debate output is
+    /// annotated with "same-model adversarial" to indicate degraded diversity.
+    ///
+    /// Set to `false` to require heterogeneous models (strict mode).
+    #[serde(default = "default_true_debate")]
+    pub same_model_fallback: bool,
 }
 
 fn default_debate_tool() -> String {
@@ -121,12 +130,17 @@ fn default_debate_timeout_seconds() -> u64 {
     1800
 }
 
+fn default_true_debate() -> bool {
+    true
+}
+
 impl Default for DebateConfig {
     fn default() -> Self {
         Self {
             tool: default_debate_tool(),
             timeout_seconds: default_debate_timeout_seconds(),
             thinking: None,
+            same_model_fallback: true,
         }
     }
 }
@@ -439,6 +453,10 @@ tool = "auto"
 timeout_seconds = 1800
 # Optional default thinking budget for `csa debate`.
 # thinking = "high"
+# Allow same-model adversarial fallback when heterogeneous models are unavailable.
+# When true, `csa debate` runs two independent sub-agents of the same tool.
+# Output is annotated with "same-model adversarial" to indicate degraded diversity.
+same_model_fallback = true
 
 # Fallback behavior when external services are unavailable.
 # cloud_review_exhausted: what to do when cloud review bot is unavailable.

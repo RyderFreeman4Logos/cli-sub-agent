@@ -247,37 +247,35 @@ fn parse_source_version_specifiers() {
 
 #[test]
 fn lockfile_roundtrip_with_version_pinning() {
-    let lockfile = Lockfile {
-        package: vec![
-            LockedPackage {
-                name: "pinned".to_string(),
-                repo: "https://github.com/org/pinned.git".to_string(),
-                commit: "abc123def456".to_string(),
-                version: Some("1.0.0".to_string()),
-                source_kind: SourceKind::Git,
-                requested_version: Some("v1.0.0".to_string()),
-                resolved_ref: Some("v1.0.0".to_string()),
-            },
-            LockedPackage {
-                name: "unpinned".to_string(),
-                repo: "https://github.com/org/unpinned.git".to_string(),
-                commit: "789abcdef".to_string(),
-                version: None,
-                source_kind: SourceKind::Git,
-                requested_version: None,
-                resolved_ref: None,
-            },
-            LockedPackage {
-                name: "branch-pinned".to_string(),
-                repo: "https://github.com/org/bp.git".to_string(),
-                commit: "deadbeef".to_string(),
-                version: None,
-                source_kind: SourceKind::Git,
-                requested_version: Some("main".to_string()),
-                resolved_ref: Some("main".to_string()),
-            },
-        ],
-    };
+    let lockfile = Lockfile::with_packages(vec![
+        LockedPackage {
+            name: "pinned".to_string(),
+            repo: "https://github.com/org/pinned.git".to_string(),
+            commit: "abc123def456".to_string(),
+            version: Some("1.0.0".to_string()),
+            source_kind: SourceKind::Git,
+            requested_version: Some("v1.0.0".to_string()),
+            resolved_ref: Some("v1.0.0".to_string()),
+        },
+        LockedPackage {
+            name: "unpinned".to_string(),
+            repo: "https://github.com/org/unpinned.git".to_string(),
+            commit: "789abcdef".to_string(),
+            version: None,
+            source_kind: SourceKind::Git,
+            requested_version: None,
+            resolved_ref: None,
+        },
+        LockedPackage {
+            name: "branch-pinned".to_string(),
+            repo: "https://github.com/org/bp.git".to_string(),
+            commit: "deadbeef".to_string(),
+            version: None,
+            source_kind: SourceKind::Git,
+            requested_version: Some("main".to_string()),
+            resolved_ref: Some("main".to_string()),
+        },
+    ]);
 
     let tmp = TempDir::new().unwrap();
     let lock_path = tmp.path().join("lock.toml");
@@ -317,17 +315,15 @@ version = "1.0"
 
 #[test]
 fn version_fields_omitted_from_toml_when_none() {
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "no-pin".to_string(),
-            repo: "https://github.com/org/no-pin.git".to_string(),
-            commit: "abc".to_string(),
-            version: None,
-            source_kind: SourceKind::Git,
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "no-pin".to_string(),
+        repo: "https://github.com/org/no-pin.git".to_string(),
+        commit: "abc".to_string(),
+        version: None,
+        source_kind: SourceKind::Git,
+        requested_version: None,
+        resolved_ref: None,
+    }]);
 
     let serialized = toml::to_string_pretty(&lockfile).unwrap();
     assert!(
@@ -342,17 +338,15 @@ fn version_fields_omitted_from_toml_when_none() {
 
 #[test]
 fn version_fields_present_in_toml_when_set() {
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "pinned".to_string(),
-            repo: "https://github.com/org/pinned.git".to_string(),
-            commit: "abc".to_string(),
-            version: None,
-            source_kind: SourceKind::Git,
-            requested_version: Some("v2.0".to_string()),
-            resolved_ref: Some("v2.0".to_string()),
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "pinned".to_string(),
+        repo: "https://github.com/org/pinned.git".to_string(),
+        commit: "abc".to_string(),
+        version: None,
+        source_kind: SourceKind::Git,
+        requested_version: Some("v2.0".to_string()),
+        resolved_ref: Some("v2.0".to_string()),
+    }]);
 
     let serialized = toml::to_string_pretty(&lockfile).unwrap();
     assert!(
@@ -376,17 +370,15 @@ fn lock_preserves_requested_version_from_existing_lockfile() {
     std::fs::write(checkout.join("SKILL.md"), "# Pinned").unwrap();
 
     // Create lockfile with pinned version.
-    let initial = Lockfile {
-        package: vec![LockedPackage {
-            name: "pinned-dep".to_string(),
-            repo: "https://github.com/org/pinned.git".to_string(),
-            commit: "abc123".to_string(),
-            version: Some("1.0".to_string()),
-            source_kind: SourceKind::Git,
-            requested_version: Some("v1.0".to_string()),
-            resolved_ref: Some("v1.0".to_string()),
-        }],
-    };
+    let initial = Lockfile::with_packages(vec![LockedPackage {
+        name: "pinned-dep".to_string(),
+        repo: "https://github.com/org/pinned.git".to_string(),
+        commit: "abc123".to_string(),
+        version: Some("1.0".to_string()),
+        source_kind: SourceKind::Git,
+        requested_version: Some("v1.0".to_string()),
+        resolved_ref: Some("v1.0".to_string()),
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &initial).unwrap();
 

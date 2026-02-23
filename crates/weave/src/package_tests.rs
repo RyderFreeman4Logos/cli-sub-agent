@@ -54,28 +54,26 @@ fn parse_source_invalid() {
 
 #[test]
 fn lockfile_round_trip() {
-    let lockfile = Lockfile {
-        package: vec![
-            LockedPackage {
-                name: "audit".to_string(),
-                repo: "https://github.com/org/audit.git".to_string(),
-                commit: "abc123def456".to_string(),
-                version: Some("1.0.0".to_string()),
-                source_kind: SourceKind::default(),
-                requested_version: None,
-                resolved_ref: None,
-            },
-            LockedPackage {
-                name: "review".to_string(),
-                repo: "https://github.com/org/review.git".to_string(),
-                commit: "789abc".to_string(),
-                version: None,
-                source_kind: SourceKind::default(),
-                requested_version: None,
-                resolved_ref: None,
-            },
-        ],
-    };
+    let lockfile = Lockfile::with_packages(vec![
+        LockedPackage {
+            name: "audit".to_string(),
+            repo: "https://github.com/org/audit.git".to_string(),
+            commit: "abc123def456".to_string(),
+            version: Some("1.0.0".to_string()),
+            source_kind: SourceKind::default(),
+            requested_version: None,
+            resolved_ref: None,
+        },
+        LockedPackage {
+            name: "review".to_string(),
+            repo: "https://github.com/org/review.git".to_string(),
+            commit: "789abc".to_string(),
+            version: None,
+            source_kind: SourceKind::default(),
+            requested_version: None,
+            resolved_ref: None,
+        },
+    ]);
 
     let tmp = TempDir::new().unwrap();
     let lock_path = tmp.path().join("lock.toml");
@@ -87,17 +85,15 @@ fn lockfile_round_trip() {
 
 #[test]
 fn upsert_adds_new_package() {
-    let mut lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "existing".to_string(),
-            repo: "https://example.com/existing.git".to_string(),
-            commit: "aaa".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let mut lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "existing".to_string(),
+        repo: "https://example.com/existing.git".to_string(),
+        commit: "aaa".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
 
     let new_pkg = LockedPackage {
         name: "new-pkg".to_string(),
@@ -116,17 +112,15 @@ fn upsert_adds_new_package() {
 
 #[test]
 fn upsert_updates_existing_package() {
-    let mut lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "pkg".to_string(),
-            repo: "https://example.com/pkg.git".to_string(),
-            commit: "old-commit".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let mut lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "pkg".to_string(),
+        repo: "https://example.com/pkg.git".to_string(),
+        commit: "old-commit".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
 
     let updated = LockedPackage {
         name: "pkg".to_string(),
@@ -275,17 +269,15 @@ fn lock_reads_from_legacy_and_writes_to_new() {
     std::fs::write(checkout.join("SKILL.md"), "# Migrated").unwrap();
     let legacy = tmp.path().join(".weave").join("lock.toml");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-    let initial = Lockfile {
-        package: vec![LockedPackage {
-            name: "migrated".to_string(),
-            repo: "https://github.com/org/migrated.git".to_string(),
-            commit: "abc123".to_string(),
-            version: None,
-            source_kind: SourceKind::Git,
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let initial = Lockfile::with_packages(vec![LockedPackage {
+        name: "migrated".to_string(),
+        repo: "https://github.com/org/migrated.git".to_string(),
+        commit: "abc123".to_string(),
+        version: None,
+        source_kind: SourceKind::Git,
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     save_lockfile(&legacy, &initial).unwrap();
     let result = lock(tmp.path(), &store).unwrap();
     assert_eq!(result.package.len(), 1);
@@ -345,17 +337,15 @@ fn lock_preserves_existing_lockfile_entries() {
     let checkout = package_dir(&store, "audit", "abc123").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Audit").unwrap();
-    let initial = Lockfile {
-        package: vec![LockedPackage {
-            name: "audit".to_string(),
-            repo: "https://github.com/org/audit.git".to_string(),
-            commit: "abc123".to_string(),
-            version: Some("1.0".to_string()),
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let initial = Lockfile::with_packages(vec![LockedPackage {
+        name: "audit".to_string(),
+        repo: "https://github.com/org/audit.git".to_string(),
+        commit: "abc123".to_string(),
+        version: Some("1.0".to_string()),
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &initial).unwrap();
     let result = lock(tmp.path(), &store).unwrap();
@@ -376,17 +366,15 @@ fn audit_empty_project_no_issues() {
 fn audit_detects_missing_dep() {
     let tmp = TempDir::new().unwrap();
     let store = tmp.path().join("store");
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "ghost".to_string(),
-            repo: "https://example.com/ghost.git".to_string(),
-            commit: "abc12345".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "ghost".to_string(),
+        repo: "https://example.com/ghost.git".to_string(),
+        commit: "abc12345".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -408,17 +396,15 @@ fn audit_detects_missing_skill_md() {
     let checkout = package_dir(&store, "broken", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
 
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "broken".to_string(),
-            repo: "https://example.com/broken.git".to_string(),
-            commit: "abc12345".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "broken".to_string(),
+        repo: "https://example.com/broken.git".to_string(),
+        commit: "abc12345".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -441,17 +427,15 @@ fn audit_detects_unknown_repo() {
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Local").unwrap();
 
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "local".to_string(),
-            repo: String::new(),
-            commit: "abc12345".to_string(),
-            version: None,
-            source_kind: SourceKind::Git, // Git source with empty repo → UnknownRepo
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "local".to_string(),
+        repo: String::new(),
+        commit: "abc12345".to_string(),
+        version: None,
+        source_kind: SourceKind::Git, // Git source with empty repo → UnknownRepo
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -480,17 +464,15 @@ fn audit_detects_case_mismatch_skill_md() {
     }
     std::fs::remove_file(&probe).unwrap();
 
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "bad-case".to_string(),
-            repo: "https://example.com/bad-case.git".to_string(),
-            commit: "abc12345".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "bad-case".to_string(),
+        repo: "https://example.com/bad-case.git".to_string(),
+        commit: "abc12345".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -519,17 +501,15 @@ fn audit_correct_skill_md_no_case_issue() {
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Good Skill").unwrap();
 
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "good".to_string(),
-            repo: "https://example.com/good.git".to_string(),
-            commit: "abc12345".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "good".to_string(),
+        repo: "https://example.com/good.git".to_string(),
+        commit: "abc12345".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -544,17 +524,15 @@ fn audit_neither_skill_md_variant_is_missing() {
     let checkout = package_dir(&store, "empty", "abc12345").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
 
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "empty".to_string(),
-            repo: "https://example.com/empty.git".to_string(),
-            commit: "abc12345".to_string(),
-            version: None,
-            source_kind: SourceKind::default(),
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "empty".to_string(),
+        repo: "https://example.com/empty.git".to_string(),
+        commit: "abc12345".to_string(),
+        version: None,
+        source_kind: SourceKind::default(),
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -580,6 +558,102 @@ fn migrate_nothing_when_no_legacy_lockfile() {
 }
 
 #[test]
+fn migrate_detects_orphaned_weave_deps() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+    // Create .weave/deps/ without lock.toml
+    let deps_dir = tmp.path().join(".weave").join("deps");
+    std::fs::create_dir_all(&deps_dir).unwrap();
+    std::fs::write(deps_dir.join("some-package"), "placeholder").unwrap();
+
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    match &result {
+        MigrateResult::OrphanedDirs(dirs) => {
+            assert_eq!(dirs.len(), 1);
+            assert!(
+                dirs[0].description.contains(".weave"),
+                "expected .weave mention, got: {}",
+                dirs[0].description
+            );
+            assert!(
+                dirs[0].cleanup_hint.contains("rm -rf"),
+                "expected cleanup hint"
+            );
+        }
+        other => panic!("expected OrphanedDirs, got: {other:?}"),
+    }
+}
+
+#[test]
+fn migrate_detects_legacy_csa_patterns() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+    // Create .csa/patterns/ directory
+    let patterns = tmp.path().join(".csa").join("patterns");
+    std::fs::create_dir_all(&patterns).unwrap();
+
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    match &result {
+        MigrateResult::OrphanedDirs(dirs) => {
+            assert!(
+                dirs.iter().any(|d| d.description.contains(".csa/patterns")),
+                "expected .csa/patterns mention, got: {dirs:?}"
+            );
+        }
+        other => panic!("expected OrphanedDirs, got: {other:?}"),
+    }
+}
+
+#[test]
+fn migrate_detects_both_orphaned_dirs() {
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+    // Create both orphaned directories
+    let deps = tmp.path().join(".weave").join("deps");
+    std::fs::create_dir_all(&deps).unwrap();
+    let patterns = tmp.path().join(".csa").join("patterns");
+    std::fs::create_dir_all(&patterns).unwrap();
+
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    match &result {
+        MigrateResult::OrphanedDirs(dirs) => {
+            assert_eq!(dirs.len(), 2, "expected 2 legacy dirs, got: {dirs:?}");
+        }
+        other => panic!("expected OrphanedDirs, got: {other:?}"),
+    }
+}
+
+#[test]
+fn migrate_ignores_weave_dir_with_non_deps_content() {
+    // If .weave/ contains files other than deps/, the orphan detection
+    // should still report it (as orphaned deps), not suggest removing .weave/.
+    let tmp = TempDir::new().unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+    let weave_dir = tmp.path().join(".weave");
+    std::fs::create_dir_all(weave_dir.join("deps")).unwrap();
+    std::fs::write(weave_dir.join("config.toml"), "some config").unwrap();
+
+    let result = migrate(tmp.path(), &cache, &store).unwrap();
+    match &result {
+        MigrateResult::OrphanedDirs(dirs) => {
+            // Should report orphaned deps but NOT suggest removing whole .weave/
+            // because it contains other files (config.toml).
+            assert_eq!(dirs.len(), 1);
+            assert!(
+                dirs[0].cleanup_hint.contains(".weave/deps"),
+                "should suggest removing deps/ only, got: {}",
+                dirs[0].cleanup_hint
+            );
+        }
+        other => panic!("expected OrphanedDirs, got: {other:?}"),
+    }
+}
+
+#[test]
 fn migrate_already_migrated_when_weave_lock_exists() {
     let tmp = TempDir::new().unwrap();
     let cache = tmp.path().join("cache");
@@ -601,17 +675,15 @@ fn migrate_creates_weave_lock_from_legacy() {
     std::fs::write(checkout.join("SKILL.md"), "# Test").unwrap();
     let legacy = tmp.path().join(".weave").join("lock.toml");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "test-skill".to_string(),
-            repo: String::new(),
-            commit: String::new(),
-            version: None,
-            source_kind: SourceKind::Local,
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "test-skill".to_string(),
+        repo: String::new(),
+        commit: String::new(),
+        version: None,
+        source_kind: SourceKind::Local,
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     save_lockfile(&legacy, &lockfile).unwrap();
 
     let result = migrate(tmp.path(), &cache, &store).unwrap();
@@ -636,17 +708,15 @@ fn migrate_skips_valid_checkout_in_global_store() {
     std::fs::write(checkout.join("SKILL.md"), "# Pre-existing").unwrap();
     let legacy = tmp.path().join(".weave").join("lock.toml");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "pre-existing".to_string(),
-            repo: "https://example.com/pre-existing.git".to_string(),
-            commit: "deadbeef".to_string(),
-            version: None,
-            source_kind: SourceKind::Git,
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "pre-existing".to_string(),
+        repo: "https://example.com/pre-existing.git".to_string(),
+        commit: "deadbeef".to_string(),
+        version: None,
+        source_kind: SourceKind::Git,
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     save_lockfile(&legacy, &lockfile).unwrap();
     let result = migrate(tmp.path(), &cache, &store).unwrap();
     assert!(
@@ -665,28 +735,26 @@ fn migrate_skips_valid_checkout_in_global_store() {
 
 #[test]
 fn source_kind_serde_roundtrip() {
-    let lockfile = Lockfile {
-        package: vec![
-            LockedPackage {
-                name: "from-git".to_string(),
-                repo: "https://github.com/org/from-git.git".to_string(),
-                commit: "abc123".to_string(),
-                version: None,
-                source_kind: SourceKind::Git,
-                requested_version: None,
-                resolved_ref: None,
-            },
-            LockedPackage {
-                name: "from-local".to_string(),
-                repo: String::new(),
-                commit: String::new(),
-                version: Some("1.0".to_string()),
-                source_kind: SourceKind::Local,
-                requested_version: None,
-                resolved_ref: None,
-            },
-        ],
-    };
+    let lockfile = Lockfile::with_packages(vec![
+        LockedPackage {
+            name: "from-git".to_string(),
+            repo: "https://github.com/org/from-git.git".to_string(),
+            commit: "abc123".to_string(),
+            version: None,
+            source_kind: SourceKind::Git,
+            requested_version: None,
+            resolved_ref: None,
+        },
+        LockedPackage {
+            name: "from-local".to_string(),
+            repo: String::new(),
+            commit: String::new(),
+            version: Some("1.0".to_string()),
+            source_kind: SourceKind::Local,
+            requested_version: None,
+            resolved_ref: None,
+        },
+    ]);
 
     let tmp = TempDir::new().unwrap();
     let lock_path = tmp.path().join("lock.toml");
@@ -718,17 +786,15 @@ fn audit_skips_unknown_repo_for_local_source() {
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Local Skill").unwrap();
 
-    let lockfile = Lockfile {
-        package: vec![LockedPackage {
-            name: "local-skill".to_string(),
-            repo: String::new(),
-            commit: String::new(),
-            version: None,
-            source_kind: SourceKind::Local,
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let lockfile = Lockfile::with_packages(vec![LockedPackage {
+        name: "local-skill".to_string(),
+        repo: String::new(),
+        commit: String::new(),
+        version: None,
+        source_kind: SourceKind::Local,
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &lockfile).unwrap();
 
@@ -743,20 +809,84 @@ fn lock_preserves_source_kind_from_existing_lockfile() {
     let checkout = package_dir(&store, "local-dep", "local").unwrap();
     std::fs::create_dir_all(&checkout).unwrap();
     std::fs::write(checkout.join("SKILL.md"), "# Local").unwrap();
-    let initial = Lockfile {
-        package: vec![LockedPackage {
-            name: "local-dep".to_string(),
-            repo: String::new(),
-            commit: String::new(),
-            version: None,
-            source_kind: SourceKind::Local,
-            requested_version: None,
-            resolved_ref: None,
-        }],
-    };
+    let initial = Lockfile::with_packages(vec![LockedPackage {
+        name: "local-dep".to_string(),
+        repo: String::new(),
+        commit: String::new(),
+        version: None,
+        source_kind: SourceKind::Local,
+        requested_version: None,
+        resolved_ref: None,
+    }]);
     let lp = lockfile_path(tmp.path());
     save_lockfile(&lp, &initial).unwrap();
     let result = lock(tmp.path(), &store).unwrap();
     assert_eq!(result.package.len(), 1);
     assert_eq!(result.package[0].source_kind, SourceKind::Local);
+}
+
+#[test]
+fn lockfile_preserves_versions_section_on_roundtrip() {
+    // When a weave.lock contains both [versions] and [[package]], the Lockfile
+    // parser must preserve the [versions] data across load/save.
+    let toml_str = r#"
+[versions]
+csa = "0.1.32"
+weave = "0.1.32"
+
+[migrations]
+applied = []
+
+[[package]]
+name = "audit"
+repo = "https://github.com/org/audit.git"
+commit = "abc123"
+"#;
+    let lockfile: Lockfile = toml::from_str(toml_str).unwrap();
+    assert_eq!(lockfile.package.len(), 1);
+    assert!(lockfile.versions.is_some());
+    assert!(lockfile.migrations.is_some());
+
+    let tmp = TempDir::new().unwrap();
+    let lock_path = tmp.path().join("weave.lock");
+    save_lockfile(&lock_path, &lockfile).unwrap();
+
+    let loaded = load_lockfile(&lock_path).unwrap();
+    assert_eq!(loaded.package.len(), 1);
+    assert!(loaded.versions.is_some(), "versions section lost on save");
+    assert!(
+        loaded.migrations.is_some(),
+        "migrations section lost on save"
+    );
+}
+
+#[test]
+fn lockfile_parses_package_only_format() {
+    // Lockfile must parse a file with only [[package]] entries (no [versions]).
+    let toml_str = r#"
+[[package]]
+name = "my-skill"
+repo = "https://github.com/org/my-skill.git"
+commit = "abc123"
+"#;
+    let lockfile: Lockfile = toml::from_str(toml_str).unwrap();
+    assert_eq!(lockfile.package.len(), 1);
+    assert!(lockfile.versions.is_none());
+    assert!(lockfile.migrations.is_none());
+}
+
+#[test]
+fn lockfile_parses_versions_only_format() {
+    // Lockfile must parse a file with only [versions] (no [[package]]).
+    let toml_str = r#"
+[versions]
+csa = "0.1.32"
+weave = "0.1.32"
+
+[migrations]
+applied = []
+"#;
+    let lockfile: Lockfile = toml::from_str(toml_str).unwrap();
+    assert!(lockfile.package.is_empty());
+    assert!(lockfile.versions.is_some());
 }

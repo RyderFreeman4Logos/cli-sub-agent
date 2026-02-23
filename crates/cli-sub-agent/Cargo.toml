@@ -41,5 +41,8 @@ ignore.workspace = true
 regex.workspace = true
 sha2.workspace = true
 
+[features]
+codex-pty-fork = ["csa-executor/codex-pty-fork"]
+
 [dev-dependencies]
 csa-acp = { path = "../csa-acp" }

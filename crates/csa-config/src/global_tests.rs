@@ -142,6 +142,7 @@ fn test_debate_config_default() {
     assert_eq!(config.debate.tool, "auto");
     assert_eq!(config.debate.timeout_seconds, 1800);
     assert_eq!(config.debate.thinking, None);
+    assert!(config.debate.same_model_fallback);
 }
 
 #[test]
@@ -232,6 +233,19 @@ thinking = "high"
     assert_eq!(config.debate.tool, "codex");
     assert_eq!(config.debate.timeout_seconds, 2400);
     assert_eq!(config.debate.thinking.as_deref(), Some("high"));
+    // same_model_fallback defaults to true when not specified
+    assert!(config.debate.same_model_fallback);
+}
+
+#[test]
+fn test_parse_debate_config_same_model_fallback_disabled() {
+    let toml_str = r#"
+[debate]
+tool = "auto"
+same_model_fallback = false
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert!(!config.debate.same_model_fallback);
 }
 
 #[test]

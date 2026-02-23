@@ -38,7 +38,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
 fn resolve_debate_tool_prefers_cli_override() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         Some(ToolName::Codex),
         Some(&cfg),
         &global,
@@ -48,13 +48,14 @@ fn resolve_debate_tool_prefers_cli_override() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
 fn resolve_debate_tool_auto_maps_heterogeneous() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["codex"]);
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         None,
         Some(&cfg),
         &global,
@@ -64,13 +65,14 @@ fn resolve_debate_tool_auto_maps_heterogeneous() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
 fn resolve_debate_tool_auto_maps_reverse() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["claude-code"]);
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         None,
         Some(&cfg),
         &global,
@@ -80,11 +82,37 @@ fn resolve_debate_tool_auto_maps_reverse() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::ClaudeCode));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
-fn resolve_debate_tool_errors_without_parent_context() {
+fn resolve_debate_tool_same_model_fallback_when_no_parent() {
+    // With same_model_fallback enabled (default), no parent context should fall
+    // back to same-model adversarial using any available tool.
     let global = GlobalConfig::default();
+    let cfg = project_config_with_enabled_tools(&["opencode"]);
+    let (tool, mode) = resolve_debate_tool(
+        None,
+        Some(&cfg),
+        &global,
+        None,
+        std::path::Path::new("/tmp/test-project"),
+        false,
+    )
+    .unwrap();
+    // Falls back to first known tool (same-model adversarial)
+    assert_eq!(mode, DebateMode::SameModelAdversarial);
+    // Tool is from all_known_tools since no parent was detected
+    assert!(matches!(
+        tool,
+        ToolName::GeminiCli | ToolName::Opencode | ToolName::Codex | ToolName::ClaudeCode
+    ));
+}
+
+#[test]
+fn resolve_debate_tool_same_model_fallback_disabled_errors_without_parent() {
+    let mut global = GlobalConfig::default();
+    global.debate.same_model_fallback = false;
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let err = resolve_debate_tool(
         None,
@@ -102,8 +130,27 @@ fn resolve_debate_tool_errors_without_parent_context() {
 }
 
 #[test]
-fn resolve_debate_tool_errors_on_unknown_parent() {
+fn resolve_debate_tool_same_model_fallback_uses_parent_tool() {
+    // When only the parent tool family is available, fallback uses the parent tool.
     let global = GlobalConfig::default();
+    let cfg = project_config_with_enabled_tools(&["opencode"]);
+    let (tool, mode) = resolve_debate_tool(
+        None,
+        Some(&cfg),
+        &global,
+        Some("opencode"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+    )
+    .unwrap();
+    assert!(matches!(tool, ToolName::Opencode));
+    assert_eq!(mode, DebateMode::SameModelAdversarial);
+}
+
+#[test]
+fn resolve_debate_tool_same_model_fallback_disabled_errors_on_unknown_parent() {
+    let mut global = GlobalConfig::default();
+    global.debate.same_model_fallback = false;
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let err = resolve_debate_tool(
         None,
@@ -128,7 +175,7 @@ fn resolve_debate_tool_prefers_project_override() {
         tool: "opencode".to_string(),
     });
 
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         None,
         Some(&cfg),
         &global,
@@ -138,6 +185,7 @@ fn resolve_debate_tool_prefers_project_override() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
@@ -148,7 +196,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
         tool: "auto".to_string(),
     });
 
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         None,
         Some(&cfg),
         &global,
@@ -158,6 +206,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
@@ -170,7 +219,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
         tool: "auto".to_string(),
     });
 
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         None,
         Some(&cfg),
         &global,
@@ -180,6 +229,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
@@ -192,7 +242,7 @@ fn resolve_debate_tool_ignores_unknown_priority_entries() {
         tool: "auto".to_string(),
     });
 
-    let tool = resolve_debate_tool(
+    let (tool, mode) = resolve_debate_tool(
         None,
         Some(&cfg),
         &global,
@@ -202,6 +252,7 @@ fn resolve_debate_tool_ignores_unknown_priority_entries() {
     )
     .unwrap();
     assert!(matches!(tool, ToolName::ClaudeCode));
+    assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
 #[test]
@@ -300,11 +351,27 @@ fn format_debate_stdout_summary_contains_required_fields() {
         confidence: "high".to_string(),
         summary: "Proceed with the proposal.".to_string(),
         key_points: vec!["Point".to_string()],
+        mode: DebateMode::Heterogeneous,
     };
     let line = format_debate_stdout_summary(&summary);
     assert!(line.contains("APPROVE"));
     assert!(line.contains("high"));
     assert!(line.contains("Proceed with the proposal."));
+    assert!(!line.contains("DEGRADED"));
+}
+
+#[test]
+fn format_debate_stdout_summary_shows_degradation_for_same_model() {
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Need more evidence.".to_string(),
+        key_points: vec![],
+        mode: DebateMode::SameModelAdversarial,
+    };
+    let line = format_debate_stdout_summary(&summary);
+    assert!(line.contains("DEGRADED"));
+    assert!(line.contains("same-model adversarial"));
 }
 
 #[test]
@@ -318,6 +385,7 @@ fn persist_debate_output_artifacts_writes_json_and_markdown() {
         confidence: "low".to_string(),
         summary: "Need more data before rollout.".to_string(),
         key_points: vec!["Insufficient benchmark evidence.".to_string()],
+        mode: DebateMode::Heterogeneous,
     };
     let transcript = "# Debate transcript\n\nFull content.";
     let artifacts = persist_debate_output_artifacts(session_dir, &summary, transcript).unwrap();
@@ -334,10 +402,34 @@ fn persist_debate_output_artifacts_writes_json_and_markdown() {
     assert_eq!(parsed["summary"], "Need more data before rollout.");
     assert_eq!(parsed["key_points"][0], "Insufficient benchmark evidence.");
     assert!(parsed["timestamp"].as_str().is_some());
+    // Heterogeneous mode should not include mode annotation
+    assert!(parsed.get("mode").is_none());
 
     let transcript_path = session_dir.join("output/debate-transcript.md");
     let transcript_content = std::fs::read_to_string(transcript_path).unwrap();
     assert_eq!(transcript_content, transcript);
+}
+
+#[test]
+fn persist_debate_output_artifacts_includes_mode_for_same_model() {
+    let tmp = tempfile::TempDir::new().unwrap();
+    let session_dir = tmp.path();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap();
+
+    let summary = DebateSummary {
+        verdict: "APPROVE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Acceptable with caveats.".to_string(),
+        key_points: vec![],
+        mode: DebateMode::SameModelAdversarial,
+    };
+    let artifacts = persist_debate_output_artifacts(session_dir, &summary, "transcript").unwrap();
+
+    let verdict_path = session_dir.join("output/debate-verdict.json");
+    let verdict_json = std::fs::read_to_string(verdict_path).unwrap();
+    let parsed: Value = serde_json::from_str(&verdict_json).unwrap();
+    assert_eq!(parsed["mode"], "same-model adversarial, not heterogeneous");
+    assert_eq!(artifacts.len(), 2);
 }
 
 #[test]
@@ -351,7 +443,7 @@ fn extract_debate_summary_does_not_leak_provider_session_id() {
     );
     // Simulate render_debate_output sanitization
     let sanitized = raw_output.replace(provider_id, meta_id);
-    let summary = extract_debate_summary(&sanitized, "fallback");
+    let summary = extract_debate_summary(&sanitized, "fallback", DebateMode::Heterogeneous);
 
     assert!(
         !summary.summary.contains(provider_id),

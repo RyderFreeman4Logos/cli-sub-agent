@@ -18,6 +18,15 @@ use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 
+/// Debate execution mode indicating model diversity level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DebateMode {
+    /// Different model families (e.g., Claude vs OpenAI) — full cognitive diversity.
+    Heterogeneous,
+    /// Same tool used for both Proposer and Critic — degraded diversity.
+    SameModelAdversarial,
+}
+
 pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
@@ -41,7 +50,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     // 5. Determine tool (heterogeneous enforcement)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let tool = resolve_debate_tool(
+    let (tool, debate_mode) = resolve_debate_tool(
         args.tool,
         config.as_ref(),
         &global_config,
@@ -49,6 +58,13 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         &project_root,
         args.force_override_user_config,
     )?;
+    if debate_mode == DebateMode::SameModelAdversarial {
+        warn!(
+            tool = %tool.as_str(),
+            "Falling back to same-model adversarial debate — heterogeneous models unavailable. \
+             Cognitive diversity is degraded."
+        );
+    }
     let thinking = resolve_debate_thinking(
         args.thinking.as_deref(),
         global_config.debate.thinking.as_deref(),
@@ -213,7 +229,8 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         execution.provider_session_id.as_deref(),
     );
 
-    let debate_summary = extract_debate_summary(&output, execution.execution.summary.as_str());
+    let debate_summary =
+        extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode);
     let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
     append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
@@ -235,6 +252,12 @@ struct DebateVerdict {
     summary: String,
     key_points: Vec<String>,
     timestamp: String,
+    /// Debate execution mode annotation.
+    ///
+    /// - `"heterogeneous"`: different model families (full diversity)
+    /// - `"same-model adversarial"`: same tool, independent contexts (degraded)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mode: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -243,9 +266,15 @@ struct DebateSummary {
     confidence: String,
     summary: String,
     key_points: Vec<String>,
+    /// Debate execution mode for output annotation.
+    mode: DebateMode,
 }
 
-fn extract_debate_summary(tool_output: &str, fallback_summary: &str) -> DebateSummary {
+fn extract_debate_summary(
+    tool_output: &str,
+    fallback_summary: &str,
+    mode: DebateMode,
+) -> DebateSummary {
     let summary = extract_one_line_summary(tool_output, fallback_summary);
     let key_points = extract_key_points(tool_output, summary.as_str());
     DebateSummary {
@@ -253,6 +282,7 @@ fn extract_debate_summary(tool_output: &str, fallback_summary: &str) -> DebateSu
         confidence: extract_confidence(tool_output).to_string(),
         summary,
         key_points,
+        mode,
     }
 }
 
@@ -269,12 +299,19 @@ fn persist_debate_output_artifacts(
         )
     })?;
 
+    let mode_annotation = match summary.mode {
+        DebateMode::Heterogeneous => None,
+        DebateMode::SameModelAdversarial => {
+            Some("same-model adversarial, not heterogeneous".to_string())
+        }
+    };
     let verdict = DebateVerdict {
         verdict: summary.verdict.clone(),
         confidence: summary.confidence.clone(),
         summary: summary.summary.clone(),
         key_points: summary.key_points.clone(),
         timestamp: Utc::now().to_rfc3339(),
+        mode: mode_annotation,
     };
     let verdict_path = output_dir.join("debate-verdict.json");
     let verdict_json = serde_json::to_string_pretty(&verdict)
@@ -320,9 +357,15 @@ fn append_debate_artifacts_to_result(
 }
 
 fn format_debate_stdout_summary(summary: &DebateSummary) -> String {
+    let mode_suffix = match summary.mode {
+        DebateMode::Heterogeneous => String::new(),
+        DebateMode::SameModelAdversarial => {
+            " [DEGRADED: same-model adversarial, not heterogeneous]".to_string()
+        }
+    };
     format!(
-        "Debate verdict: {} (confidence: {}) - {}",
-        summary.verdict, summary.confidence, summary.summary
+        "Debate verdict: {} (confidence: {}) - {}{}",
+        summary.verdict, summary.confidence, summary.summary, mode_suffix
     )
 }
 
@@ -515,14 +558,14 @@ fn resolve_debate_tool(
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
-) -> Result<ToolName> {
-    // CLI --tool override always wins
+) -> Result<(ToolName, DebateMode)> {
+    // CLI --tool override always wins (explicit tool = heterogeneous intent)
     if let Some(tool) = arg_tool {
         // Enforce tool enablement when user explicitly selects a tool
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
         }
-        return Ok(tool);
+        return Ok((tool, DebateMode::Heterogeneous));
     }
 
     // Project-level [debate] config override
@@ -555,20 +598,38 @@ fn resolve_debate_tool(
         if has_known_priority {
             if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config)
             {
-                return Ok(tool);
+                return Ok((tool, DebateMode::Heterogeneous));
             }
         }
     }
 
     // Global config [debate] section
     match global_config.resolve_debate_tool(parent_tool) {
-        Ok(tool_name) => crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
-            anyhow::anyhow!(
-                "Invalid [debate].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
-                tool_name
-            )
-        }),
-        Err(_) => Err(debate_auto_resolution_error(parent_tool, project_root)),
+        Ok(tool_name) => {
+            // Skip disabled tools from global auto-resolution
+            if let Some(cfg) = project_config {
+                if !cfg.is_tool_enabled(&tool_name) {
+                    // Try same-model fallback before giving up
+                    return resolve_same_model_fallback(
+                        parent_tool,
+                        project_config,
+                        global_config,
+                        project_root,
+                    );
+                }
+            }
+            let tool = crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
+                anyhow::anyhow!(
+                    "Invalid [debate].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
+                    tool_name
+                )
+            })?;
+            Ok((tool, DebateMode::Heterogeneous))
+        }
+        Err(_) => {
+            // Heterogeneous selection failed — try same-model fallback
+            resolve_same_model_fallback(parent_tool, project_config, global_config, project_root)
+        }
     }
 }
 
@@ -578,7 +639,7 @@ fn resolve_debate_tool_from_value(
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     project_root: &Path,
-) -> Result<ToolName> {
+) -> Result<(ToolName, DebateMode)> {
     if tool_value == "auto" {
         let has_known_priority =
             csa_config::global::effective_tool_priority(project_config, global_config)
@@ -591,35 +652,47 @@ fn resolve_debate_tool_from_value(
         if has_known_priority {
             if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config)
             {
-                return Ok(tool);
+                return Ok((tool, DebateMode::Heterogeneous));
             }
         }
 
-        // Try old heterogeneous_counterpart first for backward compatibility
+        // Try old heterogeneous_counterpart first for backward compatibility,
+        // but only if the counterpart tool is enabled.
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
-            return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
-                anyhow::anyhow!(
-                    "BUG: auto debate tool resolution returned invalid tool '{}'",
-                    resolved
-                )
-            });
+            let counterpart_enabled =
+                project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
+            if counterpart_enabled {
+                let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
+                    anyhow::anyhow!(
+                        "BUG: auto debate tool resolution returned invalid tool '{}'",
+                        resolved
+                    )
+                })?;
+                return Ok((tool, DebateMode::Heterogeneous));
+            }
         }
 
         // Fallback to ModelFamily-based selection (filtered by enabled tools)
         if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config) {
-            return Ok(tool);
+            return Ok((tool, DebateMode::Heterogeneous));
         }
 
-        // Both methods failed
-        return Err(debate_auto_resolution_error(parent_tool, project_root));
+        // All heterogeneous methods failed — try same-model fallback
+        return resolve_same_model_fallback(
+            parent_tool,
+            project_config,
+            global_config,
+            project_root,
+        );
     }
 
-    crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
+    let tool = crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
         anyhow::anyhow!(
             "Invalid project [debate].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
             tool_value
         )
-    })
+    })?;
+    Ok((tool, DebateMode::Heterogeneous))
 }
 
 fn select_auto_debate_tool(
@@ -645,6 +718,59 @@ fn select_auto_debate_tool(
     };
 
     select_heterogeneous_tool(&parent_tool_name, &enabled_tools)
+}
+
+/// Attempt same-model adversarial fallback when heterogeneous selection fails.
+///
+/// Uses the parent tool (or any available tool) to run two independent sub-agents
+/// as Proposer and Critic. Returns `SameModelAdversarial` mode to annotate output.
+///
+/// Fails with the standard auto-resolution error when:
+/// - `same_model_fallback` is disabled in config
+/// - No parent tool is detected and no tools are available
+fn resolve_same_model_fallback(
+    parent_tool: Option<&str>,
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    project_root: &Path,
+) -> Result<(ToolName, DebateMode)> {
+    if !global_config.debate.same_model_fallback {
+        return Err(debate_auto_resolution_error(parent_tool, project_root));
+    }
+
+    // Use the parent tool itself for same-model adversarial debate,
+    // but only if the tool is enabled in project config.
+    if let Some(parent_str) = parent_tool {
+        if let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str) {
+            let enabled = project_config
+                .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
+                .unwrap_or(true);
+            if enabled {
+                return Ok((tool, DebateMode::SameModelAdversarial));
+            }
+        }
+    }
+
+    // No usable parent tool — select the first enabled tool from project config
+    let candidates: Vec<_> = if let Some(cfg) = project_config {
+        csa_config::global::all_known_tools()
+            .iter()
+            .filter(|t| cfg.is_tool_enabled(t.as_str()))
+            .copied()
+            .collect()
+    } else {
+        csa_config::global::all_known_tools().to_vec()
+    };
+    // Prefer a tool that is both enabled AND installed on this system.
+    // Fall back to first enabled tool if none are installed (preserves prior behavior).
+    let installed = candidates
+        .iter()
+        .find(|t| crate::run_helpers::is_tool_binary_available(t.as_str()));
+    if let Some(tool) = installed.or(candidates.first()) {
+        return Ok((*tool, DebateMode::SameModelAdversarial));
+    }
+
+    Err(debate_auto_resolution_error(parent_tool, project_root))
 }
 
 fn debate_auto_resolution_error(parent_tool: Option<&str>, project_root: &Path) -> anyhow::Error {

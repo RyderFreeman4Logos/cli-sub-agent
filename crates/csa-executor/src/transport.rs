@@ -1,5 +1,6 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::executor::Executor;
 use anyhow::{Result, anyhow};
@@ -11,7 +12,10 @@ use csa_process::{
 };
 use csa_resource::cgroup::SandboxConfig;
 use csa_session::state::{MetaSessionState, ToolState};
-const SUMMARY_MAX_CHARS: usize = 200;
+
+#[path = "transport_meta.rs"]
+mod transport_meta;
+use transport_meta::{build_summary, run_acp_sandboxed};
 
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
@@ -189,10 +193,10 @@ impl Transport for LegacyTransport {
 
 #[derive(Debug, Clone)]
 pub struct AcpTransport {
-    tool_name: String,
+    pub(crate) tool_name: String,
     acp_command: String,
     acp_args: Vec<String>,
-    session_config: Option<SessionConfig>,
+    pub(crate) session_config: Option<SessionConfig>,
 }
 
 impl AcpTransport {
@@ -215,129 +219,6 @@ impl AcpTransport {
             "codex" => ("codex-acp".into(), vec![]),
             _ => (format!("{tool_name}-acp"), vec![]),
         }
-    }
-
-    fn build_system_prompt(session_config: Option<&SessionConfig>) -> Option<String> {
-        let config = session_config?;
-        let mut sections = Vec::new();
-
-        if !config.no_load.is_empty() {
-            sections.push(format!("No-load skills: {}", config.no_load.join(", ")));
-        }
-        if !config.extra_load.is_empty() {
-            sections.push(format!(
-                "Extra-load skills: {}",
-                config.extra_load.join(", ")
-            ));
-        }
-        if let Some(tier) = &config.tier {
-            sections.push(format!("Tier: {tier}"));
-        }
-        if !config.models.is_empty() {
-            sections.push(format!("Model candidates: {}", config.models.join(", ")));
-        }
-        if !config.mcp_servers.is_empty() {
-            let servers = config
-                .mcp_servers
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            sections.push(format!("MCP servers: {servers}"));
-        }
-
-        if sections.is_empty() {
-            None
-        } else {
-            Some(sections.join("\n"))
-        }
-    }
-
-    /// Build ACP session meta from setting_sources and MCP config.
-    ///
-    /// - setting sources: `{"claudeCode":{"options":{"settingSources": [...]}}}`
-    /// - MCP servers: `{"claudeCode":{"options":{"mcpServers": {...}}}}`
-    /// - when proxy socket exists, `mcpServers` contains a single `csa-mcp-hub` entry.
-    pub(crate) fn build_session_meta(
-        setting_sources: Option<&[String]>,
-        session_config: Option<&SessionConfig>,
-    ) -> Option<serde_json::Map<String, serde_json::Value>> {
-        let mut options = serde_json::Map::new();
-        if let Some(sources) = setting_sources {
-            options.insert(
-                "settingSources".to_string(),
-                serde_json::Value::Array(
-                    sources
-                        .iter()
-                        .map(|source| serde_json::Value::String(source.clone()))
-                        .collect(),
-                ),
-            );
-        }
-        if let Some(cfg) = session_config {
-            let mcp_servers = csa_acp::mcp_proxy_client::resolve_mcp_meta_servers(cfg);
-            let non_empty_servers = mcp_servers
-                .as_object()
-                .map(|servers| !servers.is_empty())
-                .unwrap_or(false);
-            if non_empty_servers {
-                options.insert("mcpServers".to_string(), mcp_servers);
-            }
-        }
-        if options.is_empty() {
-            return None;
-        }
-
-        let mut claude_code = serde_json::Map::new();
-        claude_code.insert("options".to_string(), serde_json::Value::Object(options));
-        let mut meta = serde_json::Map::new();
-        meta.insert(
-            "claudeCode".to_string(),
-            serde_json::Value::Object(claude_code),
-        );
-        Some(meta)
-    }
-
-    pub(crate) fn build_env(
-        &self,
-        session: &MetaSessionState,
-        extra_env: Option<&HashMap<String, String>>,
-    ) -> HashMap<String, String> {
-        let mut env = HashMap::new();
-        env.insert(
-            "CSA_SESSION_ID".to_string(),
-            session.meta_session_id.clone(),
-        );
-        env.insert(
-            "CSA_DEPTH".to_string(),
-            (session.genealogy.depth + 1).to_string(),
-        );
-        env.insert("CSA_PROJECT_ROOT".to_string(), session.project_path.clone());
-        // CSA_SESSION_DIR: absolute path to the session state directory
-        if let Ok(dir) = csa_session::manager::get_session_dir(
-            Path::new(&session.project_path),
-            &session.meta_session_id,
-        ) {
-            env.insert(
-                "CSA_SESSION_DIR".to_string(),
-                dir.to_string_lossy().into_owned(),
-            );
-        } else {
-            tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
-        }
-
-        env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
-        if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
-            env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
-        }
-        if let Some(parent_session) = &session.genealogy.parent_session_id {
-            env.insert("CSA_PARENT_SESSION".to_string(), parent_session.clone());
-        }
-
-        if let Some(extra) = extra_env {
-            env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-        env
     }
 }
 
@@ -419,6 +300,7 @@ impl Transport for AcpTransport {
                                     system_prompt: system_prompt.as_deref(),
                                     resume_session_id: resume_session_id.as_deref(),
                                     meta: session_meta.clone(),
+                                    ..Default::default()
                                 },
                                 &prompt,
                                 csa_acp::transport::AcpRunOptions {
@@ -451,6 +333,7 @@ impl Transport for AcpTransport {
                             system_prompt: system_prompt.as_deref(),
                             resume_session_id: resume_session_id.as_deref(),
                             meta: session_meta.clone(),
+                            ..Default::default()
                         },
                         &prompt,
                         csa_acp::transport::AcpRunOptions {
@@ -521,139 +404,130 @@ impl TransportFactory {
     }
 }
 
-/// Run an ACP prompt with sandbox isolation.
-#[allow(clippy::too_many_arguments)]
-async fn run_acp_sandboxed(
-    command: &str,
-    args: &[String],
-    working_dir: &Path,
-    env: &HashMap<String, String>,
-    system_prompt: Option<&str>,
-    resume_session_id: Option<&str>,
-    meta: Option<serde_json::Map<String, serde_json::Value>>,
-    prompt: &str,
-    idle_timeout: std::time::Duration,
-    init_timeout: std::time::Duration,
-    termination_grace_period: std::time::Duration,
-    sandbox_config: &SandboxConfig,
-    tool_name: &str,
-    session_id: &str,
-    stream_stdout_to_stderr: bool,
-    output_spool: Option<&Path>,
-) -> csa_acp::AcpResult<csa_acp::transport::AcpOutput> {
-    use csa_acp::AcpConnection;
-    use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
+/// Which fork strategy was used for a session fork.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkMethod {
+    /// Claude Code CLI `--fork-session` (provider-level fork).
+    Native,
+    /// Context summary injection for tools without native fork support.
+    Soft,
+}
 
-    let (connection, _sandbox_handle) = AcpConnection::spawn_sandboxed(
-        AcpSpawnRequest {
-            command,
-            args,
-            working_dir,
-            env,
-            options: AcpConnectionOptions {
-                init_timeout,
-                termination_grace_period,
-            },
-        },
-        Some(AcpSandboxRequest {
-            config: sandbox_config,
-            tool_name,
-            session_id,
-        }),
-    )
-    .await?;
+/// Result of a transport-level session fork attempt.
+#[derive(Debug, Clone)]
+pub struct ForkInfo {
+    /// Whether the fork succeeded.
+    pub success: bool,
+    /// Which fork method was used.
+    pub method: ForkMethod,
+    /// New provider-level session ID (Native forks only).
+    pub new_session_id: Option<String>,
+    /// Human-readable notes (e.g. error details or context summary path).
+    pub notes: Option<String>,
+}
 
-    connection.initialize().await?;
+/// Options for a transport-level fork request.
+#[derive(Debug, Clone)]
+pub struct ForkRequest {
+    /// The tool name.
+    pub tool_name: String,
+    /// Pre-computed fork method. When set, `fork_session` uses this instead of
+    /// re-deriving from `tool_name`. This is essential for cross-tool forks where
+    /// `resolve_fork` determines `ForkMethod::Soft` but the target tool would
+    /// otherwise select `Native`.
+    pub fork_method: Option<ForkMethod>,
+    /// Provider session ID of the parent (required for Native fork).
+    pub provider_session_id: Option<String>,
+    /// CSA session ID of the parent (used for Soft fork context loading).
+    pub parent_csa_session_id: String,
+    /// Directory of the parent session (used for Soft fork to read result/output).
+    pub parent_session_dir: PathBuf,
+    /// Working directory for CLI fork commands.
+    pub working_dir: PathBuf,
+    /// Timeout for the CLI fork subprocess.
+    pub timeout: Duration,
+}
 
-    let acp_session_id = if let Some(resume_id) = resume_session_id {
-        tracing::debug!(
-            resume_session_id = resume_id,
-            "loading ACP session (sandboxed)"
-        );
-        match connection.load_session(resume_id, Some(working_dir)).await {
-            Ok(id) => id,
-            Err(error) => {
-                tracing::warn!(
-                    resume_session_id = resume_id,
-                    error = %error,
-                    "Failed to resume sandboxed ACP session, creating new session"
-                );
-                connection
-                    .new_session(system_prompt, Some(working_dir), meta.clone())
-                    .await?
-            }
+impl TransportFactory {
+    /// Determine which fork method applies for a given tool.
+    pub fn fork_method_for_tool(tool_name: &str) -> ForkMethod {
+        if tool_name == "claude-code" {
+            ForkMethod::Native
+        } else {
+            ForkMethod::Soft
         }
-    } else {
-        connection
-            .new_session(system_prompt, Some(working_dir), meta.clone())
-            .await?
-    };
+    }
 
-    let result = connection
-        .prompt_with_io(
-            &acp_session_id,
-            prompt,
-            idle_timeout,
-            csa_acp::connection::PromptIoOptions {
-                stream_stdout_to_stderr,
-                output_spool,
-            },
+    /// Fork a session via the appropriate transport-level mechanism.
+    ///
+    /// - `claude-code`: Native fork via `claude --fork-session` CLI.
+    /// - All others: Soft fork via context summary injection from parent session.
+    pub async fn fork_session(request: &ForkRequest) -> ForkInfo {
+        let method = request
+            .fork_method
+            .unwrap_or_else(|| Self::fork_method_for_tool(&request.tool_name));
+        match method {
+            ForkMethod::Native => Self::fork_native(request).await,
+            ForkMethod::Soft => Self::fork_soft(request),
+        }
+    }
+
+    async fn fork_native(request: &ForkRequest) -> ForkInfo {
+        let Some(provider_session_id) = &request.provider_session_id else {
+            return ForkInfo {
+                success: false,
+                method: ForkMethod::Native,
+                new_session_id: None,
+                notes: Some(
+                    "Native fork requires provider_session_id, but none was provided".to_string(),
+                ),
+            };
+        };
+
+        match csa_acp::fork_session_via_cli(
+            provider_session_id,
+            &request.working_dir,
+            request.timeout,
         )
-        .await?;
-
-    let mut exit_code = connection.exit_code().await?.unwrap_or(0);
-    let mut stderr = connection.stderr();
-    if result.timed_out {
-        exit_code = 137;
-        if !stderr.is_empty() && !stderr.ends_with('\n') {
-            stderr.push('\n');
+        .await
+        {
+            Ok(result) => ForkInfo {
+                success: true,
+                method: ForkMethod::Native,
+                new_session_id: Some(result.session_id),
+                notes: None,
+            },
+            Err(e) => ForkInfo {
+                success: false,
+                method: ForkMethod::Native,
+                new_session_id: None,
+                notes: Some(format!("Native fork failed: {e}")),
+            },
         }
-        stderr.push_str(&format!(
-            "idle timeout: no ACP events/stderr for {}s; process killed",
-            idle_timeout.as_secs()
-        ));
-        stderr.push('\n');
     }
 
-    // _sandbox_handle dropped here, cleaning up cgroup scope if applicable.
-
-    Ok(csa_acp::transport::AcpOutput {
-        output: result.output,
-        stderr,
-        events: result.events,
-        session_id: acp_session_id,
-        exit_code,
-    })
-}
-
-fn build_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
-    if exit_code == 0 {
-        return truncate_line(last_non_empty_line(stdout), SUMMARY_MAX_CHARS);
+    fn fork_soft(request: &ForkRequest) -> ForkInfo {
+        match csa_session::soft_fork_session(
+            &request.parent_session_dir,
+            &request.parent_csa_session_id,
+        ) {
+            Ok(ctx) => ForkInfo {
+                success: true,
+                method: ForkMethod::Soft,
+                new_session_id: None,
+                notes: Some(format!(
+                    "Soft fork context ({} chars) ready for injection",
+                    ctx.context_summary.len()
+                )),
+            },
+            Err(e) => ForkInfo {
+                success: false,
+                method: ForkMethod::Soft,
+                new_session_id: None,
+                notes: Some(format!("Soft fork failed: {e}")),
+            },
+        }
     }
-
-    let stdout_line = last_non_empty_line(stdout);
-    if !stdout_line.is_empty() {
-        return truncate_line(stdout_line, SUMMARY_MAX_CHARS);
-    }
-
-    let stderr_line = last_non_empty_line(stderr);
-    if !stderr_line.is_empty() {
-        return truncate_line(stderr_line, SUMMARY_MAX_CHARS);
-    }
-
-    format!("exit code {exit_code}")
-}
-
-fn last_non_empty_line(output: &str) -> &str {
-    output
-        .lines()
-        .rev()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-}
-
-fn truncate_line(line: &str, max_chars: usize) -> String {
-    line.chars().take(max_chars).collect()
 }
 
 #[cfg(test)]
@@ -790,6 +664,173 @@ mod tests {
     fn test_build_summary_falls_back_to_exit_code_when_no_output() {
         let summary = build_summary("", "   \n", -1);
         assert_eq!(summary, "exit code -1");
+    }
+
+    // ── ForkMethod / ForkInfo / fork routing tests ──────────────────
+
+    #[test]
+    fn test_fork_method_for_tool_claude_code_is_native() {
+        assert_eq!(
+            TransportFactory::fork_method_for_tool("claude-code"),
+            ForkMethod::Native
+        );
+    }
+
+    #[test]
+    fn test_fork_method_for_tool_codex_is_soft() {
+        assert_eq!(
+            TransportFactory::fork_method_for_tool("codex"),
+            ForkMethod::Soft
+        );
+    }
+
+    #[test]
+    fn test_fork_method_for_tool_gemini_cli_is_soft() {
+        assert_eq!(
+            TransportFactory::fork_method_for_tool("gemini-cli"),
+            ForkMethod::Soft
+        );
+    }
+
+    #[test]
+    fn test_fork_method_for_tool_opencode_is_soft() {
+        assert_eq!(
+            TransportFactory::fork_method_for_tool("opencode"),
+            ForkMethod::Soft
+        );
+    }
+
+    #[test]
+    fn test_fork_info_construction_success() {
+        let info = ForkInfo {
+            success: true,
+            method: ForkMethod::Native,
+            new_session_id: Some("new-sess-123".to_string()),
+            notes: None,
+        };
+        assert!(info.success);
+        assert_eq!(info.method, ForkMethod::Native);
+        assert_eq!(info.new_session_id.as_deref(), Some("new-sess-123"));
+        assert!(info.notes.is_none());
+    }
+
+    #[test]
+    fn test_fork_info_construction_failure() {
+        let info = ForkInfo {
+            success: false,
+            method: ForkMethod::Soft,
+            new_session_id: None,
+            notes: Some("something went wrong".to_string()),
+        };
+        assert!(!info.success);
+        assert_eq!(info.method, ForkMethod::Soft);
+        assert!(info.new_session_id.is_none());
+        assert!(info.notes.as_deref().unwrap().contains("wrong"));
+    }
+
+    #[tokio::test]
+    async fn test_fork_session_soft_with_empty_parent_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let request = ForkRequest {
+            tool_name: "codex".to_string(),
+            fork_method: None,
+            provider_session_id: None,
+            parent_csa_session_id: "01TEST_PARENT".to_string(),
+            parent_session_dir: tmp.path().to_path_buf(),
+            working_dir: tmp.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let info = TransportFactory::fork_session(&request).await;
+
+        assert!(
+            info.success,
+            "Soft fork should succeed even with empty parent: {:?}",
+            info.notes
+        );
+        assert_eq!(info.method, ForkMethod::Soft);
+        assert!(
+            info.new_session_id.is_none(),
+            "Soft fork does not create provider session"
+        );
+        assert!(
+            info.notes
+                .as_deref()
+                .unwrap()
+                .contains("ready for injection")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fork_session_native_without_provider_id_fails() {
+        let tmp = tempfile::tempdir().unwrap();
+        let request = ForkRequest {
+            tool_name: "claude-code".to_string(),
+            fork_method: None,
+            provider_session_id: None,
+            parent_csa_session_id: "01TEST_PARENT".to_string(),
+            parent_session_dir: tmp.path().to_path_buf(),
+            working_dir: tmp.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let info = TransportFactory::fork_session(&request).await;
+
+        assert!(!info.success);
+        assert_eq!(info.method, ForkMethod::Native);
+        assert!(
+            info.notes
+                .as_deref()
+                .unwrap()
+                .contains("provider_session_id"),
+            "Should explain missing provider ID: {:?}",
+            info.notes
+        );
+    }
+
+    #[tokio::test]
+    async fn test_fork_session_soft_with_result_toml() {
+        use chrono::Utc;
+        use csa_session::result::{RESULT_FILE_NAME, SessionResult};
+
+        let tmp = tempfile::tempdir().unwrap();
+        let now = Utc::now();
+        let result = SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "Tests passed".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: vec![],
+        };
+        std::fs::write(
+            tmp.path().join(RESULT_FILE_NAME),
+            toml::to_string_pretty(&result).unwrap(),
+        )
+        .unwrap();
+
+        let request = ForkRequest {
+            tool_name: "gemini-cli".to_string(),
+            fork_method: None,
+            provider_session_id: None,
+            parent_csa_session_id: "01RICH_PARENT".to_string(),
+            parent_session_dir: tmp.path().to_path_buf(),
+            working_dir: tmp.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let info = TransportFactory::fork_session(&request).await;
+
+        assert!(info.success);
+        assert_eq!(info.method, ForkMethod::Soft);
+        assert!(
+            info.notes
+                .as_deref()
+                .unwrap()
+                .contains("ready for injection")
+        );
     }
 
     include!("transport_tests_tail.rs");

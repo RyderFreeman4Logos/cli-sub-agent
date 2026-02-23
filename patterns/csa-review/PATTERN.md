@@ -69,6 +69,28 @@ Tier: tier-2-standard
 The review tool is resolved from `[review] tool` in config (Step 2).
 If `review.tool = "auto"`, CSA selects a heterogeneous counterpart automatically.
 
+### Fork-Based Review (Recommended for Post-Implementation)
+
+For post-implementation review, fork the implementer's session to inherit full
+implementation context. Note: `csa review` does not yet support `--fork-from`
+directly. Use `csa run --fork-from` with a review prompt instead:
+
+```bash
+csa run --fork-from <impl-session-id> "Review the uncommitted changes: $(git diff)"
+```
+
+**Benefits**: The reviewer inherits the implementer's context (files read,
+design decisions, constraints, rejected alternatives). This catches
+inconsistencies between intent and implementation that a cold reviewer would
+miss — the forked context knows what the code *should* do, so deviations
+are immediately visible. Also saves tokens by avoiding redundant file reads.
+
+> **Planned**: Native `csa review --fork-from` support is tracked for a future release.
+
+### Standard Review (No Fork)
+
+When no implementation session is available, use standard review:
+
 ```bash
 csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
 ```

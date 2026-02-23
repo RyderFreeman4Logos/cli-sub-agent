@@ -68,6 +68,8 @@ mod tests {
             session: SessionConfig {
                 transcript_enabled: enabled,
                 transcript_redaction: true,
+                structured_output: true,
+                ..Default::default()
             },
             tools: HashMap::new(),
             review: None,
