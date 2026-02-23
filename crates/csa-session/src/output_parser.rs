@@ -3,6 +3,7 @@
 //! Scans output text for `<!-- CSA:SECTION:<id> -->` / `<!-- CSA:SECTION:<id>:END -->`
 //! delimiter pairs and extracts structured [`OutputSection`]s.
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -145,6 +146,10 @@ pub fn parse_sections(output: &str) -> Vec<OutputSection> {
         }];
     }
 
+    // Deduplicate file paths: when the same section ID appears multiple times,
+    // append a numeric suffix to avoid later writes overwriting earlier content.
+    deduplicate_file_paths(&mut sections);
+
     sections
 }
 
@@ -221,6 +226,21 @@ fn id_to_title(id: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Deduplicate file paths for sections with the same sanitized ID.
+///
+/// First occurrence keeps `<id>.md`, subsequent occurrences get `<id>-2.md`, `<id>-3.md`, etc.
+fn deduplicate_file_paths(sections: &mut [OutputSection]) {
+    let mut seen: HashMap<String, u32> = HashMap::new();
+    for section in sections.iter_mut() {
+        let count = seen.entry(section.id.clone()).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            let deduped_file = format!("{}-{}.md", section.id, count);
+            section.file_path = Some(deduped_file);
+        }
+    }
 }
 
 /// Parse output.log and persist structured sections to the session's output/ directory.
@@ -448,6 +468,9 @@ mod tests {
         // Second occurrence closed by END
         assert_eq!(sections[1].line_start, 4);
         assert_eq!(sections[1].line_end, 4);
+        // Deduplicated file paths: first keeps original, second gets suffix
+        assert_eq!(sections[0].file_path.as_deref(), Some("dup.md"));
+        assert_eq!(sections[1].file_path.as_deref(), Some("dup-2.md"));
     }
 
     #[test]
@@ -523,6 +546,28 @@ mod tests {
         let index_toml = fs::read_to_string(tmp.path().join("output/index.toml")).unwrap();
         let loaded: OutputIndex = toml::from_str(&index_toml).unwrap();
         assert_eq!(loaded.sections.len(), 2);
+    }
+
+    #[test]
+    fn test_persist_structured_output_duplicate_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let output = "<!-- CSA:SECTION:review -->\n\
+                       First review content\n\
+                       <!-- CSA:SECTION:review:END -->\n\
+                       <!-- CSA:SECTION:review -->\n\
+                       Second review content\n\
+                       <!-- CSA:SECTION:review:END -->";
+        let index = persist_structured_output(tmp.path(), output).unwrap();
+
+        assert_eq!(index.sections.len(), 2);
+        assert_eq!(index.sections[0].file_path.as_deref(), Some("review.md"));
+        assert_eq!(index.sections[1].file_path.as_deref(), Some("review-2.md"));
+
+        // Both files exist and have distinct content
+        let first = fs::read_to_string(tmp.path().join("output/review.md")).unwrap();
+        let second = fs::read_to_string(tmp.path().join("output/review-2.md")).unwrap();
+        assert!(first.contains("First review content"));
+        assert!(second.contains("Second review content"));
     }
 
     #[test]

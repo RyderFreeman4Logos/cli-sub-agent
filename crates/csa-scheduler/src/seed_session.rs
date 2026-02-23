@@ -28,11 +28,50 @@ pub struct SeedCandidate {
 /// - Is younger than `seed_max_age_secs`
 /// - Has a matching git HEAD (if tracked)
 /// - Matches the requested tool AND project
+/// - Has a non-empty `provider_session_id` when `require_provider_session` is true
+///   (native forks need the provider session ID to resume)
 pub fn find_seed_session(
     project_root: &Path,
     tool: &str,
     seed_max_age_secs: u64,
     current_git_head: Option<&str>,
+) -> Result<Option<SeedCandidate>> {
+    find_seed_session_inner(
+        project_root,
+        tool,
+        seed_max_age_secs,
+        current_git_head,
+        false,
+    )
+}
+
+/// Like [`find_seed_session`] but with explicit control over provider session filtering.
+///
+/// When `require_provider_session` is true, only candidates whose tool state has a
+/// non-empty `provider_session_id` are returned. Use this for tools that require
+/// native fork (e.g. claude-code) where a missing provider session would cause the
+/// fork to fail at execution time.
+pub fn find_seed_session_for_native_fork(
+    project_root: &Path,
+    tool: &str,
+    seed_max_age_secs: u64,
+    current_git_head: Option<&str>,
+) -> Result<Option<SeedCandidate>> {
+    find_seed_session_inner(
+        project_root,
+        tool,
+        seed_max_age_secs,
+        current_git_head,
+        true,
+    )
+}
+
+fn find_seed_session_inner(
+    project_root: &Path,
+    tool: &str,
+    seed_max_age_secs: u64,
+    current_git_head: Option<&str>,
+    require_provider_session: bool,
 ) -> Result<Option<SeedCandidate>> {
     let sessions = csa_session::list_sessions(project_root, None)?;
     let now = Utc::now();
@@ -48,6 +87,8 @@ pub fn find_seed_session(
             && !s.genealogy.is_fork()
             // Must have the requested tool
             && s.tools.contains_key(tool)
+            // Native fork readiness: provider_session_id must be present
+            && (!require_provider_session || s.tools.get(tool).is_some_and(|ts| ts.provider_session_id.is_some()))
             // Age check
             && {
                 let age_secs = (now - s.last_accessed).num_seconds().max(0) as u64;

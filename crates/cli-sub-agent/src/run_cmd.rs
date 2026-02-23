@@ -524,6 +524,7 @@ pub(crate) async fn handle_run(
     let resolved_tool = initial_tool;
 
     // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
+    let mut is_auto_seed_fork = false;
     let (is_fork, session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
         let auto_seed_enabled = config
             .as_ref()
@@ -535,18 +536,33 @@ pub(crate) async fn handle_run(
                 .map(|c| c.session.seed_max_age_secs)
                 .unwrap_or(86400);
             let current_git_head = csa_session::detect_git_head(&project_root);
-            match csa_scheduler::find_seed_session(
-                &project_root,
-                resolved_tool.as_str(),
-                seed_max_age,
-                current_git_head.as_deref(),
-            ) {
+            let needs_native_fork = matches!(
+                TransportFactory::fork_method_for_tool(resolved_tool.as_str()),
+                ForkMethod::Native,
+            );
+            let seed_result = if needs_native_fork {
+                csa_scheduler::find_seed_session_for_native_fork(
+                    &project_root,
+                    resolved_tool.as_str(),
+                    seed_max_age,
+                    current_git_head.as_deref(),
+                )
+            } else {
+                csa_scheduler::find_seed_session(
+                    &project_root,
+                    resolved_tool.as_str(),
+                    seed_max_age,
+                    current_git_head.as_deref(),
+                )
+            };
+            match seed_result {
                 Ok(Some(seed)) => {
                     info!(
                         seed_session = %seed.session_id,
                         tool = %seed.tool_name,
                         "Auto fork-from-seed: warm session found"
                     );
+                    is_auto_seed_fork = true;
                     (true, Some(seed.session_id))
                 }
                 Ok(None) => {
@@ -750,9 +766,21 @@ pub(crate) async fn handle_run(
         // This prevents orphaning transport-level forks when pre-run checks fail.
         if is_fork && fork_resolution.is_none() {
             if let Some(ref source_id) = session_arg {
-                fork_resolution =
-                    Some(resolve_fork(source_id, current_tool.as_str(), &project_root).await?);
-            } else {
+                match resolve_fork(source_id, current_tool.as_str(), &project_root).await {
+                    Ok(res) => fork_resolution = Some(res),
+                    Err(e) if is_auto_seed_fork => {
+                        // Auto seed forks are best-effort: degrade to cold start
+                        warn!(
+                            error = %e,
+                            source = %source_id,
+                            "Auto seed fork resolution failed, falling back to cold start"
+                        );
+                        is_auto_seed_fork = false;
+                        // fall through with fork_resolution = None; handled below
+                    }
+                    Err(e) => return Err(e),
+                }
+            } else if !is_auto_seed_fork {
                 anyhow::bail!("Fork requested but no source session resolved");
             }
         }
