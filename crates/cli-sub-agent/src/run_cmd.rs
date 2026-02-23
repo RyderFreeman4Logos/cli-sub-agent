@@ -97,6 +97,22 @@ fn take_next_runtime_fallback_tool(
     None
 }
 
+/// Remove a pre-created fork session when execution fails or tool failover
+/// occurs. Takes the session ID by `&mut Option` so it is consumed (set to
+/// `None`) after cleanup, preventing double-delete on subsequent error paths.
+fn cleanup_pre_created_fork_session(session_id: &mut Option<String>, project_root: &Path) {
+    if let Some(sid) = session_id.take() {
+        match csa_session::delete_session(project_root, &sid) {
+            Ok(()) => {
+                info!(session = %sid, "Cleaned up pre-created fork session after failure");
+            }
+            Err(e) => {
+                warn!(session = %sid, error = %e, "Failed to clean up pre-created fork session");
+            }
+        }
+    }
+}
+
 fn resolve_slot_wait_timeout_seconds(config: Option<&ProjectConfig>) -> u64 {
     config
         .map(|cfg| cfg.resources.slot_wait_timeout_seconds)
@@ -626,6 +642,8 @@ pub(crate) async fn handle_run(
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
     let mut executed_session_id: Option<String> = None;
+    // Track pre-created fork session IDs so we can clean them up on failure.
+    let mut pre_created_fork_session_id: Option<String> = None;
 
     let result = loop {
         attempts += 1;
@@ -780,6 +798,7 @@ pub(crate) async fn handle_run(
                         provider_session = %new_provider_id,
                         "Pre-created session with forked provider session for ACP resume"
                     );
+                    pre_created_fork_session_id = Some(pre_session.meta_session_id.clone());
                     effective_session_arg = Some(pre_session.meta_session_id.clone());
                 }
             }
@@ -864,6 +883,10 @@ pub(crate) async fn handle_run(
                     if error_msg.contains("Session locked by PID")
                         && matches!(output_format, OutputFormat::Json)
                     {
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            &project_root,
+                        );
                         let json_error = serde_json::json!({
                             "error": "session_locked",
                             "session_id": effective_session_arg.unwrap_or_else(|| "(new)".to_string()),
@@ -907,9 +930,14 @@ pub(crate) async fn handle_run(
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
                         effective_session_arg = None;
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            &project_root,
+                        );
                         continue;
                     }
                 }
+                cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
                 return Err(e);
             }
         };

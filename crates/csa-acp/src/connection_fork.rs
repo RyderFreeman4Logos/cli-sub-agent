@@ -42,11 +42,42 @@ pub async fn fork_session_via_cli(
         cmd.env_remove(var);
     }
 
-    let child = cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         AcpError::ForkFailed(format!("failed to spawn `claude --fork-session`: {e}"))
     })?;
 
-    let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
+    // Take stdout/stderr handles before waiting so we retain ownership of
+    // `child` for cleanup if the timeout fires.  `wait_with_output()` consumes
+    // `self`, which would prevent killing the process on timeout.
+    let stdout_handle = child.stdout.take();
+    let stderr_handle = child.stderr.take();
+
+    // Read stdout/stderr concurrently with wait to avoid pipe-buffer deadlock.
+    let wait_and_collect = async {
+        let stdout_task = async {
+            let mut buf = Vec::new();
+            if let Some(mut h) = stdout_handle {
+                tokio::io::AsyncReadExt::read_to_end(&mut h, &mut buf).await?;
+            }
+            Ok::<_, std::io::Error>(buf)
+        };
+        let stderr_task = async {
+            let mut buf = Vec::new();
+            if let Some(mut h) = stderr_handle {
+                tokio::io::AsyncReadExt::read_to_end(&mut h, &mut buf).await?;
+            }
+            Ok::<_, std::io::Error>(buf)
+        };
+        let (status, stdout_buf, stderr_buf) =
+            tokio::try_join!(child.wait(), stdout_task, stderr_task)?;
+        Ok::<_, std::io::Error>(std::process::Output {
+            status,
+            stdout: stdout_buf,
+            stderr: stderr_buf,
+        })
+    };
+
+    let output = match tokio::time::timeout(timeout, wait_and_collect).await {
         Ok(Ok(output)) => output,
         Ok(Err(e)) => {
             return Err(AcpError::ForkFailed(format!(
@@ -54,8 +85,12 @@ pub async fn fork_session_via_cli(
             )));
         }
         Err(_) => {
+            // Kill the child process to prevent leaked background processes.
+            // The child may have already exited between the timeout and this
+            // kill attempt; that is harmless (kill returns Ok or a benign error).
+            let _ = child.kill().await;
             return Err(AcpError::ForkFailed(format!(
-                "claude --fork-session timed out after {}s",
+                "claude --fork-session timed out after {}s; child process killed",
                 timeout.as_secs()
             )));
         }
