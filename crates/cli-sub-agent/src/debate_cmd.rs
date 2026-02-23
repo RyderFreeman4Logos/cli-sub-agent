@@ -761,7 +761,12 @@ fn resolve_same_model_fallback(
     } else {
         csa_config::global::all_known_tools().to_vec()
     };
-    if let Some(tool) = candidates.first() {
+    // Prefer a tool that is both enabled AND installed on this system.
+    // Fall back to first enabled tool if none are installed (preserves prior behavior).
+    let installed = candidates
+        .iter()
+        .find(|t| crate::run_helpers::is_tool_binary_available(t.as_str()));
+    if let Some(tool) = installed.or(candidates.first()) {
         return Ok((*tool, DebateMode::SameModelAdversarial));
     }
 
