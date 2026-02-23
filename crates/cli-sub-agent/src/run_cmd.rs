@@ -670,6 +670,7 @@ pub(crate) async fn handle_run(
                         // transfer across tools. The next iteration will resolve
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
+                        effective_session_arg = None;
                         continue;
                     }
                 }
@@ -880,6 +881,7 @@ pub(crate) async fn handle_run(
                         // transfer across tools. The next iteration will resolve
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
+                        effective_session_arg = None;
                         continue;
                     }
                 }
@@ -915,6 +917,7 @@ pub(crate) async fn handle_run(
                 // transfer across tools. The next iteration will resolve
                 // a fresh fork for the new tool if is_fork is set.
                 fork_resolution = None;
+                effective_session_arg = None;
                 continue;
             }
         }
@@ -995,6 +998,7 @@ pub(crate) async fn handle_run(
                         // transfer across tools. The next iteration will resolve
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
+                        effective_session_arg = None;
                         continue;
                     }
                     csa_scheduler::FailoverAction::ReportError { reason, .. } => {
