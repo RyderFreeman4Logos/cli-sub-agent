@@ -172,7 +172,8 @@ fi
 # --- Gate: fallback review failure blocks all downstream paths ---
 # This check runs unconditionally after the bot-timeout block.
 # When FALLBACK_REVIEW_HAS_ISSUES=true, the orchestrator MUST route to
-# Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10 (push/re-trigger).
+# Step 6-fix (the dedicated fallback fix cycle within the timeout branch).
+# Steps 7-10 are in the BOT_UNAVAILABLE=false branch and NOT reachable here.
 # FORBIDDEN: Reaching any merge step while FALLBACK_REVIEW_HAS_ISSUES=true.
 #
 # NOTE: This gate uses an output marker (FALLBACK_BLOCKED) instead of exit 1
@@ -181,8 +182,8 @@ fi
 # immune to skip-on-failure semantics: the orchestrator reads stdout and
 # routes based on the signal, not the exit code.
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-  echo "FALLBACK_BLOCKED: Fallback review found issues. Entering fix cycle (Step 7)."
-  echo "Orchestrator MUST route to Step 7 (classify) → Step 8/9 → Step 10."
+  echo "FALLBACK_BLOCKED: Fallback review found issues. Entering fix cycle (Step 6-fix)."
+  echo "Orchestrator MUST route to Step 6-fix (fallback fix cycle within timeout branch)."
   echo "FORBIDDEN: Falling through to any merge step from this path."
   # Exit 0 so OnFail:skip does not swallow the signal.
   # Orchestrator routes on the FALLBACK_BLOCKED marker, not exit code.
@@ -191,22 +192,67 @@ fi
 
 ## IF ${BOT_UNAVAILABLE}
 
+## Step 6-fix: Fallback Review Fix Cycle (Bot Timeout Path)
+
+> **Layer**: 1 (CSA executor) -- Layer 0 dispatches fix task to CSA. CSA reads
+> code, applies fixes, and returns results. Orchestrator re-runs review.
+
+Tool: csa
+Tier: tier-2-standard
+OnFail: retry 2
+
+When `FALLBACK_REVIEW_HAS_ISSUES=true` (set in Step 5 when `csa review`
+found issues during bot timeout), this dedicated fix cycle runs WITHIN the
+timeout branch. Steps 7-10 are structurally inside the `BOT_UNAVAILABLE=false`
+branch and are NOT reachable from here — this cycle is self-contained.
+
+Loop: fix issues → re-run `csa review --range main...HEAD` → check result.
+Max 3 rounds. If still failing after 3 rounds, abort.
+
+```bash
+FALLBACK_FIX_ROUND=0
+FALLBACK_FIX_MAX=3
+while [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ] && [ "${FALLBACK_FIX_ROUND}" -lt "${FALLBACK_FIX_MAX}" ]; do
+  FALLBACK_FIX_ROUND=$((FALLBACK_FIX_ROUND + 1))
+  echo "Fallback fix round ${FALLBACK_FIX_ROUND}/${FALLBACK_FIX_MAX}"
+
+  # 1. Fix issues found by csa review (delegated to CSA executor)
+  csa run "Fix the issues found by the local review (csa review --range main...HEAD). Read the review output and apply fixes. Commit the fixes."
+
+  # 2. Re-run csa review to verify fixes
+  if csa review --range main...HEAD 2>/dev/null; then
+    echo "Fallback review now passes. Proceeding to merge."
+    FALLBACK_REVIEW_HAS_ISSUES=false
+  else
+    echo "Fallback review still has issues after round ${FALLBACK_FIX_ROUND}."
+  fi
+done
+
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Fallback review still failing after ${FALLBACK_FIX_MAX} fix rounds. Aborting."
+  exit 1
+fi
+```
+
 ## Step 6a: Merge Without Bot
 
 > **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
 
 Tool: bash
 
-Bot unavailable. Local fallback review ran in Step 5.
-This step is ONLY reachable when FALLBACK_REVIEW_HAS_ISSUES is NOT true.
-The gate in Step 5 emits a `FALLBACK_BLOCKED` output marker (NOT exit 1,
-since Step 5 uses OnFail:skip) that the orchestrator uses to route to the
-fix cycle before execution can reach this merge command.
+Bot unavailable. Local fallback review passed (either initially in Step 5,
+or after fix cycle in Step 6-fix). Step 6-fix guarantees
+`FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
   echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
   echo "This is a workflow violation. Aborting merge."
   exit 1
 fi
@@ -520,13 +566,67 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 
     if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
       echo "BLOCKED: Post-rebase review found ${REBASE_BOT_ISSUES} actionable comment(s)."
-      echo "Routing to fix cycle (Step 7). Merge is blocked."
+      echo "Routing to inline fix cycle. Merge is blocked."
       REBASE_REVIEW_HAS_ISSUES=true
-      # Orchestrator MUST jump to Step 7 (classify) → Step 8/9 → Step 10.
-      # The rebase step is NOT repeated; only the fix-and-review cycle runs
-      # until the bot review passes clean.
+      # NOTE: We do NOT set BOT_HAS_ISSUES=true here because we are already
+      # past the BOT_HAS_ISSUES branch point — setting it would have no effect
+      # on control flow. Instead, a dedicated fix cycle runs inline below.
       # FORBIDDEN: Falling through to merge from this path.
-      echo "REBASE_BLOCKED: Post-rebase review has issues. Route to fix cycle."
+
+      # --- Inline post-rebase fix cycle ---
+      REBASE_FIX_ROUND=0
+      REBASE_FIX_MAX=3
+      while [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ] && [ "${REBASE_FIX_ROUND}" -lt "${REBASE_FIX_MAX}" ]; do
+        REBASE_FIX_ROUND=$((REBASE_FIX_ROUND + 1))
+        echo "Post-rebase fix round ${REBASE_FIX_ROUND}/${REBASE_FIX_MAX}"
+
+        # 1. Fix issues found by post-rebase bot review
+        csa run "Fix the issues found by the post-rebase bot review on PR #${PR_NUM}. Read the bot comments and apply fixes. Commit the fixes."
+
+        # 2. Push fixes and re-trigger bot review
+        git push origin "${WORKFLOW_BRANCH}"
+        gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+
+        # 3. Poll for new bot response
+        REFIX_BOT_OK=false
+        REFIX_WAITED=0
+        while [ "${REFIX_WAITED}" -lt "${MAX_WAIT}" ]; do
+          sleep "${POLL_INTERVAL}"
+          REFIX_WAITED=$((REFIX_WAITED + POLL_INTERVAL))
+          REFIX_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+            --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
+          if [ "${REFIX_REPLY}" -gt 0 ] 2>/dev/null; then
+            REFIX_BOT_OK=true
+            break
+          fi
+        done
+
+        # 4. Evaluate result
+        if [ "${REFIX_BOT_OK}" = "true" ]; then
+          REFIX_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+            --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[12]\\*\\*\"))] | length" 2>/dev/null || echo "0")
+          if [ "${REFIX_ISSUES}" -eq 0 ] 2>/dev/null; then
+            echo "Post-rebase review now passes after fix round ${REBASE_FIX_ROUND}."
+            REBASE_REVIEW_HAS_ISSUES=false
+          else
+            echo "Post-rebase review still has ${REFIX_ISSUES} issue(s) after round ${REBASE_FIX_ROUND}."
+          fi
+        else
+          # Bot timed out during fix cycle — fall back to local review
+          if csa review --range main...HEAD 2>/dev/null; then
+            echo "Local fallback review passes after fix round ${REBASE_FIX_ROUND}."
+            REBASE_REVIEW_HAS_ISSUES=false
+          else
+            echo "Local fallback review still has issues after round ${REBASE_FIX_ROUND}."
+          fi
+        fi
+      done
+
+      if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+        echo "ERROR: Post-rebase review still failing after ${REBASE_FIX_MAX} fix rounds. Aborting."
+        exit 1
+      fi
+      echo "REBASE_FIXED: Post-rebase issues resolved. Proceeding to merge."
     else
       echo "Post-rebase review is clean. Proceeding to merge."
       REBASE_REVIEW_HAS_ISSUES=false
@@ -538,12 +638,37 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
       echo "BLOCKED: Post-rebase fallback review found issues."
       FALLBACK_REVIEW_HAS_ISSUES=true
     fi
-    # Gate: fallback review failure blocks merge, routes to fix cycle.
+    # Gate: fallback review failure blocks merge, routes to inline fix cycle.
     # This check is unconditional — runs whether csa review passed or failed.
     if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-      echo "FALLBACK_BLOCKED: Post-rebase fallback review has issues. Route to fix cycle."
-      # Orchestrator MUST jump to Step 7 (classify) → Step 8/9 → Step 10.
-      # FORBIDDEN: Falling through to merge from this path.
+      # NOTE: We do NOT set BOT_HAS_ISSUES=true here because we are already
+      # past the BOT_HAS_ISSUES branch point — setting it would have no effect.
+      # Instead, a dedicated fix cycle runs inline below.
+
+      # --- Inline post-rebase fallback fix cycle ---
+      REBASE_FB_FIX_ROUND=0
+      REBASE_FB_FIX_MAX=3
+      while [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ] && [ "${REBASE_FB_FIX_ROUND}" -lt "${REBASE_FB_FIX_MAX}" ]; do
+        REBASE_FB_FIX_ROUND=$((REBASE_FB_FIX_ROUND + 1))
+        echo "Post-rebase fallback fix round ${REBASE_FB_FIX_ROUND}/${REBASE_FB_FIX_MAX}"
+
+        # 1. Fix issues found by local review
+        csa run "Fix the issues found by csa review --range main...HEAD. Read the review output and apply fixes. Commit the fixes."
+
+        # 2. Re-run local review to verify fixes
+        if csa review --range main...HEAD 2>/dev/null; then
+          echo "Post-rebase fallback review now passes after fix round ${REBASE_FB_FIX_ROUND}."
+          FALLBACK_REVIEW_HAS_ISSUES=false
+        else
+          echo "Post-rebase fallback review still has issues after round ${REBASE_FB_FIX_ROUND}."
+        fi
+      done
+
+      if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+        echo "ERROR: Post-rebase fallback review still failing after ${REBASE_FB_FIX_MAX} fix rounds. Aborting."
+        exit 1
+      fi
+      echo "REBASE_FALLBACK_FIXED: Post-rebase fallback issues resolved. Proceeding to merge."
     fi
   fi
 fi
@@ -591,6 +716,11 @@ if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
   echo "This is a workflow violation. Aborting merge."
   exit 1
 fi
+if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
 
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
@@ -611,6 +741,11 @@ First-pass clean review: merge the existing PR directly.
 # --- Hard gate: unconditional pre-merge check ---
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
   echo "ERROR: Reached merge with unresolved fallback review issues."
+  echo "This is a workflow violation. Aborting merge."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
   echo "This is a workflow violation. Aborting merge."
   exit 1
 fi
