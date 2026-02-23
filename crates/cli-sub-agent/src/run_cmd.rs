@@ -127,7 +127,18 @@ async fn resolve_fork(
     tool_name: &str,
     project_root: &Path,
 ) -> Result<ForkResolution> {
-    let fork_method = TransportFactory::fork_method_for_tool(tool_name);
+    // Determine if source session uses a different tool than the target.
+    // Cross-tool forks must always use soft fork (context summary injection)
+    // because native fork requires the same tool's provider session.
+    let source_tool = csa_session::load_metadata(project_root, source_session_id)?.map(|m| m.tool);
+    let is_cross_tool = source_tool.as_deref().is_some_and(|src| src != tool_name);
+
+    let fork_method = if is_cross_tool {
+        ForkMethod::Soft
+    } else {
+        TransportFactory::fork_method_for_tool(tool_name)
+    };
+
     let resolution = match fork_method {
         ForkMethod::Native => {
             // Native fork requires the same tool's provider session — enforce tool-lock.

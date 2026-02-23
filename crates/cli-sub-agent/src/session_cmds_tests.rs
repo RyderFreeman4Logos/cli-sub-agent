@@ -557,7 +557,7 @@ fn display_summary_section_with_structured_output() {
     csa_session::persist_structured_output(tmp.path(), output).unwrap();
 
     // Should succeed without error
-    display_summary_section(tmp.path(), "test").unwrap();
+    display_summary_section(tmp.path(), "test", false).unwrap();
 }
 
 #[test]
@@ -568,14 +568,14 @@ fn display_summary_section_falls_back_to_output_log() {
     std::fs::write(session_dir.join("output.log"), "Line 1\nLine 2\nLine 3\n").unwrap();
 
     // Should succeed (falls back to output.log)
-    display_summary_section(session_dir, "test").unwrap();
+    display_summary_section(session_dir, "test", false).unwrap();
 }
 
 #[test]
 fn display_summary_section_handles_no_output() {
     let tmp = tempdir().unwrap();
     // No output.log, no index.toml — should print message to stderr
-    display_summary_section(tmp.path(), "test").unwrap();
+    display_summary_section(tmp.path(), "test", false).unwrap();
 }
 
 #[test]
@@ -584,7 +584,7 @@ fn display_single_section_returns_content() {
     let output = "<!-- CSA:SECTION:details -->\nDetail content\n<!-- CSA:SECTION:details:END -->";
     csa_session::persist_structured_output(tmp.path(), output).unwrap();
 
-    display_single_section(tmp.path(), "test", "details").unwrap();
+    display_single_section(tmp.path(), "test", "details", false).unwrap();
 }
 
 #[test]
@@ -593,7 +593,7 @@ fn display_single_section_errors_on_missing_id() {
     let output = "<!-- CSA:SECTION:summary -->\nContent\n<!-- CSA:SECTION:summary:END -->";
     csa_session::persist_structured_output(tmp.path(), output).unwrap();
 
-    let err = display_single_section(tmp.path(), "test", "nonexistent").unwrap_err();
+    let err = display_single_section(tmp.path(), "test", "nonexistent", false).unwrap_err();
     assert!(err.to_string().contains("not found"));
     assert!(err.to_string().contains("summary")); // lists available sections
 }
@@ -601,7 +601,7 @@ fn display_single_section_errors_on_missing_id() {
 #[test]
 fn display_single_section_errors_when_no_structured_output() {
     let tmp = tempdir().unwrap();
-    let err = display_single_section(tmp.path(), "test", "any").unwrap_err();
+    let err = display_single_section(tmp.path(), "test", "any", false).unwrap_err();
     assert!(err.to_string().contains("No structured output"));
 }
 
@@ -612,7 +612,7 @@ fn display_all_sections_shows_all_in_order() {
                    <!-- CSA:SECTION:body -->\nBody\n<!-- CSA:SECTION:body:END -->";
     csa_session::persist_structured_output(tmp.path(), output).unwrap();
 
-    display_all_sections(tmp.path(), "test").unwrap();
+    display_all_sections(tmp.path(), "test", false).unwrap();
 }
 
 #[test]
@@ -621,7 +621,7 @@ fn display_all_sections_falls_back_to_output_log() {
     let session_dir = tmp.path();
     std::fs::write(session_dir.join("output.log"), "raw output here\n").unwrap();
 
-    display_all_sections(session_dir, "test").unwrap();
+    display_all_sections(session_dir, "test", false).unwrap();
 }
 
 #[test]

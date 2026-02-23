@@ -131,6 +131,20 @@ pub fn parse_sections(output: &str) -> Vec<OutputSection> {
     // Sort by line_start for deterministic order
     sections.sort_by_key(|s| s.line_start);
 
+    // Fallback: if markers existed but all were orphaned/mismatched (no sections
+    // produced), create a single "full" section so downstream consumers don't
+    // lose the actual output content.
+    if sections.is_empty() {
+        return vec![OutputSection {
+            id: "full".to_string(),
+            title: "Full Output".to_string(),
+            line_start: 1,
+            line_end: total_lines,
+            token_estimate: estimate_tokens(output),
+            file_path: Some("full.md".to_string()),
+        }];
+    }
+
     sections
 }
 
@@ -406,20 +420,17 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_orphan_end_marker_ignored() {
+    fn test_parse_orphan_end_marker_falls_back_to_full() {
         let output = "some text\n\
                        <!-- CSA:SECTION:ghost:END -->\n\
                        more text";
         let sections = parse_sections(output);
-        // No start marker means no sections from markers; falls back to empty
-        // Actually, no start markers means no markers match as Start, so markers list
-        // has only End markers. The code filters those, leaving empty sections list.
-        // But wait — scan_markers will find the End marker. Then parse_sections
-        // processes it but finds no matching open start. So sections is empty.
-        // Then we have markers (non-empty) so we don't fall back to "full".
-        // Hmm, let's verify behavior: markers is non-empty (has 1 End), so no "full" fallback.
-        // sections will be empty. That's correct — orphan markers shouldn't create sections.
-        assert!(sections.is_empty());
+        // Orphaned END markers produce no matched sections, so the parser falls
+        // back to a single "full" section to avoid losing the output content.
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].id, "full");
+        assert_eq!(sections[0].line_start, 1);
+        assert_eq!(sections[0].line_end, 3);
     }
 
     #[test]

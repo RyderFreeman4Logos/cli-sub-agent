@@ -624,7 +624,7 @@ pub(crate) fn handle_session_result(
 
     // If structured output flags are active, handle them and return early
     if structured.is_active() {
-        return display_structured_output(&session_dir, &resolved_id, &structured);
+        return display_structured_output(&session_dir, &resolved_id, &structured, json);
     }
 
     let transcript_summary = match load_transcript_summary(&session_dir) {
@@ -695,51 +695,77 @@ fn display_structured_output(
     session_dir: &Path,
     session_id: &str,
     opts: &StructuredOutputOpts,
+    json: bool,
 ) -> Result<()> {
     if opts.summary {
-        return display_summary_section(session_dir, session_id);
+        return display_summary_section(session_dir, session_id, json);
     }
 
     if let Some(ref section_id) = opts.section {
-        return display_single_section(session_dir, session_id, section_id);
+        return display_single_section(session_dir, session_id, section_id, json);
     }
 
     if opts.full {
-        return display_all_sections(session_dir, session_id);
+        return display_all_sections(session_dir, session_id, json);
     }
 
     Ok(())
 }
 
 /// Show only the summary section, with fallback to first N lines of output.log.
-fn display_summary_section(session_dir: &Path, session_id: &str) -> Result<()> {
+fn display_summary_section(session_dir: &Path, session_id: &str, json: bool) -> Result<()> {
     // Try reading "summary" section first
-    match csa_session::read_section(session_dir, "summary")? {
-        Some(content) => {
-            println!("{}", content);
-            return Ok(());
-        }
+    let (section_id, content) = match csa_session::read_section(session_dir, "summary")? {
+        Some(content) => ("summary", content),
         None => {
             // If there's a "full" section, use that as fallback
-            if let Some(content) = csa_session::read_section(session_dir, "full")? {
-                let lines: Vec<&str> = content.lines().take(FALLBACK_LINES).collect();
-                println!("{}", lines.join("\n"));
-                if content.lines().count() > FALLBACK_LINES {
-                    eprintln!(
-                        "... ({} more lines, use --full to see all)",
-                        content.lines().count() - FALLBACK_LINES
-                    );
+            match csa_session::read_section(session_dir, "full")? {
+                Some(content) => ("full", content),
+                None => {
+                    // Final fallback: first N lines of output.log
+                    let output_log = session_dir.join("output.log");
+                    if output_log.is_file() {
+                        let content = fs::read_to_string(&output_log)?;
+                        if !content.is_empty() {
+                            if json {
+                                let payload = serde_json::json!({
+                                    "section": "summary",
+                                    "source": "output.log",
+                                    "content": content.lines().take(FALLBACK_LINES).collect::<Vec<_>>().join("\n"),
+                                    "truncated": content.lines().count() > FALLBACK_LINES,
+                                });
+                                println!("{}", serde_json::to_string_pretty(&payload)?);
+                            } else {
+                                let lines: Vec<&str> =
+                                    content.lines().take(FALLBACK_LINES).collect();
+                                println!("{}", lines.join("\n"));
+                                if content.lines().count() > FALLBACK_LINES {
+                                    eprintln!(
+                                        "... ({} more lines, use --full to see all)",
+                                        content.lines().count() - FALLBACK_LINES
+                                    );
+                                }
+                            }
+                            return Ok(());
+                        }
+                    }
+                    eprintln!("No output found for session '{}'", session_id);
+                    return Ok(());
                 }
-                return Ok(());
             }
         }
-    }
+    };
 
-    // Final fallback: first N lines of output.log
-    let output_log = session_dir.join("output.log");
-    if output_log.is_file() {
-        let content = fs::read_to_string(&output_log)?;
-        if !content.is_empty() {
+    if json {
+        let payload = serde_json::json!({
+            "section": section_id,
+            "content": content,
+            "tokens": csa_session::estimate_tokens(&content),
+        });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        let is_full_fallback = section_id == "full";
+        if is_full_fallback {
             let lines: Vec<&str> = content.lines().take(FALLBACK_LINES).collect();
             println!("{}", lines.join("\n"));
             if content.lines().count() > FALLBACK_LINES {
@@ -748,19 +774,32 @@ fn display_summary_section(session_dir: &Path, session_id: &str) -> Result<()> {
                     content.lines().count() - FALLBACK_LINES
                 );
             }
-            return Ok(());
+        } else {
+            println!("{}", content);
         }
     }
-
-    eprintln!("No output found for session '{}'", session_id);
     Ok(())
 }
 
 /// Show a single section by ID.
-fn display_single_section(session_dir: &Path, session_id: &str, section_id: &str) -> Result<()> {
+fn display_single_section(
+    session_dir: &Path,
+    session_id: &str,
+    section_id: &str,
+    json: bool,
+) -> Result<()> {
     match csa_session::read_section(session_dir, section_id)? {
         Some(content) => {
-            println!("{}", content);
+            if json {
+                let payload = serde_json::json!({
+                    "section": section_id,
+                    "content": content,
+                    "tokens": csa_session::estimate_tokens(&content),
+                });
+                println!("{}", serde_json::to_string_pretty(&payload)?);
+            } else {
+                println!("{}", content);
+            }
         }
         None => {
             // Check if index exists to give a better error
@@ -788,7 +827,7 @@ fn display_single_section(session_dir: &Path, session_id: &str, section_id: &str
 }
 
 /// Show all sections in index order.
-fn display_all_sections(session_dir: &Path, session_id: &str) -> Result<()> {
+fn display_all_sections(session_dir: &Path, session_id: &str, json: bool) -> Result<()> {
     let sections = csa_session::read_all_sections(session_dir)?;
     if sections.is_empty() {
         // Fallback: show full output.log
@@ -796,7 +835,18 @@ fn display_all_sections(session_dir: &Path, session_id: &str) -> Result<()> {
         if output_log.is_file() {
             let content = fs::read_to_string(&output_log)?;
             if !content.is_empty() {
-                print!("{}", content);
+                if json {
+                    let payload = serde_json::json!({
+                        "sections": [{
+                            "section": "full",
+                            "content": content,
+                            "tokens": csa_session::estimate_tokens(&content),
+                        }]
+                    });
+                    println!("{}", serde_json::to_string_pretty(&payload)?);
+                } else {
+                    print!("{}", content);
+                }
                 return Ok(());
             }
         }
@@ -804,12 +854,28 @@ fn display_all_sections(session_dir: &Path, session_id: &str) -> Result<()> {
         return Ok(());
     }
 
-    for (i, (section, content)) in sections.iter().enumerate() {
-        if i > 0 {
-            println!();
+    if json {
+        let json_sections: Vec<serde_json::Value> = sections
+            .iter()
+            .map(|(section, content)| {
+                serde_json::json!({
+                    "section": section.id,
+                    "title": section.title,
+                    "content": content,
+                    "tokens": section.token_estimate,
+                })
+            })
+            .collect();
+        let payload = serde_json::json!({ "sections": json_sections });
+        println!("{}", serde_json::to_string_pretty(&payload)?);
+    } else {
+        for (i, (section, content)) in sections.iter().enumerate() {
+            if i > 0 {
+                println!();
+            }
+            println!("=== {} ({}) ===", section.title, section.id);
+            println!("{}", content);
         }
-        println!("=== {} ({}) ===", section.title, section.id);
-        println!("{}", content);
     }
     Ok(())
 }
