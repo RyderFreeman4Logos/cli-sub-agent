@@ -126,6 +126,21 @@ Run csa review --diff --allow-fallback (or csa debate if self-authored).
 MUST include AGENTS.md compliance checklist.
 Fix-and-retry loop (max 3 rounds).
 
+### Fork-Based Self-Review (Optional)
+
+If the session that produced the code is available (e.g., a CSA implementation
+session), consider using fork-based review for zero-cost context reuse:
+
+```bash
+csa review --fork-from <impl-session-id> --diff
+```
+
+**Benefits**: The reviewer inherits the implementer's full context (files read,
+design decisions, constraints understood) without re-reading any files. This
+makes the review deeper — the forked reviewer already knows what the code is
+trying to do and can focus on correctness, edge cases, and AGENTS.md compliance
+rather than spending tokens on exploration.
+
 ## IF ${REVIEW_HAS_ISSUES}
 
 ## Step 9: Fix Review Issues

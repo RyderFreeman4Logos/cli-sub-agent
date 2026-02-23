@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+codex-pty-fork = []
+
 [dependencies]
 csa-core.workspace = true
 csa-resource.workspace = true
