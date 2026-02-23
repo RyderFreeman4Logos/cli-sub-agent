@@ -14,7 +14,9 @@ use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
-use csa_session::{MetaSessionState, SessionPhase, load_session, resolve_session_prefix};
+use csa_session::{
+    MetaSessionState, SessionPhase, ToolState, load_session, resolve_session_prefix,
+};
 
 use crate::pipeline;
 use crate::run_helpers::{
@@ -526,9 +528,11 @@ pub(crate) async fn handle_run(
     // guards to avoid orphaning transport-level forks when a pre-run check fails.
     let mut fork_resolution: Option<ForkResolution> = None;
 
-    // When forking, don't pass session_arg to execute_with_session (that would resume).
-    // Instead, create a new session and set fork genealogy fields.
-    let effective_session_arg = if is_fork { None } else { session_arg.clone() };
+    // When forking, don't pass session_arg to execute_with_session (that would resume
+    // the *source* session). Instead, create a new session with fork genealogy.
+    // For native forks, the provider_session_id is pre-populated before execution so
+    // that ACP can resume from the forked provider session on the first turn.
+    let mut effective_session_arg = if is_fork { None } else { session_arg.clone() };
 
     // Hint: suggest reusable sessions when creating a new session (only if not auto-forking)
     if effective_session_arg.is_none() && !is_fork {
@@ -706,6 +710,52 @@ pub(crate) async fn handle_run(
                     Some(resolve_fork(source_id, current_tool.as_str(), &project_root).await?);
             } else {
                 anyhow::bail!("Fork requested but no source session resolved");
+            }
+        }
+
+        // For native forks: pre-create a session with the forked provider_session_id
+        // in tool state so that execute_with_session_and_meta can resume ACP from the
+        // forked provider session on the very first execution.
+        if effective_session_arg.is_none() {
+            if let Some(ref fork_res) = fork_resolution {
+                if let Some(ref new_provider_id) = fork_res.provider_session_id {
+                    let fork_desc = description.clone().unwrap_or_else(|| {
+                        format!(
+                            "fork of {}",
+                            fork_res
+                                .source_session_id
+                                .get(..8)
+                                .unwrap_or(&fork_res.source_session_id)
+                        )
+                    });
+                    let mut pre_session = csa_session::create_session(
+                        &project_root,
+                        Some(&fork_desc),
+                        Some(&fork_res.source_session_id),
+                        Some(current_tool.as_str()),
+                    )?;
+                    pre_session.genealogy.fork_of_session_id =
+                        Some(fork_res.source_session_id.clone());
+                    pre_session.genealogy.fork_provider_session_id =
+                        fork_res.source_provider_session_id.clone();
+                    pre_session.tools.insert(
+                        current_tool.as_str().to_string(),
+                        ToolState {
+                            provider_session_id: Some(new_provider_id.clone()),
+                            last_action_summary: String::new(),
+                            last_exit_code: 0,
+                            updated_at: chrono::Utc::now(),
+                            token_usage: None,
+                        },
+                    );
+                    csa_session::save_session(&pre_session)?;
+                    info!(
+                        session = %pre_session.meta_session_id,
+                        provider_session = %new_provider_id,
+                        "Pre-created session with forked provider session for ACP resume"
+                    );
+                    effective_session_arg = Some(pre_session.meta_session_id.clone());
+                }
             }
         }
 

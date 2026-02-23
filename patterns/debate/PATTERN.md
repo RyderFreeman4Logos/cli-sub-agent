@@ -57,16 +57,22 @@ Validate >= 2 models available. If < 2, try next higher tier.
 
 When a research session exists with relevant context (e.g., codebase exploration,
 documentation gathering, prior analysis), fork debaters from it to avoid
-redundant exploration:
+redundant exploration. Note: `csa debate` does not yet support `--fork-from`
+directly. Use `csa run --fork-from` to prepare a forked session, then pass
+the research context into the debate prompt:
 
 ```bash
-csa debate --fork-from <research-session-id> "question"
+# Gather context via forked session, then feed into debate
+csa run --fork-from <research-session-id> "Summarize findings for debate context"
+csa debate "question (with research context above)"
 ```
 
-**Benefits**: Both proposer and critic inherit the research session's context
-(files read, patterns identified, domain knowledge gathered). This eliminates
-the warm-up phase where each debater independently re-discovers the same
-information, resulting in faster convergence and deeper arguments from round 1.
+**Benefits**: Debaters inherit the research session's context (files read,
+patterns identified, domain knowledge gathered). This eliminates the warm-up
+phase where each debater independently re-discovers the same information,
+resulting in faster convergence and deeper arguments from round 1.
+
+> **Planned**: Native `csa debate --fork-from` support is tracked for a future release.
 
 ## Step 6: Round 1 — Proposal
 
