@@ -24,10 +24,16 @@ name = "COMMENT_IS_FALSE_POSITIVE"
 name = "COMMENT_IS_STALE"
 
 [[workflow.variables]]
+name = "FALLBACK_REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
 name = "FIXES_ACCUMULATED"
 
 [[workflow.variables]]
 name = "LOCAL_REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
+name = "MAX_REVIEW_ROUNDS"
 
 [[workflow.variables]]
 name = "PR_BODY"
@@ -39,7 +45,19 @@ name = "PR_NUM"
 name = "PR_TITLE"
 
 [[workflow.variables]]
+name = "REBASE_REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
 name = "REPO"
+
+[[workflow.variables]]
+name = "REVIEW_ROUND"
+
+[[workflow.variables]]
+name = "ROUND_LIMIT_ACTION"
+
+[[workflow.variables]]
+name = "ROUND_LIMIT_REACHED"
 
 [[workflow.variables]]
 name = "WORKFLOW_BRANCH"
@@ -176,14 +194,15 @@ title = "Step 6a: Merge Without Bot"
 tool = "bash"
 prompt = """
 Bot unavailable. Local review already guarantees coverage.
-Proceed to merge directly.
+Push any local commits before merge so remote HEAD includes all fixes.
 
 ```bash
+git push origin "${WORKFLOW_BRANCH}"
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "${BOT_UNAVAILABLE}"
+condition = "(${BOT_UNAVAILABLE}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 8
@@ -268,21 +287,239 @@ id = 12
 title = "Push Fixes and Re-trigger"
 tool = "bash"
 prompt = """
+Track iteration count via REVIEW_ROUND. Check the round cap BEFORE pushing
+fixes and triggering another bot review.
+
+When REVIEW_ROUND reaches MAX_REVIEW_ROUNDS (default: 10), STOP and present
+options to the user — no new review is triggered until the user decides:
+- Option A: Merge now (review is good enough)
+- Option B: Continue for MAX_REVIEW_ROUNDS more rounds
+- Option C: Abort and investigate manually
+
+The workflow MUST NOT auto-merge or auto-abort at the round limit.
+
+Orchestrator protocol: When the round cap is hit, the bash block exits with
+code 0 after printing ROUND_LIMIT_HALT. The orchestrator MUST then use
+AskUserQuestion to present options A/B/C and collect the user's choice.
+
+Signal disambiguation: ROUND_LIMIT_HALT (exit 0) = ask user.
+ROUND_LIMIT_MERGE (exit 0) = proceed to merge. ROUND_LIMIT_ABORT (exit 1) = stop.
+
 ```bash
+REVIEW_ROUND=$((REVIEW_ROUND + 1))
+MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
+
+# --- Handle orchestrator re-entry with user decision (FIRST) ---
+if [ -n "${ROUND_LIMIT_ACTION}" ]; then
+  case "${ROUND_LIMIT_ACTION}" in
+    merge)
+      echo "User chose: Merge now. Pushing local commits before merge."
+      ROUND_LIMIT_REACHED=false
+      git push origin "${WORKFLOW_BRANCH}"
+      echo "ROUND_LIMIT_MERGE: Routing to merge step."
+      exit 0
+      ;;
+    continue)
+      echo "User chose: Continue. Extending by ${MAX_REVIEW_ROUNDS} rounds."
+      ROUND_LIMIT_REACHED=false
+      MAX_REVIEW_ROUNDS=$((REVIEW_ROUND + MAX_REVIEW_ROUNDS))
+      unset ROUND_LIMIT_ACTION
+      ;;
+    abort)
+      echo "User chose: Abort workflow."
+      echo "ROUND_LIMIT_ABORT: Workflow terminated by user."
+      exit 1
+      ;;
+  esac
+fi
+
+# --- Round cap check BEFORE push/trigger ---
+if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
+  ROUND_LIMIT_REACHED=true
+  echo "Reached MAX_REVIEW_ROUNDS (${MAX_REVIEW_ROUNDS})."
+  echo "Options:"
+  echo "  A) Merge now (review is good enough)"
+  echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
+  echo "  C) Abort and investigate manually"
+  echo ""
+  echo "ROUND_LIMIT_HALT: Awaiting user decision."
+  exit 0
+fi
+
+# --- Push fixes and re-trigger bot review ---
 git push origin "${WORKFLOW_BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
 
-Loop back to Step 5 (poll). Max 10 total iterations."""
+Loop back to Step 5 (poll)."""
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[workflow.steps]]
 id = 13
 title = "Step 10a: Bot Review Clean"
-prompt = "No issues found by bot. Proceed to merge."
+prompt = "No issues found by bot. Proceed to Step 10.5 (rebase) then merge."
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
+
+[[workflow.steps]]
+id = 17
+title = "Step 10.5: Rebase for Clean History"
+tool = "bash"
+prompt = """
+When the branch has accumulated fix commits from review iterations,
+reorganize them into logical groups before merging. Skip if <= 3 commits.
+
+After rebase, trigger one final @codex review and poll for response.
+Evaluate the post-rebase review result: badge detection uses P0/P1/P2
+(e.g., **P0**, **P1**, **P2**) to identify actionable findings.
+
+If post-rebase review has issues, run an inline fix cycle (max 3 rounds).
+If bot times out, fall back to csa review --range main...HEAD with its
+own inline fix cycle.
+
+Push before merge in ALL paths so remote HEAD includes all fixes.
+
+BLOCKING: The orchestrator MUST NOT proceed to merge until the post-rebase
+gate passes (REBASE_REVIEW_HAS_ISSUES=false and FALLBACK_REVIEW_HAS_ISSUES
+unset or false).
+
+```bash
+COMMIT_COUNT=$(git rev-list --count main..HEAD)
+if [ "${COMMIT_COUNT}" -gt 3 ]; then
+  # 1. Create backup branch (idempotent)
+  git branch -f "backup-${PR_NUM}-pre-rebase" HEAD
+
+  # 2. Soft reset to merge-base
+  MERGE_BASE=$(git merge-base main HEAD)
+  git reset --soft $MERGE_BASE
+
+  # 3. Create logical commits by selectively staging files
+  git reset HEAD .
+  # Group 1: Source code
+  git diff --name-only -z HEAD | grep -zE '^(src/|crates/|lib/|bin/)' | xargs -0 --no-run-if-empty git add --
+  if ! git diff --cached --quiet; then
+    git commit -m "feat(scope): primary implementation changes"
+  fi
+
+  # Group 2: Patterns, skills, and workflow definitions
+  git diff --name-only -z HEAD | grep -zE '^(patterns/|\.claude/)' | xargs -0 --no-run-if-empty git add --
+  if ! git diff --cached --quiet; then
+    git commit -m "fix(scope): pattern and skill updates"
+  fi
+
+  # Group 3: Everything else
+  git add -A
+  if ! git diff --cached --quiet; then
+    git commit -m "chore(scope): config and documentation updates"
+  fi
+
+  # 4. Verify replacement commits exist
+  NEW_COMMIT_COUNT=$(git rev-list --count ${MERGE_BASE}..HEAD)
+  if [ "${NEW_COMMIT_COUNT}" -eq 0 ]; then
+    echo "ERROR: No replacement commits after soft reset. Restoring backup."
+    git reset --hard "backup-${PR_NUM}-pre-rebase"
+    exit 1
+  fi
+
+  # 5. Force push
+  git push --force-with-lease
+
+  # 6. Trigger final @codex review
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+
+  # 7. Poll for bot response
+  REBASE_BOT_OK=false
+  POLL_INTERVAL=30
+  MAX_WAIT=600
+  WAITED=0
+  while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
+    sleep "${POLL_INTERVAL}"
+    WAITED=$((WAITED + POLL_INTERVAL))
+    BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
+      --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\")] | length" 2>/dev/null || echo "0")
+    if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
+      REBASE_BOT_OK=true
+      break
+    fi
+    echo "Post-rebase poll... ${WAITED}s / ${MAX_WAIT}s"
+  done
+
+  # 8. BLOCKING: Evaluate final review result
+  if [ "${REBASE_BOT_OK}" = "true" ]; then
+    REBASE_BOT_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
+      --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\") | select(.body | test(\\"\\\\*\\\\*P[012]\\\\*\\\\*\\"))] | length" 2>/dev/null || echo "0")
+
+    if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
+      REBASE_REVIEW_HAS_ISSUES=true
+      # Inline post-rebase fix cycle (max 3 rounds)
+      REBASE_FIX_ROUND=0
+      REBASE_FIX_MAX=3
+      while [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ] && [ "${REBASE_FIX_ROUND}" -lt "${REBASE_FIX_MAX}" ]; do
+        REBASE_FIX_ROUND=$((REBASE_FIX_ROUND + 1))
+        csa run "Fix the issues found by the post-rebase bot review on PR #${PR_NUM}. Read the bot comments and apply fixes. Commit the fixes."
+        git push origin "${WORKFLOW_BRANCH}"
+        gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+
+        REFIX_BOT_OK=false
+        REFIX_WAITED=0
+        while [ "${REFIX_WAITED}" -lt "${MAX_WAIT}" ]; do
+          sleep "${POLL_INTERVAL}"
+          REFIX_WAITED=$((REFIX_WAITED + POLL_INTERVAL))
+          REFIX_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
+            --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\")] | length" 2>/dev/null || echo "0")
+          if [ "${REFIX_REPLY}" -gt 0 ] 2>/dev/null; then
+            REFIX_BOT_OK=true
+            break
+          fi
+        done
+
+        if [ "${REFIX_BOT_OK}" = "true" ]; then
+          REFIX_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
+            --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\") | select(.body | test(\\"\\\\*\\\\*P[012]\\\\*\\\\*\\"))] | length" 2>/dev/null || echo "0")
+          if [ "${REFIX_ISSUES}" -eq 0 ] 2>/dev/null; then
+            REBASE_REVIEW_HAS_ISSUES=false
+          fi
+        else
+          if csa review --range main...HEAD 2>/dev/null; then
+            REBASE_REVIEW_HAS_ISSUES=false
+          fi
+        fi
+      done
+
+      if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+        echo "ERROR: Post-rebase review still failing after ${REBASE_FIX_MAX} rounds. Aborting."
+        exit 1
+      fi
+      git push origin "${WORKFLOW_BRANCH}"
+    else
+      REBASE_REVIEW_HAS_ISSUES=false
+    fi
+  else
+    # Bot timed out — fallback to local review
+    if ! csa review --range main...HEAD 2>/dev/null; then
+      FALLBACK_REVIEW_HAS_ISSUES=true
+      # Inline fallback fix cycle (max 3 rounds)
+      REBASE_FB_FIX_ROUND=0
+      REBASE_FB_FIX_MAX=3
+      while [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ] && [ "${REBASE_FB_FIX_ROUND}" -lt "${REBASE_FB_FIX_MAX}" ]; do
+        REBASE_FB_FIX_ROUND=$((REBASE_FB_FIX_ROUND + 1))
+        csa run "Fix the issues found by csa review --range main...HEAD. Read the review output and apply fixes. Commit the fixes."
+        if csa review --range main...HEAD 2>/dev/null; then
+          FALLBACK_REVIEW_HAS_ISSUES=false
+        fi
+      done
+      if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+        echo "ERROR: Post-rebase fallback review still failing after ${REBASE_FB_FIX_MAX} rounds. Aborting."
+        exit 1
+      fi
+      git push origin "${WORKFLOW_BRANCH}"
+    fi
+  fi
+fi
+```"""
+on_fail = "abort"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 14
@@ -298,32 +535,56 @@ git push -u origin "${CLEAN_BRANCH}"
 gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 15
 title = "Final Merge"
 tool = "bash"
 prompt = """
-Squash-merge and update local main.
+Squash-merge and update local main. Hard gate blocks merge if any
+post-rebase review issues remain unresolved.
 
 ```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
+  exit 1
+fi
+
+git push origin "${WORKFLOW_BRANCH}"
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 16
 title = "Step 12b: Final Merge (Direct)"
 tool = "bash"
 prompt = """
-First-pass clean review: merge the existing PR directly.
+First-pass clean review: merge the existing PR directly. Hard gate blocks
+merge if any post-rebase review issues remain unresolved.
 
 ```bash
+# --- Hard gate: unconditional pre-merge check ---
+if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved fallback review issues."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Reached merge with unresolved post-rebase review issues."
+  exit 1
+fi
+
+git push origin "${WORKFLOW_BRANCH}"
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED}))"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED})) && (!(${ROUND_LIMIT_REACHED}))"

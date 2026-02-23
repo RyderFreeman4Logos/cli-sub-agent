@@ -28,7 +28,7 @@ triggers:
 
 ## Purpose
 
-Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops up to 10 iterations. FORBIDDEN: self-dismissing bot comments or skipping debate for arbitration.
+Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). When the round limit is reached, the workflow pauses and presents options: merge now, continue, or abort. Before merge, accumulated fix commits are rebased into logical groups (Step 10.5). FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration, auto-merging at round limit.
 
 ## Dispatcher Model
 
@@ -154,8 +154,9 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
 7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Post full audit trail to PR.
 8. **Fix non-stale real issues**: For surviving Category C comments, fix, commit, push.
-9. **Re-trigger**: Push fixes and re-trigger (loops back to step 4). Max 10 iterations.
+9. **Re-trigger**: Push fixes and re-trigger (loops back to step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
+10.5. **Rebase for clean history**: If branch has > 3 commits, create backup branch, soft reset to `$(git merge-base main HEAD)` (not local main tip, which may have advanced), create logical commits by selectively staging, force push with lease, then trigger one final `@codex review`. **MUST block**: poll for bot response (max 10 min, 30s interval) and only proceed to merge after the final review passes clean. If the final review finds issues, loop back into the fix cycle (Steps 7-10) — the rebase is NOT repeated, only the fix-and-review cycle runs. If bot times out, fall back to local `csa review --range main...HEAD` and fix any issues before merge. FORBIDDEN: proceeding to merge while post-rebase review has unresolved issues. Skip rebase entirely if <= 3 commits or already logically grouped.
 11. **Merge**: `gh pr merge --squash --delete-branch`, then `git checkout main && git pull`.
 
 ## Example Usage
@@ -187,5 +188,7 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
+10a. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
+10b. **Rebase for clean history** (Step 10.5): If branch had > 3 accumulated commits, commits were rebased into logical groups, force-pushed, and a final `@codex review` passed clean before merge. Backup branch created at `backup-<pr>-pre-rebase`.
 11. PR merged via squash-merge with branch cleanup.
 12. Local main updated: `git checkout main && git pull origin main`.
