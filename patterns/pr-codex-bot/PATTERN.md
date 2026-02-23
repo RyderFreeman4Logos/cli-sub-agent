@@ -295,11 +295,14 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  A) Merge now (review is good enough)"
   echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
   echo "  C) Abort and investigate manually"
-  # MUST pause and ask user -- do NOT proceed automatically
-  # If user selects Option B, reset counter for another full batch:
-  #   REVIEW_ROUND=0
-  # Then fall through to push/trigger below.
-  # If user selects Option A or C, exit loop (merge or abort).
+  # HALT: stop and wait for explicit user decision.
+  # Execution MUST NOT fall through to push/trigger below.
+  # The orchestrator presents options and awaits user input.
+  # --- Post-halt user decision handling ---
+  # Option A: proceed to merge step (Step 12/12b)
+  # Option B: REVIEW_ROUND=0, resume from push/trigger
+  # Option C: exit workflow entirely
+  exit 0
 fi
 
 # --- Push fixes and re-trigger bot review ---
@@ -334,8 +337,9 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 1. Create backup branch
   git branch "backup-${PR_NUM}-pre-rebase"
 
-  # 2. Soft reset to base
-  git reset --soft main
+  # 2. Soft reset to merge-base (not local main tip, which may have advanced)
+  MERGE_BASE=$(git merge-base main HEAD)
+  git reset --soft $MERGE_BASE
 
   # 3. Create logical commits by selectively staging files per phase/concern
   #    (Orchestrator delegates commit grouping to the executor)
