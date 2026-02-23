@@ -272,14 +272,10 @@ Fix the real issue (non-stale, non-false-positive). Commit the fix.
 
 Tool: bash
 
-```bash
-git push origin "${WORKFLOW_BRANCH}"
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
-```
-
-Loop back to Step 5 (poll). Track iteration count via `REVIEW_ROUND`.
-When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and
-present options to the user:
+Track iteration count via `REVIEW_ROUND`. Check the round cap BEFORE
+pushing fixes and triggering another bot review. When `REVIEW_ROUND`
+reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to
+the user — no new review is triggered until the user decides:
 
 - **Option A**: Merge now (review is good enough)
 - **Option B**: Continue for `MAX_REVIEW_ROUNDS` more rounds
@@ -291,6 +287,8 @@ The user MUST explicitly choose an option before proceeding.
 ```bash
 REVIEW_ROUND=$((REVIEW_ROUND + 1))
 MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
+
+# --- Round cap check BEFORE push/trigger ---
 if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "Reached MAX_REVIEW_ROUNDS (${MAX_REVIEW_ROUNDS})."
   echo "Options:"
@@ -298,8 +296,18 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
   echo "  C) Abort and investigate manually"
   # MUST pause and ask user -- do NOT proceed automatically
+  # If user selects Option B, reset counter for another full batch:
+  #   REVIEW_ROUND=0
+  # Then fall through to push/trigger below.
+  # If user selects Option A or C, exit loop (merge or abort).
 fi
+
+# --- Push fixes and re-trigger bot review ---
+git push origin "${WORKFLOW_BRANCH}"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 ```
+
+Loop back to Step 5 (poll).
 
 ## ELSE
 
