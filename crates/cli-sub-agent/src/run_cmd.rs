@@ -117,13 +117,27 @@ struct ForkResolution {
 
 /// Resolve a fork from a source session: run the transport-level fork and return
 /// the information needed to create a new CSA session with fork genealogy.
+///
+/// For soft forks (cross-tool or non-claude-code targets), tool-lock is NOT enforced
+/// because soft forks only copy context from the parent session and do not require
+/// tool ownership. Native forks (same tool) still enforce tool-lock via
+/// `resolve_resume_session`.
 async fn resolve_fork(
     source_session_id: &str,
     tool_name: &str,
     project_root: &Path,
 ) -> Result<ForkResolution> {
-    let resolution =
-        csa_session::resolve_resume_session(project_root, source_session_id, tool_name)?;
+    let fork_method = TransportFactory::fork_method_for_tool(tool_name);
+    let resolution = match fork_method {
+        ForkMethod::Native => {
+            // Native fork requires the same tool's provider session — enforce tool-lock.
+            csa_session::resolve_resume_session(project_root, source_session_id, tool_name)?
+        }
+        ForkMethod::Soft => {
+            // Soft fork only reads context files — skip tool-lock enforcement.
+            csa_session::resolve_fork_source(project_root, source_session_id)?
+        }
+    };
     let source_csa_id = resolution.meta_session_id.clone();
     let source_provider_id = resolution.provider_session_id.clone();
 
