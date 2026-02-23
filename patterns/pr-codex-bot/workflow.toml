@@ -390,24 +390,16 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 
   # 3. Create logical commits by selectively staging files
   git reset HEAD .
-  CHANGED_FILES=$(git diff --name-only HEAD)
-
   # Group 1: Source code
-  SOURCE_FILES=$(echo "${CHANGED_FILES}" | grep -E '^(src/|crates/|lib/|bin/)' || true)
-  if [ -n "${SOURCE_FILES}" ]; then
-    echo "${SOURCE_FILES}" | xargs git add --
-    if ! git diff --cached --quiet; then
-      git commit -m "feat(scope): primary implementation changes"
-    fi
+  git diff --name-only -z HEAD | grep -zE '^(src/|crates/|lib/|bin/)' | xargs -0 --no-run-if-empty git add --
+  if ! git diff --cached --quiet; then
+    git commit -m "feat(scope): primary implementation changes"
   fi
 
   # Group 2: Patterns, skills, and workflow definitions
-  PATTERN_FILES=$(echo "${CHANGED_FILES}" | grep -E '^(patterns/|\.claude/)' || true)
-  if [ -n "${PATTERN_FILES}" ]; then
-    echo "${PATTERN_FILES}" | xargs git add --
-    if ! git diff --cached --quiet; then
-      git commit -m "fix(scope): pattern and skill updates"
-    fi
+  git diff --name-only -z HEAD | grep -zE '^(patterns/|\.claude/)' | xargs -0 --no-run-if-empty git add --
+  if ! git diff --cached --quiet; then
+    git commit -m "fix(scope): pattern and skill updates"
   fi
 
   # Group 3: Everything else
@@ -521,7 +513,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```"""
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE})"
+condition = "!(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES})"
 
 [[workflow.steps]]
 id = 14
