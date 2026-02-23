@@ -181,12 +181,35 @@ pub(crate) fn create_session_in(
         token_budget: None,
         sandbox_info: None,
         termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: detect_git_head(project_path),
     };
 
     // Write state file
     save_session_in(base_dir, &state)?;
 
     Ok(state)
+}
+
+/// Detect the current git HEAD commit hash (full SHA) for seed invalidation.
+pub fn detect_git_head(project_path: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(project_path)
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let head = String::from_utf8(output.stdout).ok()?;
+    let trimmed = head.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 fn detect_current_branch(project_path: &Path) -> Option<String> {
@@ -385,6 +408,8 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     token_budget: None,
                     sandbox_info: None,
                     termination_reason: None,
+                    is_seed_candidate: false,
+                    git_head_at_creation: None,
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
                     tracing::warn!(

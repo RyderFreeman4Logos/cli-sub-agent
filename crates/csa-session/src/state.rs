@@ -65,6 +65,15 @@ pub struct MetaSessionState {
     /// Why the last run terminated early (e.g. sigint, sigterm, idle_timeout).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub termination_reason: Option<String>,
+
+    /// Whether this session is a seed candidate for future fork-from-seed.
+    #[serde(default)]
+    pub is_seed_candidate: bool,
+
+    /// Git HEAD commit hash at session creation time.
+    /// Used for seed invalidation: if HEAD changed, the seed is stale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_head_at_creation: Option<String>,
 }
 
 /// Lightweight telemetry about the resource sandbox applied to a session.
@@ -513,6 +522,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -730,6 +741,8 @@ is_compacted = false
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");

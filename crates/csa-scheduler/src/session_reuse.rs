@@ -147,6 +147,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");
@@ -177,6 +179,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let score = compute_relevance_score(&session, "review", "gemini-cli");
@@ -207,6 +211,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let score = compute_relevance_score(&session, "fix", "gemini-cli");
@@ -237,6 +243,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let score = compute_relevance_score(&session, "deploy", "gemini-cli");
@@ -265,6 +273,8 @@ mod tests {
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");

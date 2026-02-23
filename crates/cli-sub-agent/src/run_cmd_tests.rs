@@ -34,6 +34,8 @@ fn test_session(
         sandbox_info: None,
 
         termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
     }
 }
 

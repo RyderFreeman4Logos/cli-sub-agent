@@ -127,6 +127,8 @@ fn sample_session_state() -> MetaSessionState {
         token_budget: None,
         sandbox_info: None,
         termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
     }
 }
 
@@ -818,6 +820,8 @@ fn sample_fork_session() -> MetaSessionState {
         token_budget: None,
         sandbox_info: None,
         termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
     }
 }
 

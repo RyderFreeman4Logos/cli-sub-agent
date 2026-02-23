@@ -68,6 +68,25 @@ pub struct SessionConfig {
     /// `<!-- CSA:SECTION:<id> -->` delimiters for machine-readable parsing.
     #[serde(default = "default_true")]
     pub structured_output: bool,
+    /// Maximum age (seconds) for a seed session to remain valid.
+    /// Sessions older than this are not eligible as fork sources.
+    #[serde(default = "default_seed_max_age_secs")]
+    pub seed_max_age_secs: u64,
+    /// Automatically fork from a warm seed session instead of cold starting.
+    #[serde(default = "default_true")]
+    pub auto_seed_fork: bool,
+    /// Maximum number of seed sessions retained per tool×project combination.
+    /// Oldest seeds beyond this limit are retired (LRU eviction).
+    #[serde(default = "default_max_seed_sessions")]
+    pub max_seed_sessions: u32,
+}
+
+fn default_seed_max_age_secs() -> u64 {
+    86400 // 24 hours
+}
+
+fn default_max_seed_sessions() -> u32 {
+    2
 }
 
 impl Default for SessionConfig {
@@ -76,13 +95,21 @@ impl Default for SessionConfig {
             transcript_enabled: false,
             transcript_redaction: true,
             structured_output: true,
+            seed_max_age_secs: default_seed_max_age_secs(),
+            auto_seed_fork: true,
+            max_seed_sessions: default_max_seed_sessions(),
         }
     }
 }
 
 impl SessionConfig {
     pub fn is_default(&self) -> bool {
-        !self.transcript_enabled && self.transcript_redaction && self.structured_output
+        !self.transcript_enabled
+            && self.transcript_redaction
+            && self.structured_output
+            && self.seed_max_age_secs == default_seed_max_age_secs()
+            && self.auto_seed_fork
+            && self.max_seed_sessions == default_max_seed_sessions()
     }
 }
 

@@ -26,6 +26,8 @@
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let mut extra = HashMap::new();
@@ -72,6 +74,8 @@
             sandbox_info: None,
 
             termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
         };
 
         let env = transport.build_env(&session, None);

@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::Result;
 use tempfile::TempDir;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
@@ -480,6 +480,48 @@ pub(crate) async fn handle_run(
 
     let resolved_tool = initial_tool;
 
+    // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
+    let (is_fork, session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
+        let auto_seed_enabled = config
+            .as_ref()
+            .map(|c| c.session.auto_seed_fork)
+            .unwrap_or(true);
+        if auto_seed_enabled {
+            let seed_max_age = config
+                .as_ref()
+                .map(|c| c.session.seed_max_age_secs)
+                .unwrap_or(86400);
+            let current_git_head = csa_session::detect_git_head(&project_root);
+            match csa_scheduler::find_seed_session(
+                &project_root,
+                resolved_tool.as_str(),
+                seed_max_age,
+                current_git_head.as_deref(),
+            ) {
+                Ok(Some(seed)) => {
+                    info!(
+                        seed_session = %seed.session_id,
+                        tool = %seed.tool_name,
+                        "Auto fork-from-seed: warm session found"
+                    );
+                    (true, Some(seed.session_id))
+                }
+                Ok(None) => {
+                    debug!("No seed session available, cold start");
+                    (is_fork, session_arg)
+                }
+                Err(e) => {
+                    debug!(error = %e, "Seed session lookup failed, falling back to cold start");
+                    (is_fork, session_arg)
+                }
+            }
+        } else {
+            (is_fork, session_arg)
+        }
+    } else {
+        (is_fork, session_arg)
+    };
+
     // Handle fork: resolve source session and perform transport-level fork
     let fork_resolution = if is_fork {
         if let Some(ref source_id) = session_arg {
@@ -495,7 +537,7 @@ pub(crate) async fn handle_run(
     // Instead, create a new session and set fork genealogy fields.
     let effective_session_arg = if is_fork { None } else { session_arg.clone() };
 
-    // Hint: suggest reusable sessions when creating a new session
+    // Hint: suggest reusable sessions when creating a new session (only if not auto-forking)
     if effective_session_arg.is_none() && !is_fork {
         let tool_names = vec![resolved_tool.as_str().to_string()];
         match csa_scheduler::session_reuse::find_reusable_sessions(
@@ -933,6 +975,54 @@ pub(crate) async fn handle_run(
                     }
                 }
             }
+        }
+    }
+
+    // Mark successful non-fork sessions as seed candidates and run LRU eviction.
+    if result.exit_code == 0 && fork_resolution.is_none() && !ephemeral {
+        if let Ok(sessions) = csa_session::list_sessions(&project_root, None) {
+            let mut sorted = sessions;
+            sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            if let Some(newest) = sorted.first() {
+                match csa_session::load_session(&project_root, &newest.meta_session_id) {
+                    Ok(mut session) => {
+                        if !session.is_seed_candidate {
+                            session.is_seed_candidate = true;
+                            if let Err(e) = csa_session::save_session(&session) {
+                                warn!("Failed to mark session as seed candidate: {e}");
+                            } else {
+                                info!(
+                                    session = %session.meta_session_id,
+                                    tool = %current_tool.as_str(),
+                                    "Marked session as seed candidate"
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        debug!(error = %e, "Failed to load session for seed marking");
+                    }
+                }
+            }
+        }
+
+        // LRU eviction: retire excess seed sessions for this tool×project
+        let max_seeds = config
+            .as_ref()
+            .map(|c| c.session.max_seed_sessions)
+            .unwrap_or(2);
+        match csa_scheduler::evict_excess_seeds(&project_root, current_tool.as_str(), max_seeds) {
+            Ok(retired) if !retired.is_empty() => {
+                info!(
+                    count = retired.len(),
+                    tool = %current_tool.as_str(),
+                    "Evicted excess seed sessions"
+                );
+            }
+            Err(e) => {
+                debug!(error = %e, "Seed eviction check failed");
+            }
+            _ => {}
         }
     }
 

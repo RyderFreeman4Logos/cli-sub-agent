@@ -33,10 +33,10 @@ pub use soft_fork::{SoftForkContext, soft_fork_session};
 
 // Re-export manager functions
 pub use manager::{
-    complete_session, create_session, delete_session, delete_session_from_root, find_sessions,
-    get_session_dir, get_session_root, list_all_sessions, list_artifacts, list_sessions,
-    list_sessions_from_root, list_sessions_from_root_readonly, load_metadata, load_result,
-    load_session, resolve_resume_session, save_result, save_session, save_session_in,
+    complete_session, create_session, delete_session, delete_session_from_root, detect_git_head,
+    find_sessions, get_session_dir, get_session_root, list_all_sessions, list_artifacts,
+    list_sessions, list_sessions_from_root, list_sessions_from_root_readonly, load_metadata,
+    load_result, load_session, resolve_resume_session, save_result, save_session, save_session_in,
     update_last_accessed, validate_tool_access,
 };
 
