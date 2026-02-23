@@ -146,8 +146,13 @@ async fn resolve_fork(
     // Determine if source session uses a different tool than the target.
     // Cross-tool forks must always use soft fork (context summary injection)
     // because native fork requires the same tool's provider session.
-    let source_tool = csa_session::load_metadata(project_root, source_session_id)?.map(|m| m.tool);
-    let is_cross_tool = source_tool.as_deref().is_some_and(|src| src != tool_name);
+    // When metadata is missing (older/migrated sessions), default to cross-tool
+    // (soft fork) as the safe fallback — native fork would fail without metadata.
+    let source_tool = csa_session::load_metadata(project_root, source_session_id)
+        .ok()
+        .flatten()
+        .map(|m| m.tool);
+    let is_cross_tool = source_tool.as_deref() != Some(tool_name);
 
     let fork_method = if is_cross_tool {
         ForkMethod::Soft
@@ -525,7 +530,7 @@ pub(crate) async fn handle_run(
 
     // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
     let mut is_auto_seed_fork = false;
-    let (is_fork, session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
+    let (mut is_fork, mut session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
         let auto_seed_enabled = config
             .as_ref()
             .map(|c| c.session.auto_seed_fork)
@@ -769,13 +774,16 @@ pub(crate) async fn handle_run(
                 match resolve_fork(source_id, current_tool.as_str(), &project_root).await {
                     Ok(res) => fork_resolution = Some(res),
                     Err(e) if is_auto_seed_fork => {
-                        // Auto seed forks are best-effort: degrade to cold start
+                        // Auto seed forks are best-effort: degrade to cold start.
+                        // Clear all fork intent so retries don't re-enter fork resolution.
                         warn!(
                             error = %e,
                             source = %source_id,
                             "Auto seed fork resolution failed, falling back to cold start"
                         );
                         is_auto_seed_fork = false;
+                        is_fork = false;
+                        session_arg = None;
                         // fall through with fork_resolution = None; handled below
                     }
                     Err(e) => return Err(e),
