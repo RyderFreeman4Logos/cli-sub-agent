@@ -161,8 +161,15 @@ done
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "Bot timed out after ${MAX_WAIT}s. Falling back to local review."
-  # Fallback: run local csa review for coverage confirmation
-  csa review --range main...HEAD 2>/dev/null || true
+  # Fallback: run local csa review for coverage confirmation.
+  # Non-zero exit means review found issues -- block merge and route to fix cycle.
+  if ! csa review --range main...HEAD 2>/dev/null; then
+    echo "Fallback review found issues. Routing to fix cycle."
+    FALLBACK_REVIEW_HAS_ISSUES=true
+    # The orchestrator MUST treat this identically to BOT_HAS_ISSUES:
+    # loop back to Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10.
+    # FORBIDDEN: Proceeding to merge while FALLBACK_REVIEW_HAS_ISSUES=true.
+  fi
 fi
 ```
 
@@ -174,8 +181,10 @@ fi
 
 Tool: bash
 
-Bot unavailable. Local review already guarantees coverage.
-Proceed to merge directly.
+Bot unavailable. Local fallback review ran in Step 5.
+Proceed to merge ONLY if FALLBACK_REVIEW_HAS_ISSUES is not true.
+If fallback review found issues, the orchestrator MUST route to the fix cycle
+(Step 7 → Step 8/9 → Step 10) before reaching this point.
 
 ```bash
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
@@ -385,9 +394,15 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     # FORBIDDEN: Proceeding to merge while REBASE_REVIEW_HAS_ISSUES=true.
   else
     echo "Post-rebase bot timed out. Falling back to local review."
-    csa review --range main...HEAD 2>/dev/null || true
-    # Local review substitutes for bot review. If local review finds
-    # issues, the orchestrator MUST fix them before proceeding to merge.
+    if ! csa review --range main...HEAD 2>/dev/null; then
+      echo "Fallback review found issues. Routing back to fix cycle."
+      # FALLBACK_REVIEW_HAS_ISSUES=true
+      # Loop back to Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10.
+      # Fallback review failure MUST be treated identically to bot review
+      # failure -- merge is blocked until the review passes clean.
+    fi
+    # Local review substitutes for bot review. Non-zero exit blocks merge
+    # and routes into the fix cycle, same as a bot review with issues.
   fi
 fi
 ```
