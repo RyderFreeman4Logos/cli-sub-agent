@@ -176,7 +176,14 @@ fn upgrade_skips_pinned_unless_force() {
     let store = tmp.path().join("store");
 
     // Install with pin to "main".
-    let pkg = manual_install(&remote, &cache, &store, &project, "test-skill", Some("main"));
+    let pkg = manual_install(
+        &remote,
+        &cache,
+        &store,
+        &project,
+        "test-skill",
+        Some("main"),
+    );
     let first_commit = pkg.commit.clone();
 
     // Push a new version.

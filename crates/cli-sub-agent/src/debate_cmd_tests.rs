@@ -423,16 +423,12 @@ fn persist_debate_output_artifacts_includes_mode_for_same_model() {
         key_points: vec![],
         mode: DebateMode::SameModelAdversarial,
     };
-    let artifacts =
-        persist_debate_output_artifacts(session_dir, &summary, "transcript").unwrap();
+    let artifacts = persist_debate_output_artifacts(session_dir, &summary, "transcript").unwrap();
 
     let verdict_path = session_dir.join("output/debate-verdict.json");
     let verdict_json = std::fs::read_to_string(verdict_path).unwrap();
     let parsed: Value = serde_json::from_str(&verdict_json).unwrap();
-    assert_eq!(
-        parsed["mode"],
-        "same-model adversarial, not heterogeneous"
-    );
+    assert_eq!(parsed["mode"], "same-model adversarial, not heterogeneous");
     assert_eq!(artifacts.len(), 2);
 }
 

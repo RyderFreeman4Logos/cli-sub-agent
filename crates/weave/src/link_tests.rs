@@ -580,7 +580,12 @@ fn unique_counts_with_four_dirs_simulation() {
     // Simulate the real scenario: 3 unique skills × 4 directories.
     let mut outcomes = Vec::new();
     let skill_names = ["commit", "mktd", "sa"];
-    let dirs = [".claude/skills", ".codex/skills", ".agents/skills", ".gemini/skills"];
+    let dirs = [
+        ".claude/skills",
+        ".codex/skills",
+        ".agents/skills",
+        ".gemini/skills",
+    ];
 
     for dir in &dirs {
         for name in &skill_names {

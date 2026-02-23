@@ -388,8 +388,7 @@ fn main() -> Result<()> {
                     } => {
                         upgraded += 1;
                         let old_short = &old_commit[..old_commit.len().min(12)];
-                        let new_short =
-                            &entry.package.commit[..entry.package.commit.len().min(12)];
+                        let new_short = &entry.package.commit[..entry.package.commit.len().min(12)];
                         let old_ver = old_version.as_deref().unwrap_or("-");
                         let new_ver = entry.package.version.as_deref().unwrap_or("-");
                         eprintln!(
@@ -457,9 +456,7 @@ fn main() -> Result<()> {
                         "These directories are not referenced by any lockfile and can \
                          likely be removed safely."
                     );
-                    eprintln!(
-                        "To reinstall packages from scratch, run: weave install <source>"
-                    );
+                    eprintln!("To reinstall packages from scratch, run: weave install <source>");
                 }
                 package::MigrateResult::Migrated {
                     count,

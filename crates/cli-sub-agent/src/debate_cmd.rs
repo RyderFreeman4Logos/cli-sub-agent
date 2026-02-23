@@ -301,7 +301,9 @@ fn persist_debate_output_artifacts(
 
     let mode_annotation = match summary.mode {
         DebateMode::Heterogeneous => None,
-        DebateMode::SameModelAdversarial => Some("same-model adversarial, not heterogeneous".to_string()),
+        DebateMode::SameModelAdversarial => {
+            Some("same-model adversarial, not heterogeneous".to_string())
+        }
     };
     let verdict = DebateVerdict {
         verdict: summary.verdict.clone(),
@@ -608,11 +610,7 @@ fn resolve_debate_tool(
             if let Some(cfg) = project_config {
                 if !cfg.is_tool_enabled(&tool_name) {
                     // Try same-model fallback before giving up
-                    return resolve_same_model_fallback(
-                        parent_tool,
-                        global_config,
-                        project_root,
-                    );
+                    return resolve_same_model_fallback(parent_tool, global_config, project_root);
                 }
             }
             let tool = crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
@@ -656,8 +654,8 @@ fn resolve_debate_tool_from_value(
         // Try old heterogeneous_counterpart first for backward compatibility,
         // but only if the counterpart tool is enabled.
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
-            let counterpart_enabled = project_config
-                .is_none_or(|cfg| cfg.is_tool_enabled(resolved));
+            let counterpart_enabled =
+                project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
             if counterpart_enabled {
                 let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                     anyhow::anyhow!(

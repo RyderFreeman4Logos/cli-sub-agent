@@ -460,8 +460,8 @@ fn resolve_review_tool_from_value(
         // Try old heterogeneous_counterpart first for backward compatibility,
         // but only if the counterpart tool is enabled.
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
-            let counterpart_enabled = project_config
-                .is_none_or(|cfg| cfg.is_tool_enabled(resolved));
+            let counterpart_enabled =
+                project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
             if counterpart_enabled {
                 return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                     anyhow::anyhow!(

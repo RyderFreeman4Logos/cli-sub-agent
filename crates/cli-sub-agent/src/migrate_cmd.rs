@@ -70,7 +70,11 @@ fn run_migrations(
     let mut lock = csa_config::WeaveLock::load_or_init(project_dir, csa_version, weave_version)?;
 
     // load_or_init guarantees versions is Some.
-    let lock_version = lock.versions().expect("load_or_init sets versions").csa.clone();
+    let lock_version = lock
+        .versions()
+        .expect("load_or_init sets versions")
+        .csa
+        .clone();
     let current: csa_config::Version = lock_version
         .parse()
         .with_context(|| format!("parsing lock version {lock_version:?}"))?;
