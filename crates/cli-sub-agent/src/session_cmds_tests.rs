@@ -1,4 +1,5 @@
 use super::{
+    display_acp_events, display_log_files, print_content_with_tail,
     resolve_session_prefix_from_dirs, select_sessions_for_list, session_to_json,
     status_from_phase_and_result, truncate_with_ellipsis,
 };
@@ -230,4 +231,157 @@ fn resolve_session_prefix_does_not_hide_primary_ambiguity() {
     )
     .unwrap_err();
     assert!(err.to_string().contains("Ambiguous session prefix"));
+}
+
+// ── display_log_files tests ───────────────────────────────────────
+
+#[test]
+fn display_log_files_returns_false_when_logs_dir_missing() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    std::fs::create_dir_all(&session_dir).unwrap();
+
+    let result = display_log_files(&session_dir, "test-session", None).unwrap();
+    assert!(!result, "should return false when logs/ dir does not exist");
+}
+
+#[test]
+fn display_log_files_returns_false_when_all_empty() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    let logs_dir = session_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+
+    // Create empty log files (simulates broken _log_writer)
+    std::fs::write(logs_dir.join("run-2026-01-01.log"), "").unwrap();
+    std::fs::write(logs_dir.join("run-2026-01-02.log"), "").unwrap();
+
+    let result = display_log_files(&session_dir, "test-session", None).unwrap();
+    assert!(
+        !result,
+        "should return false when all log files are empty (ACP fallback trigger)"
+    );
+}
+
+#[test]
+fn display_log_files_returns_true_when_content_exists() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    let logs_dir = session_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+
+    std::fs::write(logs_dir.join("run-2026-01-01.log"), "some log output\n").unwrap();
+
+    let result = display_log_files(&session_dir, "test-session", None).unwrap();
+    assert!(
+        result,
+        "should return true when at least one log file has content"
+    );
+}
+
+#[test]
+fn display_log_files_returns_false_when_no_log_files() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    let logs_dir = session_dir.join("logs");
+    std::fs::create_dir_all(&logs_dir).unwrap();
+
+    // Create a non-.log file — should be ignored
+    std::fs::write(logs_dir.join("notes.txt"), "not a log").unwrap();
+
+    let result = display_log_files(&session_dir, "test-session", None).unwrap();
+    assert!(!result, "should return false when no .log files exist");
+}
+
+// ── display_acp_events tests ──────────────────────────────────────
+
+#[test]
+fn display_acp_events_succeeds_when_jsonl_exists() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let events = r#"{"seq":1,"ts":"2026-01-01T00:00:00Z","type":"prompt_start"}
+{"seq":2,"ts":"2026-01-01T00:00:01Z","type":"prompt_end"}
+"#;
+    std::fs::write(output_dir.join("acp-events.jsonl"), events).unwrap();
+
+    // Should not error
+    display_acp_events(&session_dir, "test-session", None).unwrap();
+}
+
+#[test]
+fn display_acp_events_succeeds_with_tail() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    let output_dir = session_dir.join("output");
+    std::fs::create_dir_all(&output_dir).unwrap();
+
+    let events = r#"{"seq":1,"ts":"2026-01-01T00:00:00Z","type":"a"}
+{"seq":2,"ts":"2026-01-01T00:00:01Z","type":"b"}
+{"seq":3,"ts":"2026-01-01T00:00:02Z","type":"c"}
+"#;
+    std::fs::write(output_dir.join("acp-events.jsonl"), events).unwrap();
+
+    // Should not error with tail
+    display_acp_events(&session_dir, "test-session", Some(1)).unwrap();
+}
+
+#[test]
+fn display_acp_events_handles_missing_file() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    std::fs::create_dir_all(&session_dir).unwrap();
+
+    // No output/acp-events.jsonl — should succeed (prints message to stderr)
+    display_acp_events(&session_dir, "test-session", None).unwrap();
+}
+
+// ── CLI --events flag parsing ─────────────────────────────────────
+
+#[test]
+fn session_logs_cli_parses_events_flag() {
+    let cli = Cli::try_parse_from([
+        "csa",
+        "session",
+        "logs",
+        "--session",
+        "01ABCDEF",
+        "--events",
+    ])
+    .unwrap();
+    match cli.command {
+        Commands::Session {
+            cmd: SessionCommands::Logs { events, .. },
+        } => assert!(events, "events flag should be true"),
+        _ => panic!("expected session logs command"),
+    }
+}
+
+#[test]
+fn session_logs_cli_events_defaults_to_false() {
+    let cli =
+        Cli::try_parse_from(["csa", "session", "logs", "--session", "01ABCDEF"]).unwrap();
+    match cli.command {
+        Commands::Session {
+            cmd: SessionCommands::Logs { events, .. },
+        } => assert!(!events, "events flag should default to false"),
+        _ => panic!("expected session logs command"),
+    }
+}
+
+// ── print_content_with_tail tests ─────────────────────────────────
+
+#[test]
+fn print_content_with_tail_no_panic_on_empty() {
+    // Should not panic on empty content
+    print_content_with_tail("", None);
+    print_content_with_tail("", Some(5));
+}
+
+#[test]
+fn print_content_with_tail_no_panic_on_large_tail() {
+    // Tail larger than line count should not panic
+    print_content_with_tail("line1\nline2\n", Some(100));
 }

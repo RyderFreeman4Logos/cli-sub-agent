@@ -656,6 +656,27 @@ init_timeout_seconds = 60
             .any(|tier| tier.models.iter().any(|m| m == spec))
     }
 
+    /// Return tier models filtered to only include enabled tools.
+    ///
+    /// For each tier, model specs whose tool component (first `/`-delimited
+    /// segment) maps to a disabled tool are excluded. Useful for display
+    /// commands (`csa tiers list`, `csa config show --effective`) where the
+    /// user expects to see only actionable entries.
+    pub fn enabled_tier_models(&self, tier_name: &str) -> Vec<String> {
+        let Some(tier) = self.tiers.get(tier_name) else {
+            return Vec::new();
+        };
+        tier.models
+            .iter()
+            .filter(|spec| {
+                spec.split('/')
+                    .next()
+                    .is_some_and(|tool| self.is_tool_enabled(tool))
+            })
+            .cloned()
+            .collect()
+    }
+
     /// Return all model specs from tiers that use the given tool.
     ///
     /// Useful for error messages showing which specs are allowed.

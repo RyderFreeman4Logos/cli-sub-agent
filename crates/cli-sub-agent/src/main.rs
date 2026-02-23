@@ -185,8 +185,13 @@ async fn main() -> Result<()> {
             } => {
                 session_cmds::handle_session_clean(days, dry_run, tool, cd)?;
             }
-            SessionCommands::Logs { session, tail, cd } => {
-                session_cmds::handle_session_logs(session, tail, cd)?;
+            SessionCommands::Logs {
+                session,
+                tail,
+                events,
+                cd,
+            } => {
+                session_cmds::handle_session_logs(session, tail, events, cd)?;
             }
             SessionCommands::IsAlive { session, cd } => {
                 let alive = session_cmds::handle_session_is_alive(session, cd)?;

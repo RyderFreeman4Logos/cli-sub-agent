@@ -400,20 +400,53 @@ pub(crate) fn handle_session_delete(session: String, cd: Option<String>) -> Resu
 pub(crate) fn handle_session_logs(
     session: String,
     tail: Option<usize>,
+    events: bool,
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
     let session_dir = get_session_dir(&project_root, &resolved_id)?;
-    let logs_dir = session_dir.join("logs");
 
-    if !logs_dir.exists() {
-        eprintln!("No logs found for session {}", resolved_id);
+    if events {
+        return display_acp_events(&session_dir, &resolved_id, tail);
+    }
+
+    // Try logs/ directory first (Legacy transport)
+    if display_log_files(&session_dir, &resolved_id, tail)? {
         return Ok(());
     }
 
-    // Find all log files, sorted by name (timestamp order)
+    // Fallback: display output.log for ACP sessions where logs/ is empty
+    let output_log = session_dir.join("output.log");
+    if output_log.is_file() {
+        let content = fs::read_to_string(&output_log)?;
+        if !content.is_empty() {
+            eprintln!("=== output.log (ACP session) ===");
+            print_content_with_tail(&content, tail);
+            return Ok(());
+        }
+    }
+
+    eprintln!("No logs found for session {}", resolved_id);
+    eprintln!(
+        "Hint: use --events to view ACP transcript events (if available)"
+    );
+    Ok(())
+}
+
+/// Display log files from the logs/ directory. Returns true if any non-empty
+/// content was displayed.
+fn display_log_files(
+    session_dir: &Path,
+    session_id: &str,
+    tail: Option<usize>,
+) -> Result<bool> {
+    let logs_dir = session_dir.join("logs");
+    if !logs_dir.exists() {
+        return Ok(false);
+    }
+
     let mut log_files: Vec<_> = fs::read_dir(&logs_dir)?
         .filter_map(|e| e.ok())
         .filter(|e| e.path().extension().is_some_and(|ext| ext == "log"))
@@ -421,32 +454,72 @@ pub(crate) fn handle_session_logs(
     log_files.sort_by_key(|e| e.file_name());
 
     if log_files.is_empty() {
-        eprintln!("No log files found for session {}", resolved_id);
-        return Ok(());
+        return Ok(false);
     }
 
-    // Display each log file
+    // Check if all log files are empty (broken _log_writer scenario)
+    let all_empty = log_files
+        .iter()
+        .all(|e| fs::metadata(e.path()).map(|m| m.len() == 0).unwrap_or(true));
+
+    if all_empty {
+        tracing::debug!(
+            session_id,
+            "All log files in logs/ are empty, falling back to output.log"
+        );
+        return Ok(false);
+    }
+
     for entry in &log_files {
         let path = entry.path();
         let file_name = path.file_name().unwrap_or_default().to_string_lossy();
         eprintln!("=== {} ===", file_name);
 
         let content = fs::read_to_string(&path)?;
-
-        if let Some(n) = tail {
-            // Show last N lines
-            let lines: Vec<&str> = content.lines().collect();
-            let start = lines.len().saturating_sub(n);
-            for line in &lines[start..] {
-                println!("{}", line);
-            }
-        } else {
-            print!("{}", content);
-        }
+        print_content_with_tail(&content, tail);
         println!();
     }
 
+    Ok(true)
+}
+
+/// Display ACP JSONL events from output/acp-events.jsonl.
+fn display_acp_events(
+    session_dir: &Path,
+    session_id: &str,
+    tail: Option<usize>,
+) -> Result<()> {
+    let events_path = session_dir.join("output").join("acp-events.jsonl");
+    if !events_path.is_file() {
+        eprintln!(
+            "No ACP events found for session {} (no output/acp-events.jsonl)",
+            session_id
+        );
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&events_path)?;
+    if content.is_empty() {
+        eprintln!("ACP events file is empty for session {}", session_id);
+        return Ok(());
+    }
+
+    eprintln!("=== acp-events.jsonl ===");
+    print_content_with_tail(&content, tail);
     Ok(())
+}
+
+/// Print content, optionally showing only the last N lines.
+fn print_content_with_tail(content: &str, tail: Option<usize>) {
+    if let Some(n) = tail {
+        let lines: Vec<&str> = content.lines().collect();
+        let start = lines.len().saturating_sub(n);
+        for line in &lines[start..] {
+            println!("{}", line);
+        }
+    } else {
+        print!("{}", content);
+    }
 }
 
 pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Result<bool> {

@@ -490,6 +490,10 @@ pub enum SessionCommands {
         #[arg(long)]
         tail: Option<usize>,
 
+        /// Show ACP JSONL events from output/acp-events.jsonl
+        #[arg(long)]
+        events: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
