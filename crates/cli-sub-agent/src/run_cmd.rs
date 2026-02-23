@@ -603,6 +603,7 @@ pub(crate) async fn handle_run(
         matches!(strategy, ToolSelectionStrategy::HeterogeneousPreferred) && !no_failover;
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
+    let mut executed_session_id: Option<String> = None;
 
     let result = loop {
         attempts += 1;
@@ -760,7 +761,7 @@ pub(crate) async fn handle_run(
                 parent.clone()
             };
 
-            match pipeline::execute_with_session(
+            match pipeline::execute_with_session_and_meta(
                 &executor,
                 &current_tool,
                 &effective_prompt,
@@ -779,7 +780,10 @@ pub(crate) async fn handle_run(
             )
             .await
             {
-                Ok(result) => Ok(result),
+                Ok(session_result) => {
+                    executed_session_id = Some(session_result.meta_session_id);
+                    Ok(session_result.execution)
+                }
                 Err(e) => {
                     let error_msg = e.to_string();
                     if error_msg.contains("Session locked by PID")
@@ -971,72 +975,64 @@ pub(crate) async fn handle_run(
         }
     };
 
-    // Update fork genealogy on newly created session (post-execution).
-    // The pipeline created a new session; we now stamp it with fork-specific fields.
+    // Update fork genealogy on the executed session (post-execution).
+    // Use the actual executed session ID instead of a global "newest" lookup.
     if let Some(ref fork_res) = fork_resolution {
-        if let Ok(sessions) = csa_session::list_sessions(&project_root, None) {
-            let mut sorted = sessions;
-            sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            if let Some(newest) = sorted.first() {
-                match csa_session::load_session(&project_root, &newest.meta_session_id) {
-                    Ok(mut session) => {
-                        session.genealogy.fork_of_session_id =
+        if let Some(ref sid) = executed_session_id {
+            match csa_session::load_session(&project_root, sid) {
+                Ok(mut session) => {
+                    session.genealogy.fork_of_session_id = Some(fork_res.source_session_id.clone());
+                    session.genealogy.fork_provider_session_id =
+                        fork_res.source_provider_session_id.clone();
+                    if session.genealogy.parent_session_id.is_none() {
+                        session.genealogy.parent_session_id =
                             Some(fork_res.source_session_id.clone());
-                        session.genealogy.fork_provider_session_id =
-                            fork_res.source_provider_session_id.clone();
-                        if session.genealogy.parent_session_id.is_none() {
-                            session.genealogy.parent_session_id =
-                                Some(fork_res.source_session_id.clone());
-                        }
-                        // For native fork: store the forked provider session ID in
-                        // ToolState so future `--session` resumes can use it.
-                        if let Some(ref new_provider_id) = fork_res.provider_session_id {
-                            if let Some(tool_state) = session.tools.get_mut(current_tool.as_str()) {
-                                tool_state.provider_session_id = Some(new_provider_id.clone());
-                            }
-                        }
-                        if let Err(e) = csa_session::save_session(&session) {
-                            warn!("Failed to update fork genealogy on session: {e}");
-                        } else {
-                            info!(
-                                session = %session.meta_session_id,
-                                fork_of = %fork_res.source_session_id,
-                                "Updated session genealogy with fork fields"
-                            );
+                    }
+                    // For native fork: store the forked provider session ID in
+                    // ToolState so future `--session` resumes can use it.
+                    if let Some(ref new_provider_id) = fork_res.provider_session_id {
+                        if let Some(tool_state) = session.tools.get_mut(current_tool.as_str()) {
+                            tool_state.provider_session_id = Some(new_provider_id.clone());
                         }
                     }
-                    Err(e) => {
-                        warn!("Failed to load session for fork genealogy update: {e}");
+                    if let Err(e) = csa_session::save_session(&session) {
+                        warn!("Failed to update fork genealogy on session: {e}");
+                    } else {
+                        info!(
+                            session = %session.meta_session_id,
+                            fork_of = %fork_res.source_session_id,
+                            "Updated session genealogy with fork fields"
+                        );
                     }
+                }
+                Err(e) => {
+                    warn!("Failed to load session for fork genealogy update: {e}");
                 }
             }
         }
     }
 
     // Mark successful non-fork sessions as seed candidates and run LRU eviction.
+    // Use the actual executed session ID to avoid tagging an unrelated newer session.
     if result.exit_code == 0 && fork_resolution.is_none() && !ephemeral {
-        if let Ok(sessions) = csa_session::list_sessions(&project_root, None) {
-            let mut sorted = sessions;
-            sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
-            if let Some(newest) = sorted.first() {
-                match csa_session::load_session(&project_root, &newest.meta_session_id) {
-                    Ok(mut session) => {
-                        if !session.is_seed_candidate {
-                            session.is_seed_candidate = true;
-                            if let Err(e) = csa_session::save_session(&session) {
-                                warn!("Failed to mark session as seed candidate: {e}");
-                            } else {
-                                info!(
-                                    session = %session.meta_session_id,
-                                    tool = %current_tool.as_str(),
-                                    "Marked session as seed candidate"
-                                );
-                            }
+        if let Some(ref sid) = executed_session_id {
+            match csa_session::load_session(&project_root, sid) {
+                Ok(mut session) => {
+                    if !session.is_seed_candidate {
+                        session.is_seed_candidate = true;
+                        if let Err(e) = csa_session::save_session(&session) {
+                            warn!("Failed to mark session as seed candidate: {e}");
+                        } else {
+                            info!(
+                                session = %session.meta_session_id,
+                                tool = %current_tool.as_str(),
+                                "Marked session as seed candidate"
+                            );
                         }
                     }
-                    Err(e) => {
-                        debug!(error = %e, "Failed to load session for seed marking");
-                    }
+                }
+                Err(e) => {
+                    debug!(error = %e, "Failed to load session for seed marking");
                 }
             }
         }
