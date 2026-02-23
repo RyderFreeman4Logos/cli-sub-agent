@@ -564,12 +564,12 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     # Orchestrator classifies the final bot response using Step 7 logic.
     # Extract bot comments posted after the force-push and check for actionable issues.
     #
-    # Detection uses P1/P2 badge presence (e.g., "**P1**", "**P2**") instead of
-    # raw keyword grep. The bot always emits P1/P2 severity badges for real issues;
+    # Detection uses P0/P1/P2 badge presence (e.g., "**P0**", "**P1**", "**P2**") instead of
+    # raw keyword grep. The bot always emits P0/P1/P2 severity badges for real issues;
     # keyword matching ("issue|error|fix|warning|problem") misclassifies clean
     # summaries like "No issues found" because they contain "issue".
     REBASE_BOT_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[12]\\*\\*\"))] | length" 2>/dev/null || echo "0")
+      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[012]\\*\\*\"))] | length" 2>/dev/null || echo "0")
 
     if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
       echo "BLOCKED: Post-rebase review found ${REBASE_BOT_ISSUES} actionable comment(s)."
@@ -611,7 +611,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
         # 4. Evaluate result
         if [ "${REFIX_BOT_OK}" = "true" ]; then
           REFIX_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-            --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[12]\\*\\*\"))] | length" 2>/dev/null || echo "0")
+            --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[012]\\*\\*\"))] | length" 2>/dev/null || echo "0")
           if [ "${REFIX_ISSUES}" -eq 0 ] 2>/dev/null; then
             echo "Post-rebase review now passes after fix round ${REBASE_FIX_ROUND}."
             REBASE_REVIEW_HAS_ISSUES=false
