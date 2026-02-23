@@ -349,8 +349,46 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 
   # 5. Trigger one final @codex review to verify rebased code
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
-  # Poll for response (reuse Step 5 polling logic)
-  # Only proceed to merge after this final review passes clean
+
+  # 6. Poll for bot response (reuse Step 5 polling logic)
+  REBASE_BOT_OK=false
+  POLL_INTERVAL=30
+  MAX_WAIT=600
+  WAITED=0
+  while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
+    sleep "${POLL_INTERVAL}"
+    WAITED=$((WAITED + POLL_INTERVAL))
+    BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
+    if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
+      REBASE_BOT_OK=true
+      break
+    fi
+    echo "Post-rebase poll... ${WAITED}s / ${MAX_WAIT}s"
+  done
+
+  # 7. BLOCKING: Evaluate final review result before merge
+  #    The orchestrator MUST NOT proceed to merge until this gate passes.
+  if [ "${REBASE_BOT_OK}" = "true" ]; then
+    echo "Post-rebase review received. Evaluating..."
+    # Orchestrator classifies the final bot response using Step 7 logic.
+    # REBASE_REVIEW_HAS_ISSUES is set to true/false after classification.
+    #
+    # IF REBASE_REVIEW_HAS_ISSUES:
+    #   Loop back to Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10
+    #   (push + re-trigger). The rebase step is NOT repeated; only the
+    #   fix-and-review cycle runs until the bot review passes clean.
+    #
+    # IF NOT REBASE_REVIEW_HAS_ISSUES:
+    #   Fall through to merge (Step 12/12b).
+    #
+    # FORBIDDEN: Proceeding to merge while REBASE_REVIEW_HAS_ISSUES=true.
+  else
+    echo "Post-rebase bot timed out. Falling back to local review."
+    csa review --range main...HEAD 2>/dev/null || true
+    # Local review substitutes for bot review. If local review finds
+    # issues, the orchestrator MUST fix them before proceeding to merge.
+  fi
 fi
 ```
 
