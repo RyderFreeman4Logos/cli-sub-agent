@@ -6,8 +6,11 @@ pub mod genealogy;
 pub mod git;
 pub mod manager;
 pub mod metadata;
+pub mod output_parser;
+pub mod output_section;
 pub mod redact;
 pub mod result;
+pub mod soft_fork;
 pub mod state;
 pub mod validate;
 
@@ -20,16 +23,21 @@ pub use state::{
 pub use metadata::SessionMetadata;
 
 pub use event_writer::{EventWriteStats, EventWriter};
-pub use redact::redact_event;
+pub use output_parser::{
+    estimate_tokens, load_output_index, persist_structured_output, read_all_sections, read_section,
+};
+pub use output_section::{OutputIndex, OutputSection};
+pub use redact::{redact_event, redact_text_content};
 pub use result::{SessionArtifact, SessionResult};
+pub use soft_fork::{SoftForkContext, soft_fork_session};
 
 // Re-export manager functions
 pub use manager::{
-    complete_session, create_session, delete_session, delete_session_from_root, find_sessions,
-    get_session_dir, get_session_root, list_all_sessions, list_artifacts, list_sessions,
-    list_sessions_from_root, list_sessions_from_root_readonly, load_metadata, load_result,
-    load_session, resolve_resume_session, save_result, save_session, save_session_in,
-    update_last_accessed, validate_tool_access,
+    complete_session, create_session, delete_session, delete_session_from_root, detect_git_head,
+    find_sessions, get_session_dir, get_session_root, list_all_sessions, list_artifacts,
+    list_sessions, list_sessions_from_root, list_sessions_from_root_readonly, load_metadata,
+    load_result, load_session, resolve_fork_source, resolve_resume_session, save_result,
+    save_session, save_session_in, update_last_accessed, validate_tool_access,
 };
 
 pub use manager::ResumeSessionResolution;
