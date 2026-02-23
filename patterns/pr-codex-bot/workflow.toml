@@ -57,6 +57,9 @@ name = "REVIEW_ROUND"
 name = "ROUND_LIMIT_ACTION"
 
 [[workflow.variables]]
+name = "ROUND_LIMIT_REACHED"
+
+[[workflow.variables]]
 name = "WORKFLOW_BRANCH"
 
 [[workflow.steps]]
@@ -199,7 +202,7 @@ gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "${BOT_UNAVAILABLE}"
+condition = "(${BOT_UNAVAILABLE}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 8
@@ -330,6 +333,7 @@ fi
 
 # --- Round cap check BEFORE push/trigger ---
 if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
+  ROUND_LIMIT_REACHED=true
   echo "Reached MAX_REVIEW_ROUNDS (${MAX_REVIEW_ROUNDS})."
   echo "Options:"
   echo "  A) Merge now (review is good enough)"
@@ -337,7 +341,7 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  C) Abort and investigate manually"
   echo ""
   echo "ROUND_LIMIT_HALT: Awaiting user decision."
-  exit 0
+  exit 1
 fi
 
 # --- Push fixes and re-trigger bot review ---
@@ -354,7 +358,7 @@ id = 13
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to Step 10.5 (rebase) then merge."
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 17
@@ -513,7 +517,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```"""
 on_fail = "abort"
-condition = "!(${BOT_UNAVAILABLE}) && !(${BOT_HAS_ISSUES})"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 14
@@ -529,7 +533,7 @@ git push -u origin "${CLEAN_BRANCH}"
 gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 15
@@ -555,7 +559,7 @@ gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
+condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 16
@@ -581,4 +585,4 @@ gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED}))"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED})) && (!(${ROUND_LIMIT_REACHED}))"
