@@ -396,7 +396,10 @@ MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
 if [ -n "${ROUND_LIMIT_ACTION}" ]; then
   case "${ROUND_LIMIT_ACTION}" in
     merge)
-      echo "User chose: Merge now. Skipping push/re-trigger."
+      echo "User chose: Merge now. Pushing local commits before merge."
+      # Push any Category C fixes from Step 9 so remote HEAD includes them.
+      # Without this, gh pr merge merges the stale remote head.
+      git push origin "${WORKFLOW_BRANCH}"
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
       # Orchestrator MUST route to Step 12/12b upon seeing ROUND_LIMIT_MERGE.
       # Distinct from ROUND_LIMIT_HALT — this is an affirmative merge decision.
@@ -672,6 +675,9 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
         echo "ERROR: Post-rebase fallback review still failing after ${REBASE_FB_FIX_MAX} fix rounds. Aborting."
         exit 1
       fi
+      # Push fallback fix commits so remote PR head includes them.
+      # Without this, gh pr merge merges stale remote HEAD and drops fixes.
+      git push origin "${WORKFLOW_BRANCH}"
       echo "REBASE_FALLBACK_FIXED: Post-rebase fallback issues resolved. Proceeding to merge."
     fi
   fi
