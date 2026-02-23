@@ -174,12 +174,18 @@ fi
 # When FALLBACK_REVIEW_HAS_ISSUES=true, the orchestrator MUST route to
 # Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10 (push/re-trigger).
 # FORBIDDEN: Reaching any merge step while FALLBACK_REVIEW_HAS_ISSUES=true.
+#
+# NOTE: This gate uses an output marker (FALLBACK_BLOCKED) instead of exit 1
+# because Step 5 is declared OnFail: skip — a non-zero exit would be silently
+# swallowed, allowing the workflow to fall through to merge. The marker is
+# immune to skip-on-failure semantics: the orchestrator reads stdout and
+# routes based on the signal, not the exit code.
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-  echo "BLOCKED: Fallback review found issues. Entering fix cycle (Step 7)."
-  # Hard block: non-zero exit forces orchestrator to route to Step 7 (classify)
-  # → Step 8/9 (arbitrate/fix) → Step 10 (push/re-trigger).
-  # FORBIDDEN: Falling through to any merge step from this path.
-  exit 1
+  echo "FALLBACK_BLOCKED: Fallback review found issues. Entering fix cycle (Step 7)."
+  echo "Orchestrator MUST route to Step 7 (classify) → Step 8/9 → Step 10."
+  echo "FORBIDDEN: Falling through to any merge step from this path."
+  # Exit 0 so OnFail:skip does not swallow the signal.
+  # Orchestrator routes on the FALLBACK_BLOCKED marker, not exit code.
 fi
 ```
 
@@ -193,8 +199,9 @@ Tool: bash
 
 Bot unavailable. Local fallback review ran in Step 5.
 This step is ONLY reachable when FALLBACK_REVIEW_HAS_ISSUES is NOT true.
-The gate in Step 5 ensures that fallback review failures route to the fix
-cycle before execution can reach this merge command.
+The gate in Step 5 emits a `FALLBACK_BLOCKED` output marker (NOT exit 1,
+since Step 5 uses OnFail:skip) that the orchestrator uses to route to the
+fix cycle before execution can reach this merge command.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -427,33 +434,43 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   #
   #    The orchestrator (Layer 0) delegates this to a Layer 1 executor:
   #    a) Unstage all changes: git reset HEAD .
-  #    b) For each logical group (e.g., by crate, by concern):
-  #       - git add <files-for-group>
-  #       - git commit -m "<conventional-commit-message>"
-  #    c) Verify all changes are committed: git status --porcelain is empty
+  #    b) Discover changed files dynamically via git diff
+  #    c) For each logical group: git add <files> && git commit
+  #    d) Verify all changes are committed: git status --porcelain is empty
   #
-  #    Example grouping for a typical CSA PR:
+  #    Dynamic grouping: discover actual changed paths instead of hard-coding
+  #    directory names (which fail with pathspec errors on repos without them).
   git reset HEAD .
-  # Group 1: Core changes (most significant change first)
-  git add src/ crates/
-  if ! git diff --cached --quiet; then
-    git commit -m "feat(scope): primary implementation changes"
+  CHANGED_FILES=$(git diff --name-only HEAD)
+
+  # Group 1: Source code (any file under directories containing code)
+  SOURCE_FILES=$(echo "${CHANGED_FILES}" | grep -E '^(src/|crates/|lib/|bin/)' || true)
+  if [ -n "${SOURCE_FILES}" ]; then
+    echo "${SOURCE_FILES}" | xargs git add --
+    if ! git diff --cached --quiet; then
+      git commit -m "feat(scope): primary implementation changes"
+    fi
   fi
-  # Group 2: Pattern/skill changes
-  git add patterns/ .claude/
-  if ! git diff --cached --quiet; then
-    git commit -m "fix(scope): pattern and skill updates"
+
+  # Group 2: Patterns, skills, and workflow definitions
+  PATTERN_FILES=$(echo "${CHANGED_FILES}" | grep -E '^(patterns/|\.claude/)' || true)
+  if [ -n "${PATTERN_FILES}" ]; then
+    echo "${PATTERN_FILES}" | xargs git add --
+    if ! git diff --cached --quiet; then
+      git commit -m "fix(scope): pattern and skill updates"
+    fi
   fi
-  # Group 3: Config, docs, and other supporting files
-  git add .
+
+  # Group 3: Everything else (config, docs, tests, etc.)
+  git add -A
   if ! git diff --cached --quiet; then
     git commit -m "chore(scope): config and documentation updates"
   fi
   #
   #    IMPORTANT: Each commit is guarded by `git diff --cached --quiet` to skip
-  #    empty groups without halting the script. Actual grouping depends on the PR.
-  #    The orchestrator (Layer 1) should inspect the changed files and create
-  #    appropriate logical groups rather than blindly using these example paths.
+  #    empty groups without halting the script. Groups are discovered dynamically
+  #    from actual changed files, so repos without src/ or crates/ directories
+  #    will not trigger pathspec errors.
 
   # 4. Verify replacement commits exist before force pushing
   NEW_COMMIT_COUNT=$(git rev-list --count ${MERGE_BASE}..HEAD)
@@ -493,8 +510,13 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     echo "Post-rebase review received. Evaluating..."
     # Orchestrator classifies the final bot response using Step 7 logic.
     # Extract bot comments posted after the force-push and check for actionable issues.
+    #
+    # Detection uses P1/P2 badge presence (e.g., "**P1**", "**P2**") instead of
+    # raw keyword grep. The bot always emits P1/P2 severity badges for real issues;
+    # keyword matching ("issue|error|fix|warning|problem") misclassifies clean
+    # summaries like "No issues found" because they contain "issue".
     REBASE_BOT_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"issue|error|fix|warning|problem\"; \"i\"))] | length" 2>/dev/null || echo "0")
+      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[12]\\*\\*\"))] | length" 2>/dev/null || echo "0")
 
     if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
       echo "BLOCKED: Post-rebase review found ${REBASE_BOT_ISSUES} actionable comment(s)."
@@ -504,7 +526,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
       # The rebase step is NOT repeated; only the fix-and-review cycle runs
       # until the bot review passes clean.
       # FORBIDDEN: Falling through to merge from this path.
-      exit 1  # Hard block: non-zero exit forces orchestrator to handle
+      echo "REBASE_BLOCKED: Post-rebase review has issues. Route to fix cycle."
     else
       echo "Post-rebase review is clean. Proceeding to merge."
       REBASE_REVIEW_HAS_ISSUES=false
@@ -519,10 +541,9 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     # Gate: fallback review failure blocks merge, routes to fix cycle.
     # This check is unconditional — runs whether csa review passed or failed.
     if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-      echo "BLOCKED: Routing to fix cycle (Step 7). Merge is blocked."
+      echo "FALLBACK_BLOCKED: Post-rebase fallback review has issues. Route to fix cycle."
       # Orchestrator MUST jump to Step 7 (classify) → Step 8/9 → Step 10.
       # FORBIDDEN: Falling through to merge from this path.
-      exit 1  # Hard block: non-zero exit forces orchestrator to route to fix cycle
     fi
   fi
 fi
