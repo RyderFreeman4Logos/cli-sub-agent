@@ -21,8 +21,8 @@ use csa_lock::acquire_lock;
 use csa_process::{ExecutionResult, check_tool_installed};
 use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{
-    SessionResult, TokenUsage, ToolState, create_session, get_session_dir, save_result,
-    save_session,
+    SessionResult, TokenUsage, ToolState, create_session, get_session_dir,
+    persist_structured_output, save_result, save_session,
 };
 
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
@@ -579,6 +579,15 @@ pub(crate) async fn execute_with_session_and_meta(
         }
     }
 
+    // Inject structured output section markers when enabled in config.
+    let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);
+    if let Some(instructions) =
+        csa_executor::structured_output_instructions(structured_output_enabled)
+    {
+        info!("Injecting structured output instructions into prompt");
+        effective_prompt.push_str(instructions);
+    }
+
     // Resolve sandbox configuration from project config and enforcement mode.
     let liveness_dead_seconds = resolve_liveness_dead_seconds(config);
     let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
@@ -758,6 +767,21 @@ pub(crate) async fn execute_with_session_and_meta(
     };
     if let Err(e) = save_result(project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);
+    }
+
+    // Persist structured output sections from output.log markers
+    let output_log_path = session_dir.join("output.log");
+    if output_log_path.exists() {
+        match fs::read_to_string(&output_log_path) {
+            Ok(output_log) => {
+                if let Err(e) = persist_structured_output(&session_dir, &output_log) {
+                    warn!("Failed to persist structured output: {}", e);
+                }
+            }
+            Err(e) => {
+                warn!("Failed to read output.log for structured output: {}", e);
+            }
+        }
     }
 
     // Save session

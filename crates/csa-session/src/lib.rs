@@ -6,6 +6,8 @@ pub mod genealogy;
 pub mod git;
 pub mod manager;
 pub mod metadata;
+pub mod output_parser;
+pub mod output_section;
 pub mod redact;
 pub mod result;
 pub mod state;
@@ -20,6 +22,10 @@ pub use state::{
 pub use metadata::SessionMetadata;
 
 pub use event_writer::{EventWriteStats, EventWriter};
+pub use output_parser::{
+    estimate_tokens, load_output_index, persist_structured_output, read_all_sections, read_section,
+};
+pub use output_section::{OutputIndex, OutputSection};
 pub use redact::redact_event;
 pub use result::{SessionArtifact, SessionResult};
 

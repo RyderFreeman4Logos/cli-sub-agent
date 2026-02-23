@@ -63,6 +63,11 @@ pub struct SessionConfig {
     /// Redact sensitive content before writing transcript events to disk.
     #[serde(default = "default_true")]
     pub transcript_redaction: bool,
+    /// Inject structured output section markers into prompts.
+    /// When enabled, agents are instructed to wrap output in
+    /// `<!-- CSA:SECTION:<id> -->` delimiters for machine-readable parsing.
+    #[serde(default = "default_true")]
+    pub structured_output: bool,
 }
 
 impl Default for SessionConfig {
@@ -70,13 +75,14 @@ impl Default for SessionConfig {
         Self {
             transcript_enabled: false,
             transcript_redaction: true,
+            structured_output: true,
         }
     }
 }
 
 impl SessionConfig {
     pub fn is_default(&self) -> bool {
-        !self.transcript_enabled && self.transcript_redaction
+        !self.transcript_enabled && self.transcript_redaction && self.structured_output
     }
 }
 

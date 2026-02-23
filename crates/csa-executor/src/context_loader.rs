@@ -253,6 +253,34 @@ fn try_load_file(
     }
 }
 
+/// Instructions appended to prompts when structured output is enabled.
+///
+/// Tells agents to wrap output in `<!-- CSA:SECTION:<id> -->` delimiters
+/// so the output parser can extract machine-readable sections.
+const STRUCTURED_OUTPUT_INSTRUCTIONS: &str = "\
+\n\n<csa-output-format>\n\
+Wrap your output in section markers for structured parsing:\n\
+<!-- CSA:SECTION:summary -->\n\
+Brief summary of result\n\
+<!-- CSA:SECTION:summary:END -->\n\
+\n\
+<!-- CSA:SECTION:details -->\n\
+Full analysis, code, or explanation\n\
+<!-- CSA:SECTION:details:END -->\n\
+</csa-output-format>";
+
+/// Return the structured output instruction block for prompt injection.
+///
+/// Returns `Some(instructions)` when `enabled` is true, `None` otherwise.
+/// The caller appends this to the effective prompt.
+pub fn structured_output_instructions(enabled: bool) -> Option<&'static str> {
+    if enabled {
+        Some(STRUCTURED_OUTPUT_INSTRUCTIONS)
+    } else {
+        None
+    }
+}
+
 /// Parse AGENTS.md content for detail file references.
 ///
 /// Looks for lines containing `→ path/to/file.md` patterns.
@@ -568,6 +596,34 @@ mod tests {
         let files = load_project_context(&project, &ContextLoadOptions::default());
         let paths: Vec<&str> = files.iter().map(|f| f.rel_path.as_str()).collect();
         assert!(!paths.contains(&"../secret.txt"));
+    }
+
+    #[test]
+    fn test_structured_output_instructions_enabled() {
+        let result = structured_output_instructions(true);
+        assert!(result.is_some());
+        let instructions = result.unwrap();
+        assert!(instructions.contains("CSA:SECTION:summary"));
+        assert!(instructions.contains("CSA:SECTION:details"));
+        assert!(instructions.contains("CSA:SECTION:summary:END"));
+        assert!(instructions.contains("CSA:SECTION:details:END"));
+        assert!(instructions.contains("<csa-output-format>"));
+    }
+
+    #[test]
+    fn test_structured_output_instructions_disabled() {
+        assert!(structured_output_instructions(false).is_none());
+    }
+
+    #[test]
+    fn test_structured_output_instructions_token_budget() {
+        // Instructions must be < 200 tokens (~150 words).
+        let instructions = structured_output_instructions(true).unwrap();
+        let word_count = instructions.split_whitespace().count();
+        assert!(
+            word_count < 150,
+            "Structured output instructions too long: {word_count} words (max ~150)"
+        );
     }
 
     #[cfg(unix)]

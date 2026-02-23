@@ -9,8 +9,8 @@ use tracing::info;
 use csa_config::paths;
 use csa_core::types::OutputFormat;
 use csa_session::{
-    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_artifacts,
-    list_sessions, list_sessions_tree_filtered, load_result, load_session, resolve_session_prefix,
+    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_sessions,
+    list_sessions_tree_filtered, load_result, load_session, resolve_session_prefix,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
@@ -429,19 +429,13 @@ pub(crate) fn handle_session_logs(
     }
 
     eprintln!("No logs found for session {}", resolved_id);
-    eprintln!(
-        "Hint: use --events to view ACP transcript events (if available)"
-    );
+    eprintln!("Hint: use --events to view ACP transcript events (if available)");
     Ok(())
 }
 
 /// Display log files from the logs/ directory. Returns true if any non-empty
 /// content was displayed.
-fn display_log_files(
-    session_dir: &Path,
-    session_id: &str,
-    tail: Option<usize>,
-) -> Result<bool> {
+fn display_log_files(session_dir: &Path, session_id: &str, tail: Option<usize>) -> Result<bool> {
     let logs_dir = session_dir.join("logs");
     if !logs_dir.exists() {
         return Ok(false);
@@ -484,11 +478,7 @@ fn display_log_files(
 }
 
 /// Display ACP JSONL events from output/acp-events.jsonl.
-fn display_acp_events(
-    session_dir: &Path,
-    session_id: &str,
-    tail: Option<usize>,
-) -> Result<()> {
+fn display_acp_events(session_dir: &Path, session_id: &str, tail: Option<usize>) -> Result<()> {
     let events_path = session_dir.join("output").join("acp-events.jsonl");
     if !events_path.is_file() {
         eprintln!(
@@ -585,11 +575,36 @@ pub(crate) fn handle_session_clean(
     Ok(())
 }
 
-pub(crate) fn handle_session_result(session: String, json: bool, cd: Option<String>) -> Result<()> {
+/// Options for structured output display in `csa session result`.
+#[derive(Debug, Default)]
+pub(crate) struct StructuredOutputOpts {
+    pub summary: bool,
+    pub section: Option<String>,
+    pub full: bool,
+}
+
+impl StructuredOutputOpts {
+    fn is_active(&self) -> bool {
+        self.summary || self.section.is_some() || self.full
+    }
+}
+
+pub(crate) fn handle_session_result(
+    session: String,
+    json: bool,
+    cd: Option<String>,
+    structured: StructuredOutputOpts,
+) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
     let session_dir = get_session_dir(&project_root, &resolved_id)?;
+
+    // If structured output flags are active, handle them and return early
+    if structured.is_active() {
+        return display_structured_output(&session_dir, &resolved_id, &structured);
+    }
+
     let transcript_summary = match load_transcript_summary(&session_dir) {
         Ok(summary) => summary,
         Err(err) => {
@@ -651,20 +666,198 @@ pub(crate) fn handle_session_result(session: String, json: bool, cd: Option<Stri
     Ok(())
 }
 
+const FALLBACK_LINES: usize = 20;
+
+/// Display structured output sections based on the requested mode.
+fn display_structured_output(
+    session_dir: &Path,
+    session_id: &str,
+    opts: &StructuredOutputOpts,
+) -> Result<()> {
+    if opts.summary {
+        return display_summary_section(session_dir, session_id);
+    }
+
+    if let Some(ref section_id) = opts.section {
+        return display_single_section(session_dir, session_id, section_id);
+    }
+
+    if opts.full {
+        return display_all_sections(session_dir, session_id);
+    }
+
+    Ok(())
+}
+
+/// Show only the summary section, with fallback to first N lines of output.log.
+fn display_summary_section(session_dir: &Path, session_id: &str) -> Result<()> {
+    // Try reading "summary" section first
+    match csa_session::read_section(session_dir, "summary")? {
+        Some(content) => {
+            println!("{}", content);
+            return Ok(());
+        }
+        None => {
+            // If there's a "full" section, use that as fallback
+            if let Some(content) = csa_session::read_section(session_dir, "full")? {
+                let lines: Vec<&str> = content.lines().take(FALLBACK_LINES).collect();
+                println!("{}", lines.join("\n"));
+                if content.lines().count() > FALLBACK_LINES {
+                    eprintln!(
+                        "... ({} more lines, use --full to see all)",
+                        content.lines().count() - FALLBACK_LINES
+                    );
+                }
+                return Ok(());
+            }
+        }
+    }
+
+    // Final fallback: first N lines of output.log
+    let output_log = session_dir.join("output.log");
+    if output_log.is_file() {
+        let content = fs::read_to_string(&output_log)?;
+        if !content.is_empty() {
+            let lines: Vec<&str> = content.lines().take(FALLBACK_LINES).collect();
+            println!("{}", lines.join("\n"));
+            if content.lines().count() > FALLBACK_LINES {
+                eprintln!(
+                    "... ({} more lines, use --full to see all)",
+                    content.lines().count() - FALLBACK_LINES
+                );
+            }
+            return Ok(());
+        }
+    }
+
+    eprintln!("No output found for session '{}'", session_id);
+    Ok(())
+}
+
+/// Show a single section by ID.
+fn display_single_section(session_dir: &Path, session_id: &str, section_id: &str) -> Result<()> {
+    match csa_session::read_section(session_dir, section_id)? {
+        Some(content) => {
+            println!("{}", content);
+        }
+        None => {
+            // Check if index exists to give a better error
+            match csa_session::load_output_index(session_dir)? {
+                Some(index) => {
+                    let available: Vec<&str> =
+                        index.sections.iter().map(|s| s.id.as_str()).collect();
+                    anyhow::bail!(
+                        "Section '{}' not found in session '{}'. Available sections: {}",
+                        section_id,
+                        session_id,
+                        available.join(", ")
+                    );
+                }
+                None => {
+                    anyhow::bail!(
+                        "No structured output for session '{}'. Run without --section to see raw result.",
+                        session_id
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Show all sections in index order.
+fn display_all_sections(session_dir: &Path, session_id: &str) -> Result<()> {
+    let sections = csa_session::read_all_sections(session_dir)?;
+    if sections.is_empty() {
+        // Fallback: show full output.log
+        let output_log = session_dir.join("output.log");
+        if output_log.is_file() {
+            let content = fs::read_to_string(&output_log)?;
+            if !content.is_empty() {
+                print!("{}", content);
+                return Ok(());
+            }
+        }
+        eprintln!("No output found for session '{}'", session_id);
+        return Ok(());
+    }
+
+    for (i, (section, content)) in sections.iter().enumerate() {
+        if i > 0 {
+            println!();
+        }
+        println!("=== {} ({}) ===", section.title, section.id);
+        println!("{}", content);
+    }
+    Ok(())
+}
+
 pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
-    let artifacts = list_artifacts(&project_root, &resolved_id)?;
-    if artifacts.is_empty() {
-        eprintln!("No artifacts for session '{}'", resolved_id);
-    } else {
-        let session_dir = get_session_dir(&project_root, &resolved_id)?;
-        for a in &artifacts {
-            println!("{}", session_dir.join("output").join(a).display());
+    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    let output_dir = session_dir.join("output");
+
+    // Show structured output index if available
+    if let Some(index) = csa_session::load_output_index(&session_dir)? {
+        println!(
+            "Structured output ({} sections, ~{} tokens):",
+            index.sections.len(),
+            index.total_tokens
+        );
+        for section in &index.sections {
+            let size_str = if let Some(ref fp) = section.file_path {
+                let path = output_dir.join(fp);
+                match fs::metadata(&path) {
+                    Ok(meta) => format_file_size(meta.len()),
+                    Err(_) => "missing".to_string(),
+                }
+            } else {
+                "-".to_string()
+            };
+            println!(
+                "  {:<20}  {:<30}  ~{}tok  {}",
+                section.id, section.title, section.token_estimate, size_str
+            );
         }
+        println!();
     }
+
+    // List all files in output/ with sizes
+    if output_dir.is_dir() {
+        let mut entries: Vec<_> = fs::read_dir(&output_dir)?
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .collect();
+        entries.sort_by_key(|e| e.file_name());
+
+        if entries.is_empty() {
+            eprintln!("No artifacts for session '{}'", resolved_id);
+        } else {
+            println!("Files:");
+            for entry in &entries {
+                let path = entry.path();
+                let name = path.file_name().unwrap_or_default().to_string_lossy();
+                let size = fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
+                println!("  {:<40}  {}", name, format_file_size(size));
+            }
+        }
+    } else {
+        eprintln!("No artifacts for session '{}'", resolved_id);
+    }
+
     Ok(())
+}
+
+fn format_file_size(bytes: u64) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
 }
 
 pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<()> {
@@ -729,6 +922,140 @@ pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Token savings measurement for structured output.
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct TokenMeasurement {
+    pub session_id: String,
+    pub total_tokens: usize,
+    pub summary_tokens: usize,
+    pub savings_tokens: usize,
+    pub savings_percent: f64,
+    pub section_count: usize,
+    pub section_names: Vec<String>,
+    pub is_structured: bool,
+}
+
+pub(crate) fn handle_session_measure(
+    session: String,
+    json: bool,
+    cd: Option<String>,
+) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved_id = resolved.session_id;
+    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+
+    let measurement = compute_token_measurement(&session_dir, &resolved_id)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&measurement)?);
+    } else {
+        let short_id = &resolved_id[..11.min(resolved_id.len())];
+        println!("Session: {}", short_id);
+        println!(
+            "Total output: {} tokens",
+            format_number(measurement.total_tokens)
+        );
+        println!(
+            "Summary only: {} tokens",
+            format_number(measurement.summary_tokens)
+        );
+        if measurement.is_structured && measurement.total_tokens > 0 {
+            println!(
+                "Savings: {:.1}% ({} tokens saved)",
+                measurement.savings_percent,
+                format_number(measurement.savings_tokens)
+            );
+            println!(
+                "Sections: {} ({})",
+                measurement.section_count,
+                measurement.section_names.join(", ")
+            );
+        } else {
+            println!("Savings: N/A (unstructured output)");
+        }
+    }
+
+    Ok(())
+}
+
+fn compute_token_measurement(session_dir: &Path, session_id: &str) -> Result<TokenMeasurement> {
+    // Try loading the structured output index
+    let index = csa_session::load_output_index(session_dir)?;
+
+    if let Some(index) = index {
+        let total_tokens = index.total_tokens;
+        let section_names: Vec<String> = index.sections.iter().map(|s| s.id.clone()).collect();
+        let section_count = index.sections.len();
+
+        // Find summary section tokens (first section named "summary", or first section)
+        let summary_tokens = index
+            .sections
+            .iter()
+            .find(|s| s.id == "summary")
+            .map(|s| s.token_estimate)
+            .unwrap_or_else(|| {
+                index
+                    .sections
+                    .first()
+                    .map(|s| s.token_estimate)
+                    .unwrap_or(0)
+            });
+
+        // "full" section means unstructured (parser wraps entire output as "full")
+        let is_structured = section_count > 1 || (section_count == 1 && section_names[0] != "full");
+
+        let savings_tokens = total_tokens.saturating_sub(summary_tokens);
+        let savings_percent = if total_tokens > 0 {
+            (1.0 - summary_tokens as f64 / total_tokens as f64) * 100.0
+        } else {
+            0.0
+        };
+
+        Ok(TokenMeasurement {
+            session_id: session_id.to_string(),
+            total_tokens,
+            summary_tokens,
+            savings_tokens,
+            savings_percent,
+            section_count,
+            section_names,
+            is_structured,
+        })
+    } else {
+        // No index — try computing from output.log directly
+        let output_log = session_dir.join("output.log");
+        let total_tokens = if output_log.is_file() {
+            let content = fs::read_to_string(&output_log)?;
+            csa_session::estimate_tokens(&content)
+        } else {
+            0
+        };
+
+        Ok(TokenMeasurement {
+            session_id: session_id.to_string(),
+            total_tokens,
+            summary_tokens: total_tokens,
+            savings_tokens: 0,
+            savings_percent: 0.0,
+            section_count: 0,
+            section_names: vec![],
+            is_structured: false,
+        })
+    }
+}
+
+/// Format a number with commas for readability.
+fn format_number(n: usize) -> String {
+    let s = n.to_string();
+    let chars: Vec<char> = s.chars().rev().collect();
+    let chunks: Vec<String> = chars
+        .chunks(3)
+        .map(|chunk| chunk.iter().collect::<String>())
+        .collect();
+    chunks.join(",").chars().rev().collect()
 }
 
 #[cfg(test)]

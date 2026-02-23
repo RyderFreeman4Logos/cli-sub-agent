@@ -11,6 +11,7 @@ pub mod transport;
 pub use agent_backend_adapter::ExecutorAgentBackend;
 pub use context_loader::{
     ContextFile, ContextLoadOptions, format_context_for_prompt, load_project_context,
+    structured_output_instructions,
 };
 pub use csa_process::ExecutionResult;
 pub use executor::{ExecuteOptions, Executor, SandboxContext};

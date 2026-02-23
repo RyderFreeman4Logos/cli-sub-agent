@@ -1054,5 +1054,42 @@ fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
     assert!(config.enabled_tier_models("tier-1").is_empty());
 }
 
+// ── SessionConfig tests ──────────────────────────────────────────
+
+#[test]
+fn test_session_config_default_has_structured_output_enabled() {
+    let cfg = SessionConfig::default();
+    assert!(cfg.structured_output);
+}
+
+#[test]
+fn test_session_config_is_default_reflects_structured_output() {
+    let mut cfg = SessionConfig::default();
+    assert!(cfg.is_default());
+
+    cfg.structured_output = false;
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_session_config_deserializes_structured_output() {
+    let toml_str = r#"
+transcript_enabled = false
+transcript_redaction = true
+structured_output = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert!(!cfg.structured_output);
+}
+
+#[test]
+fn test_session_config_defaults_structured_output_when_missing() {
+    let toml_str = r#"
+transcript_enabled = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert!(cfg.structured_output);
+}
+
 #[path = "config_tests_tier_whitelist.rs"]
 mod tier_whitelist;

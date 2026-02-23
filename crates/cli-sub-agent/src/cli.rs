@@ -520,6 +520,18 @@ pub enum SessionCommands {
         #[arg(long)]
         json: bool,
 
+        /// Show only the summary section of structured output
+        #[arg(long, conflicts_with_all = ["section", "full"])]
+        summary: bool,
+
+        /// Show a specific section by ID (e.g., "details", "implementation")
+        #[arg(long, conflicts_with_all = ["summary", "full"])]
+        section: Option<String>,
+
+        /// Show all structured output sections in order
+        #[arg(long, conflicts_with_all = ["summary", "section"])]
+        full: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
@@ -560,6 +572,21 @@ pub enum SessionCommands {
 
     /// List all checkpoint notes
     Checkpoints {
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Measure token savings from structured output
+    Measure {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Output as JSON instead of human-readable
+        #[arg(long)]
+        json: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
