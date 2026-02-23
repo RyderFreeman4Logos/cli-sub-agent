@@ -175,9 +175,11 @@ fi
 # Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10 (push/re-trigger).
 # FORBIDDEN: Reaching any merge step while FALLBACK_REVIEW_HAS_ISSUES=true.
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-  echo "Fallback review found issues. Entering fix cycle (Step 7)."
-  # Control flow: orchestrator jumps to Step 7.
-  # This is NOT a merge path — execution MUST NOT fall through.
+  echo "BLOCKED: Fallback review found issues. Entering fix cycle (Step 7)."
+  # Hard block: non-zero exit forces orchestrator to route to Step 7 (classify)
+  # → Step 8/9 (arbitrate/fix) → Step 10 (push/re-trigger).
+  # FORBIDDEN: Falling through to any merge step from this path.
+  exit 1
 fi
 ```
 
@@ -420,15 +422,55 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   git reset --soft $MERGE_BASE
 
   # 3. Create logical commits by selectively staging files per phase/concern
-  #    (Orchestrator delegates commit grouping to the executor)
+  #    After soft reset, ALL changes are staged in the index. We must unstage
+  #    everything first, then selectively re-stage and commit per logical group.
+  #
+  #    The orchestrator (Layer 0) delegates this to a Layer 1 executor:
+  #    a) Unstage all changes: git reset HEAD .
+  #    b) For each logical group (e.g., by crate, by concern):
+  #       - git add <files-for-group>
+  #       - git commit -m "<conventional-commit-message>"
+  #    c) Verify all changes are committed: git status --porcelain is empty
+  #
+  #    Example grouping for a typical CSA PR:
+  git reset HEAD .
+  # Group 1: Core changes (most significant change first)
+  git add src/ crates/
+  if ! git diff --cached --quiet; then
+    git commit -m "feat(scope): primary implementation changes"
+  fi
+  # Group 2: Pattern/skill changes
+  git add patterns/ .claude/
+  if ! git diff --cached --quiet; then
+    git commit -m "fix(scope): pattern and skill updates"
+  fi
+  # Group 3: Config, docs, and other supporting files
+  git add .
+  if ! git diff --cached --quiet; then
+    git commit -m "chore(scope): config and documentation updates"
+  fi
+  #
+  #    IMPORTANT: Each commit is guarded by `git diff --cached --quiet` to skip
+  #    empty groups without halting the script. Actual grouping depends on the PR.
+  #    The orchestrator (Layer 1) should inspect the changed files and create
+  #    appropriate logical groups rather than blindly using these example paths.
 
-  # 4. Force push
+  # 4. Verify replacement commits exist before force pushing
+  NEW_COMMIT_COUNT=$(git rev-list --count ${MERGE_BASE}..HEAD)
+  if [ "${NEW_COMMIT_COUNT}" -eq 0 ]; then
+    echo "ERROR: No replacement commits created after soft reset. Aborting push."
+    echo "Restoring from backup branch."
+    git reset --hard "backup-${PR_NUM}-pre-rebase"
+    exit 1
+  fi
+
+  # 5. Force push
   git push --force-with-lease
 
-  # 5. Trigger one final @codex review to verify rebased code
+  # 6. Trigger one final @codex review to verify rebased code
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 
-  # 6. Poll for bot response (reuse Step 5 polling logic)
+  # 7. Poll for bot response (reuse Step 5 polling logic)
   REBASE_BOT_OK=false
   POLL_INTERVAL=30
   MAX_WAIT=600
@@ -445,7 +487,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     echo "Post-rebase poll... ${WAITED}s / ${MAX_WAIT}s"
   done
 
-  # 7. BLOCKING: Evaluate final review result before merge
+  # 8. BLOCKING: Evaluate final review result before merge
   #    The orchestrator MUST NOT proceed to merge until this gate passes.
   if [ "${REBASE_BOT_OK}" = "true" ]; then
     echo "Post-rebase review received. Evaluating..."
@@ -477,9 +519,10 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     # Gate: fallback review failure blocks merge, routes to fix cycle.
     # This check is unconditional — runs whether csa review passed or failed.
     if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-      echo "Routing to fix cycle (Step 7). Merge is blocked."
+      echo "BLOCKED: Routing to fix cycle (Step 7). Merge is blocked."
       # Orchestrator MUST jump to Step 7 (classify) → Step 8/9 → Step 10.
       # FORBIDDEN: Falling through to merge from this path.
+      exit 1  # Hard block: non-zero exit forces orchestrator to route to fix cycle
     fi
   fi
 fi
