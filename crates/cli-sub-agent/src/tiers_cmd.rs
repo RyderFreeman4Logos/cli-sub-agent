@@ -35,9 +35,16 @@ fn print_tiers_text(config: &ProjectConfig) {
 
     for name in &tier_names {
         let tier = &config.tiers[*name];
+        let enabled_models = config.enabled_tier_models(name);
         println!("{}: {} [round-robin]", name, tier.description);
-        for (i, model) in tier.models.iter().enumerate() {
+        for (i, model) in enabled_models.iter().enumerate() {
             println!("  {}. {}", i + 1, model);
+        }
+        // Show disabled models with annotation
+        for model in &tier.models {
+            if !enabled_models.contains(model) {
+                println!("  -  {} (disabled)", model);
+            }
         }
         println!();
     }
@@ -65,11 +72,13 @@ fn print_tiers_json(config: &ProjectConfig) {
         .iter()
         .map(|name| {
             let tier = &config.tiers[*name];
+            let enabled_models = config.enabled_tier_models(name);
             serde_json::json!({
                 "name": name,
                 "description": tier.description,
                 "rotation": "round-robin",
-                "models": tier.models,
+                "models": enabled_models,
+                "all_models": tier.models,
             })
         })
         .collect();

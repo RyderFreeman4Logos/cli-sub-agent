@@ -128,6 +128,18 @@ fn redact_json_value(value: &mut Value, key: Option<&str>, patterns: &RedactionP
     }
 }
 
+/// Redact sensitive material from plain text (non-JSON).
+///
+/// Applies the same regex-based patterns as [`redact_event`] but operates
+/// on arbitrary text rather than structured JSON. Used to sanitize context
+/// summaries (e.g. soft-fork injection) before passing to child sessions.
+pub fn redact_text_content(text: &str) -> String {
+    let Some(patterns) = redaction_patterns() else {
+        return text.to_string();
+    };
+    redact_text(text, patterns)
+}
+
 /// Redact sensitive material from serialized JSON event lines.
 ///
 /// This function is intentionally string-based so it can run on fully
