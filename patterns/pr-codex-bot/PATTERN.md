@@ -311,16 +311,56 @@ The user MUST explicitly choose an option before proceeding.
 **Orchestrator protocol**: When the round cap is hit, the bash block exits
 with code 0 after printing `ROUND_LIMIT_HALT`. The orchestrator (Layer 0)
 MUST then use `AskUserQuestion` to present options A/B/C and collect the
-user's choice. Based on the answer:
-- **A**: Set `ROUND_LIMIT_ACTION=merge` and re-enter this step (routes to merge).
-- **B**: Set `REVIEW_ROUND=0` and re-enter this step (resumes push/re-trigger).
-- **C**: Abort the workflow with a clear message (non-zero exit).
+user's choice. Based on the answer, set `ROUND_LIMIT_ACTION` and re-enter
+this step. The action handler at the TOP of the script processes the user's
+choice BEFORE the round cap check, so the chosen action always takes effect:
+- **A**: Set `ROUND_LIMIT_ACTION=merge` → prints `ROUND_LIMIT_MERGE`, exits 0. Orchestrator routes to Step 12/12b.
+- **B**: Set `ROUND_LIMIT_ACTION=continue` → extends `MAX_REVIEW_ROUNDS`, falls through to push/re-trigger.
+- **C**: Set `ROUND_LIMIT_ACTION=abort` → prints `ROUND_LIMIT_ABORT`, exits 1.
+
+**Signal disambiguation**: The orchestrator distinguishes re-entry outcomes by
+output markers, NOT exit codes alone. `ROUND_LIMIT_HALT` (exit 0) = ask user.
+`ROUND_LIMIT_MERGE` (exit 0) = proceed to merge. `ROUND_LIMIT_ABORT` (exit 1) = stop.
 
 ```bash
 REVIEW_ROUND=$((REVIEW_ROUND + 1))
 MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
 
+# --- Handle orchestrator re-entry with user decision (FIRST) ---
+# When the orchestrator re-enters after collecting user choice via
+# AskUserQuestion, ROUND_LIMIT_ACTION is set. Process it BEFORE the round
+# cap check so the user's choice always takes effect regardless of round count.
+#
+# CRITICAL: The merge path prints ROUND_LIMIT_MERGE (distinct from
+# ROUND_LIMIT_HALT) so the orchestrator can unambiguously route to Step 12/12b.
+# The abort path exits non-zero. The continue path falls through to push/trigger.
+if [ -n "${ROUND_LIMIT_ACTION}" ]; then
+  case "${ROUND_LIMIT_ACTION}" in
+    merge)
+      echo "User chose: Merge now. Skipping push/re-trigger."
+      echo "ROUND_LIMIT_MERGE: Routing to merge step."
+      # Orchestrator MUST route to Step 12/12b upon seeing ROUND_LIMIT_MERGE.
+      # Distinct from ROUND_LIMIT_HALT — this is an affirmative merge decision.
+      exit 0
+      ;;
+    continue)
+      echo "User chose: Continue. Extending by ${MAX_REVIEW_ROUNDS} rounds."
+      MAX_REVIEW_ROUNDS=$((REVIEW_ROUND + MAX_REVIEW_ROUNDS))
+      unset ROUND_LIMIT_ACTION
+      # Fall through to push/re-trigger below (bypasses round cap check)
+      ;;
+    abort)
+      echo "User chose: Abort workflow."
+      echo "ROUND_LIMIT_ABORT: Workflow terminated by user."
+      exit 1
+      ;;
+  esac
+fi
+
 # --- Round cap check BEFORE push/trigger ---
+# This block ONLY fires when ROUND_LIMIT_ACTION is unset (first hit, or after
+# continue already extended the cap). When ROUND_LIMIT_ACTION was set, the case
+# block above already handled it and either exited or fell through past this check.
 if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "Reached MAX_REVIEW_ROUNDS (${MAX_REVIEW_ROUNDS})."
   echo "Options:"
@@ -335,23 +375,12 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   # execution environments (CSA sub-agents) do not hang on stdin.
   #
   # Orchestrator routing logic (executed at Layer 0, NOT in this bash block):
-  #   User answers "A" → set ROUND_LIMIT_ACTION=merge, jump to Step 12/12b
-  #   User answers "B" → set REVIEW_ROUND=0, jump to push/re-trigger below
-  #   User answers "C" → abort workflow with non-zero exit and clear message
+  #   User answers "A" → set ROUND_LIMIT_ACTION=merge, re-enter this step
+  #   User answers "B" → set ROUND_LIMIT_ACTION=continue, re-enter this step
+  #   User answers "C" → set ROUND_LIMIT_ACTION=abort, re-enter this step
   #
   # FORBIDDEN: Falling through to push/trigger without a user decision.
   exit 0  # Yield control to orchestrator for AskUserQuestion
-fi
-
-# --- Orchestrator re-entry point after user chose Option B (continue) ---
-# When the orchestrator receives Option B, it resets REVIEW_ROUND=0 and
-# re-enters this step starting from here (skipping the round cap block above).
-
-# --- Check for Option A (merge) routed by orchestrator ---
-if [ "${ROUND_LIMIT_ACTION}" = "merge" ]; then
-  echo "User chose: Merge now. Skipping push/re-trigger."
-  # Orchestrator routes to Step 12/12b. Execution MUST NOT fall through.
-  exit 0
 fi
 
 # --- Push fixes and re-trigger bot review ---
