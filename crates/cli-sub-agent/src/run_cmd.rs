@@ -735,7 +735,13 @@ pub(crate) async fn handle_run(
                         // transfer across tools. The next iteration will resolve
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
-                        effective_session_arg = None;
+                        // Only reset session arg for fork flows -- fork-created
+                        // sessions are tool-specific and cannot transfer. Non-fork
+                        // resumed sessions (--session/--last) must keep their
+                        // session context to maintain continuity.
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
                         continue;
                     }
                 }
@@ -966,7 +972,9 @@ pub(crate) async fn handle_run(
                         // transfer across tools. The next iteration will resolve
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
-                        effective_session_arg = None;
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
                         cleanup_pre_created_fork_session(
                             &mut pre_created_fork_session_id,
                             &project_root,
@@ -1007,7 +1015,9 @@ pub(crate) async fn handle_run(
                 // transfer across tools. The next iteration will resolve
                 // a fresh fork for the new tool if is_fork is set.
                 fork_resolution = None;
-                effective_session_arg = None;
+                if is_fork {
+                    effective_session_arg = None;
+                }
                 cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
                 continue;
             }
@@ -1095,7 +1105,9 @@ pub(crate) async fn handle_run(
                         // transfer across tools. The next iteration will resolve
                         // a fresh fork for the new tool if is_fork is set.
                         fork_resolution = None;
-                        effective_session_arg = None;
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
                         cleanup_pre_created_fork_session(
                             &mut pre_created_fork_session_id,
                             &project_root,
