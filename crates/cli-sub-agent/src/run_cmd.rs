@@ -522,16 +522,9 @@ pub(crate) async fn handle_run(
         (is_fork, session_arg)
     };
 
-    // Handle fork: resolve source session and perform transport-level fork
-    let mut fork_resolution = if is_fork {
-        if let Some(ref source_id) = session_arg {
-            Some(resolve_fork(source_id, resolved_tool.as_str(), &project_root).await?)
-        } else {
-            anyhow::bail!("Fork requested but no source session resolved");
-        }
-    } else {
-        None
-    };
+    // Fork resolution is deferred until after slot acquisition and pre-execution
+    // guards to avoid orphaning transport-level forks when a pre-run check fails.
+    let mut fork_resolution: Option<ForkResolution> = None;
 
     // When forking, don't pass session_arg to execute_with_session (that would resume).
     // Instead, create a new session and set fork genealogy fields.
@@ -669,15 +662,10 @@ pub(crate) async fn handle_run(
                         current_tool = parse_tool_name(&alt.tool_name)?;
                         current_model_spec = None;
                         current_model = None;
-                        // Recompute fork metadata for the new tool
-                        if is_fork {
-                            if let Some(ref source_id) = session_arg {
-                                fork_resolution = Some(
-                                    resolve_fork(source_id, current_tool.as_str(), &project_root)
-                                        .await?,
-                                );
-                            }
-                        }
+                        // Clear fork metadata: forks are tool-specific and cannot
+                        // transfer across tools. The next iteration will resolve
+                        // a fresh fork for the new tool if is_fork is set.
+                        fork_resolution = None;
                         continue;
                     }
                 }
@@ -707,6 +695,17 @@ pub(crate) async fn handle_run(
                     eprintln!("{}", diag_msg);
                     return Ok(1);
                 }
+            }
+        }
+
+        // Resolve fork lazily: only after slot acquisition confirms we will proceed.
+        // This prevents orphaning transport-level forks when pre-run checks fail.
+        if is_fork && fork_resolution.is_none() {
+            if let Some(ref source_id) = session_arg {
+                fork_resolution =
+                    Some(resolve_fork(source_id, current_tool.as_str(), &project_root).await?);
+            } else {
+                anyhow::bail!("Fork requested but no source session resolved");
             }
         }
 
@@ -827,15 +826,10 @@ pub(crate) async fn handle_run(
                         current_tool = next_tool;
                         current_model_spec = None;
                         current_model = None;
-                        // Recompute fork metadata for the new tool
-                        if is_fork {
-                            if let Some(ref source_id) = session_arg {
-                                fork_resolution = Some(
-                                    resolve_fork(source_id, current_tool.as_str(), &project_root)
-                                        .await?,
-                                );
-                            }
-                        }
+                        // Clear fork metadata: forks are tool-specific and cannot
+                        // transfer across tools. The next iteration will resolve
+                        // a fresh fork for the new tool if is_fork is set.
+                        fork_resolution = None;
                         continue;
                     }
                 }
@@ -867,14 +861,10 @@ pub(crate) async fn handle_run(
                 current_tool = next_tool;
                 current_model_spec = None;
                 current_model = None;
-                // Recompute fork metadata for the new tool
-                if is_fork {
-                    if let Some(ref source_id) = session_arg {
-                        fork_resolution = Some(
-                            resolve_fork(source_id, current_tool.as_str(), &project_root).await?,
-                        );
-                    }
-                }
+                // Clear fork metadata: forks are tool-specific and cannot
+                // transfer across tools. The next iteration will resolve
+                // a fresh fork for the new tool if is_fork is set.
+                fork_resolution = None;
                 continue;
             }
         }
@@ -951,15 +941,10 @@ pub(crate) async fn handle_run(
                         current_tool = parse_tool_name(&new_tool)?;
                         current_model_spec = Some(new_model_spec);
                         current_model = None;
-                        // Recompute fork metadata for the new tool
-                        if is_fork {
-                            if let Some(ref source_id) = session_arg {
-                                fork_resolution = Some(
-                                    resolve_fork(source_id, current_tool.as_str(), &project_root)
-                                        .await?,
-                                );
-                            }
-                        }
+                        // Clear fork metadata: forks are tool-specific and cannot
+                        // transfer across tools. The next iteration will resolve
+                        // a fresh fork for the new tool if is_fork is set.
+                        fork_resolution = None;
                         continue;
                     }
                     csa_scheduler::FailoverAction::ReportError { reason, .. } => {
