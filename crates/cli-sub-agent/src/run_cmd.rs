@@ -177,6 +177,7 @@ async fn resolve_fork(
 
     let fork_request = ForkRequest {
         tool_name: tool_name.to_string(),
+        fork_method: Some(fork_method),
         provider_session_id: source_provider_id.clone(),
         parent_csa_session_id: source_csa_id.clone(),
         parent_session_dir: session_dir.clone(),

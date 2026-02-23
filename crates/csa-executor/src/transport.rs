@@ -429,8 +429,13 @@ pub struct ForkInfo {
 /// Options for a transport-level fork request.
 #[derive(Debug, Clone)]
 pub struct ForkRequest {
-    /// The tool name (determines fork method).
+    /// The tool name.
     pub tool_name: String,
+    /// Pre-computed fork method. When set, `fork_session` uses this instead of
+    /// re-deriving from `tool_name`. This is essential for cross-tool forks where
+    /// `resolve_fork` determines `ForkMethod::Soft` but the target tool would
+    /// otherwise select `Native`.
+    pub fork_method: Option<ForkMethod>,
     /// Provider session ID of the parent (required for Native fork).
     pub provider_session_id: Option<String>,
     /// CSA session ID of the parent (used for Soft fork context loading).
@@ -458,7 +463,9 @@ impl TransportFactory {
     /// - `claude-code`: Native fork via `claude --fork-session` CLI.
     /// - All others: Soft fork via context summary injection from parent session.
     pub async fn fork_session(request: &ForkRequest) -> ForkInfo {
-        let method = Self::fork_method_for_tool(&request.tool_name);
+        let method = request
+            .fork_method
+            .unwrap_or_else(|| Self::fork_method_for_tool(&request.tool_name));
         match method {
             ForkMethod::Native => Self::fork_native(request).await,
             ForkMethod::Soft => Self::fork_soft(request),
@@ -726,6 +733,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let request = ForkRequest {
             tool_name: "codex".to_string(),
+            fork_method: None,
             provider_session_id: None,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
@@ -758,6 +766,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let request = ForkRequest {
             tool_name: "claude-code".to_string(),
+            fork_method: None,
             provider_session_id: None,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
@@ -804,6 +813,7 @@ mod tests {
 
         let request = ForkRequest {
             tool_name: "gemini-cli".to_string(),
+            fork_method: None,
             provider_session_id: None,
             parent_csa_session_id: "01RICH_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),

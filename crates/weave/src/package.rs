@@ -738,9 +738,14 @@ pub fn update(
 
         let cas = ensure_cached(cache_root, &pkg.repo)?;
 
-        // For pinned deps (with --force), re-resolve from the pinned ref.
-        // For unpinned deps, resolve from HEAD.
-        let resolve_ref = pkg.resolved_ref.as_deref();
+        // When --force is used on pinned deps, resolve from the configured ref
+        // (branch/tag name) instead of the previously resolved commit hash,
+        // so we can advance past immutable pinned refs.
+        let resolve_ref = if force {
+            pkg.requested_version.as_deref()
+        } else {
+            pkg.resolved_ref.as_deref()
+        };
         let new_commit = resolve_commit(&cas, resolve_ref)?;
 
         if new_commit != pkg.commit {
@@ -846,9 +851,14 @@ pub fn upgrade(
 
         let cas = ensure_cached(cache_root, &pkg.repo)?;
 
-        // For pinned deps (with --force), re-resolve from the pinned ref.
-        // For unpinned deps, resolve from HEAD.
-        let resolve_ref = pkg.resolved_ref.as_deref();
+        // When --force is used on pinned deps, resolve from the configured ref
+        // (branch/tag name) instead of the previously resolved commit hash,
+        // so we can advance past immutable pinned refs.
+        let resolve_ref = if force {
+            pkg.requested_version.as_deref()
+        } else {
+            pkg.resolved_ref.as_deref()
+        };
         let new_commit = resolve_commit(&cas, resolve_ref)?;
 
         if new_commit != pkg.commit {
