@@ -74,28 +74,26 @@ fn migrate_skips_local_and_migrates_git() {
     // Write legacy lockfile with both Local and Git source.
     let legacy = tmp.path().join(".weave").join("lock.toml");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-    let lockfile = Lockfile {
-        package: vec![
-            LockedPackage {
-                name: "local-dep".to_string(),
-                repo: String::new(),
-                commit: String::new(),
-                version: None,
-                source_kind: SourceKind::Local,
-                requested_version: None,
-                resolved_ref: None,
-            },
-            LockedPackage {
-                name: "git-dep".to_string(),
-                repo: "https://github.com/org/git-dep.git".to_string(),
-                commit: "deadbeef".to_string(),
-                version: None,
-                source_kind: SourceKind::Git,
-                requested_version: None,
-                resolved_ref: None,
-            },
-        ],
-    };
+    let lockfile = Lockfile::with_packages(vec![
+        LockedPackage {
+            name: "local-dep".to_string(),
+            repo: String::new(),
+            commit: String::new(),
+            version: None,
+            source_kind: SourceKind::Local,
+            requested_version: None,
+            resolved_ref: None,
+        },
+        LockedPackage {
+            name: "git-dep".to_string(),
+            repo: "https://github.com/org/git-dep.git".to_string(),
+            commit: "deadbeef".to_string(),
+            version: None,
+            source_kind: SourceKind::Git,
+            requested_version: None,
+            resolved_ref: None,
+        },
+    ]);
     save_lockfile(&legacy, &lockfile).unwrap();
 
     let result = migrate(tmp.path(), &cache, &store).unwrap();

@@ -12,10 +12,30 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Root structure of the lockfile (`weave.lock`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// The lock file may also contain CSA version/migration tracking sections
+/// (`[versions]`, `[migrations]`). These are preserved as opaque TOML values
+/// so that package operations do not discard them.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct Lockfile {
     #[serde(default)]
     pub package: Vec<LockedPackage>,
+    /// CSA version tracking — preserved across load/save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub versions: Option<toml::Value>,
+    /// CSA migration tracking — preserved across load/save.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrations: Option<toml::Value>,
+}
+
+impl Lockfile {
+    /// Create a lockfile with only package entries (no version tracking).
+    pub fn with_packages(package: Vec<LockedPackage>) -> Self {
+        Self {
+            package,
+            ..Default::default()
+        }
+    }
 }
 
 /// How a dependency was installed.
@@ -440,9 +460,7 @@ pub fn install(
 
     // Update the lockfile with this package.
     let lock_path = lockfile_path(project_root);
-    let mut lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
+    let mut lockfile = load_project_lockfile(project_root).unwrap_or_default();
     upsert_package(&mut lockfile, &pkg);
     save_lockfile(&lock_path, &lockfile)?;
 
@@ -572,9 +590,7 @@ pub fn install_from_local(
 
     // Update the lockfile.
     let lock_path = lockfile_path(project_root);
-    let mut lockfile = load_project_lockfile(project_root).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
+    let mut lockfile = load_project_lockfile(project_root).unwrap_or_default();
     upsert_package(&mut lockfile, &pkg);
     save_lockfile(&lock_path, &lockfile)?;
 
@@ -635,9 +651,7 @@ fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<()> {
 pub fn lock(project_root: &Path, store_root: &Path) -> Result<Lockfile> {
     let lock_path = lockfile_path(project_root);
 
-    let existing = load_project_lockfile(project_root).unwrap_or(Lockfile {
-        package: Vec::new(),
-    });
+    let existing = load_project_lockfile(project_root).unwrap_or_default();
 
     let mut packages = Vec::new();
 
@@ -660,7 +674,11 @@ pub fn lock(project_root: &Path, store_root: &Path) -> Result<Lockfile> {
         packages.push(updated);
     }
 
-    let lockfile = Lockfile { package: packages };
+    let lockfile = Lockfile {
+        package: packages,
+        versions: existing.versions,
+        migrations: existing.migrations,
+    };
     save_lockfile(&lock_path, &lockfile)?;
 
     Ok(lockfile)
@@ -743,9 +761,133 @@ pub fn update(
     Ok(updated)
 }
 
+// ---------------------------------------------------------------------------
+// Upgrade
+// ---------------------------------------------------------------------------
+
+/// Per-package outcome of an upgrade operation.
+#[derive(Debug, Clone, PartialEq)]
+pub enum UpgradeStatus {
+    /// Package was upgraded from `old_commit` to `new_commit`.
+    Upgraded {
+        old_commit: String,
+        old_version: Option<String>,
+    },
+    /// Package was already at the latest commit.
+    AlreadyLatest,
+    /// Package was skipped (local source, empty repo, or pinned).
+    Skipped { reason: String },
+}
+
+/// Result of upgrading a single package.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UpgradeEntry {
+    pub name: String,
+    pub status: UpgradeStatus,
+    /// Current package state after upgrade attempt.
+    pub package: LockedPackage,
+}
+
+/// Upgrade all installed packages to their latest available versions.
+///
+/// Unlike `update`, this function returns structured results that distinguish
+/// between packages that were upgraded, already at latest, or skipped.
+/// Pinned packages are skipped unless `force` is true.
+pub fn upgrade(
+    project_root: &Path,
+    cache_root: &Path,
+    store_root: &Path,
+    force: bool,
+) -> Result<Vec<UpgradeEntry>> {
+    let lock_path = lockfile_path(project_root);
+    let mut lockfile = load_project_lockfile(project_root)
+        .context("no lockfile found — run `weave install` first")?;
+
+    let mut results = Vec::new();
+
+    for idx in 0..lockfile.package.len() {
+        let pkg = &lockfile.package[idx];
+
+        if pkg.source_kind == SourceKind::Local {
+            results.push(UpgradeEntry {
+                name: pkg.name.clone(),
+                status: UpgradeStatus::Skipped {
+                    reason: "local source — reinstall with --path to update".to_string(),
+                },
+                package: pkg.clone(),
+            });
+            continue;
+        }
+
+        if pkg.repo.is_empty() {
+            results.push(UpgradeEntry {
+                name: pkg.name.clone(),
+                status: UpgradeStatus::Skipped {
+                    reason: "no repository URL".to_string(),
+                },
+                package: pkg.clone(),
+            });
+            continue;
+        }
+
+        if pkg.requested_version.is_some() && !force {
+            results.push(UpgradeEntry {
+                name: pkg.name.clone(),
+                status: UpgradeStatus::Skipped {
+                    reason: format!(
+                        "pinned to {} — use --force to override",
+                        pkg.requested_version.as_deref().unwrap_or("?")
+                    ),
+                },
+                package: pkg.clone(),
+            });
+            continue;
+        }
+
+        let cas = ensure_cached(cache_root, &pkg.repo)?;
+
+        // For pinned deps (with --force), re-resolve from the pinned ref.
+        // For unpinned deps, resolve from HEAD.
+        let resolve_ref = pkg.resolved_ref.as_deref();
+        let new_commit = resolve_commit(&cas, resolve_ref)?;
+
+        if new_commit != pkg.commit {
+            let old_commit = pkg.commit.clone();
+            let old_version = pkg.version.clone();
+
+            let dest = package_dir(store_root, &pkg.name, &new_commit)?;
+            if !is_checkout_valid(&dest) {
+                checkout_to(&cas, &new_commit, &dest)?;
+            }
+
+            let version = read_version(&dest);
+            lockfile.package[idx].commit = new_commit;
+            lockfile.package[idx].version = version;
+
+            results.push(UpgradeEntry {
+                name: lockfile.package[idx].name.clone(),
+                status: UpgradeStatus::Upgraded {
+                    old_commit,
+                    old_version,
+                },
+                package: lockfile.package[idx].clone(),
+            });
+        } else {
+            results.push(UpgradeEntry {
+                name: pkg.name.clone(),
+                status: UpgradeStatus::AlreadyLatest,
+                package: pkg.clone(),
+            });
+        }
+    }
+
+    save_lockfile(&lock_path, &lockfile)?;
+    Ok(results)
+}
+
 #[path = "package_migrate.rs"]
 mod package_migrate;
-pub use package_migrate::{MigrateResult, migrate};
+pub use package_migrate::{LegacyDir, MigrateResult, migrate};
 
 #[path = "package_audit.rs"]
 mod package_audit;
@@ -792,3 +934,7 @@ mod install_tests;
 #[cfg(test)]
 #[path = "package_security_tests.rs"]
 mod security_tests;
+
+#[cfg(test)]
+#[path = "package_upgrade_tests.rs"]
+mod upgrade_tests;

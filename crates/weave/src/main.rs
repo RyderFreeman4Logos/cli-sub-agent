@@ -7,7 +7,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use weave::batch;
 use weave::check;
 use weave::compiler::{compile, plan_to_toml};
-use weave::link::{self, LinkOutcome, LinkScope};
+use weave::link::{self, LinkScope};
 use weave::package;
 use weave::parser::parse_skill;
 use weave::visualize::{self, VisualizeResult, VisualizeTarget};
@@ -113,6 +113,16 @@ enum Commands {
         name: Option<String>,
 
         /// Force update even for version-pinned dependencies.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// Upgrade all installed packages to their latest versions.
+    ///
+    /// Checks each installed package for newer versions and upgrades them.
+    /// Reports what was upgraded and what was already at latest.
+    Upgrade {
+        /// Force upgrade even for version-pinned dependencies.
         #[arg(long)]
         force: bool,
     },
@@ -303,19 +313,15 @@ fn main() -> Result<()> {
             // Auto-link companion skills.
             if scope != LinkScope::None {
                 let report = link::link_skills(&project_root, scope, force_link)?;
-                let created = report.created_count();
-                let skipped = report.skipped_count();
+                let created = report.unique_created_count();
+                let skipped = report.unique_skipped_count();
 
                 if created > 0 || skipped > 0 {
                     eprintln!("linked {created} skill(s) ({skipped} already up-to-date)");
                 }
 
-                for outcome in &report.outcomes {
-                    if let LinkOutcome::Created { name, .. } | LinkOutcome::Replaced { name, .. } =
-                        outcome
-                    {
-                        eprintln!("  + {name}");
-                    }
+                for name in report.unique_created_names() {
+                    eprintln!("  + {name}");
                 }
 
                 if report.has_errors() {
@@ -364,6 +370,50 @@ fn main() -> Result<()> {
                 eprintln!("updated {} -> {}", pkg.name, commit_short);
             }
         }
+        Commands::Upgrade { force } => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let cache_root = package::default_cache_root()?;
+            let store_root = package::global_store_root()?;
+            let results = package::upgrade(&project_root, &cache_root, &store_root, force)?;
+
+            let mut upgraded = 0u32;
+            let mut already_latest = 0u32;
+            let mut skipped = 0u32;
+
+            for entry in &results {
+                match &entry.status {
+                    package::UpgradeStatus::Upgraded {
+                        old_commit,
+                        old_version,
+                    } => {
+                        upgraded += 1;
+                        let old_short = &old_commit[..old_commit.len().min(12)];
+                        let new_short = &entry.package.commit[..entry.package.commit.len().min(12)];
+                        let old_ver = old_version.as_deref().unwrap_or("-");
+                        let new_ver = entry.package.version.as_deref().unwrap_or("-");
+                        eprintln!(
+                            "  upgraded {} ({old_ver} {old_short}) -> ({new_ver} {new_short})",
+                            entry.name
+                        );
+                    }
+                    package::UpgradeStatus::AlreadyLatest => {
+                        already_latest += 1;
+                        let ver = entry.package.version.as_deref().unwrap_or("-");
+                        eprintln!("  up-to-date {} ({ver})", entry.name);
+                    }
+                    package::UpgradeStatus::Skipped { reason } => {
+                        skipped += 1;
+                        eprintln!("  skipped {} ({reason})", entry.name);
+                    }
+                }
+            }
+
+            eprintln!();
+            eprintln!(
+                "{} package(s): {upgraded} upgraded, {already_latest} up-to-date, {skipped} skipped",
+                results.len()
+            );
+        }
         Commands::Audit => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
             let store_root = package::global_store_root()?;
@@ -389,6 +439,24 @@ fn main() -> Result<()> {
                 }
                 package::MigrateResult::NothingToMigrate => {
                     eprintln!("nothing to migrate — no .weave/lock.toml found");
+                }
+                package::MigrateResult::OrphanedDirs(dirs) => {
+                    eprintln!(
+                        "no lockfile to migrate, but {} legacy director{} found:",
+                        dirs.len(),
+                        if dirs.len() == 1 { "y" } else { "ies" }
+                    );
+                    for dir in &dirs {
+                        eprintln!("  [!] {}", dir.description);
+                        eprintln!("      path: {}", dir.path.display());
+                        eprintln!("      fix:  {}", dir.cleanup_hint);
+                    }
+                    eprintln!();
+                    eprintln!(
+                        "These directories are not referenced by any lockfile and can \
+                         likely be removed safely."
+                    );
+                    eprintln!("To reinstall packages from scratch, run: weave install <source>");
                 }
                 package::MigrateResult::Migrated {
                     count,
@@ -555,8 +623,8 @@ fn main() -> Result<()> {
                         bail!("{} error(s) during link sync", report.errors.len());
                     }
 
-                    let created = report.created_count();
-                    let skipped = report.skipped_count();
+                    let created = report.unique_created_count();
+                    let skipped = report.unique_skipped_count();
                     eprintln!(
                         "link sync: {created} created, {skipped} up-to-date, {} stale removed",
                         removed.len()

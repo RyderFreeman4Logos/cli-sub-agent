@@ -139,6 +139,59 @@ impl LinkReport {
             .count()
     }
 
+    /// Count of unique skill names that were created or replaced (across all
+    /// target directories).  Use this for user-facing messages instead of
+    /// [`created_count`] which counts per-directory symlinks.
+    pub fn unique_created_count(&self) -> usize {
+        let mut seen = std::collections::HashSet::new();
+        for o in &self.outcomes {
+            match o {
+                LinkOutcome::Created { name, .. } | LinkOutcome::Replaced { name, .. } => {
+                    seen.insert(name.as_str());
+                }
+                LinkOutcome::Skipped { .. } => {}
+            }
+        }
+        seen.len()
+    }
+
+    /// Count of unique skill names that were skipped (already up-to-date in
+    /// all target directories).  A skill is "skipped" only if it was NOT
+    /// created/replaced in any directory.
+    pub fn unique_skipped_count(&self) -> usize {
+        let mut created = std::collections::HashSet::new();
+        let mut all = std::collections::HashSet::new();
+        for o in &self.outcomes {
+            match o {
+                LinkOutcome::Created { name, .. } | LinkOutcome::Replaced { name, .. } => {
+                    created.insert(name.as_str());
+                    all.insert(name.as_str());
+                }
+                LinkOutcome::Skipped { name } => {
+                    all.insert(name.as_str());
+                }
+            }
+        }
+        all.len() - created.len()
+    }
+
+    /// Unique skill names that were created or replaced, for display purposes.
+    pub fn unique_created_names(&self) -> Vec<&str> {
+        let mut seen = std::collections::HashSet::new();
+        let mut names = Vec::new();
+        for o in &self.outcomes {
+            match o {
+                LinkOutcome::Created { name, .. } | LinkOutcome::Replaced { name, .. } => {
+                    if seen.insert(name.as_str()) {
+                        names.push(name.as_str());
+                    }
+                }
+                LinkOutcome::Skipped { .. } => {}
+            }
+        }
+        names
+    }
+
     pub fn has_errors(&self) -> bool {
         !self.errors.is_empty()
     }
@@ -163,9 +216,7 @@ pub fn discover_skills(project_root: &Path) -> Result<Vec<DiscoveredSkill>> {
     let store_root = global_store_root()?;
     let lockfile = match find_lockfile(project_root) {
         Some(path) => load_lockfile(&path)?,
-        None => Lockfile {
-            package: Vec::new(),
-        },
+        None => Lockfile::default(),
     };
 
     let mut skills = Vec::new();
