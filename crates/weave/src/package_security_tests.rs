@@ -74,8 +74,7 @@ fn migrate_skips_local_and_migrates_git() {
     // Write legacy lockfile with both Local and Git source.
     let legacy = tmp.path().join(".weave").join("lock.toml");
     std::fs::create_dir_all(legacy.parent().unwrap()).unwrap();
-    let lockfile = Lockfile {
-        package: vec![
+    let lockfile = Lockfile::with_packages(vec![
             LockedPackage {
                 name: "local-dep".to_string(),
                 repo: String::new(),
@@ -94,8 +93,7 @@ fn migrate_skips_local_and_migrates_git() {
                 requested_version: None,
                 resolved_ref: None,
             },
-        ],
-    };
+        ]);
     save_lockfile(&legacy, &lockfile).unwrap();
 
     let result = migrate(tmp.path(), &cache, &store).unwrap();
