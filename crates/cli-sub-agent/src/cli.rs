@@ -46,13 +46,21 @@ pub enum Commands {
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
 
-        /// Resume existing session (ULID or prefix match)
-        #[arg(short, long, conflicts_with = "last")]
+        /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
+        #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last"])]
         session: Option<String>,
 
-        /// Resume the most recent session for this project
-        #[arg(long, conflicts_with_all = ["session", "ephemeral"])]
+        /// Resume the most recent session for this project [DEPRECATED: use --fork-last]
+        #[arg(long, conflicts_with_all = ["session", "ephemeral", "fork_from", "fork_last"])]
         last: bool,
+
+        /// Fork from a specific session (ULID or prefix match)
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_last", "ephemeral"])]
+        fork_from: Option<String>,
+
+        /// Fork the most recent session for this project
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "ephemeral"])]
+        fork_last: bool,
 
         /// Human-readable description for a new session
         #[arg(short, long)]
@@ -490,6 +498,10 @@ pub enum SessionCommands {
         #[arg(long)]
         tail: Option<usize>,
 
+        /// Show ACP JSONL events from output/acp-events.jsonl
+        #[arg(long)]
+        events: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
@@ -515,6 +527,18 @@ pub enum SessionCommands {
         /// Output as JSON instead of human-readable
         #[arg(long)]
         json: bool,
+
+        /// Show only the summary section of structured output
+        #[arg(long, conflicts_with_all = ["section", "full"])]
+        summary: bool,
+
+        /// Show a specific section by ID (e.g., "details", "implementation")
+        #[arg(long, conflicts_with_all = ["summary", "full"])]
+        section: Option<String>,
+
+        /// Show all structured output sections in order
+        #[arg(long, conflicts_with_all = ["summary", "section"])]
+        full: bool,
 
         /// Working directory
         #[arg(long)]
@@ -556,6 +580,21 @@ pub enum SessionCommands {
 
     /// List all checkpoint notes
     Checkpoints {
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Measure token savings from structured output
+    Measure {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Output as JSON instead of human-readable
+        #[arg(long)]
+        json: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
