@@ -610,7 +610,12 @@ fn resolve_debate_tool(
             if let Some(cfg) = project_config {
                 if !cfg.is_tool_enabled(&tool_name) {
                     // Try same-model fallback before giving up
-                    return resolve_same_model_fallback(parent_tool, global_config, project_root);
+                    return resolve_same_model_fallback(
+                        parent_tool,
+                        project_config,
+                        global_config,
+                        project_root,
+                    );
                 }
             }
             let tool = crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
@@ -623,7 +628,7 @@ fn resolve_debate_tool(
         }
         Err(_) => {
             // Heterogeneous selection failed — try same-model fallback
-            resolve_same_model_fallback(parent_tool, global_config, project_root)
+            resolve_same_model_fallback(parent_tool, project_config, global_config, project_root)
         }
     }
 }
@@ -673,7 +678,12 @@ fn resolve_debate_tool_from_value(
         }
 
         // All heterogeneous methods failed — try same-model fallback
-        return resolve_same_model_fallback(parent_tool, global_config, project_root);
+        return resolve_same_model_fallback(
+            parent_tool,
+            project_config,
+            global_config,
+            project_root,
+        );
     }
 
     let tool = crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
@@ -720,6 +730,7 @@ fn select_auto_debate_tool(
 /// - No parent tool is detected and no tools are available
 fn resolve_same_model_fallback(
     parent_tool: Option<&str>,
+    project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     project_root: &Path,
 ) -> Result<(ToolName, DebateMode)> {
@@ -727,15 +738,30 @@ fn resolve_same_model_fallback(
         return Err(debate_auto_resolution_error(parent_tool, project_root));
     }
 
-    // Use the parent tool itself for same-model adversarial debate
+    // Use the parent tool itself for same-model adversarial debate,
+    // but only if the tool is enabled in project config.
     if let Some(parent_str) = parent_tool {
         if let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str) {
-            return Ok((tool, DebateMode::SameModelAdversarial));
+            let enabled = project_config
+                .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
+                .unwrap_or(true);
+            if enabled {
+                return Ok((tool, DebateMode::SameModelAdversarial));
+            }
         }
     }
 
-    // No parent tool detected — use the first known tool
-    if let Some(tool) = csa_config::global::all_known_tools().first() {
+    // No usable parent tool — select the first enabled tool from project config
+    let candidates: Vec<_> = if let Some(cfg) = project_config {
+        csa_config::global::all_known_tools()
+            .iter()
+            .filter(|t| cfg.is_tool_enabled(t.as_str()))
+            .copied()
+            .collect()
+    } else {
+        csa_config::global::all_known_tools().to_vec()
+    };
+    if let Some(tool) = candidates.first() {
         return Ok((*tool, DebateMode::SameModelAdversarial));
     }
 
