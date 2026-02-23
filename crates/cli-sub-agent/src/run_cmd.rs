@@ -1037,8 +1037,14 @@ pub(crate) async fn handle_run(
 
             tried_tools.push(tool_name_str.to_string());
 
+            // Prefer the actually-executed session (important for forks where
+            // effective_session_arg starts as None) so decide_failover evaluates
+            // the fork session's context, not the parent session.
+            let failover_session_ref = executed_session_id
+                .as_ref()
+                .or(effective_session_arg.as_ref());
             let session_state = if !ephemeral {
-                session_arg.as_ref().and_then(|sid| {
+                failover_session_ref.and_then(|sid| {
                     let sessions_dir = csa_session::get_session_root(&project_root)
                         .ok()?
                         .join("sessions");
