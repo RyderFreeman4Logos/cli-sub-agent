@@ -523,7 +523,7 @@ pub(crate) async fn handle_run(
     };
 
     // Handle fork: resolve source session and perform transport-level fork
-    let fork_resolution = if is_fork {
+    let mut fork_resolution = if is_fork {
         if let Some(ref source_id) = session_arg {
             Some(resolve_fork(source_id, resolved_tool.as_str(), &project_root).await?)
         } else {
@@ -668,6 +668,15 @@ pub(crate) async fn handle_run(
                         current_tool = parse_tool_name(&alt.tool_name)?;
                         current_model_spec = None;
                         current_model = None;
+                        // Recompute fork metadata for the new tool
+                        if is_fork {
+                            if let Some(ref source_id) = session_arg {
+                                fork_resolution = Some(
+                                    resolve_fork(source_id, current_tool.as_str(), &project_root)
+                                        .await?,
+                                );
+                            }
+                        }
                         continue;
                     }
                 }
@@ -814,6 +823,15 @@ pub(crate) async fn handle_run(
                         current_tool = next_tool;
                         current_model_spec = None;
                         current_model = None;
+                        // Recompute fork metadata for the new tool
+                        if is_fork {
+                            if let Some(ref source_id) = session_arg {
+                                fork_resolution = Some(
+                                    resolve_fork(source_id, current_tool.as_str(), &project_root)
+                                        .await?,
+                                );
+                            }
+                        }
                         continue;
                     }
                 }
@@ -845,6 +863,14 @@ pub(crate) async fn handle_run(
                 current_tool = next_tool;
                 current_model_spec = None;
                 current_model = None;
+                // Recompute fork metadata for the new tool
+                if is_fork {
+                    if let Some(ref source_id) = session_arg {
+                        fork_resolution = Some(
+                            resolve_fork(source_id, current_tool.as_str(), &project_root).await?,
+                        );
+                    }
+                }
                 continue;
             }
         }
@@ -921,6 +947,15 @@ pub(crate) async fn handle_run(
                         current_tool = parse_tool_name(&new_tool)?;
                         current_model_spec = Some(new_model_spec);
                         current_model = None;
+                        // Recompute fork metadata for the new tool
+                        if is_fork {
+                            if let Some(ref source_id) = session_arg {
+                                fork_resolution = Some(
+                                    resolve_fork(source_id, current_tool.as_str(), &project_root)
+                                        .await?,
+                                );
+                            }
+                        }
                         continue;
                     }
                     csa_scheduler::FailoverAction::ReportError { reason, .. } => {

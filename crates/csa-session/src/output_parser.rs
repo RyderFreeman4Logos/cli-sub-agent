@@ -143,6 +143,25 @@ fn extract_content(lines: &[&str], start: usize, end: usize) -> String {
     lines[start..=end].join("\n")
 }
 
+/// Sanitize a section ID to prevent path traversal.
+///
+/// Only allows alphanumeric, `-`, `_`, and `.` characters.
+/// Any other character (including `/`, `\`, and `..` sequences) is replaced with `_`.
+fn sanitize_section_id(id: &str) -> String {
+    let sanitized: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    // Reject `..` sequences that survived character-level filtering
+    sanitized.replace("..", "_")
+}
+
 /// Build an OutputSection from parsed data.
 fn build_section(
     id: &str,
@@ -150,18 +169,26 @@ fn build_section(
     content_end: usize,
     content: &str,
 ) -> OutputSection {
-    // Convert 0-indexed to 1-based line numbers
+    let safe_id = sanitize_section_id(id);
+    // Convert 0-indexed to 1-based line numbers.
+    // When content_end < content_start the section is empty (adjacent markers);
+    // preserve an empty span by keeping line_end = line_start - 1.
     let line_start = content_start + 1;
-    let line_end = (content_end + 1).max(line_start);
-    let title = id_to_title(id);
+    let line_end = if content_end < content_start {
+        // Empty section: line_end < line_start signals zero content
+        line_start.saturating_sub(1)
+    } else {
+        content_end + 1
+    };
+    let title = id_to_title(&safe_id);
 
     OutputSection {
-        id: id.to_string(),
+        id: safe_id.clone(),
         title,
         line_start,
         line_end,
         token_estimate: estimate_tokens(content),
-        file_path: Some(format!("{id}.md")),
+        file_path: Some(format!("{safe_id}.md")),
     }
 }
 
@@ -601,5 +628,93 @@ mod tests {
         assert_eq!(sections.len(), 1);
         assert_eq!(sections[0].0.id, "full");
         assert!(sections[0].1.contains("Line 1"));
+    }
+
+    // ── empty section tests ────────────────────────────────────────
+
+    #[test]
+    fn test_parse_empty_section_preserves_empty_span() {
+        // Adjacent start/end markers with no content between them
+        let output = "preamble\n\
+                       <!-- CSA:SECTION:empty -->\n\
+                       <!-- CSA:SECTION:empty:END -->\n\
+                       postamble";
+        let sections = parse_sections(output);
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].id, "empty");
+        // Empty section: line_end < line_start
+        assert!(
+            sections[0].line_end < sections[0].line_start,
+            "Empty section should have line_end < line_start, got start={} end={}",
+            sections[0].line_start,
+            sections[0].line_end,
+        );
+        assert_eq!(sections[0].token_estimate, 0);
+    }
+
+    // ── section ID sanitization tests ──────────────────────────────
+
+    #[test]
+    fn test_sanitize_section_id_allows_safe_chars() {
+        assert_eq!(sanitize_section_id("summary"), "summary");
+        assert_eq!(sanitize_section_id("exec-plan"), "exec-plan");
+        assert_eq!(sanitize_section_id("code_review"), "code_review");
+        assert_eq!(sanitize_section_id("v1.2.3"), "v1.2.3");
+    }
+
+    #[test]
+    fn test_sanitize_section_id_blocks_path_traversal() {
+        let sanitized = sanitize_section_id("../../outside");
+        assert!(
+            !sanitized.contains('/'),
+            "Sanitized ID should not contain '/': {sanitized}"
+        );
+        assert!(
+            !sanitized.contains(".."),
+            "Sanitized ID should not contain '..': {sanitized}"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_section_id_blocks_backslash() {
+        let sanitized = sanitize_section_id("..\\..\\outside");
+        assert!(
+            !sanitized.contains('\\'),
+            "Sanitized ID should not contain backslash: {sanitized}"
+        );
+        assert!(
+            !sanitized.contains(".."),
+            "Sanitized ID should not contain '..': {sanitized}"
+        );
+    }
+
+    #[test]
+    fn test_persist_structured_output_sanitizes_section_ids() {
+        let tmp = tempfile::tempdir().unwrap();
+        let output =
+            "<!-- CSA:SECTION:../../escape -->\nmalicious\n<!-- CSA:SECTION:../../escape:END -->";
+        let index = persist_structured_output(tmp.path(), output).unwrap();
+
+        assert_eq!(index.sections.len(), 1);
+        let section = &index.sections[0];
+        // ID should be sanitized
+        assert!(
+            !section.id.contains('/'),
+            "Section ID should be sanitized: {}",
+            section.id
+        );
+        assert!(
+            !section.id.contains(".."),
+            "Section ID should not contain '..': {}",
+            section.id
+        );
+        // File should be written inside output dir, not escaped
+        if let Some(ref fp) = section.file_path {
+            let section_path = tmp.path().join("output").join(fp);
+            assert!(
+                section_path.exists(),
+                "Section file should exist at safe path"
+            );
+        }
     }
 }
