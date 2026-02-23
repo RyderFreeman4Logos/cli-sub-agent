@@ -257,6 +257,10 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
   exit 1
 fi
 
+# Push fallback fix commits so the remote PR head includes them.
+# Without this, gh pr merge uses the stale remote HEAD and omits fixes.
+git push origin "${WORKFLOW_BRANCH}"
+
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
@@ -467,8 +471,8 @@ reorganize them into logical groups before merging.
 ```bash
 COMMIT_COUNT=$(git rev-list --count main..HEAD)
 if [ "${COMMIT_COUNT}" -gt 3 ]; then
-  # 1. Create backup branch
-  git branch "backup-${PR_NUM}-pre-rebase"
+  # 1. Create backup branch (idempotent: -f overwrites if exists from prior run)
+  git branch -f "backup-${PR_NUM}-pre-rebase" HEAD
 
   # 2. Soft reset to merge-base (not local main tip, which may have advanced)
   MERGE_BASE=$(git merge-base main HEAD)
