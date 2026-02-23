@@ -308,6 +308,14 @@ the user — no new review is triggered until the user decides:
 The workflow MUST NOT auto-merge or auto-abort at the round limit.
 The user MUST explicitly choose an option before proceeding.
 
+**Orchestrator protocol**: When the round cap is hit, the bash block exits
+with code 0 after printing `ROUND_LIMIT_HALT`. The orchestrator (Layer 0)
+MUST then use `AskUserQuestion` to present options A/B/C and collect the
+user's choice. Based on the answer:
+- **A**: Set `ROUND_LIMIT_ACTION=merge` and re-enter this step (routes to merge).
+- **B**: Set `REVIEW_ROUND=0` and re-enter this step (resumes push/re-trigger).
+- **C**: Abort the workflow with a clear message (non-zero exit).
+
 ```bash
 REVIEW_ROUND=$((REVIEW_ROUND + 1))
 MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
@@ -319,13 +327,30 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  A) Merge now (review is good enough)"
   echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
   echo "  C) Abort and investigate manually"
-  # HALT: stop and wait for explicit user decision.
-  # Execution MUST NOT fall through to push/trigger below.
-  # The orchestrator presents options and awaits user input.
-  # --- Post-halt user decision handling ---
-  # Option A: proceed to merge step (Step 12/12b)
-  # Option B: REVIEW_ROUND=0, resume from push/trigger
-  # Option C: exit workflow entirely
+  echo ""
+  echo "ROUND_LIMIT_HALT: Awaiting user decision."
+  # HALT: The orchestrator MUST use AskUserQuestion to collect user's choice.
+  # The shell script block ENDS here. The orchestrator handles routing based on
+  # the user's answer OUTSIDE this script block. This ensures non-interactive
+  # execution environments (CSA sub-agents) do not hang on stdin.
+  #
+  # Orchestrator routing logic (executed at Layer 0, NOT in this bash block):
+  #   User answers "A" → set ROUND_LIMIT_ACTION=merge, jump to Step 12/12b
+  #   User answers "B" → set REVIEW_ROUND=0, jump to push/re-trigger below
+  #   User answers "C" → abort workflow with non-zero exit and clear message
+  #
+  # FORBIDDEN: Falling through to push/trigger without a user decision.
+  exit 0  # Yield control to orchestrator for AskUserQuestion
+fi
+
+# --- Orchestrator re-entry point after user chose Option B (continue) ---
+# When the orchestrator receives Option B, it resets REVIEW_ROUND=0 and
+# re-enters this step starting from here (skipping the round cap block above).
+
+# --- Check for Option A (merge) routed by orchestrator ---
+if [ "${ROUND_LIMIT_ACTION}" = "merge" ]; then
+  echo "User chose: Merge now. Skipping push/re-trigger."
+  # Orchestrator routes to Step 12/12b. Execution MUST NOT fall through.
   exit 0
 fi
 
@@ -396,17 +421,24 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   if [ "${REBASE_BOT_OK}" = "true" ]; then
     echo "Post-rebase review received. Evaluating..."
     # Orchestrator classifies the final bot response using Step 7 logic.
-    # REBASE_REVIEW_HAS_ISSUES is set to true/false after classification.
-    #
-    # IF REBASE_REVIEW_HAS_ISSUES:
-    #   Loop back to Step 7 (classify) → Step 8/9 (arbitrate/fix) → Step 10
-    #   (push + re-trigger). The rebase step is NOT repeated; only the
-    #   fix-and-review cycle runs until the bot review passes clean.
-    #
-    # IF NOT REBASE_REVIEW_HAS_ISSUES:
-    #   Fall through to merge (Step 12/12b).
-    #
-    # FORBIDDEN: Proceeding to merge while REBASE_REVIEW_HAS_ISSUES=true.
+    # Extract bot comments posted after the force-push and check for actionable issues.
+    REBASE_BOT_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
+      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"issue|error|fix|warning|problem\"; \"i\"))] | length" 2>/dev/null || echo "0")
+
+    if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
+      echo "BLOCKED: Post-rebase review found ${REBASE_BOT_ISSUES} actionable comment(s)."
+      echo "Routing to fix cycle (Step 7). Merge is blocked."
+      REBASE_REVIEW_HAS_ISSUES=true
+      # Orchestrator MUST jump to Step 7 (classify) → Step 8/9 → Step 10.
+      # The rebase step is NOT repeated; only the fix-and-review cycle runs
+      # until the bot review passes clean.
+      # FORBIDDEN: Falling through to merge from this path.
+      exit 1  # Hard block: non-zero exit forces orchestrator to handle
+    else
+      echo "Post-rebase review is clean. Proceeding to merge."
+      REBASE_REVIEW_HAS_ISSUES=false
+      # Fall through to merge (Step 12/12b).
+    fi
   else
     echo "Post-rebase bot timed out. Falling back to local review."
     if ! csa review --range main...HEAD 2>/dev/null; then
