@@ -53,6 +53,21 @@ Use tier mapped to default in tier_mapping, or user-specified tier.
 Filter models to those matching the debate tool.
 Validate >= 2 models available. If < 2, try next higher tier.
 
+### Fork From Research Session (Optional)
+
+When a research session exists with relevant context (e.g., codebase exploration,
+documentation gathering, prior analysis), fork debaters from it to avoid
+redundant exploration:
+
+```bash
+csa debate --fork-from <research-session-id> "question"
+```
+
+**Benefits**: Both proposer and critic inherit the research session's context
+(files read, patterns identified, domain knowledge gathered). This eliminates
+the warm-up phase where each debater independently re-discovers the same
+information, resulting in faster convergence and deeper arguments from round 1.
+
 ## Step 6: Round 1 — Proposal
 
 Tool: csa
