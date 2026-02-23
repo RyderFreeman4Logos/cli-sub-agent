@@ -15,6 +15,7 @@ fn make_test_session() -> MetaSessionState {
         genealogy: csa_session::state::Genealogy {
             parent_session_id: None,
             depth: 0,
+            ..Default::default()
         },
         tools: HashMap::new(),
         context_status: csa_session::state::ContextStatus::default(),

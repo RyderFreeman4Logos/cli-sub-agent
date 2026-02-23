@@ -14,6 +14,10 @@ pub struct AcpSessionStart<'a> {
     pub system_prompt: Option<&'a str>,
     pub resume_session_id: Option<&'a str>,
     pub meta: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Provider-level session ID to fork from (creates a branching conversation).
+    pub fork_session_id: Option<&'a str>,
+    /// Resume at a specific message within the forked session.
+    pub resume_at_message: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -89,6 +93,14 @@ impl AcpSession {
         )
         .await?;
         connection.initialize().await?;
+
+        // Inject fork metadata into the meta map when present.
+        let meta = build_session_meta(
+            session_start.meta.clone(),
+            session_start.fork_session_id,
+            session_start.resume_at_message,
+        );
+
         let session_id = if let Some(resume_id) = session_start.resume_session_id {
             tracing::debug!(resume_session_id = resume_id, "loading ACP session");
             match connection.load_session(resume_id, Some(working_dir)).await {
@@ -103,22 +115,14 @@ impl AcpSession {
                         "Failed to resume ACP session, creating new session"
                     );
                     connection
-                        .new_session(
-                            session_start.system_prompt,
-                            Some(working_dir),
-                            session_start.meta.clone(),
-                        )
+                        .new_session(session_start.system_prompt, Some(working_dir), meta.clone())
                         .await?
                 }
             }
         } else {
             tracing::debug!("creating new ACP session");
             connection
-                .new_session(
-                    session_start.system_prompt,
-                    Some(working_dir),
-                    session_start.meta.clone(),
-                )
+                .new_session(session_start.system_prompt, Some(working_dir), meta)
                 .await?
         };
 
@@ -134,6 +138,26 @@ impl AcpSession {
 
     pub fn connection(&self) -> &AcpConnection {
         &self.connection
+    }
+
+    /// Fork this session via CLI and switch to the forked session.
+    ///
+    /// After forking, prompts on this `AcpSession` will target the new forked session.
+    /// The original provider session remains intact (branching, not moving).
+    ///
+    /// Only supported for `claude-code`. Returns error for other tools.
+    pub async fn fork_session(&mut self, tool_name: &str) -> AcpResult<String> {
+        let new_session_id = self
+            .connection
+            .fork_and_load_session(&self.session_id, tool_name, None)
+            .await?;
+        let old_session_id = std::mem::replace(&mut self.session_id, new_session_id.clone());
+        tracing::info!(
+            old_session = %old_session_id,
+            new_session = %new_session_id,
+            "AcpSession forked to new provider session"
+        );
+        Ok(new_session_id)
     }
 
     pub async fn prompt(&self, prompt: &str) -> AcpResult<PromptResult> {
@@ -251,4 +275,86 @@ pub async fn run_prompt_with_io(
         session_id: session.session_id().to_string(),
         exit_code,
     })
+}
+
+/// Merge fork metadata into the session meta map. Returns the (possibly new) meta.
+fn build_session_meta(
+    base: Option<serde_json::Map<String, serde_json::Value>>,
+    fork_session_id: Option<&str>,
+    resume_at_message: Option<&str>,
+) -> Option<serde_json::Map<String, serde_json::Value>> {
+    if fork_session_id.is_none() && resume_at_message.is_none() {
+        return base;
+    }
+    let mut meta = base.unwrap_or_default();
+    if let Some(id) = fork_session_id {
+        meta.insert(
+            "fork_session_id".to_string(),
+            serde_json::Value::String(id.to_string()),
+        );
+    }
+    if let Some(msg) = resume_at_message {
+        meta.insert(
+            "resume_at_message".to_string(),
+            serde_json::Value::String(msg.to_string()),
+        );
+    }
+    Some(meta)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_acp_session_start_default_has_no_fork_fields() {
+        let start = AcpSessionStart::default();
+        assert!(start.fork_session_id.is_none());
+        assert!(start.resume_at_message.is_none());
+    }
+
+    #[test]
+    fn test_build_session_meta_passthrough_when_no_fork() {
+        let result = build_session_meta(None, None, None);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_build_session_meta_passthrough_existing_when_no_fork() {
+        let mut base = serde_json::Map::new();
+        base.insert(
+            "key".to_string(),
+            serde_json::Value::String("val".to_string()),
+        );
+        let result = build_session_meta(Some(base.clone()), None, None);
+        assert_eq!(result, Some(base));
+    }
+
+    #[test]
+    fn test_build_session_meta_injects_fork_session_id() {
+        let result = build_session_meta(None, Some("fork-123"), None);
+        let meta = result.expect("should have meta");
+        assert_eq!(meta["fork_session_id"], "fork-123");
+        assert!(!meta.contains_key("resume_at_message"));
+    }
+
+    #[test]
+    fn test_build_session_meta_injects_resume_at_message() {
+        let result = build_session_meta(None, None, Some("msg-456"));
+        let meta = result.expect("should have meta");
+        assert_eq!(meta["resume_at_message"], "msg-456");
+        assert!(!meta.contains_key("fork_session_id"));
+    }
+
+    #[test]
+    fn test_build_session_meta_injects_both_fork_fields() {
+        let mut base = serde_json::Map::new();
+        base.insert("existing".to_string(), serde_json::Value::Bool(true));
+
+        let result = build_session_meta(Some(base), Some("fork-123"), Some("msg-456"));
+        let meta = result.expect("should have meta");
+        assert_eq!(meta["fork_session_id"], "fork-123");
+        assert_eq!(meta["resume_at_message"], "msg-456");
+        assert_eq!(meta["existing"], true);
+    }
 }

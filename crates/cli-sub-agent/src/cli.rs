@@ -46,13 +46,21 @@ pub enum Commands {
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
 
-        /// Resume existing session (ULID or prefix match)
-        #[arg(short, long, conflicts_with = "last")]
+        /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
+        #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last"])]
         session: Option<String>,
 
-        /// Resume the most recent session for this project
-        #[arg(long, conflicts_with_all = ["session", "ephemeral"])]
+        /// Resume the most recent session for this project [DEPRECATED: use --fork-last]
+        #[arg(long, conflicts_with_all = ["session", "ephemeral", "fork_from", "fork_last"])]
         last: bool,
+
+        /// Fork from a specific session (ULID or prefix match)
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_last", "ephemeral"])]
+        fork_from: Option<String>,
+
+        /// Fork the most recent session for this project
+        #[arg(long, conflicts_with_all = ["session", "last", "fork_from", "ephemeral"])]
+        fork_last: bool,
 
         /// Human-readable description for a new session
         #[arg(short, long)]

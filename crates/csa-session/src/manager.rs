@@ -170,6 +170,7 @@ pub(crate) fn create_session_in(
         genealogy: crate::state::Genealogy {
             parent_session_id,
             depth,
+            ..Default::default()
         },
         tools: HashMap::new(),
         context_status: Default::default(),
@@ -374,10 +375,7 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     branch: None,
                     created_at: now,
                     last_accessed: now,
-                    genealogy: crate::state::Genealogy {
-                        parent_session_id: None,
-                        depth: 0,
-                    },
+                    genealogy: crate::state::Genealogy::default(),
                     tools: HashMap::new(),
                     context_status: Default::default(),
                     total_token_usage: None,

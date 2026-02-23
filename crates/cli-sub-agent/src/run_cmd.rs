@@ -2,12 +2,15 @@
 //!
 //! Extracted from main.rs to keep file sizes manageable.
 
+use std::path::Path;
+
 use anyhow::Result;
 use tempfile::TempDir;
 use tracing::{info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
+use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
 };
@@ -98,6 +101,82 @@ fn resolve_slot_wait_timeout_seconds(config: Option<&ProjectConfig>) -> u64 {
         .unwrap_or(csa_config::ResourcesConfig::default().slot_wait_timeout_seconds)
 }
 
+/// Result of resolving a fork request before execution.
+struct ForkResolution {
+    /// The forked provider session ID (Native fork only).
+    provider_session_id: Option<String>,
+    /// Context summary to prepend to prompt (Soft fork only).
+    context_prefix: Option<String>,
+    /// The CSA session ID that was forked from.
+    source_session_id: String,
+    /// The provider session ID of the source (used to set fork_provider_session_id in genealogy).
+    source_provider_session_id: Option<String>,
+}
+
+/// Resolve a fork from a source session: run the transport-level fork and return
+/// the information needed to create a new CSA session with fork genealogy.
+async fn resolve_fork(
+    source_session_id: &str,
+    tool_name: &str,
+    project_root: &Path,
+) -> Result<ForkResolution> {
+    let resolution =
+        csa_session::resolve_resume_session(project_root, source_session_id, tool_name)?;
+    let source_csa_id = resolution.meta_session_id.clone();
+    let source_provider_id = resolution.provider_session_id.clone();
+
+    let session_dir = csa_session::get_session_dir(project_root, &source_csa_id)?;
+
+    let fork_request = ForkRequest {
+        tool_name: tool_name.to_string(),
+        provider_session_id: source_provider_id.clone(),
+        parent_csa_session_id: source_csa_id.clone(),
+        parent_session_dir: session_dir.clone(),
+        working_dir: project_root.to_path_buf(),
+        timeout: std::time::Duration::from_secs(60),
+    };
+
+    let fork_info = TransportFactory::fork_session(&fork_request).await;
+
+    if !fork_info.success {
+        let notes = fork_info.notes.unwrap_or_default();
+        anyhow::bail!(
+            "Fork failed for session {} ({:?}): {}",
+            source_csa_id,
+            fork_info.method,
+            notes
+        );
+    }
+
+    info!(
+        source = %source_csa_id,
+        method = ?fork_info.method,
+        new_provider_session = ?fork_info.new_session_id,
+        notes = ?fork_info.notes,
+        "Session fork completed"
+    );
+
+    // For soft fork, we need to read the context summary to prepend to the prompt
+    let context_prefix = if matches!(fork_info.method, ForkMethod::Soft) {
+        match csa_session::soft_fork_session(&session_dir, &source_csa_id) {
+            Ok(ctx) => Some(ctx.context_summary),
+            Err(e) => {
+                warn!("Soft fork context extraction failed (non-fatal): {e}");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    Ok(ForkResolution {
+        provider_session_id: fork_info.new_session_id,
+        context_prefix,
+        source_session_id: source_csa_id,
+        source_provider_session_id: source_provider_id,
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
     tool: Option<ToolArg>,
@@ -105,6 +184,8 @@ pub(crate) async fn handle_run(
     prompt: Option<String>,
     session_arg: Option<String>,
     last: bool,
+    fork_from: Option<String>,
+    fork_last: bool,
     description: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
@@ -125,8 +206,34 @@ pub(crate) async fn handle_run(
     // 1. Determine project root
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
 
-    // 2. Resolve --last flag to session ID
-    let session_arg = if last {
+    // Emit deprecation warnings for legacy resume flags
+    if last {
+        warn!("--last is deprecated: use --fork-last instead (fork-first architecture)");
+        eprintln!(
+            "warning: --last is deprecated and will be removed in a future release. Use --fork-last instead."
+        );
+    }
+    if session_arg.is_some() {
+        warn!("--session is deprecated: use --fork-from instead (fork-first architecture)");
+        eprintln!(
+            "warning: --session is deprecated and will be removed in a future release. Use --fork-from instead."
+        );
+    }
+
+    // 2. Resolve fork flags or legacy resume flags to session ID
+    let is_fork = fork_from.is_some() || fork_last;
+    let session_arg = if fork_last {
+        info!("Resolving --fork-last to most recent session");
+        let sessions = csa_session::list_sessions(&project_root, None)?;
+        let (selected_id, ambiguity_warning) = resolve_last_session_selection(sessions)?;
+        if let Some(warning) = ambiguity_warning {
+            eprintln!("{warning}");
+        }
+        Some(selected_id)
+    } else if fork_from.is_some() {
+        info!(fork_from = ?fork_from, "Forking from specified session");
+        fork_from
+    } else if last {
         let sessions = csa_session::list_sessions(&project_root, None)?;
         let (selected_id, ambiguity_warning) = resolve_last_session_selection(sessions)?;
         if let Some(warning) = ambiguity_warning {
@@ -373,8 +480,23 @@ pub(crate) async fn handle_run(
 
     let resolved_tool = initial_tool;
 
+    // Handle fork: resolve source session and perform transport-level fork
+    let fork_resolution = if is_fork {
+        if let Some(ref source_id) = session_arg {
+            Some(resolve_fork(source_id, resolved_tool.as_str(), &project_root).await?)
+        } else {
+            anyhow::bail!("Fork requested but no source session resolved");
+        }
+    } else {
+        None
+    };
+
+    // When forking, don't pass session_arg to execute_with_session (that would resume).
+    // Instead, create a new session and set fork genealogy fields.
+    let effective_session_arg = if is_fork { None } else { session_arg.clone() };
+
     // Hint: suggest reusable sessions when creating a new session
-    if session_arg.is_none() {
+    if effective_session_arg.is_none() && !is_fork {
         let tool_names = vec![resolved_tool.as_str().to_string()];
         match csa_scheduler::session_reuse::find_reusable_sessions(
             &project_root,
@@ -384,7 +506,7 @@ pub(crate) async fn handle_run(
             Ok(candidates) if !candidates.is_empty() => {
                 let best = &candidates[0];
                 eprintln!(
-                    "hint: reusable session available for {}: --session {}",
+                    "hint: reusable session available for {}: --fork-from {}",
                     best.tool_name,
                     best.session_id.get(..8).unwrap_or(&best.session_id),
                 );
@@ -538,13 +660,28 @@ pub(crate) async fn handle_run(
 
         let extra_env = global_config.env_vars(tool_name_str).cloned();
 
+        // Prepend soft fork context to prompt if applicable
+        let effective_prompt = if let Some(ref fork_res) = fork_resolution {
+            if let Some(ref ctx) = fork_res.context_prefix {
+                info!(
+                    context_len = ctx.len(),
+                    "Prepending soft fork context to prompt"
+                );
+                format!("{ctx}\n\n---\n\n{prompt_text}")
+            } else {
+                prompt_text.clone()
+            }
+        } else {
+            prompt_text.clone()
+        };
+
         // Execute
         let exec_result = if ephemeral {
             let temp_dir = TempDir::new()?;
             info!("Ephemeral session in: {:?}", temp_dir.path());
             executor
                 .execute_in(
-                    &prompt_text,
+                    &effective_prompt,
                     temp_dir.path(),
                     extra_env.as_ref(),
                     stream_mode,
@@ -552,13 +689,33 @@ pub(crate) async fn handle_run(
                 )
                 .await
         } else {
+            // Build fork-aware description and parent
+            let effective_description = if let Some(ref fork_res) = fork_resolution {
+                description.clone().or_else(|| {
+                    Some(format!(
+                        "fork of {}",
+                        fork_res
+                            .source_session_id
+                            .get(..8)
+                            .unwrap_or(&fork_res.source_session_id)
+                    ))
+                })
+            } else {
+                description.clone()
+            };
+            let effective_parent = if let Some(ref fork_res) = fork_resolution {
+                Some(fork_res.source_session_id.clone())
+            } else {
+                parent.clone()
+            };
+
             match pipeline::execute_with_session(
                 &executor,
                 &current_tool,
-                &prompt_text,
-                session_arg.clone(),
-                description.clone(),
-                parent.clone(),
+                &effective_prompt,
+                effective_session_arg.clone(),
+                effective_description,
+                effective_parent,
                 &project_root,
                 config.as_ref(),
                 extra_env.as_ref(),
@@ -579,7 +736,7 @@ pub(crate) async fn handle_run(
                     {
                         let json_error = serde_json::json!({
                             "error": "session_locked",
-                            "session_id": session_arg.unwrap_or_else(|| "(new)".to_string()),
+                            "session_id": effective_session_arg.unwrap_or_else(|| "(new)".to_string()),
                             "tool": current_tool.as_str(),
                             "message": error_msg
                         });
@@ -736,6 +893,48 @@ pub(crate) async fn handle_run(
             break exec_result;
         }
     };
+
+    // Update fork genealogy on newly created session (post-execution).
+    // The pipeline created a new session; we now stamp it with fork-specific fields.
+    if let Some(ref fork_res) = fork_resolution {
+        if let Ok(sessions) = csa_session::list_sessions(&project_root, None) {
+            let mut sorted = sessions;
+            sorted.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+            if let Some(newest) = sorted.first() {
+                match csa_session::load_session(&project_root, &newest.meta_session_id) {
+                    Ok(mut session) => {
+                        session.genealogy.fork_of_session_id =
+                            Some(fork_res.source_session_id.clone());
+                        session.genealogy.fork_provider_session_id =
+                            fork_res.source_provider_session_id.clone();
+                        if session.genealogy.parent_session_id.is_none() {
+                            session.genealogy.parent_session_id =
+                                Some(fork_res.source_session_id.clone());
+                        }
+                        // For native fork: store the forked provider session ID in
+                        // ToolState so future `--session` resumes can use it.
+                        if let Some(ref new_provider_id) = fork_res.provider_session_id {
+                            if let Some(tool_state) = session.tools.get_mut(current_tool.as_str()) {
+                                tool_state.provider_session_id = Some(new_provider_id.clone());
+                            }
+                        }
+                        if let Err(e) = csa_session::save_session(&session) {
+                            warn!("Failed to update fork genealogy on session: {e}");
+                        } else {
+                            info!(
+                                session = %session.meta_session_id,
+                                fork_of = %fork_res.source_session_id,
+                                "Updated session genealogy with fork fields"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to load session for fork genealogy update: {e}");
+                    }
+                }
+            }
+        }
+    }
 
     // Print result
     match output_format {

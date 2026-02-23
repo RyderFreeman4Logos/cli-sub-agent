@@ -108,6 +108,7 @@ fn sample_session_state() -> MetaSessionState {
         genealogy: Genealogy {
             parent_session_id: None,
             depth: 0,
+            ..Default::default()
         },
         tools: HashMap::new(),
         context_status: ContextStatus::default(),
@@ -786,4 +787,83 @@ fn session_measure_cli_parses_json_flag() {
         }
         _ => panic!("expected session measure command"),
     }
+}
+
+// ── Fork display tests ────────────────────────────────────────────
+
+fn sample_fork_session() -> MetaSessionState {
+    let now = Utc::now();
+    MetaSessionState {
+        meta_session_id: "01KJ5CFQYE1AAAABBBBCCCCDD".to_string(),
+        description: Some("Forked session".to_string()),
+        project_path: "/tmp/project".to_string(),
+        branch: Some("feat/fork".to_string()),
+        created_at: now,
+        last_accessed: now,
+        genealogy: Genealogy {
+            parent_session_id: Some("01KJ5AFQYE9AAAABBBBCCCCDD".to_string()),
+            depth: 1,
+            fork_of_session_id: Some("01KJ5AFQYE9AAAABBBBCCCCDD".to_string()),
+            fork_provider_session_id: Some("provider-session-xyz".to_string()),
+        },
+        tools: HashMap::new(),
+        context_status: ContextStatus::default(),
+        total_token_usage: None,
+        phase: SessionPhase::Active,
+        task_context: TaskContext {
+            task_type: Some("run".to_string()),
+            tier_name: None,
+        },
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+        termination_reason: None,
+    }
+}
+
+#[test]
+fn session_to_json_includes_fork_fields() {
+    let session = sample_fork_session();
+    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+
+    assert_eq!(value.get("is_fork").and_then(|v| v.as_bool()), Some(true));
+    assert_eq!(
+        value.get("fork_of_session_id").and_then(|v| v.as_str()),
+        Some("01KJ5AFQYE9AAAABBBBCCCCDD")
+    );
+    assert_eq!(
+        value
+            .get("fork_provider_session_id")
+            .and_then(|v| v.as_str()),
+        Some("provider-session-xyz")
+    );
+    assert_eq!(
+        value.get("parent_session_id").and_then(|v| v.as_str()),
+        Some("01KJ5AFQYE9AAAABBBBCCCCDD")
+    );
+    assert_eq!(value.get("depth").and_then(|v| v.as_u64()), Some(1));
+}
+
+#[test]
+fn session_to_json_non_fork_has_is_fork_false() {
+    let session = sample_session_state();
+    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+
+    assert_eq!(value.get("is_fork").and_then(|v| v.as_bool()), Some(false));
+    assert!(value.get("fork_of_session_id").is_none());
+    assert!(value.get("fork_provider_session_id").is_none());
+}
+
+#[test]
+fn session_to_json_includes_depth_and_parent() {
+    let mut session = sample_session_state();
+    session.genealogy.parent_session_id = Some("01PARENT000000000000000000".to_string());
+    session.genealogy.depth = 2;
+
+    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+    assert_eq!(
+        value.get("parent_session_id").and_then(|v| v.as_str()),
+        Some("01PARENT000000000000000000")
+    );
+    assert_eq!(value.get("depth").and_then(|v| v.as_u64()), Some(2));
 }

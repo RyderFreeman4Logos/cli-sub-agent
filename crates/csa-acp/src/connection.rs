@@ -18,6 +18,10 @@ pub use connection_spawn::{
     AcpConnectionOptions, AcpSandboxHandle, AcpSandboxRequest, AcpSpawnRequest, SandboxConfig,
 };
 
+#[path = "connection_fork.rs"]
+pub(crate) mod connection_fork;
+pub use connection_fork::{CliForkResult, fork_session_via_cli};
+
 use crate::{
     client::{SessionEvent, SharedActivity, SharedEvents},
     error::{AcpError, AcpResult},
@@ -196,6 +200,43 @@ impl AcpConnection {
                 )))
             }
         }
+    }
+
+    /// Fork a provider session via CLI, then load the new session into this ACP connection.
+    ///
+    /// This is a two-step process:
+    /// 1. Call `claude --resume <id> --fork-session` to create a new provider-level session
+    /// 2. Call `load_session()` to attach the ACP connection to the forked session
+    ///
+    /// Only supported for Claude Code (the `claude` CLI must be available).
+    /// For other tools, returns `AcpError::ForkFailed` with an explanation.
+    pub async fn fork_and_load_session(
+        &self,
+        provider_session_id: &str,
+        tool_name: &str,
+        working_dir: Option<&Path>,
+    ) -> AcpResult<String> {
+        if tool_name != "claude-code" {
+            return Err(AcpError::ForkFailed(format!(
+                "CLI fork is only supported for claude-code, not {tool_name}"
+            )));
+        }
+
+        self.ensure_process_running()?;
+
+        let fork_dir = working_dir.unwrap_or(self.default_working_dir.as_path());
+        let fork_result =
+            connection_fork::fork_session_via_cli(provider_session_id, fork_dir, self.init_timeout)
+                .await?;
+
+        tracing::debug!(
+            original_session = provider_session_id,
+            forked_session = %fork_result.session_id,
+            "CLI fork succeeded, loading forked session via ACP"
+        );
+
+        self.load_session(&fork_result.session_id, working_dir)
+            .await
     }
 
     pub async fn prompt(

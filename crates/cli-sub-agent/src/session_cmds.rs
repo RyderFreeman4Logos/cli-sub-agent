@@ -94,7 +94,7 @@ fn select_sessions_for_list(
 }
 
 fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_json::Value {
-    serde_json::json!({
+    let mut value = serde_json::json!({
         "session_id": session.meta_session_id,
         "last_accessed": session.last_accessed,
         "description": session.description.as_deref().unwrap_or(""),
@@ -104,7 +104,19 @@ fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_jso
         "branch": session.branch,
         "task_type": session.task_context.task_type,
         "total_token_usage": session.total_token_usage,
-    })
+        "is_fork": session.genealogy.is_fork(),
+    });
+    if let Some(ref fork_of) = session.genealogy.fork_of_session_id {
+        value["fork_of_session_id"] = serde_json::json!(fork_of);
+    }
+    if let Some(ref fork_provider) = session.genealogy.fork_provider_session_id {
+        value["fork_provider_session_id"] = serde_json::json!(fork_provider);
+    }
+    if let Some(ref parent) = session.genealogy.parent_session_id {
+        value["parent_session_id"] = serde_json::json!(parent);
+    }
+    value["depth"] = serde_json::json!(session.genealogy.depth);
+    value
 }
 
 #[derive(Debug, Clone)]
@@ -334,8 +346,17 @@ pub(crate) fn handle_session_list(
                         "-".to_string()
                     };
 
+                    // Fork indicator appended after tokens
+                    let fork_suffix =
+                        if let Some(ref fork_of) = session.genealogy.fork_of_session_id {
+                            let short_fork = &fork_of[..11.min(fork_of.len())];
+                            format!("  \u{21B1} fork of {}", short_fork)
+                        } else {
+                            String::new()
+                        };
+
                     println!(
-                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}",
+                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}",
                         short_id,
                         session.last_accessed.format("%Y-%m-%d %H:%M"),
                         status_str,
@@ -343,6 +364,7 @@ pub(crate) fn handle_session_list(
                         tools_str,
                         branch_str,
                         tokens_str,
+                        fork_suffix,
                     );
                 }
             }

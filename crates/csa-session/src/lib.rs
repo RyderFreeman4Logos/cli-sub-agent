@@ -10,6 +10,7 @@ pub mod output_parser;
 pub mod output_section;
 pub mod redact;
 pub mod result;
+pub mod soft_fork;
 pub mod state;
 pub mod validate;
 
@@ -26,8 +27,9 @@ pub use output_parser::{
     estimate_tokens, load_output_index, persist_structured_output, read_all_sections, read_section,
 };
 pub use output_section::{OutputIndex, OutputSection};
-pub use redact::redact_event;
+pub use redact::{redact_event, redact_text_content};
 pub use result::{SessionArtifact, SessionResult};
+pub use soft_fork::{SoftForkContext, soft_fork_session};
 
 // Re-export manager functions
 pub use manager::{

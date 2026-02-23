@@ -12,6 +12,8 @@ pub enum AcpError {
     PromptFailed(String),
     #[error("ACP process exited unexpectedly: code {0}")]
     ProcessExited(i32),
+    #[error("Session fork failed: {0}")]
+    ForkFailed(String),
     #[error("ACP subprocess spawn failed: {0}")]
     SpawnFailed(#[from] std::io::Error),
     #[error("Configuration error: {0}")]

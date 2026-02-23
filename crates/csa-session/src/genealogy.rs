@@ -112,10 +112,24 @@ fn list_sessions_tree_in_roots(
     // Sort by created_at for consistent ordering
     all_sessions.sort_by(|a, b| a.created_at.cmp(&b.created_at));
 
-    // Find root sessions (no parent)
+    // Build set of session IDs present in the list for quick lookup.
+    let present_ids: HashSet<&str> = all_sessions
+        .iter()
+        .map(|s| s.meta_session_id.as_str())
+        .collect();
+
+    // Find root sessions: no parent AND not a fork-child of another session in the list.
+    // A fork-child without parent_session_id still belongs under its fork source in the tree.
     let roots: Vec<&MetaSessionState> = all_sessions
         .iter()
-        .filter(|s| s.genealogy.parent_session_id.is_none())
+        .filter(|s| {
+            s.genealogy.parent_session_id.is_none()
+                && !s
+                    .genealogy
+                    .fork_of_session_id
+                    .as_deref()
+                    .is_some_and(|fork_src| present_ids.contains(fork_src))
+        })
         .collect();
 
     let mut output = String::new();
@@ -135,11 +149,16 @@ fn format_session_tree(
 ) -> String {
     let mut output = String::new();
 
-    // Build prefix
-    let prefix = if indent == 0 {
-        String::new()
+    // Build prefix and fork marker
+    let (prefix, fork_marker) = if indent == 0 {
+        (String::new(), "")
+    } else if session.genealogy.is_fork() {
+        (
+            "  ".repeat(indent - 1) + "\u{2514}\u{2500} ",
+            "\u{21B1} fork",
+        )
     } else {
-        "  ".repeat(indent - 1) + "├─ "
+        ("  ".repeat(indent - 1) + "\u{251C}\u{2500} ", "")
     };
 
     // Short ID (first 11 chars)
@@ -156,18 +175,39 @@ fn format_session_tree(
     // Description
     let description = session.description.as_deref().unwrap_or("<no description>");
 
-    output.push_str(&format!(
-        "{}{}  {}  {}\n",
-        prefix, short_id, tools_str, description
-    ));
+    if fork_marker.is_empty() {
+        output.push_str(&format!(
+            "{}{}  {}  {}\n",
+            prefix, short_id, tools_str, description
+        ));
+    } else {
+        output.push_str(&format!(
+            "{}{}  {}  {}  {}\n",
+            prefix, short_id, tools_str, description, fork_marker
+        ));
+    }
 
-    // Find and format children
+    // Find and format children (both spawn-children and fork-children)
     let children: Vec<&MetaSessionState> = all_sessions
         .iter()
         .filter(|s| s.genealogy.parent_session_id.as_deref() == Some(&session.meta_session_id))
         .collect();
 
     for child in children {
+        output.push_str(&format_session_tree(child, all_sessions, indent + 1));
+    }
+
+    // Also find sessions that forked FROM this session (fork-children)
+    // but are NOT already shown as spawn-children (no parent_session_id pointing here)
+    let fork_children: Vec<&MetaSessionState> = all_sessions
+        .iter()
+        .filter(|s| {
+            s.genealogy.fork_of_session_id.as_deref() == Some(&session.meta_session_id)
+                && s.genealogy.parent_session_id.as_deref() != Some(&session.meta_session_id)
+        })
+        .collect();
+
+    for child in fork_children {
         output.push_str(&format_session_tree(child, all_sessions, indent + 1));
     }
 
@@ -379,5 +419,163 @@ mod tests {
         let short_id = &session.meta_session_id[..11];
 
         assert_eq!(tree.matches(short_id).count(), 1);
+    }
+
+    #[test]
+    fn test_tree_view_shows_fork_marker() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+
+        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None, None)
+            .expect("Failed to create parent");
+
+        // Spawn child (normal)
+        let _spawn_child = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Spawn child"),
+            Some(&parent.meta_session_id),
+            None,
+        )
+        .expect("Failed to create spawn child");
+
+        // Fork child: has both parent_session_id and fork_of_session_id
+        let mut fork_child = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Fork child"),
+            Some(&parent.meta_session_id),
+            None,
+        )
+        .expect("Failed to create fork child");
+        fork_child.genealogy.fork_of_session_id = Some(parent.meta_session_id.clone());
+        fork_child.genealogy.fork_provider_session_id = Some("provider-abc".to_string());
+        crate::manager::save_session_in(temp_dir.path(), &fork_child)
+            .expect("Failed to save fork child");
+
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
+
+        assert!(
+            tree.contains("\u{21B1} fork"),
+            "Tree should contain fork marker. Got:\n{}",
+            tree
+        );
+        assert!(tree.contains("Spawn child"));
+        assert!(tree.contains("Parent"));
+    }
+
+    #[test]
+    fn test_tree_view_fork_child_without_parent_id() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+
+        let parent = create_session_in(temp_dir.path(), project_path, Some("Parent"), None, None)
+            .expect("Failed to create parent");
+
+        // Fork child with fork_of_session_id but NO parent_session_id
+        let mut fork_child =
+            create_session_in(temp_dir.path(), project_path, Some("Fork only"), None, None)
+                .expect("Failed to create fork child");
+        fork_child.genealogy.fork_of_session_id = Some(parent.meta_session_id.clone());
+        crate::manager::save_session_in(temp_dir.path(), &fork_child)
+            .expect("Failed to save fork child");
+
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
+
+        let parent_short = &parent.meta_session_id[..11];
+        let fork_short = &fork_child.meta_session_id[..11];
+
+        // Fork child should appear after parent (nested under it)
+        let parent_pos = tree.find(parent_short).expect("Parent should be in tree");
+        let fork_pos = tree.find(fork_short).expect("Fork child should be in tree");
+        assert!(
+            fork_pos > parent_pos,
+            "Fork child should appear after parent in tree output"
+        );
+
+        assert!(
+            tree.contains("\u{21B1} fork"),
+            "Tree should contain fork marker. Got:\n{}",
+            tree
+        );
+    }
+
+    #[test]
+    fn test_tree_view_mixed_spawn_and_fork_children() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let project_path = temp_dir.path();
+
+        let root = create_session_in(temp_dir.path(), project_path, Some("Root"), None, None)
+            .expect("create root");
+
+        // Spawn child (regular)
+        let _child1 = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Regular child"),
+            Some(&root.meta_session_id),
+            None,
+        )
+        .expect("create child1");
+
+        // Fork child with parent_session_id
+        let mut fork1 = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Fork with parent"),
+            Some(&root.meta_session_id),
+            None,
+        )
+        .expect("create fork1");
+        fork1.genealogy.fork_of_session_id = Some(root.meta_session_id.clone());
+        crate::manager::save_session_in(temp_dir.path(), &fork1).expect("save fork1");
+
+        // Fork child without parent_session_id
+        let mut fork2 = create_session_in(
+            temp_dir.path(),
+            project_path,
+            Some("Fork no parent"),
+            None,
+            None,
+        )
+        .expect("create fork2");
+        fork2.genealogy.fork_of_session_id = Some(root.meta_session_id.clone());
+        crate::manager::save_session_in(temp_dir.path(), &fork2).expect("save fork2");
+
+        let tree =
+            list_sessions_tree_in(temp_dir.path(), None, None).expect("Failed to build tree");
+
+        assert!(tree.contains("Root"));
+        assert!(tree.contains("Regular child"));
+        assert!(tree.contains("Fork with parent"));
+        assert!(tree.contains("Fork no parent"));
+
+        // Only one root line: root lines don't start with tree connectors (├/└) or spaces
+        let lines: Vec<&str> = tree.lines().collect();
+        let root_lines: Vec<&&str> = lines
+            .iter()
+            .filter(|l| {
+                !l.is_empty()
+                    && !l.starts_with('\u{251C}') // ├
+                    && !l.starts_with('\u{2514}') // └
+                    && !l.starts_with(' ')
+            })
+            .collect();
+        assert_eq!(
+            root_lines.len(),
+            1,
+            "Should have exactly 1 root. Got:\n{}",
+            tree
+        );
+
+        // Two fork markers
+        let fork_marker_count = tree.matches("\u{21B1} fork").count();
+        assert_eq!(
+            fork_marker_count, 2,
+            "Should have 2 fork markers. Got:\n{}",
+            tree
+        );
     }
 }
