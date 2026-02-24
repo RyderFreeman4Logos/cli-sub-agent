@@ -249,6 +249,16 @@ pub(crate) struct SessionExecutionResult {
     pub provider_session_id: Option<String>,
 }
 
+fn run_pipeline_hook(
+    event: HookEvent,
+    hooks_config: &csa_hooks::HooksConfig,
+    variables: &std::collections::HashMap<String, String>,
+) -> Result<()> {
+    run_hooks_for_event(event, hooks_config, variables).map_err(|err| {
+        anyhow::anyhow!("{event:?} hook failed and fail_policy=closed blocked execution: {err}")
+    })
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
 pub(crate) async fn execute_with_session(
@@ -566,7 +576,7 @@ pub(crate) async fn execute_with_session_and_meta(
         global_hooks_path().as_deref(),
         None,
     );
-    // PreRun hook: fires before tool execution starts (best-effort).
+    // PreRun hook: fires before tool execution starts.
     let sessions_root = session_dir
         .parent()
         .unwrap_or(&session_dir)
@@ -578,9 +588,7 @@ pub(crate) async fn execute_with_session_and_meta(
         ("sessions_root".to_string(), sessions_root.clone()),
         ("tool".to_string(), executor.tool_name().to_string()),
     ]);
-    if let Err(e) = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &pre_run_vars) {
-        warn!("PreRun hook failed: {}", e);
-    }
+    run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
 
     // Run prompt guards: append reminders to effective_prompt (strongest influence at end).
     if !hooks_config.prompt_guard.is_empty() {
@@ -812,7 +820,7 @@ pub(crate) async fn execute_with_session_and_meta(
     // Save session
     save_session(&session)?;
 
-    // Fire PostRun and SessionComplete hooks (best-effort, reusing hooks_config from PreRun)
+    // Fire PostRun and SessionComplete hooks (reusing hooks_config from PreRun)
     let hook_vars = std::collections::HashMap::from([
         ("session_id".to_string(), session.meta_session_id.clone()),
         ("session_dir".to_string(), session_dir.display().to_string()),
@@ -821,9 +829,7 @@ pub(crate) async fn execute_with_session_and_meta(
         ("exit_code".to_string(), result.exit_code.to_string()),
     ]);
     // PostRun hook: fires after every tool execution
-    if let Err(e) = run_hooks_for_event(HookEvent::PostRun, &hooks_config, &hook_vars) {
-        warn!("PostRun hook failed: {}", e);
-    }
+    run_pipeline_hook(HookEvent::PostRun, &hooks_config, &hook_vars)?;
 
     // SessionComplete hook: git-commits session artifacts
     if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &hook_vars) {

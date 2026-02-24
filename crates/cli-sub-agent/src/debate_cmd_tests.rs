@@ -173,6 +173,7 @@ fn resolve_debate_tool_prefers_project_override() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
     cfg.debate = Some(ReviewConfig {
         tool: "opencode".to_string(),
+        ..Default::default()
     });
 
     let (tool, mode) = resolve_debate_tool(
@@ -194,6 +195,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.debate = Some(ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
 
     let (tool, mode) = resolve_debate_tool(
@@ -217,6 +219,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.debate = Some(ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
 
     let (tool, mode) = resolve_debate_tool(
@@ -240,6 +243,7 @@ fn resolve_debate_tool_ignores_unknown_priority_entries() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.debate = Some(ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
 
     let (tool, mode) = resolve_debate_tool(

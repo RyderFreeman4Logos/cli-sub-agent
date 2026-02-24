@@ -134,6 +134,12 @@ fn test_default_template_is_valid_comment_only() {
 fn test_review_config_default() {
     let config = GlobalConfig::default();
     assert_eq!(config.review.tool, "auto");
+    assert_eq!(config.review.gate_mode, GateMode::Monitor);
+}
+
+#[test]
+fn test_gate_mode_default_is_monitor() {
+    assert_eq!(GateMode::default(), GateMode::Monitor);
 }
 
 #[test]
@@ -190,6 +196,43 @@ tool = "codex"
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.review.tool, "codex");
+    assert_eq!(config.review.gate_mode, GateMode::Monitor);
+}
+
+#[test]
+fn test_parse_review_config_with_gate_mode_critical_only() {
+    let toml_str = r#"
+[review]
+tool = "codex"
+gate_mode = "critical_only"
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.review.gate_mode, GateMode::CriticalOnly);
+}
+
+#[test]
+fn test_parse_review_config_with_gate_mode_full() {
+    let toml_str = r#"
+[review]
+tool = "codex"
+gate_mode = "full"
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.review.gate_mode, GateMode::Full);
+}
+
+#[test]
+fn test_gate_mode_serde_roundtrip_all_variants() {
+    for gate_mode in [GateMode::Monitor, GateMode::CriticalOnly, GateMode::Full] {
+        let review = ReviewConfig {
+            tool: "codex".to_string(),
+            gate_mode: gate_mode.clone(),
+        };
+        let toml = toml::to_string(&review).unwrap();
+        let parsed: ReviewConfig = toml::from_str(&toml).unwrap();
+        assert_eq!(parsed.tool, review.tool);
+        assert_eq!(parsed.gate_mode, review.gate_mode);
+    }
 }
 
 #[test]

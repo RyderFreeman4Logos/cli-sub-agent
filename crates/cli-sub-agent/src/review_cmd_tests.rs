@@ -3,6 +3,7 @@ use crate::cli::{Cli, Commands};
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use std::collections::HashMap;
+use tempfile::tempdir;
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -160,6 +161,7 @@ fn resolve_review_tool_prefers_project_override() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "opencode".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -181,6 +183,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -204,6 +207,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -227,6 +231,7 @@ fn resolve_review_tool_ignores_unknown_priority_entries() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -535,6 +540,45 @@ fn test_build_review_instruction_no_diff_content() {
         "Instruction should be concise, got {} chars",
         result.len()
     );
+}
+
+#[test]
+fn test_build_review_instruction_for_project_includes_rust_profile() {
+    let project_dir = tempdir().unwrap();
+    std::fs::write(
+        project_dir.path().join("Cargo.toml"),
+        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
+    )
+    .unwrap();
+
+    let (instruction, routing) = build_review_instruction_for_project(
+        "uncommitted",
+        "review-only",
+        "auto",
+        None,
+        project_dir.path(),
+        None,
+    );
+
+    assert!(instruction.contains("[project_profile: rust]"));
+    assert_eq!(routing.detection_method, "auto");
+}
+
+#[test]
+fn test_build_review_instruction_for_project_includes_unknown_profile_for_empty_project() {
+    let project_dir = tempdir().unwrap();
+
+    let (instruction, routing) = build_review_instruction_for_project(
+        "uncommitted",
+        "review-only",
+        "auto",
+        None,
+        project_dir.path(),
+        None,
+    );
+
+    assert!(instruction.contains("[project_profile: unknown]"));
+    assert_eq!(routing.detection_method, "auto");
 }
 
 // --- CLI parse tests for timeout/stream flags (#146) ---

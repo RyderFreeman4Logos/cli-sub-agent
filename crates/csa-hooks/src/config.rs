@@ -3,6 +3,8 @@
 use crate::event::HookEvent;
 use crate::guard::PromptGuardEntry;
 use crate::guard::builtin_prompt_guards;
+use crate::policy::FailPolicy;
+use crate::waiver::Waiver;
 use csa_config::paths;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,6 +23,12 @@ pub struct HookConfig {
     /// Timeout in seconds (default: 30)
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// Hook failure handling policy.
+    #[serde(default)]
+    pub fail_policy: FailPolicy,
+    /// Optional waivers that allow temporary exceptions in closed mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waivers: Vec<Waiver>,
 }
 
 fn default_true() -> bool {
@@ -104,6 +112,8 @@ impl HooksConfig {
                 enabled: true,
                 command: None, // Will be resolved from builtin_command()
                 timeout_secs: 30,
+                fail_policy: FailPolicy::default(),
+                waivers: Vec::new(),
             }
         } else {
             // Events without built-in: disabled by default
@@ -111,6 +121,8 @@ impl HooksConfig {
                 enabled: false,
                 command: None,
                 timeout_secs: 30,
+                fail_policy: FailPolicy::default(),
+                waivers: Vec::new(),
             }
         }
     }
@@ -245,6 +257,8 @@ command = "echo project"
                 enabled: false,
                 command: Some("echo runtime".to_string()),
                 timeout_secs: 10,
+                fail_policy: FailPolicy::Open,
+                waivers: Vec::new(),
             },
         );
 

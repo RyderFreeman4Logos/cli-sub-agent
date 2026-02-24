@@ -18,6 +18,8 @@ ulid.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 regex.workspace = true
+sha2.workspace = true
+data-encoding = "2.6"
 
 [dev-dependencies]
 tempfile.workspace = true

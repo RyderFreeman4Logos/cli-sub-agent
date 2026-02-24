@@ -3,6 +3,7 @@ use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 use chrono::Utc;
 use csa_config::config::{CURRENT_SCHEMA_VERSION, TierConfig};
 use csa_config::{ProjectMeta, ResourcesConfig};
+use csa_hooks::{FailPolicy, HookConfig, HookEvent, HooksConfig, Waiver};
 use std::collections::HashMap;
 
 #[test]
@@ -237,6 +238,108 @@ fn resolve_liveness_dead_seconds_uses_config_then_default() {
         resolve_liveness_dead_seconds(None),
         DEFAULT_LIVENESS_DEAD_SECONDS
     );
+}
+
+fn make_hooks_config(
+    event: HookEvent,
+    command: &str,
+    fail_policy: FailPolicy,
+    waivers: Vec<Waiver>,
+) -> HooksConfig {
+    let mut hooks = HashMap::new();
+    hooks.insert(
+        event.as_config_key().to_string(),
+        HookConfig {
+            enabled: true,
+            command: Some(command.to_string()),
+            timeout_secs: 2,
+            fail_policy,
+            waivers,
+        },
+    );
+    HooksConfig {
+        builtin_guards: None,
+        prompt_guard: Vec::new(),
+        hooks,
+    }
+}
+
+#[test]
+fn pipeline_hook_open_policy_failure_continues() {
+    let config = make_hooks_config(HookEvent::PreRun, "exit 1", FailPolicy::Open, Vec::new());
+    let vars = HashMap::new();
+    let result = run_pipeline_hook(HookEvent::PreRun, &config, &vars);
+    assert!(
+        result.is_ok(),
+        "open policy should continue even when hook command fails"
+    );
+}
+
+#[test]
+fn pipeline_hook_closed_policy_failure_without_waiver_returns_err() {
+    let config = make_hooks_config(HookEvent::PreRun, "exit 1", FailPolicy::Closed, Vec::new());
+    let vars = HashMap::new();
+    let result = run_pipeline_hook(HookEvent::PreRun, &config, &vars);
+    assert!(
+        result.is_err(),
+        "closed policy without waiver must return an error"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("PreRun"));
+    assert!(err_msg.contains("fail_policy=closed"));
+}
+
+#[test]
+fn pipeline_hook_closed_policy_failure_with_valid_waiver_continues() {
+    let waiver = Waiver {
+        scope: "pre_run".to_string(),
+        justification: "temporary exception".to_string(),
+        ticket: Some("CSA-123".to_string()),
+        approver: Some("reviewer".to_string()),
+        expires_at: None,
+    };
+    let config = make_hooks_config(
+        HookEvent::PreRun,
+        "exit 1",
+        FailPolicy::Closed,
+        vec![waiver],
+    );
+    let vars = HashMap::new();
+    let result = run_pipeline_hook(HookEvent::PreRun, &config, &vars);
+    assert!(
+        result.is_ok(),
+        "closed policy with valid waiver should continue"
+    );
+}
+
+#[test]
+fn pipeline_hook_closed_policy_success_continues() {
+    let config = make_hooks_config(HookEvent::PreRun, "exit 0", FailPolicy::Closed, Vec::new());
+    let vars = HashMap::new();
+    let result = run_pipeline_hook(HookEvent::PreRun, &config, &vars);
+    assert!(result.is_ok(), "closed policy with successful hook should pass");
+}
+
+#[test]
+fn pipeline_hook_open_policy_success_continues() {
+    let config = make_hooks_config(HookEvent::PreRun, "exit 0", FailPolicy::Open, Vec::new());
+    let vars = HashMap::new();
+    let result = run_pipeline_hook(HookEvent::PreRun, &config, &vars);
+    assert!(result.is_ok(), "open policy baseline success should pass");
+}
+
+#[test]
+fn pipeline_post_run_closed_policy_failure_without_waiver_returns_err() {
+    let config = make_hooks_config(HookEvent::PostRun, "exit 1", FailPolicy::Closed, Vec::new());
+    let vars = HashMap::new();
+    let result = run_pipeline_hook(HookEvent::PostRun, &config, &vars);
+    assert!(
+        result.is_err(),
+        "post-run closed policy without waiver must return an error"
+    );
+    let err_msg = result.unwrap_err().to_string();
+    assert!(err_msg.contains("PostRun"));
+    assert!(err_msg.contains("fail_policy=closed"));
 }
 
 fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectConfig {

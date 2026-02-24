@@ -1,4 +1,5 @@
 use std::io::IsTerminal;
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -7,14 +8,15 @@ use tracing::{debug, error, info, warn};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
-    CLEAN, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
-    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_verdict,
-    resolve_consensus,
+    CLEAN, agreement_level, build_consolidated_artifact, build_multi_reviewer_instruction,
+    build_reviewer_tools, consensus_strategy_label, consensus_verdict, parse_consensus_strategy,
+    parse_review_verdict, resolve_consensus, write_consolidated_artifact,
 };
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, ProjectConfig, ProjectProfile};
 use csa_core::consensus::AgentResponse;
 use csa_core::types::ToolName;
+use csa_session::review_artifact::ReviewArtifact;
 
 #[derive(Debug, Clone)]
 struct ReviewerOutcome {
@@ -23,6 +25,12 @@ struct ReviewerOutcome {
     output: String,
     exit_code: i32,
     verdict: &'static str,
+}
+
+#[derive(Debug, Clone)]
+struct ReviewRoutingMetadata {
+    project_profile: ProjectProfile,
+    detection_method: &'static str,
 }
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
@@ -50,8 +58,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     debug!(scope = %scope, mode = %mode, security_mode = %args.security_mode, "Review parameters");
 
     // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
-    let prompt =
-        build_review_instruction(&scope, mode, &args.security_mode, args.context.as_deref());
+    let (prompt, review_routing) = build_review_instruction_for_project(
+        &scope,
+        mode,
+        &args.security_mode,
+        args.context.as_deref(),
+        &project_root,
+        config.as_ref(),
+    );
 
     // 5. Determine tool
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
@@ -84,6 +98,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             &project_root,
             config.as_ref(),
             &global_config,
+            review_routing.clone(),
             stream_mode,
             idle_timeout_seconds,
             args.force_override_user_config,
@@ -143,6 +158,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             reviewer_index + 1,
             crate::run_helpers::truncate_prompt(&scope, 80)
         );
+        let reviewer_routing = review_routing.clone();
 
         let reviewer_force_override = args.force_override_user_config;
         join_set.spawn(async move {
@@ -155,6 +171,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 &reviewer_project_root,
                 reviewer_config.as_ref(),
                 &reviewer_global,
+                reviewer_routing,
                 stream_mode,
                 idle_timeout_seconds,
                 reviewer_force_override,
@@ -199,6 +216,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         collect_future.await?;
     }
     outcomes.sort_by_key(|o| o.reviewer_index);
+
+    if let Err(err) = write_multi_reviewer_consolidated_artifact(reviewers) {
+        warn!(
+            error = %err,
+            "Failed to write consolidated multi-reviewer artifact (shadow mode; continuing)"
+        );
+    }
 
     let responses: Vec<AgentResponse> = outcomes
         .iter()
@@ -259,6 +283,7 @@ async fn execute_review(
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    review_routing: ReviewRoutingMetadata,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
     force_override_user_config: bool,
@@ -289,7 +314,7 @@ async fn execute_review(
     let extra_env = global_config.env_vars(executor.tool_name());
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
-    crate::pipeline::execute_with_session(
+    let execution = crate::pipeline::execute_with_session_and_meta(
         &executor,
         &tool,
         &effective_prompt,
@@ -306,7 +331,15 @@ async fn execute_review(
         idle_timeout_seconds,
         Some(global_config),
     )
-    .await
+    .await?;
+
+    persist_review_routing_artifact(
+        project_root,
+        &execution.meta_session_id,
+        &review_routing,
+    );
+
+    Ok(execution.execution)
 }
 
 /// Verify the review pattern is installed before attempting execution.
@@ -544,6 +577,34 @@ Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
 }
 
+fn write_multi_reviewer_consolidated_artifact(reviewers: usize) -> Result<()> {
+    let Some(session_dir) = std::env::var_os("CSA_SESSION_DIR") else {
+        return Ok(());
+    };
+    let output_dir = PathBuf::from(session_dir);
+    let session_id = std::env::var("CSA_SESSION_ID").unwrap_or_else(|_| "unknown".to_string());
+
+    let mut reviewer_artifacts = Vec::new();
+    for reviewer_index in 1..=reviewers {
+        let artifact_path = output_dir
+            .join(format!("reviewer-{reviewer_index}"))
+            .join("review-findings.json");
+
+        if !artifact_path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&artifact_path)
+            .with_context(|| format!("failed to read {}", artifact_path.display()))?;
+        let artifact: ReviewArtifact = serde_json::from_str(&content)
+            .with_context(|| format!("failed to parse {}", artifact_path.display()))?;
+        reviewer_artifacts.push(artifact);
+    }
+
+    let consolidated = build_consolidated_artifact(reviewer_artifacts, &session_id);
+    write_consolidated_artifact(&consolidated, &output_dir)
+}
+
 /// Derive the review scope string from CLI arguments.
 ///
 /// Priority order (first match wins):
@@ -585,6 +646,77 @@ fn build_review_instruction(
         instruction.push_str(&format!(" context={ctx}"));
     }
     instruction
+}
+
+fn build_review_instruction_for_project(
+    scope: &str,
+    mode: &str,
+    security_mode: &str,
+    context: Option<&str>,
+    project_root: &Path,
+    project_config: Option<&ProjectConfig>,
+) -> (String, ReviewRoutingMetadata) {
+    let review_routing = detect_review_routing_metadata(project_root, project_config);
+    let mut instruction = build_review_instruction(scope, mode, security_mode, context);
+    instruction.push_str(&format!(
+        "\n[project_profile: {}]",
+        review_routing.project_profile
+    ));
+    (instruction, review_routing)
+}
+
+fn detect_review_routing_metadata(
+    project_root: &Path,
+    _project_config: Option<&ProjectConfig>,
+) -> ReviewRoutingMetadata {
+    // Project-level profile override is not part of ProjectConfig schema yet.
+    let project_profile = csa_config::detect_project_profile(project_root);
+    ReviewRoutingMetadata {
+        project_profile,
+        detection_method: "auto",
+    }
+}
+
+fn persist_review_routing_artifact(
+    project_root: &Path,
+    meta_session_id: &str,
+    review_routing: &ReviewRoutingMetadata,
+) {
+    let session_dir = match csa_session::get_session_dir(project_root, meta_session_id) {
+        Ok(path) => path,
+        Err(err) => {
+            debug!(
+                session_id = %meta_session_id,
+                error = %err,
+                "Skipping review-routing artifact write: failed to resolve session directory"
+            );
+            return;
+        }
+    };
+
+    let output_dir = session_dir.join("output");
+    if !output_dir.is_dir() {
+        debug!(
+            session_id = %meta_session_id,
+            output_dir = %output_dir.display(),
+            "Skipping review-routing artifact write: output directory missing"
+        );
+        return;
+    }
+
+    let artifact = format!(
+        "{{\"project_profile\":\"{}\",\"detection_method\":\"{}\",\"schema_version\":\"1.0\"}}\n",
+        review_routing.project_profile, review_routing.detection_method
+    );
+    let artifact_path = output_dir.join("review-routing.json");
+    if let Err(err) = std::fs::write(&artifact_path, artifact) {
+        warn!(
+            session_id = %meta_session_id,
+            path = %artifact_path.display(),
+            error = %err,
+            "Failed to write review-routing artifact (best-effort)"
+        );
+    }
 }
 
 #[cfg(test)]

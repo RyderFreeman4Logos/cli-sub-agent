@@ -397,7 +397,7 @@ checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
 name = "cli-sub-agent"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "csa-acp"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -546,7 +546,7 @@ dependencies = [
 
 [[package]]
 name = "csa-config"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "csa-core"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "agent-teams",
  "chrono",
@@ -575,7 +575,7 @@ dependencies = [
 
 [[package]]
 name = "csa-executor"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "agent-teams",
  "anyhow",
@@ -599,9 +599,10 @@ dependencies = [
 
 [[package]]
 name = "csa-hooks"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
+ "chrono",
  "csa-config",
  "libc",
  "serde",
@@ -613,7 +614,7 @@ dependencies = [
 
 [[package]]
 name = "csa-lock"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -625,7 +626,7 @@ dependencies = [
 
 [[package]]
 name = "csa-mcp-hub"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "axum",
@@ -647,7 +648,7 @@ dependencies = [
 
 [[package]]
 name = "csa-process"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "csa-core",
@@ -661,7 +662,7 @@ dependencies = [
 
 [[package]]
 name = "csa-resource"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "csa-core",
@@ -676,7 +677,7 @@ dependencies = [
 
 [[package]]
 name = "csa-scheduler"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -694,7 +695,7 @@ dependencies = [
 
 [[package]]
 name = "csa-session"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -702,9 +703,11 @@ dependencies = [
  "csa-config",
  "csa-core",
  "csa-lock",
+ "data-encoding",
  "regex",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "toml",
  "tracing",
@@ -713,7 +716,7 @@ dependencies = [
 
 [[package]]
 name = "csa-todo"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "chrono",
@@ -759,6 +762,12 @@ dependencies = [
  "quote",
  "syn",
 ]
+
+[[package]]
+name = "data-encoding"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7a1e2f27636f116493b8b860f5546edb47c8d8f8ea73e1d2a20be88e28d1fea"
 
 [[package]]
 name = "deranged"
@@ -1322,7 +1331,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tokio",
  "tower-service",
  "tracing",
@@ -1805,7 +1814,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash",
  "rustls 0.23.36",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -1842,9 +1851,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.2",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3174,7 +3183,7 @@ dependencies = [
 
 [[package]]
 name = "weave"
-version = "0.1.35"
+version = "0.1.36"
 dependencies = [
  "anyhow",
  "clap",

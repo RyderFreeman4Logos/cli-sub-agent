@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 
 use csa_config::ProjectConfig;
 use csa_config::global::GlobalConfig;
@@ -8,6 +10,7 @@ use csa_core::consensus::{
     resolve_weighted,
 };
 use csa_core::types::ToolName;
+use csa_session::review_artifact::{Finding, ReviewArtifact, SeveritySummary};
 
 pub(crate) const CLEAN: &str = "CLEAN";
 pub(crate) const HAS_ISSUES: &str = "HAS_ISSUES";
@@ -166,10 +169,110 @@ pub(crate) fn consensus_strategy_label(strategy: ConsensusStrategy) -> &'static 
     }
 }
 
+pub(crate) fn merge_related_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut merged: Vec<Finding> = Vec::new();
+
+    for finding in findings {
+        if let Some(index) = merged
+            .iter()
+            .position(|existing| are_related_findings(existing, &finding))
+        {
+            if finding.severity > merged[index].severity {
+                merged[index] = finding;
+            }
+        } else {
+            merged.push(finding);
+        }
+    }
+
+    merged
+}
+
+fn are_related_findings(left: &Finding, right: &Finding) -> bool {
+    if left.rule_id != right.rule_id || left.file != right.file {
+        return false;
+    }
+
+    let (Some(left_line), Some(right_line)) = (left.line, right.line) else {
+        return false;
+    };
+
+    left_line.abs_diff(right_line) <= 2
+}
+
+/// Consolidates findings in two steps:
+/// 1. Deduplicate by `fid`, retaining the highest-severity entry per ID.
+/// 2. Merge related findings (same rule, same file, both with lines within 2 lines),
+///    retaining the highest-severity entry per related group.
+pub(crate) fn consolidate_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut deduped: HashMap<String, Finding> = HashMap::new();
+
+    for finding in findings {
+        match deduped.entry(finding.fid.clone()) {
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(finding);
+            }
+            std::collections::hash_map::Entry::Occupied(mut entry) => {
+                if finding.severity > entry.get().severity {
+                    entry.insert(finding);
+                }
+            }
+        }
+    }
+
+    // Sort deduped values before relatedness merge to ensure deterministic output
+    // regardless of HashMap iteration order.
+    let mut deduped_sorted: Vec<Finding> = deduped.into_values().collect();
+    deduped_sorted.sort_by(|a, b| a.fid.cmp(&b.fid));
+    let mut consolidated = merge_related_findings(deduped_sorted);
+    consolidated.sort_by(|left, right| {
+        right
+            .severity
+            .cmp(&left.severity)
+            .then_with(|| left.fid.cmp(&right.fid))
+    });
+    consolidated
+}
+
+pub(crate) fn build_consolidated_artifact(
+    reviewer_artifacts: Vec<ReviewArtifact>,
+    session_id: &str,
+) -> ReviewArtifact {
+    let all_findings: Vec<Finding> = reviewer_artifacts
+        .into_iter()
+        .flat_map(|artifact| artifact.findings)
+        .collect();
+    let findings = consolidate_findings(all_findings);
+    let severity_summary = SeveritySummary::from_findings(&findings);
+
+    ReviewArtifact {
+        findings,
+        severity_summary,
+        schema_version: "1.0".to_string(),
+        session_id: session_id.to_string(),
+        timestamp: chrono::Utc::now(),
+    }
+}
+
+pub(crate) fn write_consolidated_artifact(artifact: &ReviewArtifact, output_dir: &Path) -> Result<()> {
+    let artifact_path = output_dir.join("review-consolidated.json");
+    let payload = serde_json::to_string_pretty(artifact)
+        .context("failed to serialize consolidated review artifact")?;
+    fs::write(&artifact_path, payload).with_context(|| {
+        format!(
+            "failed to write consolidated review artifact at {}",
+            artifact_path.display()
+        )
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+    use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
+    use tempfile::tempdir;
 
     fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         let mut tool_map = HashMap::new();
@@ -223,6 +326,44 @@ mod tests {
 
     fn verdict_to_exit_code(verdict: &str) -> i32 {
         if verdict == CLEAN { 0 } else { 1 }
+    }
+
+    fn finding_with_location(
+        fid: &str,
+        severity: Severity,
+        file: &str,
+        rule_id: &str,
+        line: Option<u32>,
+    ) -> Finding {
+        Finding {
+            severity,
+            fid: fid.to_string(),
+            file: file.to_string(),
+            line,
+            rule_id: rule_id.to_string(),
+            summary: format!("finding-{fid}"),
+            engine: "reviewer".to_string(),
+        }
+    }
+
+    fn finding(fid: &str, severity: Severity) -> Finding {
+        finding_with_location(
+            fid,
+            severity,
+            "src/lib.rs",
+            &format!("rule.sample.{fid}"),
+            Some(1),
+        )
+    }
+
+    fn artifact_with_findings(session_id: &str, findings: Vec<Finding>) -> ReviewArtifact {
+        ReviewArtifact {
+            severity_summary: SeveritySummary::from_findings(&findings),
+            findings,
+            schema_version: "1.0".to_string(),
+            session_id: session_id.to_string(),
+            timestamp: chrono::Utc::now(),
+        }
     }
 
     #[test]
@@ -382,5 +523,184 @@ mod tests {
 
         assert_eq!(consensus.decision.as_deref(), Some(CLEAN));
         assert!((agreement_level(&consensus) - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn consolidate_findings_deduplicates_by_fid_and_keeps_highest_severity() {
+        let consolidated = consolidate_findings(vec![
+            finding("DUP-FID", Severity::Low),
+            finding("DUP-FID", Severity::Critical),
+            finding("UNIQ-FID", Severity::Medium),
+        ]);
+
+        assert_eq!(consolidated.len(), 2);
+        let duplicate = consolidated
+            .iter()
+            .find(|item| item.fid == "DUP-FID")
+            .expect("deduplicated finding should exist");
+        assert_eq!(duplicate.severity, Severity::Critical);
+    }
+
+    #[test]
+    fn consolidate_findings_with_no_duplicates_preserves_all_findings() {
+        let consolidated = consolidate_findings(vec![
+            finding("FID-1", Severity::Info),
+            finding("FID-2", Severity::Low),
+            finding("FID-3", Severity::High),
+        ]);
+
+        assert_eq!(consolidated.len(), 3);
+        assert!(consolidated.iter().any(|item| item.fid == "FID-1"));
+        assert!(consolidated.iter().any(|item| item.fid == "FID-2"));
+        assert!(consolidated.iter().any(|item| item.fid == "FID-3"));
+    }
+
+    #[test]
+    fn consolidate_findings_returns_findings_sorted_by_severity_desc() {
+        let consolidated = consolidate_findings(vec![
+            finding("FID-LOW", Severity::Low),
+            finding("FID-CRIT", Severity::Critical),
+            finding("FID-HIGH", Severity::High),
+            finding("FID-MED", Severity::Medium),
+            finding("FID-INFO", Severity::Info),
+        ]);
+
+        let severities: Vec<Severity> = consolidated.into_iter().map(|item| item.severity).collect();
+        assert_eq!(
+            severities,
+            vec![
+                Severity::Critical,
+                Severity::High,
+                Severity::Medium,
+                Severity::Low,
+                Severity::Info
+            ]
+        );
+    }
+
+    #[test]
+    fn merge_related_findings_merges_same_rule_same_file_with_line_delta_two() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", Some(10)),
+            finding_with_location(
+                "FID-B",
+                Severity::Critical,
+                "src/main.rs",
+                "rule.same",
+                Some(12),
+            ),
+        ]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn merge_related_findings_keeps_both_when_line_delta_is_three() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", Some(10)),
+            finding_with_location("FID-B", Severity::High, "src/main.rs", "rule.same", Some(13)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|item| item.fid == "FID-A"));
+        assert!(merged.iter().any(|item| item.fid == "FID-B"));
+    }
+
+    #[test]
+    fn merge_related_findings_keeps_both_for_different_files() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/a.rs", "rule.same", Some(20)),
+            finding_with_location("FID-B", Severity::High, "src/b.rs", "rule.same", Some(21)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_related_findings_keeps_both_for_different_rules() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.a", Some(30)),
+            finding_with_location("FID-B", Severity::High, "src/main.rs", "rule.b", Some(30)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_related_findings_does_not_merge_when_any_line_is_none() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", None),
+            finding_with_location("FID-B", Severity::Critical, "src/main.rs", "rule.same", Some(10)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_related_findings_returns_empty_for_empty_input() {
+        let merged = merge_related_findings(Vec::new());
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_related_findings_returns_single_finding_as_is() {
+        let source = finding_with_location("FID-ONLY", Severity::Medium, "src/lib.rs", "rule.one", Some(1));
+        let merged = merge_related_findings(vec![source.clone()]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0], source);
+    }
+
+    #[test]
+    fn build_consolidated_artifact_merges_findings_from_two_reviewers() {
+        let reviewer_one = artifact_with_findings(
+            "session-a",
+            vec![finding("FID-SHARED", Severity::Low), finding("FID-A", Severity::High)],
+        );
+        let reviewer_two = artifact_with_findings(
+            "session-b",
+            vec![
+                finding("FID-SHARED", Severity::Critical),
+                finding("FID-B", Severity::Medium),
+            ],
+        );
+
+        let consolidated =
+            build_consolidated_artifact(vec![reviewer_one, reviewer_two], "session-final");
+
+        assert_eq!(consolidated.session_id, "session-final");
+        assert_eq!(consolidated.schema_version, "1.0");
+        assert_eq!(consolidated.findings.len(), 3);
+        assert_eq!(consolidated.severity_summary.critical, 1);
+        assert_eq!(consolidated.severity_summary.high, 1);
+        assert_eq!(consolidated.severity_summary.medium, 1);
+        assert_eq!(consolidated.severity_summary.low, 0);
+        assert_eq!(consolidated.severity_summary.info, 0);
+    }
+
+    #[test]
+    fn build_consolidated_artifact_with_empty_input_produces_empty_artifact() {
+        let consolidated = build_consolidated_artifact(Vec::new(), "session-empty");
+
+        assert_eq!(consolidated.session_id, "session-empty");
+        assert_eq!(consolidated.schema_version, "1.0");
+        assert!(consolidated.findings.is_empty());
+        assert_eq!(consolidated.severity_summary, SeveritySummary::default());
+    }
+
+    #[test]
+    fn write_consolidated_artifact_creates_json_file_at_expected_path() {
+        let temp = tempdir().expect("tempdir should be created");
+        let artifact = artifact_with_findings("session-write", vec![finding("FID-1", Severity::Low)]);
+
+        write_consolidated_artifact(&artifact, temp.path()).expect("artifact should be written");
+
+        let artifact_path = temp.path().join("review-consolidated.json");
+        assert!(artifact_path.exists());
+        let contents = std::fs::read_to_string(&artifact_path).expect("json file should be readable");
+        let parsed: ReviewArtifact =
+            serde_json::from_str(&contents).expect("json file should deserialize");
+        assert_eq!(parsed.session_id, "session-write");
     }
 }

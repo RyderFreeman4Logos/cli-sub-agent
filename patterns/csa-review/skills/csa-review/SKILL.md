@@ -137,9 +137,39 @@ or trigger another review round to verify fixes.
 | `/csa-review scope=uncommitted context=$(csa todo show -t <ts> --path)` | Reviews and checks alignment against a TODO plan |
 | `/csa-review tool=opencode scope=base:dev` | Uses opencode instead of auto-detected tool |
 
+## Adjudication Protocol (Fix Mode Only)
+
+When running in fix mode (`--fix` or `mode=review-and-fix`), the reviewer MUST attach explicit adjudication to each `Critical` and `High` severity finding using its stable `fid`.
+
+Verdict options:
+- `Accepted`: finding is valid and a fix is required.
+- `Rejected`: finding is a false positive or otherwise invalid.
+- `Deferred`: finding needs more context or human decision.
+
+For each adjudicated finding, the reviewer MUST:
+1. Provide exactly one verdict (`Accepted` | `Rejected` | `Deferred`).
+2. Provide a rationale in 1-2 sentences that explains why the verdict is correct.
+3. Emit the adjudication in the review output using machine-parseable markers so it can be persisted as `AdjudicationRecord`.
+
+Required output block format:
+
+```markdown
+<!-- CSA:ADJUDICATION fid=<finding_id> verdict=accepted -->
+Rationale: This unsafe block lacks a SAFETY comment and could cause UB.
+<!-- CSA:ADJUDICATION:END -->
+```
+
+Notes:
+- `verdict` values in markers MUST be lowercase: `accepted`, `rejected`, `deferred`.
+- Non-fix mode behavior is unchanged; adjudication markers are required only in fix mode.
+
 ## Disagreement Escalation
 
 When findings are contested, use the `debate` skill for adversarial arbitration. Findings must never be silently dismissed — every finding deserves independent evaluation.
+
+Adjudication-specific escalation rule:
+- If reviewer A marks a finding `Accepted` and reviewer B marks the same `fid` `Rejected`, that finding is automatically escalated and treated as `Deferred` until human review resolves it.
+- This extends the existing consensus mechanism and prevents silent winner-takes-all resolution for disputed high-severity findings.
 
 > **See**: [Disagreement Escalation](references/disagreement-escalation.md) for the full dispute resolution protocol.
 
@@ -166,5 +196,6 @@ When findings are contested, use the `debate` skill for adversarial arbitration.
 10. `review-report.md` includes AGENTS.md checklist section with all items checked.
 11. If security_mode required pass 3, adversarial_pass_executed=true.
 12. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
-13. CSA session ID was reported for potential follow-up.
-14. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.
+13. If mode=review-and-fix, every `Critical`/`High` finding includes one adjudication block with `fid`, `verdict`, and 1-2 sentence rationale.
+14. CSA session ID was reported for potential follow-up.
+15. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.

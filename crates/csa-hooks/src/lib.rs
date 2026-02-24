@@ -44,7 +44,9 @@
 pub mod config;
 pub mod event;
 pub mod guard;
+pub mod policy;
 pub mod runner;
+pub mod waiver;
 
 // Re-export key types
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
@@ -53,4 +55,6 @@ pub use guard::{
     GuardContext, PromptGuardEntry, PromptGuardResult, builtin_prompt_guards, format_guard_output,
     run_prompt_guards,
 };
+pub use policy::FailPolicy;
 pub use runner::{run_hook, run_hooks_for_event};
+pub use waiver::{Waiver, WaiverSet};
