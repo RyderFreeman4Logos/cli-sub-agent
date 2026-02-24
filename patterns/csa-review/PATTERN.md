@@ -62,6 +62,8 @@ Review prompt instructs agent to:
    - Rule 027 `pattern-workflow-sync` when diff touches `PATTERN.md` or `workflow.toml`
    - Rust rule 015 `subprocess-lifecycle` when diff touches process spawning/lifecycle code
 5. Generate review-findings.json and review-report.md
+6. Parse `[project_profile: <value>]` metadata from the instruction and apply
+   framework-aware review dimensions from `references/review-protocol.md`
 
 ## Step 5: Execute Review via CSA
 

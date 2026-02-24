@@ -97,7 +97,52 @@ When a TODO plan path is provided, read it and verify implementation alignment:
 Flag deviations as findings with `finding_type: "plan-deviation"` at P2 priority.
 If no context path is provided, skip this step entirely.
 
+## Step 2.6: Project Profile Routing
+
+Review instructions may include metadata in this exact format:
+
+`[project_profile: <value>]`
+
+Parse this value and normalize to one of:
+- `rust`
+- `node`
+- `python`
+- `go`
+- `mixed`
+- `unknown`
+
+If metadata is missing or invalid, treat as `unknown`.
+
 ## Step 3: Three-Pass Review
+
+## Framework-Aware Review Dimensions
+
+Apply these dimensions in all review passes in addition to the general checklist.
+
+- `rust` focus:
+  - `unsafe` block soundness and missing `// SAFETY:` rationale
+  - lifetime correctness and borrow-checker-compliant ownership flow
+  - panic-free library paths (`unwrap`/`expect`/panic in non-test code)
+  - serde compatibility for serialized/deserialized domain types
+- `node` focus:
+  - SSR and hydration correctness (server/client render parity)
+  - bundle size impact of new dependencies/import patterns
+  - dependency audit posture (stale/vulnerable/high-risk packages)
+  - CommonJS and ESM interoperability/compatibility
+- `python` focus:
+  - type annotation coverage on public and changed APIs
+  - async/sync boundary safety (blocking calls in async paths, unsafe loop usage)
+  - import cycle detection across changed modules
+  - package metadata consistency (`pyproject.toml`, entry points, dependency declarations)
+- `go` focus:
+  - goroutine leak potential and missing shutdown/cancellation paths
+  - error wrapping chain integrity (`%w`, `errors.Is/As` usability)
+  - context propagation through request and IO boundaries
+  - interface satisfaction and accidental contract drift
+- `mixed` focus:
+  - apply the union of all relevant profile dimensions for changed components
+- `unknown` focus:
+  - apply only the general-purpose checklist in this protocol (no framework-specific expansion)
 
 ### Pass 1: Broad Issue Discovery (maximize recall)
 Scan all changed code for:
