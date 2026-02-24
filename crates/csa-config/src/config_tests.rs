@@ -77,6 +77,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         tools: HashMap::new(),
         review: Some(crate::global::ReviewConfig {
             tool: "codex".to_string(),
+            ..Default::default()
         }),
         debate: None,
         tiers: HashMap::new(),

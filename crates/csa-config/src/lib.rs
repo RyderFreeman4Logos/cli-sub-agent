@@ -21,7 +21,7 @@ pub use config::{
 };
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
-pub use global::{GlobalConfig, GlobalMcpConfig};
+pub use global::{GateMode, GlobalConfig, GlobalMcpConfig};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use migrate::{Migration, MigrationRegistry, MigrationStep, Version, default_registry};

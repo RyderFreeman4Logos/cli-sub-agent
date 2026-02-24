@@ -172,6 +172,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         tools: HashMap::new(),
         review: Some(ReviewConfig {
             tool: "invalid-tool".to_string(),
+            ..Default::default()
         }),
         debate: None,
         tiers: HashMap::new(),
@@ -406,6 +407,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         review: None,
         debate: Some(ReviewConfig {
             tool: "invalid-tool".to_string(),
+            ..Default::default()
         }),
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
@@ -589,6 +591,7 @@ fn test_validate_review_tool_auto_accepted() {
         tools: HashMap::new(),
         review: Some(ReviewConfig {
             tool: "auto".to_string(),
+            ..Default::default()
         }),
         debate: None,
         tiers: HashMap::new(),
@@ -621,6 +624,7 @@ fn test_validate_all_known_review_tools_accepted() {
             tools: HashMap::new(),
             review: Some(ReviewConfig {
                 tool: tool_name.to_string(),
+                ..Default::default()
             }),
             debate: None,
             tiers: HashMap::new(),
@@ -659,6 +663,7 @@ fn test_validate_all_known_debate_tools_accepted() {
             review: None,
             debate: Some(ReviewConfig {
                 tool: tool_name.to_string(),
+                ..Default::default()
             }),
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),

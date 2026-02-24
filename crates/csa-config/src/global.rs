@@ -66,6 +66,19 @@ pub struct PreferencesConfig {
 }
 
 /// Configuration for the code review workflow.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GateMode {
+    /// Log review results only; never block execution.
+    #[default]
+    Monitor,
+    /// Block only on Critical and High severity findings.
+    CriticalOnly,
+    /// Block on Critical, High, and Medium severity findings.
+    Full,
+}
+
+/// Configuration for the code review workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewConfig {
     /// Review tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
@@ -76,6 +89,9 @@ pub struct ReviewConfig {
     /// - Otherwise → error (user must configure explicitly)
     #[serde(default = "default_review_tool")]
     pub tool: String,
+    /// Review enforcement level for quality gates.
+    #[serde(default)]
+    pub gate_mode: GateMode,
 }
 
 fn default_review_tool() -> String {
@@ -86,6 +102,7 @@ impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
             tool: default_review_tool(),
+            gate_mode: GateMode::default(),
         }
     }
 }
