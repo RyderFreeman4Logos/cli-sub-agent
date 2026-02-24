@@ -15,6 +15,9 @@ name = "BRANCH"
 name = "COMMIT_MSG"
 
 [[workflow.variables]]
+name = "ENABLE_REVIEW_LOOP"
+
+[[workflow.variables]]
 name = "FILES"
 
 [[workflow.variables]]
@@ -190,6 +193,17 @@ retry = 3
 
 [[workflow.steps]]
 id = 12
+title = "Optional Review-Loop"
+tool = "csa"
+prompt = """
+Invoke the `review-loop` pattern on staged changes before final commit.
+Apply any required fixes, then keep staged changes ready for commit."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${ENABLE_REVIEW_LOOP} == \"true\""
+
+[[workflow.steps]]
+id = 13
 title = "Generate Commit Message"
 tool = "csa"
 prompt = """
@@ -199,7 +213,7 @@ tier = "tier-1-quick"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 13
+id = 14
 title = "Commit"
 tool = "bash"
 prompt = """
@@ -209,12 +223,12 @@ git commit -m "${COMMIT_MSG}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 15
 title = "Auto PR"
 tool = "bash"
 prompt = """
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 14-15 are ATOMIC — do not stop after PR creation.
+Steps 15-16 are ATOMIC — do not stop after PR creation.
 
 ```bash
 git push -u origin "${BRANCH}"
@@ -224,7 +238,7 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 15
+id = 16
 title = "Invoke PR Codex Bot"
 prompt = """
 Trigger the pr-codex-bot workflow on the newly created PR:
@@ -238,10 +252,10 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 16
+id = 17
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-10)."""
+Each fix goes through full commit workflow (Steps 1-12)."""
 on_fail = "abort"
 condition = "${HAS_DEFERRED_ISSUES}"

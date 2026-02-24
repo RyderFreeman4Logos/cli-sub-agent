@@ -11,6 +11,17 @@ version = "0.1.0"
 Commit = Audited. Each commit passes security audit, test completeness
 verification, code review with AGENTS.md compliance, and quality gates.
 
+## Optional Review-Loop Integration
+
+- Variable: `${ENABLE_REVIEW_LOOP}` (default: `"false"`)
+- When `${ENABLE_REVIEW_LOOP} == "true"`, run `review-loop` between
+  implementation/fix steps and final commit.
+- Example:
+
+```bash
+csa run --skill commit ENABLE_REVIEW_LOOP=true "fix the bug"
+```
+
 ## Step 1: Branch Check
 
 Tool: bash
@@ -161,13 +172,28 @@ just pre-commit
 
 ## ENDIF
 
-## Step 10: Generate Commit Message
+## IF ${ENABLE_REVIEW_LOOP} == "true"
+
+## Step 10: Optional Review-Loop
+
+Tool: csa
+Tier: tier-2-standard
+OnFail: abort
+
+Run `review-loop` pattern on staged changes before final commit.
+
+## INCLUDE review-loop
+
+## ENDIF
+
+## Step 11: Generate Commit Message
 
 Tool: csa
 Tier: tier-1-quick
 
 Delegate message generation to a lightweight tier. Commit messages are mechanical
 (read diff → format) — no deep reasoning needed.
+Scope: `${SCOPE}`.
 
 Tool and thinking budget are determined by the `tier-1-quick` config in
 `~/.config/cli-sub-agent/config.toml`. Do NOT hardcode `--tool` or `--thinking`
@@ -178,7 +204,7 @@ resume it with `--session <REVIEW_SESSION_ID>`. The model already "saw" the
 changes, so generating a message costs near-zero new tokens. When resuming,
 keep the same tool (sessions are tool-locked).
 
-## Step 11: Commit
+## Step 12: Commit
 
 Tool: bash
 OnFail: abort
@@ -189,20 +215,20 @@ git commit -m "${COMMIT_MSG}"
 
 ## IF ${IS_MILESTONE}
 
-## Step 12: Auto PR
+## Step 13: Auto PR
 
 Tool: bash
 OnFail: abort
 
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 12-14 are ATOMIC — do not stop after PR creation.
+Steps 13-14 are ATOMIC — do not stop after PR creation.
 
 ```bash
 git push -u origin "${BRANCH}"
 gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```
 
-## Step 13: Invoke PR Codex Bot
+## Step 14: Invoke PR Codex Bot
 
 ## INCLUDE pr-codex-bot
 
@@ -213,9 +239,9 @@ Handles local review, cloud bot trigger, false-positive arbitration, merge.
 
 ## IF ${HAS_DEFERRED_ISSUES}
 
-## Step 14: Fix Deferred Issues
+## Step 15: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-11).
+Each fix goes through full commit workflow (Steps 1-12).
 
 ## ENDIF
