@@ -10,6 +10,7 @@ mod config_cmds;
 mod debate_cmd;
 mod debate_errors;
 mod doctor;
+mod error_hints;
 mod gc;
 mod mcp_hub;
 mod mcp_server;
@@ -45,7 +46,18 @@ use csa_core::types::OutputFormat;
 mod migrate_cmd;
 
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(err) = run().await {
+        eprintln!("Error: {err}");
+        if let Some(hint) = error_hints::suggest_fix(&err) {
+            eprintln!();
+            eprintln!("{hint}");
+        }
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> Result<()> {
     // Read current depth from env
     let current_depth: u32 = std::env::var("CSA_DEPTH")
         .ok()

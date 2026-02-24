@@ -1,0 +1,25 @@
+我会先定位 `cli-sub-agent` 里 review 指令构建路径，确认注入点与现有测试入口；接着实现 `ProjectProfile` 注入和 `review-routing.json` 最小侵入式落盘，再跑你指定的 review 测试命令验证无回归。我已定位到 `review_cmd.rs` 和对应测试文件，下一步会精读 instruction builder 与执行路径，找出最小改动点并同步检查现有测试如何断言 instruction 内容。我已经确认 `build_review_instruction` 是当前注入点，且现有测试文件里有参数解析与 helper 测试。下一步我会定位 `build_review_instruction` 的现有断言，再设计一个小 helper 来返回 profile + detection_method，便于同时满足 prompt 注入和 JSON 落盘测试。我已确认实现路径：在 `handle_review` 组装 prompt 时新增 `build_review_instruction_for_project`，并在 `execute_review` 里改用 `execute_with_session_and_meta` 以拿到 session id 写 `review-routing.json`（best-effort，不影响主流程）。现在开始修改代码与测试。我发现当前分支的 `review_cmd.rs` 已经有额外的 consolidated artifact 逻辑，和我预期基线不一致。接下来我会基于当前文件实际内容做定点补丁，避免覆盖你分支已有改动。核心代码已完成注入；我现在补测试，覆盖 Rust/empty project 的 profile 注入，并确保现有测试签名适配新 helper。之后会跑你指定的 `cargo test -p cli-sub-agent -- review`。代码与测试已落地，我现在执行你指定的 review 测试命令先验证；如果因沙箱只读导致构建失败，我会立即按流程提权重跑同一命令。实现与测试都通过了，我现在按你给的 message 提交本次两处文件改动。<!-- CSA:SECTION:summary -->
+已完成：在 review 指令中注入 `ProjectProfile`，并新增 `review-routing.json`（best-effort）落盘；`cargo test -p cli-sub-agent -- review` 全部通过；已按指定 message 提交。
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+代码改动：
+1. 在 [review_cmd.rs](/home/user/project/cli-sub-agent/crates/cli-sub-agent/src/review_cmd.rs:61) 组装 review prompt 时，调用项目画像检测并追加协议行：
+`[project_profile: <detected>]`。
+2. 在 [review_cmd.rs](/home/user/project/cli-sub-agent/crates/cli-sub-agent/src/review_cmd.rs:317) 的 `execute_review` 中改为拿到 `meta_session_id`，并在 [review_cmd.rs](/home/user/project/cli-sub-agent/crates/cli-sub-agent/src/review_cmd.rs:680) best-effort 写入：
+`output/review-routing.json`
+内容格式：
+`{"project_profile":"...","detection_method":"auto","schema_version":"1.0"}`
+3. 未改 CLI 接口、未改 `csa-config`/`csa-session` crate。
+
+测试：
+1. 新增测试于 [review_cmd_tests.rs](/home/user/project/cli-sub-agent/crates/cli-sub-agent/src/review_cmd_tests.rs:541) 和 [review_cmd_tests.rs](/home/user/project/cli-sub-agent/crates/cli-sub-agent/src/review_cmd_tests.rs:563)：
+- Rust 项目注入 `[project_profile: rust]`
+- 空目录注入 `[project_profile: unknown]`
+2. 执行命令：`cargo test -p cli-sub-agent -- review`
+结果：`63 passed, 0 failed`（含 review 相关测试集）。
+
+提交：
+1. Commit: `aaa1111`
+2. Message: `feat(review): inject ProjectProfile into review instruction`
+<!-- CSA:SECTION:details:END -->
