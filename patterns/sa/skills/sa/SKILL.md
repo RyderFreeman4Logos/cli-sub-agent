@@ -277,6 +277,11 @@ PROMPT_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 cat > "$PROMPT_FILE" <<'IMPL_EOF'
 You are Layer 1 Employee in sa manager-employee mode.
 
+MANDATORY: Before writing ANY code, read ./AGENTS.md and identify which rules
+apply to your task. After writing code, self-review against those rules.
+Specifically verify: error handling (009), security (014), commits (015),
+testing (016), and code smells (017).
+
 Read and follow AGENTS.md and CLAUDE.md.
 
 OBJECTIVE:

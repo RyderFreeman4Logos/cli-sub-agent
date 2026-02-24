@@ -124,6 +124,10 @@ Tier: tier-2-standard
 
 Run csa review --diff --allow-fallback (or csa debate if self-authored).
 MUST include AGENTS.md compliance checklist.
+Verify changes comply with all applicable AGENTS.md rules for this task.
+If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`.
+If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`.
+Explicitly check: error handling (009), security (014), testing (016).
 Fix-and-retry loop (max 3 rounds).
 
 ### Fork-Based Self-Review (Optional)

@@ -74,6 +74,8 @@ Review each file for:
 
 For each changed file, discover AGENTS.md chain (root-to-leaf).
 Check every applicable rule. Violations are at least P2, MUST/CRITICAL → P1.
+If diff includes `PATTERN.md` or `workflow.toml`, include rule 027 `pattern-workflow-sync`.
+If diff includes process spawning/lifecycle code, include Rust rule 015 `subprocess-lifecycle`.
 Produce checklist with every rule checked.
 
 ## ENDIF

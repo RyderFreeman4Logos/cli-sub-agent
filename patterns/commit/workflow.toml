@@ -162,6 +162,10 @@ Run 'git diff --staged' yourself to see the full patch.
 
 Check each modified file against its AGENTS.md rules (discover the chain from
 repository root to the file's directory). Violations of MUST/CRITICAL rules are P1.
+Verify changes comply with all applicable AGENTS.md rules for this task.
+If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`.
+If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`.
+Explicitly check: error handling (009), security (014), testing (016).
 
 Output: structured review with issues categorized as P0 (blocking), P1 (must fix),
 P2 (should fix). Set REVIEW_HAS_ISSUES if any P0/P1 issues found."""
