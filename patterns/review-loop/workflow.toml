@@ -1,0 +1,59 @@
+[workflow]
+name = "review-loop"
+description = "Bounded iterative review-fix loop for quality convergence"
+
+[[workflow.variables]]
+name = "REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
+name = "ROUND"
+
+[[workflow.variables]]
+name = "MAX_ROUNDS"
+
+[[workflow.variables]]
+name = "REMAINING_ISSUES"
+
+[[workflow.steps]]
+id = 1
+title = "Review Changes"
+tool = "bash"
+prompt = """
+Run heterogeneous code review on current diff.
+
+```bash
+csa review --diff
+```
+
+Parse the output to determine if issues were found.
+Set REVIEW_HAS_ISSUES to "true" or "false"."""
+on_fail = "continue"
+
+[[workflow.steps]]
+id = 2
+title = "Evaluate Review Result"
+prompt = """
+If review found no issues (REVIEW_HAS_ISSUES = "false"), report success and stop.
+If issues were found, proceed to fix step."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 3
+title = "Fix Issues"
+prompt = """
+Apply fixes for all issues reported in the review.
+Focus on Critical and High severity first.
+After fixing, stage changes for re-review."""
+on_fail = "continue"
+condition = "${REVIEW_HAS_ISSUES}"
+
+[[workflow.steps]]
+id = 4
+title = "Round Check"
+prompt = """
+Increment ROUND counter.
+If ROUND >= MAX_ROUNDS (default 2), set REMAINING_ISSUES with a summary
+of any unfixed issues and exit.
+Otherwise, loop back to step 1 for re-review."""
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
