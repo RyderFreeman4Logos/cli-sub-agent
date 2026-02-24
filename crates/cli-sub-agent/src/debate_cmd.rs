@@ -76,7 +76,10 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
         None,
         args.model.as_deref(),
         thinking.as_deref(),
-        config.as_ref(),
+        crate::pipeline::ConfigRefs {
+            project: config.as_ref(),
+            global: Some(&global_config),
+        },
         false, // skip tier whitelist for debate tool selection
         args.force_override_user_config,
     )

@@ -576,3 +576,51 @@ fn test_execute_in_preserves_model_override() {
         }
     }
 }
+
+// --- override_thinking_budget tests ---
+
+#[test]
+fn override_thinking_budget_replaces_existing() {
+    let mut exec =
+        Executor::from_tool_name(&ToolName::ClaudeCode, None, Some(ThinkingBudget::Medium));
+    exec.override_thinking_budget(ThinkingBudget::Xhigh);
+    let debug = format!("{exec:?}");
+    assert!(
+        debug.contains("Xhigh"),
+        "expected Xhigh after override, got: {debug}"
+    );
+    assert!(
+        !debug.contains("Medium"),
+        "Medium should be replaced, got: {debug}"
+    );
+}
+
+#[test]
+fn override_thinking_budget_sets_when_none() {
+    let mut exec = Executor::from_tool_name(&ToolName::Codex, None, None);
+    exec.override_thinking_budget(ThinkingBudget::High);
+    let debug = format!("{exec:?}");
+    assert!(
+        debug.contains("High"),
+        "expected High after override from None, got: {debug}"
+    );
+}
+
+#[test]
+fn override_thinking_budget_works_for_all_tools() {
+    for tool in &[
+        ToolName::GeminiCli,
+        ToolName::Opencode,
+        ToolName::Codex,
+        ToolName::ClaudeCode,
+    ] {
+        let mut exec = Executor::from_tool_name(tool, None, Some(ThinkingBudget::Low));
+        exec.override_thinking_budget(ThinkingBudget::Xhigh);
+        let debug = format!("{exec:?}");
+        assert!(
+            debug.contains("Xhigh"),
+            "override failed for {}: {debug}",
+            tool.as_str()
+        );
+    }
+}

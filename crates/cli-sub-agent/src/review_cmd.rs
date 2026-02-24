@@ -268,7 +268,10 @@ async fn execute_review(
         None,
         model.as_deref(),
         None,
-        project_config,
+        crate::pipeline::ConfigRefs {
+            project: project_config,
+            global: Some(global_config),
+        },
         false, // skip tier whitelist for review tool selection
         force_override_user_config,
     )
