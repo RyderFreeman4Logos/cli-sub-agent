@@ -7,9 +7,10 @@ use anyhow::Error;
 use csa_core::error::AppError;
 
 const HINT_INSTALL_GEMINI: &str = "hint: install gemini-cli: npm install -g @google/gemini-cli";
-const HINT_INSTALL_CODEX: &str = "hint: install codex: npm install -g @openai/codex";
+const HINT_INSTALL_CODEX: &str =
+    "hint: install codex ACP adapter: npm install -g @zed-industries/codex-acp";
 const HINT_INSTALL_CLAUDE: &str =
-    "hint: install claude-code: npm install -g @anthropic-ai/claude-code";
+    "hint: install claude-code ACP adapter: npm install -g @zed-industries/claude-code-acp";
 const HINT_INSTALL_OPENCODE: &str =
     "hint: install opencode: go install github.com/opencode-ai/opencode@latest";
 const HINT_RATE_LIMIT: &str =
@@ -118,13 +119,18 @@ mod tests {
     #[test]
     fn test_tool_not_installed_codex() {
         let err = anyhow::anyhow!("tool codex not found");
-        assert_eq!(suggest_fix(&err).as_deref(), Some(HINT_INSTALL_CODEX));
+        let hint = suggest_fix(&err).unwrap();
+        assert!(hint.contains("codex-acp"), "should mention ACP adapter: {hint}");
     }
 
     #[test]
     fn test_tool_not_installed_claude() {
         let err = anyhow::anyhow!("claude-code is not installed");
-        assert_eq!(suggest_fix(&err).as_deref(), Some(HINT_INSTALL_CLAUDE));
+        let hint = suggest_fix(&err).unwrap();
+        assert!(
+            hint.contains("claude-code-acp"),
+            "should mention ACP adapter: {hint}"
+        );
     }
 
     #[test]
