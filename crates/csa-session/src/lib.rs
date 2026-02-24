@@ -2,6 +2,7 @@
 
 pub mod checkpoint;
 pub mod event_writer;
+pub mod finding_id;
 pub mod genealogy;
 pub mod git;
 pub mod manager;
@@ -23,6 +24,7 @@ pub use state::{
 pub use metadata::SessionMetadata;
 
 pub use event_writer::{EventWriteStats, EventWriter};
+pub use finding_id::{FindingId, anchor_hash, normalize_path};
 pub use output_parser::{
     estimate_tokens, load_output_index, persist_structured_output, read_all_sections, read_section,
 };
