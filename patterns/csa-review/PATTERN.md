@@ -58,7 +58,9 @@ Review prompt instructs agent to:
 1. Read project context (CLAUDE.md + AGENTS.md)
 2. Collect diff for given scope
 3. Three-pass review (discovery, evidence filtering, adversarial security)
-4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules)
+4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules), including:
+   - Rule 027 `pattern-workflow-sync` when diff touches `PATTERN.md` or `workflow.toml`
+   - Rust rule 015 `subprocess-lifecycle` when diff touches process spawning/lifecycle code
 5. Generate review-findings.json and review-report.md
 
 ## Step 5: Execute Review via CSA

@@ -95,6 +95,8 @@ csa review --diff --allow-fallback
 The review MUST include AGENTS.md compliance checklist:
 - Discover AGENTS.md chain (root-to-leaf) for each staged file
 - Check every applicable rule
+- If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`
+- If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`
 - Zero unchecked items before proceeding to commit
 
 ## Step 9: Generate Commit Message
