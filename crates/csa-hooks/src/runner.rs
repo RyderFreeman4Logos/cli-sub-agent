@@ -2,6 +2,8 @@
 
 use crate::config::HookConfig;
 use crate::event::HookEvent;
+use crate::policy::FailPolicy;
+use crate::waiver::WaiverSet;
 use anyhow::{Result, bail};
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
@@ -61,7 +63,7 @@ fn substitute_variables(template: &str, variables: &HashMap<String, String>) -> 
 /// Command is run via `sh -c` with a configurable timeout.
 ///
 /// Returns `Err` on spawn failure, non-zero exit, or timeout.
-/// Callers should handle errors as best-effort (log and continue).
+/// Higher-level fail-policy handling is performed by `run_hooks_for_event`.
 pub fn run_hook(
     event: HookEvent,
     config: &HookConfig,
@@ -147,14 +149,40 @@ pub fn run_hook(
 
 /// Execute all hooks for an event, using the merged config.
 ///
-/// This is a convenience wrapper around `run_hook` that handles the config lookup.
+/// This wraps `run_hook` with per-hook fail-policy and waiver enforcement.
 pub fn run_hooks_for_event(
     event: HookEvent,
     hooks_config: &crate::config::HooksConfig,
     variables: &HashMap<String, String>,
 ) -> Result<()> {
     let config = hooks_config.get_for_event(event);
-    run_hook(event, &config, variables)
+    match run_hook(event, &config, variables) {
+        Ok(()) => Ok(()),
+        Err(err) => match config.fail_policy {
+            FailPolicy::Open => {
+                tracing::warn!(
+                    event = ?event,
+                    error = %err,
+                    "Hook failed with fail_policy=open, continuing"
+                );
+                Ok(())
+            }
+            FailPolicy::Closed => {
+                let waivers = WaiverSet::from(config.waivers.clone());
+                if waivers.has_valid_waiver() {
+                    tracing::warn!(
+                        event = ?event,
+                        error = %err,
+                        waiver_count = waivers.0.len(),
+                        "Hook failed with fail_policy=closed, but valid waiver exists; continuing"
+                    );
+                    Ok(())
+                } else {
+                    Err(err)
+                }
+            }
+        },
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +265,8 @@ mod tests {
             enabled: false,
             command: Some("echo test".to_string()),
             timeout_secs: 30,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -250,6 +280,8 @@ mod tests {
             enabled: true,
             command: Some("echo 'hello world'".to_string()),
             timeout_secs: 30,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -263,6 +295,8 @@ mod tests {
             enabled: true,
             command: Some("test -n {value}".to_string()),
             timeout_secs: 30,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let mut vars = HashMap::new();
         vars.insert("value".to_string(), "test123".to_string());
@@ -277,6 +311,8 @@ mod tests {
             enabled: true,
             command: Some("exit 1".to_string()),
             timeout_secs: 30,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -290,6 +326,8 @@ mod tests {
             enabled: true,
             command: Some("sleep 10".to_string()),
             timeout_secs: 1,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -304,6 +342,8 @@ mod tests {
             enabled: true,
             command: None, // Use built-in
             timeout_secs: 30,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let mut vars = HashMap::new();
         vars.insert("session_id".to_string(), "test-session".to_string());
@@ -339,11 +379,74 @@ mod tests {
 
         // SessionComplete has a built-in command; empty config still enables it
         let result = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &vars);
-        // Built-in command will fail (not a git repo), but the function should run
+        // Built-in command will fail (not a git repo), but default open policy continues.
         assert!(
-            result.is_err(),
-            "Built-in hook should execute and fail on non-git dir"
+            result.is_ok(),
+            "Built-in hook failure should be tolerated under open policy"
         );
+    }
+
+    #[test]
+    fn test_run_hooks_for_event_closed_fail_no_waiver_returns_err() {
+        let mut hooks_config = crate::config::HooksConfig::default();
+        hooks_config.hooks.insert(
+            HookEvent::PreRun.as_config_key().to_string(),
+            HookConfig {
+                enabled: true,
+                command: Some("exit 1".to_string()),
+                timeout_secs: 5,
+                fail_policy: FailPolicy::Closed,
+                waivers: Vec::new(),
+            },
+        );
+
+        let vars = HashMap::new();
+        let result = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &vars);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_run_hooks_for_event_closed_fail_valid_waiver_returns_ok() {
+        let mut hooks_config = crate::config::HooksConfig::default();
+        hooks_config.hooks.insert(
+            HookEvent::PreRun.as_config_key().to_string(),
+            HookConfig {
+                enabled: true,
+                command: Some("exit 1".to_string()),
+                timeout_secs: 5,
+                fail_policy: FailPolicy::Closed,
+                waivers: vec![crate::waiver::Waiver {
+                    scope: "pre_run".to_string(),
+                    justification: "temporary bypass".to_string(),
+                    ticket: Some("CSA-456".to_string()),
+                    approver: Some("qa".to_string()),
+                    expires_at: Some(chrono::Utc::now() + chrono::Duration::minutes(5)),
+                }],
+            },
+        );
+
+        let vars = HashMap::new();
+        let result = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &vars);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_hooks_for_event_open_fail_returns_ok() {
+        let mut hooks_config = crate::config::HooksConfig::default();
+        hooks_config.hooks.insert(
+            HookEvent::PreRun.as_config_key().to_string(),
+            HookConfig {
+                enabled: true,
+                command: Some("exit 1".to_string()),
+                timeout_secs: 5,
+                fail_policy: FailPolicy::Open,
+                waivers: Vec::new(),
+            },
+        );
+
+        let vars = HashMap::new();
+        let result = run_hooks_for_event(HookEvent::PreRun, &hooks_config, &vars);
+        assert!(result.is_ok());
     }
 
     #[test]
@@ -353,6 +456,8 @@ mod tests {
             enabled: true,
             command: None,
             timeout_secs: 30,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -369,6 +474,8 @@ mod tests {
             enabled: true,
             command: Some("/nonexistent/path/to/script_abc123.sh".to_string()),
             timeout_secs: 5,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -390,6 +497,8 @@ mod tests {
             enabled: true,
             command: Some(format!("sh {}", script_path.display())),
             timeout_secs: 10,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
@@ -407,6 +516,8 @@ mod tests {
             enabled: true,
             command: Some(format!("sh {}", script_path.display())),
             timeout_secs: 10,
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
         };
         let vars = HashMap::new();
 
