@@ -124,6 +124,8 @@ Tier: tier-2-standard
 
 Run csa review --diff --allow-fallback (or csa debate if self-authored).
 MUST include AGENTS.md compliance checklist.
+Verify changes comply with all applicable AGENTS.md rules for this task.
+Explicitly check: error handling (009), security (014), testing (016).
 Fix-and-retry loop (max 3 rounds).
 
 ### Fork-Based Self-Review (Optional)
