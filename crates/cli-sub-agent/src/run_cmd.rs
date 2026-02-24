@@ -675,7 +675,10 @@ pub(crate) async fn handle_run(
             current_model_spec.as_deref(),
             current_model.as_deref(),
             thinking.as_deref(),
-            config.as_ref(),
+            pipeline::ConfigRefs {
+                project: config.as_ref(),
+                global: Some(&global_config),
+            },
             !force, // enforce tier whitelist unless --force
             force_override_user_config,
         )

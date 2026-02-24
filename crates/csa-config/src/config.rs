@@ -226,6 +226,11 @@ pub struct ToolConfig {
     /// `None` = default (load everything).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setting_sources: Option<Vec<String>>,
+    /// Lock thinking budget for this tool. When set, any CLI `--thinking` or
+    /// `--model-spec` thinking override is silently replaced with this value.
+    /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_lock: Option<String>,
 }
 
 impl Default for ToolConfig {
@@ -240,6 +245,7 @@ impl Default for ToolConfig {
             node_heap_limit_mb: None,
             lean_mode: None,
             setting_sources: None,
+            thinking_lock: None,
         }
     }
 }
@@ -508,6 +514,13 @@ impl ProjectConfig {
     /// Check if a tool is enabled (unconfigured tools default to enabled)
     pub fn is_tool_enabled(&self, tool: &str) -> bool {
         self.tools.get(tool).map(|t| t.enabled).unwrap_or(true)
+    }
+
+    /// Get the thinking budget lock for a tool from project config.
+    pub fn thinking_lock(&self, tool: &str) -> Option<&str> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.thinking_lock.as_deref())
     }
 
     /// Enforce that a tool is enabled in user configuration.

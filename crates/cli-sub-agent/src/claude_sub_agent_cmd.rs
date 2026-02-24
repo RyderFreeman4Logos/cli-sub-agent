@@ -51,7 +51,10 @@ pub(crate) async fn handle_claude_sub_agent(
         resolved_model_spec.as_deref(),
         resolved_model.as_deref(),
         None, // thinking budget
-        config.as_ref(),
+        crate::pipeline::ConfigRefs {
+            project: config.as_ref(),
+            global: Some(&global_config),
+        },
         true,  // enforce tier whitelist for sub-agent execution
         false, // claude-sub-agent does not support --force-override-user-config
     )

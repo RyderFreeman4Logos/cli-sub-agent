@@ -249,6 +249,29 @@ impl Executor {
         }
     }
 
+    /// Override the thinking budget for this executor.
+    ///
+    /// Used by thinking lock: when a tool has `thinking_lock` configured,
+    /// the locked value replaces whatever thinking budget was set.
+    pub fn override_thinking_budget(&mut self, budget: ThinkingBudget) {
+        match self {
+            Self::GeminiCli {
+                thinking_budget, ..
+            }
+            | Self::Opencode {
+                thinking_budget, ..
+            }
+            | Self::Codex {
+                thinking_budget, ..
+            }
+            | Self::ClaudeCode {
+                thinking_budget, ..
+            } => {
+                *thinking_budget = Some(budget);
+            }
+        }
+    }
+
     /// Apply restrictions by modifying the prompt to include restriction instructions.
     /// Returns the modified prompt.
     ///

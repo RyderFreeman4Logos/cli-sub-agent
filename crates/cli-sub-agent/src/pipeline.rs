@@ -141,6 +141,12 @@ fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> Option<AcpMcpServerCo
     }
 }
 
+/// References to project and global config for executor building.
+pub(crate) struct ConfigRefs<'a> {
+    pub project: Option<&'a ProjectConfig>,
+    pub global: Option<&'a GlobalConfig>,
+}
+
 /// Build executor and validate tool is installed and enabled.
 ///
 /// Returns Executor on success.
@@ -149,20 +155,39 @@ fn config_to_acp_mcp(cfg: &csa_config::McpServerConfig) -> Option<AcpMcpServerCo
 /// When `enforce_tier` is `false`, tier whitelist and model-name checks are
 /// skipped. Review and debate commands use this because they select tools for
 /// heterogeneous evaluation, not for tier-controlled execution.
+///
+/// If the tool has a `thinking_lock` in project or global config, the locked
+/// value silently overrides any CLI-provided thinking budget.
 pub(crate) async fn build_and_validate_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
     model: Option<&str>,
     thinking_budget: Option<&str>,
-    config: Option<&ProjectConfig>,
+    configs: ConfigRefs<'_>,
     enforce_tier: bool,
     force_override_user_config: bool,
 ) -> Result<Executor> {
-    let executor =
-        crate::run_helpers::build_executor(tool, model_spec, model, thinking_budget, config)?;
+    let mut executor = crate::run_helpers::build_executor(
+        tool,
+        model_spec,
+        model,
+        thinking_budget,
+        configs.project,
+    )?;
+
+    // Apply thinking lock: project config takes precedence over global.
+    // When set, silently overrides any CLI-provided thinking budget (including
+    // the one embedded in --model-spec).
+    let tool_str = tool.as_str();
+    let lock_from_project = configs.project.and_then(|c| c.thinking_lock(tool_str));
+    let lock_from_global = configs.global.and_then(|g| g.thinking_lock(tool_str));
+    if let Some(lock_str) = lock_from_project.or(lock_from_global) {
+        let locked_budget = csa_executor::ThinkingBudget::parse(lock_str)?;
+        executor.override_thinking_budget(locked_budget);
+    }
 
     // Defense-in-depth: enforce tool enablement from user config
-    if let Some(cfg) = config {
+    if let Some(cfg) = configs.project {
         cfg.enforce_tool_enabled(executor.tool_name(), force_override_user_config)?;
 
         if enforce_tier {

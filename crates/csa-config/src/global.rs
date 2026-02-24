@@ -310,6 +310,11 @@ pub struct GlobalToolConfig {
     /// Per-tool swap limit override (MB). Takes precedence over project/global resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_swap_max_mb: Option<u64>,
+    /// Lock thinking budget for this tool. When set, any CLI `--thinking` or
+    /// `--model-spec` thinking override is silently replaced with this value.
+    /// Accepts: low, medium, high, xhigh, or a numeric token count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking_lock: Option<String>,
 }
 
 fn default_max_concurrent() -> u32 {
@@ -361,6 +366,13 @@ impl GlobalConfig {
             .get(tool)
             .map(|t| &t.env)
             .filter(|m| !m.is_empty())
+    }
+
+    /// Get the thinking budget lock for a tool from global config.
+    pub fn thinking_lock(&self, tool: &str) -> Option<&str> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.thinking_lock.as_deref())
     }
 
     /// Get globally configured MCP servers.
