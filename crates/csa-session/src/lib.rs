@@ -1,5 +1,6 @@
 //! Session management with ULID-based genealogy tracking.
 
+pub mod adjudication;
 pub mod checkpoint;
 pub mod event_writer;
 pub mod finding_id;
@@ -17,6 +18,7 @@ pub mod state;
 pub mod validate;
 
 // Re-export key types
+pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use state::{
     ContextStatus, Genealogy, MetaSessionState, PhaseEvent, SandboxInfo, SessionPhase, TaskContext,
     TokenUsage, ToolState,
