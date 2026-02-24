@@ -1,9 +1,10 @@
 //! Resolve a skill by name from standard search paths.
 //!
 //! Search order:
-//! 1. `./.csa/skills/<name>/`         (project-local)
-//! 2. `~/.config/cli-sub-agent/skills/<name>/`  (global user)
-//! 3. `<global_store>/<name>/<commit>/`          (weave global store)
+//! 1. `./.csa/skills/<name>/`                    (project-local, CSA-specific)
+//! 2. `./.claude/skills/<name>/`                 (project-local, Claude Code compat)
+//! 3. `~/.config/cli-sub-agent/skills/<name>/`   (global user)
+//! 4. `<global_store>/<name>/<commit>/`           (weave global store)
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -82,17 +83,20 @@ fn search_paths_with_store(
     project_root: &Path,
     store_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut search_roots = Vec::with_capacity(3);
+    let mut search_roots = Vec::with_capacity(4);
 
-    // 1. Project-local: .csa/skills/<name>/
+    // 1. Project-local (CSA-specific): .csa/skills/<name>/
     search_roots.push(project_root.join(".csa").join("skills").join(name));
 
-    // 2. Global user: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
+    // 2. Project-local (Claude Code compat): .claude/skills/<name>/
+    search_roots.push(project_root.join(".claude").join("skills").join(name));
+
+    // 3. Global user: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
     if let Some(config_dir) = paths::config_dir() {
         search_roots.push(config_dir.join("skills").join(name));
     }
 
-    // 3. Weave global store: match locked packages by name.
+    // 4. Weave global store: match locked packages by name.
     if let Some(store) = store_root {
         if let Some(lockfile_path) = package::find_lockfile(project_root) {
             if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
@@ -243,6 +247,34 @@ tool = "claude-code"
     }
 
     #[test]
+    fn resolve_skill_from_claude_skills() {
+        let tmp = TempDir::new().unwrap();
+        make_skill_dir(
+            tmp.path(),
+            ".claude/skills/my-skill",
+            "# Claude Skill\nFrom .claude/skills.",
+            None,
+        );
+
+        let resolved = resolve_skill("my-skill", tmp.path()).unwrap();
+        assert!(resolved.skill_md.contains("Claude Skill"));
+        assert!(resolved.dir.ends_with(".claude/skills/my-skill"));
+    }
+
+    #[test]
+    fn resolve_skill_csa_takes_priority_over_claude() {
+        let tmp = TempDir::new().unwrap();
+        make_skill_dir(tmp.path(), ".csa/skills/review", "# CSA Review", None);
+        make_skill_dir(tmp.path(), ".claude/skills/review", "# Claude Review", None);
+
+        let resolved = resolve_skill("review", tmp.path()).unwrap();
+        assert!(
+            resolved.skill_md.contains("CSA Review"),
+            ".csa/skills/ should take priority over .claude/skills/"
+        );
+    }
+
+    #[test]
     fn resolve_skill_not_found() {
         let tmp = TempDir::new().unwrap();
         let result = resolve_skill("nonexistent", tmp.path());
@@ -250,6 +282,10 @@ tool = "claude-code"
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not found"), "{err}");
         assert!(err.contains(".csa/skills/nonexistent"), "{err}");
+        assert!(
+            err.contains(".claude/skills/nonexistent"),
+            "error should mention .claude/skills/ path: {err}"
+        );
     }
 
     #[test]
