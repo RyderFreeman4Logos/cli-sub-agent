@@ -69,6 +69,13 @@ pub fn normalize_path(path: &str) -> String {
         normalized = normalized.replace("//", "/");
     }
 
+    // Resolve internal `.` segments (e.g., "src/./lib.rs" → "src/lib.rs").
+    normalized = normalized
+        .split('/')
+        .filter(|seg| *seg != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+
     while normalized.ends_with('/') && normalized.len() > 1 {
         normalized.pop();
     }
@@ -174,6 +181,9 @@ mod tests {
         assert_eq!(normalize_path("./src\\session\\manager.rs/"), "src/session/manager.rs");
         assert_eq!(normalize_path("././src//lib.rs"), "src/lib.rs");
         assert_eq!(normalize_path("src\\nested\\\\file.rs"), "src/nested/file.rs");
+        // Internal dot segments are resolved.
+        assert_eq!(normalize_path("src/./lib.rs"), "src/lib.rs");
+        assert_eq!(normalize_path("a/./b/./c.rs"), "a/b/c.rs");
     }
 
     #[test]

@@ -220,7 +220,11 @@ pub(crate) fn consolidate_findings(findings: Vec<Finding>) -> Vec<Finding> {
         }
     }
 
-    let mut consolidated = merge_related_findings(deduped.into_values().collect());
+    // Sort deduped values before relatedness merge to ensure deterministic output
+    // regardless of HashMap iteration order.
+    let mut deduped_sorted: Vec<Finding> = deduped.into_values().collect();
+    deduped_sorted.sort_by(|a, b| a.fid.cmp(&b.fid));
+    let mut consolidated = merge_related_findings(deduped_sorted);
     consolidated.sort_by(|left, right| {
         right
             .severity
