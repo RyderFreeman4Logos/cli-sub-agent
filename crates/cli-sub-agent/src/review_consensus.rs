@@ -169,6 +169,41 @@ pub(crate) fn consensus_strategy_label(strategy: ConsensusStrategy) -> &'static 
     }
 }
 
+pub(crate) fn merge_related_findings(findings: Vec<Finding>) -> Vec<Finding> {
+    let mut merged: Vec<Finding> = Vec::new();
+
+    for finding in findings {
+        if let Some(index) = merged
+            .iter()
+            .position(|existing| are_related_findings(existing, &finding))
+        {
+            if finding.severity > merged[index].severity {
+                merged[index] = finding;
+            }
+        } else {
+            merged.push(finding);
+        }
+    }
+
+    merged
+}
+
+fn are_related_findings(left: &Finding, right: &Finding) -> bool {
+    if left.rule_id != right.rule_id || left.file != right.file {
+        return false;
+    }
+
+    let (Some(left_line), Some(right_line)) = (left.line, right.line) else {
+        return false;
+    };
+
+    left_line.abs_diff(right_line) <= 2
+}
+
+/// Consolidates findings in two steps:
+/// 1. Deduplicate by `fid`, retaining the highest-severity entry per ID.
+/// 2. Merge related findings (same rule, same file, both with lines within 2 lines),
+///    retaining the highest-severity entry per related group.
 pub(crate) fn consolidate_findings(findings: Vec<Finding>) -> Vec<Finding> {
     let mut deduped: HashMap<String, Finding> = HashMap::new();
 
@@ -185,7 +220,7 @@ pub(crate) fn consolidate_findings(findings: Vec<Finding>) -> Vec<Finding> {
         }
     }
 
-    let mut consolidated: Vec<Finding> = deduped.into_values().collect();
+    let mut consolidated = merge_related_findings(deduped.into_values().collect());
     consolidated.sort_by(|left, right| {
         right
             .severity
@@ -289,16 +324,32 @@ mod tests {
         if verdict == CLEAN { 0 } else { 1 }
     }
 
-    fn finding(fid: &str, severity: Severity) -> Finding {
+    fn finding_with_location(
+        fid: &str,
+        severity: Severity,
+        file: &str,
+        rule_id: &str,
+        line: Option<u32>,
+    ) -> Finding {
         Finding {
             severity,
             fid: fid.to_string(),
-            file: "src/lib.rs".to_string(),
-            line: Some(1),
-            rule_id: "rule.sample".to_string(),
+            file: file.to_string(),
+            line,
+            rule_id: rule_id.to_string(),
             summary: format!("finding-{fid}"),
             engine: "reviewer".to_string(),
         }
+    }
+
+    fn finding(fid: &str, severity: Severity) -> Finding {
+        finding_with_location(
+            fid,
+            severity,
+            "src/lib.rs",
+            &format!("rule.sample.{fid}"),
+            Some(1),
+        )
     }
 
     fn artifact_with_findings(session_id: &str, findings: Vec<Finding>) -> ReviewArtifact {
@@ -521,6 +572,80 @@ mod tests {
                 Severity::Info
             ]
         );
+    }
+
+    #[test]
+    fn merge_related_findings_merges_same_rule_same_file_with_line_delta_two() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", Some(10)),
+            finding_with_location(
+                "FID-B",
+                Severity::Critical,
+                "src/main.rs",
+                "rule.same",
+                Some(12),
+            ),
+        ]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].severity, Severity::Critical);
+    }
+
+    #[test]
+    fn merge_related_findings_keeps_both_when_line_delta_is_three() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", Some(10)),
+            finding_with_location("FID-B", Severity::High, "src/main.rs", "rule.same", Some(13)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+        assert!(merged.iter().any(|item| item.fid == "FID-A"));
+        assert!(merged.iter().any(|item| item.fid == "FID-B"));
+    }
+
+    #[test]
+    fn merge_related_findings_keeps_both_for_different_files() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/a.rs", "rule.same", Some(20)),
+            finding_with_location("FID-B", Severity::High, "src/b.rs", "rule.same", Some(21)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_related_findings_keeps_both_for_different_rules() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.a", Some(30)),
+            finding_with_location("FID-B", Severity::High, "src/main.rs", "rule.b", Some(30)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_related_findings_does_not_merge_when_any_line_is_none() {
+        let merged = merge_related_findings(vec![
+            finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", None),
+            finding_with_location("FID-B", Severity::Critical, "src/main.rs", "rule.same", Some(10)),
+        ]);
+
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_related_findings_returns_empty_for_empty_input() {
+        let merged = merge_related_findings(Vec::new());
+        assert!(merged.is_empty());
+    }
+
+    #[test]
+    fn merge_related_findings_returns_single_finding_as_is() {
+        let source = finding_with_location("FID-ONLY", Severity::Medium, "src/lib.rs", "rule.one", Some(1));
+        let merged = merge_related_findings(vec![source.clone()]);
+
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0], source);
     }
 
     #[test]
