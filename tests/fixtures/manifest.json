@@ -1,0 +1,35 @@
+{
+  "schema_version": "1.0",
+  "description": "Sanitized real session data for integration tests",
+  "sanitization_policy": {
+    "replaced": [
+      "API keys",
+      "ULIDs",
+      "user paths",
+      "commit hashes",
+      "branch names",
+      "provider session IDs"
+    ],
+    "preserved": [
+      "field names",
+      "data types",
+      "structure",
+      "tool names",
+      "session phases"
+    ]
+  },
+  "fixtures": {
+    "claude/session-001": {
+      "source_tool": "claude-code",
+      "source_date": "2026-02-24",
+      "original_phase": "active",
+      "files": ["state.toml", "output.log", "stderr.log"]
+    },
+    "codex/session-001": {
+      "source_tool": "codex",
+      "source_date": "2026-02-24",
+      "original_phase": "active",
+      "files": ["state.toml", "output.log", "stderr.log"]
+    }
+  }
+}

@@ -1,0 +1,78 @@
+
+
+我来执行这个 debate。首先让我了解相关代码，然后启动 3 轮辩论。
+
+我将执行一场 3 轮对抗性辩论来裁定这个 Codex bot 的 issue。首先让我检查相关代码，然后启动辩论。很好，我现在有了完整的代码分析。接下来启动 3 轮对抗性辩论。Tier-2 有两个异构模型（codex + claude-code），适合辩论。现在启动 3 轮辩论。Round 1 完成。Critic 提出了有力的反驳。进入 Round 2。Round 2 完成，双方已开始趋同。进入最终 Round 3。所有 6 轮辩论完成。双方在 Round 3 达成共识。现在综合最终结果。
+<!-- CSA:SECTION:summary -->
+
+## 辩论结果：Codex Bot PR #100 Issue — **CONFIRMED（真实问题，非误报）**
+
+**裁定：Sev2 正确性缺陷，应在同一 PR 中修复。**
+
+双方在 Round 3 达成完全共识。初始"假阳性"立场在 Round 2 被放弃。
+
+<!-- CSA:SECTION:summary:END -->
+
+<!-- CSA:SECTION:details -->
+
+## Debate Result: Codex Bot PR #100 Session Dir Mismatch
+
+### Final Strategy
+
+Codex bot 的发现是一个 **真实的正确性缺陷（Sev2）**，不是假阳性。路径不匹配确实存在：
+
+| 组件 | 路径 |
+|------|------|
+| Reviewer 写入 | `$REVIEWER_SESSION_DIR/reviewer-N/review-findings.json` |
+| Collector 读取 | `$ORCHESTRATOR_SESSION_DIR/reviewer-N/review-findings.json` |
+
+**结果**：Collector 永远找不到任何 reviewer 产出的文件，`exists()` check 静默跳过所有结果。
+
+### Key Insights from Debate
+
+- **"Shadow mode" 不能豁免正确性**：代码可执行且会产出输出，就需要正确性契约。Silent skip 是防御性编程，不等于正确行为。
+- **"Scaffolding" 不是推迟的借口**：如果代码在 hot path 上可以运行，不论是否 Phase 1，都需要正确处理。
+- **Consensus engine 是独立的**：现有的 `agent-teams-rs` 共识引擎不受影响，但合并制品的静默失败会产生假信心。
+- **修复成本低**：通过传递 orchestrator session dir 或调整 collector 读取 reviewer session dir，修复是局部的。
+
+### Resolved Tensions
+
+| 争论点 | 解决方式 |
+|--------|---------|
+| 假阳性 vs 真问题 | Round 2 共识：**真问题** |
+| Sev1 vs Sev2 | Round 2 共识：**Sev2**（不影响 pipeline 退出码） |
+| 同 PR 修复 vs 推迟 | Round 3 共识：**同 PR 修复优先** |
+| 推迟条件 | 仅当：explicit disable flag + 证明无生产路径 + linked issue + regression test |
+
+### Recommended Fix (from debate consensus)
+
+1. **路径解析统一**：创建共享的 path resolution helper，writer 和 collector 使用同一逻辑
+2. **传递 orchestrator session dir**：在 reviewer 启动时传入 orchestrator 的 session dir，reviewer 将制品写入 orchestrator 目录下的子目录
+3. **完整性信号**：添加 `complete/partial/missing` status 到合并输出
+4. **回归测试**：覆盖路径匹配/不匹配、缺失文件、部分结果场景
+
+### Debate Trajectory
+
+- **Rounds**: 3（6 次交换：每轮 proposer + critic）
+- **Escalation**: 无（tier-2 足以达成共识）
+- **Convergence**: Round 2 开始趋同，Round 3 完全一致
+
+### Participants
+
+| Role | Model Spec |
+|------|-----------|
+| Proposer (R1, R2, R3) | `codex/openai/gpt-5.3-codex/high` |
+| Critic (R1, R2, R3) | `codex/openai/gpt-5.3-codex-spark/xhigh` |
+
+<!-- CSA:SECTION:details:END -->
+---
+
+**总结**：3 轮辩论（6 次交换）后双方在 Round 3 达成完全共识：
+
+**裁定：CONFIRMED — 真实 Sev2 正确性缺陷，应在同一 PR 中修复。**
+
+核心分析：
+- Reviewer 写入自己的 `$CSA_SESSION_DIR/reviewer-N/...`，但 collector 从 orchestrator 的 `$CSA_SESSION_DIR/reviewer-N/...` 读取 — 路径永远对不上
+- "Shadow mode" 和 "scaffolding" 不能豁免正确性要求 — 代码可执行就需要正确的契约
+- 修复成本低：统一 path resolution，传递 orchestrator session dir 给 reviewer
+- 如果必须推迟（不推荐），需要：explicit disable flag + 证明无生产路径 + linked issue with owner + regression test

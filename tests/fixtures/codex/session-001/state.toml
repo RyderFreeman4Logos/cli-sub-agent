@@ -1,0 +1,30 @@
+meta_session_id = "01H0000000000000000000001"
+description = "MANDATORY: sanitized fixture session"
+project_path = "/home/user/project/cli-sub-agent"
+branch = "feature/sanitized-branch"
+created_at = "2026-02-24T16:53:57.470011439Z"
+last_accessed = "2026-02-24T16:57:31.434774456Z"
+phase = "active"
+turn_count = 1
+is_seed_candidate = true
+git_head_at_creation = "bbb2222"
+
+[genealogy]
+depth = 0
+
+[tools.codex]
+provider_session_id = "22222222-2222-4222-8222-222222222222"
+last_action_summary = "<!-- CSA:SECTION:details:END -->"
+last_exit_code = 0
+updated_at = "2026-02-24T16:57:31.434774040Z"
+
+[context_status]
+is_compacted = false
+
+[task_context]
+task_type = "run"
+tier_name = "tier-2-standard"
+
+[sandbox_info]
+mode = "cgroup"
+memory_max_mb = 4096
