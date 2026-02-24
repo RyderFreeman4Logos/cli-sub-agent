@@ -29,6 +29,12 @@ pub struct AdjudicationSet {
     pub schema_version: String,
 }
 
+impl Default for AdjudicationSet {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AdjudicationSet {
     pub fn new() -> Self {
         Self {

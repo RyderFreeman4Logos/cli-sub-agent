@@ -161,6 +161,7 @@ fn resolve_review_tool_prefers_project_override() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "opencode".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -182,6 +183,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -205,6 +207,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
@@ -228,6 +231,7 @@ fn resolve_review_tool_ignores_unknown_priority_entries() {
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
         tool: "auto".to_string(),
+        ..Default::default()
     });
     cfg.debate = None;
 
