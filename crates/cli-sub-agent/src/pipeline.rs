@@ -107,7 +107,15 @@ fn strip_url_credentials(url: &str) -> String {
         return url.to_string();
     }
 
-    // SSH format: git@host:org/repo.git — no credentials to strip
+    // SCP-style: user@host:org/repo.git — strip the userinfo prefix
+    if let Some(at_pos) = url.find('@') {
+        // Ensure '@' comes before ':' (SCP format, not a bare path)
+        let colon_pos = url.find(':').unwrap_or(url.len());
+        if at_pos < colon_pos {
+            return url[at_pos + 1..].to_string();
+        }
+    }
+
     url.to_string()
 }
 
