@@ -296,7 +296,7 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Memory { command } => {
-            memory_cmd::handle_memory_command(command)?;
+            memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
             let exit_code = review_cmd::handle_review(args, current_depth).await?;

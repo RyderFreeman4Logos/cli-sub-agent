@@ -115,7 +115,7 @@ impl ApiClient {
                     rotator.mark_exhausted(&model, cooldown);
                     let has_next = !rotator.all_exhausted();
                     let next_model = if has_next {
-                        Some(rotator.next_available().to_string())
+                        Some(rotator.peek_next_available().to_string())
                     } else {
                         None
                     };
@@ -225,6 +225,23 @@ impl ModelRotator {
         &self.models[self.current_index % total]
     }
 
+    /// Peek next available model without advancing rotation index.
+    pub fn peek_next_available(&mut self) -> &str {
+        self.purge_expired();
+        let total = self.models.len();
+        let start_index = self.current_index % total;
+
+        for offset in 0..total {
+            let index = (start_index + offset) % total;
+            let model = &self.models[index];
+            if !self.in_cooldown(model) {
+                return model;
+            }
+        }
+
+        &self.models[start_index]
+    }
+
     /// Mark a model as exhausted with cooldown duration
     pub fn mark_exhausted(&mut self, model: &str, cooldown: Duration) {
         self.cooldowns
@@ -327,6 +344,20 @@ mod tests {
         rotator.mark_exhausted("gpt-a", Duration::from_secs(60));
         rotator.mark_exhausted("gpt-b", Duration::from_secs(60));
         assert!(rotator.all_exhausted());
+    }
+
+    #[test]
+    fn test_model_rotator_peek_does_not_advance() {
+        let mut rotator = ModelRotator::new(vec![
+            "gpt-a".to_string(),
+            "gpt-b".to_string(),
+            "gpt-c".to_string(),
+        ]);
+        assert_eq!(rotator.next_available(), "gpt-a");
+        rotator.mark_exhausted("gpt-b", Duration::from_secs(60));
+
+        assert_eq!(rotator.peek_next_available(), "gpt-c");
+        assert_eq!(rotator.next_available(), "gpt-c");
     }
 
     #[test]

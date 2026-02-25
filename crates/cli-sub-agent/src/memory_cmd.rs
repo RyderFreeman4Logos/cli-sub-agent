@@ -14,7 +14,7 @@ use crate::cli::MemoryCommands;
 
 const APP_NAME: &str = "cli-sub-agent";
 
-pub fn handle_memory_command(command: MemoryCommands) -> Result<()> {
+pub async fn handle_memory_command(command: MemoryCommands) -> Result<()> {
     match command {
         MemoryCommands::Search { query, limit, json } => handle_search(&query, limit, json),
         MemoryCommands::List {
@@ -28,7 +28,7 @@ pub fn handle_memory_command(command: MemoryCommands) -> Result<()> {
         MemoryCommands::Show { id } => handle_show(&id),
         MemoryCommands::Gc { days, dry_run } => handle_gc(days, dry_run),
         MemoryCommands::Reindex => handle_reindex(),
-        MemoryCommands::Consolidate { dry_run } => handle_consolidate(dry_run),
+        MemoryCommands::Consolidate { dry_run } => handle_consolidate(dry_run).await,
     }
 }
 
@@ -285,18 +285,13 @@ fn handle_reindex() -> Result<()> {
     Ok(())
 }
 
-fn handle_consolidate(dry_run: bool) -> Result<()> {
+async fn handle_consolidate(dry_run: bool) -> Result<()> {
     let store = memory_store();
     let config = load_memory_config();
     let client = create_llm_client(&config);
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .context("failed to create tokio runtime for memory consolidation")?;
-
     if dry_run {
-        let plan = runtime.block_on(plan_consolidation(&store, client.as_ref()))?;
+        let plan = plan_consolidation(&store, client.as_ref()).await?;
         println!("Consolidation Plan:");
         println!("  Entries before: {}", plan.total_before);
         println!("  Entries after:  {}", plan.total_after_estimate);
@@ -315,11 +310,7 @@ fn handle_consolidate(dry_run: bool) -> Result<()> {
 
     let index_dir = store.base_dir().join("index");
     let index = MemoryIndex::open(&index_dir).ok();
-    let plan = runtime.block_on(execute_consolidation(
-        &store,
-        index.as_ref(),
-        client.as_ref(),
-    ))?;
+    let plan = execute_consolidation(&store, index.as_ref(), client.as_ref()).await?;
     println!("Consolidation complete:");
     println!("  Entries before: {}", plan.total_before);
     println!("  Groups merged: {}", plan.groups_to_merge.len());

@@ -501,7 +501,8 @@ pub(crate) async fn execute_with_session_and_meta(
     info!("Executing in session: {}", session.meta_session_id);
 
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let mut effective_prompt = prompt.to_string();
+    let raw_prompt = prompt.to_string();
+    let mut effective_prompt = raw_prompt.clone();
 
     // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
     // Session resumes already have context loaded in the tool's conversation.
@@ -540,7 +541,7 @@ pub(crate) async fn execute_with_session_and_meta(
             let project_name = config.map(|cfg| cfg.project.name.as_str());
             let memory_query = memory_injection
                 .and_then(|opts| opts.query_override.as_deref())
-                .unwrap_or(effective_prompt.as_str());
+                .unwrap_or(raw_prompt.as_str());
             if let Some(memory_section) =
                 memory_capture::build_memory_section(memory_cfg, memory_query, project_name)
             {
