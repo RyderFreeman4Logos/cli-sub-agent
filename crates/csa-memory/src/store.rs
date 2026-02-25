@@ -186,13 +186,11 @@ impl MemoryStore {
     }
 
     fn ensure_storage_dir(&self) -> Result<()> {
-        let dir_exists = self.base_dir.exists();
         fs::create_dir_all(&self.base_dir)
             .with_context(|| format!("failed to create memory dir: {}", self.base_dir.display()))?;
 
-        if !dir_exists {
-            set_dir_mode_700(&self.base_dir)?;
-        }
+        // Always enforce 0700 — pre-existing dirs may have lax permissions
+        set_dir_mode_700(&self.base_dir)?;
 
         Ok(())
     }
