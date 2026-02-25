@@ -6,7 +6,7 @@ use chrono::{DateTime, Duration, NaiveDate, Utc};
 use csa_config::{GlobalConfig, MemoryConfig, ProjectConfig};
 use csa_memory::{
     ApiClient, MemoryEntry, MemoryFilter, MemoryIndex, MemoryLlmClient, MemorySource, MemoryStore,
-    NoopClient, execute_consolidation, plan_consolidation,
+    execute_consolidation, plan_consolidation,
 };
 use ulid::Ulid;
 
@@ -290,7 +290,7 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
     let store = memory_store();
     let config = load_memory_config();
 
-    if !config.llm.enabled {
+    if !config.llm.enabled || config.llm.base_url.is_empty() || config.llm.models.is_empty() {
         bail!(
             "Memory consolidation requires an LLM client.\n\
              Configure [memory.llm] in your project or global config with enabled=true, \
@@ -298,7 +298,10 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
         );
     }
 
-    let client = create_llm_client(&config);
+    let client: Box<dyn MemoryLlmClient> = Box::new(
+        ApiClient::new(&config.llm.base_url, &config.llm.api_key, &config.llm.models)
+            .context("Failed to initialize LLM client for consolidation")?,
+    );
 
     if dry_run {
         let plan = plan_consolidation(&store, client.as_ref()).await?;
@@ -391,26 +394,6 @@ fn load_memory_config() -> MemoryConfig {
     GlobalConfig::load()
         .map(|config| config.memory)
         .unwrap_or_default()
-}
-
-fn create_llm_client(config: &MemoryConfig) -> Box<dyn MemoryLlmClient> {
-    if config.llm.enabled && !config.llm.base_url.is_empty() && !config.llm.models.is_empty() {
-        match ApiClient::new(
-            &config.llm.base_url,
-            &config.llm.api_key,
-            &config.llm.models,
-        ) {
-            Ok(client) => return Box::new(client),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "failed to initialize memory API client; falling back to noop"
-                );
-            }
-        }
-    }
-
-    Box::new(NoopClient)
 }
 
 fn memory_store() -> MemoryStore {

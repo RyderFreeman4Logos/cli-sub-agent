@@ -85,7 +85,30 @@ fn project_key_from_git_remote(project_root: &Path) -> Option<String> {
         return None;
     }
 
-    slugify_identifier(&remote)
+    let sanitized = strip_url_credentials(&remote);
+    slugify_identifier(&sanitized)
+}
+
+/// Strip userinfo (credentials) from a URL before using it as a key.
+///
+/// Handles both HTTPS (`https://token@host/org/repo.git`) and SSH
+/// (`git@host:org/repo.git`) remote formats.
+fn strip_url_credentials(url: &str) -> String {
+    // HTTPS with embedded credentials: https://user:pass@host/path
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        if let Some(at_pos) = after_scheme.find('@') {
+            // Only strip if '@' comes before the first '/' (i.e. it's in the authority)
+            let slash_pos = after_scheme.find('/').unwrap_or(after_scheme.len());
+            if at_pos < slash_pos {
+                return format!("{}{}", &url[..scheme_end + 3], &after_scheme[at_pos + 1..]);
+            }
+        }
+        return url.to_string();
+    }
+
+    // SSH format: git@host:org/repo.git — no credentials to strip
+    url.to_string()
 }
 
 fn project_key_from_git_toplevel(project_root: &Path) -> Option<String> {
