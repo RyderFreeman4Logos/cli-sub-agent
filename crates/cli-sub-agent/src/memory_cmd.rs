@@ -167,10 +167,11 @@ fn handle_list(
 }
 
 fn handle_add(content: String, tags: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(None)?;
     let entry = MemoryEntry {
         id: Ulid::new(),
         timestamp: Utc::now(),
-        project: detect_project_name(),
+        project: crate::pipeline::resolve_memory_project_key(&project_root),
         tool: Some("manual".to_string()),
         session_id: None,
         tags: parse_tags(tags),
@@ -367,12 +368,6 @@ fn parse_tags(tags: Option<String>) -> Vec<String> {
         .filter(|value| !value.is_empty())
         .map(ToString::to_string)
         .collect()
-}
-
-fn detect_project_name() -> Option<String> {
-    let project_root = crate::pipeline::determine_project_root(None).ok()?;
-    let config = ProjectConfig::load(&project_root).ok()??;
-    Some(config.project.name)
 }
 
 fn load_memory_config() -> MemoryConfig {

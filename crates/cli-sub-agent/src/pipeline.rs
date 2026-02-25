@@ -107,7 +107,7 @@ fn project_key_from_git_toplevel(project_root: &Path) -> Option<String> {
     project_key_from_path(Path::new(&toplevel))
 }
 
-fn resolve_memory_project_key(project_root: &Path) -> Option<String> {
+pub(crate) fn resolve_memory_project_key(project_root: &Path) -> Option<String> {
     std::env::var("CSA_PROJECT_ROOT")
         .ok()
         .filter(|value| !value.trim().is_empty())
@@ -620,7 +620,8 @@ pub(crate) async fn execute_with_session_and_meta(
         let memory_cfg = config
             .map(|cfg| &cfg.memory)
             .or_else(|| global_config.map(|cfg| &cfg.memory));
-        let memory_disabled = memory_injection.is_some_and(|opts| opts.disabled);
+        let memory_disabled =
+            memory_injection.is_none() || memory_injection.is_some_and(|opts| opts.disabled);
         if let Some(memory_cfg) = memory_cfg
             && memory_cfg.inject
             && !memory_disabled
