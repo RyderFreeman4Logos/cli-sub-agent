@@ -319,8 +319,13 @@ pub(crate) async fn build_and_validate_executor(
         }
 
         // Enforce thinking level is configured in tiers (unless force override).
+        // Use the effective thinking level (after thinking_lock override), not the
+        // original CLI value, to avoid rejecting locked values that differ from CLI.
+        let effective_thinking = lock_from_project
+            .or(lock_from_global)
+            .or(thinking_budget);
         if enforce_tier && !force_override_user_config {
-            cfg.enforce_thinking_level(thinking_budget)?;
+            cfg.enforce_thinking_level(effective_thinking)?;
         }
     }
 
