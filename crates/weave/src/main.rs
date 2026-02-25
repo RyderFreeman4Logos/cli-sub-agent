@@ -413,6 +413,31 @@ fn main() -> Result<()> {
                 "{} package(s): {upgraded} upgraded, {already_latest} up-to-date, {skipped} skipped",
                 results.len()
             );
+
+            // Auto-link companion skills after upgrade.
+            if upgraded > 0 {
+                let removed = link::remove_stale_links(&project_root, LinkScope::Project)?;
+                if !removed.is_empty() {
+                    eprintln!("removed {} stale symlink(s)", removed.len());
+                }
+
+                let report = link::link_skills(&project_root, LinkScope::Project, true)?;
+                let created = report.unique_created_count();
+                let link_skipped = report.unique_skipped_count();
+                if created > 0 || link_skipped > 0 {
+                    eprintln!(
+                        "linked {created} skill(s) ({link_skipped} already up-to-date)"
+                    );
+                }
+                for name in report.unique_created_names() {
+                    eprintln!("  + {name}");
+                }
+                if report.has_errors() {
+                    for err in &report.errors {
+                        eprintln!("warning: {err}");
+                    }
+                }
+            }
         }
         Commands::Audit => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
