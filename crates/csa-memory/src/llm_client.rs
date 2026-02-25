@@ -14,6 +14,7 @@ use tracing::warn;
 use crate::MemoryEntry;
 
 const DEFAULT_COOLDOWN: Duration = Duration::from_secs(600);
+const MIN_COOLDOWN: Duration = Duration::from_secs(10);
 
 /// Extracted fact from session output
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -242,10 +243,12 @@ impl ModelRotator {
         &self.models[start_index]
     }
 
-    /// Mark a model as exhausted with cooldown duration
+    /// Mark a model as exhausted with cooldown duration.
+    /// Enforces a minimum cooldown to prevent spin-loops when `Retry-After: 0`.
     pub fn mark_exhausted(&mut self, model: &str, cooldown: Duration) {
+        let effective = cooldown.max(MIN_COOLDOWN);
         self.cooldowns
-            .insert(model.to_string(), Instant::now() + cooldown);
+            .insert(model.to_string(), Instant::now() + effective);
     }
 
     /// Check if all models are in cooldown
@@ -334,8 +337,17 @@ mod tests {
     #[test]
     fn test_model_rotator_cooldown_expiry() {
         let mut rotator = ModelRotator::new(vec!["gpt-a".to_string(), "gpt-b".to_string()]);
+        // Zero cooldown is clamped to MIN_COOLDOWN, so model stays in cooldown
         rotator.mark_exhausted("gpt-a", Duration::from_secs(0));
-        assert_eq!(rotator.next_available(), "gpt-a");
+        assert_eq!(rotator.next_available(), "gpt-b");
+    }
+
+    #[test]
+    fn test_model_rotator_min_cooldown_enforced() {
+        let mut rotator = ModelRotator::new(vec!["gpt-a".to_string()]);
+        rotator.mark_exhausted("gpt-a", Duration::from_secs(0));
+        // With MIN_COOLDOWN enforced, the single model should be exhausted
+        assert!(rotator.all_exhausted());
     }
 
     #[test]
