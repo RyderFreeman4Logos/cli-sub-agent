@@ -146,15 +146,23 @@ fn build_memory_section_from_store(
         }
     };
 
-    if let Some(project_name) = project_key
-        && let Ok(entries) = store.load_all()
-    {
-        let allowed_ids: std::collections::HashSet<String> = entries
-            .into_iter()
-            .filter(|entry| entry.project.as_deref() == Some(project_name))
-            .map(|entry| entry.id.to_string())
-            .collect();
-        results.retain(|result| allowed_ids.contains(&result.entry_id));
+    if let Some(project_name) = project_key {
+        match store.load_all() {
+            Ok(entries) => {
+                let allowed_ids: std::collections::HashSet<String> = entries
+                    .into_iter()
+                    .filter(|entry| entry.project.as_deref() == Some(project_name))
+                    .map(|entry| entry.id.to_string())
+                    .collect();
+                results.retain(|result| allowed_ids.contains(&result.entry_id));
+            }
+            Err(err) => {
+                // Fail closed: if we can't load entries to verify project scope,
+                // discard all results rather than risk cross-project injection.
+                tracing::warn!(error = %err, "Cannot load memory store for project filter; discarding results");
+                results.clear();
+            }
+        }
     }
 
     results.truncate(INJECT_MAX_RESULTS);
