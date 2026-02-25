@@ -71,6 +71,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), Some(42)), 42);
@@ -200,6 +201,7 @@ fn resolve_idle_timeout_uses_config_then_default() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     assert_eq!(resolve_idle_timeout_seconds(Some(&cfg), None), 222);
@@ -231,6 +233,7 @@ fn resolve_liveness_dead_seconds_uses_config_then_default() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     assert_eq!(resolve_liveness_dead_seconds(Some(&cfg)), 42);
@@ -317,7 +320,10 @@ fn pipeline_hook_closed_policy_success_continues() {
     let config = make_hooks_config(HookEvent::PreRun, "exit 0", FailPolicy::Closed, Vec::new());
     let vars = HashMap::new();
     let result = run_pipeline_hook(HookEvent::PreRun, &config, &vars);
-    assert!(result.is_ok(), "closed policy with successful hook should pass");
+    assert!(
+        result.is_ok(),
+        "closed policy with successful hook should pass"
+    );
 }
 
 #[test]
@@ -363,6 +369,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     }
 }
 
@@ -566,6 +573,7 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     }
 }
 
@@ -714,6 +722,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     let result_true = build_and_validate_executor(
@@ -793,6 +802,7 @@ async fn thinking_lock_project_config_overrides_cli_thinking() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     let result = build_and_validate_executor(
@@ -884,6 +894,7 @@ async fn thinking_lock_project_overrides_global() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     let mut global_tools = HashMap::new();

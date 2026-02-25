@@ -329,15 +329,12 @@ async fn execute_review(
         None,
         stream_mode,
         idle_timeout_seconds,
+        None,
         Some(global_config),
     )
     .await?;
 
-    persist_review_routing_artifact(
-        project_root,
-        &execution.meta_session_id,
-        &review_routing,
-    );
+    persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
 
     Ok(execution.execution)
 }

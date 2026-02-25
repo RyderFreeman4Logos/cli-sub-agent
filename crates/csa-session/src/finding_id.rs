@@ -178,9 +178,15 @@ mod tests {
 
     #[test]
     fn test_normalize_path_handles_prefix_separators_and_trailing_slash() {
-        assert_eq!(normalize_path("./src\\session\\manager.rs/"), "src/session/manager.rs");
+        assert_eq!(
+            normalize_path("./src\\session\\manager.rs/"),
+            "src/session/manager.rs"
+        );
         assert_eq!(normalize_path("././src//lib.rs"), "src/lib.rs");
-        assert_eq!(normalize_path("src\\nested\\\\file.rs"), "src/nested/file.rs");
+        assert_eq!(
+            normalize_path("src\\nested\\\\file.rs"),
+            "src/nested/file.rs"
+        );
         // Internal dot segments are resolved.
         assert_eq!(normalize_path("src/./lib.rs"), "src/lib.rs");
         assert_eq!(normalize_path("a/./b/./c.rs"), "a/b/c.rs");

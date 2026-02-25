@@ -242,3 +242,25 @@ fn test_cli_legacy_last_still_works() {
         _ => panic!("expected Run command"),
     }
 }
+
+#[test]
+fn test_cli_no_memory_flag_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--no-memory", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { no_memory, .. } => {
+            assert!(no_memory);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_memory_query_flag_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--memory-query", "custom", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { memory_query, .. } => {
+            assert_eq!(memory_query.as_deref(), Some("custom"));
+        }
+        _ => panic!("expected Run command"),
+    }
+}

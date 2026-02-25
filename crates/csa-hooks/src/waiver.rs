@@ -17,7 +17,8 @@ pub struct Waiver {
 impl Waiver {
     /// Returns true when waiver is active (not expired) or has no expiration.
     pub fn is_valid(&self) -> bool {
-        self.expires_at.is_none_or(|expires_at| Utc::now() <= expires_at)
+        self.expires_at
+            .is_none_or(|expires_at| Utc::now() <= expires_at)
     }
 }
 

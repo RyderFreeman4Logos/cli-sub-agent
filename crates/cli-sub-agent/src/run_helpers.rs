@@ -766,6 +766,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         };
 
         let result = super::resolve_tool_and_model(
@@ -809,6 +810,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         };
 
         let result = super::resolve_tool_and_model(
@@ -852,6 +854,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         };
 
         let result = super::resolve_tool_and_model(

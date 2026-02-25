@@ -120,7 +120,10 @@ mod tests {
     fn test_tool_not_installed_codex() {
         let err = anyhow::anyhow!("tool codex not found");
         let hint = suggest_fix(&err).unwrap();
-        assert!(hint.contains("codex-acp"), "should mention ACP adapter: {hint}");
+        assert!(
+            hint.contains("codex-acp"),
+            "should mention ACP adapter: {hint}"
+        );
     }
 
     #[test]

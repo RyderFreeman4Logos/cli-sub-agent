@@ -11,8 +11,8 @@ pub mod metadata;
 pub mod output_parser;
 pub mod output_section;
 pub mod redact;
-pub mod review_artifact;
 pub mod result;
+pub mod review_artifact;
 pub mod soft_fork;
 pub mod state;
 pub mod validate;
@@ -33,8 +33,8 @@ pub use output_parser::{
 };
 pub use output_section::{OutputIndex, OutputSection};
 pub use redact::{redact_event, redact_text_content};
-pub use review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 pub use result::{SessionArtifact, SessionResult};
+pub use review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 pub use soft_fork::{SoftForkContext, soft_fork_session};
 
 // Re-export manager functions

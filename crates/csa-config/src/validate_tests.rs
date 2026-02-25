@@ -45,6 +45,7 @@ fn test_validate_config_succeeds_on_valid() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -74,6 +75,7 @@ fn test_validate_config_fails_on_empty_name() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -107,6 +109,7 @@ fn test_validate_config_fails_on_unknown_tool() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -142,6 +145,7 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -180,6 +184,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -226,6 +231,7 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -275,6 +281,7 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -333,6 +340,7 @@ fn test_validate_config_fails_on_empty_models() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -382,6 +390,7 @@ fn test_validate_config_accepts_custom_tier_names() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -414,6 +423,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -449,6 +459,7 @@ fn test_validate_max_recursion_depth_boundary_20() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -477,6 +488,7 @@ fn test_validate_max_recursion_depth_boundary_21() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -517,6 +529,7 @@ fn test_validate_model_spec_two_parts() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -562,6 +575,7 @@ fn test_validate_model_spec_five_parts() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -599,6 +613,7 @@ fn test_validate_review_tool_auto_accepted() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -632,6 +647,7 @@ fn test_validate_all_known_review_tools_accepted() {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         };
 
         config.save(dir.path()).unwrap();
@@ -670,6 +686,7 @@ fn test_validate_all_known_debate_tools_accepted() {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         };
 
         config.save(dir.path()).unwrap();
@@ -708,6 +725,7 @@ fn test_validate_all_four_known_tools_accepted() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -736,6 +754,7 @@ fn test_validate_no_review_no_debate_is_ok() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -764,6 +783,7 @@ fn test_validate_max_recursion_depth_zero() {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

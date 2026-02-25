@@ -602,6 +602,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None, // MCP server does not override context loading options
             csa_process::StreamMode::BufferOnly,
             idle_timeout_seconds,
+            None, // MCP server does not use memory injection
             Some(&global_config),
         )
         .await?

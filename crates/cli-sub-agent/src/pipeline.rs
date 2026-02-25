@@ -8,6 +8,7 @@
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
@@ -25,11 +26,132 @@ use csa_session::{
     persist_structured_output, save_result, save_session,
 };
 
+use crate::memory_capture;
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
+
+fn slugify_identifier(input: &str) -> Option<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut last_dash = false;
+
+    for ch in input.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+
+        if mapped == '-' {
+            if !last_dash {
+                out.push('-');
+                last_dash = true;
+            }
+        } else {
+            out.push(mapped);
+            last_dash = false;
+        }
+    }
+
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn project_key_from_path(path: &Path) -> Option<String> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    slugify_identifier(&canonical.to_string_lossy())
+}
+
+fn project_key_from_git_remote(project_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("config")
+        .arg("--get")
+        .arg("remote.origin.url")
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if remote.is_empty() {
+        return None;
+    }
+
+    let sanitized = strip_url_credentials(&remote);
+    slugify_identifier(&sanitized)
+}
+
+/// Strip userinfo (credentials) from a URL before using it as a key.
+///
+/// Handles both HTTPS (`https://token@host/org/repo.git`) and SSH
+/// (`git@host:org/repo.git`) remote formats.
+fn strip_url_credentials(url: &str) -> String {
+    // HTTPS with embedded credentials: https://user:pass@host/path
+    if let Some(scheme_end) = url.find("://") {
+        let after_scheme = &url[scheme_end + 3..];
+        if let Some(at_pos) = after_scheme.find('@') {
+            // Only strip if '@' comes before the first '/' (i.e. it's in the authority)
+            let slash_pos = after_scheme.find('/').unwrap_or(after_scheme.len());
+            if at_pos < slash_pos {
+                return format!("{}{}", &url[..scheme_end + 3], &after_scheme[at_pos + 1..]);
+            }
+        }
+        return url.to_string();
+    }
+
+    // SCP-style: user@host:org/repo.git — strip the userinfo prefix
+    if let Some(at_pos) = url.find('@') {
+        // Ensure '@' comes before ':' (SCP format, not a bare path)
+        let colon_pos = url.find(':').unwrap_or(url.len());
+        if at_pos < colon_pos {
+            return url[at_pos + 1..].to_string();
+        }
+    }
+
+    url.to_string()
+}
+
+fn project_key_from_git_toplevel(project_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let toplevel = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if toplevel.is_empty() {
+        return None;
+    }
+
+    project_key_from_path(Path::new(&toplevel))
+}
+
+pub(crate) fn resolve_memory_project_key(project_root: &Path) -> Option<String> {
+    // Prefer explicit project_root argument (e.g. --cd) over inherited env var,
+    // so nested sessions with --cd target the correct repo.
+    project_key_from_git_remote(project_root)
+        .or_else(|| project_key_from_git_toplevel(project_root))
+        .or_else(|| project_key_from_path(project_root))
+        .or_else(|| {
+            std::env::var("CSA_PROJECT_ROOT")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+                .and_then(|value| project_key_from_path(Path::new(&value)))
+        })
+        .or_else(|| std::env::current_dir().ok().and_then(|path| project_key_from_path(&path)))
+}
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -249,6 +371,12 @@ pub(crate) struct SessionExecutionResult {
     pub provider_session_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MemoryInjectionOptions {
+    pub disabled: bool,
+    pub query_override: Option<String>,
+}
+
 fn run_pipeline_hook(
     event: HookEvent,
     hooks_config: &csa_hooks::HooksConfig,
@@ -276,6 +404,7 @@ pub(crate) async fn execute_with_session(
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
@@ -293,6 +422,7 @@ pub(crate) async fn execute_with_session(
         context_load_options,
         stream_mode,
         idle_timeout_seconds,
+        memory_injection,
         global_config,
     )
     .await?;
@@ -317,6 +447,7 @@ pub(crate) async fn execute_with_session_and_meta(
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
@@ -327,6 +458,7 @@ pub(crate) async fn execute_with_session_and_meta(
             }
         }
     }
+    let memory_project_key = resolve_memory_project_key(project_root);
 
     // Resolve or create session
     let mut resolved_provider_session_id: Option<String> = None;
@@ -490,14 +622,9 @@ pub(crate) async fn execute_with_session_and_meta(
 
     info!("Executing in session: {}", session.meta_session_id);
 
-    // Apply restrictions if configured
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let mut effective_prompt = if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        executor.apply_restrictions(prompt, false)
-    } else {
-        prompt.to_string()
-    };
+    let raw_prompt = prompt.to_string();
+    let mut effective_prompt = raw_prompt.clone();
 
     // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
     // Session resumes already have context loaded in the tool's conversation.
@@ -520,6 +647,40 @@ pub(crate) async fn execute_with_session_and_meta(
             );
             effective_prompt = format!("{context_block}{effective_prompt}");
         }
+    }
+
+    // Inject memory after context, before restrictions.
+    let is_review_or_debate = matches!(task_type, Some("review" | "debate"));
+    if !is_review_or_debate {
+        let memory_cfg = config
+            .map(|cfg| &cfg.memory)
+            .filter(|m| !m.is_default())
+            .or_else(|| global_config.map(|cfg| &cfg.memory));
+        let memory_disabled =
+            memory_injection.is_none() || memory_injection.is_some_and(|opts| opts.disabled);
+        if let Some(memory_cfg) = memory_cfg
+            && memory_cfg.inject
+            && !memory_disabled
+        {
+            let memory_query = memory_injection
+                .and_then(|opts| opts.query_override.as_deref())
+                .unwrap_or(raw_prompt.as_str());
+            if let Some(memory_section) =
+                memory_capture::build_memory_section(memory_cfg, memory_query, memory_project_key.as_deref())
+            {
+                info!(
+                    bytes = memory_section.len(),
+                    "Injecting memory context into prompt"
+                );
+                effective_prompt.push_str(&memory_section);
+            }
+        }
+    }
+
+    // Apply restrictions after context and memory injection.
+    if !can_edit {
+        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
+        effective_prompt = executor.apply_restrictions(&effective_prompt, false);
     }
 
     // Resolve tool state for session resume.
@@ -830,6 +991,24 @@ pub(crate) async fn execute_with_session_and_meta(
     ]);
     // PostRun hook: fires after every tool execution
     run_pipeline_hook(HookEvent::PostRun, &hooks_config, &hook_vars)?;
+
+    let memory_config = config
+        .map(|cfg| &cfg.memory)
+        .filter(|m| !m.is_default())
+        .or_else(|| global_config.map(|cfg| &cfg.memory));
+    if let Some(memory_config) = memory_config {
+        if let Err(e) = memory_capture::capture_session_memory(
+            memory_config,
+            &session_dir,
+            memory_project_key.as_deref(),
+            Some(executor.tool_name()),
+            Some(session.meta_session_id.as_str()),
+        )
+        .await
+        {
+            warn!("Memory capture failed: {}", e);
+        }
+    }
 
     // SessionComplete hook: git-commits session artifacts
     if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &hook_vars) {

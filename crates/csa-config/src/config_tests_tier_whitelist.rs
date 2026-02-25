@@ -24,6 +24,7 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     }
 }
 

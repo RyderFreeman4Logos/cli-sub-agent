@@ -53,8 +53,8 @@ fn has_non_symlink_file(project_root: &Path, file_name: &str) -> bool {
 }
 
 pub fn detect_project_profile(project_root: &Path) -> ProjectProfile {
-    let has_rust =
-        has_non_symlink_file(project_root, "Cargo.toml") || has_non_symlink_file(project_root, "Cargo.lock");
+    let has_rust = has_non_symlink_file(project_root, "Cargo.toml")
+        || has_non_symlink_file(project_root, "Cargo.lock");
     let has_node = has_non_symlink_file(project_root, "package.json")
         || has_non_symlink_file(project_root, "package-lock.json")
         || has_non_symlink_file(project_root, "yarn.lock")
@@ -63,8 +63,8 @@ pub fn detect_project_profile(project_root: &Path) -> ProjectProfile {
         || has_non_symlink_file(project_root, "requirements.txt")
         || has_non_symlink_file(project_root, "poetry.lock")
         || has_non_symlink_file(project_root, "Pipfile");
-    let has_go =
-        has_non_symlink_file(project_root, "go.mod") || has_non_symlink_file(project_root, "go.sum");
+    let has_go = has_non_symlink_file(project_root, "go.mod")
+        || has_non_symlink_file(project_root, "go.sum");
 
     let detected_count = [has_rust, has_node, has_python, has_go]
         .into_iter()
@@ -111,7 +111,11 @@ mod tests {
     #[test]
     fn test_detect_project_profile_rust_with_cargo_toml() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
 
         assert_eq!(detect_project_profile(dir.path()), ProjectProfile::Rust);
     }
@@ -147,7 +151,11 @@ mod tests {
     #[test]
     fn test_detect_project_profile_mixed_with_rust_and_node() {
         let dir = tempdir().unwrap();
-        std::fs::write(dir.path().join("Cargo.toml"), "[package]\nname = \"demo\"\n").unwrap();
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            "[package]\nname = \"demo\"\n",
+        )
+        .unwrap();
         std::fs::write(dir.path().join("package.json"), "{ \"name\": \"demo\" }").unwrap();
 
         assert_eq!(detect_project_profile(dir.path()), ProjectProfile::Mixed);

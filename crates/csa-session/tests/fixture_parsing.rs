@@ -41,8 +41,12 @@ fn test_parse_real_codex_state() {
 #[test]
 fn test_output_section_markers() {
     let output_path = fixture_path("claude/session-001/output.log");
-    let output = fs::read_to_string(&output_path)
-        .unwrap_or_else(|err| panic!("failed to read output fixture {}: {err}", output_path.display()));
+    let output = fs::read_to_string(&output_path).unwrap_or_else(|err| {
+        panic!(
+            "failed to read output fixture {}: {err}",
+            output_path.display()
+        )
+    });
 
     let tmp = tempfile::tempdir().expect("create temp dir");
     let index = persist_structured_output(tmp.path(), &output).expect("persist structured output");
@@ -69,7 +73,10 @@ fn test_output_section_markers() {
 
 #[test]
 fn test_fixture_roundtrip() {
-    for relative in ["claude/session-001/state.toml", "codex/session-001/state.toml"] {
+    for relative in [
+        "claude/session-001/state.toml",
+        "codex/session-001/state.toml",
+    ] {
         let state = read_fixture_state(relative);
         let encoded = toml::to_string_pretty(&state).expect("serialize state");
         let decoded: MetaSessionState = toml::from_str(&encoded).expect("deserialize state");
