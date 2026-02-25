@@ -888,6 +888,50 @@ init_timeout_seconds = 60
         }
         Ok(())
     }
+
+    /// Enforce that a `--thinking` level appears in at least one tier's model spec.
+    ///
+    /// Model specs have format `tool/provider/model/thinking_budget`.
+    /// This checks the 4th component against the requested thinking level.
+    ///
+    /// Only enforced when tiers are non-empty. Skips when `thinking` is `None`.
+    pub fn enforce_thinking_level(&self, thinking: Option<&str>) -> anyhow::Result<()> {
+        if self.tiers.is_empty() {
+            return Ok(());
+        }
+        let Some(level) = thinking else {
+            return Ok(());
+        };
+        let level_lower = level.to_ascii_lowercase();
+        let found = self.tiers.values().any(|tier| {
+            tier.models.iter().any(|spec| {
+                spec.splitn(4, '/')
+                    .nth(3)
+                    .is_some_and(|t| t.to_ascii_lowercase() == level_lower)
+            })
+        });
+        if !found {
+            let configured_levels: Vec<String> = {
+                let mut levels = std::collections::BTreeSet::new();
+                for tier in self.tiers.values() {
+                    for spec in &tier.models {
+                        if let Some(t) = spec.splitn(4, '/').nth(3) {
+                            levels.insert(t.to_string());
+                        }
+                    }
+                }
+                levels.into_iter().collect()
+            };
+            anyhow::bail!(
+                "Thinking level '{}' is not configured in any tier. \
+                 Configured levels: [{}]. \
+                 Add it to a [tiers.*] model spec or use --force-override-user-config.",
+                level,
+                configured_levels.join(", ")
+            );
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]

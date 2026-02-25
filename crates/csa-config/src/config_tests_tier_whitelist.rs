@@ -273,3 +273,60 @@ fn enforce_tier_model_name_three_part_rejected_as_model_name() {
         .unwrap_err();
     assert!(err.to_string().contains("not configured in any tier"));
 }
+
+// ---------------------------------------------------------------------------
+// enforce_thinking_level
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enforce_thinking_level_empty_tiers_allows_all() {
+    let cfg = ProjectConfig {
+        tiers: HashMap::new(),
+        ..config_with_tiers(&[])
+    };
+    assert!(cfg.enforce_thinking_level(Some("medium")).is_ok());
+}
+
+#[test]
+fn enforce_thinking_level_none_allows() {
+    let cfg = config_with_tiers(&["codex/openai/gpt-5.3-codex/high"]);
+    assert!(cfg.enforce_thinking_level(None).is_ok());
+}
+
+#[test]
+fn enforce_thinking_level_configured_ok() {
+    let cfg = config_with_tiers(&[
+        "codex/openai/gpt-5.3-codex/high",
+        "claude-code/anthropic/sonnet-4.5/xhigh",
+    ]);
+    assert!(cfg.enforce_thinking_level(Some("high")).is_ok());
+    assert!(cfg.enforce_thinking_level(Some("xhigh")).is_ok());
+}
+
+#[test]
+fn enforce_thinking_level_unconfigured_rejected() {
+    let cfg = config_with_tiers(&["codex/openai/gpt-5.3-codex/high"]);
+    let err = cfg.enforce_thinking_level(Some("medium")).unwrap_err();
+    assert!(err.to_string().contains("not configured in any tier"));
+    assert!(err.to_string().contains("medium"));
+    assert!(err.to_string().contains("--force-override-user-config"));
+}
+
+#[test]
+fn enforce_thinking_level_case_insensitive() {
+    let cfg = config_with_tiers(&["codex/openai/gpt-5.3-codex/high"]);
+    assert!(cfg.enforce_thinking_level(Some("HIGH")).is_ok());
+    assert!(cfg.enforce_thinking_level(Some("High")).is_ok());
+}
+
+#[test]
+fn enforce_thinking_level_lists_configured_levels() {
+    let cfg = config_with_tiers(&[
+        "codex/openai/gpt-5.3-codex/high",
+        "claude-code/anthropic/sonnet-4.5/xhigh",
+    ]);
+    let err = cfg.enforce_thinking_level(Some("low")).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("high"));
+    assert!(msg.contains("xhigh"));
+}

@@ -317,6 +317,11 @@ pub(crate) async fn build_and_validate_executor(
             cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
             cfg.enforce_tier_model_name(executor.tool_name(), model)?;
         }
+
+        // Enforce thinking level is configured in tiers (unless force override).
+        if enforce_tier && !force_override_user_config {
+            cfg.enforce_thinking_level(thinking_budget)?;
+        }
     }
 
     // Check tool is installed
