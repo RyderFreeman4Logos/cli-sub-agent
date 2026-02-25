@@ -133,14 +133,15 @@ fn mask_api_key(api_key: &str) -> String {
     }
 
     let char_count = api_key.chars().count();
+
+    // For short keys (<=8 chars), fully redact to avoid leaking material
+    if char_count <= 8 {
+        return "***".to_string();
+    }
+
     let prefix: String = api_key.chars().take(3).collect();
     let suffix: String = api_key.chars().skip(char_count.saturating_sub(4)).collect();
-
-    if char_count <= 4 {
-        format!("***{suffix}")
-    } else {
-        format!("{prefix}...{suffix}")
-    }
+    format!("{prefix}...{suffix}")
 }
 
 #[cfg(test)]

@@ -59,7 +59,13 @@ async fn capture_session_memory_to_store(
     }
 
     let client = create_llm_client(config);
-    let facts = client.extract_facts(&summary).await?;
+    let facts = match client.extract_facts(&summary).await {
+        Ok(f) => f,
+        Err(err) => {
+            tracing::warn!(error = %err, "Fact extraction failed; storing raw summary without facts");
+            Vec::new()
+        }
+    };
     let entry_id = Ulid::new();
     let now = chrono::Utc::now();
     let entry = MemoryEntry {
