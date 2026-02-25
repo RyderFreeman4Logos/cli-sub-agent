@@ -112,9 +112,9 @@ pub(crate) fn resolve_memory_project_key(project_root: &Path) -> Option<String> 
         .ok()
         .filter(|value| !value.trim().is_empty())
         .and_then(|value| project_key_from_path(Path::new(&value)))
+        .or_else(|| project_key_from_git_remote(project_root))
         .or_else(|| project_key_from_git_toplevel(project_root))
         .or_else(|| project_key_from_path(project_root))
-        .or_else(|| project_key_from_git_remote(project_root))
         .or_else(|| std::env::current_dir().ok().and_then(|path| project_key_from_path(&path)))
 }
 

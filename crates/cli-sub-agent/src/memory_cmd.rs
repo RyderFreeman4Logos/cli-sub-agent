@@ -289,6 +289,15 @@ fn handle_reindex() -> Result<()> {
 async fn handle_consolidate(dry_run: bool) -> Result<()> {
     let store = memory_store();
     let config = load_memory_config();
+
+    if !config.llm.enabled {
+        bail!(
+            "Memory consolidation requires an LLM client.\n\
+             Configure [memory.llm] in your project or global config with enabled=true, \
+             base_url, api_key, and models."
+        );
+    }
+
     let client = create_llm_client(&config);
 
     if dry_run {
