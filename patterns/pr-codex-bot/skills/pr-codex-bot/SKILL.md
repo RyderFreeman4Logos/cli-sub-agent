@@ -146,7 +146,7 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 4. **Trigger cloud bot and poll** (SELF-CONTAINED -- trigger + poll are atomic):
    - Trigger `@codex review` (idempotent: skip if already commented on this HEAD).
    - Poll for bot response (max 10 minutes, 30s interval).
-   - If bot times out: fallback to `csa review --range main...HEAD`, then proceed to merge.
+   - If bot times out: fallback to `csa review --range main...HEAD`. If CLEAN, leave a PR comment explaining the merge rationale (bot timeout + local review CLEAN), then proceed to merge.
 5. **Evaluate bot comments**: Classify each as:
    - Category A (already fixed): react and acknowledge.
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
@@ -157,7 +157,7 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 9. **Re-trigger**: Push fixes and re-trigger (loops back to step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
 10.5. **Rebase for clean history**: If branch has > 3 commits, create backup branch, soft reset to `$(git merge-base main HEAD)` (not local main tip, which may have advanced), create logical commits by selectively staging, force push with lease, then trigger one final `@codex review`. **MUST block**: poll for bot response (max 10 min, 30s interval) and only proceed to merge after the final review passes clean. If the final review finds issues, loop back into the fix cycle (Steps 7-10) — the rebase is NOT repeated, only the fix-and-review cycle runs. If bot times out, fall back to local `csa review --range main...HEAD` and fix any issues before merge. FORBIDDEN: proceeding to merge while post-rebase review has unresolved issues. Skip rebase entirely if <= 3 commits or already logically grouped.
-11. **Merge**: `gh pr merge --squash --delete-branch`, then `git checkout main && git pull`.
+11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Then `gh pr merge --squash --delete-branch`, then `git checkout main && git pull`.
 
 ## Example Usage
 
