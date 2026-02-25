@@ -27,12 +27,18 @@ pub struct MergeGroup {
 }
 
 /// Generate a consolidation plan (dry-run).
+///
+/// `threshold` is the minimum total entry count before consolidation activates.
+/// Per-project minimum is `threshold / 2` (at least 3).
 pub async fn plan_consolidation(
     store: &MemoryStore,
     client: &dyn MemoryLlmClient,
+    threshold: u32,
 ) -> Result<ConsolidationPlan> {
     let entries = store.load_all()?;
-    if entries.len() < 10 {
+    let global_min = threshold.max(4) as usize;
+    let per_project_min = (threshold as usize / 2).max(3);
+    if entries.len() < global_min {
         return Ok(ConsolidationPlan {
             entries_to_expire: Vec::new(),
             groups_to_merge: Vec::new(),
@@ -58,7 +64,7 @@ pub async fn plan_consolidation(
     };
 
     for project_entries in by_project.values() {
-        if project_entries.len() < 5 {
+        if project_entries.len() < per_project_min {
             continue;
         }
 
@@ -105,8 +111,9 @@ pub async fn execute_consolidation(
     store: &MemoryStore,
     index: Option<&MemoryIndex>,
     client: &dyn MemoryLlmClient,
+    threshold: u32,
 ) -> Result<ConsolidationPlan> {
-    let plan = plan_consolidation(store, client).await?;
+    let plan = plan_consolidation(store, client, threshold).await?;
     if plan.groups_to_merge.is_empty() && plan.entries_to_expire.is_empty() {
         return Ok(plan);
     }
@@ -216,7 +223,7 @@ mod tests {
             store.append(&make_entry(format!("entry-{idx}"), "project-a"))?;
         }
 
-        let plan = plan_consolidation(&store, &client).await?;
+        let plan = plan_consolidation(&store, &client, 10).await?;
         assert_eq!(plan.total_before, 9);
         assert_eq!(plan.total_after_estimate, 9);
         assert!(plan.groups_to_merge.is_empty());
@@ -235,7 +242,7 @@ mod tests {
             store.append(&make_entry(format!("entry-{idx}"), "project-a"))?;
         }
 
-        let plan = execute_consolidation(&store, None, &client).await?;
+        let plan = execute_consolidation(&store, None, &client, 10).await?;
         assert_eq!(plan.groups_to_merge.len(), 1);
 
         let raw_file = store.base_dir().join("memories.jsonl");
@@ -291,7 +298,7 @@ mod tests {
             store.append(&make_entry(format!("entry-{idx}"), "project-a"))?;
         }
 
-        let plan = execute_consolidation(&store, None, &client).await?;
+        let plan = execute_consolidation(&store, None, &client, 10).await?;
         assert_eq!(plan.groups_to_merge.len(), 1);
         assert_eq!(plan.groups_to_merge[0].merged_content_preview.len(), 200);
         assert_eq!(plan.groups_to_merge[0].full_summary, full_summary);

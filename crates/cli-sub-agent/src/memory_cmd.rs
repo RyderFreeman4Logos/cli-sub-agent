@@ -288,7 +288,7 @@ fn handle_reindex() -> Result<()> {
 
 async fn handle_consolidate(dry_run: bool) -> Result<()> {
     let store = memory_store();
-    let config = load_memory_config();
+    let config = load_memory_config()?;
 
     if !config.llm.enabled || config.llm.base_url.is_empty() || config.llm.models.is_empty() {
         bail!(
@@ -304,7 +304,7 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
     );
 
     if dry_run {
-        let plan = plan_consolidation(&store, client.as_ref()).await?;
+        let plan = plan_consolidation(&store, client.as_ref(), config.consolidation_threshold).await?;
         println!("Consolidation Plan:");
         println!("  Entries before: {}", plan.total_before);
         println!("  Entries after:  {}", plan.total_after_estimate);
@@ -323,7 +323,7 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
 
     let index_dir = store.base_dir().join("index");
     let index = MemoryIndex::open(&index_dir).ok();
-    let plan = execute_consolidation(&store, index.as_ref(), client.as_ref()).await?;
+    let plan = execute_consolidation(&store, index.as_ref(), client.as_ref(), config.consolidation_threshold).await?;
     println!("Consolidation complete:");
     println!("  Entries before: {}", plan.total_before);
     println!("  Groups merged: {}", plan.groups_to_merge.len());
@@ -382,20 +382,24 @@ fn parse_tags(tags: Option<String>) -> Vec<String> {
         .collect()
 }
 
-fn load_memory_config() -> MemoryConfig {
-    let project_memory = crate::pipeline::determine_project_root(None)
-        .ok()
-        .and_then(|project_root| ProjectConfig::load(&project_root).ok().flatten())
-        .map(|config| config.memory)
-        .filter(|memory| !memory.is_default());
-
-    if let Some(memory) = project_memory {
-        return memory;
+fn load_memory_config() -> Result<MemoryConfig> {
+    if let Ok(project_root) = crate::pipeline::determine_project_root(None) {
+        match ProjectConfig::load(&project_root) {
+            Ok(Some(config)) if !config.memory.is_default() => return Ok(config.memory),
+            Ok(_) => {} // no project config or defaults — fall through to global
+            Err(err) => {
+                bail!(
+                    "Failed to load project config at {}: {err}.\n\
+                     Fix the config file or remove it to use global/default settings.",
+                    project_root.display()
+                );
+            }
+        }
     }
 
-    GlobalConfig::load()
+    Ok(GlobalConfig::load()
         .map(|config| config.memory)
-        .unwrap_or_default()
+        .unwrap_or_default())
 }
 
 fn memory_store() -> MemoryStore {
