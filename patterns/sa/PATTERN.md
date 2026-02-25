@@ -85,11 +85,12 @@ OnFail: abort
 Resume the Layer 1 session for implementation.
 Layer 1 will: implement → delegate errors to Layer 2 → review → commit.
 
-**Incremental review (MANDATORY)**: After each TODO block is committed,
-Layer 1 MUST run `csa review --diff` on that commit immediately — do NOT
-accumulate all changes for one cumulative review at the end. Small-scope
-reviews catch issues when context is focused, avoiding large diffs where
-reviewers can only surface 2 findings per round.
+**Incremental review (MANDATORY)**: Before committing each TODO block,
+Layer 1 MUST run `csa review --diff` on the uncommitted changes immediately.
+After the review passes, commit the block. Do NOT accumulate all changes for
+one cumulative review at the end. Small-scope reviews catch issues when
+context is focused, avoiding large diffs where reviewers can only surface
+2 findings per round.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)

@@ -8,8 +8,8 @@ version = "0.1.0"
 
 # mktd: Make TODO — Debate-Enhanced Planning
 
-Four-phase planning: RECON (CSA parallel exploration), DRAFT (synthesize TODO),
-DEBATE (adversarial review), APPROVE (user gate).
+Five-phase planning: RECON (CSA parallel exploration), DRAFT (synthesize TODO),
+THREAT MODEL (security review), DEBATE (adversarial review), APPROVE (user gate).
 
 Zero main-agent file reads during exploration. CSA sub-agents gather context.
 Mandatory adversarial review catches blind spots.
