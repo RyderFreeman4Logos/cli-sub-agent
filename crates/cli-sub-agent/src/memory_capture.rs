@@ -129,8 +129,11 @@ fn build_memory_section_from_store(
         return None;
     }
 
+    // Retrieve more candidates from BM25, then apply project filter before limiting.
+    // This prevents cross-project entries from consuming the top-k window.
+    let bm25_fetch_limit = INJECT_MAX_RESULTS * 4;
     let mut results = match MemoryIndex::open(index_dir) {
-        Ok(index) => match index.search(&query, INJECT_MAX_RESULTS) {
+        Ok(index) => match index.search(&query, bm25_fetch_limit) {
             Ok(search_results) => search_results,
             Err(err) => {
                 tracing::warn!(error = %err, "Memory BM25 search failed; falling back to quick_search");
@@ -154,6 +157,8 @@ fn build_memory_section_from_store(
         results.retain(|result| allowed_ids.contains(&result.entry_id));
     }
 
+    results.truncate(INJECT_MAX_RESULTS);
+
     if results.is_empty() {
         let fallback_query = prompt
             .split_whitespace()
@@ -164,9 +169,13 @@ fn build_memory_section_from_store(
             return None;
         }
 
-        let escaped = regex::escape(&fallback_query);
+        let term_pattern = fallback_query
+            .split_whitespace()
+            .map(regex::escape)
+            .collect::<Vec<_>>()
+            .join("|");
         results = store
-            .quick_search(&escaped)
+            .quick_search(&term_pattern)
             .unwrap_or_default()
             .into_iter()
             .filter(|entry| project_key.is_none_or(|name| entry.project.as_deref() == Some(name)))
