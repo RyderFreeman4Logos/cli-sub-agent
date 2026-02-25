@@ -46,10 +46,13 @@ pub(crate) fn classify_execution_outcome(
         ));
     }
 
-    // Catch-all: any signal-based exit code (128+signal) is transient.
+    // Catch-all: valid signal-based exit codes (128+signal) are transient.
+    // Valid Unix signals: 1-31 (standard) + 32-64 (real-time), so exit
+    // codes 129-192.  128 (signal 0) and 193+ (signal > 64) are not real
+    // signal exits — treat those as deterministic.
     // CSA only sends SIGTERM(15) and SIGKILL(9); other signals come from
     // external sources (systemd scope cleanup, kernel OOM, etc.).
-    if execution.exit_code >= 128 && execution.exit_code <= 255 {
+    if execution.exit_code >= 129 && execution.exit_code <= 192 {
         let signal_num = execution.exit_code - 128;
         tracing::warn!(
             exit_code = execution.exit_code,
