@@ -8,6 +8,7 @@
 use anyhow::Result;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
@@ -31,6 +32,91 @@ use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
+
+fn slugify_identifier(input: &str) -> Option<String> {
+    let mut out = String::with_capacity(input.len());
+    let mut last_dash = false;
+
+    for ch in input.chars() {
+        let mapped = if ch.is_ascii_alphanumeric() {
+            ch.to_ascii_lowercase()
+        } else {
+            '-'
+        };
+
+        if mapped == '-' {
+            if !last_dash {
+                out.push('-');
+                last_dash = true;
+            }
+        } else {
+            out.push(mapped);
+            last_dash = false;
+        }
+    }
+
+    let trimmed = out.trim_matches('-');
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn project_key_from_path(path: &Path) -> Option<String> {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    slugify_identifier(&canonical.to_string_lossy())
+}
+
+fn project_key_from_git_remote(project_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("config")
+        .arg("--get")
+        .arg("remote.origin.url")
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if remote.is_empty() {
+        return None;
+    }
+
+    slugify_identifier(&remote)
+}
+
+fn project_key_from_git_toplevel(project_root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("rev-parse")
+        .arg("--show-toplevel")
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let toplevel = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if toplevel.is_empty() {
+        return None;
+    }
+
+    project_key_from_path(Path::new(&toplevel))
+}
+
+fn resolve_memory_project_key(project_root: &Path) -> Option<String> {
+    std::env::var("CSA_PROJECT_ROOT")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .and_then(|value| project_key_from_path(Path::new(&value)))
+        .or_else(|| project_key_from_git_toplevel(project_root))
+        .or_else(|| project_key_from_path(project_root))
+        .or_else(|| project_key_from_git_remote(project_root))
+        .or_else(|| std::env::current_dir().ok().and_then(|path| project_key_from_path(&path)))
+}
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -337,6 +423,7 @@ pub(crate) async fn execute_with_session_and_meta(
             }
         }
     }
+    let memory_project_key = resolve_memory_project_key(project_root);
 
     // Resolve or create session
     let mut resolved_provider_session_id: Option<String> = None;
@@ -538,12 +625,11 @@ pub(crate) async fn execute_with_session_and_meta(
             && memory_cfg.inject
             && !memory_disabled
         {
-            let project_name = config.map(|cfg| cfg.project.name.as_str());
             let memory_query = memory_injection
                 .and_then(|opts| opts.query_override.as_deref())
                 .unwrap_or(raw_prompt.as_str());
             if let Some(memory_section) =
-                memory_capture::build_memory_section(memory_cfg, memory_query, project_name)
+                memory_capture::build_memory_section(memory_cfg, memory_query, memory_project_key.as_deref())
             {
                 info!(
                     bytes = memory_section.len(),
@@ -876,7 +962,7 @@ pub(crate) async fn execute_with_session_and_meta(
         if let Err(e) = memory_capture::capture_session_memory(
             memory_config,
             &session_dir,
-            config.map(|cfg| cfg.project.name.as_str()),
+            memory_project_key.as_deref(),
             Some(executor.tool_name()),
             Some(session.meta_session_id.as_str()),
         )

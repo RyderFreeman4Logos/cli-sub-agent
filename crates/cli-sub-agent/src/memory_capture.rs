@@ -20,7 +20,7 @@ const INJECT_SNIPPET_MAX_CHARS: usize = 200;
 pub async fn capture_session_memory(
     config: &MemoryConfig,
     session_dir: &Path,
-    project: Option<&str>,
+    project_key: Option<&str>,
     tool: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<()> {
@@ -31,7 +31,7 @@ pub async fn capture_session_memory(
     capture_session_memory_to_store(
         config,
         session_dir,
-        project,
+        project_key,
         tool,
         session_id,
         &store,
@@ -43,7 +43,7 @@ pub async fn capture_session_memory(
 async fn capture_session_memory_to_store(
     config: &MemoryConfig,
     session_dir: &Path,
-    project: Option<&str>,
+    project_key: Option<&str>,
     tool: Option<&str>,
     session_id: Option<&str>,
     store: &MemoryStore,
@@ -65,7 +65,7 @@ async fn capture_session_memory_to_store(
     let entry = MemoryEntry {
         id: entry_id,
         timestamp: now,
-        project: project.map(str::to_string),
+        project: project_key.map(str::to_string),
         tool: tool.map(str::to_string),
         session_id: session_id.map(str::to_string),
         tags: facts.iter().flat_map(|fact| fact.tags.clone()).collect(),
@@ -103,18 +103,18 @@ async fn capture_session_memory_to_store(
 pub(crate) fn build_memory_section(
     config: &MemoryConfig,
     prompt: &str,
-    project: Option<&str>,
+    project_key: Option<&str>,
 ) -> Option<String> {
     let memory_dir = resolve_memory_base_dir();
     let store = MemoryStore::new(memory_dir.clone());
     let index_dir = memory_dir.join("index");
-    build_memory_section_from_store(config, prompt, project, &store, &index_dir)
+    build_memory_section_from_store(config, prompt, project_key, &store, &index_dir)
 }
 
 fn build_memory_section_from_store(
     config: &MemoryConfig,
     prompt: &str,
-    project: Option<&str>,
+    project_key: Option<&str>,
     store: &MemoryStore,
     index_dir: &Path,
 ) -> Option<String> {
@@ -137,7 +137,7 @@ fn build_memory_section_from_store(
         }
     };
 
-    if let Some(project_name) = project
+    if let Some(project_name) = project_key
         && let Ok(entries) = store.load_all()
     {
         let allowed_ids: std::collections::HashSet<String> = entries
@@ -163,7 +163,7 @@ fn build_memory_section_from_store(
             .quick_search(&escaped)
             .unwrap_or_default()
             .into_iter()
-            .filter(|entry| project.is_none_or(|name| entry.project.as_deref() == Some(name)))
+            .filter(|entry| project_key.is_none_or(|name| entry.project.as_deref() == Some(name)))
             .take(INJECT_MAX_RESULTS)
             .map(|entry| SearchResult {
                 entry_id: entry.id.to_string(),
