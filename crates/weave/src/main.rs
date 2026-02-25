@@ -421,7 +421,7 @@ fn main() -> Result<()> {
                     eprintln!("removed {} stale symlink(s)", removed.len());
                 }
 
-                let report = link::link_skills(&project_root, LinkScope::Project, true)?;
+                let report = link::link_skills(&project_root, LinkScope::Project, false)?;
                 let created = report.unique_created_count();
                 let link_skipped = report.unique_skipped_count();
                 if created > 0 || link_skipped > 0 {
