@@ -386,7 +386,9 @@ fn load_memory_config() -> MemoryConfig {
     let project_memory = crate::pipeline::determine_project_root(None)
         .ok()
         .and_then(|project_root| ProjectConfig::load(&project_root).ok().flatten())
-        .map(|config| config.memory);
+        .map(|config| config.memory)
+        .filter(|memory| !memory.is_default());
+
     if let Some(memory) = project_memory {
         return memory;
     }

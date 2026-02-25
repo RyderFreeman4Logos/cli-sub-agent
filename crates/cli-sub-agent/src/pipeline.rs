@@ -642,6 +642,7 @@ pub(crate) async fn execute_with_session_and_meta(
     if !is_review_or_debate {
         let memory_cfg = config
             .map(|cfg| &cfg.memory)
+            .filter(|m| !m.is_default())
             .or_else(|| global_config.map(|cfg| &cfg.memory));
         let memory_disabled =
             memory_injection.is_none() || memory_injection.is_some_and(|opts| opts.disabled);
@@ -981,6 +982,7 @@ pub(crate) async fn execute_with_session_and_meta(
 
     let memory_config = config
         .map(|cfg| &cfg.memory)
+        .filter(|m| !m.is_default())
         .or_else(|| global_config.map(|cfg| &cfg.memory));
     if let Some(memory_config) = memory_config {
         if let Err(e) = memory_capture::capture_session_memory(
