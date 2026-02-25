@@ -244,6 +244,9 @@ Bot unavailable. Local fallback review passed (either initially in Step 5,
 or after fix cycle in Step 6-fix). Step 6-fix guarantees
 `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
 
+**MANDATORY**: Before merging, leave a PR comment explaining the merge rationale
+(bot timeout + local review CLEAN). This provides audit trail for reviewers.
+
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
 if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
@@ -260,6 +263,10 @@ fi
 # Push fallback fix commits so the remote PR head includes them.
 # Without this, gh pr merge uses the stale remote HEAD and omits fixes.
 git push origin "${WORKFLOW_BRANCH}"
+
+# Audit trail: explain why merging without bot review.
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
+  "**Merge rationale**: Cloud bot (@codex) timed out after ${MAX_WAIT}s. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
@@ -649,7 +656,11 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     fi
   else
     echo "Post-rebase bot timed out. Falling back to local review."
-    if ! csa review --range main...HEAD 2>/dev/null; then
+    if csa review --range main...HEAD 2>/dev/null; then
+      # Audit trail: explain why merging without post-rebase bot review.
+      gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
+        "**Merge rationale**: Post-rebase cloud bot timed out. Local \`csa review --range main...HEAD\` passed CLEAN. Proceeding to merge with local review as the review layer."
+    else
       echo "BLOCKED: Post-rebase fallback review found issues."
       FALLBACK_REVIEW_HAS_ISSUES=true
     fi
@@ -686,6 +697,10 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
       # Push fallback fix commits so remote PR head includes them.
       # Without this, gh pr merge merges stale remote HEAD and drops fixes.
       git push origin "${WORKFLOW_BRANCH}"
+
+      # Audit trail: explain why merging without post-rebase bot review.
+      gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
+        "**Merge rationale**: Post-rebase cloud bot timed out. Local \`csa review --range main...HEAD\` passed CLEAN after ${REBASE_FB_FIX_ROUND} fix round(s). Proceeding to merge with local review as the review layer."
       echo "REBASE_FALLBACK_FIXED: Post-rebase fallback issues resolved. Proceeding to merge."
     fi
   fi
