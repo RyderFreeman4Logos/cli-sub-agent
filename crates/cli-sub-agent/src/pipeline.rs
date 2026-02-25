@@ -317,6 +317,16 @@ pub(crate) async fn build_and_validate_executor(
             cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
             cfg.enforce_tier_model_name(executor.tool_name(), model)?;
         }
+
+        // Enforce thinking level is configured in tiers (unless force override).
+        // Use the effective thinking level (after thinking_lock override), not the
+        // original CLI value, to avoid rejecting locked values that differ from CLI.
+        let effective_thinking = lock_from_project
+            .or(lock_from_global)
+            .or(thinking_budget);
+        if enforce_tier && !force_override_user_config {
+            cfg.enforce_thinking_level(effective_thinking)?;
+        }
     }
 
     // Check tool is installed
