@@ -46,6 +46,22 @@ pub(crate) fn classify_execution_outcome(
         ));
     }
 
+    // Catch-all: any signal-based exit code (128+signal) is transient.
+    // CSA only sends SIGTERM(15) and SIGKILL(9); other signals come from
+    // external sources (systemd scope cleanup, kernel OOM, etc.).
+    if execution.exit_code >= 128 && execution.exit_code <= 255 {
+        let signal_num = execution.exit_code - 128;
+        tracing::warn!(
+            exit_code = execution.exit_code,
+            signal = signal_num,
+            "process killed by unexpected signal; classifying as transient"
+        );
+        return DebateErrorKind::Transient(format!(
+            "process killed by signal {} (exit_code={})",
+            signal_num, execution.exit_code,
+        ));
+    }
+
     let stderr_lower = execution.stderr_output.to_ascii_lowercase();
     if stderr_lower.contains("permission denied") {
         return DebateErrorKind::Deterministic("permission error".to_string());
