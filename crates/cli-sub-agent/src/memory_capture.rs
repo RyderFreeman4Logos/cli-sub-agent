@@ -7,6 +7,7 @@ use csa_memory::{
     ApiClient, MemoryEntry, MemoryIndex, MemoryLlmClient, MemorySource, MemoryStore, NoopClient,
     SearchResult,
 };
+use ulid::Ulid;
 
 const APP_NAME: &str = "cli-sub-agent";
 const OUTPUT_TRUNCATE_CHARS: usize = 500;
@@ -59,9 +60,7 @@ async fn capture_session_memory_to_store(
 
     let client = create_llm_client(config);
     let facts = client.extract_facts(&summary).await?;
-    let entry_id = session_id
-        .and_then(|value| value.parse().ok())
-        .unwrap_or_default();
+    let entry_id = Ulid::new();
     let now = chrono::Utc::now();
     let entry = MemoryEntry {
         id: entry_id,
@@ -387,6 +386,51 @@ mod tests {
         .expect("capture should return ok when disabled");
 
         assert!(!memory_dir.path().join("memories.jsonl").exists());
+    }
+
+    #[tokio::test]
+    async fn test_capture_generates_unique_entry_ids_for_same_session() {
+        let session_dir = tempdir().expect("create temp session dir");
+        let memory_dir = tempdir().expect("create temp memory dir");
+        let output_path = session_dir.path().join("output.log");
+        fs::write(&output_path, "Session output for duplicate-id regression test.")
+            .expect("write output.log");
+
+        let store = MemoryStore::new(memory_dir.path().to_path_buf());
+        let index_dir = memory_dir.path().join("index");
+        let session_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+        capture_session_memory_to_store(
+            &test_memory_config(true),
+            session_dir.path(),
+            Some("test-project"),
+            Some("codex"),
+            Some(session_id),
+            &store,
+            &index_dir,
+        )
+        .await
+        .expect("first capture should succeed");
+
+        capture_session_memory_to_store(
+            &test_memory_config(true),
+            session_dir.path(),
+            Some("test-project"),
+            Some("codex"),
+            Some(session_id),
+            &store,
+            &index_dir,
+        )
+        .await
+        .expect("second capture should succeed");
+
+        let entries = store.load_all().expect("load entries");
+        assert_eq!(entries.len(), 2);
+        assert_ne!(
+            entries[0].id, entries[1].id,
+            "entry id must be unique even when session_id repeats"
+        );
+        assert!(entries.iter().all(|entry| entry.session_id.as_deref() == Some(session_id)));
     }
 
     #[test]

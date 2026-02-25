@@ -22,6 +22,7 @@ pub struct ConsolidationPlan {
 pub struct MergeGroup {
     pub source_ids: Vec<String>,
     pub merged_content_preview: String,
+    pub full_summary: String,
     pub merged_tags: Vec<String>,
 }
 
@@ -61,8 +62,8 @@ pub async fn plan_consolidation(
             continue;
         }
 
-        let summary = client.summarize(project_entries).await?;
-        if summary.trim().is_empty() {
+        let full_summary = client.summarize(project_entries).await?;
+        if full_summary.trim().is_empty() {
             continue;
         }
 
@@ -70,10 +71,11 @@ pub async fn plan_consolidation(
             .iter()
             .map(|entry| entry.id.to_string())
             .collect();
-        let preview_len = summary
+        let preview_len = full_summary
             .char_indices()
             .nth(200)
-            .map_or(summary.len(), |(idx, _)| idx);
+            .map_or(full_summary.len(), |(idx, _)| idx);
+        let merged_content_preview = full_summary[..preview_len].to_string();
         let mut merged_tags: Vec<String> = project_entries
             .iter()
             .flat_map(|entry| entry.tags.iter().cloned())
@@ -84,7 +86,8 @@ pub async fn plan_consolidation(
 
         let group = MergeGroup {
             source_ids,
-            merged_content_preview: summary[..preview_len].to_string(),
+            merged_content_preview,
+            full_summary,
             merged_tags,
         };
 
@@ -147,7 +150,7 @@ pub async fn execute_consolidation(
             tool: None,
             session_id: None,
             tags: group.merged_tags.clone(),
-            content: group.merged_content_preview.clone(),
+            content: group.full_summary.clone(),
             facts: Vec::new(),
             source: MemorySource::Consolidated,
             valid_from: Some(now),
@@ -174,10 +177,11 @@ mod tests {
     use std::fs;
 
     use anyhow::Result;
+    use async_trait::async_trait;
     use chrono::Utc;
     use ulid::Ulid;
 
-    use crate::{MemoryEntry, MemorySource, MemoryStore, NoopClient};
+    use crate::{Fact, MemoryEntry, MemoryLlmClient, MemorySource, MemoryStore, NoopClient};
 
     use super::{execute_consolidation, plan_consolidation};
 
@@ -254,6 +258,51 @@ mod tests {
                     && entry.valid_until.is_none())
         );
         assert_eq!(store.load_all()?.len(), 1);
+
+        fs::remove_dir_all(store.base_dir()).ok();
+        Ok(())
+    }
+
+    #[derive(Debug, Clone)]
+    struct FixedSummaryClient {
+        summary: String,
+    }
+
+    #[async_trait]
+    impl MemoryLlmClient for FixedSummaryClient {
+        async fn extract_facts(&self, _text: &str) -> Result<Vec<Fact>> {
+            Ok(Vec::new())
+        }
+
+        async fn summarize(&self, _entries: &[MemoryEntry]) -> Result<String> {
+            Ok(self.summary.clone())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_execute_consolidation_persists_full_summary() -> Result<()> {
+        let store = make_test_store();
+        let full_summary = "a".repeat(260);
+        let client = FixedSummaryClient {
+            summary: full_summary.clone(),
+        };
+
+        for idx in 0..10 {
+            store.append(&make_entry(format!("entry-{idx}"), "project-a"))?;
+        }
+
+        let plan = execute_consolidation(&store, None, &client).await?;
+        assert_eq!(plan.groups_to_merge.len(), 1);
+        assert_eq!(plan.groups_to_merge[0].merged_content_preview.len(), 200);
+        assert_eq!(plan.groups_to_merge[0].full_summary, full_summary);
+
+        let active_entries = store.load_all()?;
+        assert_eq!(active_entries.len(), 1);
+        let consolidated = active_entries
+            .iter()
+            .find(|entry| matches!(entry.source, MemorySource::Consolidated))
+            .expect("consolidated entry should exist");
+        assert_eq!(consolidated.content, full_summary);
 
         fs::remove_dir_all(store.base_dir()).ok();
         Ok(())
