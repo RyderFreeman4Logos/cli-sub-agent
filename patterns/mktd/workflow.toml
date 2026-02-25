@@ -128,13 +128,41 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 5
-title = "Phase 3 — Adversarial Debate"
-tool = "csa"
+title = "Phase 2.5 — Threat Model"
 prompt = """
-Critically evaluate this draft TODO plan. Act as a devil's advocate.
+Review the draft TODO plan for security and safety concerns.
 
 ## Draft TODO Plan
 ${STEP_4_OUTPUT}
+
+## Instructions
+For each new API surface in the plan (config fields, CLI inputs, stored data,
+external interactions), enumerate:
+- What sensitive data flows through this path?
+- What happens with malformed/hostile input?
+- What information is exposed in logs/display/persistence?
+- What default behavior is safe vs unsafe?
+
+Output a structured threat analysis. Each finding should specify:
+1. **Surface** — what is being introduced
+2. **Risk** — what could go wrong
+3. **Mitigation** — how the TODO should address it
+
+These findings will be incorporated into the TODO as [Security] tagged items."""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 6
+title = "Phase 3 — Adversarial Debate"
+tool = "csa"
+prompt = """
+Critically evaluate this draft TODO plan and its threat model. Act as a devil's advocate.
+
+## Draft TODO Plan
+${STEP_4_OUTPUT}
+
+## Threat Model (Step 5)
+${STEP_5_OUTPUT}
 
 ## Instructions
 Challenge assumptions, identify gaps, question priorities, and suggest improvements.
@@ -142,7 +170,7 @@ Focus on:
 - Missing dependencies or prerequisites
 - Incorrect task ordering
 - Unrealistic scope or missing edge cases
-- Security risks not addressed
+- Security risks not addressed (check against threat model)
 - Tasks that should be split or combined
 
 Output a structured critique:
@@ -153,10 +181,10 @@ tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
+id = 7
 title = "Revise TODO"
 prompt = """
-Incorporate debate feedback into the TODO plan.
+Incorporate debate feedback and threat model findings into the TODO plan.
 Concede valid points and revise accordingly. Defend sound decisions with evidence.
 
 ## Prior Context
@@ -164,34 +192,38 @@ Concede valid points and revise accordingly. Defend sound decisions with evidenc
 ### Draft TODO (Step 4)
 ${STEP_4_OUTPUT}
 
-### Adversarial Critique (Step 5)
+### Threat Model (Step 5)
 ${STEP_5_OUTPUT}
+
+### Adversarial Critique (Step 6)
+${STEP_6_OUTPUT}
 
 ## Output
 Output the COMPLETE revised TODO plan as text to stdout.
+Include threat model findings as [Security] tagged checkbox items.
 Do NOT write files to the project directory.
-The output will be captured as ${STEP_6_OUTPUT} for the save step."""
+The output will be captured as ${STEP_7_OUTPUT} for the save step."""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 7
+id = 8
 title = "Save TODO"
 tool = "bash"
 prompt = """
 Save finalized TODO using csa todo for git-tracked lifecycle.
-Uses ${STEP_6_OUTPUT} (the revised TODO from the revise step).
+Uses ${STEP_7_OUTPUT} (the revised TODO from the revise step).
 
 ```bash
-[[ -n "${STEP_6_OUTPUT:-}" ]] || { echo "STEP_6_OUTPUT is empty — Step 6 (revise) must output the finalized TODO as text" >&2; exit 1; }
+[[ -n "${STEP_7_OUTPUT:-}" ]] || { echo "STEP_7_OUTPUT is empty — Step 7 (revise) must output the finalized TODO as text" >&2; exit 1; }
 TODO_TS=$(csa todo create --branch "$(git branch --show-current)" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
-printf '%s\n' "${STEP_6_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+printf '%s\n' "${STEP_7_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 8
+id = 9
 title = "Phase 4 — User Approval"
 prompt = """
 Present TODO to user for review in ${USER_LANGUAGE}.

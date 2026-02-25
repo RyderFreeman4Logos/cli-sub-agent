@@ -103,6 +103,11 @@ prompt = """
 Resume the Layer 1 session for implementation.
 Layer 1 will: implement → delegate errors to Layer 2 → review → commit.
 
+INCREMENTAL REVIEW (MANDATORY): Before committing each TODO block,
+Layer 1 MUST run `csa review --diff` on the uncommitted changes.
+After the review passes, commit the block.
+Do NOT accumulate all changes for one cumulative review at the end.
+
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
