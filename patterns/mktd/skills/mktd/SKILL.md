@@ -28,7 +28,7 @@ triggers:
 
 ## Purpose
 
-Generate a structured TODO plan for a feature through four phases: parallel CSA reconnaissance (structure, patterns, constraints), draft synthesis, mandatory adversarial debate review, and user approval gate. The main agent performs zero file reads during exploration -- CSA sub-agents gather all context. Plans are saved via `csa todo` for git-tracked lifecycle management.
+Generate a structured TODO plan for a feature through five phases: parallel CSA reconnaissance (structure, patterns, constraints), draft synthesis, security threat model, mandatory adversarial debate review, and user approval gate. The main agent performs zero file reads during exploration -- CSA sub-agents gather all context. Plans are saved via `csa todo` for git-tracked lifecycle management.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -52,10 +52,11 @@ csa run --skill mktd "Plan the implementation of <feature description>"
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
 2. **Phase 1.5 -- LANGUAGE DETECTION**: Detect the primary language used in conversation with the user. Set USER_LANGUAGE accordingly (e.g., "Chinese (Simplified)", "English", "Japanese"). If unclear, default to the language used in the FEATURE description. This language will be used for all TODO descriptions, section headers, and task names.
 3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in USER_LANGUAGE. Technical terms, code snippets, commit scope strings, and executor tags remain in English. Output the complete plan as text (stdout) -- do NOT write files to the project directory.
-4. **Phase 3 -- DEBATE**: Run `csa debate` (tier-2) to adversarially review the TODO draft. Mandatory -- no exceptions.
-5. **Phase 3b -- REVISE**: Incorporate debate feedback. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
-6. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, pipe `${STEP_6_OUTPUT}` to the TODO file, `csa todo save`.
-7. **Phase 4b -- APPROVE**: Present to user for APPROVE / MODIFY / REJECT.
+4. **Phase 2.5 -- THREAT MODEL**: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults). Append findings as [Security] tagged items.
+5. **Phase 3 -- DEBATE**: Run `csa debate` (tier-2) to adversarially review the TODO draft and threat model. Mandatory -- no exceptions.
+6. **Phase 3b -- REVISE**: Incorporate debate feedback and threat model findings. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
+7. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, pipe `${STEP_7_OUTPUT}` to the TODO file, `csa todo save`.
+8. **Phase 4b -- APPROVE**: Present to user for APPROVE / MODIFY / REJECT.
 
 ## Example Usage
 
@@ -75,7 +76,8 @@ csa run --skill mktd "Plan the implementation of <feature description>"
 1. Three RECON dimensions completed via CSA (structure, patterns, constraints).
 2. Main agent performed zero file reads during Phase 1.
 3. TODO draft synthesized with executor tags and checkbox items.
-4. Adversarial debate completed with at least one exchange.
-5. TODO revised to incorporate valid debate feedback.
-6. TODO saved via `csa todo create` + `csa todo save` with branch association.
-7. User presented with plan for approval decision.
+4. Threat model completed for all new API surfaces.
+5. Adversarial debate completed with at least one exchange.
+6. TODO revised to incorporate debate feedback and threat model findings.
+7. TODO saved via `csa todo create` + `csa todo save` with branch association.
+8. User presented with plan for approval decision.

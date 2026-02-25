@@ -54,41 +54,58 @@ Pre-assign executors: [Main], [Sub:developer], [Skill:commit], [CSA:tool].
 Do NOT write files to the project directory.
 The output is captured as `${STEP_4_OUTPUT}` for subsequent steps.
 
-## Step 5: Phase 3 — Adversarial Debate
+## Step 5: Phase 2.5 — Threat Model
+
+For each new API surface in the TODO plan (config fields, CLI inputs,
+stored data, external interactions), enumerate:
+
+- What sensitive data flows through this path?
+- What happens with malformed/hostile input?
+- What information is exposed in logs/display/persistence?
+- What default behavior is safe vs unsafe?
+
+Append threat findings as a "Security Considerations" section to the
+TODO plan. Each finding becomes a checkbox item tagged [Security].
+
+**Input**: `${STEP_4_OUTPUT}` (the draft TODO from Step 4).
+**Output**: Print the COMPLETE threat analysis as text to stdout.
+
+## Step 6: Phase 3 — Adversarial Debate
 
 Tool: csa
 Tier: tier-2-standard
 
 ## INCLUDE debate
 
-Mandatory adversarial review of the TODO draft.
+Mandatory adversarial review of the TODO draft and threat model.
 No exceptions — even "simple" plans benefit from challenge.
 
-## Step 6: Revise TODO
+## Step 7: Revise TODO
 
-Incorporate debate feedback. Update plan based on valid criticisms.
-Concede valid points, defend sound decisions with evidence.
+Incorporate debate feedback and threat model findings. Update plan
+based on valid criticisms. Concede valid points, defend sound decisions
+with evidence.
 
 **Output**: Print the COMPLETE revised TODO plan as text to stdout.
 Do NOT write files to the project directory.
-The output is captured as `${STEP_6_OUTPUT}` for the save step.
+The output is captured as `${STEP_7_OUTPUT}` for the save step.
 
-## Step 7: Save TODO
+## Step 8: Save TODO
 
 Tool: bash
 
 Save finalized TODO using csa todo for git-tracked lifecycle.
-Uses `${STEP_6_OUTPUT}` (the revised TODO from Step 6).
+Uses `${STEP_7_OUTPUT}` (the revised TODO from Step 7).
 
 ```bash
-[[ -n "${STEP_6_OUTPUT:-}" ]] || { echo "STEP_6_OUTPUT is empty — Step 6 (revise) must output the finalized TODO as text" >&2; exit 1; }
+[[ -n "${STEP_7_OUTPUT:-}" ]] || { echo "STEP_7_OUTPUT is empty — Step 7 (revise) must output the finalized TODO as text" >&2; exit 1; }
 TODO_TS=$(csa todo create --branch "$(git branch --show-current)" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
-printf '%s\n' "${STEP_6_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+printf '%s\n' "${STEP_7_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
 ```
 
-## Step 8: Phase 4 — User Approval
+## Step 9: Phase 4 — User Approval
 
 Present TODO to user for review in ${USER_LANGUAGE}.
 User chooses: APPROVE → proceed to mktsk, MODIFY → revise, REJECT → abandon.
