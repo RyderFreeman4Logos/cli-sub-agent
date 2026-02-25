@@ -9,6 +9,7 @@ pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Re
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
         .ok_or_else(|| anyhow::anyhow!("No configuration found. Run 'csa init' first."))?;
+    let config = config.redacted_for_display();
 
     match format {
         OutputFormat::Json => {

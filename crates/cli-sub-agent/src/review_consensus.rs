@@ -254,7 +254,10 @@ pub(crate) fn build_consolidated_artifact(
     }
 }
 
-pub(crate) fn write_consolidated_artifact(artifact: &ReviewArtifact, output_dir: &Path) -> Result<()> {
+pub(crate) fn write_consolidated_artifact(
+    artifact: &ReviewArtifact,
+    output_dir: &Path,
+) -> Result<()> {
     let artifact_path = output_dir.join("review-consolidated.json");
     let payload = serde_json::to_string_pretty(artifact)
         .context("failed to serialize consolidated review artifact")?;
@@ -312,6 +315,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         }
     }
 
@@ -565,7 +569,8 @@ mod tests {
             finding("FID-INFO", Severity::Info),
         ]);
 
-        let severities: Vec<Severity> = consolidated.into_iter().map(|item| item.severity).collect();
+        let severities: Vec<Severity> =
+            consolidated.into_iter().map(|item| item.severity).collect();
         assert_eq!(
             severities,
             vec![
@@ -599,7 +604,13 @@ mod tests {
     fn merge_related_findings_keeps_both_when_line_delta_is_three() {
         let merged = merge_related_findings(vec![
             finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", Some(10)),
-            finding_with_location("FID-B", Severity::High, "src/main.rs", "rule.same", Some(13)),
+            finding_with_location(
+                "FID-B",
+                Severity::High,
+                "src/main.rs",
+                "rule.same",
+                Some(13),
+            ),
         ]);
 
         assert_eq!(merged.len(), 2);
@@ -631,7 +642,13 @@ mod tests {
     fn merge_related_findings_does_not_merge_when_any_line_is_none() {
         let merged = merge_related_findings(vec![
             finding_with_location("FID-A", Severity::Low, "src/main.rs", "rule.same", None),
-            finding_with_location("FID-B", Severity::Critical, "src/main.rs", "rule.same", Some(10)),
+            finding_with_location(
+                "FID-B",
+                Severity::Critical,
+                "src/main.rs",
+                "rule.same",
+                Some(10),
+            ),
         ]);
 
         assert_eq!(merged.len(), 2);
@@ -645,7 +662,13 @@ mod tests {
 
     #[test]
     fn merge_related_findings_returns_single_finding_as_is() {
-        let source = finding_with_location("FID-ONLY", Severity::Medium, "src/lib.rs", "rule.one", Some(1));
+        let source = finding_with_location(
+            "FID-ONLY",
+            Severity::Medium,
+            "src/lib.rs",
+            "rule.one",
+            Some(1),
+        );
         let merged = merge_related_findings(vec![source.clone()]);
 
         assert_eq!(merged.len(), 1);
@@ -656,7 +679,10 @@ mod tests {
     fn build_consolidated_artifact_merges_findings_from_two_reviewers() {
         let reviewer_one = artifact_with_findings(
             "session-a",
-            vec![finding("FID-SHARED", Severity::Low), finding("FID-A", Severity::High)],
+            vec![
+                finding("FID-SHARED", Severity::Low),
+                finding("FID-A", Severity::High),
+            ],
         );
         let reviewer_two = artifact_with_findings(
             "session-b",
@@ -692,13 +718,15 @@ mod tests {
     #[test]
     fn write_consolidated_artifact_creates_json_file_at_expected_path() {
         let temp = tempdir().expect("tempdir should be created");
-        let artifact = artifact_with_findings("session-write", vec![finding("FID-1", Severity::Low)]);
+        let artifact =
+            artifact_with_findings("session-write", vec![finding("FID-1", Severity::Low)]);
 
         write_consolidated_artifact(&artifact, temp.path()).expect("artifact should be written");
 
         let artifact_path = temp.path().join("review-consolidated.json");
         assert!(artifact_path.exists());
-        let contents = std::fs::read_to_string(&artifact_path).expect("json file should be readable");
+        let contents =
+            std::fs::read_to_string(&artifact_path).expect("json file should be readable");
         let parsed: ReviewArtifact =
             serde_json::from_str(&contents).expect("json file should deserialize");
         assert_eq!(parsed.session_id, "session-write");

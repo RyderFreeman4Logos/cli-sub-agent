@@ -43,6 +43,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
+        memory: Default::default(),
     }
 }
 

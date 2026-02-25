@@ -114,6 +114,14 @@ pub enum Commands {
         #[arg(long, conflicts_with = "idle_timeout")]
         no_idle_timeout: bool,
 
+        /// Disable memory injection for this run (overrides memory.inject=true config)
+        #[arg(long)]
+        no_memory: bool,
+
+        /// Override memory search query used for prompt injection
+        #[arg(long)]
+        memory_query: Option<String>,
+
         /// Force stdout streaming to stderr even in non-TTY/non-Text contexts
         #[arg(long, conflicts_with = "no_stream_stdout")]
         stream_stdout: bool,
@@ -174,6 +182,12 @@ pub enum Commands {
     Config {
         #[command(subcommand)]
         cmd: ConfigCommands,
+    },
+
+    /// Manage cross-session memory
+    Memory {
+        #[command(subcommand)]
+        command: MemoryCommands,
     },
 
     /// Review code changes using an AI tool
@@ -721,6 +735,69 @@ pub enum ConfigCommands {
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum MemoryCommands {
+    /// Search memories using BM25 full-text search
+    Search {
+        /// Search query
+        query: String,
+        /// Maximum results
+        #[arg(short, long, default_value = "10")]
+        limit: usize,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// List memory entries with optional filters
+    List {
+        /// Filter by project name
+        #[arg(long)]
+        project: Option<String>,
+        /// Filter by tool name
+        #[arg(long)]
+        tool: Option<String>,
+        /// Filter by tag
+        #[arg(long)]
+        tag: Option<String>,
+        /// Only show entries since this date (YYYY-MM-DD)
+        #[arg(long)]
+        since: Option<String>,
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Manually add a memory entry
+    Add {
+        /// Memory content
+        content: String,
+        /// Comma-separated tags
+        #[arg(long)]
+        tags: Option<String>,
+    },
+    /// Show a specific memory entry by ID
+    Show {
+        /// Memory entry ULID (prefix match supported)
+        id: String,
+    },
+    /// Clean up old memory entries
+    Gc {
+        /// Remove entries older than N days
+        #[arg(long, default_value = "90")]
+        days: u32,
+        /// Preview what would be removed
+        #[arg(long)]
+        dry_run: bool,
+    },
+    /// Rebuild tantivy search index from JSONL
+    Reindex,
+    /// Consolidate memory entries via LLM semantic merge
+    Consolidate {
+        /// Preview consolidation plan without writing changes
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 

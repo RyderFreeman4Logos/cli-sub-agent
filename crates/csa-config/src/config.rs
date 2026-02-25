@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use crate::acp::AcpConfig;
 use crate::config_merge::{enforce_global_tool_disables, merge_toml_values, warn_deprecated_keys};
 use crate::global::{PreferencesConfig, ReviewConfig};
+use crate::memory::MemoryConfig;
 use crate::paths;
 
 /// Sandbox enforcement mode for resource limits (cgroups, rlimits).
@@ -130,6 +131,9 @@ pub struct ProjectConfig {
     /// Session-level behavior toggles.
     #[serde(default, skip_serializing_if = "SessionConfig::is_default")]
     pub session: SessionConfig,
+    /// Memory system configuration.
+    #[serde(default, skip_serializing_if = "MemoryConfig::is_default")]
+    pub memory: MemoryConfig,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tools: HashMap<String, ToolConfig>,
     /// Optional per-project override for `csa review` tool selection.
@@ -364,6 +368,15 @@ impl ResourcesConfig {
 }
 
 impl ProjectConfig {
+    /// Return a copy suitable for user-facing display/logging.
+    ///
+    /// Sensitive fields (e.g. API keys) are masked.
+    pub fn redacted_for_display(&self) -> Self {
+        let mut redacted = self.clone();
+        redacted.memory.llm = redacted.memory.llm.redacted_for_display();
+        redacted
+    }
+
     /// Load config with fallback chain:
     ///
     /// 1. If both `.csa/config.toml` (project) and user config exist, deep-merge

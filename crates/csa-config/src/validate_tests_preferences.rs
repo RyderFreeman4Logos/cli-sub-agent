@@ -24,6 +24,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
             tool_priority: vec!["codexx".into(), "codex".into()],
         }),
         session: Default::default(),
+        memory: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

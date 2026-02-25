@@ -248,6 +248,8 @@ pub(crate) async fn handle_run(
     wait: bool,
     idle_timeout: Option<u64>,
     no_idle_timeout: bool,
+    no_memory: bool,
+    memory_query: Option<String>,
     current_depth: u32,
     output_format: OutputFormat,
     stream_mode: csa_process::StreamMode,
@@ -664,6 +666,10 @@ pub(crate) async fn handle_run(
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
     let mut executed_session_id: Option<String> = None;
+    let memory_injection = pipeline::MemoryInjectionOptions {
+        disabled: no_memory,
+        query_override: memory_query,
+    };
     // Track pre-created fork session IDs so we can clean them up on failure.
     let mut pre_created_fork_session_id: Option<String> = None;
 
@@ -916,6 +922,7 @@ pub(crate) async fn handle_run(
                 context_load_options.as_ref(),
                 stream_mode,
                 idle_timeout_seconds,
+                Some(&memory_injection),
                 Some(&global_config),
             )
             .await

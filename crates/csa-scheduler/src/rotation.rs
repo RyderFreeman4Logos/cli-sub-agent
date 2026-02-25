@@ -283,6 +283,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         }
     }
 
@@ -585,6 +586,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         };
         assert_eq!(resolve_tier_name(&config, "anything"), None);
     }

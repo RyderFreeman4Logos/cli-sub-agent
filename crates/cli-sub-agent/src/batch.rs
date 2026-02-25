@@ -609,6 +609,7 @@ async fn execute_task(
         None, // batch does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
+        None, // batch does not use memory injection
         None, // batch does not inject MCP (callers don't have global_config)
     )
     .await;

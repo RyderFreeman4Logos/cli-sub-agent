@@ -78,6 +78,7 @@ mod tests {
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
             preferences: None,
+            memory: Default::default(),
         }
     }
 

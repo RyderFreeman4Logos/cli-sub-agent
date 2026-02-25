@@ -11,6 +11,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal crates
 csa-core = { path = "crates/csa-core" }
+csa-memory = { path = "crates/csa-memory" }
 csa-session = { path = "crates/csa-session" }
 csa-lock = { path = "crates/csa-lock" }
 csa-executor = { path = "crates/csa-executor" }
@@ -27,6 +28,7 @@ agent-teams = { git = "https://github.com/ZhangHanDong/agent-teams-rs.git", defa
 # CLI & Async
 clap = { version = "4.5", features = ["derive"] }
 tokio = { version = "1.36", features = ["full", "process"] }
+reqwest = { version = "0.12", features = ["json", "rustls-tls"] }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -56,3 +58,4 @@ regex = "1.11"
 sha2 = "0.10"
 glob = "0.3"
 ignore = "0.4"
+tantivy = "0.22"

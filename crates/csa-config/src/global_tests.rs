@@ -767,6 +767,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         aliases: HashMap::new(),
         preferences: prefs,
         session: Default::default(),
+        memory: Default::default(),
     }
 }
 

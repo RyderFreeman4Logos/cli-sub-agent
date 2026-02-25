@@ -126,6 +126,7 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
             None, // debate does not override context loading options
             stream_mode,
             idle_timeout_seconds,
+            None,
             Some(&global_config),
         );
 

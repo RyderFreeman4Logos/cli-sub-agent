@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use csa_core::types::ToolName;
 
 use crate::mcp::McpServerConfig;
+use crate::memory::MemoryConfig;
 use crate::paths;
 
 /// Default maximum concurrent instances per tool.
@@ -36,6 +37,9 @@ pub struct GlobalConfig {
     pub fallback: FallbackConfig,
     #[serde(default)]
     pub todo: TodoDisplayConfig,
+    /// Memory system configuration.
+    #[serde(default)]
+    pub memory: MemoryConfig,
     /// Global MCP server registry injected into all tool sessions.
     ///
     /// Merged with project-level `.csa/mcp.toml` servers (project takes precedence
@@ -339,6 +343,15 @@ fn default_max_concurrent() -> u32 {
 }
 
 impl GlobalConfig {
+    /// Return a copy suitable for user-facing display/logging.
+    ///
+    /// Sensitive fields (e.g. API keys) are masked.
+    pub fn redacted_for_display(&self) -> Self {
+        let mut redacted = self.clone();
+        redacted.memory.llm = redacted.memory.llm.redacted_for_display();
+        redacted
+    }
+
     /// Load global config from `~/.config/cli-sub-agent/config.toml`.
     ///
     /// Returns `Default` if the file does not exist or if the config

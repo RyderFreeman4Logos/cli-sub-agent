@@ -231,6 +231,7 @@ mod tests {
             aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
+            memory: Default::default(),
         }
     }
 

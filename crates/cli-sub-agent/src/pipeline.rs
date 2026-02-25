@@ -25,6 +25,7 @@ use csa_session::{
     persist_structured_output, save_result, save_session,
 };
 
+use crate::memory_capture;
 use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
@@ -249,6 +250,12 @@ pub(crate) struct SessionExecutionResult {
     pub provider_session_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub(crate) struct MemoryInjectionOptions {
+    pub disabled: bool,
+    pub query_override: Option<String>,
+}
+
 fn run_pipeline_hook(
     event: HookEvent,
     hooks_config: &csa_hooks::HooksConfig,
@@ -276,6 +283,7 @@ pub(crate) async fn execute_with_session(
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
@@ -293,6 +301,7 @@ pub(crate) async fn execute_with_session(
         context_load_options,
         stream_mode,
         idle_timeout_seconds,
+        memory_injection,
         global_config,
     )
     .await?;
@@ -317,6 +326,7 @@ pub(crate) async fn execute_with_session_and_meta(
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
@@ -490,14 +500,8 @@ pub(crate) async fn execute_with_session_and_meta(
 
     info!("Executing in session: {}", session.meta_session_id);
 
-    // Apply restrictions if configured
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let mut effective_prompt = if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        executor.apply_restrictions(prompt, false)
-    } else {
-        prompt.to_string()
-    };
+    let mut effective_prompt = prompt.to_string();
 
     // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
     // Session resumes already have context loaded in the tool's conversation.
@@ -520,6 +524,39 @@ pub(crate) async fn execute_with_session_and_meta(
             );
             effective_prompt = format!("{context_block}{effective_prompt}");
         }
+    }
+
+    // Inject memory after context, before restrictions.
+    let is_review_or_debate = matches!(task_type, Some("review" | "debate"));
+    if !is_review_or_debate {
+        let memory_cfg = config
+            .map(|cfg| &cfg.memory)
+            .or_else(|| global_config.map(|cfg| &cfg.memory));
+        let memory_disabled = memory_injection.is_some_and(|opts| opts.disabled);
+        if let Some(memory_cfg) = memory_cfg
+            && memory_cfg.inject
+            && !memory_disabled
+        {
+            let project_name = config.map(|cfg| cfg.project.name.as_str());
+            let memory_query = memory_injection
+                .and_then(|opts| opts.query_override.as_deref())
+                .unwrap_or(effective_prompt.as_str());
+            if let Some(memory_section) =
+                memory_capture::build_memory_section(memory_cfg, memory_query, project_name)
+            {
+                info!(
+                    bytes = memory_section.len(),
+                    "Injecting memory context into prompt"
+                );
+                effective_prompt.push_str(&memory_section);
+            }
+        }
+    }
+
+    // Apply restrictions after context and memory injection.
+    if !can_edit {
+        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
+        effective_prompt = executor.apply_restrictions(&effective_prompt, false);
     }
 
     // Resolve tool state for session resume.
@@ -830,6 +867,23 @@ pub(crate) async fn execute_with_session_and_meta(
     ]);
     // PostRun hook: fires after every tool execution
     run_pipeline_hook(HookEvent::PostRun, &hooks_config, &hook_vars)?;
+
+    let memory_config = config
+        .map(|cfg| &cfg.memory)
+        .or_else(|| global_config.map(|cfg| &cfg.memory));
+    if let Some(memory_config) = memory_config {
+        if let Err(e) = memory_capture::capture_session_memory(
+            memory_config,
+            &session_dir,
+            config.map(|cfg| cfg.project.name.as_str()),
+            Some(executor.tool_name()),
+            Some(session.meta_session_id.as_str()),
+        )
+        .await
+        {
+            warn!("Memory capture failed: {}", e);
+        }
+    }
 
     // SessionComplete hook: git-commits session artifacts
     if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &hook_vars) {

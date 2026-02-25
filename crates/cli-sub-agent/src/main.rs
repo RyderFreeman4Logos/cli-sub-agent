@@ -14,6 +14,8 @@ mod error_hints;
 mod gc;
 mod mcp_hub;
 mod mcp_server;
+mod memory_capture;
+mod memory_cmd;
 mod pattern_resolver;
 mod pipeline;
 mod pipeline_env;
@@ -137,6 +139,8 @@ async fn run() -> Result<()> {
             wait,
             idle_timeout,
             no_idle_timeout,
+            no_memory,
+            memory_query,
             stream_stdout,
             no_stream_stdout,
         } => {
@@ -171,6 +175,8 @@ async fn run() -> Result<()> {
                 wait,
                 idle_timeout,
                 no_idle_timeout,
+                no_memory,
+                memory_query,
                 current_depth,
                 output_format,
                 stream_mode,
@@ -289,6 +295,9 @@ async fn run() -> Result<()> {
                 config_cmds::handle_config_get(key, default, project, global, cd)?;
             }
         },
+        Commands::Memory { command } => {
+            memory_cmd::handle_memory_command(command)?;
+        }
         Commands::Review(args) => {
             let exit_code = review_cmd::handle_review(args, current_depth).await?;
             std::process::exit(exit_code);
