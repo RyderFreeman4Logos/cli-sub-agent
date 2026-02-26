@@ -54,6 +54,8 @@ fn make_session(
         termination_reason: None,
         is_seed_candidate: is_seed,
         git_head_at_creation: git_head.map(|s| s.to_string()),
+        last_return_packet: None,
+        fork_call_timestamps: Vec::new(),
     }
 }
 

@@ -67,24 +67,30 @@ impl SessionLock {
     }
 }
 
-/// Acquire a non-blocking exclusive lock for a session and tool.
-///
-/// Lock path: `{session_dir}/locks/{tool_name}.lock`
-///
-/// On success:
-/// - Acquires exclusive advisory lock via `flock(2)` with `LOCK_NB`
-/// - Writes diagnostic JSON (pid, tool_name, acquired_at, reason) to lock file
-/// - Returns `SessionLock` guard that releases on drop
-///
-/// On failure:
-/// - Attempts to read existing lock file to report which PID holds it
-/// - Returns error with diagnostic information
-pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result<SessionLock> {
-    let locks_dir = session_dir.join("locks");
-    fs::create_dir_all(&locks_dir)
-        .with_context(|| format!("Failed to create locks directory: {}", locks_dir.display()))?;
+fn sanitize_lock_component(input: &str) -> String {
+    let sanitized: String = input
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' || ch == '_' || ch == '.' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let trimmed = sanitized.trim_matches('_');
+    if trimmed.is_empty() {
+        "unknown".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
 
-    let lock_path = locks_dir.join(format!("{}.lock", tool_name));
+fn acquire_lock_at_path(lock_path: &Path, lock_name: &str, reason: &str) -> Result<SessionLock> {
+    if let Some(parent) = lock_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create locks directory: {}", parent.display()))?;
+    }
 
     // Open or create the lock file
     let file = OpenOptions::new()
@@ -92,7 +98,7 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result
         .write(true)
         .create(true)
         .truncate(false)
-        .open(&lock_path)
+        .open(lock_path)
         .with_context(|| format!("Failed to open lock file: {}", lock_path.display()))?;
 
     let fd = file.as_raw_fd();
@@ -104,11 +110,14 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result
 
     if ret == 0 {
         // Lock acquired successfully. Write diagnostic information.
-        let mut lock = SessionLock { file, lock_path };
+        let mut lock = SessionLock {
+            file,
+            lock_path: lock_path.to_path_buf(),
+        };
 
         let diagnostic = LockDiagnostic {
             pid: std::process::id(),
-            tool_name: tool_name.to_string(),
+            tool_name: lock_name.to_string(),
             acquired_at: Utc::now(),
             reason: reason.to_string(),
         };
@@ -128,7 +137,7 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result
     } else {
         // Lock is held by another process, try to read diagnostic info
         let mut diag_file =
-            File::open(&lock_path).context("Failed to open lock file to read diagnostic")?;
+            File::open(lock_path).context("Failed to open lock file to read diagnostic")?;
         let mut contents = String::new();
         diag_file
             .read_to_string(&mut contents)
@@ -145,6 +154,45 @@ pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result
 
         Err(anyhow::anyhow!(error_msg))
     }
+}
+
+/// Acquire a non-blocking exclusive lock for a session and tool.
+///
+/// Lock path: `{session_dir}/locks/{tool_name}.lock`
+///
+/// On success:
+/// - Acquires exclusive advisory lock via `flock(2)` with `LOCK_NB`
+/// - Writes diagnostic JSON (pid, tool_name, acquired_at, reason) to lock file
+/// - Returns `SessionLock` guard that releases on drop
+///
+/// On failure:
+/// - Attempts to read existing lock file to report which PID holds it
+/// - Returns error with diagnostic information
+pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result<SessionLock> {
+    let locks_dir = session_dir.join("locks");
+    let lock_path = locks_dir.join(format!("{}.lock", tool_name));
+    acquire_lock_at_path(&lock_path, tool_name, reason)
+}
+
+/// Acquire a per-parent fork-call serialization lock.
+///
+/// Lock path: `{state_root}/fork-call-parent-locks/<parent-session-id>.lock`
+pub fn acquire_parent_fork_lock(
+    state_root: &Path,
+    parent_session_id: &str,
+    reason: &str,
+) -> Result<SessionLock> {
+    let trimmed = parent_session_id.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("parent session id cannot be empty");
+    }
+
+    let safe_parent_id = sanitize_lock_component(trimmed);
+    let lock_path = state_root
+        .join("fork-call-parent-locks")
+        .join(format!("{safe_parent_id}.lock"));
+    let lock_name = format!("fork-call-parent:{trimmed}");
+    acquire_lock_at_path(&lock_path, &lock_name, reason)
 }
 
 #[cfg(test)]
@@ -332,5 +380,31 @@ mod tests {
         assert!(err.contains(&std::process::id().to_string()), "missing PID");
         assert!(err.contains("diag-tool"), "missing tool name");
         assert!(err.contains("first task"), "missing original reason");
+    }
+
+    #[test]
+    fn test_parent_fork_lock_serializes_same_parent() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let state_root = temp_dir.path();
+
+        let _lock1 = acquire_parent_fork_lock(state_root, "01PARENT", "fork-call")
+            .expect("first parent lock should succeed");
+        let err = acquire_parent_fork_lock(state_root, "01PARENT", "fork-call")
+            .expect_err("second lock on same parent should fail")
+            .to_string();
+
+        assert!(err.contains("fork-call-parent:01PARENT"));
+    }
+
+    #[test]
+    fn test_parent_fork_lock_allows_different_parents() {
+        let temp_dir = tempdir().expect("Failed to create temp dir");
+        let state_root = temp_dir.path();
+
+        let lock_a = acquire_parent_fork_lock(state_root, "01PARENTA", "fork-call");
+        let lock_b = acquire_parent_fork_lock(state_root, "01PARENTB", "fork-call");
+
+        assert!(lock_a.is_ok());
+        assert!(lock_b.is_ok());
     }
 }

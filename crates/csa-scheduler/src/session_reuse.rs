@@ -149,6 +149,8 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");
@@ -181,6 +183,8 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let score = compute_relevance_score(&session, "review", "gemini-cli");
@@ -213,6 +217,8 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let score = compute_relevance_score(&session, "fix", "gemini-cli");
@@ -245,6 +251,8 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let score = compute_relevance_score(&session, "deploy", "gemini-cli");
@@ -275,6 +283,8 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");

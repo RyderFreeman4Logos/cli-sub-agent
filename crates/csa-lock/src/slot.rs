@@ -33,6 +33,7 @@ pub struct ToolSlot {
     slot_path: PathBuf,
     tool_name: String,
     slot_index: u32,
+    released: bool,
 }
 
 impl std::fmt::Debug for ToolSlot {
@@ -47,6 +48,9 @@ impl std::fmt::Debug for ToolSlot {
 
 impl Drop for ToolSlot {
     fn drop(&mut self) {
+        if self.released {
+            return;
+        }
         let fd = self.file.as_raw_fd();
         // SAFETY: `fd` is a valid file descriptor owned by `self.file`.
         // `LOCK_UN` releases the advisory lock. If this fails the lock
@@ -54,6 +58,7 @@ impl Drop for ToolSlot {
         unsafe {
             libc::flock(fd, libc::LOCK_UN);
         }
+        self.released = true;
     }
 }
 
@@ -66,6 +71,22 @@ impl ToolSlot {
     /// The slot index (0-based).
     pub fn slot_index(&self) -> u32 {
         self.slot_index
+    }
+
+    /// Explicitly release this slot before drop.
+    pub fn release_slot(&mut self) -> Result<()> {
+        if self.released {
+            return Ok(());
+        }
+
+        let fd = self.file.as_raw_fd();
+        // SAFETY: `fd` is a valid file descriptor owned by `self.file`.
+        let ret = unsafe { libc::flock(fd, libc::LOCK_UN) };
+        if ret != 0 {
+            anyhow::bail!("failed to release slot lock {}", self.slot_path.display());
+        }
+        self.released = true;
+        Ok(())
     }
 }
 
@@ -130,6 +151,7 @@ pub fn try_acquire_slot(
                 slot_path,
                 tool_name: tool_name.to_string(),
                 slot_index: index,
+                released: false,
             };
 
             let diagnostic = SlotDiagnostic {
@@ -550,5 +572,26 @@ mod tests {
             }
             _ => panic!("expected Exhausted"),
         }
+    }
+
+    #[test]
+    fn test_release_slot_allows_reacquire_when_max_concurrent_is_one() {
+        let dir = tempdir().unwrap();
+        let slots_dir = dir.path();
+
+        let mut first = match try_acquire_slot(slots_dir, "single", 1, None).unwrap() {
+            SlotAcquireResult::Acquired(slot) => slot,
+            SlotAcquireResult::Exhausted(_) => panic!("expected slot acquisition"),
+        };
+
+        first
+            .release_slot()
+            .expect("explicit release should succeed");
+
+        let second = try_acquire_slot(slots_dir, "single", 1, None).unwrap();
+        assert!(
+            matches!(second, SlotAcquireResult::Acquired(_)),
+            "slot should be reacquired after explicit release"
+        );
     }
 }
