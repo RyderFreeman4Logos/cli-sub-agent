@@ -162,7 +162,7 @@ pub struct ReturnPacketRef {
     pub section_path: String,
 }
 
-fn normalize_repo_relative_path(path: &str) -> Option<String> {
+pub(crate) fn normalize_repo_relative_path(path: &str) -> Option<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed.contains('\0') {
         return None;

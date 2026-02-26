@@ -11,7 +11,7 @@ use anyhow::{Context, Result, anyhow};
 
 use crate::output_section::{
     ChangedFile, FileAction, OutputIndex, OutputSection, RETURN_PACKET_MAX_SUMMARY_CHARS,
-    ReturnPacket, ReturnStatus,
+    ReturnPacket, ReturnStatus, normalize_repo_relative_path,
 };
 use crate::redact::redact_text_content;
 
@@ -275,23 +275,6 @@ pub fn parse_return_packet(section_content: &str) -> Result<ReturnPacket> {
 /// Security checks:
 /// - path must be non-empty, relative, and free of traversal components
 /// - canonicalized target (or canonicalized parent for new files) must remain inside root
-fn normalize_repo_relative_path(path: &str) -> Option<String> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() || trimmed.contains('\0') {
-        return None;
-    }
-
-    let mut normalized = trimmed;
-    while let Some(stripped) = normalized.strip_prefix("./") {
-        normalized = stripped;
-    }
-    if normalized.is_empty() {
-        return None;
-    }
-
-    Some(normalized.to_string())
-}
-
 pub fn validate_return_packet_path(path: &str, project_root: &Path) -> bool {
     let Some(normalized) = normalize_repo_relative_path(path) else {
         return false;
