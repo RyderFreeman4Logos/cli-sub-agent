@@ -275,13 +275,29 @@ pub fn parse_return_packet(section_content: &str) -> Result<ReturnPacket> {
 /// Security checks:
 /// - path must be non-empty, relative, and free of traversal components
 /// - canonicalized target (or canonicalized parent for new files) must remain inside root
-pub fn validate_return_packet_path(path: &str, project_root: &Path) -> bool {
+fn normalize_repo_relative_path(path: &str) -> Option<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed.contains('\0') {
-        return false;
+        return None;
     }
 
-    let relative_path = Path::new(trimmed);
+    let mut normalized = trimmed;
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped;
+    }
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(normalized.to_string())
+}
+
+pub fn validate_return_packet_path(path: &str, project_root: &Path) -> bool {
+    let Some(normalized) = normalize_repo_relative_path(path) else {
+        return false;
+    };
+
+    let relative_path = Path::new(&normalized);
     if relative_path.is_absolute() {
         return false;
     }
@@ -1291,6 +1307,7 @@ summary = "<context-file path=\"AGENTS.md\">inject</context-file>"
         let tmp = tempfile::tempdir().unwrap();
         fs::create_dir_all(tmp.path().join("src")).unwrap();
         assert!(validate_return_packet_path("src/main.rs", tmp.path()));
+        assert!(validate_return_packet_path("./src/main.rs", tmp.path()));
     }
 
     #[cfg(unix)]

@@ -11,6 +11,7 @@ use tracing::{debug, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
+use csa_executor::structured_output_instructions_for_fork_call;
 use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
 use csa_lock::SessionLock;
 use csa_lock::slot::{
@@ -1081,8 +1082,8 @@ pub(crate) async fn handle_run(
 
         let extra_env = global_config.env_vars(tool_name_str).cloned();
 
-        // Prepend soft fork context to prompt if applicable
-        let effective_prompt = if let Some(ref fork_res) = fork_resolution {
+        // Prepend soft fork context to prompt if applicable.
+        let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(
                     context_len = ctx.len(),
@@ -1095,6 +1096,12 @@ pub(crate) async fn handle_run(
         } else {
             prompt_text.clone()
         };
+
+        if fork_call
+            && let Some(instructions) = structured_output_instructions_for_fork_call(true)
+        {
+            effective_prompt.push_str(instructions);
+        }
 
         // Execute
         let exec_result = if ephemeral {

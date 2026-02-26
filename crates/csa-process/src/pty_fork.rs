@@ -227,18 +227,39 @@ struct ForkSupport {
 }
 
 async fn detect_codex_fork_support(codex_path: &Path) -> Result<ForkSupport> {
-    if !codex_path.exists() {
-        return Ok(ForkSupport {
-            supported: false,
-            reason: format!("codex binary not found: {}", codex_path.display()),
-        });
+    match Command::new(codex_path).arg("--version").output().await {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ForkSupport {
+                supported: false,
+                reason: format!(
+                    "codex binary not found or not executable via PATH: {}",
+                    codex_path.display()
+                ),
+            });
+        }
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed probing '{} --version'", codex_path.display()));
+        }
     }
 
-    let output = Command::new(codex_path)
-        .arg("--help")
-        .output()
-        .await
-        .with_context(|| format!("failed running '{} --help'", codex_path.display()))?;
+    let output = match Command::new(codex_path).arg("--help").output().await {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ForkSupport {
+                supported: false,
+                reason: format!(
+                    "codex binary not found or not executable via PATH: {}",
+                    codex_path.display()
+                ),
+            });
+        }
+        Err(err) => {
+            return Err(err)
+                .with_context(|| format!("failed running '{} --help'", codex_path.display()));
+        }
+    };
 
     let help = format!(
         "{}\n{}",

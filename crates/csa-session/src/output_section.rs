@@ -162,13 +162,29 @@ pub struct ReturnPacketRef {
     pub section_path: String,
 }
 
-fn is_repo_relative_path(path: &str) -> bool {
+fn normalize_repo_relative_path(path: &str) -> Option<String> {
     let trimmed = path.trim();
     if trimmed.is_empty() || trimmed.contains('\0') {
-        return false;
+        return None;
     }
 
-    let parsed = Path::new(trimmed);
+    let mut normalized = trimmed;
+    while let Some(stripped) = normalized.strip_prefix("./") {
+        normalized = stripped;
+    }
+    if normalized.is_empty() {
+        return None;
+    }
+
+    Some(normalized.to_string())
+}
+
+fn is_repo_relative_path(path: &str) -> bool {
+    let Some(normalized) = normalize_repo_relative_path(path) else {
+        return false;
+    };
+
+    let parsed = Path::new(&normalized);
     if parsed.is_absolute() {
         return false;
     }
@@ -180,8 +196,9 @@ fn is_repo_relative_path(path: &str) -> bool {
 
     parsed.components().all(|component| match component {
         Component::Normal(_) => true,
-        Component::CurDir => true,
-        Component::ParentDir | Component::RootDir | Component::Prefix(_) => false,
+        Component::ParentDir | Component::CurDir | Component::RootDir | Component::Prefix(_) => {
+            false
+        }
     })
 }
 
@@ -292,7 +309,7 @@ mod tests {
             artifacts: vec!["build/output.txt".to_string()],
             changed_files: vec![
                 ChangedFile {
-                    path: "src/lib.rs".to_string(),
+                    path: "./src/lib.rs".to_string(),
                     action: FileAction::Modify,
                 },
                 ChangedFile {
