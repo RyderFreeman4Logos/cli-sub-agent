@@ -1,3 +1,4 @@
+use anyhow::Result;
 use clap::{ArgGroup, Parser, Subcommand};
 use csa_core::types::{OutputFormat, ToolArg, ToolName};
 
@@ -29,6 +30,32 @@ pub struct Cli {
     /// Output format (text or json)
     #[arg(long, global = true, default_value = "text")]
     pub format: OutputFormat,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReturnTarget {
+    Last,
+    Auto,
+    SessionId(String),
+}
+
+pub fn parse_return_to(value: &str) -> Result<ReturnTarget> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("return target cannot be empty");
+    }
+
+    match trimmed.to_ascii_lowercase().as_str() {
+        "last" => Ok(ReturnTarget::Last),
+        "auto" => Ok(ReturnTarget::Auto),
+        _ => Ok(ReturnTarget::SessionId(trimmed.to_string())),
+    }
+}
+
+fn validate_return_to(value: &str) -> std::result::Result<String, String> {
+    parse_return_to(value)
+        .map(|_| value.to_string())
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Subcommand)]
@@ -65,6 +92,21 @@ pub enum Commands {
         /// Human-readable description for a new session
         #[arg(short, long)]
         description: Option<String>,
+
+        /// Fork-call mode: fork a session, execute task, return only the ReturnPacket.
+        /// Incompatible with --session, --last, --ephemeral.
+        #[arg(long, conflicts_with_all = ["session", "last", "ephemeral"])]
+        fork_call: bool,
+
+        /// Session to return results to after fork-call completion.
+        /// Values: "last" (most recent session), "auto" (auto-detect parent), or a session ID.
+        #[arg(
+            long,
+            requires = "fork_call",
+            value_name = "TARGET",
+            value_parser = validate_return_to
+        )]
+        return_to: Option<String>,
 
         /// Parent session ULID (defaults to CSA_SESSION_ID env var)
         #[arg(long, hide = true)]

@@ -235,6 +235,10 @@ pub struct ToolConfig {
     /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
+    /// Codex-only: auto-approve trust dialog during PTY native fork flow.
+    /// Defaults to false for explicit safety.
+    #[serde(default)]
+    pub codex_auto_trust: bool,
 }
 
 impl Default for ToolConfig {
@@ -250,6 +254,7 @@ impl Default for ToolConfig {
             lean_mode: None,
             setting_sources: None,
             thinking_lock: None,
+            codex_auto_trust: false,
         }
     }
 }
@@ -673,6 +678,7 @@ transcript_max_size_mb = 500
 init_timeout_seconds = 60
 # [tools.codex]
 # enabled = true
+# codex_auto_trust = false
 # [tools.gemini-cli]
 # enabled = true
 # [tiers.tier-1-quick]

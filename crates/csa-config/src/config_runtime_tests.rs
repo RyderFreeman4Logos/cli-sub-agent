@@ -534,3 +534,22 @@ fn default_sandbox_for_tool_codex() {
     );
     assert_eq!(opts.node_heap_limit_mb, None);
 }
+
+#[test]
+fn codex_auto_trust_defaults_to_false() {
+    let cfg = empty_config();
+    assert!(!cfg.codex_auto_trust());
+}
+
+#[test]
+fn codex_auto_trust_reads_tools_codex_setting() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            codex_auto_trust: true,
+            ..Default::default()
+        },
+    );
+    assert!(cfg.codex_auto_trust());
+}

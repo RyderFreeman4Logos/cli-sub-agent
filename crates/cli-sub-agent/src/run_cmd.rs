@@ -236,6 +236,8 @@ pub(crate) async fn handle_run(
     fork_from: Option<String>,
     fork_last: bool,
     description: Option<String>,
+    fork_call: bool,
+    return_to: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
     cd: Option<String>,
@@ -270,6 +272,15 @@ pub(crate) async fn handle_run(
             "warning: --session is deprecated and will be removed in a future release. Use --fork-from instead."
         );
     }
+
+    let _return_target = if fork_call {
+        Some(match return_to.as_deref() {
+            Some(value) => crate::cli::parse_return_to(value)?,
+            None => crate::cli::ReturnTarget::Auto,
+        })
+    } else {
+        None
+    };
 
     // 2. Resolve fork flags or legacy resume flags to session ID
     let is_fork = fork_from.is_some() || fork_last;

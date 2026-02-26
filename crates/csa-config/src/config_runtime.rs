@@ -197,6 +197,16 @@ impl ProjectConfig {
             .map(|r| r.allow_edit_existing_files)
             .unwrap_or(true)
     }
+
+    /// Resolve Codex PTY fork trust behavior from tool config.
+    ///
+    /// Returns false by default.
+    pub fn codex_auto_trust(&self) -> bool {
+        self.tools
+            .get("codex")
+            .map(|cfg| cfg.codex_auto_trust)
+            .unwrap_or(false)
+    }
 }
 
 /// Default sandbox options derived from a tool's resource profile.
