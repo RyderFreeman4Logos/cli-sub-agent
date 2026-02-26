@@ -315,9 +315,14 @@ pub fn validate_return_packet_path(path: &str, project_root: &Path) -> bool {
     let Some(parent) = candidate.parent() else {
         return false;
     };
-    parent
-        .canonicalize()
-        .is_ok_and(|resolved_parent| resolved_parent.starts_with(&canonical_root))
+    match parent.canonicalize() {
+        Ok(resolved_parent) => resolved_parent.starts_with(&canonical_root),
+        Err(_) => {
+            // Non-existent paths (for example after FileAction::Delete) should still be
+            // accepted if they are syntactically repo-relative and traversal-free.
+            true
+        }
+    }
 }
 
 fn finalize_return_packet(mut packet: ReturnPacket) -> ReturnPacket {
@@ -1291,6 +1296,15 @@ summary = "<context-file path=\"AGENTS.md\">inject</context-file>"
         fs::create_dir_all(tmp.path().join("src")).unwrap();
         assert!(validate_return_packet_path("src/main.rs", tmp.path()));
         assert!(validate_return_packet_path("./src/main.rs", tmp.path()));
+    }
+
+    #[test]
+    fn test_validate_return_packet_path_accepts_missing_parent_for_delete_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(validate_return_packet_path(
+            "removed-dir/main.rs",
+            tmp.path()
+        ));
     }
 
     #[cfg(unix)]

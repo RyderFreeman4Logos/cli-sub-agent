@@ -727,7 +727,6 @@ pub(crate) async fn handle_run(
     session_arg = next_session_arg;
 
     let mut _fork_call_parent_lock: Option<SessionLock> = None;
-    let mut fork_call_parent_state: Option<MetaSessionState> = None;
     let mut fork_call_parent_session_id: Option<String> = None;
     if fork_call {
         let resolved_parent_id = resolve_return_target_session_id(
@@ -753,8 +752,8 @@ pub(crate) async fn handle_run(
         parent_state
             .record_fork_call_attempt(Instant::now())
             .map_err(anyhow::Error::msg)?;
+        csa_session::save_session(&parent_state)?;
         fork_call_parent_session_id = Some(parent_id.clone());
-        fork_call_parent_state = Some(parent_state);
 
         // If fork source was not explicitly provided, fork from the return parent.
         if session_arg.is_none() {
@@ -1389,12 +1388,8 @@ pub(crate) async fn handle_run(
         let parent_session_id = fork_call_parent_session_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("fork-call parent session is unresolved"))?;
-        let mut parent_state = if let Some(state) = fork_call_parent_state.take() {
-            state
-        } else {
-            csa_session::load_session(&project_root, &parent_session_id)?
-        };
-
+        // Reload current state from disk to avoid clobbering concurrent parent updates.
+        let mut parent_state = csa_session::load_session(&project_root, &parent_session_id)?;
         parent_state.last_return_packet = Some(return_packet_ref);
         csa_session::save_session(&parent_state)?;
 
