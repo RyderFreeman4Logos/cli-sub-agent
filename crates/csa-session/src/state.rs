@@ -1,8 +1,13 @@
 //! Session state types
 
+use crate::output_section::ReturnPacketRef;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+const FORK_CALL_RATE_LIMIT_MAX: usize = 10;
+const FORK_CALL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
 
 /// Meta-session state representing a logical work session
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +79,16 @@ pub struct MetaSessionState {
     /// Used for seed invalidation: if HEAD changed, the seed is stale.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub git_head_at_creation: Option<String>,
+
+    /// Reference to the latest child return packet captured via fork-call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_return_packet: Option<ReturnPacketRef>,
+
+    /// In-memory fork-call timestamps for simple per-session rate limiting.
+    ///
+    /// This is intentionally runtime-only and is not persisted to state.toml.
+    #[serde(skip)]
+    pub fork_call_timestamps: Vec<Instant>,
 }
 
 /// Lightweight telemetry about the resource sandbox applied to a session.
@@ -312,6 +327,36 @@ impl SessionPhase {
     }
 }
 
+impl MetaSessionState {
+    /// Apply a lifecycle event to this session and update `phase` in-place.
+    pub fn apply_phase_event(&mut self, event: PhaseEvent) -> Result<(), String> {
+        let new_phase = self.phase.transition(&event)?;
+        self.phase = new_phase;
+        Ok(())
+    }
+
+    /// Record a fork-call attempt and enforce a per-session sliding-window rate limit.
+    ///
+    /// Limit: at most 10 fork-calls per 60 seconds.
+    pub fn record_fork_call_attempt(&mut self, now: Instant) -> Result<(), String> {
+        self.fork_call_timestamps.retain(|ts| {
+            now.checked_duration_since(*ts)
+                .is_some_and(|elapsed| elapsed < FORK_CALL_RATE_LIMIT_WINDOW)
+        });
+
+        if self.fork_call_timestamps.len() >= FORK_CALL_RATE_LIMIT_MAX {
+            return Err(format!(
+                "fork-call rate limit exceeded: max {} per {}s",
+                FORK_CALL_RATE_LIMIT_MAX,
+                FORK_CALL_RATE_LIMIT_WINDOW.as_secs()
+            ));
+        }
+
+        self.fork_call_timestamps.push(now);
+        Ok(())
+    }
+}
+
 impl std::fmt::Display for SessionPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -336,6 +381,32 @@ pub struct TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_state_with_phase(phase: SessionPhase) -> MetaSessionState {
+        let now = chrono::Utc::now();
+        MetaSessionState {
+            meta_session_id: ulid::Ulid::new().to_string(),
+            description: Some("phase-test".to_string()),
+            project_path: "/tmp/test".to_string(),
+            branch: None,
+            created_at: now,
+            last_accessed: now,
+            genealogy: Genealogy::default(),
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: None,
+            phase,
+            task_context: TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
+        }
+    }
 
     // ── Valid transitions ────────────────────────────────────────────
 
@@ -425,6 +496,39 @@ mod tests {
         assert_eq!(available, SessionPhase::Available);
         let active_again = available.transition(&PhaseEvent::Resumed).unwrap();
         assert_eq!(active_again, SessionPhase::Active);
+    }
+
+    // ── MetaSessionState phase application ──────────────────────────
+
+    #[test]
+    fn test_apply_phase_event_resumed_available_to_active() {
+        let mut state = sample_state_with_phase(SessionPhase::Available);
+        state
+            .apply_phase_event(PhaseEvent::Resumed)
+            .expect("Available -> Active should be valid");
+        assert_eq!(state.phase, SessionPhase::Active);
+    }
+
+    #[test]
+    fn test_apply_phase_event_records_phase_change_in_state() {
+        let mut state = sample_state_with_phase(SessionPhase::Active);
+        state
+            .apply_phase_event(PhaseEvent::Compressed)
+            .expect("Active -> Available should be valid");
+        assert_eq!(state.phase, SessionPhase::Available);
+    }
+
+    #[test]
+    fn test_apply_phase_event_rejects_retired_to_active() {
+        let mut state = sample_state_with_phase(SessionPhase::Retired);
+        let err = state
+            .apply_phase_event(PhaseEvent::Resumed)
+            .expect_err("Retired -> Active should fail");
+        assert!(
+            err.contains("invalid phase transition"),
+            "error should describe invalid transition"
+        );
+        assert_eq!(state.phase, SessionPhase::Retired);
     }
 
     // ── Serde round-trip ───────────────────────────────────────────
@@ -524,6 +628,8 @@ mod tests {
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -560,6 +666,85 @@ is_compacted = false
         let loaded: MetaSessionState =
             toml::from_str(toml_str).expect("Deserialize legacy state should succeed");
         assert_eq!(loaded.branch, None);
+        assert_eq!(loaded.last_return_packet, None);
+    }
+
+    #[test]
+    fn test_meta_session_state_backward_compat_without_last_return_packet() {
+        let toml_str = r#"
+meta_session_id = "01J6F5W0M6Q7BW7Q3T0J4A8V45"
+description = "Legacy session"
+project_path = "/tmp/test"
+created_at = "2026-01-01T00:00:00Z"
+last_accessed = "2026-01-01T00:00:00Z"
+turn_count = 0
+
+[genealogy]
+depth = 0
+
+[tools]
+
+[context_status]
+is_compacted = false
+"#;
+
+        let loaded: MetaSessionState =
+            toml::from_str(toml_str).expect("Deserialize legacy state should succeed");
+        assert_eq!(loaded.last_return_packet, None);
+    }
+
+    #[test]
+    fn test_meta_session_state_last_return_packet_roundtrip() {
+        let now = chrono::Utc::now();
+        let state = MetaSessionState {
+            meta_session_id: ulid::Ulid::new().to_string(),
+            description: Some("return-packet".to_string()),
+            project_path: "/tmp/test".to_string(),
+            branch: None,
+            created_at: now,
+            last_accessed: now,
+            genealogy: Genealogy::default(),
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: None,
+            phase: SessionPhase::Active,
+            task_context: TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
+            last_return_packet: Some(ReturnPacketRef {
+                child_session_id: "01CHILDSESSIONID000000000000".to_string(),
+                section_path: "/tmp/test-session/output/return-packet.md".to_string(),
+            }),
+            fork_call_timestamps: Vec::new(),
+        };
+
+        let toml_str = toml::to_string_pretty(&state).expect("serialize");
+        let loaded: MetaSessionState = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(loaded.last_return_packet, state.last_return_packet);
+    }
+
+    #[test]
+    fn test_record_fork_call_attempt_rejects_eleventh_within_window() {
+        let mut state = sample_state_with_phase(SessionPhase::Active);
+        let base = Instant::now();
+
+        for i in 0..FORK_CALL_RATE_LIMIT_MAX {
+            state
+                .record_fork_call_attempt(base + Duration::from_secs(i as u64))
+                .expect("first ten attempts should pass");
+        }
+
+        let err = state
+            .record_fork_call_attempt(base + Duration::from_secs(FORK_CALL_RATE_LIMIT_MAX as u64))
+            .expect_err("11th attempt inside window should fail");
+        assert!(
+            err.contains("rate limit exceeded"),
+            "error should indicate rate limiting"
+        );
     }
 
     // ── Retired is terminal ────────────────────────────────────────
@@ -743,6 +928,8 @@ is_compacted = false
             termination_reason: None,
             is_seed_candidate: false,
             git_head_at_creation: None,
+            last_return_packet: None,
+            fork_call_timestamps: Vec::new(),
         };
 
         let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
