@@ -239,6 +239,7 @@ async fn resolve_fork(
     source_session_id: &str,
     tool_name: &str,
     project_root: &Path,
+    codex_auto_trust: bool,
 ) -> Result<ForkResolution> {
     // Determine if source session uses a different tool than the target.
     // Cross-tool forks must always use soft fork (context summary injection)
@@ -275,6 +276,7 @@ async fn resolve_fork(
     let fork_request = ForkRequest {
         tool_name: tool_name.to_string(),
         fork_method: Some(fork_method),
+        codex_auto_trust,
         provider_session_id: source_provider_id.clone(),
         parent_csa_session_id: source_csa_id.clone(),
         parent_session_dir: session_dir.clone(),
@@ -1011,7 +1013,17 @@ pub(crate) async fn handle_run(
         // This prevents orphaning transport-level forks when pre-run checks fail.
         if is_fork && fork_resolution.is_none() {
             if let Some(ref source_id) = session_arg {
-                match resolve_fork(source_id, current_tool.as_str(), &project_root).await {
+                let codex_auto_trust = config
+                    .as_ref()
+                    .is_some_and(ProjectConfig::codex_auto_trust);
+                match resolve_fork(
+                    source_id,
+                    current_tool.as_str(),
+                    &project_root,
+                    codex_auto_trust,
+                )
+                .await
+                {
                     Ok(res) => fork_resolution = Some(res),
                     Err(e) if is_auto_seed_fork => {
                         // Auto seed forks are best-effort: degrade to cold start.
@@ -1383,19 +1395,31 @@ pub(crate) async fn handle_run(
             csa_session::load_session(&project_root, &parent_session_id)?
         };
 
+        parent_state.last_return_packet = Some(return_packet_ref);
+        csa_session::save_session(&parent_state)?;
+
         // Reacquire a slot for parent resume work after child execution.
+        // This is best-effort only; return-packet persistence is the critical path.
         let parent_tool_name = current_tool.as_str();
         let parent_timeout =
             std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(config.as_ref()));
-        let _parent_resume_slot = acquire_slot_blocking(
+        let _parent_resume_slot = match acquire_slot_blocking(
             &slots_dir,
             parent_tool_name,
             global_config.max_concurrent(parent_tool_name),
             parent_timeout,
             Some(&parent_session_id),
-        )?;
-
-        parent_state.last_return_packet = Some(return_packet_ref);
+        ) {
+            Ok(slot) => Some(slot),
+            Err(e) => {
+                warn!(
+                    session = %parent_session_id,
+                    error = %e,
+                    "Failed to reacquire parent slot during fork-call resume; continuing"
+                );
+                None
+            }
+        };
 
         if return_target.is_some() {
             match parent_state.phase {

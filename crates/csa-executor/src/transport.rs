@@ -438,6 +438,8 @@ pub struct ForkRequest {
     pub fork_method: Option<ForkMethod>,
     /// Provider session ID of the parent (required for Native fork).
     pub provider_session_id: Option<String>,
+    /// Whether Codex PTY native fork should auto-accept trust prompts.
+    pub codex_auto_trust: bool,
     /// CSA session ID of the parent (used for Soft fork context loading).
     pub parent_csa_session_id: String,
     /// Directory of the parent session (used for Soft fork to read result/output).
@@ -529,7 +531,10 @@ impl TransportFactory {
             return Self::fork_soft_with_reason(request, reason);
         };
 
-        let config = PtyForkConfig::default();
+        let config = PtyForkConfig {
+            codex_auto_trust: request.codex_auto_trust,
+            ..PtyForkConfig::default()
+        };
         match fork_codex_session(parent_provider_session_id, Path::new("codex"), &config).await {
             Ok(PtyForkResult::Success { child_session_id }) => ForkInfo {
                 success: true,
@@ -825,6 +830,7 @@ mod tests {
             tool_name: "codex".to_string(),
             fork_method: None,
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),
@@ -858,6 +864,7 @@ mod tests {
             tool_name: "codex".to_string(),
             fork_method: Some(ForkMethod::Native),
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),
@@ -884,6 +891,7 @@ mod tests {
             tool_name: "claude-code".to_string(),
             fork_method: None,
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),
@@ -931,6 +939,7 @@ mod tests {
             tool_name: "gemini-cli".to_string(),
             fork_method: None,
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01RICH_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),
