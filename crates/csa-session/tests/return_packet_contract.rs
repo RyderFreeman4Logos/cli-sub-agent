@@ -140,6 +140,56 @@ fn test_return_packet_validate_rejects_path_traversal_in_changed_files() {
 }
 
 #[test]
+fn test_return_packet_empty_section_degrades_to_failure_packet_through_pipeline() {
+    let tempdir = write_sections_to_tempdir(&[(RETURN_PACKET_SECTION_ID, "")]);
+    let payload = read_section(tempdir.path(), RETURN_PACKET_SECTION_ID)
+        .expect("read return packet section")
+        .expect("return packet section exists");
+    assert!(payload.trim().is_empty());
+
+    let packet = parse_return_packet(&payload).expect("parse should degrade to failure packet");
+    assert_eq!(packet.status, ReturnStatus::Failure);
+    assert_eq!(packet.exit_code, 1);
+    assert!(packet.summary.is_empty());
+    assert!(packet.changed_files.is_empty());
+    assert!(packet.error_context.is_none());
+}
+
+#[test]
+fn test_return_packet_path_traversal_in_section_fails_validation_through_pipeline() {
+    let packet_with_traversal = ReturnPacket {
+        status: ReturnStatus::Success,
+        exit_code: 0,
+        summary: "attempt traversal".to_string(),
+        changed_files: vec![ChangedFile {
+            path: "../secret.txt".to_string(),
+            action: FileAction::Modify,
+        }],
+        ..ReturnPacket::default()
+    };
+
+    let return_packet_toml = toml::to_string(&packet_with_traversal)
+        .expect("serialize traversal packet to toml for section payload");
+    let tempdir = write_sections_to_tempdir(&[(RETURN_PACKET_SECTION_ID, &return_packet_toml)]);
+    let payload = read_section(tempdir.path(), RETURN_PACKET_SECTION_ID)
+        .expect("read return packet section")
+        .expect("return packet section exists");
+
+    let packet = parse_return_packet(&payload)
+        .expect("invalid changed_files path should degrade to failure packet");
+    assert_eq!(packet.status, ReturnStatus::Failure);
+    assert_eq!(packet.exit_code, 1);
+    assert!(packet.changed_files.is_empty());
+    assert!(
+        packet
+            .error_context
+            .as_deref()
+            .is_some_and(|err| err.contains("validation failed")),
+        "error context should include validation failure reason"
+    );
+}
+
+#[test]
 fn test_return_packet_isolated_when_multiple_sections_exist() {
     let expected = ReturnPacket {
         status: ReturnStatus::Success,
