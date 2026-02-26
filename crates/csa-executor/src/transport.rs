@@ -438,6 +438,8 @@ pub struct ForkRequest {
     pub fork_method: Option<ForkMethod>,
     /// Provider session ID of the parent (required for Native fork).
     pub provider_session_id: Option<String>,
+    /// Whether Codex PTY native fork should auto-accept trust prompts.
+    pub codex_auto_trust: bool,
     /// CSA session ID of the parent (used for Soft fork context loading).
     pub parent_csa_session_id: String,
     /// Directory of the parent session (used for Soft fork to read result/output).
@@ -453,6 +455,15 @@ impl TransportFactory {
     pub fn fork_method_for_tool(tool_name: &str) -> ForkMethod {
         if tool_name == "claude-code" {
             ForkMethod::Native
+        } else if tool_name == "codex" {
+            #[cfg(feature = "codex-pty-fork")]
+            {
+                ForkMethod::Native
+            }
+            #[cfg(not(feature = "codex-pty-fork"))]
+            {
+                ForkMethod::Soft
+            }
         } else {
             ForkMethod::Soft
         }
@@ -473,6 +484,10 @@ impl TransportFactory {
     }
 
     async fn fork_native(request: &ForkRequest) -> ForkInfo {
+        if request.tool_name == "codex" {
+            return Self::fork_codex_via_pty(request).await;
+        }
+
         let Some(provider_session_id) = &request.provider_session_id else {
             return ForkInfo {
                 success: false,
@@ -504,6 +519,76 @@ impl TransportFactory {
                 notes: Some(format!("Native fork failed: {e}")),
             },
         }
+    }
+
+    #[cfg(feature = "codex-pty-fork")]
+    async fn fork_codex_via_pty(request: &ForkRequest) -> ForkInfo {
+        use csa_process::pty_fork::{PtyForkConfig, PtyForkResult, fork_codex_session};
+
+        let Some(parent_provider_session_id) = request.provider_session_id.as_deref() else {
+            let reason = "codex native fork requires provider_session_id";
+            tracing::warn!(tool = %request.tool_name, reason, "native fork degraded to soft fork");
+            return Self::fork_soft_with_reason(request, reason);
+        };
+
+        let config = PtyForkConfig {
+            codex_auto_trust: request.codex_auto_trust,
+            ..PtyForkConfig::default()
+        };
+        match fork_codex_session(parent_provider_session_id, Path::new("codex"), &config).await {
+            Ok(PtyForkResult::Success { child_session_id }) => ForkInfo {
+                success: true,
+                method: ForkMethod::Native,
+                new_session_id: Some(child_session_id),
+                notes: None,
+            },
+            Ok(PtyForkResult::Degraded { reason }) => {
+                tracing::warn!(
+                    tool = %request.tool_name,
+                    reason = %reason,
+                    "native fork degraded to soft fork"
+                );
+                Self::fork_soft_with_reason(request, &reason)
+            }
+            Ok(PtyForkResult::Failed { error }) => {
+                tracing::warn!(
+                    tool = %request.tool_name,
+                    error = %error,
+                    "native fork failed; falling back to soft fork"
+                );
+                Self::fork_soft_with_reason(request, &format!("Native codex fork failed: {error}"))
+            }
+            Err(e) => {
+                tracing::warn!(
+                    tool = %request.tool_name,
+                    error = %e,
+                    "native fork errored; falling back to soft fork"
+                );
+                Self::fork_soft_with_reason(
+                    request,
+                    &format!("Native codex fork errored unexpectedly: {e}"),
+                )
+            }
+        }
+    }
+
+    #[cfg(not(feature = "codex-pty-fork"))]
+    async fn fork_codex_via_pty(request: &ForkRequest) -> ForkInfo {
+        Self::fork_soft_with_reason(
+            request,
+            "Native codex fork unavailable: feature `codex-pty-fork` is disabled",
+        )
+    }
+
+    fn fork_soft_with_reason(request: &ForkRequest, native_reason: &str) -> ForkInfo {
+        let mut soft = Self::fork_soft(request);
+        let soft_note = soft.notes.take().unwrap_or_default();
+        soft.notes = Some(if soft_note.is_empty() {
+            format!("Native codex fork degraded: {native_reason}")
+        } else {
+            format!("Native codex fork degraded: {native_reason}; {soft_note}")
+        });
+        soft
     }
 
     fn fork_soft(request: &ForkRequest) -> ForkInfo {
@@ -677,7 +762,17 @@ mod tests {
     }
 
     #[test]
-    fn test_fork_method_for_tool_codex_is_soft() {
+    #[cfg(feature = "codex-pty-fork")]
+    fn test_fork_method_for_tool_codex_is_native_when_feature_enabled() {
+        assert_eq!(
+            TransportFactory::fork_method_for_tool("codex"),
+            ForkMethod::Native
+        );
+    }
+
+    #[test]
+    #[cfg(not(feature = "codex-pty-fork"))]
+    fn test_fork_method_for_tool_codex_is_soft_when_feature_disabled() {
         assert_eq!(
             TransportFactory::fork_method_for_tool("codex"),
             ForkMethod::Soft
@@ -735,6 +830,7 @@ mod tests {
             tool_name: "codex".to_string(),
             fork_method: None,
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),
@@ -762,12 +858,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_fork_session_codex_native_falls_back_to_soft_when_provider_id_missing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let request = ForkRequest {
+            tool_name: "codex".to_string(),
+            fork_method: Some(ForkMethod::Native),
+            provider_session_id: None,
+            codex_auto_trust: false,
+            parent_csa_session_id: "01TEST_PARENT".to_string(),
+            parent_session_dir: tmp.path().to_path_buf(),
+            working_dir: tmp.path().to_path_buf(),
+            timeout: Duration::from_secs(10),
+        };
+
+        let info = TransportFactory::fork_session(&request).await;
+
+        assert!(info.success);
+        assert_eq!(info.method, ForkMethod::Soft);
+        assert!(info.new_session_id.is_none());
+        assert!(
+            info.notes
+                .as_deref()
+                .unwrap_or_default()
+                .contains("Native codex fork degraded")
+        );
+    }
+
+    #[tokio::test]
     async fn test_fork_session_native_without_provider_id_fails() {
         let tmp = tempfile::tempdir().unwrap();
         let request = ForkRequest {
             tool_name: "claude-code".to_string(),
             fork_method: None,
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01TEST_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),
@@ -815,6 +939,7 @@ mod tests {
             tool_name: "gemini-cli".to_string(),
             fork_method: None,
             provider_session_id: None,
+            codex_auto_trust: false,
             parent_csa_session_id: "01RICH_PARENT".to_string(),
             parent_session_dir: tmp.path().to_path_buf(),
             working_dir: tmp.path().to_path_buf(),

@@ -29,9 +29,13 @@ pub use metadata::SessionMetadata;
 pub use event_writer::{EventWriteStats, EventWriter};
 pub use finding_id::{FindingId, anchor_hash, normalize_path};
 pub use output_parser::{
-    estimate_tokens, load_output_index, persist_structured_output, read_all_sections, read_section,
+    estimate_tokens, load_output_index, parse_return_packet, persist_structured_output,
+    read_all_sections, read_section, validate_return_packet_path,
 };
-pub use output_section::{OutputIndex, OutputSection};
+pub use output_section::{
+    ChangedFile, FileAction, OutputIndex, OutputSection, RETURN_PACKET_MAX_SUMMARY_CHARS,
+    RETURN_PACKET_SECTION_ID, ReturnPacket, ReturnPacketRef, ReturnStatus,
+};
 pub use redact::{redact_event, redact_text_content};
 pub use result::{SessionArtifact, SessionResult};
 pub use review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};

@@ -183,6 +183,8 @@ pub(crate) fn create_session_in(
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: detect_git_head(project_path),
+        last_return_packet: None,
+        fork_call_timestamps: Vec::new(),
     };
 
     // Write state file
@@ -410,6 +412,8 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     termination_reason: None,
                     is_seed_candidate: false,
                     git_head_at_creation: None,
+                    last_return_packet: None,
+                    fork_call_timestamps: Vec::new(),
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
                     tracing::warn!(

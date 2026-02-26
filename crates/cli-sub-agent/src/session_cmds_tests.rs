@@ -129,6 +129,8 @@ fn sample_session_state() -> MetaSessionState {
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        last_return_packet: None,
+        fork_call_timestamps: Vec::new(),
     }
 }
 
@@ -822,6 +824,8 @@ fn sample_fork_session() -> MetaSessionState {
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        last_return_packet: None,
+        fork_call_timestamps: Vec::new(),
     }
 }
 

@@ -5,7 +5,7 @@ use csa_core::types::ToolName;
 use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};
 use std::collections::HashMap;
 
-use crate::cli::Cli;
+use crate::cli::{Cli, ReturnTarget, parse_return_to};
 
 fn test_session(
     meta_session_id: &str,
@@ -36,6 +36,8 @@ fn test_session(
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
+        last_return_packet: None,
+        fork_call_timestamps: Vec::new(),
     }
 }
 
@@ -263,4 +265,123 @@ fn test_cli_memory_query_flag_parses() {
         }
         _ => panic!("expected Run command"),
     }
+}
+
+#[test]
+fn test_cli_fork_call_parses_without_return_to() {
+    let cli = try_parse_cli(&["csa", "run", "--fork-call", "task"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            fork_call,
+            return_to,
+            ..
+        } => {
+            assert!(fork_call);
+            let parsed = return_to
+                .as_deref()
+                .map(parse_return_to)
+                .transpose()
+                .unwrap()
+                .unwrap_or(ReturnTarget::Auto);
+            assert_eq!(parsed, ReturnTarget::Auto);
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_call_return_to_last_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--fork-call", "--return-to", "last", "task"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { return_to, .. } => {
+            assert_eq!(return_to.as_deref(), Some("last"));
+            assert_eq!(
+                parse_return_to(return_to.as_deref().unwrap()).unwrap(),
+                ReturnTarget::Last
+            );
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_call_return_to_auto_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--fork-call", "--return-to", "auto", "task"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { return_to, .. } => {
+            assert_eq!(return_to.as_deref(), Some("auto"));
+            assert_eq!(
+                parse_return_to(return_to.as_deref().unwrap()).unwrap(),
+                ReturnTarget::Auto
+            );
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_call_return_to_session_id_parses() {
+    let cli = try_parse_cli(&[
+        "csa",
+        "run",
+        "--fork-call",
+        "--return-to",
+        "01KJXYZ",
+        "task",
+    ])
+    .unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { return_to, .. } => {
+            assert_eq!(return_to.as_deref(), Some("01KJXYZ"));
+            assert_eq!(
+                parse_return_to(return_to.as_deref().unwrap()).unwrap(),
+                ReturnTarget::SessionId("01KJXYZ".to_string())
+            );
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_fork_call_conflicts_with_session() {
+    let result = try_parse_cli(&["csa", "run", "--fork-call", "--session", "01KJXYZ", "task"]);
+    let err = match result {
+        Ok(_) => panic!("fork-call and session should conflict"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("--fork-call"));
+    assert!(err.to_string().contains("--session"));
+}
+
+#[test]
+fn test_cli_fork_call_conflicts_with_last() {
+    let result = try_parse_cli(&["csa", "run", "--fork-call", "--last", "task"]);
+    let err = match result {
+        Ok(_) => panic!("fork-call and last should conflict"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("--fork-call"));
+    assert!(err.to_string().contains("--last"));
+}
+
+#[test]
+fn test_cli_fork_call_conflicts_with_ephemeral() {
+    let result = try_parse_cli(&["csa", "run", "--fork-call", "--ephemeral", "task"]);
+    let err = match result {
+        Ok(_) => panic!("fork-call and ephemeral should conflict"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("--fork-call"));
+    assert!(err.to_string().contains("--ephemeral"));
+}
+
+#[test]
+fn test_cli_return_to_requires_fork_call() {
+    let result = try_parse_cli(&["csa", "run", "--return-to", "last", "task"]);
+    let err = match result {
+        Ok(_) => panic!("return-to should require fork-call"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("--return-to"));
+    assert!(err.to_string().contains("--fork-call"));
 }
