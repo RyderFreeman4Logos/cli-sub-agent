@@ -150,7 +150,11 @@ pub(crate) fn resolve_memory_project_key(project_root: &Path) -> Option<String> 
                 .filter(|value| !value.trim().is_empty())
                 .and_then(|value| project_key_from_path(Path::new(&value)))
         })
-        .or_else(|| std::env::current_dir().ok().and_then(|path| project_key_from_path(&path)))
+        .or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|path| project_key_from_path(&path))
+        })
 }
 
 pub(crate) fn resolve_idle_timeout_seconds(
@@ -321,9 +325,7 @@ pub(crate) async fn build_and_validate_executor(
         // Enforce thinking level is configured in tiers (unless force override).
         // Use the effective thinking level (after thinking_lock override), not the
         // original CLI value, to avoid rejecting locked values that differ from CLI.
-        let effective_thinking = lock_from_project
-            .or(lock_from_global)
-            .or(thinking_budget);
+        let effective_thinking = lock_from_project.or(lock_from_global).or(thinking_budget);
         if enforce_tier && !force_override_user_config {
             cfg.enforce_thinking_level(effective_thinking)?;
         }
@@ -520,6 +522,25 @@ pub(crate) async fn execute_with_session_and_meta(
         new_session
     };
 
+    // Resuming an Available session re-activates it for execution.
+    if session_arg.is_some() && session.phase == csa_session::SessionPhase::Available {
+        match session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
+            Ok(()) => {
+                info!(
+                    session = %session.meta_session_id,
+                    "Session resumed and marked Active"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    session = %session.meta_session_id,
+                    error = %e,
+                    "Skipping phase transition on resume"
+                );
+            }
+        }
+    }
+
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
 
     // Arm cleanup guard for new sessions only (not resumed ones).
@@ -675,9 +696,11 @@ pub(crate) async fn execute_with_session_and_meta(
             let memory_query = memory_injection
                 .and_then(|opts| opts.query_override.as_deref())
                 .unwrap_or(raw_prompt.as_str());
-            if let Some(memory_section) =
-                memory_capture::build_memory_section(memory_cfg, memory_query, memory_project_key.as_deref())
-            {
+            if let Some(memory_section) = memory_capture::build_memory_section(
+                memory_cfg,
+                memory_query,
+                memory_project_key.as_deref(),
+            ) {
                 info!(
                     bytes = memory_section.len(),
                     "Injecting memory context into prompt"
@@ -883,12 +906,8 @@ pub(crate) async fn execute_with_session_and_meta(
     if result.exit_code == 0 && is_compress_command(prompt) {
         session.context_status.is_compacted = true;
         session.context_status.last_compacted_at = Some(chrono::Utc::now());
-        match session
-            .phase
-            .transition(&csa_session::PhaseEvent::Compressed)
-        {
-            Ok(new_phase) => {
-                session.phase = new_phase;
+        match session.apply_phase_event(csa_session::PhaseEvent::Compressed) {
+            Ok(()) => {
                 info!(
                     session = %session.meta_session_id,
                     "Session compacted and marked Available for reuse"

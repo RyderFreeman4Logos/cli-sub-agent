@@ -3,21 +3,28 @@
 //! Extracted from main.rs to keep file sizes manageable.
 
 use std::path::Path;
+use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
+use csa_executor::structured_output_instructions_for_fork_call;
 use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
+use csa_lock::SessionLock;
 use csa_lock::slot::{
-    SlotAcquireResult, ToolSlot, format_slot_diagnostic, slot_usage, try_acquire_slot,
+    SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
+    try_acquire_slot,
 };
 use csa_session::{
-    MetaSessionState, SessionPhase, ToolState, load_session, resolve_session_prefix,
+    MetaSessionState, PhaseEvent, RETURN_PACKET_SECTION_ID, ReturnPacketRef, SessionPhase,
+    ToolState, load_output_index, load_session, parse_return_packet, read_section,
+    resolve_session_prefix, validate_return_packet_path,
 };
 
+use crate::cli::ReturnTarget;
 use crate::pipeline;
 use crate::run_helpers::{
     infer_task_edit_requirement, is_tool_binary_available, parse_tool_name, read_prompt,
@@ -119,6 +126,96 @@ fn resolve_slot_wait_timeout_seconds(config: Option<&ProjectConfig>) -> u64 {
         .unwrap_or(csa_config::ResourcesConfig::default().slot_wait_timeout_seconds)
 }
 
+fn resolve_session_reference(project_root: &Path, session_ref: &str) -> Result<String> {
+    let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
+    resolve_session_prefix(&sessions_dir, session_ref)
+}
+
+fn resolve_return_target_session_id(
+    return_target: &ReturnTarget,
+    project_root: &Path,
+    fork_source_ref: Option<&str>,
+    parent_flag: Option<&str>,
+) -> Result<Option<String>> {
+    match return_target {
+        ReturnTarget::Last => {
+            let sessions = csa_session::list_sessions(project_root, None)?;
+            let (selected_id, _) = resolve_last_session_selection(sessions)?;
+            Ok(Some(selected_id))
+        }
+        ReturnTarget::SessionId(session_ref) => {
+            let resolved = resolve_session_reference(project_root, session_ref)?;
+            Ok(Some(resolved))
+        }
+        ReturnTarget::Auto => {
+            let env_parent = std::env::var("CSA_SESSION_ID").ok();
+            let candidate = fork_source_ref
+                .map(ToOwned::to_owned)
+                .or_else(|| parent_flag.map(ToOwned::to_owned))
+                .or(env_parent);
+
+            if let Some(session_ref) = candidate {
+                let resolved = resolve_session_reference(project_root, &session_ref)?;
+                Ok(Some(resolved))
+            } else {
+                Ok(None)
+            }
+        }
+    }
+}
+
+fn load_child_return_packet(
+    project_root: &Path,
+    child_session_id: &str,
+) -> Result<(csa_session::ReturnPacket, ReturnPacketRef)> {
+    let child_session_dir = csa_session::get_session_dir(project_root, child_session_id)?;
+    let section_content = read_section(&child_session_dir, RETURN_PACKET_SECTION_ID)?
+        .ok_or_else(|| anyhow::anyhow!("child session missing return-packet section"))?;
+
+    let packet = parse_return_packet(&section_content)?;
+    for changed in &packet.changed_files {
+        if !validate_return_packet_path(&changed.path, project_root) {
+            anyhow::bail!(
+                "return packet changed file path escapes project root: {}",
+                changed.path
+            );
+        }
+    }
+
+    let index = load_output_index(&child_session_dir)?
+        .ok_or_else(|| anyhow::anyhow!("missing output/index.toml for child session"))?;
+    let section = index
+        .sections
+        .iter()
+        .find(|s| s.id == RETURN_PACKET_SECTION_ID)
+        .ok_or_else(|| anyhow::anyhow!("return-packet section not indexed"))?;
+    let file_path = section
+        .file_path
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("return-packet section has no file_path"))?;
+
+    let output_dir = child_session_dir
+        .join("output")
+        .canonicalize()
+        .context("failed to canonicalize child output directory")?;
+    let section_path = child_session_dir
+        .join("output")
+        .join(file_path)
+        .canonicalize()
+        .context("failed to canonicalize return-packet file path")?;
+    if !section_path.starts_with(&output_dir) {
+        anyhow::bail!("return-packet file resolved outside child output directory");
+    }
+
+    Ok((
+        packet,
+        ReturnPacketRef {
+            child_session_id: child_session_id.to_string(),
+            section_path: section_path.to_string_lossy().to_string(),
+        },
+    ))
+}
+
 /// Result of resolving a fork request before execution.
 struct ForkResolution {
     /// The forked provider session ID (Native fork only).
@@ -142,6 +239,7 @@ async fn resolve_fork(
     source_session_id: &str,
     tool_name: &str,
     project_root: &Path,
+    codex_auto_trust: bool,
 ) -> Result<ForkResolution> {
     // Determine if source session uses a different tool than the target.
     // Cross-tool forks must always use soft fork (context summary injection)
@@ -178,6 +276,7 @@ async fn resolve_fork(
     let fork_request = ForkRequest {
         tool_name: tool_name.to_string(),
         fork_method: Some(fork_method),
+        codex_auto_trust,
         provider_session_id: source_provider_id.clone(),
         parent_csa_session_id: source_csa_id.clone(),
         parent_session_dir: session_dir.clone(),
@@ -236,6 +335,8 @@ pub(crate) async fn handle_run(
     fork_from: Option<String>,
     fork_last: bool,
     description: Option<String>,
+    fork_call: bool,
+    return_to: Option<String>,
     parent: Option<String>,
     ephemeral: bool,
     cd: Option<String>,
@@ -271,9 +372,18 @@ pub(crate) async fn handle_run(
         );
     }
 
+    let return_target = if fork_call {
+        Some(match return_to.as_deref() {
+            Some(value) => crate::cli::parse_return_to(value)?,
+            None => ReturnTarget::Auto,
+        })
+    } else {
+        None
+    };
+
     // 2. Resolve fork flags or legacy resume flags to session ID
-    let is_fork = fork_from.is_some() || fork_last;
-    let session_arg = if fork_last {
+    let mut is_fork = fork_from.is_some() || fork_last;
+    let mut session_arg = if fork_last {
         info!("Resolving --fork-last to most recent session");
         let sessions = csa_session::list_sessions(&project_root, None)?;
         let (selected_id, ambiguity_warning) = resolve_last_session_selection(sessions)?;
@@ -294,6 +404,31 @@ pub(crate) async fn handle_run(
     } else {
         session_arg
     };
+
+    // Fork-call always runs as a forked child and optionally returns to a parent session.
+    if fork_call {
+        let parent_session_id = resolve_return_target_session_id(
+            return_target
+                .as_ref()
+                .expect("return target should be present for fork-call"),
+            &project_root,
+            session_arg.as_deref(),
+            parent.as_deref(),
+        )?;
+
+        if session_arg.is_none() {
+            if let Some(ref parent_id) = parent_session_id {
+                session_arg = Some(parent_id.clone());
+            } else {
+                anyhow::bail!(
+                    "fork-call requires a source session: provide --fork-from/--fork-last, \
+                     or set --return-to/--parent/CSA_SESSION_ID"
+                );
+            }
+        }
+
+        is_fork = true;
+    }
 
     // 3. Load configs and validate recursion depth
     let Some((config, global_config)) = pipeline::load_and_validate(&project_root, current_depth)?
@@ -533,7 +668,7 @@ pub(crate) async fn handle_run(
 
     // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
     let mut is_auto_seed_fork = false;
-    let (mut is_fork, mut session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
+    let (next_is_fork, next_session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
         let auto_seed_enabled = config
             .as_ref()
             .map(|c| c.session.auto_seed_fork)
@@ -588,6 +723,45 @@ pub(crate) async fn handle_run(
     } else {
         (is_fork, session_arg)
     };
+    is_fork = next_is_fork;
+    session_arg = next_session_arg;
+
+    let mut _fork_call_parent_lock: Option<SessionLock> = None;
+    let mut fork_call_parent_state: Option<MetaSessionState> = None;
+    let mut fork_call_parent_session_id: Option<String> = None;
+    if fork_call {
+        let resolved_parent_id = resolve_return_target_session_id(
+            return_target
+                .as_ref()
+                .expect("return target should be present for fork-call"),
+            &project_root,
+            session_arg.as_deref(),
+            parent.as_deref(),
+        )?;
+        let Some(parent_id) = resolved_parent_id else {
+            anyhow::bail!("unable to resolve parent session for fork-call return");
+        };
+
+        let state_root = csa_session::get_session_root(&project_root)?;
+        _fork_call_parent_lock = Some(csa_lock::acquire_parent_fork_lock(
+            &state_root,
+            &parent_id,
+            "fork-call parent serialization",
+        )?);
+
+        let mut parent_state = csa_session::load_session(&project_root, &parent_id)?;
+        parent_state
+            .record_fork_call_attempt(Instant::now())
+            .map_err(anyhow::Error::msg)?;
+        fork_call_parent_session_id = Some(parent_id.clone());
+        fork_call_parent_state = Some(parent_state);
+
+        // If fork source was not explicitly provided, fork from the return parent.
+        if session_arg.is_none() {
+            session_arg = Some(parent_id);
+            is_fork = true;
+        }
+    }
 
     // Fork resolution is deferred until after slot acquisition and pre-execution
     // guards to avoid orphaning transport-level forks when a pre-run check fails.
@@ -693,7 +867,7 @@ pub(crate) async fn handle_run(
         // Acquire global slot
         let tool_name_str = executor.tool_name();
         let max_concurrent = global_config.max_concurrent(tool_name_str);
-        let _slot_guard: Option<ToolSlot>;
+        let mut _slot_guard: Option<ToolSlot>;
 
         match try_acquire_slot(
             &slots_dir,
@@ -763,7 +937,7 @@ pub(crate) async fn handle_run(
                     let timeout = std::time::Duration::from_secs(
                         resolve_slot_wait_timeout_seconds(config.as_ref()),
                     );
-                    let slot = csa_lock::slot::acquire_slot_blocking(
+                    let slot = acquire_slot_blocking(
                         &slots_dir,
                         tool_name_str,
                         max_concurrent,
@@ -783,11 +957,73 @@ pub(crate) async fn handle_run(
             }
         }
 
+        // Fork-call slot discipline:
+        // 1) release orchestrator/parent hold,
+        // 2) reacquire for child execution,
+        // so max_concurrent=1 does not deadlock parent->child flows.
+        if fork_call {
+            if let Some(mut held_slot) = _slot_guard.take() {
+                held_slot.release_slot()?;
+                info!(
+                    tool = %tool_name_str,
+                    "Released parent slot before fork-call child execution"
+                );
+            }
+
+            let child_slot = if wait {
+                let timeout = std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(
+                    config.as_ref(),
+                ));
+                acquire_slot_blocking(
+                    &slots_dir,
+                    tool_name_str,
+                    max_concurrent,
+                    timeout,
+                    session_arg.as_deref(),
+                )?
+            } else {
+                match try_acquire_slot(
+                    &slots_dir,
+                    tool_name_str,
+                    max_concurrent,
+                    session_arg.as_deref(),
+                )? {
+                    SlotAcquireResult::Acquired(slot) => slot,
+                    SlotAcquireResult::Exhausted(status) => {
+                        let all_tools = global_config.all_tool_slots();
+                        let all_tools_ref: Vec<(&str, u32)> =
+                            all_tools.iter().map(|(n, m)| (*n, *m)).collect();
+                        let all_usage = slot_usage(&slots_dir, &all_tools_ref);
+                        let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
+                        eprintln!("{}", diag_msg);
+                        return Ok(1);
+                    }
+                }
+            };
+
+            info!(
+                tool = %tool_name_str,
+                slot = child_slot.slot_index(),
+                "Acquired child slot for fork-call execution"
+            );
+            _slot_guard = Some(child_slot);
+        }
+
         // Resolve fork lazily: only after slot acquisition confirms we will proceed.
         // This prevents orphaning transport-level forks when pre-run checks fail.
         if is_fork && fork_resolution.is_none() {
             if let Some(ref source_id) = session_arg {
-                match resolve_fork(source_id, current_tool.as_str(), &project_root).await {
+                let codex_auto_trust = config
+                    .as_ref()
+                    .is_some_and(ProjectConfig::codex_auto_trust);
+                match resolve_fork(
+                    source_id,
+                    current_tool.as_str(),
+                    &project_root,
+                    codex_auto_trust,
+                )
+                .await
+                {
                     Ok(res) => fork_resolution = Some(res),
                     Err(e) if is_auto_seed_fork => {
                         // Auto seed forks are best-effort: degrade to cold start.
@@ -858,8 +1094,8 @@ pub(crate) async fn handle_run(
 
         let extra_env = global_config.env_vars(tool_name_str).cloned();
 
-        // Prepend soft fork context to prompt if applicable
-        let effective_prompt = if let Some(ref fork_res) = fork_resolution {
+        // Prepend soft fork context to prompt if applicable.
+        let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(
                     context_len = ctx.len(),
@@ -872,6 +1108,12 @@ pub(crate) async fn handle_run(
         } else {
             prompt_text.clone()
         };
+
+        if fork_call
+            && let Some(instructions) = structured_output_instructions_for_fork_call(true)
+        {
+            effective_prompt.push_str(instructions);
+        }
 
         // Execute
         let exec_result = if ephemeral {
@@ -1136,6 +1378,80 @@ pub(crate) async fn handle_run(
             break exec_result;
         }
     };
+
+    if fork_call {
+        let child_session_id = executed_session_id
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("fork-call completed without child session id"))?;
+        let (return_packet, return_packet_ref) =
+            load_child_return_packet(&project_root, child_session_id)?;
+
+        let parent_session_id = fork_call_parent_session_id
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("fork-call parent session is unresolved"))?;
+        let mut parent_state = if let Some(state) = fork_call_parent_state.take() {
+            state
+        } else {
+            csa_session::load_session(&project_root, &parent_session_id)?
+        };
+
+        parent_state.last_return_packet = Some(return_packet_ref);
+        csa_session::save_session(&parent_state)?;
+
+        // Reacquire a slot for parent resume work after child execution.
+        // This is best-effort only; return-packet persistence is the critical path.
+        let parent_tool_name = current_tool.as_str();
+        let parent_timeout =
+            std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(config.as_ref()));
+        let _parent_resume_slot = match acquire_slot_blocking(
+            &slots_dir,
+            parent_tool_name,
+            global_config.max_concurrent(parent_tool_name),
+            parent_timeout,
+            Some(&parent_session_id),
+        ) {
+            Ok(slot) => Some(slot),
+            Err(e) => {
+                warn!(
+                    session = %parent_session_id,
+                    error = %e,
+                    "Failed to reacquire parent slot during fork-call resume; continuing"
+                );
+                None
+            }
+        };
+
+        if return_target.is_some() {
+            match parent_state.phase {
+                SessionPhase::Available => {
+                    parent_state
+                        .apply_phase_event(PhaseEvent::Resumed)
+                        .map_err(anyhow::Error::msg)?;
+                }
+                SessionPhase::Active => {
+                    debug!(
+                        session = %parent_state.meta_session_id,
+                        "Parent already active; skipping Resumed transition"
+                    );
+                }
+                SessionPhase::Retired => {
+                    warn!(
+                        session = %parent_state.meta_session_id,
+                        "Parent session is retired; skipping auto-resume"
+                    );
+                }
+            }
+        }
+
+        csa_session::save_session(&parent_state)?;
+        info!(
+            parent = %parent_session_id,
+            child = %child_session_id,
+            status = ?return_packet.status,
+            exit_code = return_packet.exit_code,
+            "Stored return packet ref and completed fork-call parent resume"
+        );
+    }
 
     // Update fork genealogy on the executed session (post-execution).
     // Use the actual executed session ID instead of a global "newest" lookup.
