@@ -312,6 +312,15 @@ impl SessionPhase {
     }
 }
 
+impl MetaSessionState {
+    /// Apply a lifecycle event to this session and update `phase` in-place.
+    pub fn apply_phase_event(&mut self, event: PhaseEvent) -> Result<(), String> {
+        let new_phase = self.phase.transition(&event)?;
+        self.phase = new_phase;
+        Ok(())
+    }
+}
+
 impl std::fmt::Display for SessionPhase {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -336,6 +345,30 @@ pub struct TaskContext {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sample_state_with_phase(phase: SessionPhase) -> MetaSessionState {
+        let now = chrono::Utc::now();
+        MetaSessionState {
+            meta_session_id: ulid::Ulid::new().to_string(),
+            description: Some("phase-test".to_string()),
+            project_path: "/tmp/test".to_string(),
+            branch: None,
+            created_at: now,
+            last_accessed: now,
+            genealogy: Genealogy::default(),
+            tools: HashMap::new(),
+            context_status: ContextStatus::default(),
+            total_token_usage: None,
+            phase,
+            task_context: TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
+        }
+    }
 
     // ── Valid transitions ────────────────────────────────────────────
 
@@ -425,6 +458,39 @@ mod tests {
         assert_eq!(available, SessionPhase::Available);
         let active_again = available.transition(&PhaseEvent::Resumed).unwrap();
         assert_eq!(active_again, SessionPhase::Active);
+    }
+
+    // ── MetaSessionState phase application ──────────────────────────
+
+    #[test]
+    fn test_apply_phase_event_resumed_available_to_active() {
+        let mut state = sample_state_with_phase(SessionPhase::Available);
+        state
+            .apply_phase_event(PhaseEvent::Resumed)
+            .expect("Available -> Active should be valid");
+        assert_eq!(state.phase, SessionPhase::Active);
+    }
+
+    #[test]
+    fn test_apply_phase_event_records_phase_change_in_state() {
+        let mut state = sample_state_with_phase(SessionPhase::Active);
+        state
+            .apply_phase_event(PhaseEvent::Compressed)
+            .expect("Active -> Available should be valid");
+        assert_eq!(state.phase, SessionPhase::Available);
+    }
+
+    #[test]
+    fn test_apply_phase_event_rejects_retired_to_active() {
+        let mut state = sample_state_with_phase(SessionPhase::Retired);
+        let err = state
+            .apply_phase_event(PhaseEvent::Resumed)
+            .expect_err("Retired -> Active should fail");
+        assert!(
+            err.contains("invalid phase transition"),
+            "error should describe invalid transition"
+        );
+        assert_eq!(state.phase, SessionPhase::Retired);
     }
 
     // ── Serde round-trip ───────────────────────────────────────────

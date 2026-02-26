@@ -3,8 +3,11 @@
 ## Overview
 
 This document analyzes the token economics of session forking vs cold-start
-sessions, covering both the existing soft-fork mechanism and the experimental
-PTY-based native fork (`codex fork`).
+sessions, covering:
+
+- Current CSA behavior: codex uses **Soft fork** (context summary injection).
+- Experimental path: PTY-based native fork (`codex fork`), not yet wired into
+  the default transport pipeline.
 
 ## Cold Start Token Cost
 
@@ -39,7 +42,7 @@ from the parent session:
 creates a brand new session with a 2K summary prepended. The tool still pays
 full cold-start context loading costs.
 
-## Native Fork Cost (PTY Fork — `codex fork`)
+## Native Fork Cost (Experimental PTY Path — `codex fork`)
 
 Codex's native `fork` command copies the conversation history server-side:
 
@@ -54,25 +57,28 @@ The key insight: `codex fork` operates at the **provider level** (OpenAI API),
 copying the thread/conversation history without re-transmitting it. The forked
 session inherits all prior context at zero additional input token cost.
 
+This is currently an experimental measurement target. In the shipped CSA
+transport path, codex still routes to Soft fork.
+
 ## Savings Comparison
 
 | Scenario | Input Tokens | Savings vs Cold Start |
 |----------|------------:|---------------------:|
 | Cold start | ~30,000 | baseline |
-| Soft fork | ~32,000 | -2,000 (worse!) |
-| Native fork | ~350 | **~29,650 (~99%)** |
+| Soft fork (current codex path) | ~32,000 | -2,000 (worse!) |
+| Native fork (experimental PTY path) | ~350 | **~29,650 (~99%)** |
 
 ### Per-Session Dollar Cost (at $15/M input tokens)
 
 | Scenario | Cost per Session | Monthly (100 sessions) |
 |----------|----------------:|-----------------------:|
 | Cold start | $0.45 | $45.00 |
-| Soft fork | $0.48 | $48.00 |
-| Native fork | $0.005 | $0.53 |
+| Soft fork (current codex path) | $0.48 | $48.00 |
+| Native fork (experimental PTY path) | $0.005 | $0.53 |
 
 ## When Native Fork is Beneficial
 
-Native fork delivers maximum value when:
+Native fork (after integration) delivers maximum value when:
 
 1. **Iterative refinement**: Multiple prompts building on the same context
    (e.g., review → fix → re-review cycle)
@@ -93,9 +99,10 @@ Native fork delivers maximum value when:
 | Feature | Status | Location |
 |---------|--------|----------|
 | Soft fork | Implemented | `csa-session/soft_fork.rs` |
+| Codex fork routing in transport | Soft only (current) | `csa-executor/src/transport.rs` (`fork_method_for_tool`) |
 | Genealogy tracking | Implemented | `csa-session/state.rs` (Genealogy) |
-| PTY fork prototype | Experimental | `csa-process/pty_fork.rs` (feature-gated) |
-| ACP fork integration | Not started | Would go in `csa-executor/transport.rs` |
+| PTY fork prototype | Experimental | `csa-process/pty_fork.rs` (`codex-pty-fork` feature-gated) |
+| Codex Native fork in CSA pipeline | Planned, not default | `csa-executor` feature-gated integration |
 | Token measurement tooling | Not started | Would use provider usage API |
 
 ## Limitations of PTY Fork Approach
@@ -111,8 +118,7 @@ Native fork delivers maximum value when:
 
 ## Recommendations
 
-1. **Short-term**: Use soft fork for cross-tool scenarios; native fork for
-   Codex-to-Codex session continuation
+1. **Short-term**: Use soft fork (including codex-to-codex in current builds)
 2. **Medium-term**: Request ACP protocol extension for fork support, which
    would eliminate the PTY dependency
 3. **Long-term**: Each tool vendor should expose fork/branch in their API,
@@ -128,7 +134,7 @@ for i in $(seq 1 10); do
   csa run --tool codex "echo hello" 2>&1 | grep -i token
 done
 
-# 2. Run N forked sessions from the same parent
+# 2. Run N experimental PTY fork sessions from the same parent
 PARENT_SESSION=$(csa session list --tool codex --json | jq -r '.[0].id')
 for i in $(seq 1 10); do
   codex fork $PARENT_SESSION "echo hello" --dangerously-bypass-approvals-and-sandbox
@@ -138,5 +144,6 @@ done
 ```
 
 Token usage data should be captured from the provider's usage API (OpenAI
-`usage` field in API responses) rather than estimated, once the PTY fork
-integration is connected to the main execution pipeline.
+`usage` field in API responses) rather than estimated. These PTY measurements
+are for pre-integration validation; they do not reflect the current default
+codex fork path in CSA.
