@@ -269,6 +269,33 @@ Full analysis, code, or explanation\n\
 <!-- CSA:SECTION:details:END -->\n\
 </csa-output-format>";
 
+/// Full structured-output instructions used in fork-call mode.
+const FORK_CALL_STRUCTURED_OUTPUT_INSTRUCTIONS: &str = "\
+\n\n<csa-output-format>\n\
+Wrap your output in section markers for structured parsing:\n\
+<!-- CSA:SECTION:summary -->\n\
+Brief summary of result\n\
+<!-- CSA:SECTION:summary:END -->\n\
+\n\
+<!-- CSA:SECTION:details -->\n\
+Full analysis, code, or explanation\n\
+<!-- CSA:SECTION:details:END -->\n\
+</csa-output-format>\n\n<csa-fork-call-return>\n\
+Fork-call mode requires a machine-readable return packet section.\n\
+You MUST output this section exactly once using TOML:\n\
+<!-- CSA:SECTION:return-packet -->\n\
+status = \"Success\" # Success | Failure | Cancelled\n\
+exit_code = 0\n\
+summary = \"Short summary of completed work\"\n\
+artifacts = [\"path/to/artifact\"]\n\
+changed_files = [{ path = \"src/file.rs\", action = \"Modify\" }] # action: Add|Modify|Delete\n\
+git_head_before = \"<optional commit sha>\"\n\
+git_head_after = \"<optional commit sha>\"\n\
+next_actions = [\"optional follow-up item\"]\n\
+error_context = \"optional failure context\"\n\
+<!-- CSA:SECTION:return-packet:END -->\n\
+</csa-fork-call-return>";
+
 /// Return the structured output instruction block for prompt injection.
 ///
 /// Returns `Some(instructions)` when `enabled` is true, `None` otherwise.
@@ -276,6 +303,18 @@ Full analysis, code, or explanation\n\
 pub fn structured_output_instructions(enabled: bool) -> Option<&'static str> {
     if enabled {
         Some(STRUCTURED_OUTPUT_INSTRUCTIONS)
+    } else {
+        None
+    }
+}
+
+/// Return fork-call structured output instructions.
+///
+/// The returned prompt includes both default structured-output requirements
+/// and the fork-call-specific return-packet section schema.
+pub fn structured_output_instructions_for_fork_call(enabled: bool) -> Option<&'static str> {
+    if enabled {
+        Some(FORK_CALL_STRUCTURED_OUTPUT_INSTRUCTIONS)
     } else {
         None
     }
@@ -624,6 +663,21 @@ mod tests {
             word_count < 150,
             "Structured output instructions too long: {word_count} words (max ~150)"
         );
+    }
+
+    #[test]
+    fn test_structured_output_instructions_for_fork_call_enabled() {
+        let instructions = structured_output_instructions_for_fork_call(true).unwrap();
+        assert!(instructions.contains("CSA:SECTION:summary"));
+        assert!(instructions.contains("CSA:SECTION:details"));
+        assert!(instructions.contains("CSA:SECTION:return-packet"));
+        assert!(instructions.contains("status = \"Success\""));
+        assert!(instructions.contains("changed_files = [{ path ="));
+    }
+
+    #[test]
+    fn test_structured_output_instructions_for_fork_call_disabled() {
+        assert!(structured_output_instructions_for_fork_call(false).is_none());
     }
 
     #[cfg(unix)]
