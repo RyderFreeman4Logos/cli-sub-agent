@@ -122,6 +122,7 @@ impl TransportFactory {
 
     #[cfg(feature = "codex-pty-fork")]
     async fn fork_codex_via_pty(request: &ForkRequest) -> ForkInfo {
+        use std::path::Path;
         use csa_process::pty_fork::{PtyForkConfig, PtyForkResult, fork_codex_session};
 
         let Some(parent_provider_session_id) = request.provider_session_id.as_deref() else {
