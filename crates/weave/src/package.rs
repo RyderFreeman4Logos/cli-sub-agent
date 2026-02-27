@@ -699,3 +699,7 @@ mod upgrade_tests;
 #[cfg(test)]
 #[path = "package_tests_audit.rs"]
 mod audit_tests;
+
+#[cfg(test)]
+#[path = "package_tests_migrate.rs"]
+mod migrate_tests;
