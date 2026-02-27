@@ -17,13 +17,12 @@ use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
     try_acquire_slot,
 };
-use csa_session::{PhaseEvent, SessionPhase, ToolState, load_session, resolve_session_prefix};
+use csa_session::{ToolState, load_session, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
 use crate::pipeline;
-use crate::run_cmd_fork::{
-    ForkResolution, cleanup_pre_created_fork_session, load_child_return_packet, resolve_fork,
-};
+use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session, resolve_fork};
+use crate::run_cmd_post::{handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy};
 use crate::run_cmd_tool_selection::{
     resolve_heterogeneous_candidates, resolve_last_session_selection,
     resolve_return_target_session_id, resolve_slot_wait_timeout_seconds,
@@ -1090,154 +1089,31 @@ pub(crate) async fn handle_run(
     };
 
     if fork_call {
-        let child_session_id = executed_session_id
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("fork-call completed without child session id"))?;
-        let (return_packet, return_packet_ref) =
-            load_child_return_packet(&project_root, child_session_id)?;
-
         let parent_session_id = fork_call_parent_session_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("fork-call parent session is unresolved"))?;
-        // Reload current state from disk to avoid clobbering concurrent parent updates.
-        let mut parent_state = csa_session::load_session(&project_root, &parent_session_id)?;
-        parent_state.last_return_packet = Some(return_packet_ref);
-        csa_session::save_session(&parent_state)?;
-
-        // Reacquire a slot for parent resume work after child execution.
-        // This is best-effort only; return-packet persistence is the critical path.
-        let parent_tool_name = current_tool.as_str();
-        let parent_timeout =
-            std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(config.as_ref()));
-        let _parent_resume_slot = match acquire_slot_blocking(
-            &slots_dir,
-            parent_tool_name,
-            global_config.max_concurrent(parent_tool_name),
-            parent_timeout,
-            Some(&parent_session_id),
-        ) {
-            Ok(slot) => Some(slot),
-            Err(e) => {
-                warn!(
-                    session = %parent_session_id,
-                    error = %e,
-                    "Failed to reacquire parent slot during fork-call resume; continuing"
-                );
-                None
-            }
-        };
-
-        if return_target.is_some() {
-            match parent_state.phase {
-                SessionPhase::Available => {
-                    parent_state
-                        .apply_phase_event(PhaseEvent::Resumed)
-                        .map_err(anyhow::Error::msg)?;
-                }
-                SessionPhase::Active => {
-                    debug!(
-                        session = %parent_state.meta_session_id,
-                        "Parent already active; skipping Resumed transition"
-                    );
-                }
-                SessionPhase::Retired => {
-                    warn!(
-                        session = %parent_state.meta_session_id,
-                        "Parent session is retired; skipping auto-resume"
-                    );
-                }
-            }
-        }
-
-        csa_session::save_session(&parent_state)?;
-        info!(
-            parent = %parent_session_id,
-            child = %child_session_id,
-            status = ?return_packet.status,
-            exit_code = return_packet.exit_code,
-            "Stored return packet ref and completed fork-call parent resume"
-        );
+        handle_fork_call_resume(
+            &project_root,
+            executed_session_id.as_deref(),
+            &parent_session_id,
+            &current_tool,
+            return_target.is_some(),
+            config.as_ref(),
+            &global_config,
+        )?;
     }
 
     // Update fork genealogy on the executed session (post-execution).
-    // Use the actual executed session ID instead of a global "newest" lookup.
     if let Some(ref fork_res) = fork_resolution {
         if let Some(ref sid) = executed_session_id {
-            match csa_session::load_session(&project_root, sid) {
-                Ok(mut session) => {
-                    session.genealogy.fork_of_session_id = Some(fork_res.source_session_id.clone());
-                    session.genealogy.fork_provider_session_id =
-                        fork_res.source_provider_session_id.clone();
-                    if session.genealogy.parent_session_id.is_none() {
-                        session.genealogy.parent_session_id =
-                            Some(fork_res.source_session_id.clone());
-                    }
-                    // For native fork: store the forked provider session ID in
-                    // ToolState so future `--session` resumes can use it.
-                    if let Some(ref new_provider_id) = fork_res.provider_session_id {
-                        if let Some(tool_state) = session.tools.get_mut(current_tool.as_str()) {
-                            tool_state.provider_session_id = Some(new_provider_id.clone());
-                        }
-                    }
-                    if let Err(e) = csa_session::save_session(&session) {
-                        warn!("Failed to update fork genealogy on session: {e}");
-                    } else {
-                        info!(
-                            session = %session.meta_session_id,
-                            fork_of = %fork_res.source_session_id,
-                            "Updated session genealogy with fork fields"
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!("Failed to load session for fork genealogy update: {e}");
-                }
-            }
+            update_fork_genealogy(&project_root, sid, fork_res, &current_tool);
         }
     }
 
     // Mark successful non-fork sessions as seed candidates and run LRU eviction.
-    // Use the actual executed session ID to avoid tagging an unrelated newer session.
     if result.exit_code == 0 && fork_resolution.is_none() && !ephemeral {
         if let Some(ref sid) = executed_session_id {
-            match csa_session::load_session(&project_root, sid) {
-                Ok(mut session) => {
-                    if !session.is_seed_candidate {
-                        session.is_seed_candidate = true;
-                        if let Err(e) = csa_session::save_session(&session) {
-                            warn!("Failed to mark session as seed candidate: {e}");
-                        } else {
-                            info!(
-                                session = %session.meta_session_id,
-                                tool = %current_tool.as_str(),
-                                "Marked session as seed candidate"
-                            );
-                        }
-                    }
-                }
-                Err(e) => {
-                    debug!(error = %e, "Failed to load session for seed marking");
-                }
-            }
-        }
-
-        // LRU eviction: retire excess seed sessions for this tool×project
-        let max_seeds = config
-            .as_ref()
-            .map(|c| c.session.max_seed_sessions)
-            .unwrap_or(2);
-        match csa_scheduler::evict_excess_seeds(&project_root, current_tool.as_str(), max_seeds) {
-            Ok(retired) if !retired.is_empty() => {
-                info!(
-                    count = retired.len(),
-                    tool = %current_tool.as_str(),
-                    "Evicted excess seed sessions"
-                );
-            }
-            Err(e) => {
-                debug!(error = %e, "Seed eviction check failed");
-            }
-            _ => {}
+            mark_seed_and_evict(&project_root, sid, &current_tool, config.as_ref());
         }
     }
 
