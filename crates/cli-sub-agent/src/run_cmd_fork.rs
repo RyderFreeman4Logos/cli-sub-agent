@@ -11,8 +11,8 @@ use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
 use csa_session::{
-    RETURN_PACKET_SECTION_ID, ReturnPacketRef, load_output_index, parse_return_packet, read_section,
-    validate_return_packet_path,
+    RETURN_PACKET_SECTION_ID, ReturnPacketRef, load_output_index, parse_return_packet,
+    read_section, validate_return_packet_path,
 };
 
 /// Result of resolving a fork request before execution.
@@ -302,8 +302,7 @@ pub(crate) fn pre_create_native_fork_session(
         Some(current_tool.as_str()),
     )?;
     pre_session.genealogy.fork_of_session_id = Some(fork_res.source_session_id.clone());
-    pre_session.genealogy.fork_provider_session_id =
-        fork_res.source_provider_session_id.clone();
+    pre_session.genealogy.fork_provider_session_id = fork_res.source_provider_session_id.clone();
     pre_session.tools.insert(
         current_tool.as_str().to_string(),
         csa_session::ToolState {
@@ -337,7 +336,10 @@ pub(crate) fn fork_call_slot_handoff(
     slot_wait_timeout_secs: u64,
     session_arg: Option<&str>,
 ) -> Result<csa_lock::slot::ToolSlot> {
-    use csa_lock::slot::{SlotAcquireResult, acquire_slot_blocking, format_slot_diagnostic, slot_usage, try_acquire_slot};
+    use csa_lock::slot::{
+        SlotAcquireResult, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
+        try_acquire_slot,
+    };
 
     if let Some(mut held_slot) = parent_slot.take() {
         held_slot.release_slot()?;
@@ -361,11 +363,12 @@ pub(crate) fn fork_call_slot_handoff(
             SlotAcquireResult::Acquired(slot) => slot,
             SlotAcquireResult::Exhausted(status) => {
                 // Build diagnostic for the exhausted tool and all tools.
-                let all_tools_names: Vec<(String, u32)> = vec![
-                    (tool_name_str.to_string(), max_concurrent),
-                ];
-                let all_tools_ref: Vec<(&str, u32)> =
-                    all_tools_names.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+                let all_tools_names: Vec<(String, u32)> =
+                    vec![(tool_name_str.to_string(), max_concurrent)];
+                let all_tools_ref: Vec<(&str, u32)> = all_tools_names
+                    .iter()
+                    .map(|(n, m)| (n.as_str(), *m))
+                    .collect();
                 let all_usage = slot_usage(slots_dir, &all_tools_ref);
                 let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
                 anyhow::bail!("fork-call child slot exhausted: {}", diag_msg);

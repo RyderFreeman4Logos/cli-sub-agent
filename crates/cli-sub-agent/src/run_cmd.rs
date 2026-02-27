@@ -30,7 +30,6 @@ use crate::run_cmd_tool_selection::{
 };
 use crate::run_helpers::{is_tool_binary_available, parse_tool_name};
 
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
     tool: Option<ToolArg>,
@@ -451,9 +450,7 @@ pub(crate) async fn handle_run(
         // This prevents orphaning transport-level forks when pre-run checks fail.
         if is_fork && fork_resolution.is_none() {
             if let Some(ref source_id) = session_arg {
-                let codex_auto_trust = config
-                    .as_ref()
-                    .is_some_and(ProjectConfig::codex_auto_trust);
+                let codex_auto_trust = config.as_ref().is_some_and(ProjectConfig::codex_auto_trust);
                 match resolve_fork(
                     source_id,
                     current_tool.as_str(),
@@ -516,8 +513,7 @@ pub(crate) async fn handle_run(
             prompt_text.clone()
         };
 
-        if fork_call
-            && let Some(instructions) = structured_output_instructions_for_fork_call(true)
+        if fork_call && let Some(instructions) = structured_output_instructions_for_fork_call(true)
         {
             effective_prompt.push_str(instructions);
         }
@@ -696,7 +692,10 @@ pub(crate) async fn handle_run(
             &project_root,
             config.as_ref(),
         )? {
-            crate::run_cmd_post::RateLimitAction::Retry { new_tool, new_model_spec } => {
+            crate::run_cmd_post::RateLimitAction::Retry {
+                new_tool,
+                new_model_spec,
+            } => {
                 current_tool = new_tool;
                 current_model_spec = new_model_spec;
                 current_model = None;

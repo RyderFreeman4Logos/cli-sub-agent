@@ -416,8 +416,11 @@ mod tests {
         let session_dir = tempdir().expect("create temp session dir");
         let memory_dir = tempdir().expect("create temp memory dir");
         let output_path = session_dir.path().join("output.log");
-        fs::write(&output_path, "Session output for duplicate-id regression test.")
-            .expect("write output.log");
+        fs::write(
+            &output_path,
+            "Session output for duplicate-id regression test.",
+        )
+        .expect("write output.log");
 
         let store = MemoryStore::new(memory_dir.path().to_path_buf());
         let index_dir = memory_dir.path().join("index");
@@ -453,7 +456,11 @@ mod tests {
             entries[0].id, entries[1].id,
             "entry id must be unique even when session_id repeats"
         );
-        assert!(entries.iter().all(|entry| entry.session_id.as_deref() == Some(session_id)));
+        assert!(
+            entries
+                .iter()
+                .all(|entry| entry.session_id.as_deref() == Some(session_id))
+        );
     }
 
     #[test]

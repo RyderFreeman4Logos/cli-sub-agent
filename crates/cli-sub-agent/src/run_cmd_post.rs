@@ -34,8 +34,7 @@ pub(crate) fn handle_fork_call_resume(
         load_child_return_packet(project_root, child_session_id)?;
 
     // Reload current state from disk to avoid clobbering concurrent parent updates.
-    let mut parent_state =
-        csa_session::load_session(project_root, fork_call_parent_session_id)?;
+    let mut parent_state = csa_session::load_session(project_root, fork_call_parent_session_id)?;
     parent_state.last_return_packet = Some(return_packet_ref);
     csa_session::save_session(&parent_state)?;
 
@@ -43,8 +42,7 @@ pub(crate) fn handle_fork_call_resume(
     // This is best-effort only; return-packet persistence is the critical path.
     let slots_dir = csa_config::GlobalConfig::slots_dir()?;
     let parent_tool_name = current_tool.as_str();
-    let parent_timeout =
-        std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(config));
+    let parent_timeout = std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(config));
     let _parent_resume_slot = match csa_lock::slot::acquire_slot_blocking(
         &slots_dir,
         parent_tool_name,
@@ -210,10 +208,8 @@ pub(crate) fn evaluate_rate_limit_failover(
         None
     };
 
-    let task_needs_edit =
-        crate::run_helpers::infer_task_edit_requirement(prompt_text).or_else(|| {
-            config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str))
-        });
+    let task_needs_edit = crate::run_helpers::infer_task_edit_requirement(prompt_text)
+        .or_else(|| config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str)));
 
     let Some(cfg) = config else {
         return Ok(RateLimitAction::ExhaustedFailovers);
@@ -286,9 +282,7 @@ pub(crate) fn mark_seed_and_evict(
     }
 
     // LRU eviction: retire excess seed sessions for this tool x project
-    let max_seeds = config
-        .map(|c| c.session.max_seed_sessions)
-        .unwrap_or(2);
+    let max_seeds = config.map(|c| c.session.max_seed_sessions).unwrap_or(2);
     match csa_scheduler::evict_excess_seeds(project_root, current_tool.as_str(), max_seeds) {
         Ok(retired) if !retired.is_empty() => {
             info!(

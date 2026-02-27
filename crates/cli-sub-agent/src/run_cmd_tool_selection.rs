@@ -104,10 +104,7 @@ pub(crate) fn resolve_slot_wait_timeout_seconds(config: Option<&ProjectConfig>) 
 }
 
 /// Resolve a session prefix (short ID) to a full session ID.
-pub(crate) fn resolve_session_reference(
-    project_root: &Path,
-    session_ref: &str,
-) -> Result<String> {
+pub(crate) fn resolve_session_reference(project_root: &Path, session_ref: &str) -> Result<String> {
     let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
     resolve_session_prefix(&sessions_dir, session_ref)
 }
@@ -157,7 +154,13 @@ pub(crate) fn resolve_tool_by_strategy(
         }
         ToolSelectionStrategy::AnyAvailable => {
             let (tool, ms, m) = resolve_tool_and_model(
-                None, model_spec, model, config, project_root, force, force_override_user_config,
+                None,
+                model_spec,
+                model,
+                config,
+                project_root,
+                force,
+                force_override_user_config,
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -166,17 +169,15 @@ pub(crate) fn resolve_tool_by_strategy(
                 runtime_fallback_candidates: Vec::new(),
             })
         }
-        ToolSelectionStrategy::HeterogeneousPreferred => {
-            resolve_heterogeneous_preferred(
-                model_spec,
-                model,
-                config,
-                global_config,
-                project_root,
-                force,
-                force_override_user_config,
-            )
-        }
+        ToolSelectionStrategy::HeterogeneousPreferred => resolve_heterogeneous_preferred(
+            model_spec,
+            model,
+            config,
+            global_config,
+            project_root,
+            force,
+            force_override_user_config,
+        ),
         ToolSelectionStrategy::HeterogeneousStrict => {
             let res = resolve_heterogeneous_strict(
                 model_spec,
@@ -259,7 +260,12 @@ fn resolve_heterogeneous_preferred(
                     parent_tool.model_family()
                 );
                 let (t, ms, m) = resolve_tool_and_model(
-                    None, model_spec, model, config, project_root, force,
+                    None,
+                    model_spec,
+                    model,
+                    config,
+                    project_root,
+                    force,
                     force_override_user_config,
                 )?;
                 Ok(StrategyResolution {
@@ -275,7 +281,13 @@ fn resolve_heterogeneous_preferred(
             "HeterogeneousPreferred requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
         );
         let (t, ms, m) = resolve_tool_and_model(
-            None, model_spec, model, config, project_root, force, force_override_user_config,
+            None,
+            model_spec,
+            model,
+            config,
+            project_root,
+            force,
+            force_override_user_config,
         )?;
         Ok(StrategyResolution {
             tool: t,
@@ -327,7 +339,13 @@ fn resolve_heterogeneous_strict(
             "HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
         );
         resolve_tool_and_model(
-            None, model_spec, model, config, project_root, force, force_override_user_config,
+            None,
+            model_spec,
+            model,
+            config,
+            project_root,
+            force,
+            force_override_user_config,
         )
     }
 }
