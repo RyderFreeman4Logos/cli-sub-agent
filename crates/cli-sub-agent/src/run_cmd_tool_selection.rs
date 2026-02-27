@@ -5,12 +5,17 @@
 use std::path::Path;
 
 use anyhow::Result;
+use tracing::warn;
 
-use csa_config::ProjectConfig;
-use csa_core::types::ToolName;
+use csa_config::{GlobalConfig, ProjectConfig};
+use csa_core::types::{ToolName, ToolSelectionStrategy};
 use csa_session::{MetaSessionState, SessionPhase, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
+use crate::run_helpers::{
+    detect_parent_tool, is_tool_binary_available, parse_tool_name, resolve_tool,
+    resolve_tool_and_model,
+};
 
 /// Resolve the `--last` flag to a concrete session ID.
 ///
@@ -104,6 +109,226 @@ pub(crate) fn resolve_session_reference(
 ) -> Result<String> {
     let sessions_dir = csa_session::get_session_root(project_root)?.join("sessions");
     resolve_session_prefix(&sessions_dir, session_ref)
+}
+
+/// Result of strategy-based tool resolution.
+pub(crate) struct StrategyResolution {
+    pub(crate) tool: ToolName,
+    pub(crate) model_spec: Option<String>,
+    pub(crate) model: Option<String>,
+    /// Remaining heterogeneous candidates for runtime fallback (HeterogeneousPreferred only).
+    pub(crate) runtime_fallback_candidates: Vec<ToolName>,
+}
+
+/// Resolve the initial tool based on the `ToolSelectionStrategy`.
+///
+/// Encapsulates the `Explicit`, `AnyAvailable`, `HeterogeneousPreferred`, and
+/// `HeterogeneousStrict` resolution arms, keeping the main `handle_run` function
+/// focused on orchestration.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn resolve_tool_by_strategy(
+    strategy: &ToolSelectionStrategy,
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    project_root: &Path,
+    force: bool,
+    force_override_user_config: bool,
+) -> Result<StrategyResolution> {
+    match strategy {
+        ToolSelectionStrategy::Explicit(t) => {
+            let (tool, ms, m) = resolve_tool_and_model(
+                Some(*t),
+                model_spec,
+                model,
+                config,
+                project_root,
+                force,
+                force_override_user_config,
+            )?;
+            Ok(StrategyResolution {
+                tool,
+                model_spec: ms,
+                model: m,
+                runtime_fallback_candidates: Vec::new(),
+            })
+        }
+        ToolSelectionStrategy::AnyAvailable => {
+            let (tool, ms, m) = resolve_tool_and_model(
+                None, model_spec, model, config, project_root, force, force_override_user_config,
+            )?;
+            Ok(StrategyResolution {
+                tool,
+                model_spec: ms,
+                model: m,
+                runtime_fallback_candidates: Vec::new(),
+            })
+        }
+        ToolSelectionStrategy::HeterogeneousPreferred => {
+            resolve_heterogeneous_preferred(
+                model_spec,
+                model,
+                config,
+                global_config,
+                project_root,
+                force,
+                force_override_user_config,
+            )
+        }
+        ToolSelectionStrategy::HeterogeneousStrict => {
+            let res = resolve_heterogeneous_strict(
+                model_spec,
+                model,
+                config,
+                global_config,
+                project_root,
+                force,
+                force_override_user_config,
+            )?;
+            Ok(StrategyResolution {
+                tool: res.0,
+                model_spec: res.1,
+                model: res.2,
+                runtime_fallback_candidates: Vec::new(),
+            })
+        }
+    }
+}
+
+fn collect_enabled_tools(
+    config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+) -> Vec<ToolName> {
+    if let Some(cfg) = config {
+        let tools: Vec<_> = csa_config::global::all_known_tools()
+            .iter()
+            .filter(|t| {
+                cfg.is_tool_auto_selectable(t.as_str()) && is_tool_binary_available(t.as_str())
+            })
+            .copied()
+            .collect();
+        csa_config::global::sort_tools_by_effective_priority(&tools, Some(cfg), global_config)
+    } else {
+        Vec::new()
+    }
+}
+
+fn resolve_heterogeneous_preferred(
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    project_root: &Path,
+    force: bool,
+    force_override_user_config: bool,
+) -> Result<StrategyResolution> {
+    let detected_parent_tool = detect_parent_tool();
+    let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
+
+    if let Some(parent_str) = parent_tool_name.as_deref() {
+        let parent_tool = parse_tool_name(parent_str)?;
+        let enabled_tools = collect_enabled_tools(config, global_config);
+        let heterogeneous_candidates =
+            resolve_heterogeneous_candidates(&parent_tool, &enabled_tools);
+
+        match heterogeneous_candidates.first().copied() {
+            Some(tool) => {
+                let fallback = heterogeneous_candidates.into_iter().skip(1).collect();
+                let (t, ms, m) = resolve_tool_and_model(
+                    Some(tool),
+                    model_spec,
+                    model,
+                    config,
+                    project_root,
+                    force,
+                    force_override_user_config,
+                )?;
+                Ok(StrategyResolution {
+                    tool: t,
+                    model_spec: ms,
+                    model: m,
+                    runtime_fallback_candidates: fallback,
+                })
+            }
+            None => {
+                warn!(
+                    "No heterogeneous tool available (parent: {}, family: {}). Falling back to any available tool.",
+                    parent_tool.as_str(),
+                    parent_tool.model_family()
+                );
+                let (t, ms, m) = resolve_tool_and_model(
+                    None, model_spec, model, config, project_root, force,
+                    force_override_user_config,
+                )?;
+                Ok(StrategyResolution {
+                    tool: t,
+                    model_spec: ms,
+                    model: m,
+                    runtime_fallback_candidates: Vec::new(),
+                })
+            }
+        }
+    } else {
+        warn!(
+            "HeterogeneousPreferred requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
+        );
+        let (t, ms, m) = resolve_tool_and_model(
+            None, model_spec, model, config, project_root, force, force_override_user_config,
+        )?;
+        Ok(StrategyResolution {
+            tool: t,
+            model_spec: ms,
+            model: m,
+            runtime_fallback_candidates: Vec::new(),
+        })
+    }
+}
+
+fn resolve_heterogeneous_strict(
+    model_spec: Option<&str>,
+    model: Option<&str>,
+    config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    project_root: &Path,
+    force: bool,
+    force_override_user_config: bool,
+) -> Result<(ToolName, Option<String>, Option<String>)> {
+    let detected_parent_tool = detect_parent_tool();
+    let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
+
+    if let Some(parent_str) = parent_tool_name.as_deref() {
+        let parent_tool = parse_tool_name(parent_str)?;
+        let enabled_tools = collect_enabled_tools(config, global_config);
+
+        match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
+            Some(tool) => resolve_tool_and_model(
+                Some(tool),
+                model_spec,
+                model,
+                config,
+                project_root,
+                force,
+                force_override_user_config,
+            ),
+            None => {
+                anyhow::bail!(
+                    "No heterogeneous tool available (parent: {}, family: {}).\n\n\
+                     If this is a low-risk task (exploration, documentation, code reading),\n\
+                     consider using `--tool any-available` instead.",
+                    parent_tool.as_str(),
+                    parent_tool.model_family()
+                );
+            }
+        }
+    } else {
+        warn!(
+            "HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
+        );
+        resolve_tool_and_model(
+            None, model_spec, model, config, project_root, force, force_override_user_config,
+        )
+    }
 }
 
 /// Resolve the `--return-to` target to a concrete session ID.

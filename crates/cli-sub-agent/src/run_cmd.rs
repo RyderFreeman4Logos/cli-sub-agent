@@ -9,7 +9,7 @@ use tempfile::TempDir;
 use tracing::{debug, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
+use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_executor::structured_output_instructions_for_fork_call;
 use csa_executor::transport::{ForkMethod, TransportFactory};
 use csa_lock::SessionLock;
@@ -24,13 +24,11 @@ use crate::pipeline;
 use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session, resolve_fork};
 use crate::run_cmd_post::{handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy};
 use crate::run_cmd_tool_selection::{
-    resolve_heterogeneous_candidates, resolve_last_session_selection,
-    resolve_return_target_session_id, resolve_slot_wait_timeout_seconds,
-    take_next_runtime_fallback_tool,
+    resolve_last_session_selection, resolve_return_target_session_id,
+    resolve_slot_wait_timeout_seconds, resolve_tool_by_strategy, take_next_runtime_fallback_tool,
 };
 use crate::run_helpers::{
     infer_task_edit_requirement, is_tool_binary_available, parse_tool_name, read_prompt,
-    resolve_tool, resolve_tool_and_model,
 };
 use crate::skill_resolver;
 
@@ -221,160 +219,20 @@ pub(crate) async fn handle_run(
     };
 
     // 7. Resolve initial tool based on strategy
-    let mut heterogeneous_runtime_fallback_candidates: Vec<ToolName> = Vec::new();
-    let (initial_tool, resolved_model_spec, resolved_model) = match &strategy {
-        ToolSelectionStrategy::Explicit(t) => resolve_tool_and_model(
-            Some(*t),
-            model_spec.as_deref(),
-            model.as_deref(),
-            config.as_ref(),
-            &project_root,
-            force,
-            force_override_user_config,
-        )?,
-        ToolSelectionStrategy::AnyAvailable => resolve_tool_and_model(
-            None,
-            model_spec.as_deref(),
-            model.as_deref(),
-            config.as_ref(),
-            &project_root,
-            force,
-            force_override_user_config,
-        )?,
-        ToolSelectionStrategy::HeterogeneousPreferred => {
-            let detected_parent_tool = crate::run_helpers::detect_parent_tool();
-            let parent_tool_name = resolve_tool(detected_parent_tool, &global_config);
-
-            if let Some(parent_str) = parent_tool_name.as_deref() {
-                let parent_tool = parse_tool_name(parent_str)?;
-                let enabled_tools = if let Some(ref cfg) = config {
-                    let tools: Vec<_> = csa_config::global::all_known_tools()
-                        .iter()
-                        .filter(|t| {
-                            cfg.is_tool_auto_selectable(t.as_str())
-                                && is_tool_binary_available(t.as_str())
-                        })
-                        .copied()
-                        .collect();
-                    csa_config::global::sort_tools_by_effective_priority(
-                        &tools,
-                        config.as_ref(),
-                        &global_config,
-                    )
-                } else {
-                    Vec::new()
-                };
-
-                let heterogeneous_candidates =
-                    resolve_heterogeneous_candidates(&parent_tool, &enabled_tools);
-                match heterogeneous_candidates.first().copied() {
-                    Some(tool) => {
-                        heterogeneous_runtime_fallback_candidates =
-                            heterogeneous_candidates.into_iter().skip(1).collect();
-                        resolve_tool_and_model(
-                            Some(tool),
-                            model_spec.as_deref(),
-                            model.as_deref(),
-                            config.as_ref(),
-                            &project_root,
-                            force,
-                            force_override_user_config,
-                        )?
-                    }
-                    None => {
-                        warn!(
-                            "No heterogeneous tool available (parent: {}, family: {}). Falling back to any available tool.",
-                            parent_tool.as_str(),
-                            parent_tool.model_family()
-                        );
-                        resolve_tool_and_model(
-                            None,
-                            model_spec.as_deref(),
-                            model.as_deref(),
-                            config.as_ref(),
-                            &project_root,
-                            force,
-                            force_override_user_config,
-                        )?
-                    }
-                }
-            } else {
-                warn!(
-                    "HeterogeneousPreferred requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
-                );
-                resolve_tool_and_model(
-                    None,
-                    model_spec.as_deref(),
-                    model.as_deref(),
-                    config.as_ref(),
-                    &project_root,
-                    force,
-                    force_override_user_config,
-                )?
-            }
-        }
-        ToolSelectionStrategy::HeterogeneousStrict => {
-            let detected_parent_tool = crate::run_helpers::detect_parent_tool();
-            let parent_tool_name = resolve_tool(detected_parent_tool, &global_config);
-
-            if let Some(parent_str) = parent_tool_name.as_deref() {
-                let parent_tool = parse_tool_name(parent_str)?;
-                let enabled_tools = if let Some(ref cfg) = config {
-                    let tools: Vec<_> = csa_config::global::all_known_tools()
-                        .iter()
-                        .filter(|t| {
-                            cfg.is_tool_auto_selectable(t.as_str())
-                                && is_tool_binary_available(t.as_str())
-                        })
-                        .copied()
-                        .collect();
-                    csa_config::global::sort_tools_by_effective_priority(
-                        &tools,
-                        config.as_ref(),
-                        &global_config,
-                    )
-                } else {
-                    Vec::new()
-                };
-
-                match csa_config::global::select_heterogeneous_tool(&parent_tool, &enabled_tools) {
-                    Some(tool) => resolve_tool_and_model(
-                        Some(tool),
-                        model_spec.as_deref(),
-                        model.as_deref(),
-                        config.as_ref(),
-                        &project_root,
-                        force,
-                        force_override_user_config,
-                    )?,
-                    None => {
-                        anyhow::bail!(
-                            "No heterogeneous tool available (parent: {}, family: {}).\n\n\
-                             If this is a low-risk task (exploration, documentation, code reading),\n\
-                             consider using `--tool any-available` instead.",
-                            parent_tool.as_str(),
-                            parent_tool.model_family()
-                        );
-                    }
-                }
-            } else {
-                warn!(
-                    "HeterogeneousStrict requested but no parent tool context/defaults.tool found. Falling back to AnyAvailable."
-                );
-                resolve_tool_and_model(
-                    None,
-                    model_spec.as_deref(),
-                    model.as_deref(),
-                    config.as_ref(),
-                    &project_root,
-                    force,
-                    force_override_user_config,
-                )?
-            }
-        }
-    };
-
-    let resolved_tool = initial_tool;
+    let strategy_result = resolve_tool_by_strategy(
+        &strategy,
+        model_spec.as_deref(),
+        model.as_deref(),
+        config.as_ref(),
+        &global_config,
+        &project_root,
+        force,
+        force_override_user_config,
+    )?;
+    let mut heterogeneous_runtime_fallback_candidates = strategy_result.runtime_fallback_candidates;
+    let resolved_model_spec = strategy_result.model_spec;
+    let resolved_model = strategy_result.model;
+    let resolved_tool = strategy_result.tool;
 
     // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
     let mut is_auto_seed_fork = false;
