@@ -20,9 +20,12 @@ use tokio::process::Command;
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-// Re-export HTTP safety functions for tests and internal use.
+// Re-export HTTP safety functions used in this module.
 #[cfg(feature = "transport-http-client")]
-pub(crate) use registry_http::{is_ssrf_dangerous_ip, parse_host_port, validate_http_url};
+pub(crate) use registry_http::{preflight_ssrf_check, validate_http_url};
+// Additional re-exports consumed only by tests (registry_tests.rs -> super::super).
+#[cfg(all(feature = "transport-http-client", test))]
+pub(crate) use registry_http::{is_ssrf_dangerous_ip, parse_host_port};
 
 #[cfg(test)]
 use registry_pool::LeaseTracker;
