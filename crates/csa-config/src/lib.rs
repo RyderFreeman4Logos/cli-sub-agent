@@ -3,6 +3,7 @@
 pub mod acp;
 pub mod config;
 mod config_merge;
+pub mod config_resources;
 mod config_runtime;
 pub mod gc;
 pub mod global;
@@ -17,9 +18,10 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    EnforcementMode, ProjectConfig, ProjectMeta, ResourcesConfig, SessionConfig, TierConfig,
-    ToolConfig, ToolResourceProfile, ToolRestrictions,
+    EnforcementMode, ProjectConfig, ProjectMeta, SessionConfig, TierConfig, ToolConfig,
+    ToolResourceProfile, ToolRestrictions,
 };
+pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
 pub use global::{GateMode, GlobalConfig, GlobalMcpConfig};
