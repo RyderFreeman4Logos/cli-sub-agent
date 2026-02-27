@@ -893,10 +893,14 @@ async fn wait_for_still_working_backoff() {
 /// The debate tool loads the debate skill from the project's `.claude/skills/`
 /// directory and follows its instructions autonomously. We only pass parameters.
 fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) -> String {
+    // Anti-recursion guard (see GitHub issue #272).
+    let prefix = "CRITICAL: You are running INSIDE a CSA subprocess as the debate agent. \
+         Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command — \
+         this would cause infinite recursion. Read files and run git commands directly.\n\n";
     if is_continuation {
-        format!("Use the debate skill. continuation=true. rounds={rounds}. question={question}")
+        format!("{prefix}Use the debate skill. continuation=true. rounds={rounds}. question={question}")
     } else {
-        format!("Use the debate skill. rounds={rounds}. question={question}")
+        format!("{prefix}Use the debate skill. rounds={rounds}. question={question}")
     }
 }
 

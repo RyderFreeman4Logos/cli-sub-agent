@@ -111,6 +111,7 @@ retry = 3
 id = 4
 title = "Push and Create PR"
 tool = "bash"
+condition = "!(${LOCAL_REVIEW_HAS_ISSUES})"
 prompt = """
 ```bash
 git push -u origin "${WORKFLOW_BRANCH}"

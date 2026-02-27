@@ -636,9 +636,17 @@ fn build_review_instruction(
     security_mode: &str,
     context: Option<&str>,
 ) -> String {
-    let mut instruction = format!(
-        "Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}."
+    // Anti-recursion guard: tell the review tool it is running INSIDE a CSA
+    // subprocess so it must NOT invoke `csa run/review/debate` (which would
+    // cause infinite recursion — see GitHub issue #272).
+    let mut instruction = String::from(
+        "CRITICAL: You are running INSIDE a CSA subprocess as the review agent. \
+         Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command — \
+         this would cause infinite recursion. Read files and run git commands directly.\n\n",
     );
+    instruction.push_str(&format!(
+        "Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}."
+    ));
     if let Some(ctx) = context {
         instruction.push_str(&format!(" context={ctx}"));
     }
