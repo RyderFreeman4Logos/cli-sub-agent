@@ -35,6 +35,7 @@ mod run_cmd_tool_selection;
 mod run_helpers;
 mod self_update;
 mod session_cmds;
+mod session_cmds_result;
 mod session_guard;
 mod setup_cmds;
 mod skill_cmds;
