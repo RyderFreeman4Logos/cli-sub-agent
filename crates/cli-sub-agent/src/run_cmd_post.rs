@@ -136,6 +136,127 @@ pub(crate) fn update_fork_genealogy(
     }
 }
 
+/// Outcome of rate-limit failover evaluation.
+pub(crate) enum RateLimitAction {
+    /// No rate limit detected; break with result.
+    NoRateLimit,
+    /// Rate limit detected but no failover possible; break with result.
+    ExhaustedFailovers,
+    /// Retry with a different tool.
+    Retry {
+        new_tool: ToolName,
+        new_model_spec: Option<String>,
+    },
+}
+
+/// Check for 429 rate-limit signals and decide whether to failover.
+///
+/// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_rate_limit_failover(
+    tool_name_str: &str,
+    exec_result: &csa_process::ExecutionResult,
+    attempts: usize,
+    max_failover_attempts: usize,
+    tried_tools: &mut Vec<String>,
+    executed_session_id: Option<&str>,
+    effective_session_arg: Option<&str>,
+    ephemeral: bool,
+    prompt_text: &str,
+    project_root: &Path,
+    config: Option<&ProjectConfig>,
+) -> Result<RateLimitAction> {
+    let rate_limit = match csa_scheduler::detect_rate_limit(
+        tool_name_str,
+        &exec_result.stderr_output,
+        &exec_result.output,
+        exec_result.exit_code,
+    ) {
+        Some(rl) => rl,
+        None => return Ok(RateLimitAction::NoRateLimit),
+    };
+
+    info!(
+        tool = %tool_name_str,
+        pattern = %rate_limit.matched_pattern,
+        attempt = attempts,
+        max = max_failover_attempts,
+        "Rate limit detected, attempting failover"
+    );
+
+    if attempts >= max_failover_attempts {
+        warn!(
+            "Max failover attempts ({}) reached, returning error",
+            max_failover_attempts
+        );
+        return Ok(RateLimitAction::ExhaustedFailovers);
+    }
+
+    tried_tools.push(tool_name_str.to_string());
+
+    // Prefer the actually-executed session (important for forks where
+    // effective_session_arg starts as None) so decide_failover evaluates
+    // the fork session's context, not the parent session.
+    let failover_session_ref = executed_session_id.or(effective_session_arg);
+    let session_state = if !ephemeral {
+        failover_session_ref.and_then(|sid| {
+            let sessions_dir = csa_session::get_session_root(project_root)
+                .ok()?
+                .join("sessions");
+            let resolved_id = csa_session::resolve_session_prefix(&sessions_dir, sid).ok()?;
+            csa_session::load_session(project_root, &resolved_id).ok()
+        })
+    } else {
+        None
+    };
+
+    let task_needs_edit =
+        crate::run_helpers::infer_task_edit_requirement(prompt_text).or_else(|| {
+            config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str))
+        });
+
+    let Some(cfg) = config else {
+        return Ok(RateLimitAction::ExhaustedFailovers);
+    };
+
+    let action = csa_scheduler::decide_failover(
+        tool_name_str,
+        "default",
+        task_needs_edit,
+        session_state.as_ref(),
+        tried_tools,
+        cfg,
+        &rate_limit.matched_pattern,
+    );
+
+    match action {
+        csa_scheduler::FailoverAction::RetryInSession {
+            new_tool,
+            new_model_spec,
+            session_id: _,
+        }
+        | csa_scheduler::FailoverAction::RetrySiblingSession {
+            new_tool,
+            new_model_spec,
+        } => {
+            info!(
+                from = %tool_name_str,
+                to = %new_tool,
+                "Failing over to alternative tool"
+            );
+            let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
+            Ok(RateLimitAction::Retry {
+                new_tool: tool,
+                new_model_spec: Some(new_model_spec),
+            })
+        }
+        csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+            warn!(reason = %reason, "Failover not possible, returning original result");
+            Ok(RateLimitAction::ExhaustedFailovers)
+        }
+    }
+}
+
 /// Mark a successful non-fork session as a seed candidate and run LRU eviction
 /// to retire excess seed sessions.
 pub(crate) fn mark_seed_and_evict(

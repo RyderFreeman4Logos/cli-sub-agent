@@ -16,7 +16,6 @@ use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
     try_acquire_slot,
 };
-use csa_session::{load_session, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
 use crate::pipeline;
@@ -29,7 +28,7 @@ use crate::run_cmd_tool_selection::{
     resolve_last_session_selection, resolve_return_target_session_id, resolve_skill_and_prompt,
     resolve_slot_wait_timeout_seconds, resolve_tool_by_strategy, take_next_runtime_fallback_tool,
 };
-use crate::run_helpers::{infer_task_edit_requirement, is_tool_binary_available, parse_tool_name};
+use crate::run_helpers::{is_tool_binary_available, parse_tool_name};
 
 
 #[allow(clippy::too_many_arguments)]
@@ -430,51 +429,22 @@ pub(crate) async fn handle_run(
         // 2) reacquire for child execution,
         // so max_concurrent=1 does not deadlock parent->child flows.
         if fork_call {
-            if let Some(mut held_slot) = _slot_guard.take() {
-                held_slot.release_slot()?;
-                info!(
-                    tool = %tool_name_str,
-                    "Released parent slot before fork-call child execution"
-                );
-            }
-
-            let child_slot = if wait {
-                let timeout = std::time::Duration::from_secs(resolve_slot_wait_timeout_seconds(
-                    config.as_ref(),
-                ));
-                acquire_slot_blocking(
-                    &slots_dir,
-                    tool_name_str,
-                    max_concurrent,
-                    timeout,
-                    session_arg.as_deref(),
-                )?
-            } else {
-                match try_acquire_slot(
-                    &slots_dir,
-                    tool_name_str,
-                    max_concurrent,
-                    session_arg.as_deref(),
-                )? {
-                    SlotAcquireResult::Acquired(slot) => slot,
-                    SlotAcquireResult::Exhausted(status) => {
-                        let all_tools = global_config.all_tool_slots();
-                        let all_tools_ref: Vec<(&str, u32)> =
-                            all_tools.iter().map(|(n, m)| (*n, *m)).collect();
-                        let all_usage = slot_usage(&slots_dir, &all_tools_ref);
-                        let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
-                        eprintln!("{}", diag_msg);
-                        return Ok(1);
-                    }
+            let slot_timeout = resolve_slot_wait_timeout_seconds(config.as_ref());
+            match crate::run_cmd_fork::fork_call_slot_handoff(
+                &mut _slot_guard,
+                &slots_dir,
+                tool_name_str,
+                max_concurrent,
+                wait,
+                slot_timeout,
+                session_arg.as_deref(),
+            ) {
+                Ok(child_slot) => _slot_guard = Some(child_slot),
+                Err(e) => {
+                    eprintln!("{}", e);
+                    return Ok(1);
                 }
-            };
-
-            info!(
-                tool = %tool_name_str,
-                slot = child_slot.slot_index(),
-                "Acquired child slot for fork-call execution"
-            );
-            _slot_guard = Some(child_slot);
+            }
         }
 
         // Resolve fork lazily: only after slot acquisition confirms we will proceed.
@@ -713,106 +683,31 @@ pub(crate) async fn handle_run(
         }
 
         // Check for 429 rate limit and attempt failover
-        if let Some(rate_limit) = csa_scheduler::detect_rate_limit(
+        match crate::run_cmd_post::evaluate_rate_limit_failover(
             tool_name_str,
-            &exec_result.stderr_output,
-            &exec_result.output,
-            exec_result.exit_code,
-        ) {
-            info!(
-                tool = %tool_name_str,
-                pattern = %rate_limit.matched_pattern,
-                attempt = attempts,
-                max = max_failover_attempts,
-                "Rate limit detected, attempting failover"
-            );
-
-            if attempts >= max_failover_attempts {
-                warn!(
-                    "Max failover attempts ({}) reached, returning error",
-                    max_failover_attempts
-                );
-                break exec_result;
-            }
-
-            tried_tools.push(tool_name_str.to_string());
-
-            // Prefer the actually-executed session (important for forks where
-            // effective_session_arg starts as None) so decide_failover evaluates
-            // the fork session's context, not the parent session.
-            let failover_session_ref = executed_session_id
-                .as_ref()
-                .or(effective_session_arg.as_ref());
-            let session_state = if !ephemeral {
-                failover_session_ref.and_then(|sid| {
-                    let sessions_dir = csa_session::get_session_root(&project_root)
-                        .ok()?
-                        .join("sessions");
-                    let resolved_id = resolve_session_prefix(&sessions_dir, sid).ok()?;
-                    load_session(&project_root, &resolved_id).ok()
-                })
-            } else {
-                None
-            };
-
-            let task_needs_edit = infer_task_edit_requirement(&prompt_text).or_else(|| {
-                config
-                    .as_ref()
-                    .map(|cfg| cfg.can_tool_edit_existing(tool_name_str))
-            });
-
-            if let Some(ref cfg) = config {
-                let action = csa_scheduler::decide_failover(
-                    tool_name_str,
-                    "default",
-                    task_needs_edit,
-                    session_state.as_ref(),
-                    &tried_tools,
-                    cfg,
-                    &rate_limit.matched_pattern,
-                );
-
-                match action {
-                    csa_scheduler::FailoverAction::RetryInSession {
-                        new_tool,
-                        new_model_spec,
-                        session_id: _,
-                    }
-                    | csa_scheduler::FailoverAction::RetrySiblingSession {
-                        new_tool,
-                        new_model_spec,
-                    } => {
-                        info!(
-                            from = %tool_name_str,
-                            to = %new_tool,
-                            "Failing over to alternative tool"
-                        );
-                        current_tool = parse_tool_name(&new_tool)?;
-                        current_model_spec = Some(new_model_spec);
-                        current_model = None;
-                        // Clear fork metadata: forks are tool-specific and cannot
-                        // transfer across tools. The next iteration will resolve
-                        // a fresh fork for the new tool if is_fork is set.
-                        fork_resolution = None;
-                        if is_fork {
-                            effective_session_arg = None;
-                        }
-                        cleanup_pre_created_fork_session(
-                            &mut pre_created_fork_session_id,
-                            &project_root,
-                        );
-                        continue;
-                    }
-                    csa_scheduler::FailoverAction::ReportError { reason, .. } => {
-                        warn!(reason = %reason, "Failover not possible, returning original result");
-                        break exec_result;
-                    }
+            &exec_result,
+            attempts,
+            max_failover_attempts,
+            &mut tried_tools,
+            executed_session_id.as_deref(),
+            effective_session_arg.as_deref(),
+            ephemeral,
+            &prompt_text,
+            &project_root,
+            config.as_ref(),
+        )? {
+            crate::run_cmd_post::RateLimitAction::Retry { new_tool, new_model_spec } => {
+                current_tool = new_tool;
+                current_model_spec = new_model_spec;
+                current_model = None;
+                fork_resolution = None;
+                if is_fork {
+                    effective_session_arg = None;
                 }
-            } else {
-                break exec_result;
+                cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
+                continue;
             }
-        } else {
-            break exec_result;
+            _ => break exec_result,
         }
     };
 

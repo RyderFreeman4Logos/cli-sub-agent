@@ -324,6 +324,63 @@ pub(crate) fn pre_create_native_fork_session(
     Ok((Some(sid.clone()), Some(sid)))
 }
 
+/// Fork-call slot discipline: release the parent/orchestrator slot so the child
+/// can run without deadlocking `max_concurrent=1`, then reacquire a child slot.
+///
+/// Returns the child `ToolSlot` on success.
+pub(crate) fn fork_call_slot_handoff(
+    parent_slot: &mut Option<csa_lock::slot::ToolSlot>,
+    slots_dir: &std::path::Path,
+    tool_name_str: &str,
+    max_concurrent: u32,
+    wait: bool,
+    slot_wait_timeout_secs: u64,
+    session_arg: Option<&str>,
+) -> Result<csa_lock::slot::ToolSlot> {
+    use csa_lock::slot::{SlotAcquireResult, acquire_slot_blocking, format_slot_diagnostic, slot_usage, try_acquire_slot};
+
+    if let Some(mut held_slot) = parent_slot.take() {
+        held_slot.release_slot()?;
+        info!(
+            tool = %tool_name_str,
+            "Released parent slot before fork-call child execution"
+        );
+    }
+
+    let child_slot = if wait {
+        let timeout = std::time::Duration::from_secs(slot_wait_timeout_secs);
+        acquire_slot_blocking(
+            slots_dir,
+            tool_name_str,
+            max_concurrent,
+            timeout,
+            session_arg,
+        )?
+    } else {
+        match try_acquire_slot(slots_dir, tool_name_str, max_concurrent, session_arg)? {
+            SlotAcquireResult::Acquired(slot) => slot,
+            SlotAcquireResult::Exhausted(status) => {
+                // Build diagnostic for the exhausted tool and all tools.
+                let all_tools_names: Vec<(String, u32)> = vec![
+                    (tool_name_str.to_string(), max_concurrent),
+                ];
+                let all_tools_ref: Vec<(&str, u32)> =
+                    all_tools_names.iter().map(|(n, m)| (n.as_str(), *m)).collect();
+                let all_usage = slot_usage(slots_dir, &all_tools_ref);
+                let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
+                anyhow::bail!("fork-call child slot exhausted: {}", diag_msg);
+            }
+        }
+    };
+
+    info!(
+        tool = %tool_name_str,
+        slot = child_slot.slot_index(),
+        "Acquired child slot for fork-call execution"
+    );
+    Ok(child_slot)
+}
+
 /// Remove a pre-created fork session when execution fails or tool failover
 /// occurs. Takes the session ID by `&mut Option` so it is consumed (set to
 /// `None`) after cleanup, preventing double-delete on subsequent error paths.
