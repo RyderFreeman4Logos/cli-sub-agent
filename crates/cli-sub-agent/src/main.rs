@@ -30,6 +30,7 @@ mod review_cmd;
 mod review_consensus;
 mod run_cmd;
 mod run_cmd_fork;
+mod run_cmd_tool_selection;
 mod run_helpers;
 mod self_update;
 mod session_cmds;
