@@ -206,7 +206,15 @@ push-reviewed base="main":
     echo "=== Review passed. Pushing... ==="
     git push -u origin HEAD
     echo "=== Creating PR targeting {{base}}... ==="
-    gh pr create --base "{{base}}" || echo "PR already exists or creation skipped."
+    if ! gh pr create --base "{{base}}" 2>&1; then
+        # Only tolerate "already exists" — fail on other errors.
+        if gh pr view --json state -q '.state' 2>/dev/null | grep -qi 'open'; then
+            echo "PR already exists. Continuing."
+        else
+            echo "ERROR: gh pr create failed and no open PR found."
+            exit 1
+        fi
+    fi
     echo "=== Done. Run /pr-codex-bot to complete the review loop. ==="
 
 # Push to all submodules and the main repo (useful for monorepos).

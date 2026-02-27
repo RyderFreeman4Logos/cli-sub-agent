@@ -61,6 +61,7 @@ This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 > the fast-path.
 
 ```bash
+set -euo pipefail
 CURRENT_HEAD="$(git rev-parse HEAD)"
 REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
