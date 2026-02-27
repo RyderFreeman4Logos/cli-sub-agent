@@ -39,6 +39,9 @@ name = "MAX_REVIEW_ROUNDS"
 name = "PR_BODY"
 
 [[workflow.variables]]
+name = "REVIEW_COMPLETED"
+
+[[workflow.variables]]
 name = "PR_NUM"
 
 [[workflow.variables]]
@@ -93,6 +96,7 @@ else
   echo "No matching review HEAD found (or HEAD drift detected). Running full local review."
   csa review --branch main
 fi
+REVIEW_COMPLETED=true
 ```"""
 on_fail = "abort"
 
@@ -112,7 +116,14 @@ id = 4
 title = "Push and Create PR"
 tool = "bash"
 prompt = """
+PRECONDITION: REVIEW_COMPLETED must be true (set by Step 2).
+
 ```bash
+if [ "${REVIEW_COMPLETED}" != "true" ]; then
+  echo "ERROR: Local review (Step 2) has not completed successfully."
+  echo "REVIEW_COMPLETED is not set. Cannot create PR without review."
+  exit 1
+fi
 git push -u origin "${WORKFLOW_BRANCH}"
 gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
 PR_NUM=$(gh pr view --json number -q '.number')
