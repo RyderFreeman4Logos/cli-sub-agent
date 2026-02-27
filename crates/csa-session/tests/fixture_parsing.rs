@@ -63,7 +63,10 @@ fn test_output_section_markers() {
     let summary = read_section(tmp.path(), "summary")
         .expect("read summary section")
         .expect("summary section exists");
-    assert!(summary.contains("辩论结果"));
+    assert!(
+        summary.contains("CONFIRMED"),
+        "summary should contain debate verdict"
+    );
 
     let loaded_index = load_output_index(tmp.path())
         .expect("load index")

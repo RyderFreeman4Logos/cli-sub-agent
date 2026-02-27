@@ -138,7 +138,7 @@ pre-commit:
 # Requires: ripgrep (rg)
 check-chinese:
     @echo "Checking for Chinese characters..."
-    @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**'
+    @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**'
 
 # Format code and auto-stage modified .rs files.
 # This allows 'just fmt' to be run immediately before commit without manual 'git add'.
