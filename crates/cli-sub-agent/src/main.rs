@@ -8,6 +8,7 @@ mod claude_sub_agent_cmd;
 mod cli;
 mod config_cmds;
 mod debate_cmd;
+mod debate_cmd_output;
 mod debate_errors;
 mod doctor;
 mod error_hints;
