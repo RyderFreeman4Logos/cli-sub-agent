@@ -783,3 +783,7 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_thinking.rs"]
+mod thinking_tests;
