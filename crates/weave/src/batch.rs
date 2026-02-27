@@ -33,6 +33,21 @@ pub struct PatternResult {
 /// [2/5] patterns/debate/workflow.toml ... FAILED: <reason>
 /// ```
 pub fn compile_all(root: &Path) -> Result<BatchSummary> {
+    if !root.exists() {
+        eprintln!(
+            "directory {} does not exist, nothing to compile",
+            root.display()
+        );
+        return Ok(BatchSummary {
+            ok: 0,
+            failed: 0,
+            results: Vec::new(),
+        });
+    }
+    if !root.is_dir() {
+        anyhow::bail!("{} is not a directory", root.display());
+    }
+
     let plans = find_workflow_tomls(root)?;
 
     if plans.is_empty() {
@@ -202,6 +217,28 @@ title = "Hello"
 prompt = "Say hello"
 on_fail = "abort"
 "#
+    }
+
+    #[test]
+    fn compile_all_nonexistent_dir_returns_zero_results() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp.path().join("no-such-dir");
+        let summary = compile_all(&missing).expect("compile_all should succeed");
+        assert_eq!(summary.ok, 0);
+        assert_eq!(summary.failed, 0);
+        assert!(summary.results.is_empty());
+    }
+
+    #[test]
+    fn compile_all_file_path_returns_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let file = tmp.path().join("not-a-dir.txt");
+        fs::write(&file, "hello").unwrap();
+        let err = compile_all(&file).unwrap_err();
+        assert!(
+            err.to_string().contains("is not a directory"),
+            "expected 'is not a directory' error, got: {err}"
+        );
     }
 
     #[test]
