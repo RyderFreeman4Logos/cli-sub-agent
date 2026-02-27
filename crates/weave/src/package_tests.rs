@@ -400,7 +400,6 @@ commit = "abc"
     assert_eq!(lockfile.package[0].source_kind, SourceKind::Git);
 }
 
-
 #[test]
 fn lock_preserves_source_kind_from_existing_lockfile() {
     let tmp = TempDir::new().unwrap();

@@ -407,7 +407,6 @@ impl TransportFactory {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use csa_acp::SessionConfig;

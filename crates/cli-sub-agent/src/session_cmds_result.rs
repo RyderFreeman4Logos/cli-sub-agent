@@ -309,11 +309,7 @@ pub(crate) fn display_single_section(
 }
 
 /// Show all sections in index order.
-pub(crate) fn display_all_sections(
-    session_dir: &Path,
-    session_id: &str,
-    json: bool,
-) -> Result<()> {
+pub(crate) fn display_all_sections(session_dir: &Path, session_id: &str, json: bool) -> Result<()> {
     let sections = csa_session::read_all_sections(session_dir)?;
     if sections.is_empty() {
         // Fallback: show full output.log

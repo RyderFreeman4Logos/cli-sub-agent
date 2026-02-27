@@ -22,8 +22,7 @@ fn truncate_prompt_ascii_truncated() {
 #[test]
 fn truncate_prompt_multibyte_no_panic() {
     // 10 CJK chars (3 bytes each = 30 bytes); truncate to 6 chars should not panic
-    let cjk =
-        "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{6d4b}\u{8bd5}\u{8fd9}\u{662f}\u{4e2d}\u{6587}";
+    let cjk = "\u{4f60}\u{597d}\u{4e16}\u{754c}\u{6d4b}\u{8bd5}\u{8fd9}\u{662f}\u{4e2d}\u{6587}";
     let result = truncate_prompt(cjk, 6);
     assert!(result.ends_with("..."));
     assert!(result.chars().count() <= 6);

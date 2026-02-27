@@ -624,4 +624,3 @@ fn test_state_base_dir_returns_ok() {
         "unexpected state dir path: {path_str}"
     );
 }
-

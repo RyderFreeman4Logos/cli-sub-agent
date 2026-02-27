@@ -145,9 +145,7 @@ pub(crate) async fn process_execution_result(
     }
 
     // SessionComplete hook: git-commits session artifacts
-    if let Err(e) =
-        run_hooks_for_event(HookEvent::SessionComplete, ctx.hooks_config, &hook_vars)
-    {
+    if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, ctx.hooks_config, &hook_vars) {
         warn!("SessionComplete hook failed: {}", e);
     }
 
@@ -251,4 +249,3 @@ fn persist_output_sections(session_dir: &Path) {
         }
     }
 }
-

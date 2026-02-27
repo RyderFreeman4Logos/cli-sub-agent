@@ -24,9 +24,9 @@ use tokio_util::sync::CancellationToken;
 #[cfg(feature = "transport-http-client")]
 pub(crate) use registry_http::{is_ssrf_dangerous_ip, parse_host_port, validate_http_url};
 
-use registry_pool::StatefulServerPool;
 #[cfg(test)]
 use registry_pool::LeaseTracker;
+use registry_pool::StatefulServerPool;
 
 const RESTART_BACKOFF_INITIAL_MS: u64 = 100;
 const RESTART_BACKOFF_MAX_MS: u64 = 30_000;

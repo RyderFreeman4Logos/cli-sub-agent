@@ -12,14 +12,14 @@ use serde::{Deserialize, Serialize};
 
 #[path = "package_git.rs"]
 mod package_git;
-pub use package_git::{
-    default_cache_root, find_lockfile, global_store_root, is_checkout_valid,
-    load_project_lockfile, lockfile_path,
-};
 pub(crate) use package_git::detect_skill_md_case_mismatch;
 use package_git::{
     checkout_to, copy_dir_recursive, ensure_cached, legacy_lockfile_path, read_version,
     resolve_commit,
+};
+pub use package_git::{
+    default_cache_root, find_lockfile, global_store_root, is_checkout_valid, load_project_lockfile,
+    lockfile_path,
 };
 
 /// Root structure of the lockfile (`weave.lock`).

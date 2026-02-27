@@ -251,8 +251,7 @@ fn test_meta_session_state_toml_roundtrip() {
     };
 
     let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
-    let loaded: MetaSessionState =
-        toml::from_str(&toml_str).expect("Deserialize should succeed");
+    let loaded: MetaSessionState = toml::from_str(&toml_str).expect("Deserialize should succeed");
 
     assert_eq!(loaded.meta_session_id, state.meta_session_id);
     assert_eq!(loaded.description, state.description);
@@ -551,8 +550,7 @@ fn test_meta_session_state_with_budget_roundtrip() {
     };
 
     let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
-    let loaded: MetaSessionState =
-        toml::from_str(&toml_str).expect("Deserialize should succeed");
+    let loaded: MetaSessionState = toml::from_str(&toml_str).expect("Deserialize should succeed");
 
     assert_eq!(loaded.turn_count, 3);
     assert_eq!(loaded.token_budget, Some(budget));

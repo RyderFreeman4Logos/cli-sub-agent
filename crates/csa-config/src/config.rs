@@ -609,7 +609,6 @@ init_timeout_seconds = 60
             .cloned()
             .unwrap_or_else(|| input.to_string())
     }
-
 }
 
 #[cfg(test)]

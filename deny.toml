@@ -7,6 +7,9 @@ ignore = [
     # Transitive from agent-teams -> cc-sdk -> reqwest.
     # rustls-pemfile is archived; no non-breaking safe upgrade is available yet.
     "RUSTSEC-2025-0134",
+    # Transitive dep `instant` is unmaintained; replaced by `web-time` upstream.
+    # Waiting for upstream crate updates to resolve.
+    "RUSTSEC-2024-0384",
 ]
 
 [licenses]
