@@ -16,12 +16,13 @@ use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
     try_acquire_slot,
 };
-use csa_session::{ToolState, load_session, resolve_session_prefix};
+use csa_session::{load_session, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
 use crate::pipeline;
 use crate::run_cmd_fork::{
-    ForkResolution, cleanup_pre_created_fork_session, resolve_fork, try_auto_seed_fork,
+    ForkResolution, cleanup_pre_created_fork_session, pre_create_native_fork_session, resolve_fork,
+    try_auto_seed_fork,
 };
 use crate::run_cmd_post::{handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy};
 use crate::run_cmd_tool_selection::{
@@ -513,50 +514,19 @@ pub(crate) async fn handle_run(
         }
 
         // For native forks: pre-create a session with the forked provider_session_id
-        // in tool state so that execute_with_session_and_meta can resume ACP from the
-        // forked provider session on the very first execution.
-        if effective_session_arg.is_none() {
-            if let Some(ref fork_res) = fork_resolution {
-                if let Some(ref new_provider_id) = fork_res.provider_session_id {
-                    let fork_desc = description.clone().unwrap_or_else(|| {
-                        format!(
-                            "fork of {}",
-                            fork_res
-                                .source_session_id
-                                .get(..8)
-                                .unwrap_or(&fork_res.source_session_id)
-                        )
-                    });
-                    let mut pre_session = csa_session::create_session(
-                        &project_root,
-                        Some(&fork_desc),
-                        Some(&fork_res.source_session_id),
-                        Some(current_tool.as_str()),
-                    )?;
-                    pre_session.genealogy.fork_of_session_id =
-                        Some(fork_res.source_session_id.clone());
-                    pre_session.genealogy.fork_provider_session_id =
-                        fork_res.source_provider_session_id.clone();
-                    pre_session.tools.insert(
-                        current_tool.as_str().to_string(),
-                        ToolState {
-                            provider_session_id: Some(new_provider_id.clone()),
-                            last_action_summary: String::new(),
-                            last_exit_code: 0,
-                            updated_at: chrono::Utc::now(),
-                            token_usage: None,
-                        },
-                    );
-                    csa_session::save_session(&pre_session)?;
-                    info!(
-                        session = %pre_session.meta_session_id,
-                        provider_session = %new_provider_id,
-                        "Pre-created session with forked provider session for ACP resume"
-                    );
-                    pre_created_fork_session_id = Some(pre_session.meta_session_id.clone());
-                    effective_session_arg = Some(pre_session.meta_session_id.clone());
-                }
+        // in tool state so that ACP can resume from the forked provider session.
+        if let Some(ref fork_res) = fork_resolution {
+            let (pre_id, new_eff) = pre_create_native_fork_session(
+                &project_root,
+                fork_res,
+                &current_tool,
+                description.as_deref(),
+                effective_session_arg,
+            )?;
+            if pre_id.is_some() {
+                pre_created_fork_session_id = pre_id;
             }
+            effective_session_arg = new_eff;
         }
 
         let extra_env = global_config.env_vars(tool_name_str).cloned();

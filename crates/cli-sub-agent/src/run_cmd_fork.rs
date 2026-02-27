@@ -265,6 +265,65 @@ pub(crate) fn try_auto_seed_fork(
     }
 }
 
+/// Pre-create a session with forked provider_session_id in tool state so that
+/// `execute_with_session_and_meta` can resume ACP from the forked provider
+/// session on the first turn. Only applies to native forks.
+///
+/// Returns `(pre_created_session_id, effective_session_arg)` if a session was
+/// created, or `(None, existing_arg)` otherwise.
+pub(crate) fn pre_create_native_fork_session(
+    project_root: &Path,
+    fork_res: &ForkResolution,
+    current_tool: &ToolName,
+    description: Option<&str>,
+    effective_session_arg: Option<String>,
+) -> Result<(Option<String>, Option<String>)> {
+    if effective_session_arg.is_some() {
+        return Ok((None, effective_session_arg));
+    }
+
+    let Some(ref new_provider_id) = fork_res.provider_session_id else {
+        return Ok((None, effective_session_arg));
+    };
+
+    let fork_desc = description.map(String::from).unwrap_or_else(|| {
+        format!(
+            "fork of {}",
+            fork_res
+                .source_session_id
+                .get(..8)
+                .unwrap_or(&fork_res.source_session_id)
+        )
+    });
+    let mut pre_session = csa_session::create_session(
+        project_root,
+        Some(&fork_desc),
+        Some(&fork_res.source_session_id),
+        Some(current_tool.as_str()),
+    )?;
+    pre_session.genealogy.fork_of_session_id = Some(fork_res.source_session_id.clone());
+    pre_session.genealogy.fork_provider_session_id =
+        fork_res.source_provider_session_id.clone();
+    pre_session.tools.insert(
+        current_tool.as_str().to_string(),
+        csa_session::ToolState {
+            provider_session_id: Some(new_provider_id.clone()),
+            last_action_summary: String::new(),
+            last_exit_code: 0,
+            updated_at: chrono::Utc::now(),
+            token_usage: None,
+        },
+    );
+    csa_session::save_session(&pre_session)?;
+    info!(
+        session = %pre_session.meta_session_id,
+        provider_session = %new_provider_id,
+        "Pre-created session with forked provider session for ACP resume"
+    );
+    let sid = pre_session.meta_session_id.clone();
+    Ok((Some(sid.clone()), Some(sid)))
+}
+
 /// Remove a pre-created fork session when execution fails or tool failover
 /// occurs. Takes the session ID by `&mut Option` so it is consumed (set to
 /// `None`) after cleanup, preventing double-delete on subsequent error paths.
