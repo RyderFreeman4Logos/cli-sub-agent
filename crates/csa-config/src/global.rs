@@ -623,3 +623,7 @@ fn resolve_auto_tool(section: &str, parent_tool: Option<&str>) -> Result<String>
 #[cfg(test)]
 #[path = "global_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "global_tests_priority.rs"]
+mod tests_priority;

@@ -425,9 +425,7 @@ fn main() -> Result<()> {
                 let created = report.unique_created_count();
                 let link_skipped = report.unique_skipped_count();
                 if created > 0 || link_skipped > 0 {
-                    eprintln!(
-                        "linked {created} skill(s) ({link_skipped} already up-to-date)"
-                    );
+                    eprintln!("linked {created} skill(s) ({link_skipped} already up-to-date)");
                 }
                 for name in report.unique_created_names() {
                     eprintln!("  + {name}");

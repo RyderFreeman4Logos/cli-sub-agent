@@ -6,9 +6,7 @@
 //! - Global slot acquisition with concurrency limits
 
 use anyhow::Result;
-use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
@@ -21,141 +19,15 @@ use csa_hooks::{
 use csa_lock::acquire_lock;
 use csa_process::{ExecutionResult, check_tool_installed};
 use csa_resource::{ResourceGuard, ResourceLimits};
-use csa_session::{
-    SessionResult, TokenUsage, ToolState, create_session, get_session_dir,
-    persist_structured_output, save_result, save_session,
-};
+use csa_session::{ToolState, create_session, get_session_dir};
 
 use crate::memory_capture;
-use crate::run_helpers::{is_compress_command, parse_token_usage, truncate_prompt};
+use crate::pipeline_project_key::resolve_memory_project_key;
+use crate::run_helpers::truncate_prompt;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
-
-fn slugify_identifier(input: &str) -> Option<String> {
-    let mut out = String::with_capacity(input.len());
-    let mut last_dash = false;
-
-    for ch in input.chars() {
-        let mapped = if ch.is_ascii_alphanumeric() {
-            ch.to_ascii_lowercase()
-        } else {
-            '-'
-        };
-
-        if mapped == '-' {
-            if !last_dash {
-                out.push('-');
-                last_dash = true;
-            }
-        } else {
-            out.push(mapped);
-            last_dash = false;
-        }
-    }
-
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
-fn project_key_from_path(path: &Path) -> Option<String> {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    slugify_identifier(&canonical.to_string_lossy())
-}
-
-fn project_key_from_git_remote(project_root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("config")
-        .arg("--get")
-        .arg("remote.origin.url")
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let remote = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if remote.is_empty() {
-        return None;
-    }
-
-    let sanitized = strip_url_credentials(&remote);
-    slugify_identifier(&sanitized)
-}
-
-/// Strip userinfo (credentials) from a URL before using it as a key.
-///
-/// Handles both HTTPS (`https://token@host/org/repo.git`) and SSH
-/// (`git@host:org/repo.git`) remote formats.
-fn strip_url_credentials(url: &str) -> String {
-    // HTTPS with embedded credentials: https://user:pass@host/path
-    if let Some(scheme_end) = url.find("://") {
-        let after_scheme = &url[scheme_end + 3..];
-        if let Some(at_pos) = after_scheme.find('@') {
-            // Only strip if '@' comes before the first '/' (i.e. it's in the authority)
-            let slash_pos = after_scheme.find('/').unwrap_or(after_scheme.len());
-            if at_pos < slash_pos {
-                return format!("{}{}", &url[..scheme_end + 3], &after_scheme[at_pos + 1..]);
-            }
-        }
-        return url.to_string();
-    }
-
-    // SCP-style: user@host:org/repo.git — strip the userinfo prefix
-    if let Some(at_pos) = url.find('@') {
-        // Ensure '@' comes before ':' (SCP format, not a bare path)
-        let colon_pos = url.find(':').unwrap_or(url.len());
-        if at_pos < colon_pos {
-            return url[at_pos + 1..].to_string();
-        }
-    }
-
-    url.to_string()
-}
-
-fn project_key_from_git_toplevel(project_root: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .arg("rev-parse")
-        .arg("--show-toplevel")
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let toplevel = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if toplevel.is_empty() {
-        return None;
-    }
-
-    project_key_from_path(Path::new(&toplevel))
-}
-
-pub(crate) fn resolve_memory_project_key(project_root: &Path) -> Option<String> {
-    // Prefer explicit project_root argument (e.g. --cd) over inherited env var,
-    // so nested sessions with --cd target the correct repo.
-    project_key_from_git_remote(project_root)
-        .or_else(|| project_key_from_git_toplevel(project_root))
-        .or_else(|| project_key_from_path(project_root))
-        .or_else(|| {
-            std::env::var("CSA_PROJECT_ROOT")
-                .ok()
-                .filter(|value| !value.trim().is_empty())
-                .and_then(|value| project_key_from_path(Path::new(&value)))
-        })
-        .or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|path| project_key_from_path(&path))
-        })
-}
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -389,7 +261,7 @@ pub(crate) struct MemoryInjectionOptions {
     pub query_override: Option<String>,
 }
 
-fn run_pipeline_hook(
+pub(crate) fn run_pipeline_hook(
     event: HookEvent,
     hooks_config: &csa_hooks::HooksConfig,
     variables: &std::collections::HashMap<String, String>,
@@ -872,177 +744,24 @@ pub(crate) async fn execute_with_session_and_meta(
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let result = transport_result.execution;
 
-    // Parse token usage from output (best-effort)
-    let token_usage = parse_token_usage(&result.output);
-
-    // Update session state
-    session
-        .tools
-        .entry(executor.tool_name().to_string())
-        .and_modify(|t| {
-            // Only update provider_session_id if extraction succeeded
-            if let Some(ref session_id) = provider_session_id {
-                t.provider_session_id = Some(session_id.clone());
-            }
-            t.last_action_summary = result.summary.clone();
-            t.last_exit_code = result.exit_code;
-            t.updated_at = chrono::Utc::now();
-
-            // Update token usage if parsed successfully
-            if let Some(ref usage) = token_usage {
-                t.token_usage = Some(usage.clone());
-            }
-        })
-        .or_insert_with(|| ToolState {
-            provider_session_id: provider_session_id.clone(),
-            last_action_summary: result.summary.clone(),
-            last_exit_code: result.exit_code,
-            updated_at: chrono::Utc::now(),
-            token_usage: token_usage.clone(),
-        });
-    session.last_accessed = chrono::Utc::now();
-
-    // Detect compress/compact commands: mark session as Available for reuse
-    if result.exit_code == 0 && is_compress_command(prompt) {
-        session.context_status.is_compacted = true;
-        session.context_status.last_compacted_at = Some(chrono::Utc::now());
-        match session.apply_phase_event(csa_session::PhaseEvent::Compressed) {
-            Ok(()) => {
-                info!(
-                    session = %session.meta_session_id,
-                    "Session compacted and marked Available for reuse"
-                );
-            }
-            Err(e) => {
-                warn!(
-                    session = %session.meta_session_id,
-                    error = %e,
-                    "Skipping phase transition on compress"
-                );
-            }
-        }
-    }
-
-    // Increment turn count
-    session.turn_count += 1;
-
-    // Update cumulative token usage if we got new tokens
-    if let Some(new_usage) = token_usage {
-        let cumulative = session
-            .total_token_usage
-            .get_or_insert(TokenUsage::default());
-        cumulative.input_tokens =
-            Some(cumulative.input_tokens.unwrap_or(0) + new_usage.input_tokens.unwrap_or(0));
-        cumulative.output_tokens =
-            Some(cumulative.output_tokens.unwrap_or(0) + new_usage.output_tokens.unwrap_or(0));
-        cumulative.total_tokens =
-            Some(cumulative.total_tokens.unwrap_or(0) + new_usage.total_tokens.unwrap_or(0));
-        cumulative.estimated_cost_usd = Some(
-            cumulative.estimated_cost_usd.unwrap_or(0.0)
-                + new_usage.estimated_cost_usd.unwrap_or(0.0),
-        );
-
-        // Update token budget tracking
-        if let Some(ref mut budget) = session.token_budget {
-            let tokens_used = new_usage.total_tokens.unwrap_or(0);
-            budget.record_usage(tokens_used);
-            if budget.is_hard_exceeded() {
-                warn!(
-                    session = %session.meta_session_id,
-                    used = budget.used,
-                    allocated = budget.allocated,
-                    "Token budget hard threshold reached — advisory only"
-                );
-            } else if budget.is_soft_exceeded() {
-                warn!(
-                    session = %session.meta_session_id,
-                    used = budget.used,
-                    allocated = budget.allocated,
-                    remaining = budget.remaining(),
-                    "Token budget soft threshold reached"
-                );
-            }
-        }
-    }
-
-    // Write effective_prompt (with guard + context injections) to input/ for audit trail.
-    // This ensures prompt.txt captures the full prompt sent to the tool, not just the
-    // raw user input, making guard injections auditable.
-    let input_dir = session_dir.join("input");
-    if input_dir.exists() {
-        let prompt_path = input_dir.join("prompt.txt");
-        if let Err(e) = fs::write(&prompt_path, &effective_prompt) {
-            warn!("Failed to write prompt to input/: {}", e);
-        }
-    }
-
-    // Write structured result
-    let execution_end_time = chrono::Utc::now();
-    let session_result = SessionResult {
-        status: SessionResult::status_from_exit_code(result.exit_code),
-        exit_code: result.exit_code,
-        summary: result.summary.clone(),
-        tool: executor.tool_name().to_string(),
-        started_at: execution_start_time,
-        completed_at: execution_end_time,
+    // Delegate post-execution processing (state updates, persistence, hooks, memory).
+    let post_ctx = crate::pipeline_post_exec::PostExecContext {
+        executor,
+        prompt,
+        effective_prompt: &effective_prompt,
+        project_root,
+        config,
+        global_config,
+        session_dir,
+        sessions_root,
+        execution_start_time,
+        hooks_config: &hooks_config,
+        memory_project_key,
+        provider_session_id: provider_session_id.clone(),
         events_count,
-        artifacts: transcript_artifacts,
+        transcript_artifacts,
     };
-    if let Err(e) = save_result(project_root, &session.meta_session_id, &session_result) {
-        warn!("Failed to save session result: {}", e);
-    }
-
-    // Persist structured output sections from output.log markers
-    let output_log_path = session_dir.join("output.log");
-    if output_log_path.exists() {
-        match fs::read_to_string(&output_log_path) {
-            Ok(output_log) => {
-                if let Err(e) = persist_structured_output(&session_dir, &output_log) {
-                    warn!("Failed to persist structured output: {}", e);
-                }
-            }
-            Err(e) => {
-                warn!("Failed to read output.log for structured output: {}", e);
-            }
-        }
-    }
-
-    // Save session
-    save_session(&session)?;
-
-    // Fire PostRun and SessionComplete hooks (reusing hooks_config from PreRun)
-    let hook_vars = std::collections::HashMap::from([
-        ("session_id".to_string(), session.meta_session_id.clone()),
-        ("session_dir".to_string(), session_dir.display().to_string()),
-        ("sessions_root".to_string(), sessions_root),
-        ("tool".to_string(), executor.tool_name().to_string()),
-        ("exit_code".to_string(), result.exit_code.to_string()),
-    ]);
-    // PostRun hook: fires after every tool execution
-    run_pipeline_hook(HookEvent::PostRun, &hooks_config, &hook_vars)?;
-
-    let memory_config = config
-        .map(|cfg| &cfg.memory)
-        .filter(|m| !m.is_default())
-        .or_else(|| global_config.map(|cfg| &cfg.memory));
-    if let Some(memory_config) = memory_config {
-        if let Err(e) = memory_capture::capture_session_memory(
-            memory_config,
-            &session_dir,
-            memory_project_key.as_deref(),
-            Some(executor.tool_name()),
-            Some(session.meta_session_id.as_str()),
-        )
-        .await
-        {
-            warn!("Memory capture failed: {}", e);
-        }
-    }
-
-    // SessionComplete hook: git-commits session artifacts
-    if let Err(e) = run_hooks_for_event(HookEvent::SessionComplete, &hooks_config, &hook_vars) {
-        warn!("SessionComplete hook failed: {}", e);
-    }
+    crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &result).await?;
 
     Ok(SessionExecutionResult {
         execution: result,
@@ -1064,3 +783,7 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
 #[cfg(test)]
 #[path = "pipeline_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_thinking.rs"]
+mod thinking_tests;

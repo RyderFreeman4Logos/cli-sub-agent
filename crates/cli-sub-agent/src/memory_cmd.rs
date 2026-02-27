@@ -171,7 +171,7 @@ fn handle_add(content: String, tags: Option<String>) -> Result<()> {
     let entry = MemoryEntry {
         id: Ulid::new(),
         timestamp: Utc::now(),
-        project: crate::pipeline::resolve_memory_project_key(&project_root),
+        project: crate::pipeline_project_key::resolve_memory_project_key(&project_root),
         tool: Some("manual".to_string()),
         session_id: None,
         tags: parse_tags(tags),
@@ -299,12 +299,17 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
     }
 
     let client: Box<dyn MemoryLlmClient> = Box::new(
-        ApiClient::new(&config.llm.base_url, &config.llm.api_key, &config.llm.models)
-            .context("Failed to initialize LLM client for consolidation")?,
+        ApiClient::new(
+            &config.llm.base_url,
+            &config.llm.api_key,
+            &config.llm.models,
+        )
+        .context("Failed to initialize LLM client for consolidation")?,
     );
 
     if dry_run {
-        let plan = plan_consolidation(&store, client.as_ref(), config.consolidation_threshold).await?;
+        let plan =
+            plan_consolidation(&store, client.as_ref(), config.consolidation_threshold).await?;
         println!("Consolidation Plan:");
         println!("  Entries before: {}", plan.total_before);
         println!("  Entries after:  {}", plan.total_after_estimate);
@@ -323,7 +328,13 @@ async fn handle_consolidate(dry_run: bool) -> Result<()> {
 
     let index_dir = store.base_dir().join("index");
     let index = MemoryIndex::open(&index_dir).ok();
-    let plan = execute_consolidation(&store, index.as_ref(), client.as_ref(), config.consolidation_threshold).await?;
+    let plan = execute_consolidation(
+        &store,
+        index.as_ref(),
+        client.as_ref(),
+        config.consolidation_threshold,
+    )
+    .await?;
     println!("Consolidation complete:");
     println!("  Entries before: {}", plan.total_before);
     println!("  Groups merged: {}", plan.groups_to_merge.len());

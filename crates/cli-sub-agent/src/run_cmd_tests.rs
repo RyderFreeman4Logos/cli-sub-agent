@@ -6,6 +6,10 @@ use csa_session::{Genealogy, MetaSessionState, SessionPhase, TaskContext};
 use std::collections::HashMap;
 
 use crate::cli::{Cli, ReturnTarget, parse_return_to};
+use crate::run_cmd_tool_selection::{
+    resolve_heterogeneous_candidates, resolve_last_session_selection,
+    take_next_runtime_fallback_tool,
+};
 
 fn test_session(
     meta_session_id: &str,
