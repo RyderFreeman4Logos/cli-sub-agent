@@ -1,6 +1,7 @@
 use std::process::Command;
 use tempfile::TempDir;
 
+use super::package_git::cas_dir_for;
 use super::*;
 
 #[test]
