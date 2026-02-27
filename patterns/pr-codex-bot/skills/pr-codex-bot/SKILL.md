@@ -136,8 +136,8 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 ### Step-by-Step
 
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
-2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA). If matched, skip review; if mismatched/missing, run full `csa review --branch main`. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds).
-3. **Push and create PR**: `git push -u origin`, `gh pr create --base main`.
+2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA). If matched, skip review; if mismatched/missing, run full `csa review --branch main`. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds). Sets `REVIEW_COMPLETED=true` on success.
+3. **Push and create PR** (PRECONDITION: `REVIEW_COMPLETED=true`): `git push -u origin`, `gh pr create --base main`. FORBIDDEN: creating PR without Step 2 completion.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
     If `false` → skip Steps 4-9. Apply the same SHA-verified fast-path before
     supplementary review. If SHA matches, skip review and jump to Step 11; if
@@ -177,8 +177,9 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 1. Step 2 completed synchronously (not backgrounded) via one of:
    - full path: `csa review --branch main`, or
    - fast-path: current HEAD SHA matches latest reviewed session HEAD SHA.
+   - `REVIEW_COMPLETED=true` is set after successful completion.
 2. Any local review issues are fixed before PR creation.
-3. PR created.
+3. PR created (Step 4 precondition verified: `REVIEW_COMPLETED=true`).
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
 5. **If cloud_bot enabled (default)**: cloud bot triggered, response received or timeout handled.
 6. **If cloud_bot disabled**: supplementary check completed via one of:
