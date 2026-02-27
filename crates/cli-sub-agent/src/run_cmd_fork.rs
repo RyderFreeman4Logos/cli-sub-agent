@@ -5,8 +5,10 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
+use csa_config::ProjectConfig;
+use csa_core::types::ToolName;
 use csa_executor::transport::{ForkMethod, ForkRequest, TransportFactory};
 use csa_session::{
     RETURN_PACKET_SECTION_ID, ReturnPacketRef, load_output_index, parse_return_packet, read_section,
@@ -173,6 +175,94 @@ pub(crate) fn load_child_return_packet(
             section_path: section_path.to_string_lossy().to_string(),
         },
     ))
+}
+
+/// Result of attempting auto-seed-fork resolution.
+pub(crate) struct AutoSeedResult {
+    pub(crate) is_fork: bool,
+    pub(crate) session_arg: Option<String>,
+    pub(crate) is_auto_seed_fork: bool,
+}
+
+/// Try to auto-fork from a warm seed session if conditions allow.
+///
+/// Returns the (possibly updated) fork and session state.
+pub(crate) fn try_auto_seed_fork(
+    project_root: &Path,
+    resolved_tool: &ToolName,
+    config: Option<&ProjectConfig>,
+    is_fork: bool,
+    session_arg: Option<String>,
+    ephemeral: bool,
+) -> AutoSeedResult {
+    if is_fork || session_arg.is_some() || ephemeral {
+        return AutoSeedResult {
+            is_fork,
+            session_arg,
+            is_auto_seed_fork: false,
+        };
+    }
+
+    let auto_seed_enabled = config.map(|c| c.session.auto_seed_fork).unwrap_or(true);
+    if !auto_seed_enabled {
+        return AutoSeedResult {
+            is_fork,
+            session_arg,
+            is_auto_seed_fork: false,
+        };
+    }
+
+    let seed_max_age = config.map(|c| c.session.seed_max_age_secs).unwrap_or(86400);
+    let current_git_head = csa_session::detect_git_head(project_root);
+    let needs_native_fork = matches!(
+        TransportFactory::fork_method_for_tool(resolved_tool.as_str()),
+        ForkMethod::Native,
+    );
+    let seed_result = if needs_native_fork {
+        csa_scheduler::find_seed_session_for_native_fork(
+            project_root,
+            resolved_tool.as_str(),
+            seed_max_age,
+            current_git_head.as_deref(),
+        )
+    } else {
+        csa_scheduler::find_seed_session(
+            project_root,
+            resolved_tool.as_str(),
+            seed_max_age,
+            current_git_head.as_deref(),
+        )
+    };
+    match seed_result {
+        Ok(Some(seed)) => {
+            info!(
+                seed_session = %seed.session_id,
+                tool = %seed.tool_name,
+                "Auto fork-from-seed: warm session found"
+            );
+            AutoSeedResult {
+                is_fork: true,
+                session_arg: Some(seed.session_id),
+                is_auto_seed_fork: true,
+            }
+        }
+        Ok(None) => {
+            debug!("No seed session available, cold start");
+            AutoSeedResult {
+                is_fork,
+                session_arg,
+                is_auto_seed_fork: false,
+            }
+        }
+        Err(e) => {
+            debug!(error = %e, "Seed session lookup failed, falling back to cold start");
+            AutoSeedResult {
+                is_fork,
+                session_arg,
+                is_auto_seed_fork: false,
+            }
+        }
+    }
 }
 
 /// Remove a pre-created fork session when execution fails or tool failover

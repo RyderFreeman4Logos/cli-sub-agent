@@ -13,9 +13,10 @@ use csa_session::{MetaSessionState, SessionPhase, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
 use crate::run_helpers::{
-    detect_parent_tool, is_tool_binary_available, parse_tool_name, resolve_tool,
+    detect_parent_tool, is_tool_binary_available, parse_tool_name, read_prompt, resolve_tool,
     resolve_tool_and_model,
 };
+use crate::skill_resolver::{self, ResolvedSkill};
 
 /// Resolve the `--last` flag to a concrete session ID.
 ///
@@ -329,6 +330,98 @@ fn resolve_heterogeneous_strict(
             None, model_spec, model, config, project_root, force, force_override_user_config,
         )
     }
+}
+
+/// Resolved skill, prompt text, and overridden CLI params.
+pub(crate) struct SkillResolution {
+    pub(crate) prompt_text: String,
+    pub(crate) resolved_skill: Option<ResolvedSkill>,
+    pub(crate) tool: Option<csa_core::types::ToolArg>,
+    pub(crate) model: Option<String>,
+    pub(crate) thinking: Option<String>,
+}
+
+/// Resolve the skill (if any), build the prompt, and apply agent config
+/// overrides for tool/model/thinking.
+pub(crate) fn resolve_skill_and_prompt(
+    skill: Option<&str>,
+    prompt: Option<String>,
+    tool: Option<csa_core::types::ToolArg>,
+    model: Option<String>,
+    thinking: Option<String>,
+    project_root: &Path,
+) -> Result<SkillResolution> {
+    let resolved_skill = if let Some(skill_name) = skill {
+        Some(skill_resolver::resolve_skill(skill_name, project_root)?)
+    } else {
+        None
+    };
+
+    let prompt_text = if let Some(ref sk) = resolved_skill {
+        let mut parts = vec![sk.skill_md.clone()];
+
+        // Load extra_context files relative to the skill directory.
+        if let Some(agent) = sk.agent_config() {
+            for extra in &agent.extra_context {
+                let extra_path = sk.dir.join(extra);
+                match std::fs::read_to_string(&extra_path) {
+                    Ok(content) => {
+                        parts.push(format!(
+                            "<context-file path=\"{}\">\n{}\n</context-file>",
+                            extra, content
+                        ));
+                    }
+                    Err(e) => {
+                        warn!(path = %extra, error = %e, "Failed to load skill extra_context file");
+                    }
+                }
+            }
+        }
+
+        if let Some(user_prompt) = prompt {
+            parts.push(format!("---\n\n{}", user_prompt));
+        }
+
+        parts.join("\n\n")
+    } else {
+        read_prompt(prompt)?
+    };
+
+    // Apply skill agent config overrides for tool/model when CLI didn't specify.
+    let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
+    let tool = if tool.is_none() {
+        skill_agent
+            .and_then(|a| a.tools.first())
+            .and_then(|t| parse_tool_name(&t.tool).ok())
+            .map(csa_core::types::ToolArg::Specific)
+            .or(tool)
+    } else {
+        tool
+    };
+    let model = if model.is_none() {
+        skill_agent
+            .and_then(|a| a.tools.first())
+            .and_then(|t| t.model.clone())
+            .or(model)
+    } else {
+        model
+    };
+    let thinking = if thinking.is_none() {
+        skill_agent
+            .and_then(|a| a.tools.first())
+            .and_then(|t| t.thinking_budget.clone())
+            .or(thinking)
+    } else {
+        thinking
+    };
+
+    Ok(SkillResolution {
+        prompt_text,
+        resolved_skill,
+        tool,
+        model,
+        thinking,
+    })
 }
 
 /// Resolve the `--return-to` target to a concrete session ID.

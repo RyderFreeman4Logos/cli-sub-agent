@@ -6,12 +6,11 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tempfile::TempDir;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_executor::structured_output_instructions_for_fork_call;
-use csa_executor::transport::{ForkMethod, TransportFactory};
 use csa_lock::SessionLock;
 use csa_lock::slot::{
     SlotAcquireResult, ToolSlot, acquire_slot_blocking, format_slot_diagnostic, slot_usage,
@@ -21,16 +20,15 @@ use csa_session::{ToolState, load_session, resolve_session_prefix};
 
 use crate::cli::ReturnTarget;
 use crate::pipeline;
-use crate::run_cmd_fork::{ForkResolution, cleanup_pre_created_fork_session, resolve_fork};
+use crate::run_cmd_fork::{
+    ForkResolution, cleanup_pre_created_fork_session, resolve_fork, try_auto_seed_fork,
+};
 use crate::run_cmd_post::{handle_fork_call_resume, mark_seed_and_evict, update_fork_genealogy};
 use crate::run_cmd_tool_selection::{
-    resolve_last_session_selection, resolve_return_target_session_id,
+    resolve_last_session_selection, resolve_return_target_session_id, resolve_skill_and_prompt,
     resolve_slot_wait_timeout_seconds, resolve_tool_by_strategy, take_next_runtime_fallback_tool,
 };
-use crate::run_helpers::{
-    infer_task_edit_requirement, is_tool_binary_available, parse_tool_name, read_prompt,
-};
-use crate::skill_resolver;
+use crate::run_helpers::{infer_task_edit_requirement, is_tool_binary_available, parse_tool_name};
 
 
 #[allow(clippy::too_many_arguments)]
@@ -144,73 +142,22 @@ pub(crate) async fn handle_run(
         return Ok(1);
     };
 
-    // 4. Resolve --skill if provided
-    let resolved_skill = if let Some(ref skill_name) = skill {
-        Some(skill_resolver::resolve_skill(skill_name, &project_root)?)
-    } else {
-        None
-    };
-
-    // 5. Read prompt (skill prompt = SKILL.md + extra_context files + optional user prompt)
-    let prompt_text = if let Some(ref sk) = resolved_skill {
-        let mut parts = vec![sk.skill_md.clone()];
-
-        // Load extra_context files relative to the skill directory.
-        if let Some(agent) = sk.agent_config() {
-            for extra in &agent.extra_context {
-                let extra_path = sk.dir.join(extra);
-                match std::fs::read_to_string(&extra_path) {
-                    Ok(content) => {
-                        parts.push(format!(
-                            "<context-file path=\"{}\">\n{}\n</context-file>",
-                            extra, content
-                        ));
-                    }
-                    Err(e) => {
-                        warn!(path = %extra, error = %e, "Failed to load skill extra_context file");
-                    }
-                }
-            }
-        }
-
-        if let Some(user_prompt) = prompt {
-            parts.push(format!("---\n\n{}", user_prompt));
-        }
-
-        parts.join("\n\n")
-    } else {
-        read_prompt(prompt)?
-    };
-
-    // 6. Apply skill agent config overrides for tool/model when CLI didn't specify.
+    // 4-6. Resolve skill, build prompt, apply agent config overrides
+    let skill_res = resolve_skill_and_prompt(
+        skill.as_deref(),
+        prompt,
+        tool,
+        model,
+        thinking,
+        &project_root,
+    )?;
+    let prompt_text = skill_res.prompt_text;
+    let resolved_skill = skill_res.resolved_skill;
     let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
-    let tool = if tool.is_none() {
-        skill_agent
-            .and_then(|a| a.tools.first())
-            .and_then(|t| parse_tool_name(&t.tool).ok())
-            .map(ToolArg::Specific)
-            .or(tool)
-    } else {
-        tool
-    };
-    let model = if model.is_none() {
-        skill_agent
-            .and_then(|a| a.tools.first())
-            .and_then(|t| t.model.clone())
-            .or(model)
-    } else {
-        model
-    };
-    let thinking = if thinking.is_none() {
-        skill_agent
-            .and_then(|a| a.tools.first())
-            .and_then(|t| t.thinking_budget.clone())
-            .or(thinking)
-    } else {
-        thinking
-    };
+    let thinking = skill_res.thinking;
+    let model = skill_res.model;
 
-    let strategy = tool.unwrap_or(ToolArg::Auto).into_strategy();
+    let strategy = skill_res.tool.unwrap_or(ToolArg::Auto).into_strategy();
     let idle_timeout_seconds = if no_idle_timeout {
         info!("Idle timeout disabled via --no-idle-timeout");
         u64::MAX
@@ -235,64 +182,17 @@ pub(crate) async fn handle_run(
     let resolved_tool = strategy_result.tool;
 
     // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
-    let mut is_auto_seed_fork = false;
-    let (next_is_fork, next_session_arg) = if !is_fork && session_arg.is_none() && !ephemeral {
-        let auto_seed_enabled = config
-            .as_ref()
-            .map(|c| c.session.auto_seed_fork)
-            .unwrap_or(true);
-        if auto_seed_enabled {
-            let seed_max_age = config
-                .as_ref()
-                .map(|c| c.session.seed_max_age_secs)
-                .unwrap_or(86400);
-            let current_git_head = csa_session::detect_git_head(&project_root);
-            let needs_native_fork = matches!(
-                TransportFactory::fork_method_for_tool(resolved_tool.as_str()),
-                ForkMethod::Native,
-            );
-            let seed_result = if needs_native_fork {
-                csa_scheduler::find_seed_session_for_native_fork(
-                    &project_root,
-                    resolved_tool.as_str(),
-                    seed_max_age,
-                    current_git_head.as_deref(),
-                )
-            } else {
-                csa_scheduler::find_seed_session(
-                    &project_root,
-                    resolved_tool.as_str(),
-                    seed_max_age,
-                    current_git_head.as_deref(),
-                )
-            };
-            match seed_result {
-                Ok(Some(seed)) => {
-                    info!(
-                        seed_session = %seed.session_id,
-                        tool = %seed.tool_name,
-                        "Auto fork-from-seed: warm session found"
-                    );
-                    is_auto_seed_fork = true;
-                    (true, Some(seed.session_id))
-                }
-                Ok(None) => {
-                    debug!("No seed session available, cold start");
-                    (is_fork, session_arg)
-                }
-                Err(e) => {
-                    debug!(error = %e, "Seed session lookup failed, falling back to cold start");
-                    (is_fork, session_arg)
-                }
-            }
-        } else {
-            (is_fork, session_arg)
-        }
-    } else {
-        (is_fork, session_arg)
-    };
-    is_fork = next_is_fork;
-    session_arg = next_session_arg;
+    let seed_result = try_auto_seed_fork(
+        &project_root,
+        &resolved_tool,
+        config.as_ref(),
+        is_fork,
+        session_arg,
+        ephemeral,
+    );
+    let mut is_auto_seed_fork = seed_result.is_auto_seed_fork;
+    is_fork = seed_result.is_fork;
+    session_arg = seed_result.session_arg;
 
     let mut _fork_call_parent_lock: Option<SessionLock> = None;
     let mut fork_call_parent_session_id: Option<String> = None;
