@@ -534,12 +534,29 @@ fn test_build_review_instruction_fix_mode() {
 
 #[test]
 fn test_build_review_instruction_no_diff_content() {
-    // Critical: the instruction must not contain actual diff output or review protocol
+    // Critical: the instruction must not contain actual diff output or review protocol.
+    // The anti-recursion preamble (~300 chars) is expected; the instruction body itself
+    // should remain concise.
     let result = build_review_instruction("uncommitted", "review-only", "auto", None);
     assert!(
-        result.len() < 200,
-        "Instruction should be concise, got {} chars",
+        result.len() < 600,
+        "Instruction should be concise (preamble + params), got {} chars",
         result.len()
+    );
+    assert!(!result.contains("git diff"));
+    assert!(!result.contains("Pass 1:"));
+}
+
+#[test]
+fn test_build_review_instruction_contains_anti_recursion_guard() {
+    let result = build_review_instruction("uncommitted", "review-only", "auto", None);
+    assert!(
+        result.contains("INSIDE a CSA subprocess"),
+        "Review instruction must contain anti-recursion preamble"
+    );
+    assert!(
+        result.contains("Do NOT invoke"),
+        "Anti-recursion preamble must warn against csa invocation"
     );
 }
 

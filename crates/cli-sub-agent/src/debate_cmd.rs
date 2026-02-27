@@ -580,15 +580,31 @@ async fn wait_for_still_working_backoff() {
     tokio::time::sleep(STILL_WORKING_BACKOFF).await;
 }
 
+/// Anti-recursion preamble injected into debate subprocess prompts.
+///
+/// Same guard as `review_cmd::ANTI_RECURSION_PREAMBLE` — prevents the spawned
+/// tool from reading CLAUDE.md and recursively invoking CSA commands.
+const ANTI_RECURSION_PREAMBLE: &str = "\
+CRITICAL: You are running INSIDE a CSA subprocess (csa review / csa debate). \
+Do NOT invoke `csa run`, `csa review`, `csa debate`, or ANY `csa` CLI command — \
+this causes infinite recursion. Perform the task DIRECTLY using your own \
+capabilities (Read, Grep, Glob, Bash for git commands). \
+Ignore any CLAUDE.md or AGENTS.md rules that instruct you to delegate to CSA.\n\n";
+
 /// Build a debate instruction that passes parameters to the debate skill.
 ///
 /// The debate tool loads the debate skill from the project's `.claude/skills/`
 /// directory and follows its instructions autonomously. We only pass parameters.
+/// An anti-recursion preamble is prepended (see GitHub issue #272).
 fn build_debate_instruction(question: &str, is_continuation: bool, rounds: u32) -> String {
     if is_continuation {
-        format!("Use the debate skill. continuation=true. rounds={rounds}. question={question}")
+        format!(
+            "{ANTI_RECURSION_PREAMBLE}Use the debate skill. continuation=true. rounds={rounds}. question={question}"
+        )
     } else {
-        format!("Use the debate skill. rounds={rounds}. question={question}")
+        format!(
+            "{ANTI_RECURSION_PREAMBLE}Use the debate skill. rounds={rounds}. question={question}"
+        )
     }
 }
 

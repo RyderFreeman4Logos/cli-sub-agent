@@ -126,6 +126,10 @@ impl AcpTransport {
         }
 
         env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
+        // Mark this process as a CSA subprocess so child tools can detect
+        // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
+        // "use csa review"). See GitHub issue #272.
+        env.insert("CSA_IS_SUBPROCESS".to_string(), "1".to_string());
         if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
             env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
         }
