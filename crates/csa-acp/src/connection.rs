@@ -391,7 +391,9 @@ impl AcpConnection {
             .try_wait()
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
         {
-            return Err(AcpError::ProcessExited(status.code().unwrap_or(-1)));
+            let code = status.code().unwrap_or(-1);
+            let stderr = self.stderr();
+            return Err(AcpError::ProcessExited { code, stderr });
         }
         Ok(())
     }
