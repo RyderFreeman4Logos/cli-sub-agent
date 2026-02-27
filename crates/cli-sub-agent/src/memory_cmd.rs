@@ -171,7 +171,7 @@ fn handle_add(content: String, tags: Option<String>) -> Result<()> {
     let entry = MemoryEntry {
         id: Ulid::new(),
         timestamp: Utc::now(),
-        project: crate::pipeline::resolve_memory_project_key(&project_root),
+        project: crate::pipeline_project_key::resolve_memory_project_key(&project_root),
         tool: Some("manual".to_string()),
         session_id: None,
         tags: parse_tags(tags),
