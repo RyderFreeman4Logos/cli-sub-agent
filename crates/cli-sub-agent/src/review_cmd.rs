@@ -626,10 +626,23 @@ fn derive_scope(args: &ReviewArgs) -> String {
     format!("base:{}", args.branch.as_deref().unwrap_or("main"))
 }
 
+/// Anti-recursion preamble injected into every review/debate subprocess prompt.
+///
+/// Prevents the spawned tool (e.g. claude-code-acp) from reading CLAUDE.md rules
+/// that say "use csa review" and recursively invoking `csa run` / `csa review`.
+const ANTI_RECURSION_PREAMBLE: &str = "\
+CRITICAL: You are running INSIDE a CSA subprocess (csa review / csa debate). \
+Do NOT invoke `csa run`, `csa review`, `csa debate`, or ANY `csa` CLI command — \
+this causes infinite recursion. Perform the task DIRECTLY using your own \
+capabilities (Read, Grep, Glob, Bash for git commands). \
+Ignore any CLAUDE.md or AGENTS.md rules that instruct you to delegate to CSA.\n\n";
+
 /// Build a concise review instruction that tells the tool to use the csa-review skill.
 ///
 /// The tool loads the skill from `.claude/skills/csa-review/` automatically.
 /// CSA only passes scope, mode, and optional parameters — no diff content.
+/// An anti-recursion preamble is prepended to prevent the spawned tool from
+/// re-invoking CSA commands (see GitHub issue #272).
 fn build_review_instruction(
     scope: &str,
     mode: &str,
@@ -637,7 +650,7 @@ fn build_review_instruction(
     context: Option<&str>,
 ) -> String {
     let mut instruction = format!(
-        "Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}."
+        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}."
     );
     if let Some(ctx) = context {
         instruction.push_str(&format!(" context={ctx}"));

@@ -10,14 +10,38 @@ pub enum AcpError {
     SessionFailed(String),
     #[error("ACP prompt failed: {0}")]
     PromptFailed(String),
-    #[error("ACP process exited unexpectedly: code {0}")]
-    ProcessExited(i32),
+    #[error(
+        "ACP process exited unexpectedly: code {code}{}",
+        format_stderr(stderr)
+    )]
+    ProcessExited { code: i32, stderr: String },
     #[error("Session fork failed: {0}")]
     ForkFailed(String),
     #[error("ACP subprocess spawn failed: {0}")]
     SpawnFailed(#[from] std::io::Error),
     #[error("Configuration error: {0}")]
     ConfigError(String),
+}
+
+/// Format captured stderr for inclusion in `ProcessExited` error display.
+///
+/// Returns last 10 lines prefixed with `"; stderr:\n..."` or empty if no stderr.
+fn format_stderr(stderr: &str) -> String {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
+        String::new()
+    } else {
+        let last_lines: String = trimmed
+            .lines()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!("; stderr:\n{last_lines}")
+    }
 }
 
 pub type AcpResult<T> = std::result::Result<T, AcpError>;
@@ -47,5 +71,25 @@ mod tests {
         let err = AcpError::PromptFailed("permission denied".to_string());
         assert_eq!(err.to_string(), "ACP prompt failed: permission denied");
         assert!(err.source().is_none());
+    }
+
+    #[test]
+    fn test_process_exited_without_stderr() {
+        let err = AcpError::ProcessExited {
+            code: 143,
+            stderr: String::new(),
+        };
+        assert_eq!(err.to_string(), "ACP process exited unexpectedly: code 143");
+    }
+
+    #[test]
+    fn test_process_exited_with_stderr() {
+        let err = AcpError::ProcessExited {
+            code: 1,
+            stderr: "Error: write EPIPE\n  at node:events:486".to_string(),
+        };
+        let display = err.to_string();
+        assert!(display.contains("code 1"), "should contain exit code");
+        assert!(display.contains("EPIPE"), "should contain stderr content");
     }
 }

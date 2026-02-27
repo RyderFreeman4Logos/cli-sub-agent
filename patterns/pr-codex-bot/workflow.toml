@@ -39,6 +39,9 @@ name = "MAX_REVIEW_ROUNDS"
 name = "PR_BODY"
 
 [[workflow.variables]]
+name = "REVIEW_COMPLETED"
+
+[[workflow.variables]]
 name = "PR_NUM"
 
 [[workflow.variables]]
@@ -85,6 +88,7 @@ fast-path. This is the FOUNDATION — without it, bot unavailability cannot
 safely merge.
 
 ```bash
+set -euo pipefail
 CURRENT_HEAD="$(git rev-parse HEAD)"
 REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
@@ -93,6 +97,7 @@ else
   echo "No matching review HEAD found (or HEAD drift detected). Running full local review."
   csa review --branch main
 fi
+REVIEW_COMPLETED=true
 ```"""
 on_fail = "abort"
 
@@ -112,6 +117,11 @@ id = 4
 title = "Push and Create PR"
 tool = "bash"
 prompt = """
+PRECONDITION: Step 2 (local review) must have completed successfully.
+In workflow executor context, Step 2's on_fail=abort already guarantees this —
+Step 4 is only reached when Step 2 exits 0. The REVIEW_COMPLETED variable
+is tracked by the manual orchestrator (PATTERN.md), not by the workflow engine.
+
 ```bash
 git push -u origin "${WORKFLOW_BRANCH}"
 gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"

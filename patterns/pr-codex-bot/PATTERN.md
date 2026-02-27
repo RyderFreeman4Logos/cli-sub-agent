@@ -61,6 +61,7 @@ This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 > the fast-path.
 
 ```bash
+set -euo pipefail
 CURRENT_HEAD="$(git rev-parse HEAD)"
 REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
@@ -68,6 +69,7 @@ if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
 else
   csa review --branch main
 fi
+REVIEW_COMPLETED=true
 ```
 
 ## IF ${LOCAL_REVIEW_HAS_ISSUES}
@@ -92,7 +94,22 @@ Fix issues found by local review. Loop until clean (max 3 rounds).
 Tool: bash
 OnFail: abort
 
+**PRECONDITION (MANDATORY)**: Step 2 local review MUST have completed successfully.
+- If `REVIEW_COMPLETED` is not `true`, STOP and report:
+  `ERROR: Local review (Step 2) was not completed. Run csa review --branch main before creating PR.`
+- If Step 2 found unresolved issues that were not fixed in Step 3, STOP and report:
+  `ERROR: Local review found unresolved issues. Fix them before PR creation.`
+- FORBIDDEN: Creating a PR without completing Step 2. This violates the two-layer review guarantee.
+
 ```bash
+# --- Precondition gate: review must be complete ---
+if [ "${REVIEW_COMPLETED}" != "true" ]; then
+  echo "ERROR: Local review (Step 2) was not completed."
+  echo "Run csa review --branch main before creating PR."
+  echo "FORBIDDEN: Creating PR without Step 2 completion."
+  exit 1
+fi
+
 git push -u origin "${WORKFLOW_BRANCH}"
 gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
 PR_NUM=$(gh pr view --json number -q '.number')

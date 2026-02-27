@@ -391,7 +391,9 @@ impl AcpConnection {
             .try_wait()
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
         {
-            return Err(AcpError::ProcessExited(status.code().unwrap_or(-1)));
+            let code = status.code().unwrap_or(-1);
+            let stderr = self.stderr();
+            return Err(AcpError::ProcessExited { code, stderr });
         }
         Ok(())
     }
@@ -400,7 +402,7 @@ impl AcpConnection {
     ///
     /// Returns an empty string when no stderr was captured, or
     /// `"; stderr: <content>"` otherwise.
-    fn format_stderr(stderr: &str) -> String {
+    pub(crate) fn format_stderr(stderr: &str) -> String {
         let trimmed = stderr.trim();
         if trimmed.is_empty() {
             String::new()

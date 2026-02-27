@@ -196,6 +196,27 @@ review:
     @echo ""
     @echo "Review the above before committing."
 
+# Reviewed push: run csa review --range base...HEAD, then push and create PR.
+# Enforces the mandatory pre-push review (see GitHub issue #276).
+push-reviewed base="main":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "=== Pre-push review: csa review --range {{base}}...HEAD ==="
+    csa review --range "{{base}}...HEAD"
+    echo "=== Review passed. Pushing... ==="
+    git push -u origin HEAD
+    echo "=== Creating PR targeting {{base}}... ==="
+    if ! gh pr create --base "{{base}}" 2>&1; then
+        # Only tolerate "already exists" — fail on other errors.
+        if gh pr view --json state -q '.state' 2>/dev/null | grep -qi 'open'; then
+            echo "PR already exists. Continuing."
+        else
+            echo "ERROR: gh pr create failed and no open PR found."
+            exit 1
+        fi
+    fi
+    echo "=== Done. Run /pr-codex-bot to complete the review loop. ==="
+
 # Push to all submodules and the main repo (useful for monorepos).
 git-push-all:
     git submodule foreach 'git push origin --all'

@@ -262,6 +262,19 @@ fn resolve_debate_tool_ignores_unknown_priority_entries() {
 }
 
 #[test]
+fn build_debate_instruction_contains_anti_recursion_guard() {
+    let prompt = build_debate_instruction("topic", false, 3);
+    assert!(
+        prompt.contains("INSIDE a CSA subprocess"),
+        "Debate instruction must contain anti-recursion preamble"
+    );
+    assert!(
+        prompt.contains("Do NOT invoke"),
+        "Anti-recursion preamble must warn against csa invocation"
+    );
+}
+
+#[test]
 fn build_debate_instruction_new_debate() {
     let prompt = build_debate_instruction("Should we use gRPC or REST?", false, 3);
     assert!(prompt.contains("debate skill"));
