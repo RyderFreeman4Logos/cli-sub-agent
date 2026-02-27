@@ -4,6 +4,7 @@ pub mod acp;
 pub mod config;
 mod config_merge;
 pub mod config_resources;
+mod config_tiers;
 mod config_runtime;
 pub mod gc;
 pub mod global;

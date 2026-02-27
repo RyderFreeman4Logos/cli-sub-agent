@@ -1117,6 +1117,3 @@ transcript_enabled = false
     let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
     assert!(cfg.structured_output);
 }
-
-#[path = "config_tests_tier_whitelist.rs"]
-mod tier_whitelist;
