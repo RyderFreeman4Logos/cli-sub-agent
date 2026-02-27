@@ -81,6 +81,53 @@ on_fail = "abort"
 }
 
 #[test]
+fn compile_all_nonexistent_dir_succeeds_with_info_message() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let missing = tmp.path().join("no-such-patterns");
+
+    let output = weave_cmd()
+        .arg("compile-all")
+        .arg("--dir")
+        .arg(&missing)
+        .output()
+        .expect("run weave compile-all");
+
+    assert!(
+        output.status.success(),
+        "compile-all on nonexistent dir should succeed (nothing to compile)"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("does not exist"),
+        "should report directory does not exist, got: {stderr}"
+    );
+}
+
+#[test]
+fn compile_all_file_path_exits_nonzero() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let file = tmp.path().join("not-a-dir.txt");
+    fs::write(&file, "hello").unwrap();
+
+    let output = weave_cmd()
+        .arg("compile-all")
+        .arg("--dir")
+        .arg(&file)
+        .output()
+        .expect("run weave compile-all");
+
+    assert!(
+        !output.status.success(),
+        "compile-all on a file path should fail"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("is not a directory"),
+        "should report 'is not a directory', got: {stderr}"
+    );
+}
+
+#[test]
 fn compile_all_exits_nonzero_when_pattern_fails() {
     let tmp = tempfile::tempdir().expect("tempdir");
 

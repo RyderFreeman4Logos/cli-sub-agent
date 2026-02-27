@@ -33,19 +33,25 @@ pub struct PatternResult {
 /// [2/5] patterns/debate/workflow.toml ... FAILED: <reason>
 /// ```
 pub fn compile_all(root: &Path) -> Result<BatchSummary> {
-    if !root.exists() {
-        eprintln!(
-            "directory {} does not exist, nothing to compile",
-            root.display()
-        );
-        return Ok(BatchSummary {
-            ok: 0,
-            failed: 0,
-            results: Vec::new(),
-        });
-    }
-    if !root.is_dir() {
-        anyhow::bail!("{} is not a directory", root.display());
+    match root.try_exists() {
+        Ok(false) => {
+            eprintln!(
+                "directory {} does not exist, nothing to compile",
+                root.display()
+            );
+            return Ok(BatchSummary {
+                ok: 0,
+                failed: 0,
+                results: Vec::new(),
+            });
+        }
+        Err(e) => {
+            anyhow::bail!("cannot access {}: {e}", root.display());
+        }
+        Ok(true) if !root.is_dir() => {
+            anyhow::bail!("{} is not a directory", root.display());
+        }
+        Ok(true) => {} // directory exists, proceed
     }
 
     let plans = find_workflow_tomls(root)?;
