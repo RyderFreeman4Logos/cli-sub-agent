@@ -695,3 +695,7 @@ mod security_tests;
 #[cfg(test)]
 #[path = "package_upgrade_tests.rs"]
 mod upgrade_tests;
+
+#[cfg(test)]
+#[path = "package_tests_audit.rs"]
+mod audit_tests;
