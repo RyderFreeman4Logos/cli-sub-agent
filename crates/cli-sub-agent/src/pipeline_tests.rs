@@ -5,6 +5,7 @@ use csa_config::config::{CURRENT_SCHEMA_VERSION, TierConfig};
 use csa_config::{ProjectMeta, ResourcesConfig};
 use csa_hooks::{FailPolicy, HookConfig, HookEvent, HooksConfig, Waiver};
 use std::collections::HashMap;
+use std::fs;
 
 #[test]
 fn determine_project_root_none_returns_cwd() {

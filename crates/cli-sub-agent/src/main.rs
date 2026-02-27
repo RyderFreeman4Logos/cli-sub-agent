@@ -20,6 +20,7 @@ mod pattern_resolver;
 mod pipeline;
 mod pipeline_env;
 mod pipeline_execute;
+mod pipeline_post_exec;
 mod pipeline_project_key;
 mod pipeline_sandbox;
 mod pipeline_transcript;
