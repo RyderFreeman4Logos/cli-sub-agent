@@ -617,5 +617,9 @@ init_timeout_seconds = 60
 mod tests;
 
 #[cfg(test)]
+#[path = "config_tests_tier.rs"]
+mod tier_tests;
+
+#[cfg(test)]
 #[path = "config_merge_tests.rs"]
 mod merge_tests;
