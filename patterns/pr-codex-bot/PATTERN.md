@@ -89,6 +89,12 @@ Fix issues found by local review. Loop until clean (max 3 rounds).
 
 > **Layer**: 0 (Orchestrator) -- shell commands only, no code reading/writing.
 
+**Precondition**: Step 2 (Local Pre-PR Review) MUST have completed successfully.
+If `LOCAL_REVIEW_HAS_ISSUES` is set, this step is blocked until Step 3 resolves
+all issues. The orchestrator MUST NOT create a PR with unresolved local review
+issues — this enforces the two-layer review architecture.
+
+Condition: `!(${LOCAL_REVIEW_HAS_ISSUES})`
 Tool: bash
 OnFail: abort
 
