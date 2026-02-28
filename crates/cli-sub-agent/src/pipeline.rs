@@ -19,6 +19,7 @@ use csa_hooks::{
 use csa_lock::acquire_lock;
 use csa_process::{ExecutionResult, check_tool_installed};
 use csa_resource::{ResourceGuard, ResourceLimits};
+use csa_resource::memory_balloon::{MemoryBalloon, should_enable_balloon};
 use csa_session::{ToolState, create_session, get_session_dir};
 
 use crate::memory_capture;
@@ -467,12 +468,8 @@ pub(crate) async fn execute_with_session_and_meta(
     let mut resource_guard = if let Some(cfg) = config {
         let limits = ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
-            initial_estimates: cfg.resources.initial_estimates.clone(),
         };
-        // Stats stored at project state level, not per-session
-        let project_state_dir = csa_session::get_session_root(project_root)?;
-        let stats_path = project_state_dir.join("usage_stats.toml");
-        Some(ResourceGuard::new(limits, &stats_path))
+        Some(ResourceGuard::new(limits))
     } else {
         None
     };
@@ -716,6 +713,31 @@ pub(crate) async fn execute_with_session_and_meta(
 
     // Record sandbox telemetry in session state (first turn only).
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
+
+    // Memory balloon: pre-warm swap for claude-code by inflating a large anonymous
+    // mmap, forcing other processes into swap.  Deflate (drop) immediately — the
+    // physical pages are reclaimed for the tool process about to launch.
+    if tool.as_str() == "claude-code" {
+        const BALLOON_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
+        let mut sys = sysinfo::System::new();
+        sys.refresh_memory();
+        let available_swap = sys.free_swap();
+        if should_enable_balloon(available_swap, BALLOON_SIZE as u64) {
+            match MemoryBalloon::inflate(BALLOON_SIZE) {
+                Ok(balloon) => {
+                    info!(
+                        size_mb = BALLOON_SIZE / 1024 / 1024,
+                        "Memory balloon inflated — deflating immediately"
+                    );
+                    drop(balloon);
+                }
+                Err(e) => {
+                    // Balloon is an optimisation; failure is non-fatal.
+                    warn!(error = %e, "Memory balloon inflation failed; continuing without pre-warming");
+                }
+            }
+        }
+    }
 
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,
