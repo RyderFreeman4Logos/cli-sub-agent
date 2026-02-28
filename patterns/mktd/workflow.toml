@@ -81,12 +81,12 @@ if [[ -n "${CSA_USER_LANGUAGE:-}" ]]; then
   printf '%s\n' "${CSA_USER_LANGUAGE}"
   exit 0
 fi
-if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Han}]'; then
-  echo "Chinese (Simplified)"
-  exit 0
-fi
 if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Hiragana}\\p{Katakana}]'; then
   echo "Japanese"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Han}]'; then
+  echo "Chinese (Simplified)"
   exit 0
 fi
 echo "English"
