@@ -326,10 +326,12 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
         .get_args()
         .map(|a| a.to_string_lossy().to_string())
         .collect();
+    let expected_dir =
+        std::fs::canonicalize(&dir_with_space).unwrap_or_else(|_| dir_with_space.clone());
 
     assert!(args.contains(&"--include-directories".to_string()));
     assert!(args.contains(&"/tmp/test-project".to_string()));
-    assert!(args.contains(&dir_with_space.to_string_lossy().to_string()));
+    assert!(args.contains(&expected_dir.to_string_lossy().to_string()));
 }
 
 #[test]
