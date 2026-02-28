@@ -77,12 +77,13 @@ if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'
   if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)Cargo\.toml$|(^|/)package\.json$|(^|/)pnpm-workspace\.yaml$|(^|/)go\.mod$'; then
     echo "INFO: Dependency manifest change detected; preserving staged lockfiles."
   else
-    for lockfile in Cargo.lock weave.lock package-lock.json pnpm-lock.yaml yarn.lock go.sum; do
-      if printf '%s\n' "${STAGED_FILES}" | grep -qx "${lockfile}"; then
-        echo "INFO: Unstaging ${lockfile} (scope does not indicate release/dependency update)."
-        git restore --staged -- "${lockfile}"
-      fi
-    done
+    MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | awk '$0 ~ /(^|\/)(Cargo\.lock|weave\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$/ { print }')"
+    if [ -n "${MATCHED_LOCKFILES}" ]; then
+      printf '%s\n' "${MATCHED_LOCKFILES}" | while read -r lockpath; do
+        echo "INFO: Removing incidental lockfile changes from index and worktree: ${lockpath}"
+        git restore --staged --worktree -- "${lockpath}"
+      done
+    fi
   fi
 fi
 if ! git diff --cached --name-only | grep -q .; then
