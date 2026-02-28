@@ -117,8 +117,8 @@ if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'
     MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | awk '$0 ~ /(^|\/)(Cargo\.lock|weave\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$/ { print }')"
     if [ -n "${MATCHED_LOCKFILES}" ]; then
       printf '%s\n' "${MATCHED_LOCKFILES}" | while read -r lockpath; do
-        echo "INFO: Removing incidental lockfile changes from index and worktree: ${lockpath}"
-        git restore --staged --worktree -- "${lockpath}"
+        echo "INFO: Unstaging incidental lockfile change: ${lockpath}"
+        git restore --staged -- "${lockpath}"
       done
     fi
   fi
@@ -282,9 +282,19 @@ if just check-version-bumped; then
   echo "Version bump check passed."
   exit 0
 fi
+PRE_DIRTY_LOCKS="$(git diff --name-only -- Cargo.lock weave.lock)"
 just bump-patch
 weave lock
-git add Cargo.toml Cargo.lock weave.lock
+git add Cargo.toml
+for lockfile in Cargo.lock weave.lock; do
+  if printf '%s\n' "${PRE_DIRTY_LOCKS}" | grep -qx "${lockfile}"; then
+    echo "INFO: Skipping ${lockfile} in release commit (pre-existing local edits)."
+    continue
+  fi
+  if [ -f "${lockfile}" ]; then
+    git add "${lockfile}"
+  fi
+done
 if git diff --cached --quiet; then
   echo "ERROR: Version bump expected changes but none were staged." >&2
   exit 1
@@ -351,8 +361,13 @@ Capture the PR number for polling.
 
 ```bash
 PR_NUM=$(gh pr view --json number -q '.number')
-TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+SELF_LOGIN=$(gh api user -q '.login')
+COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO}" --json comments)
+TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
+if [ -z "${TRIGGER_TS}" ]; then
+  TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 ```"""
 on_fail = "abort"
@@ -456,8 +471,13 @@ Push all fix commits and trigger a new round of codex review.
 
 ```bash
 git push origin "${BRANCH}"
-TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+SELF_LOGIN=$(gh api user -q '.login')
+COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO}" --json comments)
+TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
+if [ -z "${TRIGGER_TS}" ]; then
+  TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 ```"""
 on_fail = "abort"
