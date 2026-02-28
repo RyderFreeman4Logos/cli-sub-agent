@@ -7,6 +7,7 @@ use csa_process::{ExecutionResult, StreamMode};
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -137,6 +138,11 @@ pub enum Executor {
 }
 
 impl Executor {
+    const GEMINI_INCLUDE_DIRS_ENV_KEYS: &[&str] = &[
+        "CSA_GEMINI_INCLUDE_DIRECTORIES",
+        "GEMINI_INCLUDE_DIRECTORIES",
+    ];
+
     /// Get the tool name as a string.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -315,12 +321,19 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        let gemini_include_directories = Self::gemini_include_directories(
+            extra_env,
+            prompt,
+            Some(Path::new(&session.project_path)),
+        );
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
-        if matches!(prompt_transport, PromptTransport::Argv) {
-            self.append_tool_args(&mut cmd, prompt, tool_state);
-        } else {
-            self.append_tool_args_with_transport(&mut cmd, prompt, tool_state, prompt_transport);
-        }
+        self.append_tool_args_with_transport(
+            &mut cmd,
+            prompt,
+            tool_state,
+            prompt_transport,
+            &gemini_include_directories,
+        );
         (cmd, stdin_data)
     }
 
@@ -448,8 +461,13 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        let gemini_include_directories =
+            Self::gemini_include_directories(extra_env, prompt, Some(work_dir));
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
+        if matches!(self, Self::GeminiCli { .. }) {
+            Self::append_gemini_include_directories_args(&mut cmd, &gemini_include_directories);
+        }
         if matches!(self, Self::Codex { .. }) {
             if let Some(env) = extra_env {
                 cmd.args(Self::codex_notify_suppression_args(env));
@@ -530,8 +548,9 @@ impl Executor {
     ///
     /// Delegates to `append_yolo_args`, `append_model_args`, `append_prompt_args`,
     /// and adds session-resume and tool-specific structural args.
+    #[cfg(test)]
     fn append_tool_args(&self, cmd: &mut Command, prompt: &str, tool_state: Option<&ToolState>) {
-        self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv);
+        self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv, &[]);
     }
 
     fn append_tool_args_with_transport(
@@ -540,6 +559,7 @@ impl Executor {
         prompt: &str,
         tool_state: Option<&ToolState>,
         prompt_transport: PromptTransport,
+        gemini_include_directories: &[String],
     ) {
         // Structural args (subcommand, output format, yolo) come first
         match self {
@@ -566,6 +586,7 @@ impl Executor {
         // Yolo flag for gemini (other tools handle it in structural args above)
         if matches!(self, Self::GeminiCli { .. }) {
             cmd.arg("-y");
+            Self::append_gemini_include_directories_args(cmd, gemini_include_directories);
         }
 
         // Session resume
@@ -685,6 +706,146 @@ impl Executor {
         match env.get("CSA_SUPPRESS_NOTIFY").map(String::as_str) {
             Some("1") => vec!["-c".to_string(), "notify=[]".to_string()],
             _ => Vec::new(),
+        }
+    }
+
+    fn gemini_include_directories(
+        extra_env: Option<&HashMap<String, String>>,
+        prompt: &str,
+        execution_dir: Option<&Path>,
+    ) -> Vec<String> {
+        let mut directories = Vec::new();
+
+        if let Some(dir) = execution_dir {
+            Self::push_unique_directory_string(&mut directories, dir.to_string_lossy().as_ref());
+        }
+
+        if let Some(env) = extra_env {
+            let raw = Self::GEMINI_INCLUDE_DIRS_ENV_KEYS
+                .iter()
+                .find_map(|key| env.get(*key))
+                .map(String::as_str)
+                .unwrap_or_default();
+
+            for entry in raw.split([',', '\n']) {
+                let directory = entry.trim();
+                if directory.is_empty() {
+                    continue;
+                }
+                if Path::new(directory).is_relative() {
+                    if let Some(base) = execution_dir {
+                        let combined = base.join(directory);
+                        Self::push_unique_directory_string(
+                            &mut directories,
+                            combined.to_string_lossy().as_ref(),
+                        );
+                    } else {
+                        Self::push_unique_directory_string(&mut directories, directory);
+                    }
+                    continue;
+                }
+                Self::push_unique_directory_string(&mut directories, directory);
+            }
+        }
+
+        for directory in Self::gemini_prompt_directories(prompt) {
+            Self::push_unique_directory_string(&mut directories, &directory);
+        }
+
+        directories
+    }
+
+    fn gemini_prompt_directories(prompt: &str) -> Vec<String> {
+        let mut directories = Vec::new();
+        let tokens: Vec<String> = prompt
+            .split_whitespace()
+            .map(Self::trim_prompt_path_token)
+            .filter(|token| !token.is_empty())
+            .collect();
+
+        let mut index = 0;
+        while index < tokens.len() {
+            if !tokens[index].starts_with('/') || tokens[index].contains("://") {
+                index += 1;
+                continue;
+            }
+
+            let mut candidate = String::new();
+            let mut best_match: Option<(usize, PathBuf)> = None;
+            for (end, token) in tokens.iter().enumerate().skip(index) {
+                if end > index {
+                    if token.starts_with('/') {
+                        break;
+                    }
+                    candidate.push(' ');
+                }
+                candidate.push_str(token);
+
+                let path = Path::new(&candidate);
+                if path.is_absolute() && path.exists() {
+                    best_match = Some((end, path.to_path_buf()));
+                }
+            }
+
+            if let Some((end, path)) = best_match {
+                let dir = if path.is_dir() {
+                    path
+                } else if let Some(parent) = path.parent() {
+                    parent.to_path_buf()
+                } else {
+                    index += 1;
+                    continue;
+                };
+
+                let normalized = fs::canonicalize(&dir).unwrap_or(dir);
+                Self::push_unique_directory_string(
+                    &mut directories,
+                    normalized.to_string_lossy().as_ref(),
+                );
+                index = end + 1;
+            } else {
+                index += 1;
+            }
+        }
+        directories
+    }
+
+    fn trim_prompt_path_token(raw: &str) -> String {
+        raw.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\''
+                    | '`'
+                    | ','
+                    | ';'
+                    | ':'
+                    | '.'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '<'
+                    | '>'
+            )
+        })
+        .to_string()
+    }
+
+    fn push_unique_directory_string(directories: &mut Vec<String>, directory: &str) {
+        if directory.is_empty() {
+            return;
+        }
+        if directories.iter().any(|existing| existing == directory) {
+            return;
+        }
+        directories.push(directory.to_string());
+    }
+
+    fn append_gemini_include_directories_args(cmd: &mut Command, directories: &[String]) {
+        for directory in directories {
+            cmd.arg("--include-directories").arg(directory);
         }
     }
 

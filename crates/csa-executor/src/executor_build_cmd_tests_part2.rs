@@ -410,3 +410,36 @@ fn test_codex_dual_c_flags_coexist() {
         "Codex should include notify suppression arg"
     );
 }
+
+#[test]
+fn test_build_execute_in_command_gemini_adds_include_directories_from_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let mut extra = HashMap::new();
+    extra.insert(
+        "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
+        "/tmp/a,/tmp/b".to_string(),
+    );
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("test", work_dir, Some(&extra));
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    let include_flag_count = args
+        .iter()
+        .filter(|arg| arg.as_str() == "--include-directories")
+        .count();
+    assert_eq!(
+        include_flag_count, 3,
+        "Gemini execute_in should receive work_dir and both include directories"
+    );
+    assert!(args.contains(&"/tmp/test-project".to_string()));
+    assert!(args.contains(&"/tmp/a".to_string()));
+    assert!(args.contains(&"/tmp/b".to_string()));
+}

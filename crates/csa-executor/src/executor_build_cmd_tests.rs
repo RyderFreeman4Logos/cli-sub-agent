@@ -240,6 +240,101 @@ fn test_build_command_gemini_args_structure() {
 }
 
 #[test]
+fn test_build_command_gemini_adds_include_directories_from_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert(
+        "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
+        " /tmp/one ,/tmp/two\n/tmp/one ".to_string(),
+    );
+
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    let include_flag_count = args
+        .iter()
+        .filter(|arg| arg.as_str() == "--include-directories")
+        .count();
+    assert_eq!(
+        include_flag_count, 3,
+        "Expected execution dir + deduplicated include directories from env"
+    );
+    assert!(args.contains(&"/tmp/test-project".to_string()));
+    assert!(args.contains(&"/tmp/one".to_string()));
+    assert!(args.contains(&"/tmp/two".to_string()));
+}
+
+#[test]
+fn test_build_command_gemini_supports_fallback_include_directories_key() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert(
+        "GEMINI_INCLUDE_DIRECTORIES".to_string(),
+        "/tmp/fallback".to_string(),
+    );
+
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        args.contains(&"--include-directories".to_string()),
+        "Expected --include-directories when fallback env key is set"
+    );
+    assert!(args.contains(&"/tmp/test-project".to_string()));
+    assert!(args.contains(&"/tmp/fallback".to_string()));
+}
+
+#[test]
+fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let dir_with_space = temp.path().join("with space");
+    std::fs::create_dir_all(&dir_with_space).expect("create spaced dir");
+    let file_path = dir_with_space.join("sample.txt");
+    std::fs::write(&file_path, "ok").expect("write fixture");
+    let prompt = format!("Read and patch {}", file_path.display());
+
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+    let expected_dir =
+        std::fs::canonicalize(&dir_with_space).unwrap_or_else(|_| dir_with_space.clone());
+
+    assert!(args.contains(&"--include-directories".to_string()));
+    assert!(args.contains(&"/tmp/test-project".to_string()));
+    assert!(args.contains(&expected_dir.to_string_lossy().to_string()));
+}
+
+#[test]
 fn test_build_command_claude_args_structure() {
     let exec = Executor::ClaudeCode {
         model_override: Some("claude-opus".to_string()),

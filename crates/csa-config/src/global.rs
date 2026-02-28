@@ -456,6 +456,7 @@ max_concurrent = 3  # Default max parallel instances per tool
 # max_concurrent = 5  # Higher limit with API key
 # [tools.gemini-cli.env]
 # GEMINI_API_KEY = "AI..."
+# CSA_GEMINI_INCLUDE_DIRECTORIES = "/abs/path/one,/abs/path/two"
 #
 # [tools.claude-code]
 # max_concurrent = 1
