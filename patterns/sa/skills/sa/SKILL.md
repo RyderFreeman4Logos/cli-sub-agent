@@ -1,3 +1,9 @@
+---
+name: sa
+description: Three-layer manager-employee orchestration for recursive delegation with structured reports.
+allowed-tools: Bash, Read, Grep, Glob
+---
+
 # sa: Manager-Employee Orchestration (Three-Layer Model)
 
 Three-layer recursive delegation for planning and implementation with strict role boundaries.

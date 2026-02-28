@@ -1,3 +1,9 @@
+---
+name: review-loop
+description: Bounded iterative review-fix loop using csa review until clean or max rounds.
+allowed-tools: Bash, Read, Grep, Glob
+---
+
 # Review Loop
 
 Bounded iterative review-fix loop. Runs `csa review --diff` up to 2 rounds,
