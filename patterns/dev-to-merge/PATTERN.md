@@ -240,6 +240,7 @@ if just check-version-bumped; then
   exit 0
 fi
 just bump-patch
+weave lock
 git add Cargo.toml Cargo.lock weave.lock
 if git diff --cached --quiet; then
   echo "ERROR: Version bump expected changes but none were staged." >&2
