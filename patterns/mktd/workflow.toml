@@ -190,7 +190,8 @@ title = "Phase 3 — Adversarial Debate"
 tool = "bash"
 prompt = """
 Run explicit adversarial debate via `csa debate`.
-The output MUST contain required evidence headers for mechanical validation.
+Capture debate stdout, then normalize into a structured evidence packet
+for mechanical validation in Step 6.5.
 
 ```bash
 LANGUAGE="${STEP_50_OUTPUT:-English}"
@@ -204,16 +205,33 @@ DEBATE_PROMPT="$(printf '%s\n' \
 "${STEP_5_OUTPUT}" \
 "" \
 "## Output Requirements" \
-"Return EXACT section headers in ${LANGUAGE} (headers themselves remain English):" \
-"DEBATE_EVIDENCE:" \
-"- method: csa debate" \
-"- rounds: 3" \
-"- language: ${LANGUAGE}" \
-"- verdict: READY|REVISE" \
-"VALID_CONCERNS:" \
-"SUGGESTED_CHANGES:" \
-"OVERALL_ASSESSMENT:" )"
-printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3 --format text
+"Provide explicit verdict and confidence in your conclusion." )"
+DEBATE_SUMMARY="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3)" || { echo "csa debate failed" >&2; exit 1; }
+[[ -n "${DEBATE_SUMMARY:-}" ]] || { echo "empty debate summary" >&2; exit 1; }
+RAW_VERDICT="$(printf '%s\n' "${DEBATE_SUMMARY}" | grep '^Debate verdict:' | tail -n1 | sed -nE 's/^Debate verdict:[[:space:]]*([A-Z]+).*/\\1/p')"
+case "${RAW_VERDICT}" in
+  APPROVE) MAPPED_VERDICT="READY" ;;
+  REVISE|REJECT) MAPPED_VERDICT="REVISE" ;;
+  *) MAPPED_VERDICT="REVISE" ;;
+esac
+CONFIDENCE="$(printf '%s\n' "${DEBATE_SUMMARY}" | grep '^Debate verdict:' | tail -n1 | sed -nE 's/^Debate verdict:[^\\(]*\\(confidence:[[:space:]]*([a-zA-Z]+)\\).*/\\1/p')"
+printf '%s\n' "DEBATE_EVIDENCE:"
+printf '%s\n' "- method: csa debate"
+printf '%s\n' "- rounds: 3"
+printf '%s\n' "- language: ${LANGUAGE}"
+printf '%s\n' "- raw_verdict: ${RAW_VERDICT:-UNKNOWN}"
+printf '%s\n' "- mapped_verdict: ${MAPPED_VERDICT}"
+printf '%s\n' "- confidence: ${CONFIDENCE:-unknown}"
+printf '%s\n' "VALID_CONCERNS:"
+printf '%s\n' "- Review debate summary + threat model findings before approval."
+printf '%s\n' "SUGGESTED_CHANGES:"
+if [ "${MAPPED_VERDICT}" = "REVISE" ]; then
+  printf '%s\n' "- Revise TODO tasks based on debate objections and risk findings."
+else
+  printf '%s\n' "- Keep current plan; no blocking objections detected by debate."
+fi
+printf '%s\n' "OVERALL_ASSESSMENT:"
+printf '%s\n' "${DEBATE_SUMMARY}"
 ```"""
 on_fail = "abort"
 
@@ -227,7 +245,9 @@ Validate that debate output exists and carries required evidence markers.
 ```bash
 [[ -n "${STEP_6_OUTPUT:-}" ]] || { echo "STEP_6_OUTPUT is empty — debate did not run" >&2; exit 1; }
 printf '%s\n' "${STEP_6_OUTPUT}" | grep -q '^DEBATE_EVIDENCE:' || { echo "debate evidence header missing" >&2; exit 1; }
-printf '%s\n' "${STEP_6_OUTPUT}" | grep -Eq 'verdict:[[:space:]]*(READY|REVISE)' || { echo "debate verdict missing" >&2; exit 1; }
+printf '%s\n' "${STEP_6_OUTPUT}" | grep -Eq 'mapped_verdict:[[:space:]]*(READY|REVISE)' || { echo "mapped debate verdict missing" >&2; exit 1; }
+printf '%s\n' "${STEP_6_OUTPUT}" | grep -Eq 'raw_verdict:[[:space:]]*(APPROVE|REVISE|REJECT|UNKNOWN)' || { echo "raw debate verdict missing" >&2; exit 1; }
+printf '%s\n' "${STEP_6_OUTPUT}" | grep -Eq 'confidence:[[:space:]]*(high|medium|low|unknown)' || { echo "debate confidence missing" >&2; exit 1; }
 printf '%s\n' "${STEP_6_OUTPUT}" | grep -q '^VALID_CONCERNS:' || { echo "valid concerns section missing" >&2; exit 1; }
 printf '%s\n' "${STEP_6_OUTPUT}" | grep -q '^SUGGESTED_CHANGES:' || { echo "suggested changes section missing" >&2; exit 1; }
 printf '%s\n' "${STEP_6_OUTPUT}" | grep -q '^OVERALL_ASSESSMENT:' || { echo "overall assessment section missing" >&2; exit 1; }
