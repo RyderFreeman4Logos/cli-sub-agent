@@ -1,4 +1,3 @@
-use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
@@ -16,7 +15,9 @@ use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig, ProjectProfile};
 use csa_core::consensus::AgentResponse;
 use csa_core::types::ToolName;
-use csa_session::review_artifact::ReviewArtifact;
+use csa_session::{
+    output_parser::parse_sections, output_section::OutputSection, review_artifact::ReviewArtifact,
+};
 
 #[derive(Debug, Clone)]
 struct ReviewerOutcome {
@@ -124,7 +125,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        print!("{}", result.output);
+        print!("{}", sanitize_review_output(&result.output));
         return Ok(result.exit_code);
     }
 
@@ -181,7 +182,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_index,
                 tool: reviewer_tool,
                 verdict: parse_review_verdict(&result.output, result.exit_code),
-                output: result.output,
+                output: sanitize_review_output(&result.output),
                 exit_code: result.exit_code,
             })
         });
@@ -382,20 +383,90 @@ fn verify_review_skill_available(project_root: &Path, allow_fallback: bool) -> R
 ///
 /// - `--stream-stdout` forces TeeToStderr (progressive output)
 /// - `--no-stream-stdout` forces BufferOnly (silent until complete)
-/// - Default: auto-detect TTY on stderr → TeeToStderr if interactive,
-///   BufferOnly otherwise. This prevents the "appears hung" UX issue (#139)
-///   by showing progress when running interactively.
+/// - Default: BufferOnly to prevent raw provider noise from polluting review
+///   output. Long-running progress is still surfaced by periodic heartbeats.
 fn resolve_review_stream_mode(
     stream_stdout: bool,
     no_stream_stdout: bool,
 ) -> csa_process::StreamMode {
     if no_stream_stdout {
         csa_process::StreamMode::BufferOnly
-    } else if stream_stdout || std::io::stderr().is_terminal() {
+    } else if stream_stdout {
         csa_process::StreamMode::TeeToStderr
     } else {
         csa_process::StreamMode::BufferOnly
     }
+}
+
+/// Prefer structured review sections (summary/details) when available to avoid
+/// leaking unrelated provider noise into caller-facing review output.
+fn sanitize_review_output(output: &str) -> String {
+    let sections = parse_sections(output);
+    if sections.is_empty() {
+        return output.to_string();
+    }
+
+    let summary = last_non_empty_section_content(output, &sections, "summary");
+    let details = last_non_empty_section_content(output, &sections, "details");
+    if summary.is_none() && details.is_none() {
+        return output.to_string();
+    }
+
+    let mut rendered = String::new();
+    if let Some(content) = summary {
+        rendered.push_str("<!-- CSA:SECTION:summary -->\n");
+        rendered.push_str(&content);
+        if !content.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered.push_str("<!-- CSA:SECTION:summary:END -->\n");
+    }
+    if let Some(content) = details {
+        if !rendered.is_empty() && !rendered.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered.push_str("<!-- CSA:SECTION:details -->\n");
+        rendered.push_str(&content);
+        if !content.ends_with('\n') {
+            rendered.push('\n');
+        }
+        rendered.push_str("<!-- CSA:SECTION:details:END -->\n");
+    }
+    rendered
+}
+
+fn last_non_empty_section_content(
+    output: &str,
+    sections: &[OutputSection],
+    section_id: &str,
+) -> Option<String> {
+    sections
+        .iter()
+        .rev()
+        .filter(|section| section.id == section_id)
+        .find_map(|section| {
+            let content = extract_section_content(output, section);
+            if content.trim().is_empty() {
+                None
+            } else {
+                Some(content)
+            }
+        })
+}
+
+fn extract_section_content(output: &str, section: &OutputSection) -> String {
+    if section.line_start == 0 || section.line_end < section.line_start {
+        return String::new();
+    }
+
+    let lines: Vec<&str> = output.lines().collect();
+    if lines.is_empty() || section.line_start > lines.len() {
+        return String::new();
+    }
+
+    let start = section.line_start - 1;
+    let end_exclusive = section.line_end.min(lines.len());
+    lines[start..end_exclusive].join("\n")
 }
 
 fn resolve_review_tool(

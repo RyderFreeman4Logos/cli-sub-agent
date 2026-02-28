@@ -13,7 +13,9 @@ triggers:
 
 ## Role Detection (READ THIS FIRST -- MANDATORY)
 
-**Check your initial prompt.** If it contains the literal string `"Use the dev-to-merge skill"`, then:
+Role MUST be determined by explicit mode marker, not fragile natural-language substring matching.
+Treat the run as executor ONLY when initial prompt contains:
+`<skill-mode>executor</skill-mode>`.
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
@@ -49,21 +51,22 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 
 1. **Validate branch**: Verify on feature branch, not main/dev. Abort if protected.
 2. **Quality gates**: Run `just fmt`, `just clippy`, `just test` sequentially.
-3. **Stage changes**: `git add -A`. Verify no untracked files.
+3. **Stage changes**: `git add -A`, then unstage incidental lockfiles unless scope indicates release/dependency updates.
 4. **Security scan**: Grep staged files for hardcoded secrets.
-5. **Security audit**: Run `security-audit` pattern via CSA (three phases).
+5. **Security audit**: Run `security-audit` via bounded bash wrapper with timeout and required `SECURITY_AUDIT_VERDICT`.
 6. **Pre-commit review**: Run `csa review --diff` (heterogeneous reviewer). Fix issues up to 3 rounds.
 7. **Re-run quality gates**: `just pre-commit` after any fixes.
 8. **Generate commit message**: Delegate to CSA (tier-1) for Conventional Commits.
 9. **Commit**: `git commit -m "${COMMIT_MSG}"`.
-10. **Pre-PR cumulative review**: `csa review --range main...HEAD` (covers full branch, NOT just last commit). MUST pass before push.
-11. **Push**: `git push -u origin ${BRANCH}`.
-12. **Create PR**: `gh pr create --base main`.
-13. **Trigger codex bot**: `gh pr comment --body "@codex review"`.
-14. **Poll and evaluate**: Handle bot comments (already-fixed, false-positive, real issues).
-15. **Arbitrate false positives**: Use `csa debate` with independent model.
-16. **Fix real issues**: Commit fixes, push, re-trigger bot (max 10 iterations).
-17. **Merge**: `gh pr merge --squash --delete-branch`, update local main.
+10. **Version gate precheck**: auto-run `just check-version-bumped`; if needed, `just bump-patch` and create a dedicated release commit before pre-PR review/push.
+11. **Pre-PR cumulative review**: `csa review --range main...HEAD` (covers full branch, NOT just last commit). MUST pass before push.
+12. **Push**: `git push -u origin ${BRANCH}`.
+13. **Create PR**: `gh pr create --base main`.
+14. **Trigger codex bot**: post `@codex review` and capture trigger timestamp.
+15. **Poll and evaluate**: wait for bot comments/reviews newer than trigger timestamp.
+16. **Arbitrate false positives**: Use `csa debate` with independent model.
+17. **Fix real issues**: Commit fixes, push, re-trigger bot (max 10 iterations).
+18. **Merge**: `gh pr merge --squash --delete-branch`, update local main.
 
 ## Example Usage
 

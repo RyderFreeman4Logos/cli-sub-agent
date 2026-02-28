@@ -674,9 +674,8 @@ fn review_cli_rejects_zero_idle_timeout() {
 
 #[test]
 fn stream_mode_default_non_tty_is_buffer_only() {
-    // In test environment (non-TTY stderr), default should be BufferOnly
+    // Default should always be BufferOnly unless explicitly overridden.
     let mode = resolve_review_stream_mode(false, false);
-    // Note: in interactive TTY, default would be TeeToStderr (fixes #139)
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
 }
 
@@ -690,6 +689,28 @@ fn stream_mode_explicit_stream() {
 fn stream_mode_explicit_no_stream() {
     let mode = resolve_review_stream_mode(false, true);
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+#[test]
+fn sanitize_review_output_prefers_summary_and_details_sections() {
+    let raw = "noise line\n\
+<!-- CSA:SECTION:summary -->\nSummary body\n<!-- CSA:SECTION:summary:END -->\n\
+<!-- CSA:SECTION:details -->\nDetails body\n<!-- CSA:SECTION:details:END -->\n\
+trailing noise";
+    let sanitized = sanitize_review_output(raw);
+    assert!(sanitized.contains("CSA:SECTION:summary"));
+    assert!(sanitized.contains("Summary body"));
+    assert!(sanitized.contains("CSA:SECTION:details"));
+    assert!(sanitized.contains("Details body"));
+    assert!(!sanitized.contains("noise line"));
+    assert!(!sanitized.contains("trailing noise"));
+}
+
+#[test]
+fn sanitize_review_output_falls_back_when_sections_missing() {
+    let raw = "plain output without markers";
+    let sanitized = sanitize_review_output(raw);
+    assert_eq!(sanitized, raw);
 }
 
 // --- verify_review_skill_available tests ---
