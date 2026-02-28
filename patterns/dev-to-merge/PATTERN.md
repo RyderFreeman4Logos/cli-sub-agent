@@ -73,12 +73,17 @@ Verify no untracked files remain.
 ```bash
 git add -A
 if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'; then
-  for lockfile in Cargo.lock weave.lock package-lock.json pnpm-lock.yaml yarn.lock go.sum; do
-    if git diff --cached --name-only | grep -qx "${lockfile}"; then
-      echo "INFO: Unstaging ${lockfile} (scope does not indicate release/dependency update)."
-      git restore --staged -- "${lockfile}"
-    fi
-  done
+  STAGED_FILES="$(git diff --cached --name-only)"
+  if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)Cargo\.toml$|(^|/)package\.json$|(^|/)pnpm-workspace\.yaml$|(^|/)go\.mod$'; then
+    echo "INFO: Dependency manifest change detected; preserving staged lockfiles."
+  else
+    for lockfile in Cargo.lock weave.lock package-lock.json pnpm-lock.yaml yarn.lock go.sum; do
+      if printf '%s\n' "${STAGED_FILES}" | grep -qx "${lockfile}"; then
+        echo "INFO: Unstaging ${lockfile} (scope does not indicate release/dependency update)."
+        git restore --staged -- "${lockfile}"
+      fi
+    done
+  fi
 fi
 if ! git diff --cached --name-only | grep -q .; then
   echo "ERROR: No staged files remain after scope filtering."
