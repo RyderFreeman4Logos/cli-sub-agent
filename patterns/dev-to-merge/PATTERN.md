@@ -238,6 +238,7 @@ Ensure workspace version differs from main before push gate.
 If not bumped yet, auto-bump patch and create a dedicated release commit.
 
 ```bash
+set -euo pipefail
 if just check-version-bumped; then
   echo "Version bump check passed."
   exit 0
@@ -313,6 +314,7 @@ Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
 
 ```bash
+set -euo pipefail
 PR_NUM=$(gh pr view --json number -q '.number')
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 SELF_LOGIN=$(gh api user -q '.login')
@@ -409,6 +411,7 @@ Tool: bash
 Push all fix commits and trigger a new round of codex review.
 
 ```bash
+set -euo pipefail
 git push origin "${BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 SELF_LOGIN=$(gh api user -q '.login')
