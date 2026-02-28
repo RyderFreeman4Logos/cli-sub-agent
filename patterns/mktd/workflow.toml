@@ -69,8 +69,9 @@ Resolve planning language for TODO content.
 Priority:
 1) Explicit ${USER_LANGUAGE}
 2) Environment ${CSA_USER_LANGUAGE}
-3) Detect from ${FEATURE}
-4) Fallback to English
+3) Script-aware detection from ${FEATURE}
+4) Preserve feature language when script is unknown
+5) Fallback to English only when ${FEATURE} is empty
 
 ```bash
 if [[ -n "${USER_LANGUAGE:-}" ]]; then
@@ -85,8 +86,28 @@ if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Hiragana}\\p{Katakana}]'; then
   echo "Japanese"
   exit 0
 fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Hangul}]'; then
+  echo "Korean"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Arabic}]'; then
+  echo "Arabic"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Cyrillic}]'; then
+  echo "Russian"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Devanagari}]'; then
+  echo "Hindi"
+  exit 0
+fi
 if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Han}]'; then
-  echo "Chinese (Simplified)"
+  echo "Feature Language (CJK)"
+  exit 0
+fi
+if [[ -n "${FEATURE:-}" ]]; then
+  echo "Feature Language"
   exit 0
 fi
 echo "English"

@@ -52,7 +52,7 @@ csa run --skill mktd "Plan the implementation of <feature description>"
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
-2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> detect from `${FEATURE}` -> fallback English. This language is captured as `${STEP_50_OUTPUT}`.
+2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> preserve feature language when script is unknown -> fallback English only when `${FEATURE}` is empty. This language is captured as `${STEP_50_OUTPUT}`.
 3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_50_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 4. **Phase 2.5 -- THREAT MODEL**: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults). Append findings as [Security] tagged items.
 5. **Phase 3 -- DEBATE**: Run explicit `csa debate` (tier-2) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`.

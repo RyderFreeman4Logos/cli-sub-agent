@@ -37,8 +37,28 @@ if printf '%s' "${FEATURE:-}" | rg -q '[\p{Hiragana}\p{Katakana}]'; then
   echo "Japanese"
   exit 0
 fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\p{Hangul}]'; then
+  echo "Korean"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\p{Arabic}]'; then
+  echo "Arabic"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\p{Cyrillic}]'; then
+  echo "Russian"
+  exit 0
+fi
+if printf '%s' "${FEATURE:-}" | rg -q '[\p{Devanagari}]'; then
+  echo "Hindi"
+  exit 0
+fi
 if printf '%s' "${FEATURE:-}" | rg -q '[\p{Han}]'; then
-  echo "Chinese (Simplified)"
+  echo "Feature Language (CJK)"
+  exit 0
+fi
+if [[ -n "${FEATURE:-}" ]]; then
+  echo "Feature Language"
   exit 0
 fi
 echo "English"
