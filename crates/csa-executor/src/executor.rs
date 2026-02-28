@@ -761,8 +761,20 @@ impl Executor {
             let token = raw.trim_matches(|c: char| {
                 matches!(
                     c,
-                    '"' | '\'' | '`' | ',' | ';' | ':' | '.' | '(' | ')' | '[' | ']' | '{' | '}'
-                        | '<' | '>'
+                    '"' | '\''
+                        | '`'
+                        | ','
+                        | ';'
+                        | ':'
+                        | '.'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '<'
+                        | '>'
                 )
             });
             if token.is_empty() || token.contains("://") || !token.starts_with('/') {
