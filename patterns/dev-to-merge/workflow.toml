@@ -272,7 +272,7 @@ git commit -m "${COMMIT_MSG}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 130
+id = 14
 title = "Ensure Version Bumped"
 tool = "bash"
 prompt = """
@@ -290,7 +290,8 @@ if git diff --name-only -- Cargo.lock | grep -q .; then
   PRE_DIRTY_CARGO_LOCK=1
 fi
 just bump-patch
-weave lock
+# Use workspace weave binary to avoid stale globally-installed version drift.
+cargo run -p weave -- lock
 git add Cargo.toml weave.lock
 if [ "${PRE_DIRTY_CARGO_LOCK}" -eq 0 ] && [ -f Cargo.lock ]; then
   git add Cargo.lock
@@ -307,7 +308,7 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 131
+id = 15
 title = "Pre-PR Cumulative Review"
 tool = "csa"
 prompt = """
@@ -326,7 +327,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 16
 title = "Push to Origin"
 tool = "bash"
 prompt = """
@@ -340,7 +341,7 @@ git push -u origin "${BRANCH}"
 retry = 2
 
 [[workflow.steps]]
-id = 15
+id = 17
 title = "Create Pull Request"
 tool = "bash"
 prompt = """
@@ -354,7 +355,7 @@ gh pr create --base main --repo "${REPO}" --title "${COMMIT_MSG}" --body "${PR_B
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 16
+id = 18
 title = "Trigger Codex Bot Review"
 tool = "bash"
 prompt = """
@@ -376,7 +377,7 @@ printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 17
+id = 19
 title = "Poll for Bot Response"
 tool = "bash"
 prompt = """
@@ -385,8 +386,8 @@ If the bot does not respond, fall through to UNAVAILABLE handling.
 
 ```bash
 TIMEOUT=600; INTERVAL=30; ELAPSED=0
-PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_16_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-TRIGGER_TS="$(printf '%s\n' "${STEP_16_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+TRIGGER_TS="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
@@ -406,7 +407,7 @@ exit 1
 on_fail = "skip"
 
 [[workflow.steps]]
-id = 18
+id = 20
 title = "Evaluate Bot Comments"
 tool = "csa"
 prompt = """
@@ -419,7 +420,7 @@ on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
 [[workflow.steps]]
-id = 19
+id = 21
 title = "Process Comment"
 tool = "csa"
 prompt = """
@@ -433,7 +434,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
-id = 20
+id = 22
 title = "Arbitrate False Positive"
 tool = "csa"
 prompt = """
@@ -451,7 +452,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
-id = 21
+id = 23
 title = "Fix Real Issue"
 tool = "csa"
 prompt = "Fix the real issue identified by the bot. Commit the fix."
@@ -466,7 +467,7 @@ variable = "comment"
 collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
-id = 22
+id = 24
 title = "Push Fixes and Re-trigger Review"
 tool = "bash"
 prompt = """
@@ -488,7 +489,7 @@ on_fail = "abort"
 condition = "${BOT_HAS_ISSUES}"
 
 [[workflow.steps]]
-id = 23
+id = 25
 title = "Bot Review Clean"
 tool = "bash"
 prompt = """
@@ -501,7 +502,7 @@ on_fail = "abort"
 condition = "(!(${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 24
+id = 26
 title = "Merge PR"
 tool = "bash"
 prompt = """

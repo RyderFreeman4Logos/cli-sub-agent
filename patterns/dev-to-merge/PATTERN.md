@@ -229,7 +229,7 @@ Create the commit using the generated message: ${COMMIT_MSG}.
 git commit -m "${COMMIT_MSG}"
 ```
 
-## Step 130: Ensure Version Bumped
+## Step 14: Ensure Version Bumped
 
 Tool: bash
 OnFail: abort
@@ -248,7 +248,8 @@ if git diff --name-only -- Cargo.lock | grep -q .; then
   PRE_DIRTY_CARGO_LOCK=1
 fi
 just bump-patch
-weave lock
+# Use workspace weave binary to avoid stale globally-installed version drift.
+cargo run -p weave -- lock
 git add Cargo.toml weave.lock
 if [ "${PRE_DIRTY_CARGO_LOCK}" -eq 0 ] && [ -f Cargo.lock ]; then
   git add Cargo.lock
@@ -263,7 +264,7 @@ VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | se
 git commit -m "chore(release): bump workspace version to ${VERSION}"
 ```
 
-## Step 131: Pre-PR Cumulative Review
+## Step 15: Pre-PR Cumulative Review
 
 Tool: csa
 Tier: tier-2-standard
@@ -281,7 +282,7 @@ csa review --range main...HEAD
 CUMULATIVE_REVIEW_COMPLETED=true
 ```
 
-## Step 14: Push to Origin
+## Step 16: Push to Origin
 
 Tool: bash
 OnFail: retry 2
@@ -292,7 +293,7 @@ Push the feature branch to the remote origin.
 git push -u origin "${BRANCH}"
 ```
 
-## Step 15: Create Pull Request
+## Step 17: Create Pull Request
 
 Tool: bash
 OnFail: abort
@@ -305,7 +306,7 @@ security audit, and codex review.
 gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```
 
-## Step 16: Trigger Codex Bot Review
+## Step 18: Trigger Codex Bot Review
 
 Tool: bash
 
@@ -325,7 +326,7 @@ fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 ```
 
-## Step 17: Poll for Bot Response
+## Step 19: Poll for Bot Response
 
 Tool: bash
 OnFail: skip
@@ -335,8 +336,8 @@ If the bot does not respond, fall through to UNAVAILABLE handling.
 
 ```bash
 TIMEOUT=600; INTERVAL=30; ELAPSED=0
-PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_16_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-TRIGGER_TS="$(printf '%s\n' "${STEP_16_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+TRIGGER_TS="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
@@ -356,7 +357,7 @@ exit 1
 
 ## IF ${BOT_HAS_ISSUES}
 
-## Step 18: Evaluate Bot Comments
+## Step 20: Evaluate Bot Comments
 
 Tool: csa
 Tier: tier-2-standard
@@ -368,7 +369,7 @@ For each bot comment, classify as:
 
 ## FOR comment IN ${BOT_COMMENTS}
 
-## Step 19: Process Comment
+## Step 21: Process Comment
 
 Tool: csa
 
@@ -377,7 +378,7 @@ Determine category (A/B/C) and take appropriate action.
 
 ## IF ${COMMENT_IS_FALSE_POSITIVE}
 
-## Step 20: Arbitrate False Positive
+## Step 22: Arbitrate False Positive
 
 Tool: csa
 Tier: tier-2-standard
@@ -391,7 +392,7 @@ csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
 
 ## ELSE
 
-## Step 21: Fix Real Issue
+## Step 23: Fix Real Issue
 
 Tool: csa
 Tier: tier-2-standard
@@ -403,7 +404,7 @@ Fix the real issue identified by the bot. Commit the fix.
 
 ## ENDFOR
 
-## Step 22: Push Fixes and Re-trigger Review
+## Step 24: Push Fixes and Re-trigger Review
 
 Tool: bash
 
@@ -424,13 +425,13 @@ printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 
 ## ELSE
 
-## Step 23: Bot Review Clean
+## Step 25: Bot Review Clean
 
 No issues found by the codex bot. Proceed to merge.
 
 ## ENDIF
 
-## Step 24: Merge PR
+## Step 26: Merge PR
 
 Tool: bash
 OnFail: abort

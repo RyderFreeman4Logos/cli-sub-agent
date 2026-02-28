@@ -1,5 +1,3 @@
-package = []
-
 [versions]
 csa = "0.1.53"
 weave = "0.1.53"

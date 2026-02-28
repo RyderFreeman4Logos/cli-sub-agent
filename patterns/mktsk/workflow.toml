@@ -1,6 +1,6 @@
 [workflow]
 name = "mktsk"
-description = "Execute TODO plans as deterministic serial checklists across auto-compaction"
+description = "Execute TODO plans as deterministic, resumable serial checklists across auto-compaction"
 
 [[workflow.variables]]
 name = "CONTEXT_ABOVE_80_PERCENT"
@@ -11,15 +11,21 @@ title = "Parse TODO Plan"
 prompt = """
 Read the TODO plan file (from mktd output or user-provided path).
 Extract every unchecked checklist item with executor tag and DONE WHEN.
+Record the resolved TODO path explicitly in the output.
 Fail if no executable checklist items are found."""
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 2
-title = "Build Execution Checklist"
+title = "Build Resumable Execution Checklist"
 prompt = """
 Normalize parsed items into a serial checklist.
-Each item must include executor tag, concrete action, and DONE WHEN.
+Each item must include:
+- stable item id
+- source TODO line reference
+- executor tag
+- concrete action
+- mechanically verifiable DONE WHEN
 
 ## Parsed Items
 ${STEP_1_OUTPUT}"""
@@ -30,13 +36,24 @@ id = 3
 title = "Execute Checklist Serially"
 prompt = """
 Execute the normalized checklist strictly in order.
+Treat each checklist item as an atomic transaction:
+1) execute exactly one item
+2) run quality gates/review
+3) persist completion to TODO immediately
+4) write progress checkpoint before moving to next item
+
 Dispatch by executor tag:
 - [CSA:tool] => csa run
 - [Sub:developer] => execute directly
 - [Skill:xxx] => invoke skill
 - [Main]/no tag => execute directly
 
-After each implementation item:
+Checkpoint policy (mandatory):
+- Use `.csa/state/mktsk/checkpoint.json` as progress checkpoint.
+- Update checkpoint after each completed item with latest completed item id.
+- If interrupted, resume from remaining unchecked TODO items and checkpoint state.
+
+After each item:
 1) just fmt
 2) just clippy
 3) just test
@@ -55,7 +72,8 @@ Compact while preserving:
 - remaining checklist items
 - completed items
 - open review findings
-- pending DONE WHEN checks."""
+- pending DONE WHEN checks
+- checkpoint path and latest completed item id."""
 on_fail = "abort"
 condition = "${CONTEXT_ABOVE_80_PERCENT}"
 

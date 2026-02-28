@@ -1,6 +1,6 @@
 ---
 name: mktsk
-description: Convert TODO plans into deterministic serial execution checklists across auto-compaction
+description: Convert TODO plans into deterministic, resumable serial execution checklists across auto-compaction
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit
 triggers:
   - "mktsk"
@@ -28,7 +28,7 @@ triggers:
 
 ## Purpose
 
-Execute TODO plans (from `mktd` or user-provided) as deterministic serial checklists. Enforces strict serial execution: implement, verify, review, commit, then next task. Every checklist item carries an executor tag and a mechanically verifiable `DONE WHEN` condition.
+Execute TODO plans (from `mktd` or user-provided) as deterministic, resumable serial checklists. Enforces strict serial execution: implement, verify, review, persist progress, then next task. Every checklist item carries an executor tag and a mechanically verifiable `DONE WHEN` condition.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -48,12 +48,17 @@ csa run --skill mktsk "Execute the TODO plan at <path or csa todo show -t <times
 
 1. **Parse TODO plan**: Read the TODO file. Extract each `[ ]` item with executor tag and `DONE WHEN`.
 2. **Build checklist entries**: Normalize each item into a serial execution entry with:
+   - Stable item id
+   - Source TODO line reference
    - Subject with executor tag: `[Sub:developer]`, `[Skill:commit]`, `[CSA:tool]`
    - Description with clear scope
    - DONE WHEN condition (mechanically verifiable)
-3. **Execute serially**: Process checklist items strictly in order. NEVER parallelize implementation tasks.
+3. **Execute serially with checkpointing**: Process checklist items strictly in order. NEVER parallelize implementation tasks.
+   - Treat each item as an atomic transaction: execute one item -> verify -> review -> persist TODO/checkpoint.
    - After each implementation item: run `just fmt`, `just clippy`, `just test`, then `csa review --diff`.
    - Mark each completed item in the TODO checklist.
+   - Write latest completed item id to `.csa/state/mktsk/checkpoint.json` after each completed item.
+   - On interruption, resume from unchecked TODO items and checkpoint state.
 4. **Compact if needed**: If context > 80%, compact while preserving remaining items and review findings.
 5. **Verify completion**: Run `just fmt`, `just clippy`, `just test`, and `git status --short`.
 
@@ -77,5 +82,6 @@ csa run --skill mktsk "Execute the TODO plan at <path or csa todo show -t <times
 2. All checklist items executed in strict serial order.
 3. Each task's DONE WHEN condition verified before marking complete.
 4. Completed items are marked in TODO.
-5. `just fmt`, `just clippy`, and `just test` exit 0 after final task.
-6. `git status` shows clean working tree.
+5. Progress checkpoint is updated after each completed item.
+6. `just fmt`, `just clippy`, and `just test` exit 0 after final task.
+7. `git status` shows clean working tree.
