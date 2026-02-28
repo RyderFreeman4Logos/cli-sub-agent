@@ -215,13 +215,13 @@ and writing intermediate files outside the TODO path.
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -qE '^- \[ \] .+' || { echo "STEP_7_OUTPUT has no non-empty checkbox tasks" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -q 'DONE WHEN:' || { echo "STEP_7_OUTPUT has no DONE WHEN clauses" >&2; exit 1; }
 RESOLVED_LANGUAGE="${STEP_50_OUTPUT:-English}"
-if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
+if printf '%s' "${RESOLVED_LANGUAGE}" | grep -Eqi 'chinese|cjk'; then
   TASK_COUNT=$(printf '%s\n' "${STEP_7_OUTPUT}" | grep -cE '^- \[ \] .+')
   MIN_HAN="${TASK_COUNT}"
   if [ "${MIN_HAN}" -lt 2 ]; then MIN_HAN=2; fi
   if [ "${MIN_HAN}" -gt 30 ]; then MIN_HAN=30; fi
   HAN_COUNT_DRAFT=$(printf '%s\n' "${STEP_7_OUTPUT}" | rg -o '[\p{Han}]' | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "STEP_7_OUTPUT language mismatch: expected Chinese content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
+  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "STEP_7_OUTPUT language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
 fi
 CURRENT_BRANCH=$(git branch --show-current) || { echo "detect branch failed" >&2; exit 1; }
 TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
@@ -230,11 +230,11 @@ printf '%s\n' "${STEP_7_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" 
 [[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }
 grep -qE '^- \[ \] .+' "${TODO_PATH}" || { echo "saved TODO has no non-empty checkbox tasks" >&2; exit 1; }
 grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "saved TODO has no DONE WHEN clauses" >&2; exit 1; }
-if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
+if printf '%s' "${RESOLVED_LANGUAGE}" | grep -Eqi 'chinese|cjk'; then
   HAN_COUNT_SAVED=$(rg -o '[\p{Han}]' "${TODO_PATH}" | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT_SAVED:-0}" -ge "${MIN_HAN:-2}" ]] || { echo "saved TODO language mismatch: expected Chinese content (Han chars >= ${MIN_HAN:-2})" >&2; exit 1; }
+  [[ "${HAN_COUNT_SAVED:-0}" -ge "${MIN_HAN:-2}" ]] || { echo "saved TODO language mismatch: expected Han-script content (Han chars >= ${MIN_HAN:-2})" >&2; exit 1; }
 fi
-csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}"
+csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}" || { echo "csa todo save failed" >&2; exit 1; }
 csa todo show -t "${TODO_TS}" --path
 ```
 
