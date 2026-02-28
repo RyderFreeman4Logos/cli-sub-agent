@@ -173,12 +173,27 @@ Tool: bash
 OnFail: abort
 
 Create the commit using the generated message: ${COMMIT_MSG}.
-NOTE: In production, this step should invoke the `/commit` skill which
-enforces security audit, test completeness, and AGENTS.md compliance.
-The raw `git commit` here demonstrates the skill-lang format only.
 
 ```bash
 git commit -m "${COMMIT_MSG}"
+```
+
+## Step 13b: Pre-PR Cumulative Review
+
+Tool: csa
+Tier: tier-2-standard
+OnFail: abort
+
+Run a cumulative review covering ALL commits on the feature branch since main.
+This is distinct from Step 8's per-commit review (`csa review --diff`):
+- Step 8 reviews uncommitted changes (staged diff) — single-commit granularity.
+- This step reviews the full feature branch — catches cross-commit issues.
+
+MANDATORY: This review MUST pass before pushing to origin.
+
+```bash
+csa review --range main...HEAD
+CUMULATIVE_REVIEW_COMPLETED=true
 ```
 
 ## Step 14: Push to Origin
@@ -211,9 +226,6 @@ Tool: bash
 
 Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
-NOTE: In production, Steps 15-24 should invoke the `/pr-codex-bot` skill
-which handles the full review-trigger-procedure, bounded polling, false-positive
-arbitration, and merge atomically. The manual flow here demonstrates skill-lang.
 
 ```bash
 PR_NUM=$(gh pr view --json number -q '.number')

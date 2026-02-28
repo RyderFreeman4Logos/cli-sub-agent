@@ -175,9 +175,10 @@ pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
     const BALLOON_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
     let mut sys = sysinfo::System::new();
     sys.refresh_memory();
+    let available_memory = sys.available_memory();
     let available_swap = sys.free_swap();
 
-    if !should_enable_balloon(available_swap, BALLOON_SIZE as u64) {
+    if !should_enable_balloon(available_memory, available_swap, BALLOON_SIZE as u64) {
         return;
     }
 

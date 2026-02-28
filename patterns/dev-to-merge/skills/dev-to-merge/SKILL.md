@@ -56,13 +56,14 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 7. **Re-run quality gates**: `just pre-commit` after any fixes.
 8. **Generate commit message**: Delegate to CSA (tier-1) for Conventional Commits.
 9. **Commit**: `git commit -m "${COMMIT_MSG}"`.
-10. **Push**: `git push -u origin ${BRANCH}`.
-11. **Create PR**: `gh pr create --base main`.
-12. **Trigger codex bot**: `gh pr comment --body "@codex review"`.
-13. **Poll and evaluate**: Handle bot comments (already-fixed, false-positive, real issues).
-14. **Arbitrate false positives**: Use `csa debate` with independent model.
-15. **Fix real issues**: Commit fixes, push, re-trigger bot (max 10 iterations).
-16. **Merge**: `gh pr merge --squash --delete-branch`, update local main.
+10. **Pre-PR cumulative review**: `csa review --range main...HEAD` (covers full branch, NOT just last commit). MUST pass before push.
+11. **Push**: `git push -u origin ${BRANCH}`.
+12. **Create PR**: `gh pr create --base main`.
+13. **Trigger codex bot**: `gh pr comment --body "@codex review"`.
+14. **Poll and evaluate**: Handle bot comments (already-fixed, false-positive, real issues).
+15. **Arbitrate false positives**: Use `csa debate` with independent model.
+16. **Fix real issues**: Commit fixes, push, re-trigger bot (max 10 iterations).
+17. **Merge**: `gh pr merge --squash --delete-branch`, update local main.
 
 ## Example Usage
 
