@@ -60,7 +60,6 @@ fn resolve_idle_timeout_prefers_cli_override() {
         resources: ResourcesConfig {
             min_free_memory_mb: 4096,
             idle_timeout_seconds: 111,
-            initial_estimates: HashMap::new(),
             ..Default::default()
         },
         acp: Default::default(),
@@ -190,7 +189,6 @@ fn resolve_idle_timeout_uses_config_then_default() {
         resources: ResourcesConfig {
             min_free_memory_mb: 4096,
             idle_timeout_seconds: 222,
-            initial_estimates: HashMap::new(),
             ..Default::default()
         },
         acp: Default::default(),

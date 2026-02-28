@@ -53,6 +53,12 @@ fn validate_project_meta(config: &ProjectConfig) -> Result<()> {
 }
 
 fn validate_resources(config: &ProjectConfig) -> Result<()> {
+    if !config.resources.initial_estimates.is_empty() {
+        tracing::warn!(
+            "initial_estimates in [resources] is deprecated and will be ignored. \
+             Memory scheduling no longer uses static per-tool estimates."
+        );
+    }
     if config.resources.idle_timeout_seconds == 0 {
         bail!("resources.idle_timeout_seconds must be > 0 (got 0)");
     }

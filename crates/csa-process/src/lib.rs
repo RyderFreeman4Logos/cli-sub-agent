@@ -9,7 +9,6 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 use csa_resource::cgroup::SandboxConfig;
-use csa_resource::rlimit::RssWatcher;
 use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
 mod idle_watchdog;
 use idle_watchdog::should_terminate_for_idle;
@@ -42,19 +41,17 @@ pub enum StreamMode {
 ///   `SIGTERM` to **all** processes in the scope.  CSA should let systemd
 ///   handle cleanup rather than sending signals directly when a scope is active.
 ///
-/// - **`Rlimit`**: `setrlimit` was applied in the child's `pre_exec`.  The
-///   optional [`RssWatcher`] monitors RSS from the parent and sends `SIGTERM`
-///   to the child's process group if RSS exceeds the threshold.
+/// - **`Rlimit`**: `RLIMIT_NPROC` was applied in the child's `pre_exec`.
+///   This is a marker variant indicating rlimit-based PID isolation is active.
 ///
 /// - **`None`**: No sandbox active; signal handling is unchanged.
 ///
 /// [`CgroupScopeGuard`]: csa_resource::cgroup::CgroupScopeGuard
-/// [`RssWatcher`]: csa_resource::rlimit::RssWatcher
 pub enum SandboxHandle {
     /// cgroup scope guard -- dropped to stop the scope.
     Cgroup(csa_resource::cgroup::CgroupScopeGuard),
-    /// `setrlimit` was applied in child; optional RSS watcher monitors externally.
-    Rlimit { watcher: Option<RssWatcher> },
+    /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
+    Rlimit,
     /// No sandbox active.
     None,
 }
@@ -101,11 +98,16 @@ impl Default for SpawnOptions {
 
 #[derive(Debug, Clone, Copy)]
 enum PreExecPolicy {
-    SetsidOnly,
-    SetsidAndRlimits {
+    /// Call `setsid()` only — no additional resource enforcement.
+    Setsid,
+    /// Call `setsid()` + apply `RLIMIT_NPROC` (and ignore memory_max_mb).
+    Rlimits {
         memory_max_mb: u64,
         pids_max: Option<u64>,
     },
+    /// Call `setsid()` + raise OOM score.  Used when no cgroup or rlimit is
+    /// available, as a last-resort signal to the kernel OOM killer.
+    OomAdj,
 }
 
 /// Spawn a tool process without waiting for it to complete.
@@ -135,7 +137,7 @@ pub async fn spawn_tool_with_options(
     stdin_data: Option<Vec<u8>>,
     spawn_options: SpawnOptions,
 ) -> Result<tokio::process::Child> {
-    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::SetsidOnly, spawn_options).await
+    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::Setsid, spawn_options).await
 }
 
 async fn spawn_tool_with_pre_exec(
@@ -160,12 +162,15 @@ async fn spawn_tool_with_pre_exec(
         cmd.pre_exec(move || {
             libc::setsid();
             match pre_exec_policy {
-                PreExecPolicy::SetsidOnly => Ok(()),
-                PreExecPolicy::SetsidAndRlimits {
+                PreExecPolicy::Setsid => Ok(()),
+                PreExecPolicy::Rlimits {
                     memory_max_mb,
                     pids_max,
                 } => csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
                     .map_err(std::io::Error::other),
+                PreExecPolicy::OomAdj => {
+                    csa_resource::rlimit::apply_oom_score_adj().map_err(std::io::Error::other)
+                }
             }
         });
     }
@@ -210,9 +215,7 @@ async fn spawn_tool_with_pre_exec(
 ///   scope via `systemd-run --user --scope`.  A [`CgroupScopeGuard`] is
 ///   returned that stops the scope on drop.
 ///
-/// - **Setrlimit**: `RLIMIT_AS` and optionally `RLIMIT_NPROC` are applied
-///   in the child via `pre_exec`.  An [`RssWatcher`] is started after spawn
-///   to monitor RSS from the parent side.
+/// - **Setrlimit**: `RLIMIT_NPROC` is applied in the child via `pre_exec`.
 ///
 /// - **None capability**: Falls through to normal `spawn_tool` behavior.
 ///
@@ -229,7 +232,6 @@ async fn spawn_tool_with_pre_exec(
 /// * `session_id` — Session identifier for scope naming.
 ///
 /// [`CgroupScopeGuard`]: csa_resource::cgroup::CgroupScopeGuard
-/// [`RssWatcher`]: csa_resource::rlimit::RssWatcher
 pub async fn spawn_tool_sandboxed(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,
@@ -256,11 +258,27 @@ pub async fn spawn_tool_sandboxed(
             .await
         }
         SandboxCapability::Setrlimit => {
-            spawn_with_rlimit(cmd, stdin_data, spawn_options, config).await
+            let memory_max_mb = config.memory_max_mb;
+            let pids_max = config.pids_max.map(u64::from);
+
+            let child = spawn_tool_with_pre_exec(
+                cmd,
+                stdin_data,
+                PreExecPolicy::Rlimits {
+                    memory_max_mb,
+                    pids_max,
+                },
+                spawn_options,
+            )
+            .await?;
+
+            Ok((child, SandboxHandle::Rlimit))
         }
         SandboxCapability::None => {
-            debug!("no sandbox capability detected; spawning without isolation");
-            let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
+            debug!("no sandbox capability detected; applying OOM score adj as fallback");
+            let child =
+                spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::OomAdj, spawn_options)
+                    .await?;
             Ok((child, SandboxHandle::None))
         }
     }
@@ -311,47 +329,6 @@ async fn spawn_with_cgroup(
     );
 
     Ok((child, SandboxHandle::Cgroup(guard)))
-}
-
-/// Spawn with `setrlimit` applied in the child's `pre_exec`.
-///
-/// After spawn, starts an [`RssWatcher`] to monitor the child's resident set
-/// size from the parent process.
-async fn spawn_with_rlimit(
-    cmd: Command,
-    stdin_data: Option<Vec<u8>>,
-    spawn_options: SpawnOptions,
-    config: &SandboxConfig,
-) -> Result<(tokio::process::Child, SandboxHandle)> {
-    let memory_max_mb = config.memory_max_mb;
-    let pids_max = config.pids_max.map(u64::from);
-
-    let child = spawn_tool_with_pre_exec(
-        cmd,
-        stdin_data,
-        PreExecPolicy::SetsidAndRlimits {
-            memory_max_mb,
-            pids_max,
-        },
-        spawn_options,
-    )
-    .await?;
-
-    let watcher = child.id().and_then(|pid| {
-        debug!(
-            pid,
-            memory_max_mb, "starting RSS watcher for sandboxed child"
-        );
-        match RssWatcher::start(pid, memory_max_mb, Duration::from_secs(5)) {
-            Ok(w) => Some(w),
-            Err(e) => {
-                warn!("failed to start RSS watcher: {e:#}");
-                None
-            }
-        }
-    });
-
-    Ok((child, SandboxHandle::Rlimit { watcher }))
 }
 
 /// Wait for a spawned child process and capture its output.

@@ -8,14 +8,12 @@ use std::time::Instant;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
+use crate::pipeline::{determine_project_root, execute_with_session};
+use crate::run_helpers::build_executor;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
 use csa_resource::{ResourceGuard, ResourceLimits};
-use csa_session::get_session_root;
-
-use crate::pipeline::{determine_project_root, execute_with_session};
-use crate::run_helpers::build_executor;
 
 /// Batch configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]
@@ -304,11 +302,8 @@ async fn execute_batch(
     let mut resource_guard = if let Some(cfg) = config {
         let limits = ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
-            initial_estimates: cfg.resources.initial_estimates.clone(),
         };
-        let project_state_dir = get_session_root(project_root)?;
-        let stats_path = project_state_dir.join("usage_stats.toml");
-        Some(ResourceGuard::new(limits, &stats_path))
+        Some(ResourceGuard::new(limits))
     } else {
         None
     };

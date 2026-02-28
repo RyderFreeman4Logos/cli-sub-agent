@@ -467,12 +467,8 @@ pub(crate) async fn execute_with_session_and_meta(
     let mut resource_guard = if let Some(cfg) = config {
         let limits = ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
-            initial_estimates: cfg.resources.initial_estimates.clone(),
         };
-        // Stats stored at project state level, not per-session
-        let project_state_dir = csa_session::get_session_root(project_root)?;
-        let stats_path = project_state_dir.join("usage_stats.toml");
-        Some(ResourceGuard::new(limits, &stats_path))
+        Some(ResourceGuard::new(limits))
     } else {
         None
     };
@@ -716,6 +712,9 @@ pub(crate) async fn execute_with_session_and_meta(
 
     // Record sandbox telemetry in session state (first turn only).
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
+
+    // Memory balloon: pre-warm swap for heavyweight tools.
+    crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
 
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
         executor,

@@ -133,7 +133,6 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         resources: ResourcesConfig {
             min_free_memory_mb: 4096,
             idle_timeout_seconds: 0,
-            initial_estimates: HashMap::new(),
             ..Default::default()
         },
         acp: Default::default(),
@@ -792,6 +791,7 @@ fn test_validate_max_recursion_depth_zero() {
     assert!(result.is_ok(), "max_recursion_depth 0 should be valid");
 }
 
+include!("validate_tests_deprecated.rs");
 include!("validate_tests_preferences.rs");
 include!("validate_tests_sandbox.rs");
 include!("validate_tests_tiers.rs");

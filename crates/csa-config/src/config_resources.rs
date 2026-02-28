@@ -24,7 +24,10 @@ pub struct ResourcesConfig {
     /// Grace period between SIGTERM and SIGKILL during forced termination.
     #[serde(default = "default_termination_grace_period_seconds")]
     pub termination_grace_period_seconds: u64,
-    #[serde(default)]
+    /// Deprecated: initial memory estimates per tool.
+    /// Retained for backward-compatible deserialization of old configs.
+    /// New configs should NOT include this field.
+    #[serde(default, skip_serializing)]
     pub initial_estimates: HashMap<String, u64>,
     /// Sandbox enforcement mode for resource limits.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +100,6 @@ impl ResourcesConfig {
             && self.slot_wait_timeout_seconds == default_slot_wait_timeout_seconds()
             && self.stdin_write_timeout_seconds == default_stdin_write_timeout_seconds()
             && self.termination_grace_period_seconds == default_termination_grace_period_seconds()
-            && self.initial_estimates.is_empty()
             && self.enforcement_mode.is_none()
             && self.memory_max_mb.is_none()
             && self.memory_swap_max_mb.is_none()
