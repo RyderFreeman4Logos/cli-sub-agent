@@ -37,19 +37,15 @@ use super::AcpConnection;
 ///   On drop, the guard calls `systemctl --user stop <scope>`, sending
 ///   `SIGTERM` to all processes in the scope.
 ///
-/// - **`Rlimit`**: `setrlimit` was applied in the child's `pre_exec`.  The
-///   optional [`RssWatcher`] monitors RSS from the parent side.
+/// - **`Rlimit`**: `RLIMIT_NPROC` was applied in the child's `pre_exec`.
+///   This is a marker variant indicating rlimit-based PID isolation is active.
 ///
 /// - **`None`**: No sandbox active.
-///
-/// [`RssWatcher`]: csa_resource::rlimit::RssWatcher
 pub enum AcpSandboxHandle {
     /// cgroup scope guard -- dropped to stop the scope.
     Cgroup(csa_resource::cgroup::CgroupScopeGuard),
-    /// `setrlimit` was applied in child; optional RSS watcher monitors externally.
-    Rlimit {
-        watcher: Option<csa_resource::rlimit::RssWatcher>,
-    },
+    /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
+    Rlimit,
     /// No sandbox active.
     None,
 }
@@ -212,22 +208,7 @@ impl AcpConnection {
                 let conn =
                     Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
 
-                let watcher = conn.child.borrow().id().and_then(|pid| {
-                    debug!(pid, memory_max_mb, "starting RSS watcher for ACP child");
-                    match csa_resource::rlimit::RssWatcher::start(
-                        pid,
-                        memory_max_mb,
-                        Duration::from_secs(5),
-                    ) {
-                        Ok(w) => Some(w),
-                        Err(e) => {
-                            tracing::warn!("failed to start RSS watcher: {e:#}");
-                            None
-                        }
-                    }
-                });
-
-                Ok((conn, AcpSandboxHandle::Rlimit { watcher }))
+                Ok((conn, AcpSandboxHandle::Rlimit))
             }
             SandboxCapability::None => {
                 debug!("no sandbox capability detected; spawning ACP without isolation");

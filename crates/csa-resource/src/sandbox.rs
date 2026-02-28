@@ -14,7 +14,7 @@ use std::sync::OnceLock;
 pub enum SandboxCapability {
     /// cgroup v2 with systemd user-scope support (best isolation).
     CgroupV2,
-    /// POSIX `setrlimit` only (address-space + nproc limits).
+    /// POSIX `setrlimit` — PID limit only (`RLIMIT_NPROC`).
     Setrlimit,
     /// No usable isolation mechanism detected.
     None,

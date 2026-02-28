@@ -10,5 +10,5 @@ pub use cgroup::{
     CgroupScopeGuard, OrphanScope, SandboxConfig, cleanup_orphan_scopes, create_scope_command,
 };
 pub use guard::{ResourceGuard, ResourceLimits};
-pub use rlimit::{RssWatcher, apply_rlimits};
+pub use rlimit::apply_rlimits;
 pub use sandbox::{SandboxCapability, detect_sandbox_capability};
