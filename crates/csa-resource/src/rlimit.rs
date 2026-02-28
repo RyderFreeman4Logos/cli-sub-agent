@@ -73,23 +73,40 @@ pub fn current_rlimit_nproc() -> Option<u64> {
 /// Returns `Ok(())` on success or if `/proc/self/oom_score_adj` does
 /// not exist (non-Linux).  Returns `Err` only on unexpected I/O errors.
 pub fn apply_oom_score_adj() -> Result<()> {
-    use std::io::ErrorKind;
-    use std::path::Path;
+    // Use raw libc syscalls instead of std::fs to be async-signal-safe.
+    // This function runs inside a pre_exec closure (after fork, before exec)
+    // where only async-signal-safe functions may be called.
+    const PATH: &[u8] = b"/proc/self/oom_score_adj\0";
+    const VALUE: &[u8] = b"500";
 
-    let path = Path::new("/proc/self/oom_score_adj");
-    if !path.exists() {
-        // Non-Linux or procfs not mounted — silently skip.
-        return Ok(());
-    }
-
-    match std::fs::write(path, "500") {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == ErrorKind::PermissionDenied => {
-            // Inside some containers the file exists but is read-only.
-            Ok(())
+    // SAFETY: open() is async-signal-safe per POSIX.  We pass a valid
+    // NUL-terminated path and O_WRONLY flag.
+    let fd = unsafe { libc::open(PATH.as_ptr().cast::<libc::c_char>(), libc::O_WRONLY) };
+    if fd < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::ENOENT) || err.raw_os_error() == Some(libc::EACCES) {
+            // Non-Linux, procfs not mounted, or container restriction — skip.
+            return Ok(());
         }
-        Err(e) => Err(e).context("failed to write /proc/self/oom_score_adj"),
+        return Err(err).context("failed to open /proc/self/oom_score_adj");
     }
+
+    // SAFETY: write() is async-signal-safe.  fd is a valid open descriptor.
+    let written = unsafe { libc::write(fd, VALUE.as_ptr().cast::<libc::c_void>(), VALUE.len()) };
+
+    // SAFETY: close() is async-signal-safe.
+    unsafe { libc::close(fd) };
+
+    if written < 0 {
+        let err = std::io::Error::last_os_error();
+        if err.raw_os_error() == Some(libc::EACCES) {
+            // Inside some containers the file is read-only.
+            return Ok(());
+        }
+        return Err(err).context("failed to write /proc/self/oom_score_adj");
+    }
+
+    Ok(())
 }
 
 #[cfg(test)]
