@@ -41,24 +41,6 @@ pub fn apply_rlimits(_memory_max_mb: u64, pids_max: Option<u64>) -> Result<()> {
     Ok(())
 }
 
-/// Read current RLIMIT_AS soft limit (useful for `csa doctor` output).
-pub fn current_rlimit_as() -> Option<u64> {
-    let mut rlim = libc::rlimit {
-        rlim_cur: 0,
-        rlim_max: 0,
-    };
-    // SAFETY: getrlimit is a well-defined POSIX syscall.
-    let ret = unsafe { libc::getrlimit(libc::RLIMIT_AS, &mut rlim) };
-    if ret != 0 {
-        return None;
-    }
-    if rlim.rlim_cur == libc::RLIM_INFINITY {
-        None
-    } else {
-        Some(rlim.rlim_cur / 1024 / 1024)
-    }
-}
-
 /// Read current RLIMIT_NPROC soft limit.
 pub fn current_rlimit_nproc() -> Option<u64> {
     let mut rlim = libc::rlimit {
@@ -113,12 +95,6 @@ pub fn apply_oom_score_adj() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_current_rlimit_as_runs() {
-        // Just ensure it doesn't panic.
-        let _ = current_rlimit_as();
-    }
 
     #[test]
     fn test_current_rlimit_nproc_runs() {
