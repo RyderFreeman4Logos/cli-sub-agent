@@ -772,14 +772,14 @@ impl Executor {
 
             let mut candidate = String::new();
             let mut best_match: Option<(usize, PathBuf)> = None;
-            for end in index..tokens.len() {
+            for (end, token) in tokens.iter().enumerate().skip(index) {
                 if end > index {
-                    if tokens[end].starts_with('/') {
+                    if token.starts_with('/') {
                         break;
                     }
                     candidate.push(' ');
                 }
-                candidate.push_str(&tokens[end]);
+                candidate.push_str(token);
 
                 let path = Path::new(&candidate);
                 if path.is_absolute() && path.exists() {
