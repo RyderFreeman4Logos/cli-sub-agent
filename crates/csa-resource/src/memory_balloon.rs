@@ -102,14 +102,28 @@ impl Drop for MemoryBalloon {
     }
 }
 
-/// Check whether a memory balloon should be enabled given current swap
-/// availability.
+/// Minimum amount of available RAM (in bytes) that the tool process needs.
+/// If the system already has at least `balloon_size + RAM_HEADROOM` available,
+/// the balloon is unnecessary because RAM is plentiful.
+const RAM_HEADROOM: u64 = 2 * 1024 * 1024 * 1024; // 2 GiB
+
+/// Check whether a memory balloon should be enabled given current system state.
 ///
-/// Returns `true` only when:
-/// 1. `balloon_size` does not exceed [`MAX_BALLOON_SIZE`] (16 GiB), AND
-/// 2. `available_swap_bytes` is at least as large as `balloon_size`.
-pub fn should_enable_balloon(available_swap_bytes: u64, balloon_size: u64) -> bool {
-    balloon_size <= MAX_BALLOON_SIZE && available_swap_bytes >= balloon_size
+/// Returns `true` only when ALL conditions hold:
+/// 1. `balloon_size` does not exceed [`MAX_BALLOON_SIZE`] (16 GiB),
+/// 2. `available_swap_bytes` is at least as large as `balloon_size` (so the
+///    pressure can be absorbed by swap without starving other processes), AND
+/// 3. `available_memory_bytes` is **less than** `balloon_size + RAM_HEADROOM` —
+///    i.e. the system is actually tight on physical memory.  If there is plenty
+///    of free RAM, inflating a balloon would needlessly push pages into swap.
+pub fn should_enable_balloon(
+    available_memory_bytes: u64,
+    available_swap_bytes: u64,
+    balloon_size: u64,
+) -> bool {
+    balloon_size <= MAX_BALLOON_SIZE
+        && available_swap_bytes >= balloon_size
+        && available_memory_bytes < balloon_size + RAM_HEADROOM
 }
 
 #[cfg(test)]
@@ -134,23 +148,22 @@ mod tests {
 
     #[test]
     fn test_balloon_enable_conditions() {
-        // Enough swap.
-        assert!(should_enable_balloon(
-            2 * 1024 * 1024 * 1024,
-            1024 * 1024 * 1024
-        ));
+        let gb = 1024 * 1024 * 1024_u64;
 
-        // Exactly equal.
-        assert!(should_enable_balloon(1024, 1024));
+        // Tight RAM (1 GiB avail) + enough swap → enable.
+        assert!(should_enable_balloon(1 * gb, 2 * gb, 1 * gb));
 
-        // Not enough swap.
-        assert!(!should_enable_balloon(512, 1024));
+        // Plenty of RAM (8 GiB avail) + enough swap → skip (RAM is plentiful).
+        assert!(!should_enable_balloon(8 * gb, 2 * gb, 1 * gb));
 
-        // Balloon exceeds hard limit.
-        assert!(!should_enable_balloon(u64::MAX, MAX_BALLOON_SIZE + 1));
+        // Tight RAM but not enough swap → skip.
+        assert!(!should_enable_balloon(512, 512, 1024));
 
-        // Zero balloon is fine for the condition check (separate from inflate).
-        assert!(should_enable_balloon(0, 0));
+        // Balloon exceeds hard limit → skip.
+        assert!(!should_enable_balloon(0, u64::MAX, MAX_BALLOON_SIZE + 1));
+
+        // Zero balloon + zero everything → enable (degenerate case).
+        assert!(should_enable_balloon(0, 0, 0));
     }
 
     #[test]

@@ -53,6 +53,16 @@ csa run --skill commit "Commit the current changes with scope: <scope>"
 7. **Generate commit message**: Delegate to CSA at `tier-1-quick` (tool and thinking budget come from config). If a review session already ran in this workflow, prefer resuming it with `--session <review-session-id>` (reuses cached context, near-zero new tokens). When resuming, keep the same tool (sessions are tool-locked).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 9. **Auto PR** (if milestone): Push branch, create PR targeting main, invoke `/pr-codex-bot`.
+   - **NOTE**: `/pr-codex-bot` internally runs a **separate cumulative review** (`csa review --range main...HEAD`) covering ALL commits on the branch before push. This is distinct from Step 6's per-commit review (`csa review --diff`). Do NOT skip pr-codex-bot's internal review even if Step 6 passed.
+
+## Two-Layer Review Architecture
+
+| Layer | Command | Scope | Timing |
+|-------|---------|-------|--------|
+| Per-commit | `csa review --diff` | Staged changes only | Before `git commit` (Step 6) |
+| Pre-PR cumulative | `csa review --range main...HEAD` | Full feature branch | Before `git push` (inside `/pr-codex-bot` Step 2) |
+
+Both layers are mandatory. The per-commit review catches issues in each individual change; the cumulative review catches cross-commit issues and ensures the full branch is coherent.
 
 ## Example Usage
 

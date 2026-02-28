@@ -118,11 +118,18 @@ title = "Push and Create PR"
 tool = "bash"
 prompt = """
 PRECONDITION: Step 2 (local review) must have completed successfully.
-In workflow executor context, Step 2's on_fail=abort already guarantees this —
-Step 4 is only reached when Step 2 exits 0. The REVIEW_COMPLETED variable
-is tracked by the manual orchestrator (PATTERN.md), not by the workflow engine.
+The bash block below includes an explicit REVIEW_COMPLETED gate for safety:
+even though the workflow engine's on_fail=abort on Step 2 should prevent
+reaching this step without a passing review, agents executing manually via
+PATTERN.md may skip or fail to set the variable.
 
 ```bash
+set -euo pipefail
+if [ "${REVIEW_COMPLETED}" != "true" ]; then
+  echo "ERROR: Local review (Step 2) was not completed. REVIEW_COMPLETED=${REVIEW_COMPLETED:-unset}"
+  echo "FORBIDDEN: Creating a PR without completing Step 2."
+  exit 1
+fi
 git push -u origin "${WORKFLOW_BRANCH}"
 gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
 PR_NUM=$(gh pr view --json number -q '.number')

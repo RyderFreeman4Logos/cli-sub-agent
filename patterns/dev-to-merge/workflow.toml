@@ -33,6 +33,9 @@ name = "REPO"
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
+name = "CUMULATIVE_REVIEW_COMPLETED"
+
+[[workflow.variables]]
 name = "SCOPE"
 
 [[workflow.steps]]
@@ -209,13 +212,29 @@ title = "Commit"
 tool = "bash"
 prompt = """
 Create the commit using the generated message: ${COMMIT_MSG}.
-NOTE: In production, this step should invoke the `/commit` skill which
-enforces security audit, test completeness, and AGENTS.md compliance.
-The raw `git commit` here demonstrates the skill-lang format only.
 
 ```bash
 git commit -m "${COMMIT_MSG}"
 ```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 131
+title = "Pre-PR Cumulative Review"
+tool = "csa"
+prompt = """
+Run a cumulative review covering ALL commits on the feature branch since main.
+This is distinct from Step 8's per-commit review (csa review --diff):
+- Step 8 reviews uncommitted changes (staged diff) — single-commit granularity.
+- This step reviews the full feature branch — catches cross-commit issues.
+
+MANDATORY: This review MUST pass before pushing to origin.
+
+```bash
+csa review --range main...HEAD
+CUMULATIVE_REVIEW_COMPLETED=true
+```"""
+tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -253,9 +272,6 @@ tool = "bash"
 prompt = """
 Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
-NOTE: In production, Steps 15-24 should invoke the `/pr-codex-bot` skill
-which handles the full review-trigger-procedure, bounded polling, false-positive
-arbitration, and merge atomically. The manual flow here demonstrates skill-lang.
 
 ```bash
 PR_NUM=$(gh pr view --json number -q '.number')
