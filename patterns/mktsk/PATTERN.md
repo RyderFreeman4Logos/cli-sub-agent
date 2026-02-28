@@ -1,121 +1,71 @@
 ---
 name = "mktsk"
-description = "Convert TODO plans into Task tool entries for persistent serial execution across auto-compaction"
-allowed-tools = "TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Grep, Glob, Bash, Write, Edit"
+description = "Execute TODO plans as deterministic serial checklists across auto-compaction"
+allowed-tools = "Read, Grep, Glob, Bash, Write, Edit"
 tier = "tier-2-standard"
 version = "0.1.0"
 ---
 
 # mktsk: Make Task — Plan-to-Execution Bridge
 
-Convert TODO plans into Task tool entries that persist across auto-compaction.
-Strict serial execution: implement → review → commit → next.
-Every task has executor tag, DONE WHEN condition, and commit step.
+Execute TODO plans as deterministic serial checklists.
+Strict order: implement -> verify -> review -> commit -> next.
 
 ## Step 1: Parse TODO Plan
 
-Read the TODO plan file (from mktd output or user-provided plan).
-Extract each [ ] item with its executor tag and description.
+Read the TODO plan file (from mktd output or user-provided path).
+Extract all unchecked checklist items (`- [ ]`) with:
+- executor tag (`[Sub:developer]`, `[Skill:commit]`, `[CSA:tool]`, or `[Main]`)
+- task description
+- `DONE WHEN:` condition
 
-## Step 2: Create Task Entries
+Fail fast if no executable checklist items are found.
 
-## FOR task IN ${TODO_ITEMS}
+## Step 2: Build Execution Checklist
 
-## Step 2a: Create TaskCreate Entry
+Normalize extracted items into a serial execution checklist.
+Each normalized item MUST include:
+- stable item id
+- executor tag
+- concrete action
+- mechanically verifiable `DONE WHEN`
 
-Create a TaskCreate entry for this TODO item.
-Each task MUST include:
-- Subject with executor tag: [Sub:developer], [Skill:commit], [CSA:tool]
-- Description with clear scope
-- DONE WHEN condition (mechanically verifiable)
+Output the full checklist as markdown text.
 
-## Step 2b: Append Commit Task
+## Step 3: Execute Checklist Serially
 
-For implementation tasks, append a corresponding commit task:
-[Skill:commit] → runs full commit workflow (fmt → lint → test → audit → review → commit)
+Execute checklist items strictly in order.
+Do not parallelize implementation work.
 
-## ENDFOR
+Dispatch policy by executor tag:
+- `[CSA:tool]`: run `csa run` with the item objective and `DONE WHEN`.
+- `[Sub:developer]`: execute directly as implementation work in current session.
+- `[Skill:xxx]`: invoke the corresponding skill directly.
+- `[Main]` or no tag: execute directly in current session.
 
-## Step 4: Execute Tasks Serially
+After each implementation item:
+1. Run quality gates (`just fmt`, `just clippy`, `just test`).
+2. Run `csa review --diff`.
+3. Apply fixes if review reports blocking issues.
+4. Mark the item as completed in the TODO file (`- [x]`), preserving text.
 
-## FOR task IN ${TASK_LIST}
+## Step 4: Compact Context (Conditional)
 
-Execute tasks strictly in order. NEVER parallel development.
-Only read-only/analysis tasks may run in parallel.
-
-## IF ${TASK_IS_IMPLEMENTATION}
-
-## Step 4a: Dispatch by Executor Tag
-
-Route execution based on the task's executor tag:
-
-### IF tag matches `[CSA:tool]` (e.g., `[CSA:gemini]`, `[CSA:codex]`, `[CSA:auto]`)
-
-Execute via CSA sub-agent:
-
-```bash
-csa run "prompt with task description and DONE WHEN condition"
-```
-
-### ELIF tag matches `[Sub:developer]` (e.g., `[Sub:rust-sonnet-developer]`, `[Sub:developer]`)
-
-Execute via Claude Code Sub-Agent (Task tool):
-- Spawn a Task with appropriate `subagent_type` matching the developer role
-- Pass full task description including files to modify, scope, and DONE WHEN
-
-### ELIF tag matches `[Skill:xxx]` (e.g., `[Skill:commit]`, `[Skill:mktsk]`)
-
-Execute via Skill tool:
-- Invoke `Skill(xxx)` with the task arguments
-- Wait for skill completion before proceeding
-
-### ELSE (no tag or trivial task)
-
-Write code directly — ONLY for trivial tasks (< 5 lines, single clear operation).
-If the task is non-trivial and has no tag, default to `[Sub:developer]` dispatch.
-
-## Step 4b: Quality Gates
-
-Tool: bash
-OnFail: retry 2
-
-```bash
-just pre-commit
-```
-
-## Step 4c: Review
-
-Tool: bash
-
-```bash
-csa review --diff
-```
-
-## Step 4d: Commit
-
-## INCLUDE commit
-
-Full commit workflow per logical unit.
-
-## ENDIF
-
-## IF ${CONTEXT_ABOVE_80_PERCENT}
-
-## Step 4e: Compact Context
-
-Preserve task list and decisions. Compact process details.
-
-## ENDIF
-
-Mark task complete via TaskUpdate.
-
-## ENDFOR
+If context usage exceeds threshold, compact while preserving:
+- remaining checklist items
+- completed items
+- open review findings
+- pending `DONE WHEN` checks
 
 ## Step 5: Verify Completion
 
-Check all tasks completed. Run final quality gates.
+Run final verification:
 
 ```bash
-just pre-commit
-git status
+just fmt
+just clippy
+just test
+git status --short
 ```
+
+Ensure no unchecked executable checklist items remain in the TODO file.

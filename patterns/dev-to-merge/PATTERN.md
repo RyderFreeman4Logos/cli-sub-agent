@@ -76,10 +76,10 @@ if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'
   STAGED_FILES="$(git diff --cached --name-only)"
   if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)Cargo\.toml$|(^|/)package\.json$|(^|/)pnpm-workspace\.yaml$|(^|/)go\.mod$'; then
     echo "INFO: Dependency manifest change detected; preserving staged lockfiles."
-  elif ! printf '%s\n' "${STAGED_FILES}" | grep -Ev '(^|/)(Cargo\.lock|weave\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$' | grep -q .; then
+  elif ! printf '%s\n' "${STAGED_FILES}" | grep -Ev '(^|/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$' | grep -q .; then
     echo "INFO: Lockfile-only staged change detected; preserving staged lockfiles."
   else
-    MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | awk '$0 ~ /(^|\/)(Cargo\.lock|weave\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$/ { print }')"
+    MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | awk '$0 ~ /(^|\/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$/ { print }')"
     if [ -n "${MATCHED_LOCKFILES}" ]; then
       printf '%s\n' "${MATCHED_LOCKFILES}" | while read -r lockpath; do
         echo "INFO: Unstaging incidental lockfile change: ${lockpath}"
@@ -209,14 +209,13 @@ Loop back to Step 9 if issues persist (max 3 rounds).
 
 ## Step 12: Generate Commit Message
 
-Tool: csa
-Tier: tier-1-quick
+Tool: bash
+OnFail: abort
 
-Generate a Conventional Commits message from the staged diff.
-The message must follow the format: `type(${SCOPE}): description`.
+Generate a deterministic Conventional Commits message from staged files.
 
 ```bash
-csa run "Run 'git diff --staged' and generate a Conventional Commits message. Scope: ${SCOPE}"
+scripts/gen_commit_msg.sh "${SCOPE:-}"
 ```
 
 ## Step 13: Commit
@@ -230,7 +229,7 @@ Create the commit using the generated message: ${COMMIT_MSG}.
 git commit -m "${COMMIT_MSG}"
 ```
 
-## Step 13a: Ensure Version Bumped
+## Step 130: Ensure Version Bumped
 
 Tool: bash
 OnFail: abort
@@ -244,19 +243,18 @@ if just check-version-bumped; then
   echo "Version bump check passed."
   exit 0
 fi
-PRE_DIRTY_LOCKS="$(git diff --name-only -- Cargo.lock weave.lock)"
+PRE_DIRTY_CARGO_LOCK=0
+if git diff --name-only -- Cargo.lock | grep -q .; then
+  PRE_DIRTY_CARGO_LOCK=1
+fi
 just bump-patch
 weave lock
-git add Cargo.toml
-for lockfile in Cargo.lock weave.lock; do
-  if printf '%s\n' "${PRE_DIRTY_LOCKS}" | grep -qx "${lockfile}"; then
-    echo "INFO: Skipping ${lockfile} in release commit (pre-existing local edits)."
-    continue
-  fi
-  if [ -f "${lockfile}" ]; then
-    git add "${lockfile}"
-  fi
-done
+git add Cargo.toml weave.lock
+if [ "${PRE_DIRTY_CARGO_LOCK}" -eq 0 ] && [ -f Cargo.lock ]; then
+  git add Cargo.lock
+else
+  echo "INFO: Skipping Cargo.lock in release commit (pre-existing local edits)."
+fi
 if git diff --cached --quiet; then
   echo "ERROR: Version bump expected changes but none were staged." >&2
   exit 1
@@ -265,7 +263,7 @@ VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | se
 git commit -m "chore(release): bump workspace version to ${VERSION}"
 ```
 
-## Step 13b: Pre-PR Cumulative Review
+## Step 131: Pre-PR Cumulative Review
 
 Tool: csa
 Tier: tier-2-standard

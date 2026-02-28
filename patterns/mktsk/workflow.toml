@@ -1,153 +1,75 @@
 [workflow]
 name = "mktsk"
-description = "Convert TODO plans into Task tool entries for persistent serial execution across auto-compaction"
+description = "Execute TODO plans as deterministic serial checklists across auto-compaction"
 
 [[workflow.variables]]
 name = "CONTEXT_ABOVE_80_PERCENT"
-
-[[workflow.variables]]
-name = "TASK_IS_IMPLEMENTATION"
-
-[[workflow.variables]]
-name = "TASK_LIST"
-
-[[workflow.variables]]
-name = "TODO_ITEMS"
 
 [[workflow.steps]]
 id = 1
 title = "Parse TODO Plan"
 prompt = """
-Read the TODO plan file (from mktd output or user-provided plan).
-Extract each [ ] item with its executor tag and description."""
+Read the TODO plan file (from mktd output or user-provided path).
+Extract every unchecked checklist item with executor tag and DONE WHEN.
+Fail if no executable checklist items are found."""
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 2
-title = "Create Task Entries"
+title = "Build Execution Checklist"
 prompt = """
-For each TODO item extracted in Step 1, create a TaskCreate entry.
-Each task MUST include subject, description, executor tag, and DONE WHEN condition.
+Normalize parsed items into a serial checklist.
+Each item must include executor tag, concrete action, and DONE WHEN.
 
-## TODO Items
+## Parsed Items
 ${STEP_1_OUTPUT}"""
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 3
-title = "Step 2a: Create TaskCreate Entry"
+title = "Execute Checklist Serially"
 prompt = """
-Create a TaskCreate entry for this TODO item.
-Each task MUST include:
-- Subject with executor tag: [Sub:developer], [Skill:commit], [CSA:tool]
-- Description with clear scope
-- DONE WHEN condition (mechanically verifiable)"""
-on_fail = "abort"
+Execute the normalized checklist strictly in order.
+Dispatch by executor tag:
+- [CSA:tool] => csa run
+- [Sub:developer] => execute directly
+- [Skill:xxx] => invoke skill
+- [Main]/no tag => execute directly
 
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TODO_ITEMS}"
+After each implementation item:
+1) just fmt
+2) just clippy
+3) just test
+4) csa review --diff
+5) mark TODO checkbox as completed
 
-[[workflow.steps]]
-id = 4
-title = "Step 2b: Append Commit Task"
-prompt = """
-For implementation tasks, append a corresponding commit task:
-[Skill:commit] → runs full commit workflow (fmt → lint → test → audit → review → commit)"""
-on_fail = "abort"
-
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TODO_ITEMS}"
-
-[[workflow.steps]]
-id = 5
-title = "Execute Tasks Serially"
-prompt = """
-Execute each task from the task list in order.
-For implementation tasks, write code then run quality gates (fmt, clippy, test).
-For non-implementation tasks, follow the task description directly.
-
-## Task List
+## Execution Checklist
 ${STEP_2_OUTPUT}"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
-title = "Step 4a: Implement"
-prompt = "Write code for the current task."
-on_fail = "abort"
-condition = "${TASK_IS_IMPLEMENTATION}"
-
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TASK_LIST}"
-
-[[workflow.steps]]
-id = 7
-title = "Step 4b: Quality Gates"
-tool = "bash"
+id = 4
+title = "Compact Context"
 prompt = """
-```bash
-just pre-commit
-```"""
-condition = "${TASK_IS_IMPLEMENTATION}"
-
-[workflow.steps.on_fail]
-retry = 2
-
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TASK_LIST}"
-
-[[workflow.steps]]
-id = 8
-title = "Step 4c: Review"
-tool = "bash"
-prompt = """
-```bash
-csa review --diff
-```"""
-on_fail = "abort"
-condition = "${TASK_IS_IMPLEMENTATION}"
-
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TASK_LIST}"
-
-[[workflow.steps]]
-id = 9
-title = "Step 4d: Commit"
-prompt = """
-Run the full commit workflow for the current task:
-format, lint, test, security audit, code review, then create commit.
-Use Conventional Commits format with appropriate scope."""
-on_fail = "abort"
-condition = "${TASK_IS_IMPLEMENTATION}"
-
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TASK_LIST}"
-
-[[workflow.steps]]
-id = 10
-title = "Step 4e: Compact Context"
-prompt = "Preserve task list and decisions. Compact process details."
+Compact while preserving:
+- remaining checklist items
+- completed items
+- open review findings
+- pending DONE WHEN checks."""
 on_fail = "abort"
 condition = "${CONTEXT_ABOVE_80_PERCENT}"
 
-[workflow.steps.loop_var]
-variable = "task"
-collection = "${TASK_LIST}"
-
 [[workflow.steps]]
-id = 11
+id = 5
 title = "Verify Completion"
+tool = "bash"
 prompt = """
-Check all tasks completed. Run final quality gates.
+Run final verification.
 
 ```bash
-just pre-commit
-git status
+just fmt
+just clippy
+just test
+git status --short
 ```"""
 on_fail = "abort"

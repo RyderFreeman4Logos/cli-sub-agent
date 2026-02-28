@@ -140,14 +140,14 @@ tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 8
+id = 71
 title = "Step 7a: Fix Audit Issues"
 prompt = "Fix blocking issues and re-run from Step 2."
 on_fail = "abort"
 condition = "${AUDIT_FAIL}"
 
 [[workflow.steps]]
-id = 9
+id = 72
 title = "Step 7b: Record Deferred Issues"
 prompt = """
 Record deferred issues (other modules) via TaskCreate for
@@ -156,7 +156,7 @@ on_fail = "abort"
 condition = "${AUDIT_PASS_DEFERRED}"
 
 [[workflow.steps]]
-id = 10
+id = 8
 title = "Pre-Commit Review"
 tool = "csa"
 prompt = """
@@ -176,7 +176,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 11
+id = 9
 title = "Fix Review Issues"
 tool = "csa"
 prompt = """
@@ -192,7 +192,7 @@ condition = "${REVIEW_HAS_ISSUES}"
 retry = 3
 
 [[workflow.steps]]
-id = 12
+id = 10
 title = "Optional Review-Loop"
 tool = "csa"
 prompt = """
@@ -203,17 +203,19 @@ on_fail = "abort"
 condition = "${ENABLE_REVIEW_LOOP} == \"true\""
 
 [[workflow.steps]]
-id = 13
+id = 11
 title = "Generate Commit Message"
-tool = "csa"
+tool = "bash"
 prompt = """
-Run 'git diff --staged' and generate a Conventional Commits message.
-Scope: ${SCOPE}. Output ONLY the commit message, nothing else."""
-tier = "tier-1-quick"
+Generate a deterministic Conventional Commits message from staged files.
+
+```bash
+scripts/gen_commit_msg.sh "${SCOPE:-}"
+```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 12
 title = "Commit"
 tool = "bash"
 prompt = """
@@ -223,7 +225,7 @@ git commit -m "${COMMIT_MSG}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 15
+id = 13
 title = "Auto PR"
 tool = "bash"
 prompt = """
@@ -238,7 +240,7 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 16
+id = 14
 title = "Invoke PR Codex Bot"
 prompt = """
 Trigger the pr-codex-bot workflow on the newly created PR:
@@ -252,7 +254,7 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 17
+id = 15
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).

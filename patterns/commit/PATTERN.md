@@ -188,21 +188,15 @@ Run `review-loop` pattern on staged changes before final commit.
 
 ## Step 11: Generate Commit Message
 
-Tool: csa
-Tier: tier-1-quick
+Tool: bash
+OnFail: abort
 
-Delegate message generation to a lightweight tier. Commit messages are mechanical
-(read diff → format) — no deep reasoning needed.
-Scope: `${SCOPE}`.
+Generate a deterministic Conventional Commits message from staged files.
+Avoid model-dependent loops in commit-message generation.
 
-Tool and thinking budget are determined by the `tier-1-quick` config in
-`~/.config/cli-sub-agent/config.toml`. Do NOT hardcode `--tool` or `--thinking`
-flags — the tier system already specifies the right model.
-
-**Session reuse** (PREFERRED): If a review session already ran in this workflow,
-resume it with `--session <REVIEW_SESSION_ID>`. The model already "saw" the
-changes, so generating a message costs near-zero new tokens. When resuming,
-keep the same tool (sessions are tool-locked).
+```bash
+scripts/gen_commit_msg.sh "${SCOPE:-}"
+```
 
 ## Step 12: Commit
 
