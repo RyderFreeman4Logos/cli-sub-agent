@@ -133,7 +133,8 @@ Phase 2: Input validation, size limits, panic risks.
 Phase 3: No debug code, secrets, or commented-out code.
 
 ```bash
-AUDIT_PROMPT="Run security-audit against staged changes.
+AUDIT_PROMPT="Use the security-audit skill.
+Run security-audit against staged changes.
 Output a concise report and end with EXACTLY one line:
 SECURITY_AUDIT_VERDICT: PASS|PASS_DEFERRED|FAIL"
 if command -v timeout >/dev/null 2>&1; then
