@@ -364,8 +364,8 @@ if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   PAYLOAD=$(gh pr view "${PR_NUM_FROM_STEP}" --repo "${REPO}" --json comments,reviews)
-  BOT_COMMENTS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.comments[]? | select(.createdAt > $ts and (.author.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  BOT_REVIEWS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.reviews[]? | select(.submittedAt > $ts and (.author.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  BOT_COMMENTS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.comments[]? | select(.createdAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
+  BOT_REVIEWS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.reviews[]? | select(.submittedAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")))] | length')
   if [ "${BOT_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
     echo "Bot response received."
     exit 0
