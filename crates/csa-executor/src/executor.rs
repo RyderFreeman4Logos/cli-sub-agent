@@ -757,47 +757,80 @@ impl Executor {
 
     fn gemini_prompt_directories(prompt: &str) -> Vec<String> {
         let mut directories = Vec::new();
-        for raw in prompt.split_whitespace() {
-            let token = raw.trim_matches(|c: char| {
-                matches!(
-                    c,
-                    '"' | '\''
-                        | '`'
-                        | ','
-                        | ';'
-                        | ':'
-                        | '.'
-                        | '('
-                        | ')'
-                        | '['
-                        | ']'
-                        | '{'
-                        | '}'
-                        | '<'
-                        | '>'
-                )
-            });
-            if token.is_empty() || token.contains("://") || !token.starts_with('/') {
+        let tokens: Vec<String> = prompt
+            .split_whitespace()
+            .map(Self::trim_prompt_path_token)
+            .filter(|token| !token.is_empty())
+            .collect();
+
+        let mut index = 0;
+        while index < tokens.len() {
+            if !tokens[index].starts_with('/') || tokens[index].contains("://") {
+                index += 1;
                 continue;
             }
-            let path = Path::new(token);
-            if !path.is_absolute() || !path.exists() {
-                continue;
+
+            let mut candidate = String::new();
+            let mut best_match: Option<(usize, PathBuf)> = None;
+            for end in index..tokens.len() {
+                if end > index {
+                    if tokens[end].starts_with('/') {
+                        break;
+                    }
+                    candidate.push(' ');
+                }
+                candidate.push_str(&tokens[end]);
+
+                let path = Path::new(&candidate);
+                if path.is_absolute() && path.exists() {
+                    best_match = Some((end, path.to_path_buf()));
+                }
             }
-            let dir = if path.is_dir() {
-                path.to_path_buf()
-            } else if let Some(parent) = path.parent() {
-                parent.to_path_buf()
+
+            if let Some((end, path)) = best_match {
+                let dir = if path.is_dir() {
+                    path
+                } else if let Some(parent) = path.parent() {
+                    parent.to_path_buf()
+                } else {
+                    index += 1;
+                    continue;
+                };
+
+                let normalized = fs::canonicalize(&dir).unwrap_or(dir);
+                Self::push_unique_directory_string(
+                    &mut directories,
+                    normalized.to_string_lossy().as_ref(),
+                );
+                index = end + 1;
             } else {
-                continue;
-            };
-            let normalized = fs::canonicalize(&dir).unwrap_or(dir);
-            Self::push_unique_directory_string(
-                &mut directories,
-                normalized.to_string_lossy().as_ref(),
-            );
+                index += 1;
+            }
         }
         directories
+    }
+
+    fn trim_prompt_path_token(raw: &str) -> String {
+        raw.trim_matches(|c: char| {
+            matches!(
+                c,
+                '"' | '\''
+                    | '`'
+                    | ','
+                    | ';'
+                    | ':'
+                    | '.'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '<'
+                    | '>'
+            )
+        })
+        .to_string()
     }
 
     fn push_unique_directory_string(directories: &mut Vec<String>, directory: &str) {

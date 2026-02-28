@@ -312,7 +312,9 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
     };
     let session = make_test_session();
     let temp = tempfile::tempdir().expect("tempdir");
-    let file_path = temp.path().join("sample.txt");
+    let dir_with_space = temp.path().join("with space");
+    std::fs::create_dir_all(&dir_with_space).expect("create spaced dir");
+    let file_path = dir_with_space.join("sample.txt");
     std::fs::write(&file_path, "ok").expect("write fixture");
     let prompt = format!("Read and patch {}", file_path.display());
 
@@ -327,7 +329,7 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
 
     assert!(args.contains(&"--include-directories".to_string()));
     assert!(args.contains(&"/tmp/test-project".to_string()));
-    assert!(args.contains(&temp.path().to_string_lossy().to_string()));
+    assert!(args.contains(&dir_with_space.to_string_lossy().to_string()));
 }
 
 #[test]
