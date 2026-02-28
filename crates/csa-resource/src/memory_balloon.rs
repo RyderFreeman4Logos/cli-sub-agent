@@ -1,15 +1,20 @@
 //! Memory balloon for swap-pressure testing via anonymous mmap.
 //!
 //! [`MemoryBalloon`] allocates a contiguous block of anonymous memory using
-//! `mmap(MAP_ANONYMOUS | MAP_PRIVATE | MAP_POPULATE)`.  The `MAP_POPULATE`
-//! flag forces the kernel to fault in all pages immediately, ensuring the
-//! allocation actually consumes physical memory (or swap).  On [`Drop`],
-//! the mapping is released via `munmap`.
+//! `mmap(MAP_ANONYMOUS | MAP_PRIVATE | optional MAP_POPULATE)`. When available,
+//! `MAP_POPULATE` forces the kernel to fault in all pages immediately, ensuring
+//! the allocation actually consumes physical memory (or swap). On [`Drop`], the
+//! mapping is released via `munmap`.
 //!
 //! Use [`should_enable_balloon`] to check whether the system has sufficient
 //! swap headroom before inflating.
 
 use anyhow::{Context, Result, bail};
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+const MAP_POPULATE_FLAG: libc::c_int = libc::MAP_POPULATE;
+#[cfg(not(any(target_os = "linux", target_os = "android")))]
+const MAP_POPULATE_FLAG: libc::c_int = 0;
 
 /// Hard upper limit: 16 GiB.  Prevents accidental OOM from absurd values.
 const MAX_BALLOON_SIZE: u64 = 16 * 1024 * 1024 * 1024;
@@ -55,14 +60,14 @@ impl MemoryBalloon {
         }
 
         // SAFETY: mmap with MAP_ANONYMOUS does not require a file descriptor.
-        // We pass -1 for fd and 0 for offset.  The returned pointer is either
+        // We pass -1 for fd and 0 for offset. The returned pointer is either
         // MAP_FAILED (checked below) or a valid mapping of `size_bytes` length.
         let ptr = unsafe {
             libc::mmap(
                 std::ptr::null_mut(),
                 size_bytes,
                 libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | libc::MAP_POPULATE,
+                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE | MAP_POPULATE_FLAG,
                 -1,
                 0,
             )
