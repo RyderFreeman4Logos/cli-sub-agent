@@ -119,10 +119,6 @@ if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'
       printf '%s\n' "${MATCHED_LOCKFILES}" | while read -r lockpath; do
         echo "INFO: Unstaging incidental lockfile change: ${lockpath}"
         git restore --staged -- "${lockpath}"
-        if [ "${CSA_KEEP_FILTERED_LOCKFILES_IN_WORKTREE:-0}" != "1" ]; then
-          echo "INFO: Cleaning incidental lockfile from worktree: ${lockpath}"
-          git restore --worktree -- "${lockpath}"
-        fi
       done
     fi
   fi
