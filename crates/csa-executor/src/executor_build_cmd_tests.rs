@@ -240,6 +240,69 @@ fn test_build_command_gemini_args_structure() {
 }
 
 #[test]
+fn test_build_command_gemini_adds_include_directories_from_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert(
+        "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
+        " /tmp/one ,/tmp/two\n/tmp/one ".to_string(),
+    );
+
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    let include_flag_count = args
+        .iter()
+        .filter(|arg| arg.as_str() == "--include-directories")
+        .count();
+    assert_eq!(
+        include_flag_count, 2,
+        "Expected deduplicated include directories from env"
+    );
+    assert!(args.contains(&"/tmp/one".to_string()));
+    assert!(args.contains(&"/tmp/two".to_string()));
+}
+
+#[test]
+fn test_build_command_gemini_supports_fallback_include_directories_key() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert(
+        "GEMINI_INCLUDE_DIRECTORIES".to_string(),
+        "/tmp/fallback".to_string(),
+    );
+
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, Some(&extra));
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        args.contains(&"--include-directories".to_string()),
+        "Expected --include-directories when fallback env key is set"
+    );
+    assert!(args.contains(&"/tmp/fallback".to_string()));
+}
+
+#[test]
 fn test_build_command_claude_args_structure() {
     let exec = Executor::ClaudeCode {
         model_override: Some("claude-opus".to_string()),

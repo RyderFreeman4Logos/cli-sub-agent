@@ -137,6 +137,11 @@ pub enum Executor {
 }
 
 impl Executor {
+    const GEMINI_INCLUDE_DIRS_ENV_KEYS: &[&str] = &[
+        "CSA_GEMINI_INCLUDE_DIRECTORIES",
+        "GEMINI_INCLUDE_DIRECTORIES",
+    ];
+
     /// Get the tool name as a string.
     pub fn tool_name(&self) -> &'static str {
         match self {
@@ -315,12 +320,15 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        let gemini_include_directories = Self::gemini_include_directories(extra_env);
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
-        if matches!(prompt_transport, PromptTransport::Argv) {
-            self.append_tool_args(&mut cmd, prompt, tool_state);
-        } else {
-            self.append_tool_args_with_transport(&mut cmd, prompt, tool_state, prompt_transport);
-        }
+        self.append_tool_args_with_transport(
+            &mut cmd,
+            prompt,
+            tool_state,
+            prompt_transport,
+            &gemini_include_directories,
+        );
         (cmd, stdin_data)
     }
 
@@ -448,8 +456,12 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        let gemini_include_directories = Self::gemini_include_directories(extra_env);
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
+        if matches!(self, Self::GeminiCli { .. }) {
+            Self::append_gemini_include_directories_args(&mut cmd, &gemini_include_directories);
+        }
         if matches!(self, Self::Codex { .. }) {
             if let Some(env) = extra_env {
                 cmd.args(Self::codex_notify_suppression_args(env));
@@ -530,8 +542,9 @@ impl Executor {
     ///
     /// Delegates to `append_yolo_args`, `append_model_args`, `append_prompt_args`,
     /// and adds session-resume and tool-specific structural args.
+    #[cfg(test)]
     fn append_tool_args(&self, cmd: &mut Command, prompt: &str, tool_state: Option<&ToolState>) {
-        self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv);
+        self.append_tool_args_with_transport(cmd, prompt, tool_state, PromptTransport::Argv, &[]);
     }
 
     fn append_tool_args_with_transport(
@@ -540,6 +553,7 @@ impl Executor {
         prompt: &str,
         tool_state: Option<&ToolState>,
         prompt_transport: PromptTransport,
+        gemini_include_directories: &[String],
     ) {
         // Structural args (subcommand, output format, yolo) come first
         match self {
@@ -566,6 +580,7 @@ impl Executor {
         // Yolo flag for gemini (other tools handle it in structural args above)
         if matches!(self, Self::GeminiCli { .. }) {
             cmd.arg("-y");
+            Self::append_gemini_include_directories_args(cmd, gemini_include_directories);
         }
 
         // Session resume
@@ -685,6 +700,39 @@ impl Executor {
         match env.get("CSA_SUPPRESS_NOTIFY").map(String::as_str) {
             Some("1") => vec!["-c".to_string(), "notify=[]".to_string()],
             _ => Vec::new(),
+        }
+    }
+
+    fn gemini_include_directories(extra_env: Option<&HashMap<String, String>>) -> Vec<String> {
+        let Some(env) = extra_env else {
+            return Vec::new();
+        };
+        let raw = Self::GEMINI_INCLUDE_DIRS_ENV_KEYS
+            .iter()
+            .find_map(|key| env.get(*key))
+            .map(String::as_str)
+            .unwrap_or_default();
+        if raw.trim().is_empty() {
+            return Vec::new();
+        }
+
+        let mut directories = Vec::new();
+        for entry in raw.split([',', '\n']) {
+            let directory = entry.trim();
+            if directory.is_empty() {
+                continue;
+            }
+            if directories.iter().any(|existing| existing == directory) {
+                continue;
+            }
+            directories.push(directory.to_string());
+        }
+        directories
+    }
+
+    fn append_gemini_include_directories_args(cmd: &mut Command, directories: &[String]) {
+        for directory in directories {
+            cmd.arg("--include-directories").arg(directory);
         }
     }
 
