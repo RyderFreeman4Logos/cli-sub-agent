@@ -27,6 +27,9 @@ use crate::{
     error::{AcpError, AcpResult},
 };
 
+const DEFAULT_HEARTBEAT_SECS: u64 = 20;
+const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
+
 #[derive(Debug, Clone, Default)]
 pub struct PromptResult {
     pub output: String,
@@ -261,6 +264,9 @@ impl AcpConnection {
         // Clear stale events before dispatching this prompt turn.
         self.events.borrow_mut().clear();
         *self.last_activity.borrow_mut() = Instant::now();
+        let execution_start = Instant::now();
+        let heartbeat_interval = resolve_heartbeat_interval();
+        let mut last_heartbeat = execution_start;
         let mut streamed_event_index = 0usize;
         let mut output_spool = open_output_spool_file(io.output_spool);
 
@@ -292,6 +298,13 @@ impl AcpConnection {
                                 &mut streamed_event_index,
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
+                            );
+                            maybe_emit_heartbeat(
+                                heartbeat_interval,
+                                execution_start,
+                                *self.last_activity.borrow(),
+                                &mut last_heartbeat,
+                                idle_timeout,
                             );
                             if self.last_activity.borrow().elapsed() >= idle_timeout {
                                 // Check if the child process is still working before
@@ -426,6 +439,49 @@ fn open_output_spool_file(path: Option<&Path>) -> Option<std::fs::File> {
             None
         }
     }
+}
+
+fn resolve_heartbeat_interval() -> Option<Duration> {
+    let raw = std::env::var(HEARTBEAT_INTERVAL_ENV).ok();
+    let secs = match raw {
+        Some(value) => match value.trim().parse::<u64>() {
+            Ok(0) => return None,
+            Ok(parsed) => parsed,
+            Err(_) => DEFAULT_HEARTBEAT_SECS,
+        },
+        None => DEFAULT_HEARTBEAT_SECS,
+    };
+    Some(Duration::from_secs(secs))
+}
+
+fn maybe_emit_heartbeat(
+    heartbeat_interval: Option<Duration>,
+    execution_start: Instant,
+    last_activity: Instant,
+    last_heartbeat: &mut Instant,
+    idle_timeout: Duration,
+) {
+    let Some(interval) = heartbeat_interval else {
+        return;
+    };
+
+    let now = Instant::now();
+    let idle_for = now.saturating_duration_since(last_activity);
+    if idle_for < interval {
+        return;
+    }
+    if now.saturating_duration_since(*last_heartbeat) < interval {
+        return;
+    }
+
+    let elapsed = now.saturating_duration_since(execution_start);
+    eprintln!(
+        "[csa-heartbeat] ACP prompt still running: elapsed={}s idle={}s idle-timeout={}s",
+        elapsed.as_secs(),
+        idle_for.as_secs(),
+        idle_timeout.as_secs()
+    );
+    *last_heartbeat = now;
 }
 
 fn stream_new_agent_messages(

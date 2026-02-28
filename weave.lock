@@ -1,6 +1,6 @@
 [versions]
-csa = "0.1.48"
-weave = "0.1.48"
+csa = "0.1.49"
+weave = "0.1.49"
 
 [migrations]
 applied = []

@@ -74,6 +74,8 @@ pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_STDIN_WRITE_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
+const DEFAULT_HEARTBEAT_SECS: u64 = 20;
+const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 
 /// Spawn-time process control options.
 #[derive(Debug, Clone, Copy)]
@@ -405,7 +407,10 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut stdout_line_buf = String::new();
 
     let mut stderr_output = String::new();
+    let execution_start = Instant::now();
     let mut last_activity = Instant::now();
+    let mut last_heartbeat = execution_start;
+    let heartbeat_interval = resolve_heartbeat_interval();
     let mut liveness_dead_since: Option<Instant> = None;
     let mut next_liveness_poll_at: Option<Instant> = None;
     let mut idle_timed_out = false;
@@ -436,6 +441,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                         Ok(n) => {
                             last_activity = Instant::now();
+                            last_heartbeat = last_activity;
                             liveness_dead_since = None;
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
@@ -462,6 +468,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                         Ok(n) => {
                             last_activity = Instant::now();
+                            last_heartbeat = last_activity;
                             liveness_dead_since = None;
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stderr_buf[..n]);
@@ -479,6 +486,13 @@ pub async fn wait_and_capture_with_idle_timeout(
                     }
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
+                    maybe_emit_heartbeat(
+                        heartbeat_interval,
+                        execution_start,
+                        last_activity,
+                        &mut last_heartbeat,
+                        idle_timeout,
+                    );
                     if should_terminate_for_idle(
                         &mut last_activity,
                         idle_timeout,
@@ -512,6 +526,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                         }
                         Ok(n) => {
                             last_activity = Instant::now();
+                            last_heartbeat = last_activity;
                             liveness_dead_since = None;
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
@@ -530,6 +545,13 @@ pub async fn wait_and_capture_with_idle_timeout(
                     }
                 }
                 _ = tokio::time::sleep(IDLE_POLL_INTERVAL) => {
+                    maybe_emit_heartbeat(
+                        heartbeat_interval,
+                        execution_start,
+                        last_activity,
+                        &mut last_heartbeat,
+                        idle_timeout,
+                    );
                     if should_terminate_for_idle(
                         &mut last_activity,
                         idle_timeout,
@@ -626,6 +648,49 @@ fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
         let _ = f.write_all(bytes);
         let _ = f.flush();
     }
+}
+
+fn resolve_heartbeat_interval() -> Option<Duration> {
+    let raw = std::env::var(HEARTBEAT_INTERVAL_ENV).ok();
+    let secs = match raw {
+        Some(value) => match value.trim().parse::<u64>() {
+            Ok(0) => return None,
+            Ok(parsed) => parsed,
+            Err(_) => DEFAULT_HEARTBEAT_SECS,
+        },
+        None => DEFAULT_HEARTBEAT_SECS,
+    };
+    Some(Duration::from_secs(secs))
+}
+
+fn maybe_emit_heartbeat(
+    heartbeat_interval: Option<Duration>,
+    execution_start: Instant,
+    last_activity: Instant,
+    last_heartbeat: &mut Instant,
+    idle_timeout: Duration,
+) {
+    let Some(interval) = heartbeat_interval else {
+        return;
+    };
+
+    let now = Instant::now();
+    let idle_for = now.saturating_duration_since(last_activity);
+    if idle_for < interval {
+        return;
+    }
+    if now.saturating_duration_since(*last_heartbeat) < interval {
+        return;
+    }
+
+    let elapsed = now.saturating_duration_since(execution_start);
+    eprintln!(
+        "[csa-heartbeat] tool still running: elapsed={}s idle={}s idle-timeout={}s",
+        elapsed.as_secs(),
+        idle_for.as_secs(),
+        idle_timeout.as_secs()
+    );
+    *last_heartbeat = now;
 }
 
 /// Accumulate a chunk of bytes into a line buffer, flushing complete lines to output.
