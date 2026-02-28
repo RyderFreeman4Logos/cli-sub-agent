@@ -14,7 +14,9 @@ triggers:
 
 ## Role Detection (READ THIS FIRST -- MANDATORY)
 
-**Check your initial prompt.** If it contains the literal string `"Use the mktd skill"`, then:
+Role MUST be determined by explicit mode marker, not fragile natural-language substring matching.
+Treat the run as executor ONLY when initial prompt contains:
+`<skill-mode>executor</skill-mode>`.
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
@@ -50,13 +52,14 @@ csa run --skill mktd "Plan the implementation of <feature description>"
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
-2. **Phase 1.5 -- LANGUAGE DETECTION**: Detect the primary language used in conversation with the user. Set USER_LANGUAGE accordingly (e.g., "Chinese (Simplified)", "English", "Japanese"). If unclear, default to the language used in the FEATURE description. This language will be used for all TODO descriptions, section headers, and task names.
-3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in USER_LANGUAGE. Technical terms, code snippets, commit scope strings, and executor tags remain in English. Output the complete plan as text (stdout) -- do NOT write files to the project directory.
+2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> preserve feature language when script is unknown -> fallback English only when `${FEATURE}` is empty. This language is captured as `${STEP_50_OUTPUT}`.
+3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_50_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 4. **Phase 2.5 -- THREAT MODEL**: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults). Append findings as [Security] tagged items.
-5. **Phase 3 -- DEBATE**: Run `csa debate` (tier-2) to adversarially review the TODO draft and threat model. Mandatory -- no exceptions.
-6. **Phase 3b -- REVISE**: Incorporate debate feedback and threat model findings. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
-7. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, pipe `${STEP_7_OUTPUT}` to the TODO file, `csa todo save`.
-8. **Phase 4b -- APPROVE**: Present to user for APPROVE / MODIFY / REJECT.
+5. **Phase 3 -- DEBATE**: Run explicit `csa debate` (tier-2) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`.
+6. **Phase 3.5 -- DEBATE VALIDATION**: Hard-fail if required evidence headers, mapped verdict (`READY|REVISE`), raw verdict (`APPROVE|REVISE|REJECT|UNKNOWN`), or confidence are missing.
+7. **Phase 3b -- REVISE**: Incorporate debate feedback and threat model findings. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
+8. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, write `${STEP_7_OUTPUT}` to TODO file, then `csa todo save`. Save step MUST validate non-empty checkbox tasks, `DONE WHEN` clauses, and language consistency (Chinese mode requires Chinese content).
+9. **Phase 4b -- APPROVE**: Present to user in `${STEP_50_OUTPUT}` for APPROVE / MODIFY / REJECT.
 
 ## Example Usage
 
@@ -77,7 +80,9 @@ csa run --skill mktd "Plan the implementation of <feature description>"
 2. Main agent performed zero file reads during Phase 1.
 3. TODO draft synthesized with executor tags and checkbox items.
 4. Threat model completed for all new API surfaces.
-5. Adversarial debate completed with at least one exchange.
-6. TODO revised to incorporate debate feedback and threat model findings.
-7. TODO saved via `csa todo create` + `csa todo save` with branch association.
-8. User presented with plan for approval decision.
+5. Adversarial debate completed via explicit `csa debate`.
+6. Debate evidence packet validated (includes mapped verdict, raw verdict, and confidence).
+7. TODO revised to incorporate debate feedback and threat model findings.
+8. TODO saved via `csa todo create` + `csa todo save` with branch association.
+9. Save gate validated task completeness (`- [ ] ...`, `DONE WHEN`) and language consistency.
+10. User presented with plan for approval decision in resolved language.
