@@ -2,6 +2,7 @@
 
 pub mod cgroup;
 pub mod guard;
+pub mod memory_balloon;
 pub mod monitor;
 pub mod rlimit;
 pub mod sandbox;
