@@ -266,9 +266,10 @@ fn test_build_command_gemini_adds_include_directories_from_env() {
         .filter(|arg| arg.as_str() == "--include-directories")
         .count();
     assert_eq!(
-        include_flag_count, 2,
-        "Expected deduplicated include directories from env"
+        include_flag_count, 3,
+        "Expected execution dir + deduplicated include directories from env"
     );
+    assert!(args.contains(&"/tmp/test-project".to_string()));
     assert!(args.contains(&"/tmp/one".to_string()));
     assert!(args.contains(&"/tmp/two".to_string()));
 }
@@ -299,7 +300,34 @@ fn test_build_command_gemini_supports_fallback_include_directories_key() {
         args.contains(&"--include-directories".to_string()),
         "Expected --include-directories when fallback env key is set"
     );
+    assert!(args.contains(&"/tmp/test-project".to_string()));
     assert!(args.contains(&"/tmp/fallback".to_string()));
+}
+
+#[test]
+fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let temp = tempfile::tempdir().expect("tempdir");
+    let file_path = temp.path().join("sample.txt");
+    std::fs::write(&file_path, "ok").expect("write fixture");
+    let prompt = format!("Read and patch {}", file_path.display());
+
+    let (cmd, stdin_data) = exec.build_command(&prompt, None, &session, None);
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(args.contains(&"--include-directories".to_string()));
+    assert!(args.contains(&"/tmp/test-project".to_string()));
+    assert!(args.contains(&temp.path().to_string_lossy().to_string()));
 }
 
 #[test]

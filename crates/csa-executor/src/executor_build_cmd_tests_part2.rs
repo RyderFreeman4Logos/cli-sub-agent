@@ -436,9 +436,10 @@ fn test_build_execute_in_command_gemini_adds_include_directories_from_env() {
         .filter(|arg| arg.as_str() == "--include-directories")
         .count();
     assert_eq!(
-        include_flag_count, 2,
-        "Gemini execute_in should receive both include directories"
+        include_flag_count, 3,
+        "Gemini execute_in should receive work_dir and both include directories"
     );
+    assert!(args.contains(&"/tmp/test-project".to_string()));
     assert!(args.contains(&"/tmp/a".to_string()));
     assert!(args.contains(&"/tmp/b".to_string()));
 }

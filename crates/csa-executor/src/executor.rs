@@ -7,6 +7,7 @@ use csa_process::{ExecutionResult, StreamMode};
 use csa_session::state::{MetaSessionState, ToolState};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::process::Command;
 
@@ -320,7 +321,11 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
-        let gemini_include_directories = Self::gemini_include_directories(extra_env);
+        let gemini_include_directories = Self::gemini_include_directories(
+            extra_env,
+            prompt,
+            Some(Path::new(&session.project_path)),
+        );
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
         self.append_tool_args_with_transport(
             &mut cmd,
@@ -456,7 +461,8 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
-        let gemini_include_directories = Self::gemini_include_directories(extra_env);
+        let gemini_include_directories =
+            Self::gemini_include_directories(extra_env, prompt, Some(work_dir));
         self.append_yolo_args(&mut cmd);
         self.append_model_args(&mut cmd);
         if matches!(self, Self::GeminiCli { .. }) {
@@ -703,31 +709,93 @@ impl Executor {
         }
     }
 
-    fn gemini_include_directories(extra_env: Option<&HashMap<String, String>>) -> Vec<String> {
-        let Some(env) = extra_env else {
-            return Vec::new();
-        };
-        let raw = Self::GEMINI_INCLUDE_DIRS_ENV_KEYS
-            .iter()
-            .find_map(|key| env.get(*key))
-            .map(String::as_str)
-            .unwrap_or_default();
-        if raw.trim().is_empty() {
-            return Vec::new();
+    fn gemini_include_directories(
+        extra_env: Option<&HashMap<String, String>>,
+        prompt: &str,
+        execution_dir: Option<&Path>,
+    ) -> Vec<String> {
+        let mut directories = Vec::new();
+
+        if let Some(dir) = execution_dir {
+            Self::push_unique_directory_string(&mut directories, dir.to_string_lossy().as_ref());
         }
 
+        if let Some(env) = extra_env {
+            let raw = Self::GEMINI_INCLUDE_DIRS_ENV_KEYS
+                .iter()
+                .find_map(|key| env.get(*key))
+                .map(String::as_str)
+                .unwrap_or_default();
+
+            for entry in raw.split([',', '\n']) {
+                let directory = entry.trim();
+                if directory.is_empty() {
+                    continue;
+                }
+                if Path::new(directory).is_relative() {
+                    if let Some(base) = execution_dir {
+                        let combined = base.join(directory);
+                        Self::push_unique_directory_string(
+                            &mut directories,
+                            combined.to_string_lossy().as_ref(),
+                        );
+                    } else {
+                        Self::push_unique_directory_string(&mut directories, directory);
+                    }
+                    continue;
+                }
+                Self::push_unique_directory_string(&mut directories, directory);
+            }
+        }
+
+        for directory in Self::gemini_prompt_directories(prompt) {
+            Self::push_unique_directory_string(&mut directories, &directory);
+        }
+
+        directories
+    }
+
+    fn gemini_prompt_directories(prompt: &str) -> Vec<String> {
         let mut directories = Vec::new();
-        for entry in raw.split([',', '\n']) {
-            let directory = entry.trim();
-            if directory.is_empty() {
+        for raw in prompt.split_whitespace() {
+            let token = raw.trim_matches(|c: char| {
+                matches!(
+                    c,
+                    '"' | '\'' | '`' | ',' | ';' | ':' | '.' | '(' | ')' | '[' | ']' | '{' | '}'
+                        | '<' | '>'
+                )
+            });
+            if token.is_empty() || token.contains("://") || !token.starts_with('/') {
                 continue;
             }
-            if directories.iter().any(|existing| existing == directory) {
+            let path = Path::new(token);
+            if !path.is_absolute() || !path.exists() {
                 continue;
             }
-            directories.push(directory.to_string());
+            let dir = if path.is_dir() {
+                path.to_path_buf()
+            } else if let Some(parent) = path.parent() {
+                parent.to_path_buf()
+            } else {
+                continue;
+            };
+            let normalized = fs::canonicalize(&dir).unwrap_or(dir);
+            Self::push_unique_directory_string(
+                &mut directories,
+                normalized.to_string_lossy().as_ref(),
+            );
         }
         directories
+    }
+
+    fn push_unique_directory_string(directories: &mut Vec<String>, directory: &str) {
+        if directory.is_empty() {
+            return;
+        }
+        if directories.iter().any(|existing| existing == directory) {
+            return;
+        }
+        directories.push(directory.to_string());
     }
 
     fn append_gemini_include_directories_args(cmd: &mut Command, directories: &[String]) {
