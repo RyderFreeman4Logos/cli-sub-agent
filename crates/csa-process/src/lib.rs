@@ -98,11 +98,16 @@ impl Default for SpawnOptions {
 
 #[derive(Debug, Clone, Copy)]
 enum PreExecPolicy {
-    SetsidOnly,
-    SetsidAndRlimits {
+    /// Call `setsid()` only — no additional resource enforcement.
+    Setsid,
+    /// Call `setsid()` + apply `RLIMIT_NPROC` (and ignore memory_max_mb).
+    Rlimits {
         memory_max_mb: u64,
         pids_max: Option<u64>,
     },
+    /// Call `setsid()` + raise OOM score.  Used when no cgroup or rlimit is
+    /// available, as a last-resort signal to the kernel OOM killer.
+    OomAdj,
 }
 
 /// Spawn a tool process without waiting for it to complete.
@@ -132,7 +137,7 @@ pub async fn spawn_tool_with_options(
     stdin_data: Option<Vec<u8>>,
     spawn_options: SpawnOptions,
 ) -> Result<tokio::process::Child> {
-    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::SetsidOnly, spawn_options).await
+    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::Setsid, spawn_options).await
 }
 
 async fn spawn_tool_with_pre_exec(
@@ -157,12 +162,16 @@ async fn spawn_tool_with_pre_exec(
         cmd.pre_exec(move || {
             libc::setsid();
             match pre_exec_policy {
-                PreExecPolicy::SetsidOnly => Ok(()),
-                PreExecPolicy::SetsidAndRlimits {
+                PreExecPolicy::Setsid => Ok(()),
+                PreExecPolicy::Rlimits {
                     memory_max_mb,
                     pids_max,
                 } => csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
                     .map_err(std::io::Error::other),
+                PreExecPolicy::OomAdj => {
+                    csa_resource::rlimit::apply_oom_score_adj()
+                        .map_err(std::io::Error::other)
+                }
             }
         });
     }
@@ -256,7 +265,7 @@ pub async fn spawn_tool_sandboxed(
             let child = spawn_tool_with_pre_exec(
                 cmd,
                 stdin_data,
-                PreExecPolicy::SetsidAndRlimits {
+                PreExecPolicy::Rlimits {
                     memory_max_mb,
                     pids_max,
                 },
@@ -267,8 +276,14 @@ pub async fn spawn_tool_sandboxed(
             Ok((child, SandboxHandle::Rlimit))
         }
         SandboxCapability::None => {
-            debug!("no sandbox capability detected; spawning without isolation");
-            let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
+            debug!("no sandbox capability detected; applying OOM score adj as fallback");
+            let child = spawn_tool_with_pre_exec(
+                cmd,
+                stdin_data,
+                PreExecPolicy::OomAdj,
+                spawn_options,
+            )
+            .await?;
             Ok((child, SandboxHandle::None))
         }
     }
