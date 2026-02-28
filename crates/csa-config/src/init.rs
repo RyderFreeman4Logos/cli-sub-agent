@@ -234,12 +234,6 @@ pub fn init_project(
             preferences: None,
         }
     } else {
-        let mut initial_estimates = HashMap::new();
-        initial_estimates.insert("gemini-cli".to_string(), 150);
-        initial_estimates.insert("opencode".to_string(), 500);
-        initial_estimates.insert("codex".to_string(), 800);
-        initial_estimates.insert("claude-code".to_string(), 1200);
-
         ProjectConfig {
             schema_version: CURRENT_SCHEMA_VERSION,
             project: ProjectMeta {
@@ -250,7 +244,6 @@ pub fn init_project(
             resources: ResourcesConfig {
                 min_free_memory_mb: 4096,
                 idle_timeout_seconds: 300,
-                initial_estimates,
                 ..Default::default()
             },
             acp: Default::default(),

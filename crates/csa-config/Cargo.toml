@@ -14,6 +14,7 @@ which.workspace = true
 anyhow.workspace = true
 directories.workspace = true
 libc.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
