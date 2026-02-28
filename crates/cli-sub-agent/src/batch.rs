@@ -8,12 +8,12 @@ use std::time::Instant;
 use tokio::task::JoinSet;
 use tracing::{error, info, warn};
 
+use crate::pipeline::{determine_project_root, execute_with_session};
+use crate::run_helpers::build_executor;
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_process::check_tool_installed;
 use csa_resource::{ResourceGuard, ResourceLimits};
-use crate::pipeline::{determine_project_root, execute_with_session};
-use crate::run_helpers::build_executor;
 
 /// Batch configuration loaded from TOML file.
 #[derive(Debug, Deserialize)]

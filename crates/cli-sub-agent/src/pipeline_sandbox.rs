@@ -160,6 +160,42 @@ pub(crate) fn resolve_sandbox_options(
     SandboxResolution::Ok(execute_options)
 }
 
+/// Conditionally inflate and immediately deflate a memory balloon for claude-code.
+///
+/// Pre-warms RAM by `mmap`-ing a large anonymous mapping with `MAP_POPULATE`, forcing
+/// the kernel to swap out other processes.  The balloon is dropped (deflated) right
+/// away so the freed physical pages are available for the tool process about to launch.
+pub(crate) fn maybe_inflate_balloon(tool_name: &str) {
+    use csa_resource::memory_balloon::{MemoryBalloon, should_enable_balloon};
+
+    if tool_name != "claude-code" {
+        return;
+    }
+
+    const BALLOON_SIZE: usize = 1024 * 1024 * 1024; // 1 GiB
+    let mut sys = sysinfo::System::new();
+    sys.refresh_memory();
+    let available_swap = sys.free_swap();
+
+    if !should_enable_balloon(available_swap, BALLOON_SIZE as u64) {
+        return;
+    }
+
+    match MemoryBalloon::inflate(BALLOON_SIZE) {
+        Ok(balloon) => {
+            info!(
+                size_mb = BALLOON_SIZE / 1024 / 1024,
+                "Memory balloon inflated — deflating immediately"
+            );
+            drop(balloon);
+        }
+        Err(e) => {
+            // Balloon is an optimisation; failure is non-fatal.
+            warn!(error = %e, "Memory balloon inflation failed; continuing without pre-warming");
+        }
+    }
+}
+
 /// Record sandbox telemetry in session state (first turn only).
 ///
 /// If sandbox options are present and `session.sandbox_info` is still `None`,

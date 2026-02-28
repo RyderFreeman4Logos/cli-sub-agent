@@ -135,7 +135,10 @@ mod tests {
     #[test]
     fn test_balloon_enable_conditions() {
         // Enough swap.
-        assert!(should_enable_balloon(2 * 1024 * 1024 * 1024, 1024 * 1024 * 1024));
+        assert!(should_enable_balloon(
+            2 * 1024 * 1024 * 1024,
+            1024 * 1024 * 1024
+        ));
 
         // Exactly equal.
         assert!(should_enable_balloon(1024, 1024));

@@ -169,8 +169,7 @@ async fn spawn_tool_with_pre_exec(
                 } => csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
                     .map_err(std::io::Error::other),
                 PreExecPolicy::OomAdj => {
-                    csa_resource::rlimit::apply_oom_score_adj()
-                        .map_err(std::io::Error::other)
+                    csa_resource::rlimit::apply_oom_score_adj().map_err(std::io::Error::other)
                 }
             }
         });
@@ -277,13 +276,9 @@ pub async fn spawn_tool_sandboxed(
         }
         SandboxCapability::None => {
             debug!("no sandbox capability detected; applying OOM score adj as fallback");
-            let child = spawn_tool_with_pre_exec(
-                cmd,
-                stdin_data,
-                PreExecPolicy::OomAdj,
-                spawn_options,
-            )
-            .await?;
+            let child =
+                spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::OomAdj, spawn_options)
+                    .await?;
             Ok((child, SandboxHandle::None))
         }
     }
