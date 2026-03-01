@@ -55,6 +55,8 @@ pub(crate) async fn process_execution_result(
         result,
         &token_usage,
     );
+    // Clear stale interruption markers once a run reaches post-exec.
+    session.termination_reason = None;
     session.last_accessed = chrono::Utc::now();
 
     // Detect compress/compact commands: mark session as Available for reuse
