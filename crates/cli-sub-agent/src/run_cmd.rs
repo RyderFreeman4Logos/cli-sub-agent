@@ -10,7 +10,7 @@ use tempfile::TempDir;
 use tracing::{info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
+use csa_core::types::{OutputFormat, ToolArg, ToolName, ToolSelectionStrategy};
 use csa_executor::structured_output_instructions_for_fork_call;
 use csa_lock::SessionLock;
 use csa_lock::slot::{
@@ -610,6 +610,57 @@ pub(crate) async fn handle_run(
         let exec_result = match exec_result {
             Ok(result) => result,
             Err(e) => {
+                if let Some(signal_exit_code) = signal_interruption_exit_code(&e) {
+                    cleanup_pre_created_fork_session(
+                        &mut pre_created_fork_session_id,
+                        &project_root,
+                    );
+                    let interrupted_session_id = extract_meta_session_id_from_error(&e)
+                        .or_else(|| executed_session_id.clone())
+                        .or_else(|| effective_session_arg.clone());
+                    let signal_name = signal_name_from_exit_code(signal_exit_code);
+
+                    match output_format {
+                        OutputFormat::Text => {
+                            if let Some(ref session_id) = interrupted_session_id {
+                                let resume_hint = build_resume_hint_command(
+                                    session_id,
+                                    current_tool,
+                                    skill.as_deref(),
+                                );
+                                eprintln!(
+                                    "csa run interrupted by {} (exit {}). Resume with:\n  {}",
+                                    signal_name, signal_exit_code, resume_hint
+                                );
+                            } else {
+                                eprintln!(
+                                    "csa run interrupted by {} (exit {}). Resume by reusing the interrupted session with `csa run --session <session-id> ...`.",
+                                    signal_name, signal_exit_code
+                                );
+                            }
+                        }
+                        OutputFormat::Json => {
+                            let resume_hint = interrupted_session_id.as_ref().map(|session_id| {
+                                build_resume_hint_command(
+                                    session_id,
+                                    current_tool,
+                                    skill.as_deref(),
+                                )
+                            });
+                            let json_error = serde_json::json!({
+                                "error": "interrupted",
+                                "signal": signal_name,
+                                "exit_code": signal_exit_code,
+                                "session_id": interrupted_session_id,
+                                "resume_hint": resume_hint,
+                                "message": e.to_string()
+                            });
+                            println!("{}", serde_json::to_string_pretty(&json_error)?);
+                        }
+                    }
+
+                    return Ok(signal_exit_code);
+                }
                 if runtime_fallback_enabled
                     && runtime_fallback_attempts < max_runtime_fallback_attempts
                 {
@@ -799,6 +850,62 @@ fn detect_effective_repo(project_root: &Path) -> Option<String> {
         return Some(rest.to_string());
     }
     Some(trimmed.to_string())
+}
+
+fn signal_interruption_exit_code(error: &anyhow::Error) -> Option<i32> {
+    for cause in error.chain() {
+        let message = cause.to_string().to_ascii_lowercase();
+        if message.contains("sigterm") {
+            return Some(143);
+        }
+        if message.contains("sigint") {
+            return Some(130);
+        }
+    }
+    None
+}
+
+fn signal_name_from_exit_code(exit_code: i32) -> &'static str {
+    match exit_code {
+        143 => "SIGTERM",
+        130 => "SIGINT",
+        _ => "signal",
+    }
+}
+
+fn extract_meta_session_id_from_error(error: &anyhow::Error) -> Option<String> {
+    const MARKER: &str = "meta_session_id=";
+    for cause in error.chain() {
+        let message = cause.to_string();
+        let Some(idx) = message.find(MARKER) else {
+            continue;
+        };
+        let suffix = &message[idx + MARKER.len()..];
+        let session_id: String = suffix
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric())
+            .collect();
+        if !session_id.is_empty() {
+            return Some(session_id);
+        }
+    }
+    None
+}
+
+fn build_resume_hint_command(session_id: &str, tool: ToolName, skill: Option<&str>) -> String {
+    match skill {
+        Some(skill_name) => format!(
+            "csa run --session {} --tool {} --skill {}",
+            session_id,
+            tool.as_str(),
+            skill_name
+        ),
+        None => format!(
+            "csa run --session {} --tool {} <same prompt>",
+            session_id,
+            tool.as_str()
+        ),
+    }
 }
 
 #[cfg(test)]

@@ -5,7 +5,7 @@
 //! - Executor building and tool installation checks
 //! - Global slot acquisition with concurrency limits
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tracing::{error, info, warn};
 
@@ -760,7 +760,8 @@ pub(crate) async fn execute_with_session_and_meta(
         &mut cleanup_guard,
         execution_start_time,
     )
-    .await?;
+    .await
+    .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;
 
     // Tool execution completed — defuse cleanup guard (preserve artifacts on later errors).
     if let Some(ref mut guard) = cleanup_guard {
