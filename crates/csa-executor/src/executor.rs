@@ -643,7 +643,7 @@ impl Executor {
                 model_override,
                 thinking_budget,
             } => {
-                if let Some(model) = model_override {
+                if let Some(model) = Self::effective_gemini_model_override(model_override) {
                     cmd.arg("-m").arg(model);
                 }
                 if let Some(budget) = thinking_budget {
@@ -700,6 +700,15 @@ impl Executor {
                 }
             }
         }
+    }
+
+    /// `"default"` means "delegate model routing to gemini-cli", so omit `-m`.
+    fn effective_gemini_model_override(model_override: &Option<String>) -> Option<&str> {
+        model_override
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.eq_ignore_ascii_case("default"))
+            .filter(|model| !model.is_empty())
     }
 
     fn codex_notify_suppression_args(env: &HashMap<String, String>) -> Vec<String> {

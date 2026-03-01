@@ -87,10 +87,10 @@ pub enum GateMode {
 pub struct ReviewConfig {
     /// Review tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
     ///
-    /// In `auto` mode, the review tool is the heterogeneous counterpart of the parent:
-    /// - Parent is `claude-code` → review with `codex`
-    /// - Parent is `codex` → review with `claude-code`
-    /// - Otherwise → error (user must configure explicitly)
+    /// In `auto` mode, CSA prefers a heterogeneous tool (different model family)
+    /// from the detected parent tool, ordered by effective tool priority and
+    /// filtered by enabled/eligible tools. Legacy counterpart mapping
+    /// (`claude-code` <-> `codex`) is retained as a compatibility fallback.
     #[serde(default = "default_review_tool")]
     pub tool: String,
     /// Review enforcement level for quality gates.
@@ -116,10 +116,10 @@ impl Default for ReviewConfig {
 pub struct DebateConfig {
     /// Debate tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
     ///
-    /// In `auto` mode, the debate tool is the heterogeneous counterpart of the parent:
-    /// - Parent is `claude-code` → debate with `codex`
-    /// - Parent is `codex` → debate with `claude-code`
-    /// - Otherwise → error (user must configure explicitly)
+    /// In `auto` mode, CSA prefers a heterogeneous tool (different model family)
+    /// from the detected parent tool, ordered by effective tool priority and
+    /// filtered by enabled/eligible tools. Legacy counterpart mapping
+    /// (`claude-code` <-> `codex`) is retained as a compatibility fallback.
     #[serde(default = "default_debate_tool")]
     pub tool: String,
     /// Default absolute wall-clock timeout (seconds) for `csa debate`.

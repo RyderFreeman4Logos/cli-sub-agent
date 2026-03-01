@@ -7,6 +7,17 @@ use std::collections::HashMap;
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
+    for tool in csa_config::global::all_known_tools() {
+        tool_map.insert(
+            tool.as_str().to_string(),
+            ToolConfig {
+                enabled: false,
+                restrictions: None,
+                suppress_notify: true,
+                ..Default::default()
+            },
+        );
+    }
     for tool in tools {
         tool_map.insert(
             (*tool).to_string(),
@@ -39,7 +50,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
 #[test]
 fn resolve_debate_tool_prefers_cli_override() {
     let global = GlobalConfig::default();
-    let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let (tool, mode) = resolve_debate_tool(
         Some(ToolName::Codex),
         Some(&cfg),
@@ -238,7 +249,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
 }
 
 #[test]
-fn resolve_debate_tool_ignores_unknown_priority_entries() {
+fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection() {
     let mut global = GlobalConfig::default();
     global.preferences.tool_priority = vec!["codexx".to_string()];
 
@@ -257,7 +268,7 @@ fn resolve_debate_tool_ignores_unknown_priority_entries() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::ClaudeCode));
+    assert!(matches!(tool, ToolName::Opencode));
     assert_eq!(mode, DebateMode::Heterogeneous);
 }
 
