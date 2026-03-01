@@ -61,7 +61,10 @@ pub enum SandboxHandle {
 pub struct ExecutionResult {
     /// Combined stdout output.
     pub output: String,
-    /// Captured stderr output (tee'd to parent stderr in real-time).
+    /// Captured stderr output.
+    ///
+    /// In `StreamMode::TeeToStderr`, stderr is also forwarded to parent stderr
+    /// in real-time. In `StreamMode::BufferOnly`, stderr is captured only.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub stderr_output: String,
     /// Last non-empty line or truncated output (max 200 chars).
@@ -463,7 +466,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                 result = stderr_reader.read(&mut stderr_buf), if !stderr_done => {
                     match result {
                         Ok(0) => {
-                            flush_stderr_buf(&mut stderr_line_buf, &mut stderr_output);
+                            flush_stderr_buf(
+                                &mut stderr_line_buf,
+                                &mut stderr_output,
+                                stream_mode,
+                            );
                             stderr_done = true;
                         }
                         Ok(n) => {
@@ -477,10 +484,15 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 &chunk,
                                 &mut stderr_line_buf,
                                 &mut stderr_output,
+                                stream_mode,
                             );
                         }
                         Err(_) => {
-                            flush_stderr_buf(&mut stderr_line_buf, &mut stderr_output);
+                            flush_stderr_buf(
+                                &mut stderr_line_buf,
+                                &mut stderr_output,
+                                stream_mode,
+                            );
                             stderr_done = true;
                         }
                     }
@@ -726,19 +738,28 @@ fn flush_line_buf(line_buf: &mut String, output: &mut String, stream_mode: Strea
 }
 
 /// Accumulate stderr chunk, flushing complete lines in real-time.
-fn accumulate_and_flush_stderr(chunk: &str, line_buf: &mut String, stderr_output: &mut String) {
+fn accumulate_and_flush_stderr(
+    chunk: &str,
+    line_buf: &mut String,
+    stderr_output: &mut String,
+    stream_mode: StreamMode,
+) {
     line_buf.push_str(chunk);
     while let Some(newline_pos) = line_buf.find('\n') {
         let line: String = line_buf.drain(..=newline_pos).collect();
-        eprint!("{line}");
+        if stream_mode == StreamMode::TeeToStderr {
+            eprint!("{line}");
+        }
         stderr_output.push_str(&line);
     }
 }
 
 /// Flush any remaining partial stderr line on EOF.
-fn flush_stderr_buf(line_buf: &mut String, stderr_output: &mut String) {
+fn flush_stderr_buf(line_buf: &mut String, stderr_output: &mut String, stream_mode: StreamMode) {
     if !line_buf.is_empty() {
-        eprint!("{line_buf}");
+        if stream_mode == StreamMode::TeeToStderr {
+            eprint!("{line_buf}");
+        }
         stderr_output.push_str(line_buf);
         line_buf.clear();
     }

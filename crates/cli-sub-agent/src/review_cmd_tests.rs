@@ -81,9 +81,10 @@ fn resolve_review_tool_prefers_cli_override() {
 }
 
 #[test]
-fn resolve_review_tool_uses_global_auto_with_enabled_counterpart() {
+fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
     let global = GlobalConfig::default();
-    // Enable codex so heterogeneous_counterpart(claude-code) → codex succeeds
+    // Parent=claude-code (Anthropic family), so first heterogeneous candidate
+    // in default order is gemini-cli.
     let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let tool = resolve_review_tool(
         None,
@@ -94,15 +95,15 @@ fn resolve_review_tool_uses_global_auto_with_enabled_counterpart() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::Codex));
+    assert!(matches!(tool, ToolName::GeminiCli));
 }
 
 #[test]
-fn resolve_review_tool_skips_disabled_counterpart_from_global_auto() {
+fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
     let global = GlobalConfig::default();
-    // Only gemini-cli enabled — codex is disabled
+    // Only gemini-cli enabled — auto-selection should still succeed.
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
-    let err = resolve_review_tool(
+    let tool = resolve_review_tool(
         None,
         Some(&cfg),
         &global,
@@ -110,11 +111,8 @@ fn resolve_review_tool_skips_disabled_counterpart_from_global_auto() {
         std::path::Path::new("/tmp/test-project"),
         false,
     )
-    .unwrap_err();
-    assert!(
-        err.to_string()
-            .contains("AUTO review tool selection failed")
-    );
+    .unwrap();
+    assert!(matches!(tool, ToolName::GeminiCli));
 }
 
 #[test]
@@ -225,7 +223,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
 }
 
 #[test]
-fn resolve_review_tool_ignores_unknown_priority_entries() {
+fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection() {
     let mut global = GlobalConfig::default();
     global.preferences.tool_priority = vec!["codexx".to_string()];
 
@@ -245,7 +243,7 @@ fn resolve_review_tool_ignores_unknown_priority_entries() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::ClaudeCode));
+    assert!(matches!(tool, ToolName::Opencode));
 }
 
 // --- derive_scope tests ---

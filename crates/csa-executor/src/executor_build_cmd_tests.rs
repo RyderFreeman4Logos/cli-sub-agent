@@ -240,6 +240,32 @@ fn test_build_command_gemini_args_structure() {
 }
 
 #[test]
+fn test_build_command_gemini_default_model_omits_model_flag() {
+    let exec = Executor::GeminiCli {
+        model_override: Some("default".to_string()),
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let (cmd, stdin_data) = exec.build_command("analyze code", None, &session, None);
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.contains(&"-m".to_string()),
+        "\"default\" model should omit -m and let gemini-cli auto-route"
+    );
+    assert!(
+        !args.contains(&"default".to_string()),
+        "\"default\" sentinel should not be passed as a literal model"
+    );
+}
+
+#[test]
 fn test_build_command_gemini_adds_include_directories_from_env() {
     let exec = Executor::GeminiCli {
         model_override: None,
