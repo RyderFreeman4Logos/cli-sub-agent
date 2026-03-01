@@ -776,7 +776,19 @@ fn detect_effective_repo(project_root: &Path) -> Option<String> {
         return None;
     }
 
-    let trimmed = raw.trim_end_matches(".git");
+    // Strip credentials from HTTPS/SSH URLs (e.g. https://user:token@github.com/repo)
+    let sanitized = if let Some(pos) = raw.find("://") {
+        let (scheme, rest) = raw.split_at(pos + 3);
+        if let Some(at_pos) = rest.find('@') {
+            format!("{}{}", scheme, &rest[at_pos + 1..])
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+
+    let trimmed = sanitized.trim_end_matches(".git");
     if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
         return Some(rest.to_string());
     }

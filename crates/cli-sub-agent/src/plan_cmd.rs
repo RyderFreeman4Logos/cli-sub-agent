@@ -657,7 +657,7 @@ async fn execute_plan_with_journal(
         for (key, value) in assignment_markers {
             vars.insert(key, value);
         }
-        if !is_failure {
+        if !is_failure && !result.skipped {
             completed_steps.insert(step.id);
         }
         run_ctx.journal.vars = vars.clone();
