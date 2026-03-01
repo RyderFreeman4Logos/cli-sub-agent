@@ -432,3 +432,29 @@ fn build_resume_hint_command_includes_skill_when_present() {
         "csa run --session 01KJTESTSIGTERMABCDE12345 --tool codex --skill pr-codex-bot"
     );
 }
+
+#[test]
+fn skill_session_description_uses_stable_prefix() {
+    assert_eq!(skill_session_description("dev2merge"), "skill:dev2merge");
+}
+
+#[test]
+fn session_matches_interrupted_skill_requires_signal_and_skill_tag() {
+    let mut session = test_session(
+        "01KJTESTSIGTERMABCDE12345",
+        Utc.with_ymd_and_hms(2026, 3, 1, 13, 10, 0)
+            .single()
+            .unwrap(),
+        SessionPhase::Active,
+    );
+    session.description = Some(skill_session_description("dev2merge"));
+    session.termination_reason = Some("sigterm".to_string());
+    assert!(session_matches_interrupted_skill(&session, "dev2merge"));
+
+    session.termination_reason = None;
+    assert!(!session_matches_interrupted_skill(&session, "dev2merge"));
+
+    session.termination_reason = Some("sigterm".to_string());
+    session.description = Some(skill_session_description("mktd"));
+    assert!(!session_matches_interrupted_skill(&session, "dev2merge"));
+}

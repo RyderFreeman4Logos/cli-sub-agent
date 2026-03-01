@@ -163,6 +163,7 @@ pub(crate) async fn handle_run(
     let skill_agent = resolved_skill.as_ref().and_then(|sk| sk.agent_config());
     let thinking = skill_res.thinking;
     let model = skill_res.model;
+    let skill_session_tag = skill.as_deref().map(skill_session_description);
 
     let strategy = skill_res.tool.unwrap_or(ToolArg::Auto).into_strategy();
     let idle_timeout_seconds = if no_idle_timeout {
@@ -187,6 +188,21 @@ pub(crate) async fn handle_run(
     let resolved_model_spec = strategy_result.model_spec;
     let resolved_model = strategy_result.model;
     let resolved_tool = strategy_result.tool;
+
+    if session_arg.is_none()
+        && !is_fork
+        && !fork_call
+        && !ephemeral
+        && let Some(skill_name) = skill.as_deref()
+        && let Some(interrupted_session_id) =
+            find_recent_interrupted_skill_session(&project_root, skill_name, &resolved_tool)
+    {
+        eprintln!(
+            "Auto-resuming interrupted skill session {} for '{}'.",
+            interrupted_session_id, skill_name
+        );
+        session_arg = Some(interrupted_session_id);
+    }
 
     // Auto seed fork: if no explicit fork/session requested, try to fork from a warm seed
     let seed_result = try_auto_seed_fork(
@@ -552,7 +568,7 @@ pub(crate) async fn handle_run(
                     ))
                 })
             } else {
-                description.clone()
+                description.clone().or_else(|| skill_session_tag.clone())
             };
             let effective_parent = if let Some(ref fork_res) = fork_resolution {
                 Some(fork_res.source_session_id.clone())
@@ -906,6 +922,59 @@ fn build_resume_hint_command(session_id: &str, tool: ToolName, skill: Option<&st
             tool.as_str()
         ),
     }
+}
+
+fn skill_session_description(skill_name: &str) -> String {
+    format!("skill:{skill_name}")
+}
+
+fn session_matches_interrupted_skill(
+    session: &csa_session::MetaSessionState,
+    skill_name: &str,
+) -> bool {
+    let expected = skill_session_description(skill_name);
+    let description_matches = session.description.as_deref() == Some(expected.as_str());
+    let terminated_by_signal = matches!(
+        session.termination_reason.as_deref(),
+        Some("sigterm" | "sigint")
+    );
+    description_matches && terminated_by_signal
+}
+
+fn find_recent_interrupted_skill_session(
+    project_root: &Path,
+    skill_name: &str,
+    tool: &ToolName,
+) -> Option<String> {
+    let sessions = csa_session::find_sessions(
+        project_root,
+        None,
+        Some("run"),
+        None,
+        Some(&[tool.as_str()]),
+    )
+    .ok()?;
+
+    for session in sessions {
+        if !session_matches_interrupted_skill(&session, skill_name) {
+            continue;
+        }
+
+        match csa_session::load_result(project_root, &session.meta_session_id) {
+            Ok(Some(result))
+                if result.status == "interrupted"
+                    || result.exit_code == 130
+                    || result.exit_code == 143 =>
+            {
+                return Some(session.meta_session_id.clone());
+            }
+            Ok(None) => return Some(session.meta_session_id.clone()),
+            Ok(Some(_)) => continue,
+            Err(_) => return Some(session.meta_session_id.clone()),
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
