@@ -152,11 +152,23 @@ fn trim_prompt_path_token(raw: &str) -> String {
 }
 
 fn push_unique_directory_string(directories: &mut Vec<String>, directory: &str) {
-    if directory.is_empty() {
+    let trimmed = directory.trim();
+    if trimmed.is_empty() {
         return;
     }
-    if directories.iter().any(|existing| existing == directory) {
+
+    let path = Path::new(trimmed);
+    // Never inject filesystem root as an include directory. In practice this
+    // can explode workspace scan scope and trigger avoidable memory pressure.
+    if is_filesystem_root(path) {
         return;
     }
-    directories.push(directory.to_string());
+    if directories.iter().any(|existing| existing == trimmed) {
+        return;
+    }
+    directories.push(trimmed.to_string());
+}
+
+fn is_filesystem_root(path: &Path) -> bool {
+    path.is_absolute() && path.parent().is_none()
 }

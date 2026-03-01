@@ -190,6 +190,16 @@ fn memory_max_heavyweight_gets_profile_default() {
 }
 
 #[test]
+fn memory_max_gemini_cli_defaults_to_none() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.sandbox_memory_max_mb("gemini-cli"),
+        None,
+        "gemini-cli should not force a hard memory_max_mb default"
+    );
+}
+
+#[test]
 fn memory_max_lightweight_gets_none() {
     let cfg = empty_config();
     assert_eq!(
@@ -230,6 +240,16 @@ fn memory_swap_heavyweight_gets_profile_default() {
         cfg.sandbox_memory_swap_max_mb("claude-code"),
         Some(0),
         "Heavyweight profile should provide 0 MB swap default (no swap)"
+    );
+}
+
+#[test]
+fn memory_swap_gemini_cli_defaults_to_none() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.sandbox_memory_swap_max_mb("gemini-cli"),
+        None,
+        "gemini-cli should not force a memory_swap_max_mb default"
     );
 }
 
@@ -506,6 +526,16 @@ fn node_heap_limit_heavyweight_defaults_to_2048() {
     );
 }
 
+#[test]
+fn node_heap_limit_gemini_cli_defaults_to_none() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.sandbox_node_heap_limit_mb("gemini-cli"),
+        None,
+        "gemini-cli should not inject NODE_OPTIONS heap limit by default"
+    );
+}
+
 // ── default_sandbox_for_tool pub API ───────────────────────────────────
 
 #[test]
@@ -531,6 +561,20 @@ fn default_sandbox_for_tool_codex() {
     assert_eq!(
         opts.setting_sources, None,
         "Lightweight should default to None (load everything)"
+    );
+    assert_eq!(opts.node_heap_limit_mb, None);
+}
+
+#[test]
+fn default_sandbox_for_tool_gemini_cli_uses_unbounded_defaults() {
+    let opts = default_sandbox_for_tool("gemini-cli");
+    assert_eq!(opts.enforcement, EnforcementMode::BestEffort);
+    assert_eq!(opts.memory_max_mb, None);
+    assert_eq!(opts.memory_swap_max_mb, None);
+    assert_eq!(
+        opts.setting_sources,
+        Some(vec![]),
+        "Gemini remains heavyweight for setting source defaults"
     );
     assert_eq!(opts.node_heap_limit_mb, None);
 }

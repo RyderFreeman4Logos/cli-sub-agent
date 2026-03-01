@@ -1,6 +1,59 @@
 use super::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use weave::compiler::VariableDecl;
+
+#[test]
+fn safe_plan_name_normalizes_non_alphanumeric_characters() {
+    assert_eq!(safe_plan_name("Dev2Merge Workflow"), "dev2merge_workflow");
+    assert_eq!(safe_plan_name("mktd@2026!"), "mktd_2026");
+}
+
+#[test]
+fn load_plan_resume_context_reads_running_journal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![VariableDecl {
+            name: "FEATURE".into(),
+            default: Some("default".into()),
+        }],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("test.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "test".into(),
+        workflow_path: normalize_path(&workflow_path),
+        status: "running".into(),
+        vars: HashMap::from([
+            ("FEATURE".to_string(), "from-journal".to_string()),
+            ("STEP_1_OUTPUT".to_string(), "cached".to_string()),
+        ]),
+        completed_steps: vec![1, 2],
+        last_error: None,
+    };
+    persist_plan_journal(&journal_path, &journal).unwrap();
+
+    let cli_vars = HashMap::from([("FEATURE".to_string(), "from-cli".to_string())]);
+    let ctx = load_plan_resume_context(&plan, &workflow_path, &journal_path, &cli_vars).unwrap();
+
+    assert!(ctx.resumed);
+    assert!(ctx.completed_steps.contains(&1));
+    assert!(ctx.completed_steps.contains(&2));
+    assert_eq!(
+        ctx.initial_vars.get("FEATURE").map(String::as_str),
+        Some("from-cli")
+    );
+    assert_eq!(
+        ctx.initial_vars.get("STEP_1_OUTPUT").map(String::as_str),
+        Some("cached")
+    );
+}
 
 #[test]
 fn parse_variables_uses_defaults() {

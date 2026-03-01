@@ -39,6 +39,33 @@ fn profile_defaults(profile: ToolResourceProfile) -> ProfileDefaults {
     }
 }
 
+fn default_memory_max_mb_for_tool(tool: &str) -> Option<u64> {
+    if tool == "gemini-cli" {
+        // Gemini CLI workloads are highly variable. A hard 2GB default often
+        // fails in real projects before useful output is produced.
+        return None;
+    }
+    profile_defaults(default_profile(tool)).memory_max_mb
+}
+
+fn default_memory_swap_max_mb_for_tool(tool: &str) -> Option<u64> {
+    if tool == "gemini-cli" {
+        return None;
+    }
+    profile_defaults(default_profile(tool)).memory_swap_max_mb
+}
+
+fn default_node_heap_limit_mb_for_tool(tool: &str) -> Option<u64> {
+    if tool == "gemini-cli" {
+        // Let gemini-cli decide Node heap sizing unless user explicitly pins it.
+        return None;
+    }
+    match default_profile(tool) {
+        ToolResourceProfile::Heavyweight => Some(2048),
+        _ => None,
+    }
+}
+
 impl ProjectConfig {
     /// Resolve the resource profile for a tool.
     ///
@@ -101,7 +128,7 @@ impl ProjectConfig {
             .get(tool)
             .and_then(|t| t.memory_max_mb)
             .or(self.resources.memory_max_mb)
-            .or_else(|| profile_defaults(default_profile(tool)).memory_max_mb)
+            .or_else(|| default_memory_max_mb_for_tool(tool))
     }
 
     /// Resolve memory_swap_max_mb for a tool.
@@ -115,7 +142,7 @@ impl ProjectConfig {
             .get(tool)
             .and_then(|t| t.memory_swap_max_mb)
             .or(self.resources.memory_swap_max_mb)
-            .or_else(|| profile_defaults(default_profile(tool)).memory_swap_max_mb)
+            .or_else(|| default_memory_swap_max_mb_for_tool(tool))
     }
 
     /// Resolve node_heap_limit_mb: tool-level override > project resources > profile default > None.
@@ -124,10 +151,7 @@ impl ProjectConfig {
             .get(tool)
             .and_then(|t| t.node_heap_limit_mb)
             .or(self.resources.node_heap_limit_mb)
-            .or_else(|| match default_profile(tool) {
-                ToolResourceProfile::Heavyweight => Some(2048),
-                _ => None,
-            })
+            .or_else(|| default_node_heap_limit_mb_for_tool(tool))
     }
 
     /// Resolve pids_max from project resources config.
@@ -229,17 +253,14 @@ pub fn default_sandbox_for_tool(tool: &str) -> DefaultSandboxOptions {
     let defaults = profile_defaults(profile);
     DefaultSandboxOptions {
         enforcement: defaults.enforcement,
-        memory_max_mb: defaults.memory_max_mb,
-        memory_swap_max_mb: defaults.memory_swap_max_mb,
+        memory_max_mb: default_memory_max_mb_for_tool(tool),
+        memory_swap_max_mb: default_memory_swap_max_mb_for_tool(tool),
         setting_sources: if matches!(profile, ToolResourceProfile::Heavyweight) {
             Some(vec![])
         } else {
             None
         },
-        node_heap_limit_mb: match profile {
-            ToolResourceProfile::Heavyweight => Some(2048),
-            _ => None,
-        },
+        node_heap_limit_mb: default_node_heap_limit_mb_for_tool(tool),
     }
 }
 
