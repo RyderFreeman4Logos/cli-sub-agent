@@ -118,12 +118,12 @@ Verify no untracked files remain.
 git add -A
 if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'; then
   STAGED_FILES="$(git diff --cached --name-only)"
-  if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)Cargo\.toml$|(^|/)package\.json$|(^|/)pnpm-workspace\.yaml$|(^|/)go\.mod$'; then
+  if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)Cargo[.]toml$|(^|/)package[.]json$|(^|/)pnpm-workspace[.]yaml$|(^|/)go[.]mod$'; then
     echo "INFO: Dependency manifest change detected; preserving staged lockfiles."
-  elif ! printf '%s\n' "${STAGED_FILES}" | grep -Ev '(^|/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$' | grep -q .; then
+  elif ! printf '%s\n' "${STAGED_FILES}" | grep -Ev '(^|/)(Cargo[.]lock|package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|go[.]sum)$' | grep -q .; then
     echo "INFO: Lockfile-only staged change detected; preserving staged lockfiles."
   else
-    MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | awk '$0 ~ /(^|\/)(Cargo\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|go\.sum)$/ { print }')"
+    MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | grep -E '(^|/)(Cargo[.]lock|package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|go[.]sum)$' || true)"
     if [ -n "${MATCHED_LOCKFILES}" ]; then
       printf '%s\n' "${MATCHED_LOCKFILES}" | while read -r lockpath; do
         echo "INFO: Unstaging incidental lockfile change: ${lockpath}"
