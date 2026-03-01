@@ -405,6 +405,59 @@ fn format_debate_stdout_summary_shows_degradation_for_same_model() {
 }
 
 #[test]
+fn format_debate_stdout_text_includes_summary_and_transcript() {
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Needs stronger evidence.".to_string(),
+        key_points: vec![],
+        mode: DebateMode::Heterogeneous,
+    };
+    let transcript = "<!-- CSA:SECTION:summary -->\nDetailed transcript\n";
+    let text = format_debate_stdout_text(&summary, transcript);
+
+    assert!(text.starts_with("Debate verdict: REVISE"));
+    assert!(text.contains("Needs stronger evidence."));
+    assert!(text.contains("Detailed transcript"));
+}
+
+#[test]
+fn render_debate_stdout_json_outputs_valid_payload() {
+    let summary = DebateSummary {
+        verdict: "APPROVE".to_string(),
+        confidence: "high".to_string(),
+        summary: "Ship with safeguards.".to_string(),
+        key_points: vec!["Bounded retries".to_string()],
+        mode: DebateMode::SameModelAdversarial,
+    };
+    let transcript = "Full transcript body\nCSA Meta Session ID: 01META\n";
+    let json = render_debate_stdout_json(&summary, transcript, "01META").unwrap();
+    let parsed: Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed["verdict"], "APPROVE");
+    assert_eq!(parsed["confidence"], "high");
+    assert_eq!(parsed["mode"], "same-model-adversarial");
+    assert_eq!(parsed["meta_session_id"], "01META");
+    assert!(
+        parsed["transcript"]
+            .as_str()
+            .unwrap()
+            .contains("Full transcript body")
+    );
+}
+
+#[test]
+fn extract_one_line_summary_ignores_csa_section_marker_lines() {
+    let output = r#"
+<!-- CSA:SECTION:summary -->
+<!-- CSA:SECTION:summary:END -->
+Summary: Keep full debate transcript in stdout.
+"#;
+    let summary = extract_one_line_summary(output, "fallback");
+    assert_eq!(summary, "Keep full debate transcript in stdout.");
+}
+
+#[test]
 fn persist_debate_output_artifacts_writes_json_and_markdown() {
     let tmp = tempfile::TempDir::new().unwrap();
     let session_dir = tmp.path();

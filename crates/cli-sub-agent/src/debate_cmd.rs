@@ -11,11 +11,11 @@ use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_e
 use crate::run_helpers::read_prompt;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolName;
+use csa_core::types::{OutputFormat, ToolName};
 
 use crate::debate_cmd_output::{
-    append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_summary,
-    persist_debate_output_artifacts, render_debate_output,
+    append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_text,
+    persist_debate_output_artifacts, render_debate_output, render_debate_stdout_json,
 };
 
 /// Debate execution mode indicating model diversity level.
@@ -27,7 +27,11 @@ pub(crate) enum DebateMode {
     SameModelAdversarial,
 }
 
-pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
+pub(crate) async fn handle_debate(
+    args: DebateArgs,
+    current_depth: u32,
+    output_format: OutputFormat,
+) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
@@ -239,8 +243,17 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
     append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
 
-    // 10. Print brief summary only.
-    println!("{}", format_debate_stdout_summary(&debate_summary));
+    match output_format {
+        OutputFormat::Text => {
+            print!("{}", format_debate_stdout_text(&debate_summary, &output));
+        }
+        OutputFormat::Json => {
+            println!(
+                "{}",
+                render_debate_stdout_json(&debate_summary, &output, &execution.meta_session_id)?
+            );
+        }
+    }
 
     Ok(execution.execution.exit_code)
 }
