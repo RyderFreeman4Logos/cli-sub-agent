@@ -6,9 +6,6 @@ description = "Full development cycle from branch creation through mktd planning
 name = "BOT_COMMENTS"
 
 [[workflow.variables]]
-name = "BOT_HAS_ISSUES"
-
-[[workflow.variables]]
 name = "BRANCH"
 
 [[workflow.variables]]
@@ -306,10 +303,15 @@ id = 13
 title = "Commit"
 tool = "bash"
 prompt = """
-Create the commit using the generated message: ${COMMIT_MSG}.
+Create the commit using the generated message from Step 12.
 
 ```bash
-git commit -m "${COMMIT_MSG}"
+COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
+if [ -z "${COMMIT_MSG_LOCAL}" ]; then
+  echo "ERROR: Commit message is empty. Step 12 must output a commit message." >&2
+  exit 1
+fi
+git commit -m "${COMMIT_MSG_LOCAL}"
 ```"""
 on_fail = "abort"
 
@@ -392,7 +394,21 @@ of changes for ${SCOPE} and a test plan checklist covering tests, linting,
 security audit, and codex review.
 
 ```bash
-gh pr create --base main --repo "${REPO}" --title "${COMMIT_MSG}" --body "${PR_BODY}"
+COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
+if [ -z "${COMMIT_MSG_LOCAL}" ]; then
+  echo "ERROR: PR title is empty. Step 12 output is required." >&2
+  exit 1
+fi
+PR_BODY_LOCAL="${PR_BODY:-## Summary
+- Scope: ${SCOPE:-unspecified}
+
+## Validation
+- just fmt
+- just clippy
+- just test
+- csa review --range main...HEAD
+}"
+gh pr create --base main --repo "${REPO}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
 ```"""
 on_fail = "abort"
 
@@ -424,7 +440,7 @@ title = "Poll for Bot Response"
 tool = "bash"
 prompt = """
 Poll for bot review response with a bounded timeout (max 10 minutes).
-If the bot does not respond, fall through to UNAVAILABLE handling.
+Output `1` when bot findings are present; output empty string otherwise.
 
 ```bash
 TIMEOUT=600; INTERVAL=30; ELAPSED=0
@@ -437,16 +453,15 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_COMMENTS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.comments[]? | select(.createdAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
   BOT_REVIEWS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.reviews[]? | select(.submittedAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")))] | length')
   if [ "${BOT_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
-    echo "Bot response received."
+    echo "1"
     exit 0
   fi
   sleep "$INTERVAL"
   ELAPSED=$((ELAPSED + INTERVAL))
 done
-echo "Bot did not respond within timeout."
-exit 1
+echo ""
 ```"""
-on_fail = "skip"
+on_fail = "abort"
 
 [[workflow.steps]]
 id = 20
@@ -459,7 +474,7 @@ For each bot comment, classify as:
 - Category C (real issue): react and queue for fix"""
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "${BOT_HAS_ISSUES}"
+condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
 id = 21
@@ -469,7 +484,7 @@ prompt = """
 Evaluate this specific bot comment against the current code state.
 Determine category (A/B/C) and take appropriate action."""
 on_fail = "abort"
-condition = "${BOT_HAS_ISSUES}"
+condition = "${STEP_19_OUTPUT}"
 
 [workflow.steps.loop_var]
 variable = "comment"
@@ -487,7 +502,7 @@ A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently.
 Is this a real issue or a false positive? Provide reasoning."""
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "${BOT_HAS_ISSUES}"
+condition = "${STEP_19_OUTPUT}"
 
 [workflow.steps.loop_var]
 variable = "comment"
@@ -499,7 +514,7 @@ title = "Fix Real Issue"
 tool = "csa"
 prompt = "Fix the real issue identified by the bot. Commit the fix."
 tier = "tier-2-standard"
-condition = "${BOT_HAS_ISSUES}"
+condition = "${STEP_19_OUTPUT}"
 
 [workflow.steps.on_fail]
 retry = 2
@@ -528,7 +543,7 @@ fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 ```"""
 on_fail = "abort"
-condition = "${BOT_HAS_ISSUES}"
+condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
 id = 25
@@ -541,7 +556,7 @@ No issues found by the codex bot. Proceed to merge.
 echo "Bot review clean — no issues found. Proceeding to merge."
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_HAS_ISSUES}))"
+condition = "(!(${STEP_19_OUTPUT}))"
 
 [[workflow.steps]]
 id = 26

@@ -261,10 +261,15 @@ scripts/gen_commit_msg.sh "${SCOPE:-}"
 Tool: bash
 OnFail: abort
 
-Create the commit using the generated message: ${COMMIT_MSG}.
+Create the commit using the generated message from Step 12.
 
 ```bash
-git commit -m "${COMMIT_MSG}"
+COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
+if [ -z "${COMMIT_MSG_LOCAL}" ]; then
+  echo "ERROR: Commit message is empty. Step 12 must output a commit message." >&2
+  exit 1
+fi
+git commit -m "${COMMIT_MSG_LOCAL}"
 ```
 
 ## Step 14: Ensure Version Bumped
@@ -341,7 +346,21 @@ of changes for ${SCOPE} and a test plan checklist covering tests, linting,
 security audit, and codex review.
 
 ```bash
-gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
+COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
+if [ -z "${COMMIT_MSG_LOCAL}" ]; then
+  echo "ERROR: PR title is empty. Step 12 output is required." >&2
+  exit 1
+fi
+PR_BODY_LOCAL="${PR_BODY:-## Summary
+- Scope: ${SCOPE:-unspecified}
+
+## Validation
+- just fmt
+- just clippy
+- just test
+- csa review --range main...HEAD
+}"
+gh pr create --base main --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
 ```
 
 ## Step 18: Trigger Codex Bot Review
@@ -367,10 +386,10 @@ printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 ## Step 19: Poll for Bot Response
 
 Tool: bash
-OnFail: skip
+OnFail: abort
 
 Poll for bot review response with a bounded timeout (max 10 minutes).
-If the bot does not respond, fall through to UNAVAILABLE handling.
+Output `1` when bot findings are present; output empty string otherwise.
 
 ```bash
 TIMEOUT=600; INTERVAL=30; ELAPSED=0
@@ -383,17 +402,16 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_COMMENTS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.comments[]? | select(.createdAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
   BOT_REVIEWS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.reviews[]? | select(.submittedAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")))] | length')
   if [ "${BOT_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
-    echo "Bot response received."
+    echo "1"
     exit 0
   fi
   sleep "$INTERVAL"
   ELAPSED=$((ELAPSED + INTERVAL))
 done
-echo "Bot did not respond within timeout."
-exit 1
+echo ""
 ```
 
-## IF ${BOT_HAS_ISSUES}
+## IF ${STEP_19_OUTPUT}
 
 ## Step 20: Evaluate Bot Comments
 
