@@ -3,34 +3,103 @@ name = "dev2merge"
 description = "Full development cycle from branch creation through mktd planning, commit, PR, codex-bot review, and merge"
 
 [[workflow.variables]]
+name = "AUDIT_OUTPUT"
+
+[[workflow.variables]]
+name = "AUDIT_PROMPT"
+
+[[workflow.variables]]
+name = "AUDIT_STATUS"
+
+[[workflow.variables]]
+name = "BOT_INLINE_COMMENTS"
+
+[[workflow.variables]]
+name = "BOT_PR_COMMENTS"
+
+[[workflow.variables]]
+name = "BOT_PR_FINDINGS"
+
+[[workflow.variables]]
+name = "BOT_REVIEWS"
+
+[[workflow.variables]]
+name = "BOT_REVIEW_FINDINGS"
+
+[[workflow.variables]]
+name = "BOT_TRIGGER_REACTIONS"
+
+[[workflow.variables]]
 name = "BRANCH"
 
 [[workflow.variables]]
-name = "COMMIT_MSG"
+name = "COMMENTS_PAYLOAD"
 
 [[workflow.variables]]
-name = "PR_BODY"
+name = "COMMENT_URL"
+
+[[workflow.variables]]
+name = "COMMIT_MSG_LOCAL"
+
+[[workflow.variables]]
+name = "ELAPSED"
+
+[[workflow.variables]]
+name = "MATCHED_LOCKFILES"
+
+[[workflow.variables]]
+name = "ORIGIN_URL"
+
+[[workflow.variables]]
+name = "PRE_DIRTY_CARGO_LOCK"
+
+[[workflow.variables]]
+name = "PR_BODY_LOCAL"
 
 [[workflow.variables]]
 name = "PR_NUM"
 
 [[workflow.variables]]
-name = "REPO"
+name = "PR_NUM_FROM_STEP"
+
+[[workflow.variables]]
+name = "PR_NUM_LOCAL"
+
+[[workflow.variables]]
+name = "REPO_LOCAL"
 
 [[workflow.variables]]
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
-name = "CUMULATIVE_REVIEW_COMPLETED"
-
-[[workflow.variables]]
 name = "SCOPE"
 
 [[workflow.variables]]
-name = "MKTD_TODO_PATH"
+name = "SELF_LOGIN"
 
 [[workflow.variables]]
-name = "MKTD_TODO_TIMESTAMP"
+name = "STAGED_FILES"
+
+[[workflow.variables]]
+name = "STEP_19_OUTPUT"
+
+[[workflow.variables]]
+name = "STEP_25_OUTPUT"
+
+[[workflow.variables]]
+name = "TRIGGER_COMMENT_ID"
+
+[[workflow.variables]]
+name = "TRIGGER_TS"
+
+[[workflow.variables]]
+name = "VERDICT"
+
+[[workflow.variables]]
+name = "VERSION"
+
+[[workflow.variables]]
+name = "lockpath"
 
 [[workflow.steps]]
 id = 1
@@ -56,45 +125,23 @@ fi
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 101
-title = "Plan with mktd (Debate Required)"
+id = 2
+title = "Step 1.5: Plan with mktd (Debate Required)"
 tool = "bash"
 prompt = """
-Generate or refresh a branch TODO plan through mktd before development gates.
-This step MUST pass through mktd's built-in debate phase and save a TODO.
-
-```bash
-set -euo pipefail
-CURRENT_BRANCH="$(git branch --show-current)"
-FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
-MKTD_PROMPT="Plan dev2merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
-set +e
-MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
-MKTD_STATUS=$?
-set -e
-printf '%s\n' "${MKTD_OUTPUT}"
-if [ "${MKTD_STATUS}" -ne 0 ]; then
-  echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
-  exit 1
-fi
-LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
-if [ -z "${LATEST_TS}" ]; then
-  echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2
-  exit 1
-fi
-TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
-if [ ! -s "${TODO_PATH}" ]; then
-  echo "ERROR: TODO file is empty: ${TODO_PATH}" >&2
-  exit 1
-fi
-grep -qF -- '- [ ] ' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks: ${TODO_PATH}" >&2; exit 1; }
-grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses: ${TODO_PATH}" >&2; exit 1; }
-printf 'MKTD_TODO_TIMESTAMP=%s\nMKTD_TODO_PATH=%s\n' "${LATEST_TS}" "${TODO_PATH}"
-```"""
+Generate or refresh a branch TODO plan through `mktd` before development gates.
+This step MUST pass through mktd's built-in debate phase and save a TODO."""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 2
+id = 3
+title = "Include mktd"
+tool = "weave"
+prompt = "mktd"
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 4
 title = "Run Formatters"
 tool = "bash"
 prompt = """
@@ -108,7 +155,7 @@ just fmt
 retry = 2
 
 [[workflow.steps]]
-id = 3
+id = 5
 title = "Run Linters"
 tool = "bash"
 prompt = """
@@ -122,7 +169,7 @@ just clippy
 retry = 2
 
 [[workflow.steps]]
-id = 4
+id = 6
 title = "Run Tests"
 tool = "bash"
 prompt = """
@@ -134,10 +181,10 @@ just test
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 5
+id = 7
 title = "Stage Changes"
 tool = "bash"
-prompt = """
+prompt = '''
 Stage all modified and new files relevant to ${SCOPE}.
 Verify no untracked files remain.
 
@@ -168,11 +215,11 @@ if git ls-files --others --exclude-standard | grep -q .; then
   git ls-files --others --exclude-standard
   exit 1
 fi
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
+id = 8
 title = "Security Scan"
 tool = "bash"
 prompt = """
@@ -190,10 +237,10 @@ done
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 7
+id = 9
 title = "Security Audit"
 tool = "bash"
-prompt = """
+prompt = '''
 Run the security-audit skill: test completeness check, vulnerability scan,
 and code quality check. The audit MUST pass before commit.
 
@@ -222,7 +269,7 @@ if [ "${AUDIT_STATUS}" -ne 0 ]; then
   echo "ERROR: security-audit command failed (exit=${AUDIT_STATUS})." >&2
   exit 1
 fi
-VERDICT="$(printf '%s\n' "${AUDIT_OUTPUT}" | sed -nE 's/^SECURITY_AUDIT_VERDICT:[[:space:]]*(PASS_DEFERRED|PASS|FAIL)$/\\1/p' | tail -n1)"
+VERDICT="$(printf '%s\n' "${AUDIT_OUTPUT}" | sed -nE 's/^SECURITY_AUDIT_VERDICT:[[:space:]]*(PASS_DEFERRED|PASS|FAIL)$/\1/p' | tail -n1)"
 if [ -z "${VERDICT}" ]; then
   echo "ERROR: Missing SECURITY_AUDIT_VERDICT marker in audit output." >&2
   exit 1
@@ -232,22 +279,27 @@ if [ "${VERDICT}" = "FAIL" ]; then
   exit 1
 fi
 echo "SECURITY_AUDIT_VERDICT=${VERDICT}"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 8
+id = 10
 title = "Pre-Commit Review"
 tool = "csa"
 prompt = """
 Run heterogeneous code review on all uncommitted changes versus HEAD.
 The reviewer MUST be a different model family than the code author.
+
+```bash
+csa review --diff
+```
+
 Review output includes AGENTS.md compliance checklist."""
 tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 9
+id = 11
 title = "Fix Review Issues"
 tool = "csa"
 prompt = """
@@ -260,7 +312,7 @@ condition = "${REVIEW_HAS_ISSUES}"
 retry = 3
 
 [[workflow.steps]]
-id = 10
+id = 12
 title = "Re-run Quality Gates"
 tool = "bash"
 prompt = """
@@ -273,18 +325,18 @@ on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
 [[workflow.steps]]
-id = 11
+id = 13
 title = "Re-review"
 tool = "csa"
 prompt = """
-Re-review all changes to verify all issues are resolved.
+Run `csa review --diff` again to verify all issues are resolved.
 Loop back to Step 9 if issues persist (max 3 rounds)."""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
 
 [[workflow.steps]]
-id = 12
+id = 14
 title = "Generate Commit Message"
 tool = "bash"
 prompt = """
@@ -296,7 +348,7 @@ scripts/gen_commit_msg.sh "${SCOPE:-}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 13
+id = 15
 title = "Commit"
 tool = "bash"
 prompt = """
@@ -313,7 +365,7 @@ git commit -m "${COMMIT_MSG_LOCAL}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 16
 title = "Ensure Version Bumped"
 tool = "bash"
 prompt = """
@@ -349,12 +401,12 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 15
+id = 17
 title = "Pre-PR Cumulative Review"
 tool = "csa"
 prompt = """
 Run a cumulative review covering ALL commits on the feature branch since main.
-This is distinct from Step 8's per-commit review (csa review --diff):
+This is distinct from Step 8's per-commit review (`csa review --diff`):
 - Step 8 reviews uncommitted changes (staged diff) — single-commit granularity.
 - This step reviews the full feature branch — catches cross-commit issues.
 
@@ -368,7 +420,7 @@ tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 16
+id = 18
 title = "Push to Origin"
 tool = "bash"
 prompt = """
@@ -387,10 +439,10 @@ git push -u origin "${BRANCH}"
 retry = 2
 
 [[workflow.steps]]
-id = 17
+id = 19
 title = "Create Pull Request"
 tool = "bash"
-prompt = """
+prompt = '''
 Create a PR targeting main via GitHub CLI. The PR body includes a summary
 of changes for ${SCOPE} and a test plan checklist covering tests, linting,
 security audit, and codex review.
@@ -399,7 +451,7 @@ security audit, and codex review.
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -412,9 +464,13 @@ if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   exit 1
 fi
 PR_BODY_LOCAL="${PR_BODY:-## Summary
-- Scope: ${SCOPE:-unspecified}
+- Scope: ${SCOPE:-unspecified}'''
+on_fail = "abort"
 
-## Validation
+[[workflow.steps]]
+id = 20
+title = "Validation"
+prompt = """
 - just fmt
 - just clippy
 - just test
@@ -425,10 +481,10 @@ gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 18
+id = 21
 title = "Trigger Codex Bot Review"
 tool = "bash"
-prompt = """
+prompt = '''
 Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
 
@@ -437,7 +493,7 @@ set -euo pipefail
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -445,31 +501,35 @@ if [ -z "${REPO_LOCAL}" ]; then
   exit 1
 fi
 PR_NUM=$(gh pr view --json number -q '.number')
-gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review"
+COMMENT_URL="$(gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review")"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO_LOCAL}" --json comments)
-TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
+COMMENTS_PAYLOAD=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM}/comments?per_page=100")
+TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .created_at // empty')
+TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENT_URL}" | sed -nE 's#.*issuecomment-([0-9]+).*#\1#p')
+if [ -z "${TRIGGER_COMMENT_ID}" ]; then
+  TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .id // empty')
+fi
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
-```"""
+printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 19
+id = 22
 title = "Poll for Bot Response"
 tool = "bash"
-prompt = """
-Poll for bot review response with a bounded timeout (max 10 minutes).
+prompt = '''
+Poll for bot review response with a bounded timeout (max 20 minutes).
 Output `1` when bot findings are present; output empty string otherwise.
 
 ```bash
-TIMEOUT=600; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=30; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -478,6 +538,7 @@ if [ -z "${REPO_LOCAL}" ]; then
 fi
 PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 TRIGGER_TS="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
@@ -486,11 +547,16 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical")))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical"))))] | length')
+  BOT_TRIGGER_REACTIONS=0
+  if [ -n "${TRIGGER_COMMENT_ID}" ]; then
+    BOT_TRIGGER_REACTIONS=$(gh api "repos/${REPO_LOCAL}/issues/comments/${TRIGGER_COMMENT_ID}/reactions?per_page=100" -H "Accept: application/vnd.github+json" | jq -r '[.[]? | select((.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  fi
+  echo "heartbeat elapsed=${ELAPSED}s inline=${BOT_INLINE_COMMENTS} pr_comments=${BOT_PR_COMMENTS} pr_findings=${BOT_PR_FINDINGS} reviews=${BOT_REVIEWS} review_findings=${BOT_REVIEW_FINDINGS} reactions=${BOT_TRIGGER_REACTIONS}"
   if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
-  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ] || [ "${BOT_TRIGGER_REACTIONS}" -gt 0 ]; then
     echo ""
     exit 0
   fi
@@ -499,11 +565,11 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
 done
 echo "ERROR: Timed out waiting for bot response." >&2
 exit 1
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 20
+id = 23
 title = "Evaluate Bot Comments"
 tool = "csa"
 prompt = """
@@ -514,17 +580,17 @@ on_fail = "abort"
 condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
-id = 21
+id = 24
 title = "Arbitrate Disputed Findings"
 tool = "csa"
 prompt = """
-For disputed findings, run independent arbitration using csa debate and
+For disputed findings, run independent arbitration using `csa debate` and
 produce a verdict for each disputed item."""
 on_fail = "abort"
 condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
-id = 22
+id = 25
 title = "Fix Confirmed Issues"
 tool = "csa"
 prompt = """
@@ -535,10 +601,10 @@ on_fail = "abort"
 condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
-id = 23
+id = 26
 title = "Re-run Local Review After Fixes"
 tool = "csa"
-prompt = "Run csa review --diff to validate fixes before re-triggering cloud review."
+prompt = "Run `csa review --diff` to validate fixes before re-triggering cloud review."
 tier = "tier-2-standard"
 condition = "${STEP_19_OUTPUT}"
 
@@ -546,10 +612,10 @@ condition = "${STEP_19_OUTPUT}"
 retry = 2
 
 [[workflow.steps]]
-id = 24
+id = 27
 title = "Push Fixes and Re-trigger Review"
 tool = "bash"
-prompt = """
+prompt = '''
 Push all fix commits and trigger a new round of codex review.
 
 ```bash
@@ -557,7 +623,7 @@ set -euo pipefail
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -574,32 +640,36 @@ PR_NUM_LOCAL="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | t
 if [ -z "${PR_NUM_LOCAL}" ]; then
   PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
 fi
-gh pr comment "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --body "@codex review"
+COMMENT_URL="$(gh pr comment "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --body "@codex review")"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --json comments)
-TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
+COMMENTS_PAYLOAD=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_LOCAL}/comments?per_page=100")
+TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .created_at // empty')
+TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENT_URL}" | sed -nE 's#.*issuecomment-([0-9]+).*#\1#p')
+if [ -z "${TRIGGER_COMMENT_ID}" ]; then
+  TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .id // empty')
+fi
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}"
-```"""
+printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
+```'''
 on_fail = "abort"
 condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
-id = 25
+id = 28
 title = "Poll Re-triggered Bot Response"
 tool = "bash"
-prompt = """
-After posting the second @codex review, poll again with bounded timeout.
+prompt = '''
+After posting the second `@codex review`, poll again with bounded timeout.
 Output `1` when findings remain; output empty string when clean.
 
 ```bash
-TIMEOUT=600; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=30; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -608,6 +678,7 @@ if [ -z "${REPO_LOCAL}" ]; then
 fi
 PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 TRIGGER_TS="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then
   PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 fi
@@ -621,11 +692,16 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical")))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical"))))] | length')
+  BOT_TRIGGER_REACTIONS=0
+  if [ -n "${TRIGGER_COMMENT_ID}" ]; then
+    BOT_TRIGGER_REACTIONS=$(gh api "repos/${REPO_LOCAL}/issues/comments/${TRIGGER_COMMENT_ID}/reactions?per_page=100" -H "Accept: application/vnd.github+json" | jq -r '[.[]? | select((.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  fi
+  echo "heartbeat elapsed=${ELAPSED}s inline=${BOT_INLINE_COMMENTS} pr_comments=${BOT_PR_COMMENTS} pr_findings=${BOT_PR_FINDINGS} reviews=${BOT_REVIEWS} review_findings=${BOT_REVIEW_FINDINGS} reactions=${BOT_TRIGGER_REACTIONS}"
   if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
-  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ] || [ "${BOT_TRIGGER_REACTIONS}" -gt 0 ]; then
     echo ""
     exit 0
   fi
@@ -634,12 +710,12 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
 done
 echo "ERROR: Timed out waiting for re-triggered bot response." >&2
 exit 1
-```"""
+```'''
 on_fail = "abort"
 condition = "${STEP_19_OUTPUT}"
 
 [[workflow.steps]]
-id = 26
+id = 29
 title = "Stop on Remaining Bot Findings"
 tool = "bash"
 prompt = """
@@ -653,17 +729,17 @@ on_fail = "abort"
 condition = "(${STEP_19_OUTPUT}) && (${STEP_25_OUTPUT})"
 
 [[workflow.steps]]
-id = 27
+id = 30
 title = "Merge PR After Re-review Clean"
 tool = "bash"
-prompt = """
+prompt = '''
 Squash-merge the PR after the second bot review returns clean, then update local main.
 
 ```bash
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -679,22 +755,22 @@ if [ -z "${PR_NUM_LOCAL}" ]; then
 fi
 gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
-```"""
+```'''
 on_fail = "abort"
 condition = "(${STEP_19_OUTPUT}) && (!(${STEP_25_OUTPUT}))"
 
 [[workflow.steps]]
-id = 28
+id = 31
 title = "Merge PR (Initial Review Clean)"
 tool = "bash"
-prompt = """
+prompt = '''
 No issues were found in the initial bot review. Merge using the PR number from step output.
 
 ```bash
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\\.com:|https://github\\.com/)([^/]+/[^/]+)(\\.git)?$#\\2#p')"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
   REPO_LOCAL="${REPO_LOCAL%.git}"
 fi
 if [ -z "${REPO_LOCAL}" ]; then
@@ -707,6 +783,6 @@ if [ -z "${PR_NUM_LOCAL}" ]; then
 fi
 gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
-```"""
+```'''
 on_fail = "abort"
-condition = "(!(${STEP_19_OUTPUT}))"
+condition = "!(${STEP_19_OUTPUT})"

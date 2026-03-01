@@ -404,14 +404,18 @@ if [ -z "${REPO_LOCAL}" ]; then
   exit 1
 fi
 PR_NUM=$(gh pr view --json number -q '.number')
-gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review"
+COMMENT_URL="$(gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review")"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO_LOCAL}" --json comments)
-TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
+COMMENTS_PAYLOAD=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM}/comments?per_page=100")
+TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .created_at // empty')
+TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENT_URL}" | sed -nE 's#.*issuecomment-([0-9]+).*#\1#p')
+if [ -z "${TRIGGER_COMMENT_ID}" ]; then
+  TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .id // empty')
+fi
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
+printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
 ```
 
 ## Step 19: Poll for Bot Response
@@ -419,11 +423,11 @@ printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
 Tool: bash
 OnFail: abort
 
-Poll for bot review response with a bounded timeout (max 10 minutes).
+Poll for bot review response with a bounded timeout (max 20 minutes).
 Output `1` when bot findings are present; output empty string otherwise.
 
 ```bash
-TIMEOUT=600; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=30; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -436,6 +440,7 @@ if [ -z "${REPO_LOCAL}" ]; then
 fi
 PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 TRIGGER_TS="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
@@ -444,11 +449,16 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical")))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical"))))] | length')
+  BOT_TRIGGER_REACTIONS=0
+  if [ -n "${TRIGGER_COMMENT_ID}" ]; then
+    BOT_TRIGGER_REACTIONS=$(gh api "repos/${REPO_LOCAL}/issues/comments/${TRIGGER_COMMENT_ID}/reactions?per_page=100" -H "Accept: application/vnd.github+json" | jq -r '[.[]? | select((.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  fi
+  echo "heartbeat elapsed=${ELAPSED}s inline=${BOT_INLINE_COMMENTS} pr_comments=${BOT_PR_COMMENTS} pr_findings=${BOT_PR_FINDINGS} reviews=${BOT_REVIEWS} review_findings=${BOT_REVIEW_FINDINGS} reactions=${BOT_TRIGGER_REACTIONS}"
   if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
-  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ] || [ "${BOT_TRIGGER_REACTIONS}" -gt 0 ]; then
     echo ""
     exit 0
   fi
@@ -520,14 +530,18 @@ PR_NUM_LOCAL="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | t
 if [ -z "${PR_NUM_LOCAL}" ]; then
   PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
 fi
-gh pr comment "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --body "@codex review"
+COMMENT_URL="$(gh pr comment "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --body "@codex review")"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --json comments)
-TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
+COMMENTS_PAYLOAD=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_LOCAL}/comments?per_page=100")
+TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .created_at // empty')
+TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENT_URL}" | sed -nE 's#.*issuecomment-([0-9]+).*#\1#p')
+if [ -z "${TRIGGER_COMMENT_ID}" ]; then
+  TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .id // empty')
+fi
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}"
+printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
 ```
 
 ## Step 25: Poll Re-triggered Bot Response
@@ -539,7 +553,7 @@ After posting the second `@codex review`, poll again with bounded timeout.
 Output `1` when findings remain; output empty string when clean.
 
 ```bash
-TIMEOUT=600; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=30; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -552,6 +566,7 @@ if [ -z "${REPO_LOCAL}" ]; then
 fi
 PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 TRIGGER_TS="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then
   PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 fi
@@ -565,11 +580,16 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical")))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical"))))] | length')
+  BOT_TRIGGER_REACTIONS=0
+  if [ -n "${TRIGGER_COMMENT_ID}" ]; then
+    BOT_TRIGGER_REACTIONS=$(gh api "repos/${REPO_LOCAL}/issues/comments/${TRIGGER_COMMENT_ID}/reactions?per_page=100" -H "Accept: application/vnd.github+json" | jq -r '[.[]? | select((.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  fi
+  echo "heartbeat elapsed=${ELAPSED}s inline=${BOT_INLINE_COMMENTS} pr_comments=${BOT_PR_COMMENTS} pr_findings=${BOT_PR_FINDINGS} reviews=${BOT_REVIEWS} review_findings=${BOT_REVIEW_FINDINGS} reactions=${BOT_TRIGGER_REACTIONS}"
   if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
-  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ] || [ "${BOT_TRIGGER_REACTIONS}" -gt 0 ]; then
     echo ""
     exit 0
   fi
