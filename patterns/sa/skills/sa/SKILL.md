@@ -1,3 +1,14 @@
+---
+name: sa
+description: Three-layer manager-employee orchestration for delegated planning and implementation
+allowed-tools: Bash, Read, Grep, Glob, Edit, Write
+triggers:
+  - "sa"
+  - "/sa"
+  - "manager employee orchestration"
+  - "sub-agent orchestration"
+---
+
 # sa: Manager-Employee Orchestration (Three-Layer Model)
 
 Three-layer recursive delegation for planning and implementation with strict role boundaries.
