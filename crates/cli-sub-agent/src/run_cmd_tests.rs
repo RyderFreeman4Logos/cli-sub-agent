@@ -389,3 +389,46 @@ fn test_cli_return_to_requires_fork_call() {
     assert!(err.to_string().contains("--return-to"));
     assert!(err.to_string().contains("--fork-call"));
 }
+
+#[test]
+fn signal_interruption_exit_code_detects_sigterm_from_error_chain() {
+    let err = anyhow::anyhow!("transport failure")
+        .context("Failed to execute tool via transport")
+        .context("Execution interrupted by SIGTERM");
+    assert_eq!(signal_interruption_exit_code(&err), Some(143));
+}
+
+#[test]
+fn signal_interruption_exit_code_detects_sigint_from_error_chain() {
+    let err = anyhow::anyhow!("Execution interrupted by SIGINT");
+    assert_eq!(signal_interruption_exit_code(&err), Some(130));
+}
+
+#[test]
+fn extract_meta_session_id_from_error_reads_context_marker() {
+    let err = anyhow::anyhow!("Execution interrupted by SIGTERM")
+        .context("meta_session_id=01KJTESTSIGTERMABCDE12345");
+    assert_eq!(
+        extract_meta_session_id_from_error(&err).as_deref(),
+        Some("01KJTESTSIGTERMABCDE12345")
+    );
+}
+
+#[test]
+fn extract_meta_session_id_from_error_returns_none_without_marker() {
+    let err = anyhow::anyhow!("Execution interrupted by SIGTERM");
+    assert_eq!(extract_meta_session_id_from_error(&err), None);
+}
+
+#[test]
+fn build_resume_hint_command_includes_skill_when_present() {
+    let command = build_resume_hint_command(
+        "01KJTESTSIGTERMABCDE12345",
+        ToolName::Codex,
+        Some("pr-codex-bot"),
+    );
+    assert_eq!(
+        command,
+        "csa run --session 01KJTESTSIGTERMABCDE12345 --tool codex --skill pr-codex-bot"
+    );
+}
