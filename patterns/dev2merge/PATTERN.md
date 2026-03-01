@@ -441,8 +441,10 @@ if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
+  BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("p[0-3][^a-z0-9]*badge|changes requested|must fix|blocking|severity|critical")))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ]; then
+  BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("p[0-3][^a-z0-9]*badge|changes requested|must fix|blocking|severity|critical"))))] | length')
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
@@ -560,8 +562,10 @@ if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
+  BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("p[0-3][^a-z0-9]*badge|changes requested|must fix|blocking|severity|critical")))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ]; then
+  BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("p[0-3][^a-z0-9]*badge|changes requested|must fix|blocking|severity|critical"))))] | length')
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
