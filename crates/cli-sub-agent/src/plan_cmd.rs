@@ -348,18 +348,17 @@ pub(crate) async fn handle_plan_run(
     );
     journal.completed_steps = resume_context.completed_steps.iter().copied().collect();
     persist_plan_journal(&journal_path, &journal)?;
+    let mut run_ctx = PlanRunContext {
+        project_root: &project_root,
+        config: config.as_ref(),
+        tool_override: tool_override.as_ref(),
+        journal: &mut journal,
+        journal_path: Some(&journal_path),
+        resume_completed_steps: &resume_context.completed_steps,
+    };
 
-    let results = execute_plan_with_journal(
-        &plan,
-        &resume_context.initial_vars,
-        &project_root,
-        config.as_ref(),
-        tool_override.as_ref(),
-        &mut journal,
-        Some(&journal_path),
-        &resume_context.completed_steps,
-    )
-    .await?;
+    let results =
+        execute_plan_with_journal(&plan, &resume_context.initial_vars, &mut run_ctx).await?;
 
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
@@ -582,44 +581,46 @@ async fn execute_plan(
 ) -> Result<Vec<StepResult>> {
     let mut journal = PlanRunJournal::new(&plan.name, Path::new("."), variables.clone());
     let completed = HashSet::new();
-    execute_plan_with_journal(
-        plan,
-        variables,
+    let mut run_ctx = PlanRunContext {
         project_root,
         config,
         tool_override,
-        &mut journal,
-        None,
-        &completed,
-    )
-    .await
+        journal: &mut journal,
+        journal_path: None,
+        resume_completed_steps: &completed,
+    };
+    execute_plan_with_journal(plan, variables, &mut run_ctx).await
+}
+
+struct PlanRunContext<'a> {
+    project_root: &'a Path,
+    config: Option<&'a ProjectConfig>,
+    tool_override: Option<&'a ToolName>,
+    journal: &'a mut PlanRunJournal,
+    journal_path: Option<&'a Path>,
+    resume_completed_steps: &'a HashSet<usize>,
 }
 
 async fn execute_plan_with_journal(
     plan: &ExecutionPlan,
     variables: &HashMap<String, String>,
-    project_root: &Path,
-    config: Option<&ProjectConfig>,
-    tool_override: Option<&ToolName>,
-    journal: &mut PlanRunJournal,
-    journal_path: Option<&Path>,
-    resume_completed_steps: &HashSet<usize>,
+    run_ctx: &mut PlanRunContext<'_>,
 ) -> Result<Vec<StepResult>> {
     let mut results = Vec::with_capacity(plan.steps.len());
     let mut vars = variables.clone();
-    let mut completed_steps = resume_completed_steps.clone();
+    let mut completed_steps = run_ctx.resume_completed_steps.clone();
     let assignment_marker_allowlist: HashSet<String> = plan
         .variables
         .iter()
         .map(|decl| decl.name.clone())
         .collect();
 
-    journal.status = "running".to_string();
-    journal.vars = vars.clone();
-    journal.completed_steps = completed_steps.iter().copied().collect();
-    journal.last_error = None;
-    if let Some(path) = journal_path {
-        persist_plan_journal(path, journal)?;
+    run_ctx.journal.status = "running".to_string();
+    run_ctx.journal.vars = vars.clone();
+    run_ctx.journal.completed_steps = completed_steps.iter().copied().collect();
+    run_ctx.journal.last_error = None;
+    if let Some(path) = run_ctx.journal_path {
+        persist_plan_journal(path, run_ctx.journal)?;
     }
 
     for step in &plan.steps {
@@ -631,7 +632,14 @@ async fn execute_plan_with_journal(
             continue;
         }
 
-        let result = execute_step(step, &vars, project_root, config, tool_override).await;
+        let result = execute_step(
+            step,
+            &vars,
+            run_ctx.project_root,
+            run_ctx.config,
+            run_ctx.tool_override,
+        )
+        .await;
         let is_failure = !result.skipped && result.exit_code != 0;
 
         // Inject step output for subsequent steps (successful steps only).
@@ -652,10 +660,10 @@ async fn execute_plan_with_journal(
         if !is_failure {
             completed_steps.insert(step.id);
         }
-        journal.vars = vars.clone();
-        journal.completed_steps = completed_steps.iter().copied().collect();
-        if let Some(path) = journal_path {
-            persist_plan_journal(path, journal)?;
+        run_ctx.journal.vars = vars.clone();
+        run_ctx.journal.completed_steps = completed_steps.iter().copied().collect();
+        if let Some(path) = run_ctx.journal_path {
+            persist_plan_journal(path, run_ctx.journal)?;
         }
 
         // Abort on failure when: on_fail=abort, or retry exhausted (retries
@@ -673,13 +681,13 @@ async fn execute_plan_with_journal(
                 "Step {} ('{}') failed (on_fail={:?}) — stopping workflow",
                 step.id, step.title, step.on_fail
             );
-            journal.status = "failed".to_string();
-            journal.last_error = Some(format!(
+            run_ctx.journal.status = "failed".to_string();
+            run_ctx.journal.last_error = Some(format!(
                 "Step {} ('{}') failed with on_fail={:?}",
                 step.id, step.title, step.on_fail
             ));
-            if let Some(path) = journal_path {
-                persist_plan_journal(path, journal)?;
+            if let Some(path) = run_ctx.journal_path {
+                persist_plan_journal(path, run_ctx.journal)?;
             }
             break;
         }
