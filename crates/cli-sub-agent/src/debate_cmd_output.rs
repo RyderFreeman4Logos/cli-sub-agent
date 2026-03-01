@@ -136,6 +136,54 @@ pub(crate) fn format_debate_stdout_summary(summary: &DebateSummary) -> String {
     )
 }
 
+pub(crate) fn format_debate_stdout_text(summary: &DebateSummary, transcript: &str) -> String {
+    let mut rendered = String::new();
+    rendered.push_str(&format_debate_stdout_summary(summary));
+    rendered.push('\n');
+
+    if !transcript.is_empty() {
+        rendered.push('\n');
+        rendered.push_str(transcript);
+        if !transcript.ends_with('\n') {
+            rendered.push('\n');
+        }
+    }
+
+    rendered
+}
+
+#[derive(Debug, Serialize)]
+struct DebateJsonOutput<'a> {
+    verdict: &'a str,
+    confidence: &'a str,
+    summary: &'a str,
+    key_points: &'a [String],
+    mode: &'static str,
+    transcript: &'a str,
+    meta_session_id: &'a str,
+}
+
+pub(crate) fn render_debate_stdout_json(
+    summary: &DebateSummary,
+    transcript: &str,
+    meta_session_id: &str,
+) -> Result<String> {
+    let payload = DebateJsonOutput {
+        verdict: summary.verdict.as_str(),
+        confidence: summary.confidence.as_str(),
+        summary: summary.summary.as_str(),
+        key_points: &summary.key_points,
+        mode: match summary.mode {
+            DebateMode::Heterogeneous => "heterogeneous",
+            DebateMode::SameModelAdversarial => "same-model-adversarial",
+        },
+        transcript,
+        meta_session_id,
+    };
+
+    serde_json::to_string_pretty(&payload).context("Failed to serialize debate JSON output")
+}
+
 pub(crate) fn render_debate_output(
     tool_output: &str,
     meta_session_id: &str,
@@ -314,6 +362,8 @@ fn is_non_summary_line(line: &str) -> bool {
         || line.starts_with("```")
         || line.starts_with("- ")
         || line.starts_with("* ")
+        || line.starts_with("<!-- CSA:SECTION:")
+        || line.starts_with("CSA Meta Session ID:")
         || line.starts_with("Position:")
         || line.starts_with("Key Arguments:")
         || line.starts_with("Implementation:")

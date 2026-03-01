@@ -322,7 +322,7 @@ async fn run() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Debate(args) => {
-            let exit_code = debate_cmd::handle_debate(args, current_depth).await?;
+            let exit_code = debate_cmd::handle_debate(args, current_depth, output_format).await?;
             std::process::exit(exit_code);
         }
         Commands::Doctor => {

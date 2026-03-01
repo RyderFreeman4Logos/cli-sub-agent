@@ -11,11 +11,11 @@ use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_e
 use crate::run_helpers::read_prompt;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig};
-use csa_core::types::ToolName;
+use csa_core::types::{OutputFormat, ToolName};
 
 use crate::debate_cmd_output::{
-    append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_summary,
-    persist_debate_output_artifacts, render_debate_output,
+    append_debate_artifacts_to_result, extract_debate_summary, format_debate_stdout_text,
+    persist_debate_output_artifacts, render_debate_output, render_debate_stdout_json,
 };
 
 /// Debate execution mode indicating model diversity level.
@@ -27,7 +27,11 @@ pub(crate) enum DebateMode {
     SameModelAdversarial,
 }
 
-pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Result<i32> {
+pub(crate) async fn handle_debate(
+    args: DebateArgs,
+    current_depth: u32,
+    output_format: OutputFormat,
+) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
 
@@ -239,10 +243,33 @@ pub(crate) async fn handle_debate(args: DebateArgs, current_depth: u32) -> Resul
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
     append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
 
-    // 10. Print brief summary only.
-    println!("{}", format_debate_stdout_summary(&debate_summary));
+    let rendered_output = render_debate_cli_output(
+        output_format,
+        &debate_summary,
+        &output,
+        &execution.meta_session_id,
+    )?;
+    if rendered_output.ends_with('\n') {
+        print!("{rendered_output}");
+    } else {
+        println!("{rendered_output}");
+    }
 
     Ok(execution.execution.exit_code)
+}
+
+fn render_debate_cli_output(
+    output_format: OutputFormat,
+    debate_summary: &crate::debate_cmd_output::DebateSummary,
+    transcript: &str,
+    meta_session_id: &str,
+) -> Result<String> {
+    match output_format {
+        OutputFormat::Text => Ok(format_debate_stdout_text(debate_summary, transcript)),
+        OutputFormat::Json => {
+            render_debate_stdout_json(debate_summary, transcript, meta_session_id)
+        }
+    }
 }
 
 const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);

@@ -405,6 +405,59 @@ fn format_debate_stdout_summary_shows_degradation_for_same_model() {
 }
 
 #[test]
+fn format_debate_stdout_text_includes_summary_and_transcript() {
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Needs stronger evidence.".to_string(),
+        key_points: vec![],
+        mode: DebateMode::Heterogeneous,
+    };
+    let transcript = "<!-- CSA:SECTION:summary -->\nDetailed transcript\n";
+    let text = format_debate_stdout_text(&summary, transcript);
+
+    assert!(text.starts_with("Debate verdict: REVISE"));
+    assert!(text.contains("Needs stronger evidence."));
+    assert!(text.contains("Detailed transcript"));
+}
+
+#[test]
+fn render_debate_stdout_json_outputs_valid_payload() {
+    let summary = DebateSummary {
+        verdict: "APPROVE".to_string(),
+        confidence: "high".to_string(),
+        summary: "Ship with safeguards.".to_string(),
+        key_points: vec!["Bounded retries".to_string()],
+        mode: DebateMode::SameModelAdversarial,
+    };
+    let transcript = "Full transcript body\nCSA Meta Session ID: 01META\n";
+    let json = render_debate_stdout_json(&summary, transcript, "01META").unwrap();
+    let parsed: Value = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed["verdict"], "APPROVE");
+    assert_eq!(parsed["confidence"], "high");
+    assert_eq!(parsed["mode"], "same-model-adversarial");
+    assert_eq!(parsed["meta_session_id"], "01META");
+    assert!(
+        parsed["transcript"]
+            .as_str()
+            .unwrap()
+            .contains("Full transcript body")
+    );
+}
+
+#[test]
+fn extract_one_line_summary_ignores_csa_section_marker_lines() {
+    let output = r#"
+<!-- CSA:SECTION:summary -->
+<!-- CSA:SECTION:summary:END -->
+Summary: Keep full debate transcript in stdout.
+"#;
+    let summary = extract_one_line_summary(output, "fallback");
+    assert_eq!(summary, "Keep full debate transcript in stdout.");
+}
+
+#[test]
 fn persist_debate_output_artifacts_writes_json_and_markdown() {
     let tmp = tempfile::TempDir::new().unwrap();
     let session_dir = tmp.path();
@@ -499,6 +552,22 @@ fn parse_debate_args(argv: &[&str]) -> crate::cli::DebateArgs {
     let cli = Cli::try_parse_from(argv).expect("debate CLI args should parse");
     match cli.command {
         Commands::Debate(args) => args,
+        _ => panic!("expected debate subcommand"),
+    }
+}
+
+#[test]
+fn debate_cli_parses_global_json_format() {
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
+    use csa_core::types::OutputFormat;
+
+    let cli = Cli::try_parse_from(["csa", "--format", "json", "debate", "question"])
+        .expect("cli should parse global json format for debate");
+
+    assert!(matches!(cli.format, OutputFormat::Json));
+    match cli.command {
+        Commands::Debate(args) => assert_eq!(args.question.as_deref(), Some("question")),
         _ => panic!("expected debate subcommand"),
     }
 }
@@ -616,6 +685,26 @@ fn debate_stream_mode_explicit_stream() {
 fn debate_stream_mode_explicit_no_stream() {
     let mode = resolve_debate_stream_mode(false, true);
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+#[test]
+fn render_debate_cli_output_respects_json_format() {
+    use csa_core::types::OutputFormat;
+
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Need more evidence.".to_string(),
+        key_points: vec!["Point A".to_string()],
+        mode: DebateMode::Heterogeneous,
+    };
+
+    let rendered =
+        render_debate_cli_output(OutputFormat::Json, &summary, "Transcript body", "01META")
+            .unwrap();
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(parsed["meta_session_id"], "01META");
+    assert_eq!(parsed["transcript"], "Transcript body");
 }
 
 // --- resolve_debate_thinking tests ---
