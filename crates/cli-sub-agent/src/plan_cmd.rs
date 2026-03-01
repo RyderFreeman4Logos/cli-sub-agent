@@ -14,7 +14,7 @@
 //! - `condition` evaluation: `${VAR}` truthiness, `!(expr)`, `(a) && (b)`
 //! - Steps with `loop_var` are skipped with a warning (v2)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -36,6 +36,8 @@ use plan_cmd_exec::{
 };
 #[cfg(test)]
 use plan_cmd_exec::{extract_bash_code_block, is_stale_session_error, truncate};
+
+const OUTPUT_ASSIGNMENT_MARKER_PREFIX: &str = "CSA_VAR:";
 
 /// Resolved execution target for a plan step.
 ///
@@ -367,6 +369,8 @@ async fn execute_plan(
 ) -> Result<Vec<StepResult>> {
     let mut results = Vec::with_capacity(plan.steps.len());
     let mut vars = variables.clone();
+    let assignment_marker_allowlist: HashSet<String> =
+        plan.variables.iter().map(|decl| decl.name.clone()).collect();
 
     for step in &plan.steps {
         let result = execute_step(step, &vars, project_root, config, tool_override).await;
@@ -375,10 +379,18 @@ async fn execute_plan(
         // Inject step output for subsequent steps (successful steps only).
         let var_key = format!("STEP_{}_OUTPUT", result.step_id);
         let var_value = result.output.as_deref().unwrap_or("").to_string();
+        let assignment_markers = if !is_failure && should_inject_assignment_markers(step) {
+            extract_output_assignment_markers(&var_value, &assignment_marker_allowlist)
+        } else {
+            Vec::new()
+        };
         vars.insert(var_key, var_value);
         let session_var_key = format!("STEP_{}_SESSION", result.step_id);
         let session_var_value = result.session_id.as_deref().unwrap_or("").to_string();
         vars.insert(session_var_key, session_var_value);
+        for (key, value) in assignment_markers {
+            vars.insert(key, value);
+        }
 
         // Abort on failure when: on_fail=abort, or retry exhausted (retries
         // already happened inside execute_step; reaching here means all failed),
@@ -688,6 +700,40 @@ async fn execute_step(
             }
         }
     }
+}
+
+fn extract_output_assignment_markers(
+    output: &str,
+    allowlist: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut markers = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let marker_payload = match trimmed.strip_prefix(OUTPUT_ASSIGNMENT_MARKER_PREFIX) {
+            Some(payload) => payload.trim(),
+            None => continue,
+        };
+        if let Some((raw_key, raw_value)) = marker_payload.split_once('=') {
+            let key = raw_key.trim();
+            if is_assignment_marker_key(key) && allowlist.contains(key) {
+                markers.push((key.to_string(), raw_value.trim().to_string()));
+            }
+        }
+    }
+    markers
+}
+
+fn should_inject_assignment_markers(step: &PlanStep) -> bool {
+    step.tool
+        .as_deref()
+        .is_some_and(|tool| tool.eq_ignore_ascii_case("bash"))
+}
+
+fn is_assignment_marker_key(key: &str) -> bool {
+    validate_variable_name(key).is_ok()
 }
 
 #[cfg(test)]

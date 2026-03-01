@@ -206,7 +206,7 @@ if [ "${VERDICT}" = "FAIL" ]; then
   echo "ERROR: security-audit verdict is FAIL." >&2
   exit 1
 fi
-echo "SECURITY_AUDIT_VERDICT=${VERDICT}"
+echo "CSA_VAR:SECURITY_AUDIT_VERDICT=${VERDICT}"
 ```
 
 ## Step 10: Pre-Commit Review

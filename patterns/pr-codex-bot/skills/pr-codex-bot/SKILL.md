@@ -118,7 +118,7 @@ cloud_bot = false   # skip @codex cloud review, use local codex instead
 **Check at runtime**: `csa config get pr_review.cloud_bot --default true`
 
 When `cloud_bot = false`:
-- Steps 4-9 (cloud bot trigger, poll, classify, arbitrate, fix) are **skipped entirely**
+- Steps 4-9 (cloud bot trigger, delegated wait gate, classify, arbitrate, fix) are **skipped entirely**
 - A SHA-verified fast-path check is applied before supplementary local review:
   compare current `git rev-parse HEAD` with HEAD SHA from latest `csa review`
   session metadata
@@ -137,16 +137,17 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
 2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA). If matched, skip review; if mismatched/missing, run full `csa review --branch main`. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds). Sets `REVIEW_COMPLETED=true` on success.
-3. **Push and create PR** (PRECONDITION: `REVIEW_COMPLETED=true`): `git push -u origin`, `gh pr create --base main`. FORBIDDEN: creating PR without Step 2 completion.
+3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): `git push -u origin`, derive `source_owner` from `origin` remote URL, then resolve PR strictly by owner-aware lookup (`base=main + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
     If `false` → skip Steps 4-9. Apply the same SHA-verified fast-path before
-    supplementary review. If SHA matches, skip review and jump to Step 11; if
-    SHA mismatches/missing (HEAD drift fallback), run full `csa review --branch main`,
-    then jump to Step 11 (merge).
-4. **Trigger cloud bot and poll** (SELF-CONTAINED -- trigger + poll are atomic):
-   - Trigger `@codex review` (idempotent: skip if already commented on this HEAD).
-   - Poll for bot response (max 10 minutes, 30s interval).
-   - If bot times out: fallback to `csa review --range main...HEAD`. If CLEAN, leave a PR comment explaining the merge rationale (bot timeout + local review CLEAN), then proceed to merge.
+    supplementary review. If SHA matches, skip review; if SHA mismatches/missing
+    (HEAD drift fallback), run full `csa review --branch main`. Then route through
+    the bot-unavailable merge path (Step 6a).
+4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
+   - Trigger a fresh `@codex review` for current HEAD.
+   - Delegate the 10-minute wait window to a CSA-managed step (no caller-side polling loop), enforced by command-level hard timeout (`timeout`/`gtimeout`) and explicit `--tool codex`.
+   - Delegated wait failures map to `BOT_UNAVAILABLE=true` and enter local fallback review (instead of silent success).
+   - If bot times out: fallback to `csa review --range main...HEAD`. If fallback review fails, run dedicated fallback fix cycle before merge; on success, clear `FALLBACK_REVIEW_HAS_ISSUES=false`.
 5. **Evaluate bot comments**: Classify each as:
    - Category A (already fixed): react and acknowledge.
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
@@ -154,9 +155,9 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
 7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Post full audit trail to PR.
 8. **Fix non-stale real issues**: For surviving Category C comments, fix, commit, push.
-9. **Re-trigger**: Push fixes and re-trigger (loops back to step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
+9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
-10.5. **Rebase for clean history**: If branch has > 3 commits, create backup branch, soft reset to `$(git merge-base main HEAD)` (not local main tip, which may have advanced), create logical commits by selectively staging, force push with lease, then trigger one final `@codex review`. **MUST block**: poll for bot response (max 10 min, 30s interval) and only proceed to merge after the final review passes clean. If the final review finds issues, loop back into the fix cycle (Steps 7-10) — the rebase is NOT repeated, only the fix-and-review cycle runs. If bot times out, fall back to local `csa review --range main...HEAD` and fix any issues before merge. FORBIDDEN: proceeding to merge while post-rebase review has unresolved issues. Skip rebase entirely if <= 3 commits or already logically grouped.
+10.5. **Rebase for clean history**: If branch has > 3 commits, create backup branch, soft reset to `$(git merge-base main HEAD)` (not local main tip, which may have advanced), create logical commits by selectively staging, force push with lease, then trigger one final `@codex review`. **MUST block**: delegate post-rebase wait/fix/review handling to one CSA-managed gate step and proceed only when it returns pass. The delegated gate is hard-time-bounded and must return an explicit pass marker; non-zero/timeout/invalid-marker is hard fail. If issues remain after bounded retries, abort. If bot times out, delegated gate must execute fallback `csa review --range main...HEAD` plus bounded fix cycle. FORBIDDEN: proceeding to merge while post-rebase review has unresolved issues. Skip rebase entirely if <= 3 commits or already logically grouped.
 11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Then `gh pr merge --squash --delete-branch`, then `git checkout main && git pull`.
 
 ## Example Usage
@@ -179,9 +180,9 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
    - fast-path: current HEAD SHA matches latest reviewed session HEAD SHA.
    - `REVIEW_COMPLETED=true` is set after successful completion.
 2. Any local review issues are fixed before PR creation.
-3. PR created (Step 4 precondition verified: `REVIEW_COMPLETED=true`).
+3. PR resolved for the workflow branch (existing PR reused or a new PR created via strict owner-aware match, with create-race recovery and Step 4 precondition verified: `REVIEW_COMPLETED=true`).
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
-5. **If cloud_bot enabled (default)**: cloud bot triggered, response received or timeout handled.
+5. **If cloud_bot enabled (default)**: cloud bot triggered, wait handled by delegated CSA gate with hard timeout and explicit marker checks, and timeout path handled.
 6. **If cloud_bot disabled**: supplementary check completed via one of:
    - fast-path: SHA match, review skipped, or
    - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch main` executed.
@@ -190,6 +191,6 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
 10a. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
-10b. **Rebase for clean history** (Step 10.5): If branch had > 3 accumulated commits, commits were rebased into logical groups, force-pushed, and a final `@codex review` passed clean before merge. Backup branch created at `backup-<pr>-pre-rebase`.
+10b. **Rebase for clean history** (Step 10.5): If branch had > 3 accumulated commits, commits were rebased into logical groups, force-pushed, and delegated post-rebase CSA gate passed before merge (including timeout fallback handling). Backup branch created at `backup-<pr>-pre-rebase`.
 11. PR merged via squash-merge with branch cleanup.
 12. Local main updated: `git checkout main && git pull origin main`.

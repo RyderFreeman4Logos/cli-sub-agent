@@ -12,6 +12,9 @@ name = "AUDIT_PROMPT"
 name = "AUDIT_STATUS"
 
 [[workflow.variables]]
+name = "SECURITY_AUDIT_VERDICT"
+
+[[workflow.variables]]
 name = "BRANCH"
 
 [[workflow.variables]]
@@ -285,7 +288,7 @@ if [ "${VERDICT}" = "FAIL" ]; then
   echo "ERROR: security-audit verdict is FAIL." >&2
   exit 1
 fi
-echo "SECURITY_AUDIT_VERDICT=${VERDICT}"
+echo "CSA_VAR:SECURITY_AUDIT_VERDICT=${VERDICT}"
 ```'''
 on_fail = "abort"
 

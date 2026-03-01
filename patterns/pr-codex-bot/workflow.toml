@@ -75,6 +75,7 @@ clean branch switches in Step 11).
 
 ```bash
 WORKFLOW_BRANCH="$(git branch --show-current)"
+echo "CSA_VAR:WORKFLOW_BRANCH=${WORKFLOW_BRANCH}"
 ```"""
 on_fail = "abort"
 
@@ -98,6 +99,7 @@ else
   csa review --branch main
 fi
 REVIEW_COMPLETED=true
+echo "CSA_VAR:REVIEW_COMPLETED=${REVIEW_COMPLETED}"
 ```"""
 on_fail = "abort"
 
@@ -114,7 +116,7 @@ retry = 3
 
 [[workflow.steps]]
 id = 4
-title = "Push and Create PR"
+title = "Push and Ensure PR"
 tool = "bash"
 prompt = """
 PRECONDITION: Step 2 (local review) must have completed successfully.
@@ -125,14 +127,87 @@ PATTERN.md may skip or fail to set the variable.
 
 ```bash
 set -euo pipefail
-if [ "${REVIEW_COMPLETED}" != "true" ]; then
+if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
   echo "ERROR: Local review (Step 2) was not completed. REVIEW_COMPLETED=${REVIEW_COMPLETED:-unset}"
   echo "FORBIDDEN: Creating a PR without completing Step 2."
   exit 1
 fi
 git push -u origin "${WORKFLOW_BRANCH}"
-gh pr create --base main --title "${PR_TITLE}" --body "${PR_BODY}"
-PR_NUM=$(gh pr view --json number -q '.number')
+ORIGIN_URL="$(git remote get-url origin)"
+SOURCE_OWNER="$(
+  printf '%s\n' "${ORIGIN_URL}" | sed -nE \
+    -e 's#^https?://([^@/]+@)?github\\.com/([^/]+)/[^/]+(\\.git)?$#\\2#p' \
+    -e 's#^(ssh://)?([^@]+@)?github\\.com[:/]([^/]+)/[^/]+(\\.git)?$#\\3#p' \
+    | head -n 1
+)"
+if [ -z "${SOURCE_OWNER}" ]; then
+  SOURCE_OWNER="$(gh repo view --json owner -q '.owner.login')"
+fi
+find_branch_pr() {
+  local owner_matches owner_count
+  owner_matches="$(
+    gh pr list --base main --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
+      --jq '.[].number' 2>/dev/null || true
+  )"
+  owner_count="$(printf '%s\n' "${owner_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "${owner_count}" = "1" ]; then
+    printf '%s\n' "${owner_matches}" | sed '/^$/d' | head -n 1
+    return 0
+  fi
+  if [ "${owner_count}" -gt 1 ]; then
+    echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
+    return 1
+  fi
+  return 2
+}
+
+set +e
+PR_NUM="$(find_branch_pr)"
+FIND_RC=$?
+set -e
+if [ "${FIND_RC}" -eq 0 ] && [ -n "${PR_NUM}" ]; then
+  echo "Using existing PR #${PR_NUM} for branch ${WORKFLOW_BRANCH}"
+elif [ "${FIND_RC}" -eq 1 ]; then
+  exit 1
+else
+  set +e
+  CREATE_OUTPUT="$(gh pr create --base main --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}" 2>&1)"
+  CREATE_RC=$?
+  set -e
+  if [ "${CREATE_RC}" -ne 0 ]; then
+    if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+      echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
+      exit 1
+    fi
+    echo "Detected existing PR during create race; resolving PR number by owner+branch."
+  fi
+  FIND_RC=2
+  PR_NUM=""
+  for attempt in 1 2 3 4 5; do
+    set +e
+    PR_NUM="$(find_branch_pr)"
+    FIND_RC=$?
+    set -e
+    if [ "${FIND_RC}" -eq 0 ] && [ -n "${PR_NUM}" ]; then
+      break
+    fi
+    if [ "${FIND_RC}" -eq 1 ]; then
+      break
+    fi
+    sleep 2
+  done
+  if [ "${FIND_RC}" -ne 0 ] || [ -z "${PR_NUM}" ]; then
+    echo "ERROR: Failed to resolve a unique PR for branch ${WORKFLOW_BRANCH} targeting main." >&2
+    exit 1
+  fi
+fi
+if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
+  echo "ERROR: Failed to resolve PR number for branch ${WORKFLOW_BRANCH} targeting main." >&2
+  exit 1
+fi
+REPO="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
+echo "CSA_VAR:PR_NUM=${PR_NUM}"
+echo "CSA_VAR:REPO=${REPO}"
 ```"""
 on_fail = "abort"
 
@@ -146,9 +221,11 @@ If disabled, set BOT_UNAVAILABLE and apply the same SHA-verified fast-path
 before deciding whether supplementary local review is needed.
 
 ```bash
+set -euo pipefail
 CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
+  FALLBACK_REVIEW_HAS_ISSUES=false
   CURRENT_HEAD="$(git rev-parse HEAD)"
   REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
@@ -158,52 +235,231 @@ if [ "${CLOUD_BOT}" = "false" ]; then
     csa review --branch main
   fi
 fi
+BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
+FALLBACK_REVIEW_HAS_ISSUES="${FALLBACK_REVIEW_HAS_ISSUES:-false}"
+echo "CSA_VAR:BOT_UNAVAILABLE=${BOT_UNAVAILABLE}"
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
 ```"""
-on_fail = "skip"
+on_fail = "abort"
 
 [[workflow.steps]]
 id = 5
-title = "Trigger Cloud Bot Review and Poll for Response"
+title = "Trigger Cloud Bot Review and Delegate Waiting"
 tool = "bash"
 prompt = """
-Trigger @codex review (idempotent — skip if already commented on this HEAD),
-then poll for bot response with bounded timeout (max 10 min, 30s interval).
+Trigger a fresh @codex review for current HEAD,
+then delegate long waiting to CSA so caller-side polling loops are avoided.
 If bot times out, set BOT_UNAVAILABLE and fall through — local review
-(Step 2) already covers main...HEAD. On timeout, run fallback local review:
-csa review --range main...HEAD.
+(Step 2) already covers main...HEAD. On timeout, run fallback local review
+and gate merge on fallback result.
 
 ```bash
-# --- Trigger @codex review (idempotent) ---
-CURRENT_SHA="$(git rev-parse HEAD)"
-EXISTING=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
-  --jq "[.[] | select(.body | test(\\"@codex review\\")) | select(.body | test(\\"${CURRENT_SHA}\\") or (.updated_at > \\"$(git log -1 --format=%cI HEAD~1 2>/dev/null || echo 1970-01-01)\\"))] | length" 2>/dev/null || echo "0")
-if [ "${EXISTING}" = "0" ]; then
-  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
-fi
-
-# --- Poll for bot response (max 10 min) ---
-BOT_UNAVAILABLE=true
-POLL_INTERVAL=30
-MAX_WAIT=600
-WAITED=0
-while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
-  sleep "${POLL_INTERVAL}"
-  WAITED=$((WAITED + POLL_INTERVAL))
-  BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
-    --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\")] | length" 2>/dev/null || echo "0")
-  if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
-    BOT_UNAVAILABLE=false
-    break
+set -euo pipefail
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+run_with_hard_timeout() {
+  local timeout_secs="$1"
+  shift
+  if [ -n "${TIMEOUT_BIN}" ]; then
+    "${TIMEOUT_BIN}" -k 5s "${timeout_secs}s" "$@" 2>&1
+    return $?
   fi
-  echo "Polling... ${WAITED}s / ${MAX_WAIT}s"
-done
+
+  local tmp_out timeout_flag child_pid watcher_pid rc use_pgroup
+  tmp_out="$(mktemp)"
+  timeout_flag="$(mktemp)"
+  rm -f "${timeout_flag}"
+  use_pgroup=false
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"${tmp_out}" 2>&1 &
+    use_pgroup=true
+    child_pid=$!
+  else
+    "$@" >"${tmp_out}" 2>&1 &
+    child_pid=$!
+  fi
+  (
+    sleep "${timeout_secs}"
+    if kill -0 "${child_pid}" 2>/dev/null; then
+      : >"${timeout_flag}"
+      if [ "${use_pgroup}" = "true" ]; then
+        kill -TERM "-${child_pid}" 2>/dev/null || true
+      else
+        kill -TERM "${child_pid}" 2>/dev/null || true
+      fi
+      sleep 2
+      if kill -0 "${child_pid}" 2>/dev/null; then
+        if [ "${use_pgroup}" = "true" ]; then
+          kill -KILL "-${child_pid}" 2>/dev/null || true
+        else
+          kill -KILL "${child_pid}" 2>/dev/null || true
+        fi
+      fi
+    fi
+  ) &
+  watcher_pid=$!
+  wait "${child_pid}"
+  rc=$?
+  kill "${watcher_pid}" 2>/dev/null || true
+  cat "${tmp_out}"
+  rm -f "${tmp_out}"
+  if [ -f "${timeout_flag}" ]; then
+    rm -f "${timeout_flag}"
+    return 124
+  fi
+  rm -f "${timeout_flag}"
+  return "${rc}"
+}
+
+# --- Trigger fresh @codex review for current HEAD ---
+CURRENT_SHA="$(git rev-parse HEAD)"
+TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+WAIT_BASE_TS="${TRIGGER_TS}"
+TRIGGER_BODY="@codex review
+
+<!-- csa-trigger:${CURRENT_SHA}:${TRIGGER_TS} -->"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
+
+# --- Delegate waiting to CSA-managed step (max 10 min) ---
+BOT_UNAVAILABLE=true
+FALLBACK_REVIEW_HAS_ISSUES=false
+set +e
+WAIT_RESULT="$(run_with_hard_timeout 650 csa run --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
+WAIT_RC=$?
+set -e
+if [ "${WAIT_RC}" -eq 124 ]; then
+  BOT_UNAVAILABLE=true
+elif [ "${WAIT_RC}" -ne 0 ]; then
+  echo "WARN: Delegated bot wait failed (rc=${WAIT_RC}); treating cloud bot as unavailable." >&2
+  BOT_UNAVAILABLE=true
+else
+  WAIT_MARKER="$(
+    printf '%s\n' "${WAIT_RESULT}" \
+      | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
+      | tail -n 1 \
+      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+      || true
+  )"
+  if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
+    BOT_UNAVAILABLE=false
+  elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
+    BOT_UNAVAILABLE=true
+  else
+    echo "WARN: Delegated bot wait returned no marker; treating cloud bot as unavailable." >&2
+    BOT_UNAVAILABLE=true
+  fi
+fi
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
-  echo "Bot timed out after ${MAX_WAIT}s. Falling back to local review."
-  csa review --range main...HEAD 2>/dev/null || true
+  echo "Bot timed out after delegated wait window. Falling back to local review."
+  if ! csa review --range main...HEAD --timeout 1200 2>/dev/null; then
+    FALLBACK_REVIEW_HAS_ISSUES=true
+  fi
 fi
+echo "CSA_VAR:BOT_UNAVAILABLE=${BOT_UNAVAILABLE}"
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
 ```"""
-on_fail = "skip"
+on_fail = "abort"
+condition = "!(${BOT_UNAVAILABLE})"
+
+[[workflow.steps]]
+id = 18
+title = "Step 6-fix: Fallback Review Fix Cycle (Bot Timeout Path)"
+tool = "bash"
+prompt = """
+When BOT_UNAVAILABLE=true and FALLBACK_REVIEW_HAS_ISSUES=true, delegate a
+self-contained fallback fix cycle to CSA. This wrapper enforces hard timeout,
+strict return-code handling, and an explicit variable clear on success.
+
+DONE WHEN:
+- CSA returns marker FALLBACK_FIX=clean and FALLBACK_REVIEW_HAS_ISSUES=false.
+- Any timeout/agent failure/invalid marker exits non-zero.
+
+```bash
+set -euo pipefail
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+run_with_hard_timeout() {
+  local timeout_secs="$1"
+  shift
+  if [ -n "${TIMEOUT_BIN}" ]; then
+    "${TIMEOUT_BIN}" -k 5s "${timeout_secs}s" "$@" 2>&1
+    return $?
+  fi
+
+  local tmp_out timeout_flag child_pid watcher_pid rc use_pgroup
+  tmp_out="$(mktemp)"
+  timeout_flag="$(mktemp)"
+  rm -f "${timeout_flag}"
+  use_pgroup=false
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"${tmp_out}" 2>&1 &
+    use_pgroup=true
+    child_pid=$!
+  else
+    "$@" >"${tmp_out}" 2>&1 &
+    child_pid=$!
+  fi
+  (
+    sleep "${timeout_secs}"
+    if kill -0 "${child_pid}" 2>/dev/null; then
+      : >"${timeout_flag}"
+      if [ "${use_pgroup}" = "true" ]; then
+        kill -TERM "-${child_pid}" 2>/dev/null || true
+      else
+        kill -TERM "${child_pid}" 2>/dev/null || true
+      fi
+      sleep 2
+      if kill -0 "${child_pid}" 2>/dev/null; then
+        if [ "${use_pgroup}" = "true" ]; then
+          kill -KILL "-${child_pid}" 2>/dev/null || true
+        else
+          kill -KILL "${child_pid}" 2>/dev/null || true
+        fi
+      fi
+    fi
+  ) &
+  watcher_pid=$!
+  wait "${child_pid}"
+  rc=$?
+  kill "${watcher_pid}" 2>/dev/null || true
+  cat "${tmp_out}"
+  rm -f "${tmp_out}"
+  if [ -f "${timeout_flag}" ]; then
+    rm -f "${timeout_flag}"
+    return 124
+  fi
+  rm -f "${timeout_flag}"
+  return "${rc}"
+}
+set +e
+FIX_RESULT="$(run_with_hard_timeout 1800 csa run --tool codex --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
+FIX_RC=$?
+set -e
+
+if [ "${FIX_RC}" -eq 124 ]; then
+  echo "ERROR: Fallback fix cycle exceeded hard timeout (1800s)." >&2
+  exit 1
+fi
+if [ "${FIX_RC}" -ne 0 ]; then
+  echo "ERROR: Fallback fix cycle failed (rc=${FIX_RC})." >&2
+  exit 1
+fi
+FIX_MARKER="$(
+  printf '%s\n' "${FIX_RESULT}" \
+    | grep -E '^[[:space:]]*FALLBACK_FIX=(clean|failed)[[:space:]]*$' \
+    | tail -n 1 \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    || true
+)"
+if [ "${FIX_MARKER}" != "FALLBACK_FIX=clean" ]; then
+  echo "ERROR: Fallback fix cycle returned invalid marker." >&2
+  exit 1
+fi
+
+FALLBACK_REVIEW_HAS_ISSUES=false
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+```"""
+on_fail = "abort"
+condition = "(${BOT_UNAVAILABLE}) && (${FALLBACK_REVIEW_HAS_ISSUES}) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 7
@@ -216,17 +472,26 @@ MANDATORY: Leave an audit trail comment on the PR explaining the merge rationale
 (bot timeout + local review CLEAN) before merging.
 
 ```bash
+if [ "${FALLBACK_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
+  echo "ERROR: Reached bot-timeout merge with unresolved fallback review issues."
+  exit 1
+fi
+if [ "${REBASE_REVIEW_HAS_ISSUES:-false}" = "true" ]; then
+  echo "ERROR: Reached bot-timeout merge with unresolved post-rebase review issues."
+  exit 1
+fi
+
 git push origin "${WORKFLOW_BRANCH}"
 
 # Audit trail: explain why merging without bot review.
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: Cloud bot (@codex) timed out. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+  "**Merge rationale**: Cloud bot (@codex) is disabled or unavailable. Local csa review --branch main passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
 git checkout main && git pull origin main
 ```"""
 on_fail = "abort"
-condition = "(${BOT_UNAVAILABLE}) && (!(${ROUND_LIMIT_REACHED}))"
+condition = "(${BOT_UNAVAILABLE}) && (!(${FALLBACK_REVIEW_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
 
 [[workflow.steps]]
 id = 8
@@ -308,11 +573,11 @@ collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
 id = 12
-title = "Push Fixes and Re-trigger"
+title = "Push Fixes and Continue Loop"
 tool = "bash"
 prompt = """
 Track iteration count via REVIEW_ROUND. Check the round cap BEFORE pushing
-fixes and triggering another bot review.
+fixes and continuing to the next review loop iteration.
 
 When REVIEW_ROUND reaches MAX_REVIEW_ROUNDS (default: 10), STOP and present
 options to the user — no new review is triggered until the user decides:
@@ -332,6 +597,8 @@ ROUND_LIMIT_MERGE (exit 0) = proceed to merge. ROUND_LIMIT_ABORT (exit 1) = stop
 ```bash
 REVIEW_ROUND=$((REVIEW_ROUND + 1))
 MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
+echo "CSA_VAR:REVIEW_ROUND=${REVIEW_ROUND}"
+echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS}"
 
 # --- Handle orchestrator re-entry with user decision (FIRST) ---
 if [ -n "${ROUND_LIMIT_ACTION}" ]; then
@@ -340,6 +607,8 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       echo "User chose: Merge now. Pushing local commits before merge."
       ROUND_LIMIT_REACHED=false
       git push origin "${WORKFLOW_BRANCH}"
+      echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
+      echo "CSA_VAR:ROUND_LIMIT_ACTION="
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
       exit 0
       ;;
@@ -348,6 +617,9 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       ROUND_LIMIT_REACHED=false
       MAX_REVIEW_ROUNDS=$((REVIEW_ROUND + MAX_REVIEW_ROUNDS))
       unset ROUND_LIMIT_ACTION
+      echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
+      echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS}"
+      echo "CSA_VAR:ROUND_LIMIT_ACTION="
       ;;
     abort)
       echo "User chose: Abort workflow."
@@ -357,7 +629,7 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
   esac
 fi
 
-# --- Round cap check BEFORE push/trigger ---
+# --- Round cap check BEFORE push/next-loop ---
 if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   ROUND_LIMIT_REACHED=true
   echo "Reached MAX_REVIEW_ROUNDS (${MAX_REVIEW_ROUNDS})."
@@ -366,16 +638,20 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
   echo "  C) Abort and investigate manually"
   echo ""
+  echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
   echo "ROUND_LIMIT_HALT: Awaiting user decision."
   exit 0
 fi
 
-# --- Push fixes and re-trigger bot review ---
+# --- Push fixes only (next trigger happens in Step 5) ---
 git push origin "${WORKFLOW_BRANCH}"
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+ROUND_LIMIT_REACHED=false
+echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
+echo "CSA_VAR:REVIEW_ROUND=${REVIEW_ROUND}"
+echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS}"
 ```
 
-Loop back to Step 5 (poll)."""
+Loop back to Step 5 (delegated wait gate)."""
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
@@ -394,21 +670,71 @@ prompt = """
 When the branch has accumulated fix commits from review iterations,
 reorganize them into logical groups before merging. Skip if <= 3 commits.
 
-After rebase, trigger one final @codex review and poll for response.
-Evaluate the post-rebase review result: badge detection uses P0/P1/P2
-(e.g., **P0**, **P1**, **P2**) to identify actionable findings.
-
-If post-rebase review has issues, run an inline fix cycle (max 3 rounds).
-If bot times out, fall back to csa review --range main...HEAD with its
-own inline fix cycle.
-
-Push before merge in ALL paths so remote HEAD includes all fixes.
+After rebase, trigger one final @codex review, then delegate all long waiting,
+fix/review retries, and timeout fallback handling to a single CSA step.
+Caller stays as router/gate only (no explicit polling loops).
 
 BLOCKING: The orchestrator MUST NOT proceed to merge until the post-rebase
 gate passes (REBASE_REVIEW_HAS_ISSUES=false and FALLBACK_REVIEW_HAS_ISSUES
 unset or false).
 
 ```bash
+set -euo pipefail
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+run_with_hard_timeout() {
+  local timeout_secs="$1"
+  shift
+  if [ -n "${TIMEOUT_BIN}" ]; then
+    "${TIMEOUT_BIN}" -k 5s "${timeout_secs}s" "$@" 2>&1
+    return $?
+  fi
+
+  local tmp_out timeout_flag child_pid watcher_pid rc use_pgroup
+  tmp_out="$(mktemp)"
+  timeout_flag="$(mktemp)"
+  rm -f "${timeout_flag}"
+  use_pgroup=false
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"${tmp_out}" 2>&1 &
+    use_pgroup=true
+    child_pid=$!
+  else
+    "$@" >"${tmp_out}" 2>&1 &
+    child_pid=$!
+  fi
+  (
+    sleep "${timeout_secs}"
+    if kill -0 "${child_pid}" 2>/dev/null; then
+      : >"${timeout_flag}"
+      if [ "${use_pgroup}" = "true" ]; then
+        kill -TERM "-${child_pid}" 2>/dev/null || true
+      else
+        kill -TERM "${child_pid}" 2>/dev/null || true
+      fi
+      sleep 2
+      if kill -0 "${child_pid}" 2>/dev/null; then
+        if [ "${use_pgroup}" = "true" ]; then
+          kill -KILL "-${child_pid}" 2>/dev/null || true
+        else
+          kill -KILL "${child_pid}" 2>/dev/null || true
+        fi
+      fi
+    fi
+  ) &
+  watcher_pid=$!
+  wait "${child_pid}"
+  rc=$?
+  kill "${watcher_pid}" 2>/dev/null || true
+  cat "${tmp_out}"
+  rm -f "${tmp_out}"
+  if [ -f "${timeout_flag}" ]; then
+    rm -f "${timeout_flag}"
+    return 124
+  fi
+  rm -f "${timeout_flag}"
+  return "${rc}"
+}
+
 COMMIT_COUNT=$(git rev-list --count main..HEAD)
 if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 1. Create backup branch (idempotent)
@@ -421,13 +747,13 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 3. Create logical commits by selectively staging files
   git reset HEAD .
   # Group 1: Source code
-  git diff --name-only -z HEAD | grep -zE '^(src/|crates/|lib/|bin/)' | xargs -0 --no-run-if-empty git add --
+  git diff --name-only -z HEAD | { grep -zE '^(src/|crates/|lib/|bin/)' || true; } | xargs -0 --no-run-if-empty git add --
   if ! git diff --cached --quiet; then
     git commit -m "feat(scope): primary implementation changes"
   fi
 
   # Group 2: Patterns, skills, and workflow definitions
-  git diff --name-only -z HEAD | grep -zE '^(patterns/|\.claude/)' | xargs -0 --no-run-if-empty git add --
+  git diff --name-only -z HEAD | { grep -zE '^(patterns/|\\.claude/)' || true; } | xargs -0 --no-run-if-empty git add --
   if ! git diff --cached --quiet; then
     git commit -m "fix(scope): pattern and skill updates"
   fi
@@ -452,101 +778,49 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 6. Trigger final @codex review
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
 
-  # 7. Poll for bot response
-  REBASE_BOT_OK=false
-  POLL_INTERVAL=30
-  MAX_WAIT=600
-  WAITED=0
-  while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
-    sleep "${POLL_INTERVAL}"
-    WAITED=$((WAITED + POLL_INTERVAL))
-    BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
-      --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\")] | length" 2>/dev/null || echo "0")
-    if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
-      REBASE_BOT_OK=true
-      break
-    fi
-    echo "Post-rebase poll... ${WAITED}s / ${MAX_WAIT}s"
-  done
-
-  # 8. BLOCKING: Evaluate final review result
-  if [ "${REBASE_BOT_OK}" = "true" ]; then
-    REBASE_BOT_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
-      --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\") | select(.body | test(\\"\\\\*\\\\*P[012]\\\\*\\\\*\\"))] | length" 2>/dev/null || echo "0")
-
-    if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
-      REBASE_REVIEW_HAS_ISSUES=true
-      # Inline post-rebase fix cycle (max 3 rounds)
-      REBASE_FIX_ROUND=0
-      REBASE_FIX_MAX=3
-      while [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ] && [ "${REBASE_FIX_ROUND}" -lt "${REBASE_FIX_MAX}" ]; do
-        REBASE_FIX_ROUND=$((REBASE_FIX_ROUND + 1))
-        csa run "Fix the issues found by the post-rebase bot review on PR #${PR_NUM}. Read the bot comments and apply fixes. Commit the fixes."
-        git push origin "${WORKFLOW_BRANCH}"
-        gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
-
-        REFIX_BOT_OK=false
-        REFIX_WAITED=0
-        while [ "${REFIX_WAITED}" -lt "${MAX_WAIT}" ]; do
-          sleep "${POLL_INTERVAL}"
-          REFIX_WAITED=$((REFIX_WAITED + POLL_INTERVAL))
-          REFIX_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
-            --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\")] | length" 2>/dev/null || echo "0")
-          if [ "${REFIX_REPLY}" -gt 0 ] 2>/dev/null; then
-            REFIX_BOT_OK=true
-            break
-          fi
-        done
-
-        if [ "${REFIX_BOT_OK}" = "true" ]; then
-          REFIX_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \\
-            --jq "[.[] | select(.user.type == \\"Bot\\" or .user.login == \\"codex[bot]\\" or .user.login == \\"codex-bot\\") | select(.created_at > \\"$(git log -1 --format=%cI HEAD)\\") | select(.body | test(\\"\\\\*\\\\*P[012]\\\\*\\\\*\\"))] | length" 2>/dev/null || echo "0")
-          if [ "${REFIX_ISSUES}" -eq 0 ] 2>/dev/null; then
-            REBASE_REVIEW_HAS_ISSUES=false
-          fi
-        else
-          if csa review --range main...HEAD 2>/dev/null; then
-            REBASE_REVIEW_HAS_ISSUES=false
-          fi
-        fi
-      done
-
-      if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
-        echo "ERROR: Post-rebase review still failing after ${REBASE_FIX_MAX} rounds. Aborting."
-        exit 1
-      fi
-      git push origin "${WORKFLOW_BRANCH}"
-    else
-      REBASE_REVIEW_HAS_ISSUES=false
-    fi
-  else
-    # Bot timed out — fallback to local review
-    if csa review --range main...HEAD 2>/dev/null; then
-      # Audit trail: explain why merging without post-rebase bot review.
-      gh pr comment "${PR_NUM}" --repo "${REPO}" --body \\
-        "**Merge rationale**: Post-rebase cloud bot timed out. Local csa review --range main...HEAD passed CLEAN. Proceeding to merge with local review as the review layer."
-    else
-      FALLBACK_REVIEW_HAS_ISSUES=true
-      # Inline fallback fix cycle (max 3 rounds)
-      REBASE_FB_FIX_ROUND=0
-      REBASE_FB_FIX_MAX=3
-      while [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ] && [ "${REBASE_FB_FIX_ROUND}" -lt "${REBASE_FB_FIX_MAX}" ]; do
-        REBASE_FB_FIX_ROUND=$((REBASE_FB_FIX_ROUND + 1))
-        csa run "Fix the issues found by csa review --range main...HEAD. Read the review output and apply fixes. Commit the fixes."
-        if csa review --range main...HEAD 2>/dev/null; then
-          FALLBACK_REVIEW_HAS_ISSUES=false
-        fi
-      done
-      if [ "${FALLBACK_REVIEW_HAS_ISSUES}" = "true" ]; then
-        echo "ERROR: Post-rebase fallback review still failing after ${REBASE_FB_FIX_MAX} rounds. Aborting."
-        exit 1
-      fi
-      git push origin "${WORKFLOW_BRANCH}"
-      # Audit trail: explain merge after fix cycle.
-      gh pr comment "${PR_NUM}" --repo "${REPO}" --body \\
-        "**Merge rationale**: Post-rebase cloud bot timed out. Local csa review --range main...HEAD passed CLEAN after ${REBASE_FB_FIX_ROUND} fix round(s). Proceeding to merge with local review as the review layer."
-    fi
+  # 7. Delegate post-rebase wait/fix/review loop to CSA.
+  set +e
+  GATE_RESULT="$(run_with_hard_timeout 2400 csa run --tool codex --idle-timeout 2400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end: wait up to 10 minutes for @codex response to the latest trigger; if response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check (max 3 rounds); if bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
+  GATE_RC=$?
+  set -e
+  if [ "${GATE_RC}" -eq 124 ]; then
+    REBASE_REVIEW_HAS_ISSUES=true
+    FALLBACK_REVIEW_HAS_ISSUES=true
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "ERROR: Post-rebase delegated gate exceeded hard timeout (2400s)." >&2
+    exit 1
   fi
+  if [ "${GATE_RC}" -ne 0 ]; then
+    REBASE_REVIEW_HAS_ISSUES=true
+    FALLBACK_REVIEW_HAS_ISSUES=true
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "ERROR: Post-rebase delegated gate failed (rc=${GATE_RC})." >&2
+    exit 1
+  fi
+
+  GATE_MARKER="$(
+    printf '%s\n' "${GATE_RESULT}" \
+      | grep -E '^[[:space:]]*REBASE_GATE=(PASS|FAIL)[[:space:]]*$' \
+      | tail -n 1 \
+      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+      || true
+  )"
+  if [ "${GATE_MARKER}" != "REBASE_GATE=PASS" ]; then
+    REBASE_REVIEW_HAS_ISSUES=true
+    FALLBACK_REVIEW_HAS_ISSUES=true
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "ERROR: Post-rebase review gate failed."
+    exit 1
+  fi
+
+  REBASE_REVIEW_HAS_ISSUES=false
+  FALLBACK_REVIEW_HAS_ISSUES=false
+  echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+  echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+  git push origin "${WORKFLOW_BRANCH}"
 fi
 ```"""
 on_fail = "abort"
