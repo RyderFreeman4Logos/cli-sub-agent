@@ -2,7 +2,7 @@
 name = "csa-review"
 description = "CSA-driven code review with independent model selection, session isolation, and structured outputs"
 allowed-tools = "Bash, Read, Grep, Glob"
-tier = "tier-2-standard"
+tier = "tier-3-complex"
 version = "0.1.0"
 ---
 
@@ -68,7 +68,7 @@ Review prompt instructs agent to:
 ## Step 5: Execute Review via CSA
 
 Tool: csa
-Tier: tier-2-standard
+Tier: tier-3-complex
 
 The review tool is resolved from `[review] tool` in config (Step 2).
 If `review.tool = "auto"`, CSA selects a heterogeneous counterpart automatically.
@@ -109,7 +109,7 @@ AGENTS.md checklist summary. Report CSA session ID for follow-up.
 ## Step 7: Fix Mode
 
 Tool: csa
-Tier: tier-2-standard
+Tier: tier-3-complex
 
 Resume same CSA session to fix all P0 and P1 issues.
 Generate fix-summary.md and post-fix-review-findings.json.

@@ -88,7 +88,7 @@ prompt = """
 Perform code review: ${SCOPE}.
 
 ${REVIEW_PROMPT}"""
-tier = "tier-2-standard"
+tier = "tier-3-complex"
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -111,7 +111,7 @@ $CSA_SESSION_DIR/reviewer-{N}/post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
 ${FIX_PROMPT}"""
-tier = "tier-2-standard"
+tier = "tier-3-complex"
 on_fail = "abort"
 condition = "${MODE_IS_REVIEW_AND_FIX}"
 
