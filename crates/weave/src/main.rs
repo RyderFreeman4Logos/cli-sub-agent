@@ -224,6 +224,14 @@ fn main() -> Result<()> {
             Ok(csa_config::VersionCheckResult::AutoUpdated) => {
                 tracing::debug!("weave.lock auto-updated to match binary version");
             }
+            Ok(csa_config::VersionCheckResult::BinaryOlder {
+                lock_csa_version,
+                binary_csa_version,
+            }) => {
+                eprintln!(
+                    "WARNING: running older weave binary ({binary_csa_version}) than weave.lock ({lock_csa_version}); lockfile unchanged."
+                );
+            }
             Ok(_) => {}
             Err(e) => {
                 tracing::debug!("weave.lock version check failed: {e:#}");
