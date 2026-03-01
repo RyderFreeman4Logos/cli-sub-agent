@@ -379,10 +379,10 @@ id = 15
 title = "Commit"
 tool = "bash"
 prompt = """
-Create the commit using the generated message from Step 12.
+Create the commit using the generated message from Step 14.
 
 ```bash
-COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
+COMMIT_MSG_LOCAL="${STEP_14_OUTPUT:-${COMMIT_MSG:-}}"
 if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   echo "ERROR: Commit message is empty. Step 12 must output a commit message." >&2
   exit 1
@@ -485,9 +485,9 @@ if [ -z "${REPO_LOCAL}" ]; then
   echo "ERROR: Cannot resolve repository owner/name." >&2
   exit 1
 fi
-COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
+COMMIT_MSG_LOCAL="${STEP_14_OUTPUT:-${COMMIT_MSG:-}}"
 if [ -z "${COMMIT_MSG_LOCAL}" ]; then
-  echo "ERROR: PR title is empty. Step 12 output is required." >&2
+  echo "ERROR: PR title is empty. Step 14 output is required." >&2
   exit 1
 fi
 PR_BODY_LOCAL="${PR_BODY:-Summary:
@@ -563,9 +563,9 @@ if [ -z "${REPO_LOCAL}" ]; then
   echo "ERROR: Cannot resolve repository owner/name." >&2
   exit 1
 fi
-PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-TRIGGER_TS="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
-TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
+PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+TRIGGER_TS="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 write_reflection_issue() {
@@ -717,7 +717,7 @@ if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
   exit 1
 fi
 git push origin "${BRANCH}"
-PR_NUM_LOCAL="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+PR_NUM_LOCAL="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 if [ -z "${PR_NUM_LOCAL}" ]; then
   PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
 fi
@@ -761,11 +761,11 @@ if [ -z "${REPO_LOCAL}" ]; then
   echo "ERROR: Cannot resolve repository owner/name." >&2
   exit 1
 fi
-PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_27_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-TRIGGER_TS="$(printf '%s\n' "${STEP_27_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
-TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_27_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
+PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+TRIGGER_TS="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then
-  PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+  PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 fi
 if [ -z "${PR_NUM_FROM_STEP}" ]; then
   PR_NUM_FROM_STEP="$(gh pr view --json number -q '.number')"
@@ -879,9 +879,9 @@ if [ -z "${REPO_LOCAL}" ]; then
   echo "ERROR: Cannot resolve repository owner/name." >&2
   exit 1
 fi
-PR_NUM_LOCAL="$(printf '%s\n' "${STEP_27_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+PR_NUM_LOCAL="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 if [ -z "${PR_NUM_LOCAL}" ]; then
-  PR_NUM_LOCAL="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+  PR_NUM_LOCAL="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 fi
 if [ -z "${PR_NUM_LOCAL}" ]; then
   PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
@@ -910,7 +910,7 @@ if [ -z "${REPO_LOCAL}" ]; then
   echo "ERROR: Cannot resolve repository owner/name." >&2
   exit 1
 fi
-PR_NUM_LOCAL="$(printf '%s\n' "${STEP_21_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+PR_NUM_LOCAL="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 if [ -z "${PR_NUM_LOCAL}" ]; then
   PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
 fi
