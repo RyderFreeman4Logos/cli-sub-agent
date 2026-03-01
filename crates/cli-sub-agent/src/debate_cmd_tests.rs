@@ -557,6 +557,22 @@ fn parse_debate_args(argv: &[&str]) -> crate::cli::DebateArgs {
 }
 
 #[test]
+fn debate_cli_parses_global_json_format() {
+    use crate::cli::{Cli, Commands};
+    use clap::Parser;
+    use csa_core::types::OutputFormat;
+
+    let cli = Cli::try_parse_from(["csa", "--format", "json", "debate", "question"])
+        .expect("cli should parse global json format for debate");
+
+    assert!(matches!(cli.format, OutputFormat::Json));
+    match cli.command {
+        Commands::Debate(args) => assert_eq!(args.question.as_deref(), Some("question")),
+        _ => panic!("expected debate subcommand"),
+    }
+}
+
+#[test]
 fn debate_cli_parses_timeout_flag() {
     let args = parse_debate_args(&["csa", "debate", "--timeout", "120", "question"]);
     assert_eq!(args.timeout, Some(120));
@@ -669,6 +685,26 @@ fn debate_stream_mode_explicit_stream() {
 fn debate_stream_mode_explicit_no_stream() {
     let mode = resolve_debate_stream_mode(false, true);
     assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+#[test]
+fn render_debate_cli_output_respects_json_format() {
+    use csa_core::types::OutputFormat;
+
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Need more evidence.".to_string(),
+        key_points: vec!["Point A".to_string()],
+        mode: DebateMode::Heterogeneous,
+    };
+
+    let rendered =
+        render_debate_cli_output(OutputFormat::Json, &summary, "Transcript body", "01META")
+            .unwrap();
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(parsed["meta_session_id"], "01META");
+    assert_eq!(parsed["transcript"], "Transcript body");
 }
 
 // --- resolve_debate_thinking tests ---

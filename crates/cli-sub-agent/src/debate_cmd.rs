@@ -243,19 +243,33 @@ pub(crate) async fn handle_debate(
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
     append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
 
-    match output_format {
-        OutputFormat::Text => {
-            print!("{}", format_debate_stdout_text(&debate_summary, &output));
-        }
-        OutputFormat::Json => {
-            println!(
-                "{}",
-                render_debate_stdout_json(&debate_summary, &output, &execution.meta_session_id)?
-            );
-        }
+    let rendered_output = render_debate_cli_output(
+        output_format,
+        &debate_summary,
+        &output,
+        &execution.meta_session_id,
+    )?;
+    if rendered_output.ends_with('\n') {
+        print!("{rendered_output}");
+    } else {
+        println!("{rendered_output}");
     }
 
     Ok(execution.execution.exit_code)
+}
+
+fn render_debate_cli_output(
+    output_format: OutputFormat,
+    debate_summary: &crate::debate_cmd_output::DebateSummary,
+    transcript: &str,
+    meta_session_id: &str,
+) -> Result<String> {
+    match output_format {
+        OutputFormat::Text => Ok(format_debate_stdout_text(debate_summary, transcript)),
+        OutputFormat::Json => {
+            render_debate_stdout_json(debate_summary, transcript, meta_session_id)
+        }
+    }
 }
 
 const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);
