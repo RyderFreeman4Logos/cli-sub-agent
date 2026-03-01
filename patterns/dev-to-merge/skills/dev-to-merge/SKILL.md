@@ -29,7 +29,7 @@ Treat the run as executor ONLY when initial prompt contains:
 
 ## Purpose
 
-Execute the complete development lifecycle on a feature branch: mandatory mktd planning (with internal debate), format, lint, test, stage, security scan, security audit, heterogeneous code review, commit with Conventional Commits, push, create PR, trigger cloud codex-bot review, handle false-positive arbitration via debate, fix-and-retrigger loops, and final squash-merge to main. This is the "everything in one command" workflow that composes `mktd`, `commit`, `security-audit`, `ai-reviewed-commit`, and `pr-codex-bot` into a single end-to-end pipeline.
+Execute the complete development lifecycle on a feature branch: mandatory mktd planning (with internal debate), format, lint, test, stage, security scan, security audit, heterogeneous code review, commit with Conventional Commits, push, create PR, and then delegate the full cloud review/polling/fix/merge loop to `pr-codex-bot`. This is the "everything in one command" workflow that composes `mktd`, `commit`, `security-audit`, `ai-reviewed-commit`, and `pr-codex-bot` into a single end-to-end pipeline.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -63,11 +63,9 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 12. **Pre-PR cumulative review**: `csa review --range main...HEAD` (covers full branch, NOT just last commit). MUST pass before push.
 13. **Push**: `git push -u origin ${BRANCH}`.
 14. **Create PR**: `gh pr create --base main`.
-15. **Trigger codex bot**: post `@codex review` and capture trigger timestamp.
-16. **Poll and evaluate**: wait for bot comments/reviews newer than trigger timestamp.
-17. **Arbitrate false positives**: Use `csa debate` with independent model.
-18. **Fix real issues**: Commit fixes, push, re-trigger bot (max 10 iterations).
-19. **Merge**: `gh pr merge --squash --delete-branch`, update local main.
+15. **Delegate PR review loop**: invoke `csa run --skill pr-codex-bot --no-stream-stdout ...`.
+16. **Do not poll in caller**: all trigger/poll/timeout/fix/review/merge waiting is handled inside delegated CSA workflow.
+17. **Post-merge sync**: ensure local `main` is updated after delegated workflow completes.
 
 ## Example Usage
 
@@ -93,8 +91,8 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 6. Pre-commit review completed with zero unresolved P0/P1 issues.
 7. Commit created with Conventional Commits format.
 8. PR created on GitHub targeting main.
-9. Cloud codex bot triggered and response handled.
-10. All bot comments classified and actioned (fixed, arbitrated, or acknowledged).
+9. `pr-codex-bot` delegated workflow completed successfully.
+10. Cloud review polling and fix loops stayed inside delegated CSA session (no caller-side polling loop).
 11. PR merged via squash-merge.
 12. Local main updated: `git checkout main && git pull origin main`.
 13. Feature branch deleted (remote and local).
