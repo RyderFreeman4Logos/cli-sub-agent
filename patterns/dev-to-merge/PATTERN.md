@@ -50,8 +50,10 @@ set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
 MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
+set +e
 MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
 MKTD_STATUS=$?
+set -e
 printf '%s\n' "${MKTD_OUTPUT}"
 if [ "${MKTD_STATUS}" -ne 0 ]; then
   echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
@@ -440,11 +442,11 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ]; then
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
-  if [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
     echo ""
     exit 0
   fi
@@ -559,11 +561,11 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ]; then
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
-  if [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
     echo ""
     exit 0
   fi
