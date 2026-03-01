@@ -45,7 +45,16 @@ name = "COMMENT_URL"
 name = "COMMIT_MSG_LOCAL"
 
 [[workflow.variables]]
+name = "CURRENT_BRANCH"
+
+[[workflow.variables]]
 name = "ELAPSED"
+
+[[workflow.variables]]
+name = "FEATURE_INPUT"
+
+[[workflow.variables]]
+name = "LATEST_TS"
 
 [[workflow.variables]]
 name = "LOCAL_REVIEW_OUTPUT"
@@ -55,6 +64,15 @@ name = "LOCAL_REVIEW_STATUS"
 
 [[workflow.variables]]
 name = "MATCHED_LOCKFILES"
+
+[[workflow.variables]]
+name = "MKTD_OUTPUT"
+
+[[workflow.variables]]
+name = "MKTD_PROMPT"
+
+[[workflow.variables]]
+name = "MKTD_STATUS"
 
 [[workflow.variables]]
 name = "ORIGIN_URL"
@@ -97,6 +115,9 @@ name = "STEP_27_OUTPUT"
 
 [[workflow.variables]]
 name = "TIMEOUT"
+
+[[workflow.variables]]
+name = "TODO_PATH"
 
 [[workflow.variables]]
 name = "TRIGGER_COMMENT_ID"
@@ -150,18 +171,49 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 2
-title = "Step 1.5: Plan with mktd (Debate Required)"
+title = "Plan with mktd (Debate Required)"
 tool = "bash"
 prompt = """
 Generate or refresh a branch TODO plan through `mktd` before development gates.
-This step MUST pass through mktd's built-in debate phase and save a TODO."""
+This step MUST pass through mktd's built-in debate phase and save a TODO.
+
+```bash
+: "mktd execution is handled by Step 3 include"
+```"""
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 3
 title = "Include mktd"
-tool = "weave"
-prompt = "mktd"
+prompt = '''
+```bash
+set -euo pipefail
+CURRENT_BRANCH="$(git branch --show-current)"
+FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
+MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
+set +e
+MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
+MKTD_STATUS=$?
+set -e
+printf '%s\n' "${MKTD_OUTPUT}"
+if [ "${MKTD_STATUS}" -ne 0 ]; then
+  echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
+  exit 1
+fi
+LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
+if [ -z "${LATEST_TS}" ]; then
+  echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2
+  exit 1
+fi
+TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
+if [ ! -s "${TODO_PATH}" ]; then
+  echo "ERROR: TODO file is empty: ${TODO_PATH}" >&2
+  exit 1
+fi
+grep -qF -- '- [ ] ' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks: ${TODO_PATH}" >&2; exit 1; }
+grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses: ${TODO_PATH}" >&2; exit 1; }
+printf 'MKTD_TODO_TIMESTAMP=%s\nMKTD_TODO_PATH=%s\n' "${LATEST_TS}" "${TODO_PATH}"
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -357,7 +409,7 @@ title = "Re-review"
 tool = "csa"
 prompt = """
 Run `csa review --diff` again to verify all issues are resolved.
-Loop back to Step 9 if issues persist (max 3 rounds)."""
+Loop back to Step 11 if issues persist (max 3 rounds)."""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
@@ -384,7 +436,7 @@ Create the commit using the generated message from Step 14.
 ```bash
 COMMIT_MSG_LOCAL="${STEP_14_OUTPUT:-${COMMIT_MSG:-}}"
 if [ -z "${COMMIT_MSG_LOCAL}" ]; then
-  echo "ERROR: Commit message is empty. Step 12 must output a commit message." >&2
+  echo "ERROR: Commit message is empty. Step 14 must output a commit message." >&2
   exit 1
 fi
 git commit -m "${COMMIT_MSG_LOCAL}"
@@ -433,8 +485,8 @@ title = "Pre-PR Cumulative Review"
 tool = "csa"
 prompt = """
 Run a cumulative review covering ALL commits on the feature branch since main.
-This is distinct from Step 8's per-commit review (`csa review --diff`):
-- Step 8 reviews uncommitted changes (staged diff) — single-commit granularity.
+This is distinct from Step 10's per-commit review (`csa review --diff`):
+- Step 10 reviews uncommitted changes (staged diff) — single-commit granularity.
 - This step reviews the full feature branch — catches cross-commit issues.
 
 MANDATORY: This review MUST pass before pushing to origin.
