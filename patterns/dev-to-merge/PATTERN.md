@@ -227,31 +227,72 @@ echo "CSA_VAR:SECURITY_AUDIT_VERDICT=${VERDICT}"
 
 ## Step 10: Pre-Commit Review
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 
-Run heterogeneous code review on all uncommitted changes versus HEAD.
-The reviewer MUST be a different model family than the code author.
+Run heterogeneous pre-commit review on uncommitted changes.
+This step is strictly review-only: no commit/push/PR side effects.
 
 ```bash
-csa review --diff
-```
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  REVIEW_OUTPUT="$(timeout 1800 csa review --diff 2>&1)"
+  REVIEW_STATUS=$?
+else
+  REVIEW_OUTPUT="$(csa review --diff 2>&1)"
+  REVIEW_STATUS=$?
+fi
+set -e
+printf '%s\n' "${REVIEW_OUTPUT}"
 
-Review output includes AGENTS.md compliance checklist.
+if [ "${REVIEW_STATUS}" -eq 124 ]; then
+  echo "ERROR: pre-commit review timed out after 1800s." >&2
+  exit 1
+fi
+
+if [ "${REVIEW_STATUS}" -eq 0 ]; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
+  exit 0
+fi
+
+if printf '%s\n' "${REVIEW_OUTPUT}" | grep -q '<!-- CSA:SECTION:'; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
+  exit 0
+fi
+
+echo "ERROR: csa review failed unexpectedly (exit=${REVIEW_STATUS})." >&2
+exit 1
+```
 
 ## IF ${REVIEW_HAS_ISSUES}
 
 ## Step 11: Fix Review Issues
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 OnFail: retry 3
 
-Fix each issue identified by the pre-commit review.
-Preserve original code intent. Do NOT delete code to silence warnings.
-Before applying fixes, write a reflection note to
-`drafts/issues/<date --iso-8601=seconds>/review-reflection.md` classifying root
-cause as `RULE_GAP`, `WORKFLOW_GAP`, or `EXECUTION_GAP`.
+Apply fixes for issues found in Step 10 using review-and-fix mode.
+Do not commit/push inside this step; only modify code.
+
+```bash
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  FIX_OUTPUT="$(timeout 1800 csa review --diff --fix 2>&1)"
+  FIX_STATUS=$?
+else
+  FIX_OUTPUT="$(csa review --diff --fix 2>&1)"
+  FIX_STATUS=$?
+fi
+set -e
+printf '%s\n' "${FIX_OUTPUT}"
+if [ "${FIX_STATUS}" -eq 124 ]; then
+  echo "ERROR: review --fix timed out after 1800s." >&2
+  exit 1
+fi
+if [ "${FIX_STATUS}" -ne 0 ]; then
+  echo "ERROR: review --fix failed (exit=${FIX_STATUS})." >&2
+  exit 1
+fi
+```
 
 ## Step 12: Re-run Quality Gates
 
@@ -266,11 +307,42 @@ just pre-commit
 
 ## Step 13: Re-review
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 
-Run `csa review --diff` again to verify all issues are resolved.
-Loop back to Step 11 if issues persist (max 3 rounds).
+Re-run review to verify remediation quality.
+If issues remain after fix, fail the workflow.
+
+```bash
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  REREVIEW_OUTPUT="$(timeout 1800 csa review --diff 2>&1)"
+  REREVIEW_STATUS=$?
+else
+  REREVIEW_OUTPUT="$(csa review --diff 2>&1)"
+  REREVIEW_STATUS=$?
+fi
+set -e
+printf '%s\n' "${REREVIEW_OUTPUT}"
+
+if [ "${REREVIEW_STATUS}" -eq 124 ]; then
+  echo "ERROR: re-review timed out after 1800s." >&2
+  exit 1
+fi
+
+if [ "${REREVIEW_STATUS}" -eq 0 ]; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
+  exit 0
+fi
+
+if printf '%s\n' "${REREVIEW_OUTPUT}" | grep -q '<!-- CSA:SECTION:'; then
+  echo "ERROR: Re-review still reports unresolved issues." >&2
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
+  exit 1
+fi
+
+echo "ERROR: re-review failed unexpectedly (exit=${REREVIEW_STATUS})." >&2
+exit 1
+```
 
 ## ENDIF
 
@@ -338,20 +410,19 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 
 ## Step 17: Pre-PR Cumulative Review
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 OnFail: abort
 
-Run a cumulative review covering ALL commits on the feature branch since main.
-This is distinct from Step 10's per-commit review (`csa review --diff`):
-- Step 10 reviews uncommitted changes (staged diff) — single-commit granularity.
-- This step reviews the full feature branch — catches cross-commit issues.
-
-MANDATORY: This review MUST pass before pushing to origin.
+Run cumulative read-only review for the full feature branch range.
+This gate must pass before push/PR.
 
 ```bash
-csa review --range main...HEAD
-CUMULATIVE_REVIEW_COMPLETED=true
+if command -v timeout >/dev/null 2>&1; then
+  timeout 1800 csa review --range main...HEAD
+else
+  csa review --range main...HEAD
+fi
+echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
 ```
 
 ## Step 18: Push to Origin
@@ -404,7 +475,18 @@ Validation:
 - just test
 - csa review --range main...HEAD
 }"
+BRANCH="$(git branch --show-current)"
+EXISTING_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+if [ -n "${EXISTING_PR}" ] && [ "${EXISTING_PR}" != "null" ]; then
+  echo "INFO: Reusing existing PR #${EXISTING_PR} for branch ${BRANCH}."
+  echo "CSA_VAR:PR_NUMBER=${EXISTING_PR}"
+  exit 0
+fi
 gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
+CREATED_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+if [ -n "${CREATED_PR}" ] && [ "${CREATED_PR}" != "null" ]; then
+  echo "CSA_VAR:PR_NUMBER=${CREATED_PR}"
+fi
 ```
 
 ## Step 20: Delegate PR Review/Merge to pr-codex-bot

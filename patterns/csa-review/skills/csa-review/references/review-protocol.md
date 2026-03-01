@@ -6,6 +6,7 @@
 > **CRITICAL**: You are the review agent. Your job is to review code DIRECTLY — NOT to orchestrate.
 > **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command.
 > Do NOT spawn sub-agents. Do NOT delegate. Execute every step below yourself using `git`, `cat`, `grep`, etc.
+> **REVIEW-ONLY SAFETY**: Do NOT run `git add/commit/push/merge/rebase/checkout/reset/stash` or mutate PR state with `gh pr` write operations.
 > Write review artifacts to `$CSA_SESSION_DIR/reviewer-{N}/` (for example:
 > `$CSA_SESSION_DIR/reviewer-{N}/review-findings.json` and `$CSA_SESSION_DIR/reviewer-{N}/review-report.md`).
 
