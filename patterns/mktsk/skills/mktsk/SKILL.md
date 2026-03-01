@@ -1,6 +1,6 @@
 ---
 name: mktsk
-description: Convert TODO plans into Task tool entries for persistent serial execution across auto-compaction
+description: Convert TODO plans into deterministic, resumable serial execution checklists across auto-compaction
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit
 triggers:
   - "mktsk"
@@ -28,7 +28,7 @@ triggers:
 
 ## Purpose
 
-Convert TODO plans (from `mktd` or user-provided) into Task tool entries that persist across auto-compaction. Enforces strict serial execution: implement, review, commit, then next task. Every task carries an executor tag, a mechanically verifiable DONE WHEN condition, and a corresponding commit step. Context is compacted at >80% to prevent overflow during multi-task execution.
+Execute TODO plans (from `mktd` or user-provided) as deterministic, resumable serial checklists. Enforces strict serial execution: implement, verify, review, persist progress, then next task. Every checklist item carries an executor tag and a mechanically verifiable `DONE WHEN` condition.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -46,17 +46,21 @@ csa run --skill mktsk "Execute the TODO plan at <path or csa todo show -t <times
 
 ### Step-by-Step
 
-1. **Parse TODO plan**: Read the TODO file. Extract each `[ ]` item with its executor tag and description.
-2. **Create Task entries**: For each TODO item, create a TaskCreate entry with:
+1. **Parse TODO plan**: Read the TODO file. Extract each `[ ]` item with executor tag and `DONE WHEN`.
+2. **Build checklist entries**: Normalize each item into a serial execution entry with:
+   - Stable item id
+   - Source TODO line reference
    - Subject with executor tag: `[Sub:developer]`, `[Skill:commit]`, `[CSA:tool]`
    - Description with clear scope
    - DONE WHEN condition (mechanically verifiable)
-3. **Append commit tasks**: For each implementation task, append a corresponding `[Skill:commit]` task that runs the full commit workflow.
-4. **Execute serially**: Process tasks strictly in order. NEVER parallelize implementation tasks.
-   - For each implementation task: write code, run `just pre-commit`, run `csa review --diff`, invoke `/commit`.
-   - If context > 80%: compact, preserving task list and decisions.
-   - Mark each task complete via TaskUpdate.
-5. **Verify completion**: Check all tasks completed. Run `just pre-commit` and `git status` for final verification.
+3. **Execute serially with checkpointing**: Process checklist items strictly in order. NEVER parallelize implementation tasks.
+   - Treat each item as an atomic transaction: execute one item -> verify -> review -> persist TODO/checkpoint.
+   - After each implementation item: run `just fmt`, `just clippy`, `just test`, then `csa review --diff`.
+   - Mark each completed item in the TODO checklist.
+   - Write latest completed item id to `.csa/state/mktsk/checkpoint.json` after each completed item.
+   - On interruption, resume from unchecked TODO items and checkpoint state.
+4. **Compact if needed**: If context > 80%, compact while preserving remaining items and review findings.
+5. **Verify completion**: Run `just fmt`, `just clippy`, `just test`, and `git status --short`.
 
 ## Example Usage
 
@@ -74,10 +78,10 @@ csa run --skill mktsk "Execute the TODO plan at <path or csa todo show -t <times
 
 ## Done Criteria
 
-1. All TODO items parsed and converted to Task entries with executor tags.
-2. Each implementation task has a corresponding commit task.
-3. All tasks executed in strict serial order.
-4. Each task's DONE WHEN condition verified before marking complete.
-5. `just pre-commit` exits 0 after final task.
-6. `git status` shows clean working tree.
-7. All Task entries marked complete via TaskUpdate.
+1. All TODO items parsed and converted to checklist entries with executor tags.
+2. All checklist items executed in strict serial order.
+3. Each task's DONE WHEN condition verified before marking complete.
+4. Completed items are marked in TODO.
+5. Progress checkpoint is updated after each completed item.
+6. `just fmt`, `just clippy`, and `just test` exit 0 after final task.
+7. `git status` shows clean working tree.

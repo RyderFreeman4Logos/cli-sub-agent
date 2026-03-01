@@ -126,7 +126,7 @@ immediate post-commit fixing.
 
 ## ENDIF
 
-## Step 8: Pre-Commit Review
+## Step 10: Pre-Commit Review
 
 Tool: csa
 Tier: tier-2-standard
@@ -158,7 +158,7 @@ rather than spending tokens on exploration.
 
 ## IF ${REVIEW_HAS_ISSUES}
 
-## Step 9: Fix Review Issues
+## Step 11: Fix Review Issues
 
 Tool: csa
 Tier: tier-2-standard
@@ -174,7 +174,7 @@ just pre-commit
 
 ## IF ${ENABLE_REVIEW_LOOP} == "true"
 
-## Step 10: Optional Review-Loop
+## Step 12: Optional Review-Loop
 
 Tool: csa
 Tier: tier-2-standard
@@ -186,25 +186,19 @@ Run `review-loop` pattern on staged changes before final commit.
 
 ## ENDIF
 
-## Step 11: Generate Commit Message
+## Step 13: Generate Commit Message
 
-Tool: csa
-Tier: tier-1-quick
+Tool: bash
+OnFail: abort
 
-Delegate message generation to a lightweight tier. Commit messages are mechanical
-(read diff → format) — no deep reasoning needed.
-Scope: `${SCOPE}`.
+Generate a deterministic Conventional Commits message from staged files.
+Avoid model-dependent loops in commit-message generation.
 
-Tool and thinking budget are determined by the `tier-1-quick` config in
-`~/.config/cli-sub-agent/config.toml`. Do NOT hardcode `--tool` or `--thinking`
-flags — the tier system already specifies the right model.
+```bash
+scripts/gen_commit_msg.sh "${SCOPE:-}"
+```
 
-**Session reuse** (PREFERRED): If a review session already ran in this workflow,
-resume it with `--session <REVIEW_SESSION_ID>`. The model already "saw" the
-changes, so generating a message costs near-zero new tokens. When resuming,
-keep the same tool (sessions are tool-locked).
-
-## Step 12: Commit
+## Step 14: Commit
 
 Tool: bash
 OnFail: abort
@@ -215,7 +209,7 @@ git commit -m "${COMMIT_MSG}"
 
 ## IF ${IS_MILESTONE}
 
-## Step 13: Auto PR
+## Step 15: Auto PR
 
 Tool: bash
 OnFail: abort
@@ -228,7 +222,7 @@ git push -u origin "${BRANCH}"
 gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
 ```
 
-## Step 14: Invoke PR Codex Bot
+## Step 16: Invoke PR Codex Bot
 
 ## INCLUDE pr-codex-bot
 
@@ -239,9 +233,9 @@ Handles local review, cloud bot trigger, false-positive arbitration, merge.
 
 ## IF ${HAS_DEFERRED_ISSUES}
 
-## Step 15: Fix Deferred Issues
+## Step 17: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-12).
+Each fix goes through full commit workflow (Steps 1-14).
 
 ## ENDIF

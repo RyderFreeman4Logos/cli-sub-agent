@@ -141,14 +141,14 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 8
-title = "Step 7a: Fix Audit Issues"
+title = "Fix Audit Issues"
 prompt = "Fix blocking issues and re-run from Step 2."
 on_fail = "abort"
 condition = "${AUDIT_FAIL}"
 
 [[workflow.steps]]
 id = 9
-title = "Step 7b: Record Deferred Issues"
+title = "Record Deferred Issues"
 prompt = """
 Record deferred issues (other modules) via TaskCreate for
 immediate post-commit fixing."""
@@ -205,11 +205,13 @@ condition = "${ENABLE_REVIEW_LOOP} == \"true\""
 [[workflow.steps]]
 id = 13
 title = "Generate Commit Message"
-tool = "csa"
+tool = "bash"
 prompt = """
-Run 'git diff --staged' and generate a Conventional Commits message.
-Scope: ${SCOPE}. Output ONLY the commit message, nothing else."""
-tier = "tier-1-quick"
+Generate a deterministic Conventional Commits message from staged files.
+
+```bash
+scripts/gen_commit_msg.sh "${SCOPE:-}"
+```"""
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -256,6 +258,6 @@ id = 17
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-12)."""
+Each fix goes through full commit workflow (Steps 1-14)."""
 on_fail = "abort"
 condition = "${HAS_DEFERRED_ISSUES}"
