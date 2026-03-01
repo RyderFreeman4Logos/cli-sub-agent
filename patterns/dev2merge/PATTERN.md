@@ -53,12 +53,28 @@ This step MUST pass through mktd's built-in debate phase and save a TODO.
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
-MKTD_PROMPT="Plan dev2merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
+USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
+MKTD_PROMPT="Plan dev2merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}."
 set +e
-MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
-MKTD_STATUS=$?
+if command -v timeout >/dev/null 2>&1; then
+  MKTD_OUTPUT="$(timeout 1800 csa plan run patterns/mktd/workflow.toml \
+    --var CWD="$(pwd)" \
+    --var FEATURE="${MKTD_PROMPT}" \
+    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1)"
+  MKTD_STATUS=$?
+else
+  MKTD_OUTPUT="$(csa plan run patterns/mktd/workflow.toml \
+    --var CWD="$(pwd)" \
+    --var FEATURE="${MKTD_PROMPT}" \
+    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1)"
+  MKTD_STATUS=$?
+fi
 set -e
 printf '%s\n' "${MKTD_OUTPUT}"
+if [ "${MKTD_STATUS}" -eq 124 ]; then
+  echo "ERROR: mktd workflow timed out after 1800s." >&2
+  exit 1
+fi
 if [ "${MKTD_STATUS}" -ne 0 ]; then
   echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
   exit 1

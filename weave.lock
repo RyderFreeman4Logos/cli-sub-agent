@@ -1,8 +1,6 @@
-package = []
-
 [versions]
-csa = "0.1.60"
-weave = "0.1.60"
+csa = "0.1.61"
+weave = "0.1.61"
 
 [migrations]
 applied = []
