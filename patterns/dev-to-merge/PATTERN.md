@@ -507,30 +507,85 @@ if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
   exit 1
 fi
 git push origin "${BRANCH}"
-gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review"
+PR_NUM_LOCAL="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+if [ -z "${PR_NUM_LOCAL}" ]; then
+  PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
+fi
+gh pr comment "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --body "@codex review"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO_LOCAL}" --json comments)
+COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --json comments)
 TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM}" "${TRIGGER_TS}"
+printf 'PR_NUM=%s\nTRIGGER_TS=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}"
 ```
 
-## ELSE
-
-## Step 25: Bot Review Clean
-
-No issues found by the codex bot. Proceed to merge.
-
-## ENDIF
-
-## Step 26: Merge PR
+## Step 25: Poll Re-triggered Bot Response
 
 Tool: bash
 OnFail: abort
 
-Squash-merge the PR and update local main.
+After posting the second `@codex review`, poll again with bounded timeout.
+Output `1` when findings remain; output empty string when clean.
+
+```bash
+TIMEOUT=600; INTERVAL=30; ELAPSED=0
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
+PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+TRIGGER_TS="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
+if [ -z "${PR_NUM_FROM_STEP}" ]; then
+  PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+fi
+if [ -z "${PR_NUM_FROM_STEP}" ]; then
+  PR_NUM_FROM_STEP="$(gh pr view --json number -q '.number')"
+fi
+if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
+while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
+  BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
+  BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+    echo "1"
+    exit 0
+  fi
+  sleep "$INTERVAL"
+  ELAPSED=$((ELAPSED + INTERVAL))
+done
+echo ""
+```
+
+## IF ${STEP_25_OUTPUT}
+
+## Step 26: Stop on Remaining Bot Findings
+
+Tool: bash
+OnFail: abort
+
+Abort merge when re-triggered bot review still reports findings.
+
+```bash
+echo "ERROR: Bot review still has findings after re-trigger. Do not merge." >&2
+exit 1
+```
+
+## ELSE
+
+## Step 27: Merge PR After Re-review Clean
+
+Tool: bash
+OnFail: abort
+
+Squash-merge the PR after the second bot review returns clean, then update local main.
 
 ```bash
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
@@ -543,6 +598,45 @@ if [ -z "${REPO_LOCAL}" ]; then
   echo "ERROR: Cannot resolve repository owner/name." >&2
   exit 1
 fi
-gh pr merge "${PR_NUM}" --repo "${REPO_LOCAL}" --squash --delete-branch
+PR_NUM_LOCAL="$(printf '%s\n' "${STEP_24_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+if [ -z "${PR_NUM_LOCAL}" ]; then
+  PR_NUM_LOCAL="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+fi
+if [ -z "${PR_NUM_LOCAL}" ]; then
+  PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
+fi
+gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
+
+## ENDIF
+
+## ELSE
+
+## Step 28: Merge PR (Initial Review Clean)
+
+Tool: bash
+OnFail: abort
+
+No issues were found in the initial bot review. Merge using the PR number from step output.
+
+```bash
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
+PR_NUM_LOCAL="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
+if [ -z "${PR_NUM_LOCAL}" ]; then
+  PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
+fi
+gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
+git checkout main && git pull origin main
+```
+
+## ENDIF
