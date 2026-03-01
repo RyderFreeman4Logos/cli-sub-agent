@@ -93,6 +93,10 @@ struct PlanRunJournal {
     vars: HashMap<String, String>,
     completed_steps: Vec<usize>,
     last_error: Option<String>,
+    #[serde(default)]
+    repo_head: Option<String>,
+    #[serde(default)]
+    repo_dirty: Option<bool>,
 }
 
 impl PlanRunJournal {
@@ -105,6 +109,8 @@ impl PlanRunJournal {
             vars,
             completed_steps: Vec::new(),
             last_error: None,
+            repo_head: None,
+            repo_dirty: None,
         }
     }
 }
@@ -113,6 +119,12 @@ struct PlanResumeContext {
     initial_vars: HashMap<String, String>,
     completed_steps: HashSet<usize>,
     resumed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RepoFingerprint {
+    head: Option<String>,
+    dirty: Option<bool>,
 }
 
 fn normalize_path(path: &Path) -> String {
@@ -163,11 +175,50 @@ fn persist_plan_journal(path: &Path, journal: &PlanRunJournal) -> Result<()> {
     Ok(())
 }
 
+fn detect_repo_fingerprint(project_root: &Path) -> RepoFingerprint {
+    let head = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["rev-parse", "--verify", "HEAD"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                let value = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if value.is_empty() { None } else { Some(value) }
+            } else {
+                None
+            }
+        });
+
+    let dirty = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["status", "--porcelain", "--untracked-files=normal"])
+        .output()
+        .ok()
+        .and_then(|out| {
+            if out.status.success() {
+                Some(!String::from_utf8_lossy(&out.stdout).trim().is_empty())
+            } else {
+                None
+            }
+        });
+
+    RepoFingerprint { head, dirty }
+}
+
+fn apply_repo_fingerprint(journal: &mut PlanRunJournal, fingerprint: &RepoFingerprint) {
+    journal.repo_head = fingerprint.head.clone();
+    journal.repo_dirty = fingerprint.dirty;
+}
+
 fn load_plan_resume_context(
     plan: &ExecutionPlan,
     workflow_path: &Path,
     journal_path: &Path,
     cli_vars: &HashMap<String, String>,
+    repo_fingerprint: &RepoFingerprint,
 ) -> Result<PlanResumeContext> {
     let mut initial_vars = cli_vars.clone();
     if !journal_path.exists() {
@@ -207,6 +258,29 @@ fn load_plan_resume_context(
         });
     }
 
+    let fingerprint_matches = match (
+        journal.repo_head.as_ref(),
+        journal.repo_dirty,
+        repo_fingerprint.head.as_ref(),
+        repo_fingerprint.dirty,
+    ) {
+        (Some(saved_head), Some(saved_dirty), Some(current_head), Some(current_dirty)) => {
+            saved_head == current_head && saved_dirty == current_dirty
+        }
+        _ => false,
+    };
+    if !fingerprint_matches {
+        warn!(
+            path = %journal_path.display(),
+            "Ignoring plan journal because repository state changed (or fingerprint unavailable)"
+        );
+        return Ok(PlanResumeContext {
+            initial_vars,
+            completed_steps: HashSet::new(),
+            resumed: false,
+        });
+    }
+
     for (key, value) in journal.vars {
         initial_vars.insert(key, value);
     }
@@ -236,7 +310,19 @@ fn detect_effective_repo(project_root: &Path) -> Option<String> {
     if raw.is_empty() {
         return None;
     }
-    let trimmed = raw.trim_end_matches(".git");
+    // Strip credentials from HTTPS/SSH URLs (e.g. https://user:token@github.com/repo)
+    let sanitized = if let Some(pos) = raw.find("://") {
+        let (scheme, rest) = raw.split_at(pos + 3);
+        if let Some(at_pos) = rest.find('@') {
+            format!("{}{}", scheme, &rest[at_pos + 1..])
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+
+    let trimmed = sanitized.trim_end_matches(".git");
     if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
         return Some(rest.to_string());
     }
@@ -311,8 +397,14 @@ pub(crate) async fn handle_plan_run(
     }
 
     let journal_path = plan_journal_path(&project_root, &plan.name);
-    let resume_context =
-        load_plan_resume_context(&plan, &workflow_path, &journal_path, &cli_variables)?;
+    let current_repo_fingerprint = detect_repo_fingerprint(&project_root);
+    let resume_context = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &cli_variables,
+        &current_repo_fingerprint,
+    )?;
     if resume_context.resumed {
         let next_step = plan
             .steps
@@ -347,6 +439,7 @@ pub(crate) async fn handle_plan_run(
         resume_context.initial_vars.clone(),
     );
     journal.completed_steps = resume_context.completed_steps.iter().copied().collect();
+    apply_repo_fingerprint(&mut journal, &current_repo_fingerprint);
     persist_plan_journal(&journal_path, &journal)?;
     let mut run_ctx = PlanRunContext {
         project_root: &project_root,
@@ -389,6 +482,7 @@ pub(crate) async fn handle_plan_run(
             "{} step(s) failed ({} execution, {} unsupported-skip)",
             total_failures, execution_failures, unsupported_skips
         ));
+        apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
         persist_plan_journal(&journal_path, &journal)?;
         bail!(
             "{} step(s) failed ({} execution, {} unsupported-skip)",
@@ -400,6 +494,7 @@ pub(crate) async fn handle_plan_run(
 
     journal.status = "completed".to_string();
     journal.last_error = None;
+    apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
     persist_plan_journal(&journal_path, &journal)?;
 
     Ok(())
@@ -619,6 +714,10 @@ async fn execute_plan_with_journal(
     run_ctx.journal.vars = vars.clone();
     run_ctx.journal.completed_steps = completed_steps.iter().copied().collect();
     run_ctx.journal.last_error = None;
+    apply_repo_fingerprint(
+        run_ctx.journal,
+        &detect_repo_fingerprint(run_ctx.project_root),
+    );
     if let Some(path) = run_ctx.journal_path {
         persist_plan_journal(path, run_ctx.journal)?;
     }
@@ -662,6 +761,10 @@ async fn execute_plan_with_journal(
         }
         run_ctx.journal.vars = vars.clone();
         run_ctx.journal.completed_steps = completed_steps.iter().copied().collect();
+        apply_repo_fingerprint(
+            run_ctx.journal,
+            &detect_repo_fingerprint(run_ctx.project_root),
+        );
         if let Some(path) = run_ctx.journal_path {
             persist_plan_journal(path, run_ctx.journal)?;
         }
@@ -686,6 +789,10 @@ async fn execute_plan_with_journal(
                 "Step {} ('{}') failed with on_fail={:?}",
                 step.id, step.title, step.on_fail
             ));
+            apply_repo_fingerprint(
+                run_ctx.journal,
+                &detect_repo_fingerprint(run_ctx.project_root),
+            );
             if let Some(path) = run_ctx.journal_path {
                 persist_plan_journal(path, run_ctx.journal)?;
             }

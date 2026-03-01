@@ -36,11 +36,24 @@ fn load_plan_resume_context_reads_running_journal() {
         ]),
         completed_steps: vec![1, 2],
         last_error: None,
+        repo_head: Some("abc123".to_string()),
+        repo_dirty: Some(false),
     };
     persist_plan_journal(&journal_path, &journal).unwrap();
 
     let cli_vars = HashMap::from([("FEATURE".to_string(), "from-cli".to_string())]);
-    let ctx = load_plan_resume_context(&plan, &workflow_path, &journal_path, &cli_vars).unwrap();
+    let repo_fingerprint = RepoFingerprint {
+        head: Some("abc123".to_string()),
+        dirty: Some(false),
+    };
+    let ctx = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &cli_vars,
+        &repo_fingerprint,
+    )
+    .unwrap();
 
     assert!(ctx.resumed);
     assert!(ctx.completed_steps.contains(&1));
@@ -52,6 +65,81 @@ fn load_plan_resume_context_reads_running_journal() {
     assert_eq!(
         ctx.initial_vars.get("STEP_1_OUTPUT").map(String::as_str),
         Some("cached")
+    );
+}
+
+#[test]
+fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("test.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "test".into(),
+        workflow_path: normalize_path(&workflow_path),
+        status: "running".into(),
+        vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
+        completed_steps: vec![1],
+        last_error: None,
+        repo_head: Some("abc123".to_string()),
+        repo_dirty: Some(false),
+    };
+    persist_plan_journal(&journal_path, &journal).unwrap();
+
+    let cli_vars = HashMap::new();
+    let repo_fingerprint = RepoFingerprint {
+        head: Some("def456".to_string()),
+        dirty: Some(false),
+    };
+    let ctx = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &cli_vars,
+        &repo_fingerprint,
+    )
+    .unwrap();
+
+    assert!(!ctx.resumed);
+    assert!(ctx.completed_steps.is_empty());
+    assert!(!ctx.initial_vars.contains_key("STEP_1_OUTPUT"));
+}
+
+#[test]
+fn detect_effective_repo_strips_credentials_from_https_origin() {
+    let tmp = tempfile::tempdir().unwrap();
+    let git_dir = tmp.path();
+    let init = std::process::Command::new("git")
+        .args(["init"])
+        .current_dir(git_dir)
+        .output()
+        .unwrap();
+    assert!(init.status.success());
+
+    let add_origin = std::process::Command::new("git")
+        .args([
+            "remote",
+            "add",
+            "origin",
+            "https://user:token@github.com/example/private-repo.git",
+        ])
+        .current_dir(git_dir)
+        .output()
+        .unwrap();
+    assert!(add_origin.status.success());
+
+    assert_eq!(
+        detect_effective_repo(git_dir).as_deref(),
+        Some("example/private-repo")
     );
 }
 
