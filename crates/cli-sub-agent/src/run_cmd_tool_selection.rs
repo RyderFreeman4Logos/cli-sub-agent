@@ -376,7 +376,13 @@ pub(crate) fn resolve_skill_and_prompt(
     };
 
     let prompt_text = if let Some(ref sk) = resolved_skill {
-        let mut parts = vec![sk.skill_md.clone()];
+        // Skills execute inside `csa run` as the leaf executor. Inject an
+        // explicit mode marker so skill docs can branch deterministically and
+        // avoid orchestrator-style recursive `csa run` loops.
+        let mut parts = vec![
+            "<skill-mode>executor</skill-mode>".to_string(),
+            sk.skill_md.clone(),
+        ];
 
         // Load extra_context files relative to the skill directory.
         if let Some(agent) = sk.agent_config() {

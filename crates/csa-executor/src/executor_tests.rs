@@ -311,10 +311,10 @@ fn test_thinking_budget_in_gemini_cli_args() {
     let mut cmd = Command::new(exec.executable_name());
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
-    // Check that the command contains --thinking_budget 32768
+    // gemini-cli runtime no longer accepts thinking-budget flags.
     let debug_str = format!("{:?}", cmd);
-    assert!(debug_str.contains("--thinking_budget"));
-    assert!(debug_str.contains("32768"));
+    assert!(!debug_str.contains("--thinking_budget"));
+    assert!(!debug_str.contains("32768"));
 }
 
 #[test]
@@ -342,8 +342,8 @@ fn test_thinking_budget_from_spec_gemini() {
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
     let debug_str = format!("{:?}", cmd);
-    assert!(debug_str.contains("--thinking_budget"));
-    assert!(debug_str.contains("32768"));
+    assert!(!debug_str.contains("--thinking_budget"));
+    assert!(!debug_str.contains("32768"));
 }
 
 #[test]
@@ -539,8 +539,8 @@ fn test_execute_in_preserves_model_override() {
                     "GeminiCli missing model: {debug_str}"
                 );
                 assert!(
-                    debug_str.contains("--thinking_budget"),
-                    "GeminiCli missing thinking: {debug_str}"
+                    !debug_str.contains("--thinking_budget"),
+                    "GeminiCli should ignore explicit thinking flags: {debug_str}"
                 );
             }
             Executor::Codex { .. } => {

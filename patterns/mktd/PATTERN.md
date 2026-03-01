@@ -145,34 +145,21 @@ DEBATE_PROMPT="$(printf '%s\n' \
 "" \
 "## Output Requirements" \
 "Provide explicit verdict and confidence in your conclusion." )"
-DEBATE_SUMMARY="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3)" || { echo "csa debate failed" >&2; exit 1; }
-[[ -n "${DEBATE_SUMMARY:-}" ]] || { echo "empty debate summary" >&2; exit 1; }
-RAW_VERDICT="$(printf '%s\n' "${DEBATE_SUMMARY}" | grep '^Debate verdict:' | tail -n1 | sed -nE 's/^Debate verdict:[[:space:]]*([A-Z]+).*/\1/p')"
+DEBATE_JSON="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3 --format json)" || { echo "csa debate failed" >&2; exit 1; }
+[[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
+RAW_VERDICT="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.verdict // "UNKNOWN"' | tr '[:lower:]' '[:upper:]')"
 case "${RAW_VERDICT}" in
   APPROVE) MAPPED_VERDICT="READY" ;;
   REVISE|REJECT) MAPPED_VERDICT="REVISE" ;;
   *) MAPPED_VERDICT="REVISE" ;;
 esac
-CONFIDENCE="$(printf '%s\n' "${DEBATE_SUMMARY}" | grep '^Debate verdict:' | tail -n1 | sed -nE 's/^Debate verdict:[^\(]*\(confidence:[[:space:]]*([a-zA-Z]+)\).*/\1/p')"
-CRITIQUE_PROMPT="$(printf '%s\n' \
-"Using the draft TODO, threat model, and debate summary, produce concrete adversarial feedback." \
-"" \
-"## Draft TODO Plan" \
-"${STEP_4_OUTPUT}" \
-"" \
-"## Threat Model (Step 5)" \
-"${STEP_5_OUTPUT}" \
-"" \
-"## Debate Summary" \
-"${DEBATE_SUMMARY}" \
-"" \
-"## Output Requirements (EXACT headers, English headers only)" \
-"VALID_CONCERNS:" \
-"SUGGESTED_CHANGES:" \
-"OVERALL_ASSESSMENT:" \
-"Each section must be non-empty. Use concise bullets. No code fences." )"
-CRITIQUE_OUTPUT="$(printf '%s\n' "${CRITIQUE_PROMPT}" | csa run)" || { echo "debate critique synthesis failed" >&2; exit 1; }
-[[ -n "${CRITIQUE_OUTPUT:-}" ]] || { echo "empty debate critique output" >&2; exit 1; }
+CONFIDENCE="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.confidence // "unknown"' | tr '[:upper:]' '[:lower:]')"
+SUMMARY_LINE="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.summary // empty')"
+KEY_POINTS="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.key_points[]?')"
+if [[ -z "${KEY_POINTS:-}" && -n "${SUMMARY_LINE:-}" ]]; then
+  KEY_POINTS="${SUMMARY_LINE}"
+fi
+[[ -n "${KEY_POINTS:-}" ]] || { KEY_POINTS="No concrete concerns surfaced; keep current plan with careful verification."; }
 printf '%s\n' "DEBATE_EVIDENCE:"
 printf '%s\n' "- method: csa debate"
 printf '%s\n' "- rounds: 3"
@@ -180,7 +167,16 @@ printf '%s\n' "- language: ${LANGUAGE}"
 printf '%s\n' "- raw_verdict: ${RAW_VERDICT:-UNKNOWN}"
 printf '%s\n' "- mapped_verdict: ${MAPPED_VERDICT}"
 printf '%s\n' "- confidence: ${CONFIDENCE:-unknown}"
-printf '%s\n' "${CRITIQUE_OUTPUT}"
+printf '%s\n' "VALID_CONCERNS:"
+printf '%s\n' "${KEY_POINTS}" | sed 's/^/- /'
+printf '%s\n' "SUGGESTED_CHANGES:"
+printf '%s\n' "${KEY_POINTS}" | sed 's/^/- Address: /'
+printf '%s\n' "OVERALL_ASSESSMENT:"
+if [[ -n "${SUMMARY_LINE:-}" ]]; then
+  printf '%s\n' "${SUMMARY_LINE}"
+else
+  printf '%s\n' "Debate completed without summary; proceed conservatively with REVISE stance."
+fi
 ```
 
 ## Step 6.5: Phase 3.5 — Validate Debate Evidence

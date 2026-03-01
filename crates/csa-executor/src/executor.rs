@@ -643,9 +643,12 @@ impl Executor {
                 if let Some(model) = effective_gemini_model_override(model_override) {
                     cmd.arg("-m").arg(model);
                 }
-                if let Some(budget) = thinking_budget {
-                    cmd.arg("--thinking_budget")
-                        .arg(budget.token_count().to_string());
+                if thinking_budget.is_some() {
+                    // gemini-cli (0.31+) no longer accepts thinking-budget flags.
+                    // Ignore CSA thinking hints and let gemini-cli decide routing.
+                    tracing::debug!(
+                        "Ignoring thinking budget for gemini-cli because runtime no longer supports a thinking flag"
+                    );
                 }
             }
             Self::Opencode {

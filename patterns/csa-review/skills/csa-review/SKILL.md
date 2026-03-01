@@ -20,6 +20,7 @@ triggers:
 3. **Read [Output Schema](references/output-schema.md)** for the required output format.
 4. Your scope/mode/security_mode parameters are in your initial prompt. Parse them from there.
 5. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the review DIRECTLY by running `git diff`, reading files, and analyzing code yourself. Running any `csa` command causes infinite recursion and will be terminated.
+6. **REVIEW-ONLY SAFETY**: Do NOT run `git add`, `git commit`, `git push`, `git merge`, `git rebase`, `git checkout`, `git reset`, `git stash`, or any `gh pr *` mutation command. Review mode must not mutate repo or PR state.
 
 **Only if you are Claude Code and a human user typed `/csa-review` in the chat**:
 - You are the **orchestrator**. Follow the "Execution Protocol" steps below.

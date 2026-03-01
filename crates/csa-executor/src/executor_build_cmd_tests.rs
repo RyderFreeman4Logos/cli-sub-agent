@@ -227,11 +227,17 @@ fn test_build_command_gemini_args_structure() {
         "Should have model name"
     );
     assert!(
-        args.contains(&"--thinking_budget".to_string()),
-        "Should have --thinking_budget"
+        !args.contains(&"--thinking_budget".to_string()),
+        "gemini-cli no longer supports --thinking_budget"
     );
-    assert!(args.contains(&"32768".to_string()), "Should have 32768");
-    assert!(args.contains(&"-y".to_string()), "Should have -y (yolo)");
+    assert!(
+        !args.iter().any(|arg| arg == "32768"),
+        "gemini thinking token count should not be passed as argv"
+    );
+    assert!(
+        args.contains(&"-y".to_string()),
+        "Should have -y (yolo mode)"
+    );
     assert!(args.contains(&"-p".to_string()), "Should have -p flag");
     assert!(
         args.contains(&"analyze code".to_string()),
@@ -358,6 +364,39 @@ fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
     assert!(args.contains(&"--include-directories".to_string()));
     assert!(args.contains(&"/tmp/test-project".to_string()));
     assert!(args.contains(&expected_dir.to_string_lossy().to_string()));
+}
+
+#[test]
+fn test_build_command_gemini_never_includes_filesystem_root_directory() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert(
+        "CSA_GEMINI_INCLUDE_DIRECTORIES".to_string(),
+        "/".to_string(),
+    );
+
+    let (cmd, stdin_data) =
+        exec.build_command("Inspect / and summarize", None, &session, Some(&extra));
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+
+    assert!(
+        !args.iter().any(|arg| arg == "/"),
+        "Filesystem root must not be injected into --include-directories"
+    );
+    assert!(
+        args.contains(&"/tmp/test-project".to_string()),
+        "Execution directory should still be included"
+    );
 }
 
 #[test]

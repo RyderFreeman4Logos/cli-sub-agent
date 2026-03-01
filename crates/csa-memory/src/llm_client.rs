@@ -387,7 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_noop_client() {
-        let client = NoopClient::default();
+        let client = NoopClient;
         let input = "session output text";
         let facts = client
             .extract_facts(input)

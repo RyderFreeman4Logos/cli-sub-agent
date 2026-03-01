@@ -2,6 +2,7 @@
 //!
 //! Extracted from main.rs to keep file sizes manageable.
 
+use std::path::Path;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -62,6 +63,13 @@ pub(crate) async fn handle_run(
 ) -> Result<i32> {
     // 1. Determine project root
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
+    let effective_repo =
+        detect_effective_repo(&project_root).unwrap_or_else(|| "(unknown)".to_string());
+    eprintln!(
+        "csa run context: effective_repo={} effective_cwd={}",
+        effective_repo,
+        project_root.display()
+    );
 
     // Emit deprecation warnings for legacy resume flags
     if last {
@@ -751,6 +759,46 @@ pub(crate) async fn handle_run(
     }
 
     Ok(result.exit_code)
+}
+
+fn detect_effective_repo(project_root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+
+    // Strip credentials from HTTPS/SSH URLs (e.g. https://user:token@github.com/repo)
+    let sanitized = if let Some(pos) = raw.find("://") {
+        let (scheme, rest) = raw.split_at(pos + 3);
+        if let Some(at_pos) = rest.find('@') {
+            format!("{}{}", scheme, &rest[at_pos + 1..])
+        } else {
+            raw
+        }
+    } else {
+        raw
+    };
+
+    let trimmed = sanitized.trim_end_matches(".git");
+    if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        return Some(rest.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
+        return Some(rest.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
+        return Some(rest.to_string());
+    }
+    Some(trimmed.to_string())
 }
 
 #[cfg(test)]
