@@ -90,10 +90,10 @@ name = "SELF_LOGIN"
 name = "STAGED_FILES"
 
 [[workflow.variables]]
-name = "STEP_22_OUTPUT"
+name = "STEP_21_OUTPUT"
 
 [[workflow.variables]]
-name = "STEP_28_OUTPUT"
+name = "STEP_27_OUTPUT"
 
 [[workflow.variables]]
 name = "TIMEOUT"
@@ -490,25 +490,21 @@ if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   echo "ERROR: PR title is empty. Step 12 output is required." >&2
   exit 1
 fi
-PR_BODY_LOCAL="${PR_BODY:-## Summary
-- Scope: ${SCOPE:-unspecified}'''
-on_fail = "abort"
+PR_BODY_LOCAL="${PR_BODY:-Summary:
+- Scope: ${SCOPE:-unspecified}
 
-[[workflow.steps]]
-id = 20
-title = "Validation"
-prompt = """
+Validation:
 - just fmt
 - just clippy
 - just test
 - csa review --range main...HEAD
 }"
 gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 21
+id = 20
 title = "Trigger Codex Bot Review"
 tool = "bash"
 prompt = '''
@@ -544,18 +540,19 @@ printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM}" "${TRIGGE
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 22
+id = 21
 title = "Poll for Bot Response"
 tool = "bash"
 prompt = '''
 Poll for bot review response with a bounded timeout (max 20 minutes).
+Use low-frequency heartbeat checks (every 120s) to minimize context noise.
 Output `1` when actionable findings are present; output empty string when clean.
 If cloud review times out, run local heterogeneous fallback review on
 `main...HEAD`; clean fallback posts an English PR comment then returns clean.
 
 ```bash
 set -euo pipefail
-TIMEOUT=1200; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=120; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -646,7 +643,7 @@ exit "${LOCAL_REVIEW_STATUS}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 23
+id = 22
 title = "Evaluate Review Findings and Root Cause"
 tool = "csa"
 prompt = """
@@ -659,20 +656,20 @@ For each confirmed finding, classify root cause into exactly one bucket:
 List suspected false positives and confirmed defects separately."""
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "${STEP_22_OUTPUT}"
+condition = "${STEP_21_OUTPUT}"
 
 [[workflow.steps]]
-id = 24
+id = 23
 title = "Arbitrate Disputed Findings"
 tool = "csa"
 prompt = """
 For disputed findings, run independent arbitration using `csa debate` and
 produce a verdict for each disputed item."""
 on_fail = "abort"
-condition = "${STEP_22_OUTPUT}"
+condition = "${STEP_21_OUTPUT}"
 
 [[workflow.steps]]
-id = 25
+id = 24
 title = "Fix Confirmed Issues"
 tool = "csa"
 prompt = """
@@ -682,21 +679,21 @@ If root cause was `RULE_GAP` or `WORKFLOW_GAP`, include corresponding rule/hook
 workflow updates in the same fix stream."""
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "${STEP_22_OUTPUT}"
+condition = "${STEP_21_OUTPUT}"
 
 [[workflow.steps]]
-id = 26
+id = 25
 title = "Re-run Local Review After Fixes"
 tool = "csa"
 prompt = "Run `csa review --diff` to validate fixes before re-triggering cloud review."
 tier = "tier-2-standard"
-condition = "${STEP_22_OUTPUT}"
+condition = "${STEP_21_OUTPUT}"
 
 [workflow.steps.on_fail]
 retry = 2
 
 [[workflow.steps]]
-id = 27
+id = 26
 title = "Push Fixes and Re-trigger Review"
 tool = "bash"
 prompt = '''
@@ -738,21 +735,22 @@ fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
 ```'''
 on_fail = "abort"
-condition = "${STEP_22_OUTPUT}"
+condition = "${STEP_21_OUTPUT}"
 
 [[workflow.steps]]
-id = 28
+id = 27
 title = "Poll Re-triggered Bot Response"
 tool = "bash"
 prompt = '''
 After posting the second `@codex review`, poll again with bounded timeout.
+Use low-frequency heartbeat checks (every 120s) to minimize context noise.
 Output `1` when findings remain; output empty string when clean.
 If cloud review times out again, run local heterogeneous fallback review on
 `main...HEAD`; clean fallback posts an English PR comment then returns clean.
 
 ```bash
 set -euo pipefail
-TIMEOUT=1200; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=120; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -846,10 +844,10 @@ echo "ERROR: Local fallback review failed unexpectedly (exit=${LOCAL_REVIEW_STAT
 exit "${LOCAL_REVIEW_STATUS}"
 ```'''
 on_fail = "abort"
-condition = "${STEP_22_OUTPUT}"
+condition = "${STEP_21_OUTPUT}"
 
 [[workflow.steps]]
-id = 29
+id = 28
 title = "Stop on Remaining Findings"
 tool = "bash"
 prompt = """
@@ -861,10 +859,10 @@ echo "ERROR: Review still has findings after re-trigger. Do not merge." >&2
 exit 1
 ```"""
 on_fail = "abort"
-condition = "(${STEP_22_OUTPUT}) && (${STEP_28_OUTPUT})"
+condition = "(${STEP_21_OUTPUT}) && (${STEP_27_OUTPUT})"
 
 [[workflow.steps]]
-id = 30
+id = 29
 title = "Merge PR After Re-review Clean"
 tool = "bash"
 prompt = '''
@@ -892,10 +890,10 @@ gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
 ```'''
 on_fail = "abort"
-condition = "(${STEP_22_OUTPUT}) && (!(${STEP_28_OUTPUT}))"
+condition = "(${STEP_21_OUTPUT}) && (!(${STEP_27_OUTPUT}))"
 
 [[workflow.steps]]
-id = 31
+id = 30
 title = "Merge PR (Initial Review Clean)"
 tool = "bash"
 prompt = '''
@@ -920,4 +918,4 @@ gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
 ```'''
 on_fail = "abort"
-condition = "!(${STEP_22_OUTPUT})"
+condition = "!(${STEP_21_OUTPUT})"

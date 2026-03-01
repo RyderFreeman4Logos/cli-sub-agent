@@ -375,10 +375,10 @@ if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   echo "ERROR: PR title is empty. Step 12 output is required." >&2
   exit 1
 fi
-PR_BODY_LOCAL="${PR_BODY:-## Summary
+PR_BODY_LOCAL="${PR_BODY:-Summary:
 - Scope: ${SCOPE:-unspecified}
 
-## Validation
+Validation:
 - just fmt
 - just clippy
 - just test
@@ -427,13 +427,14 @@ Tool: bash
 OnFail: abort
 
 Poll for bot review response with a bounded timeout (max 20 minutes).
+Use low-frequency heartbeat checks (every 120s) to minimize context noise.
 Output `1` when actionable findings are present; output empty string when clean.
 If cloud review times out, run local heterogeneous fallback review on
 `main...HEAD`; clean fallback posts an English PR comment then returns clean.
 
 ```bash
 set -euo pipefail
-TIMEOUT=1200; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=120; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -522,7 +523,7 @@ echo "ERROR: Local fallback review failed unexpectedly (exit=${LOCAL_REVIEW_STAT
 exit "${LOCAL_REVIEW_STATUS}"
 ```
 
-## IF ${STEP_22_OUTPUT}
+## IF ${STEP_21_OUTPUT}
 
 ## Step 20: Evaluate Review Findings and Root Cause
 
@@ -610,13 +611,14 @@ Tool: bash
 OnFail: abort
 
 After posting the second `@codex review`, poll again with bounded timeout.
+Use low-frequency heartbeat checks (every 120s) to minimize context noise.
 Output `1` when findings remain; output empty string when clean.
 If cloud review times out again, run local heterogeneous fallback review on
 `main...HEAD`; clean fallback posts an English PR comment then returns clean.
 
 ```bash
 set -euo pipefail
-TIMEOUT=1200; INTERVAL=30; ELAPSED=0
+TIMEOUT=1200; INTERVAL=120; ELAPSED=0
 REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
 if [ -z "${REPO_LOCAL}" ]; then
   ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
@@ -710,7 +712,7 @@ echo "ERROR: Local fallback review failed unexpectedly (exit=${LOCAL_REVIEW_STAT
 exit "${LOCAL_REVIEW_STATUS}"
 ```
 
-## IF ${STEP_28_OUTPUT}
+## IF ${STEP_27_OUTPUT}
 
 ## Step 26: Stop on Remaining Findings
 
