@@ -554,11 +554,6 @@ fn resolve_review_tool_from_value(
             }
         }
 
-        // Fallback to ModelFamily-based selection (filtered by enabled tools)
-        if let Some(tool) = select_auto_review_tool(parent_tool, project_config, global_config) {
-            return Ok(tool);
-        }
-
         // Both methods failed
         return Err(review_auto_resolution_error(parent_tool, project_root));
     }

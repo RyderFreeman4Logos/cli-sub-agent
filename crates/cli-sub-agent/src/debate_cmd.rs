@@ -346,11 +346,6 @@ fn resolve_debate_tool_from_value(
             }
         }
 
-        // Fallback to ModelFamily-based selection (filtered by enabled tools)
-        if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config) {
-            return Ok((tool, DebateMode::Heterogeneous));
-        }
-
         // All heterogeneous methods failed — try same-model fallback
         return resolve_same_model_fallback(
             parent_tool,
