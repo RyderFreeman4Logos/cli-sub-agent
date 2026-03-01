@@ -53,12 +53,28 @@ This step MUST pass through mktd's built-in debate phase and save a TODO.
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
-MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
+USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
+MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}."
 set +e
-MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
-MKTD_STATUS=$?
+if command -v timeout >/dev/null 2>&1; then
+  MKTD_OUTPUT="$(timeout 1800 csa plan run patterns/mktd/workflow.toml \
+    --var CWD="$(pwd)" \
+    --var FEATURE="${MKTD_PROMPT}" \
+    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1)"
+  MKTD_STATUS=$?
+else
+  MKTD_OUTPUT="$(csa plan run patterns/mktd/workflow.toml \
+    --var CWD="$(pwd)" \
+    --var FEATURE="${MKTD_PROMPT}" \
+    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1)"
+  MKTD_STATUS=$?
+fi
 set -e
 printf '%s\n' "${MKTD_OUTPUT}"
+if [ "${MKTD_STATUS}" -eq 124 ]; then
+  echo "ERROR: mktd workflow timed out after 1800s." >&2
+  exit 1
+fi
 if [ "${MKTD_STATUS}" -ne 0 ]; then
   echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
   exit 1
@@ -206,36 +222,77 @@ if [ "${VERDICT}" = "FAIL" ]; then
   echo "ERROR: security-audit verdict is FAIL." >&2
   exit 1
 fi
-echo "SECURITY_AUDIT_VERDICT=${VERDICT}"
+echo "CSA_VAR:SECURITY_AUDIT_VERDICT=${VERDICT}"
 ```
 
 ## Step 10: Pre-Commit Review
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 
-Run heterogeneous code review on all uncommitted changes versus HEAD.
-The reviewer MUST be a different model family than the code author.
+Run heterogeneous pre-commit review on uncommitted changes.
+This step is strictly review-only: no commit/push/PR side effects.
 
 ```bash
-csa review --diff
-```
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  REVIEW_OUTPUT="$(timeout 1800 csa review --diff 2>&1)"
+  REVIEW_STATUS=$?
+else
+  REVIEW_OUTPUT="$(csa review --diff 2>&1)"
+  REVIEW_STATUS=$?
+fi
+set -e
+printf '%s\n' "${REVIEW_OUTPUT}"
 
-Review output includes AGENTS.md compliance checklist.
+if [ "${REVIEW_STATUS}" -eq 124 ]; then
+  echo "ERROR: pre-commit review timed out after 1800s." >&2
+  exit 1
+fi
+
+if [ "${REVIEW_STATUS}" -eq 0 ]; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
+  exit 0
+fi
+
+if printf '%s\n' "${REVIEW_OUTPUT}" | grep -q '<!-- CSA:SECTION:'; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
+  exit 0
+fi
+
+echo "ERROR: csa review failed unexpectedly (exit=${REVIEW_STATUS})." >&2
+exit 1
+```
 
 ## IF ${REVIEW_HAS_ISSUES}
 
 ## Step 11: Fix Review Issues
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 OnFail: retry 3
 
-Fix each issue identified by the pre-commit review.
-Preserve original code intent. Do NOT delete code to silence warnings.
-Before applying fixes, write a reflection note to
-`drafts/issues/<date --iso-8601=seconds>/review-reflection.md` classifying root
-cause as `RULE_GAP`, `WORKFLOW_GAP`, or `EXECUTION_GAP`.
+Apply fixes for issues found in Step 10 using review-and-fix mode.
+Do not commit/push inside this step; only modify code.
+
+```bash
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  FIX_OUTPUT="$(timeout 1800 csa review --diff --fix 2>&1)"
+  FIX_STATUS=$?
+else
+  FIX_OUTPUT="$(csa review --diff --fix 2>&1)"
+  FIX_STATUS=$?
+fi
+set -e
+printf '%s\n' "${FIX_OUTPUT}"
+if [ "${FIX_STATUS}" -eq 124 ]; then
+  echo "ERROR: review --fix timed out after 1800s." >&2
+  exit 1
+fi
+if [ "${FIX_STATUS}" -ne 0 ]; then
+  echo "ERROR: review --fix failed (exit=${FIX_STATUS})." >&2
+  exit 1
+fi
+```
 
 ## Step 12: Re-run Quality Gates
 
@@ -250,11 +307,42 @@ just pre-commit
 
 ## Step 13: Re-review
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 
-Run `csa review --diff` again to verify all issues are resolved.
-Loop back to Step 11 if issues persist (max 3 rounds).
+Re-run review to verify remediation quality.
+If issues remain after fix, fail the workflow.
+
+```bash
+set +e
+if command -v timeout >/dev/null 2>&1; then
+  REREVIEW_OUTPUT="$(timeout 1800 csa review --diff 2>&1)"
+  REREVIEW_STATUS=$?
+else
+  REREVIEW_OUTPUT="$(csa review --diff 2>&1)"
+  REREVIEW_STATUS=$?
+fi
+set -e
+printf '%s\n' "${REREVIEW_OUTPUT}"
+
+if [ "${REREVIEW_STATUS}" -eq 124 ]; then
+  echo "ERROR: re-review timed out after 1800s." >&2
+  exit 1
+fi
+
+if [ "${REREVIEW_STATUS}" -eq 0 ]; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
+  exit 0
+fi
+
+if printf '%s\n' "${REREVIEW_OUTPUT}" | grep -q '<!-- CSA:SECTION:'; then
+  echo "ERROR: Re-review still reports unresolved issues." >&2
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
+  exit 1
+fi
+
+echo "ERROR: re-review failed unexpectedly (exit=${REREVIEW_STATUS})." >&2
+exit 1
+```
 
 ## ENDIF
 
@@ -322,20 +410,19 @@ git commit -m "chore(release): bump workspace version to ${VERSION}"
 
 ## Step 17: Pre-PR Cumulative Review
 
-Tool: csa
-Tier: tier-2-standard
+Tool: bash
 OnFail: abort
 
-Run a cumulative review covering ALL commits on the feature branch since main.
-This is distinct from Step 10's per-commit review (`csa review --diff`):
-- Step 10 reviews uncommitted changes (staged diff) — single-commit granularity.
-- This step reviews the full feature branch — catches cross-commit issues.
-
-MANDATORY: This review MUST pass before pushing to origin.
+Run cumulative read-only review for the full feature branch range.
+This gate must pass before push/PR.
 
 ```bash
-csa review --range main...HEAD
-CUMULATIVE_REVIEW_COMPLETED=true
+if command -v timeout >/dev/null 2>&1; then
+  timeout 1800 csa review --range main...HEAD
+else
+  csa review --range main...HEAD
+fi
+echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
 ```
 
 ## Step 18: Push to Origin
@@ -388,408 +475,32 @@ Validation:
 - just test
 - csa review --range main...HEAD
 }"
-gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
-```
-
-## Step 20: Trigger Codex Bot Review
-
-Tool: bash
-
-Trigger the cloud codex review bot on the newly created PR.
-Capture the PR number for polling.
-
-```bash
-set -euo pipefail
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
-PR_NUM=$(gh pr view --json number -q '.number')
-COMMENT_URL="$(gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review")"
-SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM}/comments?per_page=100")
-TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .created_at // empty')
-TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENT_URL}" | sed -nE 's#.*issuecomment-([0-9]+).*#\1#p')
-if [ -z "${TRIGGER_COMMENT_ID}" ]; then
-  TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .id // empty')
-fi
-if [ -z "${TRIGGER_TS}" ]; then
-  TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
-```
-
-## Step 21: Poll for Bot Response
-
-Tool: bash
-OnFail: abort
-
-Poll for bot review response with a bounded timeout (max 20 minutes).
-Use low-frequency heartbeat checks (every 120s) to minimize context noise.
-Output `1` when actionable findings are present; output empty string when clean.
-If cloud review times out, run local heterogeneous fallback review on
-`main...HEAD`; clean fallback posts an English PR comment then returns clean.
-
-```bash
-set -euo pipefail
-TIMEOUT=1200; INTERVAL=120; ELAPSED=0
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
-PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-TRIGGER_TS="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
-TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
-if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
-if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
-write_reflection_issue() {
-  local source="$1"
-  local ts
-  ts="$(date --iso-8601=seconds)"
-  local dir="drafts/issues/${ts}"
-  mkdir -p "${dir}"
-  local file="${dir}/review-reflection.md"
-  cat > "${file}" <<EOF
-# Review Finding Reflection
-- Timestamp: ${ts}
-- Source: ${source}
-- Branch: $(git branch --show-current)
-- PR: ${PR_NUM_FROM_STEP}
-- Review Range: main...HEAD
-
-Why this issue escaped earlier checks:
-- Rule gap candidate: CLAUDE.md / AGENTS.md / .agents/rules-ref missing enforceable guidance.
-- Workflow gap candidate: csa hook/dev2merge missing mandatory guardrails.
-- Execution gap candidate: existing rules were present but not followed during implementation.
-
-Mandatory follow-up before merge:
-- [ ] Classify each finding into one root-cause bucket above.
-- [ ] If rule gap: patch CLAUDE.md, AGENTS.md, or .agents/rules-ref in the fix stream.
-- [ ] If workflow gap: patch csa hook/workflow and add verification.
-- [ ] If execution gap: add stronger checklist/tests to prevent recurrence.
-- [ ] Re-run heterogeneous review on main...HEAD and confirm clean.
-EOF
-  echo "REFLECTION_ISSUE_PATH=${file}" >&2
-}
-while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-  BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
-  BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical")))] | length')
-  BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical"))))] | length')
-  BOT_TRIGGER_REACTIONS=0
-  if [ -n "${TRIGGER_COMMENT_ID}" ]; then
-    BOT_TRIGGER_REACTIONS=$(gh api "repos/${REPO_LOCAL}/issues/comments/${TRIGGER_COMMENT_ID}/reactions?per_page=100" -H "Accept: application/vnd.github+json" | jq -r '[.[]? | select((.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  fi
-  echo "heartbeat elapsed=${ELAPSED}s inline=${BOT_INLINE_COMMENTS} pr_comments=${BOT_PR_COMMENTS} pr_findings=${BOT_PR_FINDINGS} reviews=${BOT_REVIEWS} review_findings=${BOT_REVIEW_FINDINGS} reactions=${BOT_TRIGGER_REACTIONS}" >&2
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
-    write_reflection_issue "cloud-bot-initial"
-    echo "1"
-    exit 0
-  fi
-  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ] || [ "${BOT_TRIGGER_REACTIONS}" -gt 0 ]; then
-    echo ""
-    exit 0
-  fi
-  sleep "$INTERVAL"
-  ELAPSED=$((ELAPSED + INTERVAL))
-done
-echo "INFO: Timed out waiting for cloud bot response after ${TIMEOUT}s; running local fallback review." >&2
-set +e
-LOCAL_REVIEW_OUTPUT="$(csa review --range main...HEAD 2>&1)"
-LOCAL_REVIEW_STATUS=$?
-set -e
-printf '%s\n' "${LOCAL_REVIEW_OUTPUT}" >&2
-if [ "${LOCAL_REVIEW_STATUS}" -eq 0 ]; then
-  COMMENT_BODY="Cloud Codex review timed out after 20 minutes. I completed a comprehensive local heterogeneous review on main...HEAD with no blocking findings, so I will merge directly."
-  gh pr comment "${PR_NUM_FROM_STEP}" --repo "${REPO_LOCAL}" --body "${COMMENT_BODY}" >/dev/null
-  echo ""
-  exit 0
-fi
-if printf '%s\n' "${LOCAL_REVIEW_OUTPUT}" | grep -Eqi '(^|[^A-Za-z0-9_])HAS_ISSUES([^A-Za-z0-9_]|$)|final_decision:[[:space:]]*HAS_ISSUES'; then
-  write_reflection_issue "local-fallback-after-cloud-timeout"
-  echo "1"
-  exit 0
-fi
-echo "ERROR: Local fallback review failed unexpectedly (exit=${LOCAL_REVIEW_STATUS})." >&2
-exit "${LOCAL_REVIEW_STATUS}"
-```
-
-## IF ${STEP_21_OUTPUT}
-
-## Step 22: Evaluate Review Findings and Root Cause
-
-Tool: csa
-Tier: tier-2-standard
-
-Evaluate findings from cloud bot comments and/or local fallback review output,
-then produce a consolidated action plan.
-For each confirmed finding, classify root cause into exactly one bucket:
-- `RULE_GAP`: CLAUDE.md / AGENTS.md / .agents/rules-ref lacks enforceable rule(s).
-- `WORKFLOW_GAP`: csa hook/workflow lacks required enforcement.
-- `EXECUTION_GAP`: rules existed, but implementation/review did not follow them.
-List suspected false positives and confirmed defects separately.
-
-## Step 23: Arbitrate Disputed Findings
-
-Tool: csa
-
-For disputed findings, run independent arbitration using `csa debate` and
-produce a verdict for each disputed item.
-
-## Step 24: Fix Confirmed Issues
-
-Tool: csa
-Tier: tier-2-standard
-
-Implement fixes for confirmed findings and create commit(s) with clear
-messages. Do not modify unrelated files.
-If root cause was `RULE_GAP` or `WORKFLOW_GAP`, include corresponding rule/hook
-workflow updates in the same fix stream.
-
-## Step 25: Re-run Local Review After Fixes
-
-Tool: csa
-Tier: tier-2-standard
-OnFail: retry 2
-
-Run `csa review --diff` to validate fixes before re-triggering cloud review.
-
-## Step 26: Push Fixes and Re-trigger Review
-
-Tool: bash
-
-Push all fix commits and trigger a new round of codex review.
-
-```bash
-set -euo pipefail
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
 BRANCH="$(git branch --show-current)"
-if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
-  echo "ERROR: Cannot determine current branch for push."
-  exit 1
+EXISTING_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+if [ -n "${EXISTING_PR}" ] && [ "${EXISTING_PR}" != "null" ]; then
+  echo "INFO: Reusing existing PR #${EXISTING_PR} for branch ${BRANCH}."
+  echo "CSA_VAR:PR_NUMBER=${EXISTING_PR}"
+  exit 0
 fi
-git push origin "${BRANCH}"
-PR_NUM_LOCAL="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-if [ -z "${PR_NUM_LOCAL}" ]; then
-  PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
+gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
+CREATED_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+if [ -n "${CREATED_PR}" ] && [ "${CREATED_PR}" != "null" ]; then
+  echo "CSA_VAR:PR_NUMBER=${CREATED_PR}"
 fi
-COMMENT_URL="$(gh pr comment "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --body "@codex review")"
-SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_LOCAL}/comments?per_page=100")
-TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .created_at // empty')
-TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENT_URL}" | sed -nE 's#.*issuecomment-([0-9]+).*#\1#p')
-if [ -z "${TRIGGER_COMMENT_ID}" ]; then
-  TRIGGER_COMMENT_ID=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.[]? | select((.user.login // "") == $me and (.body // "") == "@codex review")] | sort_by(.created_at) | last | .id // empty')
-fi
-if [ -z "${TRIGGER_TS}" ]; then
-  TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-fi
-printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
 ```
 
-## Step 27: Poll Re-triggered Bot Response
+## Step 20: Delegate PR Review/Merge to pr-codex-bot
 
 Tool: bash
 OnFail: abort
 
-After posting the second `@codex review`, poll again with bounded timeout.
-Use low-frequency heartbeat checks (every 120s) to minimize context noise.
-Output `1` when findings remain; output empty string when clean.
-If cloud review times out again, run local heterogeneous fallback review on
-`main...HEAD`; clean fallback posts an English PR comment then returns clean.
+Delegate all long polling/status waiting to CSA internals.
+Run `pr-codex-bot` in a child CSA session so the caller workflow stays concise.
+The delegated workflow handles trigger, bounded polling, timeout fallback,
+fix loops, and merge end-to-end.
 
 ```bash
 set -euo pipefail
-TIMEOUT=1200; INTERVAL=120; ELAPSED=0
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
-PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-TRIGGER_TS="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
-TRIGGER_COMMENT_ID="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^TRIGGER_COMMENT_ID=//p' | tail -n1)"
-if [ -z "${PR_NUM_FROM_STEP}" ]; then
-  PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-fi
-if [ -z "${PR_NUM_FROM_STEP}" ]; then
-  PR_NUM_FROM_STEP="$(gh pr view --json number -q '.number')"
-fi
-if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
-write_reflection_issue() {
-  local source="$1"
-  local ts
-  ts="$(date --iso-8601=seconds)"
-  local dir="drafts/issues/${ts}"
-  mkdir -p "${dir}"
-  local file="${dir}/review-reflection.md"
-  cat > "${file}" <<EOF
-# Review Finding Reflection
-- Timestamp: ${ts}
-- Source: ${source}
-- Branch: $(git branch --show-current)
-- PR: ${PR_NUM_FROM_STEP}
-- Review Range: main...HEAD
-
-Why this issue escaped earlier checks:
-- Rule gap candidate: CLAUDE.md / AGENTS.md / .agents/rules-ref missing enforceable guidance.
-- Workflow gap candidate: csa hook/dev2merge missing mandatory guardrails.
-- Execution gap candidate: existing rules were present but not followed during implementation.
-
-Mandatory follow-up before merge:
-- [ ] Classify each finding into one root-cause bucket above.
-- [ ] If rule gap: patch CLAUDE.md, AGENTS.md, or .agents/rules-ref in the fix stream.
-- [ ] If workflow gap: patch csa hook/workflow and add verification.
-- [ ] If execution gap: add stronger checklist/tests to prevent recurrence.
-- [ ] Re-run heterogeneous review on main...HEAD and confirm clean.
-EOF
-  echo "REFLECTION_ISSUE_PATH=${file}" >&2
-}
-while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-  BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
-  BOT_PR_FINDINGS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not) and ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical")))] | length')
-  BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  BOT_REVIEW_FINDINGS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and ((((.state // "") | ascii_downcase) == "changes_requested") or ((.body // "") | ascii_downcase | test("(^|[^a-z0-9])p[0-3]([^a-z0-9]|$)|changes requested|must fix|blocking|severity|critical"))))] | length')
-  BOT_TRIGGER_REACTIONS=0
-  if [ -n "${TRIGGER_COMMENT_ID}" ]; then
-    BOT_TRIGGER_REACTIONS=$(gh api "repos/${REPO_LOCAL}/issues/comments/${TRIGGER_COMMENT_ID}/reactions?per_page=100" -H "Accept: application/vnd.github+json" | jq -r '[.[]? | select((.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  fi
-  echo "heartbeat elapsed=${ELAPSED}s inline=${BOT_INLINE_COMMENTS} pr_comments=${BOT_PR_COMMENTS} pr_findings=${BOT_PR_FINDINGS} reviews=${BOT_REVIEWS} review_findings=${BOT_REVIEW_FINDINGS} reactions=${BOT_TRIGGER_REACTIONS}" >&2
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_FINDINGS}" -gt 0 ] || [ "${BOT_REVIEW_FINDINGS}" -gt 0 ]; then
-    write_reflection_issue "cloud-bot-rerun"
-    echo "1"
-    exit 0
-  fi
-  if [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ] || [ "${BOT_TRIGGER_REACTIONS}" -gt 0 ]; then
-    echo ""
-    exit 0
-  fi
-  sleep "$INTERVAL"
-  ELAPSED=$((ELAPSED + INTERVAL))
-done
-echo "INFO: Timed out waiting for re-triggered cloud review after ${TIMEOUT}s; running local fallback review." >&2
-set +e
-LOCAL_REVIEW_OUTPUT="$(csa review --range main...HEAD 2>&1)"
-LOCAL_REVIEW_STATUS=$?
-set -e
-printf '%s\n' "${LOCAL_REVIEW_OUTPUT}" >&2
-if [ "${LOCAL_REVIEW_STATUS}" -eq 0 ]; then
-  COMMENT_BODY="Re-triggered cloud Codex review timed out after 20 minutes. I completed a comprehensive local heterogeneous review on main...HEAD with no blocking findings, so I will merge directly."
-  gh pr comment "${PR_NUM_FROM_STEP}" --repo "${REPO_LOCAL}" --body "${COMMENT_BODY}" >/dev/null
-  echo ""
-  exit 0
-fi
-if printf '%s\n' "${LOCAL_REVIEW_OUTPUT}" | grep -Eqi '(^|[^A-Za-z0-9_])HAS_ISSUES([^A-Za-z0-9_]|$)|final_decision:[[:space:]]*HAS_ISSUES'; then
-  write_reflection_issue "local-fallback-after-rerun-timeout"
-  echo "1"
-  exit 0
-fi
-echo "ERROR: Local fallback review failed unexpectedly (exit=${LOCAL_REVIEW_STATUS})." >&2
-exit "${LOCAL_REVIEW_STATUS}"
+csa run --skill pr-codex-bot --no-stream-stdout \
+  "Operate on the current branch and active PR. Execute the full cloud review lifecycle end-to-end, including trigger, polling, timeout fallback, iterative fixes, and merge."
 ```
-
-## IF ${STEP_27_OUTPUT}
-
-## Step 28: Stop on Remaining Findings
-
-Tool: bash
-OnFail: abort
-
-Abort merge when re-triggered review still reports findings.
-Reflection issue artifacts should already be written under `drafts/issues/<timestamp>/`.
-
-```bash
-echo "ERROR: Review still has findings after re-trigger. Do not merge." >&2
-exit 1
-```
-
-## ELSE
-
-## Step 29: Merge PR After Re-review Clean
-
-Tool: bash
-OnFail: abort
-
-Squash-merge the PR after the second bot review returns clean, then update local main.
-
-```bash
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
-PR_NUM_LOCAL="$(printf '%s\n' "${STEP_26_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-if [ -z "${PR_NUM_LOCAL}" ]; then
-  PR_NUM_LOCAL="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-fi
-if [ -z "${PR_NUM_LOCAL}" ]; then
-  PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
-fi
-gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
-git checkout main && git pull origin main
-```
-
-## ENDIF
-
-## ELSE
-
-## Step 30: Merge PR (Initial Review Clean)
-
-Tool: bash
-OnFail: abort
-
-No issues were found in the initial bot review. Merge using the PR number from step output.
-
-```bash
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
-PR_NUM_LOCAL="$(printf '%s\n' "${STEP_20_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
-if [ -z "${PR_NUM_LOCAL}" ]; then
-  PR_NUM_LOCAL="$(gh pr view --json number -q '.number')"
-fi
-gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
-git checkout main && git pull origin main
-```
-
-## ENDIF
