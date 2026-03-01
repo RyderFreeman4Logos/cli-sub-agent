@@ -22,7 +22,11 @@ Verify the current branch is a feature branch, not a protected branch.
 If on main or dev, abort immediately.
 
 ```bash
-BRANCH="${BRANCH}"
+BRANCH="$(git branch --show-current)"
+if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
+  echo "ERROR: Cannot determine current branch."
+  exit 1
+fi
 DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
 if [ -z "$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH="main"; fi
 if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
@@ -333,6 +337,11 @@ OnFail: retry 2
 Push the feature branch to the remote origin.
 
 ```bash
+BRANCH="$(git branch --show-current)"
+if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
+  echo "ERROR: Cannot determine current branch for push."
+  exit 1
+fi
 git push -u origin "${BRANCH}"
 ```
 
@@ -346,6 +355,16 @@ of changes for ${SCOPE} and a test plan checklist covering tests, linting,
 security audit, and codex review.
 
 ```bash
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
 COMMIT_MSG_LOCAL="${STEP_12_OUTPUT:-${COMMIT_MSG:-}}"
 if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   echo "ERROR: PR title is empty. Step 12 output is required." >&2
@@ -360,7 +379,7 @@ PR_BODY_LOCAL="${PR_BODY:-## Summary
 - just test
 - csa review --range main...HEAD
 }"
-gh pr create --base main --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
+gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
 ```
 
 ## Step 18: Trigger Codex Bot Review
@@ -372,10 +391,20 @@ Capture the PR number for polling.
 
 ```bash
 set -euo pipefail
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
 PR_NUM=$(gh pr view --json number -q '.number')
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO}" --json comments)
+COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO_LOCAL}" --json comments)
 TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -393,15 +422,25 @@ Output `1` when bot findings are present; output empty string otherwise.
 
 ```bash
 TIMEOUT=600; INTERVAL=30; ELAPSED=0
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
 PR_NUM_FROM_STEP="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^PR_NUM=//p' | tail -n1)"
 TRIGGER_TS="$(printf '%s\n' "${STEP_18_OUTPUT:-}" | sed -n 's/^TRIGGER_TS=//p' | tail -n1)"
 if [ -z "${PR_NUM_FROM_STEP}" ]; then PR_NUM_FROM_STEP="${PR_NUM}"; fi
 if [ -z "${TRIGGER_TS}" ]; then TRIGGER_TS="1970-01-01T00:00:00Z"; fi
 while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
-  PAYLOAD=$(gh pr view "${PR_NUM_FROM_STEP}" --repo "${REPO}" --json comments,reviews)
-  BOT_COMMENTS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.comments[]? | select(.createdAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
-  BOT_REVIEWS=$(printf '%s' "${PAYLOAD}" | jq -r --arg ts "${TRIGGER_TS}" '[.reviews[]? | select(.submittedAt >= $ts and (.author.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
+  BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
     echo "1"
     exit 0
   fi
@@ -418,47 +457,31 @@ echo ""
 Tool: csa
 Tier: tier-2-standard
 
-For each bot comment, classify as:
-- Category A (already fixed): react and acknowledge
-- Category B (suspected false positive): queue for arbitration
-- Category C (real issue): react and queue for fix
+Evaluate all inline bot findings on the PR and produce a consolidated action plan.
+List suspected false positives and real defects separately.
 
-## FOR comment IN ${BOT_COMMENTS}
-
-## Step 21: Process Comment
+## Step 21: Arbitrate Disputed Findings
 
 Tool: csa
 
-Evaluate this specific bot comment against the current code state.
-Determine category (A/B/C) and take appropriate action.
+For disputed findings, run independent arbitration using `csa debate` and
+produce a verdict for each disputed item.
 
-## IF ${COMMENT_IS_FALSE_POSITIVE}
-
-## Step 22: Arbitrate False Positive
+## Step 22: Fix Confirmed Issues
 
 Tool: csa
 Tier: tier-2-standard
 
-Run `csa debate` to get an independent second opinion on the suspected
-false positive. The arbiter MUST be a different model family.
+Implement fixes for confirmed bot findings and create commit(s) with clear
+messages. Do not modify unrelated files.
 
-```bash
-csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
-```
-
-## ELSE
-
-## Step 23: Fix Real Issue
+## Step 23: Re-run Local Review After Fixes
 
 Tool: csa
 Tier: tier-2-standard
 OnFail: retry 2
 
-Fix the real issue identified by the bot. Commit the fix.
-
-## ENDIF
-
-## ENDFOR
+Run `csa review --diff` to validate fixes before re-triggering cloud review.
 
 ## Step 24: Push Fixes and Re-trigger Review
 
@@ -468,10 +491,25 @@ Push all fix commits and trigger a new round of codex review.
 
 ```bash
 set -euo pipefail
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
+BRANCH="$(git branch --show-current)"
+if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
+  echo "ERROR: Cannot determine current branch for push."
+  exit 1
+fi
 git push origin "${BRANCH}"
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+gh pr comment "${PR_NUM}" --repo "${REPO_LOCAL}" --body "@codex review"
 SELF_LOGIN=$(gh api user -q '.login')
-COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO}" --json comments)
+COMMENTS_PAYLOAD=$(gh pr view "${PR_NUM}" --repo "${REPO_LOCAL}" --json comments)
 TRIGGER_TS=$(printf '%s' "${COMMENTS_PAYLOAD}" | jq -r --arg me "${SELF_LOGIN}" '[.comments[]? | select(.author.login == $me and .body == "@codex review")] | sort_by(.createdAt) | last | .createdAt // empty')
 if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -495,6 +533,16 @@ OnFail: abort
 Squash-merge the PR and update local main.
 
 ```bash
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
+if [ -z "${REPO_LOCAL}" ]; then
+  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
+  REPO_LOCAL="${REPO_LOCAL%.git}"
+fi
+if [ -z "${REPO_LOCAL}" ]; then
+  echo "ERROR: Cannot resolve repository owner/name." >&2
+  exit 1
+fi
+gh pr merge "${PR_NUM}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
 ```
