@@ -1,5 +1,59 @@
 use super::*;
+use std::collections::{HashMap, HashSet};
 use weave::compiler::VariableDecl;
+
+#[test]
+fn safe_plan_name_normalizes_non_alphanumeric_characters() {
+    assert_eq!(safe_plan_name("Dev2Merge Workflow"), "dev2merge_workflow");
+    assert_eq!(safe_plan_name("mktd@2026!"), "mktd_2026");
+}
+
+#[test]
+fn load_plan_resume_context_reads_running_journal() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![VariableDecl {
+            name: "FEATURE".into(),
+            default: Some("default".into()),
+        }],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("test.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "test".into(),
+        workflow_path: normalize_path(&workflow_path),
+        status: "running".into(),
+        vars: HashMap::from([
+            ("FEATURE".to_string(), "from-journal".to_string()),
+            ("STEP_1_OUTPUT".to_string(), "cached".to_string()),
+        ]),
+        completed_steps: vec![1, 2],
+        last_error: None,
+    };
+    persist_plan_journal(&journal_path, &journal).unwrap();
+
+    let cli_vars = HashMap::from([("FEATURE".to_string(), "from-cli".to_string())]);
+    let ctx = load_plan_resume_context(&plan, &workflow_path, &journal_path, &cli_vars).unwrap();
+
+    assert!(ctx.resumed);
+    assert!(ctx.completed_steps.contains(&1));
+    assert!(ctx.completed_steps.contains(&2));
+    assert_eq!(
+        ctx.initial_vars.get("FEATURE").map(String::as_str),
+        Some("from-cli")
+    );
+    assert_eq!(
+        ctx.initial_vars.get("STEP_1_OUTPUT").map(String::as_str),
+        Some("cached")
+    );
+}
 
 #[test]
 fn parse_variables_uses_defaults() {
@@ -84,6 +138,112 @@ fn substitute_vars_replaces_placeholders() {
 fn substitute_vars_leaves_unknown_placeholders() {
     let vars = HashMap::new();
     assert_eq!(substitute_vars("${UNKNOWN}", &vars), "${UNKNOWN}");
+}
+
+#[test]
+fn extract_output_assignment_markers_parses_uppercase_assignments() {
+    let output = r#"
+CSA_VAR:BOT_UNAVAILABLE=true
+CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=false
+noise line
+lowercase=value
+"#;
+    let allowlist = HashSet::from([
+        "BOT_UNAVAILABLE".to_string(),
+        "FALLBACK_REVIEW_HAS_ISSUES".to_string(),
+    ]);
+    let markers = extract_output_assignment_markers(output, &allowlist);
+    assert_eq!(
+        markers,
+        vec![
+            ("BOT_UNAVAILABLE".to_string(), "true".to_string()),
+            (
+                "FALLBACK_REVIEW_HAS_ISSUES".to_string(),
+                "false".to_string()
+            )
+        ]
+    );
+}
+
+#[test]
+fn extract_output_assignment_markers_ignores_non_allowlisted_keys() {
+    let output = r#"
+CSA_VAR:BOT_UNAVAILABLE=true
+CSA_VAR:PATH=/tmp/unsafe
+"#;
+    let allowlist = HashSet::from(["BOT_UNAVAILABLE".to_string()]);
+    let markers = extract_output_assignment_markers(output, &allowlist);
+    assert_eq!(
+        markers,
+        vec![("BOT_UNAVAILABLE".to_string(), "true".to_string())]
+    );
+}
+
+#[test]
+fn extract_output_assignment_markers_ignores_unprefixed_assignments() {
+    let output = r#"
+BOT_UNAVAILABLE=true
+CSA_VAR:BOT_UNAVAILABLE=false
+"#;
+    let allowlist = HashSet::from(["BOT_UNAVAILABLE".to_string()]);
+    let markers = extract_output_assignment_markers(output, &allowlist);
+    assert_eq!(
+        markers,
+        vec![("BOT_UNAVAILABLE".to_string(), "false".to_string())]
+    );
+}
+
+#[test]
+fn is_assignment_marker_key_accepts_expected_format() {
+    assert!(is_assignment_marker_key("BOT_UNAVAILABLE"));
+    assert!(is_assignment_marker_key("_INTERNAL_FLAG1"));
+    assert!(is_assignment_marker_key("bot_unavailable"));
+    assert!(!is_assignment_marker_key("1BAD"));
+    assert!(!is_assignment_marker_key("BAD-KEY"));
+}
+
+#[test]
+fn should_inject_assignment_markers_only_for_bash_steps() {
+    let bash_step = PlanStep {
+        id: 1,
+        title: "bash".into(),
+        tool: Some("Bash".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let codex_step = PlanStep {
+        id: 2,
+        title: "codex".into(),
+        tool: Some("codex".into()),
+        prompt: String::new(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let tier_only_step = PlanStep {
+        id: 3,
+        title: "tier-only".into(),
+        tool: None,
+        prompt: String::new(),
+        tier: Some("tier-1-fast".into()),
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+
+    assert!(should_inject_assignment_markers(&bash_step));
+    assert!(!should_inject_assignment_markers(&codex_step));
+    assert!(!should_inject_assignment_markers(&tier_only_step));
 }
 
 #[test]
@@ -418,6 +578,108 @@ async fn execute_plan_runs_true_condition_steps() {
     assert_eq!(results.len(), 1);
     assert!(!results[0].skipped, "true condition must execute");
     assert_eq!(results[0].exit_code, 0);
+}
+
+#[tokio::test]
+async fn execute_plan_allows_prefixed_marker_to_drive_next_condition() {
+    let plan = ExecutionPlan {
+        name: "marker-flow".into(),
+        description: String::new(),
+        variables: vec![VariableDecl {
+            name: "FLAG".into(),
+            default: None,
+        }],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "emit marker".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho 'CSA_VAR:FLAG=yes'\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "conditioned step".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho marker_pass > marker.txt\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: Some("${FLAG}".into()),
+                loop_var: None,
+                session: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].exit_code, 0);
+    assert_eq!(results[1].exit_code, 0);
+    assert!(!results[1].skipped);
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("marker.txt"))
+            .unwrap()
+            .trim(),
+        "marker_pass"
+    );
+}
+
+#[tokio::test]
+async fn execute_plan_does_not_inject_markers_from_failed_steps() {
+    let plan = ExecutionPlan {
+        name: "failed-marker".into(),
+        description: String::new(),
+        variables: vec![VariableDecl {
+            name: "FLAG".into(),
+            default: None,
+        }],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "emit then fail".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho 'CSA_VAR:FLAG=yes'\nexit 1\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Skip,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "must stay skipped".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\necho should_not_run > should_not_exist.txt\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: Some("${FLAG}".into()),
+                loop_var: None,
+                session: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let results = execute_plan(&plan, &vars, tmp.path(), None, None)
+        .await
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_ne!(results[0].exit_code, 0);
+    assert!(results[1].skipped);
+    assert!(!tmp.path().join("should_not_exist.txt").exists());
 }
 
 #[tokio::test]

@@ -537,7 +537,7 @@ fn test_build_review_instruction_no_diff_content() {
     // should remain concise.
     let result = build_review_instruction("uncommitted", "review-only", "auto", None);
     assert!(
-        result.len() < 600,
+        result.len() < 900,
         "Instruction should be concise (preamble + params), got {} chars",
         result.len()
     );

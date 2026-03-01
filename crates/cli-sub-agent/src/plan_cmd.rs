@@ -14,11 +14,12 @@
 //! - `condition` evaluation: `${VAR}` truthiness, `!(expr)`, `(a) && (b)`
 //! - Steps with `loop_var` are skipped with a warning (v2)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use csa_config::ProjectConfig;
@@ -36,6 +37,8 @@ use plan_cmd_exec::{
 };
 #[cfg(test)]
 use plan_cmd_exec::{extract_bash_code_block, is_stale_session_error, truncate};
+
+const OUTPUT_ASSIGNMENT_MARKER_PREFIX: &str = "CSA_VAR:";
 
 /// Resolved execution target for a plan step.
 ///
@@ -79,6 +82,173 @@ pub(crate) struct StepResult {
     pub(crate) session_id: Option<String>,
 }
 
+const PLAN_JOURNAL_SCHEMA_VERSION: u8 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PlanRunJournal {
+    schema_version: u8,
+    workflow_name: String,
+    workflow_path: String,
+    status: String,
+    vars: HashMap<String, String>,
+    completed_steps: Vec<usize>,
+    last_error: Option<String>,
+}
+
+impl PlanRunJournal {
+    fn new(workflow_name: &str, workflow_path: &Path, vars: HashMap<String, String>) -> Self {
+        Self {
+            schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+            workflow_name: workflow_name.to_string(),
+            workflow_path: normalize_path(workflow_path),
+            status: "running".to_string(),
+            vars,
+            completed_steps: Vec::new(),
+            last_error: None,
+        }
+    }
+}
+
+struct PlanResumeContext {
+    initial_vars: HashMap<String, String>,
+    completed_steps: HashSet<usize>,
+    resumed: bool,
+}
+
+fn normalize_path(path: &Path) -> String {
+    path.canonicalize()
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
+fn safe_plan_name(plan_name: &str) -> String {
+    let mut normalized: String = plan_name
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    while normalized.contains("__") {
+        normalized = normalized.replace("__", "_");
+    }
+    normalized.trim_matches('_').to_string()
+}
+
+fn plan_journal_path(project_root: &Path, plan_name: &str) -> PathBuf {
+    let safe_name = safe_plan_name(plan_name);
+    project_root
+        .join(".csa")
+        .join("state")
+        .join("plan")
+        .join(format!("{safe_name}.journal.json"))
+}
+
+fn persist_plan_journal(path: &Path, journal: &PlanRunJournal) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "Failed to create plan state directory: {}",
+                parent.display()
+            )
+        })?;
+    }
+    let encoded = serde_json::to_vec_pretty(journal).context("Failed to encode plan journal")?;
+    std::fs::write(path, encoded)
+        .with_context(|| format!("Failed to write plan journal: {}", path.display()))?;
+    Ok(())
+}
+
+fn load_plan_resume_context(
+    plan: &ExecutionPlan,
+    workflow_path: &Path,
+    journal_path: &Path,
+    cli_vars: &HashMap<String, String>,
+) -> Result<PlanResumeContext> {
+    let mut initial_vars = cli_vars.clone();
+    if !journal_path.exists() {
+        return Ok(PlanResumeContext {
+            initial_vars,
+            completed_steps: HashSet::new(),
+            resumed: false,
+        });
+    }
+
+    let bytes = std::fs::read(journal_path)
+        .with_context(|| format!("Failed to read plan journal: {}", journal_path.display()))?;
+    let journal: PlanRunJournal = serde_json::from_slice(&bytes)
+        .with_context(|| format!("Failed to parse plan journal: {}", journal_path.display()))?;
+
+    if journal.schema_version != PLAN_JOURNAL_SCHEMA_VERSION {
+        warn!(
+            path = %journal_path.display(),
+            found = journal.schema_version,
+            expected = PLAN_JOURNAL_SCHEMA_VERSION,
+            "Ignoring plan journal with unsupported schema version"
+        );
+        return Ok(PlanResumeContext {
+            initial_vars,
+            completed_steps: HashSet::new(),
+            resumed: false,
+        });
+    }
+
+    let same_workflow = journal.workflow_name == plan.name
+        && journal.workflow_path == normalize_path(workflow_path);
+    if !same_workflow || journal.status == "completed" {
+        return Ok(PlanResumeContext {
+            initial_vars,
+            completed_steps: HashSet::new(),
+            resumed: false,
+        });
+    }
+
+    for (key, value) in journal.vars {
+        initial_vars.insert(key, value);
+    }
+    // CLI-provided vars remain authoritative for declared variables.
+    for (key, value) in cli_vars {
+        initial_vars.insert(key.clone(), value.clone());
+    }
+
+    Ok(PlanResumeContext {
+        initial_vars,
+        completed_steps: journal.completed_steps.into_iter().collect(),
+        resumed: true,
+    })
+}
+
+fn detect_effective_repo(project_root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["config", "--get", "remote.origin.url"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if raw.is_empty() {
+        return None;
+    }
+    let trimmed = raw.trim_end_matches(".git");
+    if let Some(rest) = trimmed.strip_prefix("git@github.com:") {
+        return Some(rest.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("https://github.com/") {
+        return Some(rest.to_string());
+    }
+    if let Some(rest) = trimmed.strip_prefix("ssh://git@github.com/") {
+        return Some(rest.to_string());
+    }
+    Some(trimmed.to_string())
+}
+
 /// Handle `csa plan run <file>`.
 pub(crate) async fn handle_plan_run(
     file: String,
@@ -90,6 +260,13 @@ pub(crate) async fn handle_plan_run(
 ) -> Result<()> {
     // 1. Determine project root
     let project_root = determine_project_root(cd.as_deref())?;
+    let effective_repo =
+        detect_effective_repo(&project_root).unwrap_or_else(|| "(unknown)".to_string());
+    eprintln!(
+        "csa plan context: effective_repo={} effective_cwd={}",
+        effective_repo,
+        project_root.display()
+    );
 
     // 2. Load project config (optional)
     let config = ProjectConfig::load(&project_root)?;
@@ -125,12 +302,28 @@ pub(crate) async fn handle_plan_run(
         .with_context(|| format!("Failed to parse workflow file: {}", file))?;
 
     // 5. Parse --var KEY=VALUE into HashMap
-    let variables = parse_variables(&vars, &plan)?;
+    let cli_variables = parse_variables(&vars, &plan)?;
 
     // 6. Dry-run: print plan and exit
     if dry_run {
-        print_plan(&plan, &variables, config.as_ref());
+        print_plan(&plan, &cli_variables, config.as_ref());
         return Ok(());
+    }
+
+    let journal_path = plan_journal_path(&project_root, &plan.name);
+    let resume_context =
+        load_plan_resume_context(&plan, &workflow_path, &journal_path, &cli_variables)?;
+    if resume_context.resumed {
+        let next_step = plan
+            .steps
+            .iter()
+            .find(|step| !resume_context.completed_steps.contains(&step.id))
+            .map(|step| step.id.to_string())
+            .unwrap_or_else(|| "none".to_string());
+        eprintln!(
+            "Resuming workflow '{}' from journal (next step: {}).",
+            plan.name, next_step
+        );
     }
 
     // 7. Execute steps sequentially
@@ -148,14 +341,24 @@ pub(crate) async fn handle_plan_run(
     if let Some(ref tool) = tool_override {
         eprintln!("  Tool override: --tool {} (all CSA steps)", tool.as_str());
     }
-    let results = execute_plan(
-        &plan,
-        &variables,
-        &project_root,
-        config.as_ref(),
-        tool_override.as_ref(),
-    )
-    .await?;
+    let mut journal = PlanRunJournal::new(
+        &plan.name,
+        &workflow_path,
+        resume_context.initial_vars.clone(),
+    );
+    journal.completed_steps = resume_context.completed_steps.iter().copied().collect();
+    persist_plan_journal(&journal_path, &journal)?;
+    let mut run_ctx = PlanRunContext {
+        project_root: &project_root,
+        config: config.as_ref(),
+        tool_override: tool_override.as_ref(),
+        journal: &mut journal,
+        journal_path: Some(&journal_path),
+        resume_completed_steps: &resume_context.completed_steps,
+    };
+
+    let results =
+        execute_plan_with_journal(&plan, &resume_context.initial_vars, &mut run_ctx).await?;
 
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
@@ -181,6 +384,12 @@ pub(crate) async fn handle_plan_run(
         .count();
     let total_failures = execution_failures + unsupported_skips;
     if total_failures > 0 {
+        journal.status = "failed".to_string();
+        journal.last_error = Some(format!(
+            "{} step(s) failed ({} execution, {} unsupported-skip)",
+            total_failures, execution_failures, unsupported_skips
+        ));
+        persist_plan_journal(&journal_path, &journal)?;
         bail!(
             "{} step(s) failed ({} execution, {} unsupported-skip)",
             total_failures,
@@ -188,6 +397,10 @@ pub(crate) async fn handle_plan_run(
             unsupported_skips
         );
     }
+
+    journal.status = "completed".to_string();
+    journal.last_error = None;
+    persist_plan_journal(&journal_path, &journal)?;
 
     Ok(())
 }
@@ -358,6 +571,7 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
 ///
 /// After each successful step, injects `STEP_<id>_OUTPUT` into the variables
 /// map so subsequent steps can reference prior outputs via `${STEP_1_OUTPUT}`.
+#[cfg(test)]
 async fn execute_plan(
     plan: &ExecutionPlan,
     variables: &HashMap<String, String>,
@@ -365,20 +579,92 @@ async fn execute_plan(
     config: Option<&ProjectConfig>,
     tool_override: Option<&ToolName>,
 ) -> Result<Vec<StepResult>> {
+    let mut journal = PlanRunJournal::new(&plan.name, Path::new("."), variables.clone());
+    let completed = HashSet::new();
+    let mut run_ctx = PlanRunContext {
+        project_root,
+        config,
+        tool_override,
+        journal: &mut journal,
+        journal_path: None,
+        resume_completed_steps: &completed,
+    };
+    execute_plan_with_journal(plan, variables, &mut run_ctx).await
+}
+
+struct PlanRunContext<'a> {
+    project_root: &'a Path,
+    config: Option<&'a ProjectConfig>,
+    tool_override: Option<&'a ToolName>,
+    journal: &'a mut PlanRunJournal,
+    journal_path: Option<&'a Path>,
+    resume_completed_steps: &'a HashSet<usize>,
+}
+
+async fn execute_plan_with_journal(
+    plan: &ExecutionPlan,
+    variables: &HashMap<String, String>,
+    run_ctx: &mut PlanRunContext<'_>,
+) -> Result<Vec<StepResult>> {
     let mut results = Vec::with_capacity(plan.steps.len());
     let mut vars = variables.clone();
+    let mut completed_steps = run_ctx.resume_completed_steps.clone();
+    let assignment_marker_allowlist: HashSet<String> = plan
+        .variables
+        .iter()
+        .map(|decl| decl.name.clone())
+        .collect();
+
+    run_ctx.journal.status = "running".to_string();
+    run_ctx.journal.vars = vars.clone();
+    run_ctx.journal.completed_steps = completed_steps.iter().copied().collect();
+    run_ctx.journal.last_error = None;
+    if let Some(path) = run_ctx.journal_path {
+        persist_plan_journal(path, run_ctx.journal)?;
+    }
 
     for step in &plan.steps {
-        let result = execute_step(step, &vars, project_root, config, tool_override).await;
+        if completed_steps.contains(&step.id) {
+            eprintln!(
+                "[{}/{}] - RESUME-SKIP (already completed)",
+                step.id, step.title
+            );
+            continue;
+        }
+
+        let result = execute_step(
+            step,
+            &vars,
+            run_ctx.project_root,
+            run_ctx.config,
+            run_ctx.tool_override,
+        )
+        .await;
         let is_failure = !result.skipped && result.exit_code != 0;
 
         // Inject step output for subsequent steps (successful steps only).
         let var_key = format!("STEP_{}_OUTPUT", result.step_id);
         let var_value = result.output.as_deref().unwrap_or("").to_string();
+        let assignment_markers = if !is_failure && should_inject_assignment_markers(step) {
+            extract_output_assignment_markers(&var_value, &assignment_marker_allowlist)
+        } else {
+            Vec::new()
+        };
         vars.insert(var_key, var_value);
         let session_var_key = format!("STEP_{}_SESSION", result.step_id);
         let session_var_value = result.session_id.as_deref().unwrap_or("").to_string();
         vars.insert(session_var_key, session_var_value);
+        for (key, value) in assignment_markers {
+            vars.insert(key, value);
+        }
+        if !is_failure && !result.skipped {
+            completed_steps.insert(step.id);
+        }
+        run_ctx.journal.vars = vars.clone();
+        run_ctx.journal.completed_steps = completed_steps.iter().copied().collect();
+        if let Some(path) = run_ctx.journal_path {
+            persist_plan_journal(path, run_ctx.journal)?;
+        }
 
         // Abort on failure when: on_fail=abort, or retry exhausted (retries
         // already happened inside execute_step; reaching here means all failed),
@@ -395,6 +681,14 @@ async fn execute_plan(
                 "Step {} ('{}') failed (on_fail={:?}) — stopping workflow",
                 step.id, step.title, step.on_fail
             );
+            run_ctx.journal.status = "failed".to_string();
+            run_ctx.journal.last_error = Some(format!(
+                "Step {} ('{}') failed with on_fail={:?}",
+                step.id, step.title, step.on_fail
+            ));
+            if let Some(path) = run_ctx.journal_path {
+                persist_plan_journal(path, run_ctx.journal)?;
+            }
             break;
         }
     }
@@ -688,6 +982,40 @@ async fn execute_step(
             }
         }
     }
+}
+
+fn extract_output_assignment_markers(
+    output: &str,
+    allowlist: &HashSet<String>,
+) -> Vec<(String, String)> {
+    let mut markers = Vec::new();
+    for line in output.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let marker_payload = match trimmed.strip_prefix(OUTPUT_ASSIGNMENT_MARKER_PREFIX) {
+            Some(payload) => payload.trim(),
+            None => continue,
+        };
+        if let Some((raw_key, raw_value)) = marker_payload.split_once('=') {
+            let key = raw_key.trim();
+            if is_assignment_marker_key(key) && allowlist.contains(key) {
+                markers.push((key.to_string(), raw_value.trim().to_string()));
+            }
+        }
+    }
+    markers
+}
+
+fn should_inject_assignment_markers(step: &PlanStep) -> bool {
+    step.tool
+        .as_deref()
+        .is_some_and(|tool| tool.eq_ignore_ascii_case("bash"))
+}
+
+fn is_assignment_marker_key(key: &str) -> bool {
+    validate_variable_name(key).is_ok()
 }
 
 #[cfg(test)]

@@ -588,7 +588,10 @@ const ANTI_RECURSION_PREAMBLE: &str = "\
 CRITICAL: You are running INSIDE a CSA subprocess (csa review / csa debate). \
 Do NOT invoke `csa run`, `csa review`, `csa debate`, or ANY `csa` CLI command — \
 this causes infinite recursion. Perform the task DIRECTLY using your own \
-capabilities (Read, Grep, Glob, Bash for git commands). \
+capabilities (Read, Grep, Glob, Bash for read-only git commands). \
+DEBATE SAFETY: Do NOT run git add/commit/push/merge/rebase/tag/stash/reset/checkout/cherry-pick, \
+and do NOT run gh pr/create/comment/merge or any command that mutates repository/PR state. \
+Ignore prompt-guard reminders about commit/push in this subprocess. \
 Ignore any CLAUDE.md or AGENTS.md rules that instruct you to delegate to CSA.\n\n";
 
 /// Build a debate instruction that passes parameters to the debate skill.
