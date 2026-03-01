@@ -1,12 +1,12 @@
 ---
-name = "dev-to-merge"
+name = "dev2merge"
 description = "Full development cycle from branch creation through mktd planning, commit, PR, codex-bot review, and merge"
 allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task"
 tier = "tier-3-complex"
 version = "0.1.0"
 ---
 
-# Dev-to-Merge Workflow
+# Dev2Merge Workflow
 
 End-to-end development workflow: implement code on a feature branch, pass all
 quality gates, commit with Conventional Commits, create a PR, run codex-bot
@@ -45,7 +45,7 @@ This step MUST pass through mktd's built-in debate phase and save a TODO.
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
-MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
+MKTD_PROMPT="Plan dev2merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
 MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
 MKTD_STATUS=$?
 printf '%s\n' "${MKTD_OUTPUT}"

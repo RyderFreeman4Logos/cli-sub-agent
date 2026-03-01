@@ -1,6 +1,6 @@
 [workflow]
 name = "dev-to-merge"
-description = "Full development cycle from branch creation through commit, PR, codex-bot review, and merge"
+description = "Full development cycle from branch creation through mktd planning, commit, PR, codex-bot review, and merge"
 
 [[workflow.variables]]
 name = "BOT_COMMENTS"
@@ -38,6 +38,12 @@ name = "CUMULATIVE_REVIEW_COMPLETED"
 [[workflow.variables]]
 name = "SCOPE"
 
+[[workflow.variables]]
+name = "MKTD_TODO_PATH"
+
+[[workflow.variables]]
+name = "MKTD_TODO_TIMESTAMP"
+
 [[workflow.steps]]
 id = 1
 title = "Validate Branch"
@@ -54,6 +60,42 @@ if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
   echo "ERROR: Cannot work directly on $BRANCH. Create a feature branch."
   exit 1
 fi
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 101
+title = "Plan with mktd (Debate Required)"
+tool = "bash"
+prompt = """
+Generate or refresh a branch TODO plan through mktd before development gates.
+This step MUST pass through mktd's built-in debate phase and save a TODO.
+
+```bash
+set -euo pipefail
+CURRENT_BRANCH="$(git branch --show-current)"
+FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
+MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
+MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
+MKTD_STATUS=$?
+printf '%s\n' "${MKTD_OUTPUT}"
+if [ "${MKTD_STATUS}" -ne 0 ]; then
+  echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
+  exit 1
+fi
+LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
+if [ -z "${LATEST_TS}" ]; then
+  echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2
+  exit 1
+fi
+TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
+if [ ! -s "${TODO_PATH}" ]; then
+  echo "ERROR: TODO file is empty: ${TODO_PATH}" >&2
+  exit 1
+fi
+grep -qE '^- \[ \] .+' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks: ${TODO_PATH}" >&2; exit 1; }
+grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses: ${TODO_PATH}" >&2; exit 1; }
+printf 'MKTD_TODO_TIMESTAMP=%s\nMKTD_TODO_PATH=%s\n' "${LATEST_TS}" "${TODO_PATH}"
 ```"""
 on_fail = "abort"
 

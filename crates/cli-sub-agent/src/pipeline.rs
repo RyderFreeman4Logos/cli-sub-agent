@@ -25,30 +25,12 @@ use crate::memory_capture;
 use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+#[path = "pipeline_prompt_guard.rs"]
+mod prompt_guard;
+use prompt_guard::emit_prompt_guard_to_caller;
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
-const PROMPT_GUARD_CALLER_INJECTION_ENV: &str = "CSA_EMIT_CALLER_GUARD_INJECTION";
-
-fn should_emit_prompt_guard_to_caller() -> bool {
-    match std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV) {
-        Ok(raw) => {
-            let normalized = raw.trim().to_ascii_lowercase();
-            !matches!(normalized.as_str(), "0" | "false" | "off" | "no")
-        }
-        Err(_) => true,
-    }
-}
-
-fn emit_prompt_guard_to_caller(guard_block: &str, guard_count: usize) {
-    if !should_emit_prompt_guard_to_caller() || guard_block.trim().is_empty() {
-        return;
-    }
-    eprintln!("[csa-hook] reverse prompt injection for caller (guards={guard_count})");
-    eprintln!("<csa-caller-prompt-injection guards=\"{guard_count}\">");
-    eprintln!("{guard_block}");
-    eprintln!("</csa-caller-prompt-injection>");
-}
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -808,3 +790,7 @@ mod tests;
 #[cfg(test)]
 #[path = "pipeline_tests_thinking.rs"]
 mod thinking_tests;
+
+#[cfg(test)]
+#[path = "pipeline_tests_prompt_guard.rs"]
+mod prompt_guard_tests;

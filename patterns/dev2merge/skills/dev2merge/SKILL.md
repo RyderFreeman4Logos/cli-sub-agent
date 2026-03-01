@@ -1,15 +1,17 @@
 ---
-name: dev-to-merge
+name: dev2merge
 description: Full development cycle from branch creation through mktd planning, commit, PR, codex-bot review, and merge
 allowed-tools: Bash, Read, Grep, Glob, Edit, Write
 triggers:
+  - "dev2merge"
+  - "/dev2merge"
   - "dev-to-merge"
   - "/dev-to-merge"
   - "full dev cycle"
   - "implement and merge"
 ---
 
-# Dev-to-Merge: End-to-End Development Workflow
+# Dev2Merge: End-to-End Development Workflow
 
 ## Role Detection (READ THIS FIRST -- MANDATORY)
 
@@ -19,7 +21,7 @@ Treat the run as executor ONLY when initial prompt contains:
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
-2. **Read the pattern** at `patterns/dev-to-merge/PATTERN.md` and follow it step by step.
+2. **Read the pattern** at `patterns/dev2merge/PATTERN.md` and follow it step by step.
 3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the work DIRECTLY. Running any `csa` command causes infinite recursion.
 
 **Only if you are the main agent (Claude Code / human user)**:
@@ -44,7 +46,7 @@ Execute the complete development lifecycle on a feature branch: mandatory mktd p
 ### Quick Start
 
 ```bash
-csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
+csa run --skill dev2merge "Implement, review, and merge <scope description>"
 ```
 
 ### Step-by-Step
@@ -73,9 +75,9 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 
 | Command | Effect |
 |---------|--------|
-| `/dev-to-merge scope=executor` | Full cycle for executor module changes |
-| `/dev-to-merge` | Full cycle for all current changes |
-| `/dev2merge` | Preferred new command (same workflow behavior) |
+| `/dev2merge scope=executor` | Full cycle for executor module changes |
+| `/dev2merge` | Full cycle for all current changes |
+| `/dev-to-merge` | Backward-compatible alias to `dev2merge` |
 
 ## Integration
 

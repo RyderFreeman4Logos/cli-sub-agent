@@ -24,7 +24,7 @@ installs the workflow entrypoints required by `csa review` and `csa debate`.
 | `csa-review` | Compatibility shim for review command scaffolding; delegates behavior to workflow protocol. |
 | `debate` | Compatibility shim for debate command scaffolding and continuation protocol. |
 
-## Compiled Patterns (13)
+## Compiled Patterns (14)
 
 | Pattern | Description |
 |---|---|
@@ -34,6 +34,7 @@ installs the workflow entrypoints required by `csa review` and `csa debate`.
 | `csa-issue-reporter` | Structured GitHub issue filing workflow for CSA runtime/tool errors. |
 | `csa-review` | Independent CSA-driven code review with session isolation and structured output. |
 | `debate` | Adversarial multi-tool strategy debate with escalation and convergence checks. |
+| `dev2merge` | End-to-end branch-to-merge workflow with mandatory mktd planning/debate gate. |
 | `dev-to-merge` | End-to-end branch-to-merge workflow: implement, validate, PR, bot review, merge. |
 | `file-audit` | Per-file AGENTS.md compliance audit with report generation workflow. |
 | `mktd` | Make TODO workflow: reconnaissance, drafting, debate, and approval. |
