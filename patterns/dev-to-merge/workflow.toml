@@ -674,7 +674,7 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
 done
 echo "INFO: Timed out waiting for cloud bot response after ${TIMEOUT}s; running local fallback review." >&2
 set +e
-LOCAL_REVIEW_OUTPUT="$(csa review --range main...HEAD --tool auto 2>&1)"
+LOCAL_REVIEW_OUTPUT="$(csa review --range main...HEAD 2>&1)"
 LOCAL_REVIEW_STATUS=$?
 set -e
 printf '%s\n' "${LOCAL_REVIEW_OUTPUT}" >&2
@@ -877,7 +877,7 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
 done
 echo "INFO: Timed out waiting for re-triggered cloud review after ${TIMEOUT}s; running local fallback review." >&2
 set +e
-LOCAL_REVIEW_OUTPUT="$(csa review --range main...HEAD --tool auto 2>&1)"
+LOCAL_REVIEW_OUTPUT="$(csa review --range main...HEAD 2>&1)"
 LOCAL_REVIEW_STATUS=$?
 set -e
 printf '%s\n' "${LOCAL_REVIEW_OUTPUT}" >&2
