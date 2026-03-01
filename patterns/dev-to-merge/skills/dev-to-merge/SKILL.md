@@ -20,7 +20,7 @@ Treat the run as executor ONLY when initial prompt contains:
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
 2. **Read the pattern** at `patterns/dev-to-merge/PATTERN.md` and follow it step by step.
-3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the work DIRECTLY. Running any `csa` command causes infinite recursion.
+3. **RECURSION GUARD**: Do NOT run `csa run --skill dev2merge` or `csa run --skill dev-to-merge` from inside this skill. Other `csa` commands required by the workflow (for example `csa run --skill mktd`, `csa review`, `csa debate`) are allowed.
 
 **Only if you are the main agent (Claude Code / human user)**:
 - You are the **orchestrator**. Follow the "Execution Protocol" steps below.
