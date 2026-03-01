@@ -440,14 +440,19 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ]; then
     echo "1"
+    exit 0
+  fi
+  if [ "${BOT_REVIEWS}" -gt 0 ]; then
+    echo ""
     exit 0
   fi
   sleep "$INTERVAL"
   ELAPSED=$((ELAPSED + INTERVAL))
 done
-echo ""
+echo "ERROR: Timed out waiting for bot response." >&2
+exit 1
 ```
 
 ## IF ${STEP_19_OUTPUT}
@@ -554,14 +559,19 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
   BOT_INLINE_COMMENTS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select(.created_at >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
   BOT_PR_COMMENTS=$(gh api "repos/${REPO_LOCAL}/issues/${PR_NUM_FROM_STEP}/comments?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.created_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")) and (((.body // "") | ascii_downcase | contains("@codex review")) | not))] | length')
   BOT_REVIEWS=$(gh api "repos/${REPO_LOCAL}/pulls/${PR_NUM_FROM_STEP}/reviews?per_page=100" | jq -r --arg ts "${TRIGGER_TS}" '[.[]? | select((.submitted_at // "") >= $ts and (.user.login | ascii_downcase | test("codex|bot|connector")))] | length')
-  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ] || [ "${BOT_REVIEWS}" -gt 0 ]; then
+  if [ "${BOT_INLINE_COMMENTS}" -gt 0 ] || [ "${BOT_PR_COMMENTS}" -gt 0 ]; then
     echo "1"
+    exit 0
+  fi
+  if [ "${BOT_REVIEWS}" -gt 0 ]; then
+    echo ""
     exit 0
   fi
   sleep "$INTERVAL"
   ELAPSED=$((ELAPSED + INTERVAL))
 done
-echo ""
+echo "ERROR: Timed out waiting for re-triggered bot response." >&2
+exit 1
 ```
 
 ## IF ${STEP_25_OUTPUT}
