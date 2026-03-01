@@ -1,23 +1,111 @@
----
-name = "dev-to-merge"
+[workflow]
+name = "dev2merge"
 description = "Full development cycle from branch creation through mktd planning, commit, PR, codex-bot review, and merge"
-allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task"
-tier = "tier-3-complex"
-version = "0.1.0"
----
 
-# Dev-to-Merge Workflow
+[[workflow.variables]]
+name = "AUDIT_OUTPUT"
 
-End-to-end development workflow: implement code on a feature branch, pass all
-quality gates, commit with Conventional Commits, create a PR, run codex-bot
-review loop, and merge to main. Planning is mandatory via `mktd`, and `mktd`
-internally requires adversarial `debate` evidence.
+[[workflow.variables]]
+name = "AUDIT_PROMPT"
 
-## Step 1: Validate Branch
+[[workflow.variables]]
+name = "AUDIT_STATUS"
 
-Tool: bash
-OnFail: abort
+[[workflow.variables]]
+name = "BOT_INLINE_COMMENTS"
 
+[[workflow.variables]]
+name = "BOT_PR_COMMENTS"
+
+[[workflow.variables]]
+name = "BOT_PR_FINDINGS"
+
+[[workflow.variables]]
+name = "BOT_REVIEWS"
+
+[[workflow.variables]]
+name = "BOT_REVIEW_FINDINGS"
+
+[[workflow.variables]]
+name = "BOT_TRIGGER_REACTIONS"
+
+[[workflow.variables]]
+name = "BRANCH"
+
+[[workflow.variables]]
+name = "COMMENTS_PAYLOAD"
+
+[[workflow.variables]]
+name = "COMMENT_URL"
+
+[[workflow.variables]]
+name = "COMMIT_MSG_LOCAL"
+
+[[workflow.variables]]
+name = "ELAPSED"
+
+[[workflow.variables]]
+name = "MATCHED_LOCKFILES"
+
+[[workflow.variables]]
+name = "ORIGIN_URL"
+
+[[workflow.variables]]
+name = "PRE_DIRTY_CARGO_LOCK"
+
+[[workflow.variables]]
+name = "PR_BODY_LOCAL"
+
+[[workflow.variables]]
+name = "PR_NUM"
+
+[[workflow.variables]]
+name = "PR_NUM_FROM_STEP"
+
+[[workflow.variables]]
+name = "PR_NUM_LOCAL"
+
+[[workflow.variables]]
+name = "REPO_LOCAL"
+
+[[workflow.variables]]
+name = "REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
+name = "SCOPE"
+
+[[workflow.variables]]
+name = "SELF_LOGIN"
+
+[[workflow.variables]]
+name = "STAGED_FILES"
+
+[[workflow.variables]]
+name = "STEP_19_OUTPUT"
+
+[[workflow.variables]]
+name = "STEP_25_OUTPUT"
+
+[[workflow.variables]]
+name = "TRIGGER_COMMENT_ID"
+
+[[workflow.variables]]
+name = "TRIGGER_TS"
+
+[[workflow.variables]]
+name = "VERDICT"
+
+[[workflow.variables]]
+name = "VERSION"
+
+[[workflow.variables]]
+name = "lockpath"
+
+[[workflow.steps]]
+id = 1
+title = "Validate Branch"
+tool = "bash"
+prompt = """
 Verify the current branch is a feature branch, not a protected branch.
 If on main or dev, abort immediately.
 
@@ -33,84 +121,70 @@ if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
   echo "ERROR: Cannot work directly on $BRANCH. Create a feature branch."
   exit 1
 fi
-```
+```"""
+on_fail = "abort"
 
-## Step 1.5: Plan with mktd (Debate Required)
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 2
+title = "Step 1.5: Plan with mktd (Debate Required)"
+tool = "bash"
+prompt = """
 Generate or refresh a branch TODO plan through `mktd` before development gates.
-This step MUST pass through mktd's built-in debate phase and save a TODO.
+This step MUST pass through mktd's built-in debate phase and save a TODO."""
+on_fail = "abort"
 
-## INCLUDE mktd
+[[workflow.steps]]
+id = 3
+title = "Include mktd"
+tool = "weave"
+prompt = "mktd"
+on_fail = "abort"
 
-```bash
-set -euo pipefail
-CURRENT_BRANCH="$(git branch --show-current)"
-FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
-MKTD_PROMPT="Plan dev-to-merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}. Must execute full mktd workflow and save TODO."
-set +e
-MKTD_OUTPUT="$(csa run --skill mktd "${MKTD_PROMPT}" 2>&1)"
-MKTD_STATUS=$?
-set -e
-printf '%s\n' "${MKTD_OUTPUT}"
-if [ "${MKTD_STATUS}" -ne 0 ]; then
-  echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
-  exit 1
-fi
-LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
-if [ -z "${LATEST_TS}" ]; then
-  echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2
-  exit 1
-fi
-TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
-if [ ! -s "${TODO_PATH}" ]; then
-  echo "ERROR: TODO file is empty: ${TODO_PATH}" >&2
-  exit 1
-fi
-grep -qF -- '- [ ] ' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks: ${TODO_PATH}" >&2; exit 1; }
-grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses: ${TODO_PATH}" >&2; exit 1; }
-printf 'MKTD_TODO_TIMESTAMP=%s\nMKTD_TODO_PATH=%s\n' "${LATEST_TS}" "${TODO_PATH}"
-```
-
-## Step 2: Run Formatters
-
-Tool: bash
-OnFail: retry 2
-
+[[workflow.steps]]
+id = 4
+title = "Run Formatters"
+tool = "bash"
+prompt = """
 Run the project formatter to ensure consistent code style.
 
 ```bash
 just fmt
-```
+```"""
 
-## Step 3: Run Linters
+[workflow.steps.on_fail]
+retry = 2
 
-Tool: bash
-OnFail: retry 2
-
+[[workflow.steps]]
+id = 5
+title = "Run Linters"
+tool = "bash"
+prompt = """
 Run linters to catch static analysis issues.
 
 ```bash
 just clippy
-```
+```"""
 
-## Step 4: Run Tests
+[workflow.steps.on_fail]
+retry = 2
 
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 6
+title = "Run Tests"
+tool = "bash"
+prompt = """
 Run the full test suite. All tests must pass before proceeding.
 
 ```bash
 just test
-```
+```"""
+on_fail = "abort"
 
-## Step 5: Stage Changes
-
-Tool: bash
-
+[[workflow.steps]]
+id = 7
+title = "Stage Changes"
+tool = "bash"
+prompt = '''
 Stage all modified and new files relevant to ${SCOPE}.
 Verify no untracked files remain.
 
@@ -141,13 +215,14 @@ if git ls-files --others --exclude-standard | grep -q .; then
   git ls-files --others --exclude-standard
   exit 1
 fi
-```
+```'''
+on_fail = "abort"
 
-## Step 6: Security Scan
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 8
+title = "Security Scan"
+tool = "bash"
+prompt = """
 Check for hardcoded secrets, debug statements, and commented-out code
 in staged files. Runs after staging so `git diff --cached` covers all changes.
 
@@ -158,13 +233,14 @@ git diff --cached --name-only | while read -r file; do
     exit 1
   fi
 done
-```
+```"""
+on_fail = "abort"
 
-## Step 7: Security Audit
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 9
+title = "Security Audit"
+tool = "bash"
+prompt = '''
 Run the security-audit skill: test completeness check, vulnerability scan,
 and code quality check. The audit MUST pass before commit.
 
@@ -203,13 +279,14 @@ if [ "${VERDICT}" = "FAIL" ]; then
   exit 1
 fi
 echo "SECURITY_AUDIT_VERDICT=${VERDICT}"
-```
+```'''
+on_fail = "abort"
 
-## Step 8: Pre-Commit Review
-
-Tool: csa
-Tier: tier-2-standard
-
+[[workflow.steps]]
+id = 10
+title = "Pre-Commit Review"
+tool = "csa"
+prompt = """
 Run heterogeneous code review on all uncommitted changes versus HEAD.
 The reviewer MUST be a different model family than the code author.
 
@@ -217,56 +294,64 @@ The reviewer MUST be a different model family than the code author.
 csa review --diff
 ```
 
-Review output includes AGENTS.md compliance checklist.
+Review output includes AGENTS.md compliance checklist."""
+tier = "tier-2-standard"
+on_fail = "abort"
 
-## IF ${REVIEW_HAS_ISSUES}
-
-## Step 9: Fix Review Issues
-
-Tool: csa
-Tier: tier-2-standard
-OnFail: retry 3
-
+[[workflow.steps]]
+id = 11
+title = "Fix Review Issues"
+tool = "csa"
+prompt = """
 Fix each issue identified by the pre-commit review.
-Preserve original code intent. Do NOT delete code to silence warnings.
+Preserve original code intent. Do NOT delete code to silence warnings."""
+tier = "tier-2-standard"
+condition = "${REVIEW_HAS_ISSUES}"
 
-## Step 10: Re-run Quality Gates
+[workflow.steps.on_fail]
+retry = 3
 
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 12
+title = "Re-run Quality Gates"
+tool = "bash"
+prompt = """
 Re-run formatters, linters, and tests after fixes.
 
 ```bash
 just pre-commit
-```
+```"""
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
 
-## Step 11: Re-review
-
-Tool: csa
-Tier: tier-2-standard
-
+[[workflow.steps]]
+id = 13
+title = "Re-review"
+tool = "csa"
+prompt = """
 Run `csa review --diff` again to verify all issues are resolved.
-Loop back to Step 9 if issues persist (max 3 rounds).
+Loop back to Step 9 if issues persist (max 3 rounds)."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${REVIEW_HAS_ISSUES}"
 
-## ENDIF
-
-## Step 12: Generate Commit Message
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 14
+title = "Generate Commit Message"
+tool = "bash"
+prompt = """
 Generate a deterministic Conventional Commits message from staged files.
 
 ```bash
 scripts/gen_commit_msg.sh "${SCOPE:-}"
-```
+```"""
+on_fail = "abort"
 
-## Step 13: Commit
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 15
+title = "Commit"
+tool = "bash"
+prompt = """
 Create the commit using the generated message from Step 12.
 
 ```bash
@@ -276,13 +361,14 @@ if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   exit 1
 fi
 git commit -m "${COMMIT_MSG_LOCAL}"
-```
+```"""
+on_fail = "abort"
 
-## Step 14: Ensure Version Bumped
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 16
+title = "Ensure Version Bumped"
+tool = "bash"
+prompt = """
 Ensure workspace version differs from main before push gate.
 If not bumped yet, auto-bump patch and create a dedicated release commit.
 
@@ -311,14 +397,14 @@ if git diff --cached --quiet; then
 fi
 VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
 git commit -m "chore(release): bump workspace version to ${VERSION}"
-```
+```"""
+on_fail = "abort"
 
-## Step 15: Pre-PR Cumulative Review
-
-Tool: csa
-Tier: tier-2-standard
-OnFail: abort
-
+[[workflow.steps]]
+id = 17
+title = "Pre-PR Cumulative Review"
+tool = "csa"
+prompt = """
 Run a cumulative review covering ALL commits on the feature branch since main.
 This is distinct from Step 8's per-commit review (`csa review --diff`):
 - Step 8 reviews uncommitted changes (staged diff) — single-commit granularity.
@@ -329,13 +415,15 @@ MANDATORY: This review MUST pass before pushing to origin.
 ```bash
 csa review --range main...HEAD
 CUMULATIVE_REVIEW_COMPLETED=true
-```
+```"""
+tier = "tier-2-standard"
+on_fail = "abort"
 
-## Step 16: Push to Origin
-
-Tool: bash
-OnFail: retry 2
-
+[[workflow.steps]]
+id = 18
+title = "Push to Origin"
+tool = "bash"
+prompt = """
 Push the feature branch to the remote origin.
 
 ```bash
@@ -345,13 +433,16 @@ if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
   exit 1
 fi
 git push -u origin "${BRANCH}"
-```
+```"""
 
-## Step 17: Create Pull Request
+[workflow.steps.on_fail]
+retry = 2
 
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 19
+title = "Create Pull Request"
+tool = "bash"
+prompt = '''
 Create a PR targeting main via GitHub CLI. The PR body includes a summary
 of changes for ${SCOPE} and a test plan checklist covering tests, linting,
 security audit, and codex review.
@@ -373,21 +464,27 @@ if [ -z "${COMMIT_MSG_LOCAL}" ]; then
   exit 1
 fi
 PR_BODY_LOCAL="${PR_BODY:-## Summary
-- Scope: ${SCOPE:-unspecified}
+- Scope: ${SCOPE:-unspecified}'''
+on_fail = "abort"
 
-## Validation
+[[workflow.steps]]
+id = 20
+title = "Validation"
+prompt = """
 - just fmt
 - just clippy
 - just test
 - csa review --range main...HEAD
 }"
 gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
-```
+```"""
+on_fail = "abort"
 
-## Step 18: Trigger Codex Bot Review
-
-Tool: bash
-
+[[workflow.steps]]
+id = 21
+title = "Trigger Codex Bot Review"
+tool = "bash"
+prompt = '''
 Trigger the cloud codex review bot on the newly created PR.
 Capture the PR number for polling.
 
@@ -416,13 +513,14 @@ if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
-```
+```'''
+on_fail = "abort"
 
-## Step 19: Poll for Bot Response
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 22
+title = "Poll for Bot Response"
+tool = "bash"
+prompt = '''
 Poll for bot review response with a bounded timeout (max 20 minutes).
 Output `1` when bot findings are present; output empty string otherwise.
 
@@ -467,45 +565,57 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
 done
 echo "ERROR: Timed out waiting for bot response." >&2
 exit 1
-```
+```'''
+on_fail = "abort"
 
-## IF ${STEP_19_OUTPUT}
-
-## Step 20: Evaluate Bot Comments
-
-Tool: csa
-Tier: tier-2-standard
-
+[[workflow.steps]]
+id = 23
+title = "Evaluate Bot Comments"
+tool = "csa"
+prompt = """
 Evaluate all inline bot findings on the PR and produce a consolidated action plan.
-List suspected false positives and real defects separately.
+List suspected false positives and real defects separately."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${STEP_19_OUTPUT}"
 
-## Step 21: Arbitrate Disputed Findings
-
-Tool: csa
-
+[[workflow.steps]]
+id = 24
+title = "Arbitrate Disputed Findings"
+tool = "csa"
+prompt = """
 For disputed findings, run independent arbitration using `csa debate` and
-produce a verdict for each disputed item.
+produce a verdict for each disputed item."""
+on_fail = "abort"
+condition = "${STEP_19_OUTPUT}"
 
-## Step 22: Fix Confirmed Issues
-
-Tool: csa
-Tier: tier-2-standard
-
+[[workflow.steps]]
+id = 25
+title = "Fix Confirmed Issues"
+tool = "csa"
+prompt = """
 Implement fixes for confirmed bot findings and create commit(s) with clear
-messages. Do not modify unrelated files.
+messages. Do not modify unrelated files."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${STEP_19_OUTPUT}"
 
-## Step 23: Re-run Local Review After Fixes
+[[workflow.steps]]
+id = 26
+title = "Re-run Local Review After Fixes"
+tool = "csa"
+prompt = "Run `csa review --diff` to validate fixes before re-triggering cloud review."
+tier = "tier-2-standard"
+condition = "${STEP_19_OUTPUT}"
 
-Tool: csa
-Tier: tier-2-standard
-OnFail: retry 2
+[workflow.steps.on_fail]
+retry = 2
 
-Run `csa review --diff` to validate fixes before re-triggering cloud review.
-
-## Step 24: Push Fixes and Re-trigger Review
-
-Tool: bash
-
+[[workflow.steps]]
+id = 27
+title = "Push Fixes and Re-trigger Review"
+tool = "bash"
+prompt = '''
 Push all fix commits and trigger a new round of codex review.
 
 ```bash
@@ -542,13 +652,15 @@ if [ -z "${TRIGGER_TS}" ]; then
   TRIGGER_TS=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 fi
 printf 'PR_NUM=%s\nTRIGGER_TS=%s\nTRIGGER_COMMENT_ID=%s\n' "${PR_NUM_LOCAL}" "${TRIGGER_TS}" "${TRIGGER_COMMENT_ID}"
-```
+```'''
+on_fail = "abort"
+condition = "${STEP_19_OUTPUT}"
 
-## Step 25: Poll Re-triggered Bot Response
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 28
+title = "Poll Re-triggered Bot Response"
+tool = "bash"
+prompt = '''
 After posting the second `@codex review`, poll again with bounded timeout.
 Output `1` when findings remain; output empty string when clean.
 
@@ -598,29 +710,29 @@ while [ "$ELAPSED" -lt "$TIMEOUT" ]; do
 done
 echo "ERROR: Timed out waiting for re-triggered bot response." >&2
 exit 1
-```
+```'''
+on_fail = "abort"
+condition = "${STEP_19_OUTPUT}"
 
-## IF ${STEP_25_OUTPUT}
-
-## Step 26: Stop on Remaining Bot Findings
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 29
+title = "Stop on Remaining Bot Findings"
+tool = "bash"
+prompt = """
 Abort merge when re-triggered bot review still reports findings.
 
 ```bash
 echo "ERROR: Bot review still has findings after re-trigger. Do not merge." >&2
 exit 1
-```
+```"""
+on_fail = "abort"
+condition = "(${STEP_19_OUTPUT}) && (${STEP_25_OUTPUT})"
 
-## ELSE
-
-## Step 27: Merge PR After Re-review Clean
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 30
+title = "Merge PR After Re-review Clean"
+tool = "bash"
+prompt = '''
 Squash-merge the PR after the second bot review returns clean, then update local main.
 
 ```bash
@@ -643,17 +755,15 @@ if [ -z "${PR_NUM_LOCAL}" ]; then
 fi
 gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
-```
+```'''
+on_fail = "abort"
+condition = "(${STEP_19_OUTPUT}) && (!(${STEP_25_OUTPUT}))"
 
-## ENDIF
-
-## ELSE
-
-## Step 28: Merge PR (Initial Review Clean)
-
-Tool: bash
-OnFail: abort
-
+[[workflow.steps]]
+id = 31
+title = "Merge PR (Initial Review Clean)"
+tool = "bash"
+prompt = '''
 No issues were found in the initial bot review. Merge using the PR number from step output.
 
 ```bash
@@ -673,6 +783,6 @@ if [ -z "${PR_NUM_LOCAL}" ]; then
 fi
 gh pr merge "${PR_NUM_LOCAL}" --repo "${REPO_LOCAL}" --squash --delete-branch
 git checkout main && git pull origin main
-```
-
-## ENDIF
+```'''
+on_fail = "abort"
+condition = "!(${STEP_19_OUTPUT})"

@@ -76,7 +76,7 @@ Both layers are mandatory. The per-commit review catches issues in each individu
 
 - **Depends on**: `security-audit` (Step 5), `ai-reviewed-commit` (Step 6)
 - **Triggers**: `pr-codex-bot` (Step 9, when milestone)
-- **Used by**: `mktsk` (as commit step after each implementation task), `dev-to-merge`
+- **Used by**: `mktsk` (as commit step after each implementation task), `dev2merge`, `dev-to-merge` (legacy alias)
 
 ## Done Criteria
 

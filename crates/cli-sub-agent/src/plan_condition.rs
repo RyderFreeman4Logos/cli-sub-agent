@@ -243,7 +243,7 @@ mod tests {
 
     #[test]
     fn nested_not_and_and() {
-        // Pattern from dev-to-merge: (${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE}))
+        // Pattern from dev2merge/dev-to-merge: (${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE}))
         let mut vars = HashMap::new();
         vars.insert("BOT_HAS_ISSUES".into(), "yes".into());
         // COMMENT_IS_FALSE_POSITIVE not set → !(false) = true

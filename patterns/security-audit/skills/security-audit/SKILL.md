@@ -61,7 +61,7 @@ csa run --skill security-audit "Audit the staged changes for security issues"
 
 ## Integration
 
-- **Used by**: `commit` (Step 7), `dev-to-merge` (Step 7)
+- **Used by**: `commit` (Step 7), `dev2merge` (Step 8), `dev-to-merge` (legacy alias)
 - **May trigger**: Task creation for deferred issues (PASS_DEFERRED verdict)
 
 ## Done Criteria

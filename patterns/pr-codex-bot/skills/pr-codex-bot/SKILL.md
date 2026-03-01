@@ -169,7 +169,7 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 ## Integration
 
 - **Depends on**: `csa-review` (Step 2 local review), `debate` (Step 6 false-positive arbitration)
-- **Used by**: `commit` (Step 13 auto PR), `dev-to-merge` (Steps 16-24)
+- **Used by**: `commit` (Step 13 auto PR), `dev2merge` (Steps 17-25), `dev-to-merge` (legacy alias)
 - **ATOMIC with**: PR creation -- Steps 1-9 are an atomic unit; NEVER stop after PR creation
 
 ## Done Criteria

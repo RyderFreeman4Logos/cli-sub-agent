@@ -1,11 +1,11 @@
-# Dev-to-Merge Pattern: Compilation Findings
+# Dev2Merge Pattern: Compilation Findings
 
 ## Summary
 
-`dev-to-merge` is maintained as a backward-compatible alias of `dev2merge`.
-It compiles successfully and reflects the same 27-step branch-to-merge
-workflow, including mandatory `mktd` planning/debate gate and the codex-bot
-review loop.
+The current `dev2merge` workflow compiles successfully and implements a
+27-step end-to-end branch-to-merge pipeline with mandatory planning via
+`mktd` (including mktd-internal debate), quality gates, local/cumulative
+review, cloud codex review loop, and final merge.
 
 ## Current Workflow Shape
 
@@ -25,25 +25,25 @@ review loop.
 
 ## Key Improvements Captured
 
-- Kept behavior aligned with `dev2merge` while preserving legacy command
-  compatibility.
 - Added mandatory mktd planning gate before development gates.
 - Migrated review handling from per-comment loop to consolidated analysis
-  steps.
+  steps (better context and lower orchestration complexity).
 - Hardened repository resolution with `gh repo view` primary path and
   remote URL fallback, including `.git` suffix normalization.
-- Added top-level PR comments polling to reduce missed bot findings.
+- Added top-level PR comments polling (in addition to inline comments and
+  reviews) to reduce missed bot findings.
 - Added explicit branch detection guards before push operations.
 
 ## Known Tradeoffs
 
-- `REPO_LOCAL` resolution block is duplicated across several bash steps for
-  step-level self-containment.
-- Bot identity detection still depends on login-name heuristics and may need
-  tuning when external naming changes.
+- `REPO_LOCAL` resolution block is intentionally duplicated across multiple
+  bash steps for robustness and local step self-sufficiency.
+- Bot identity detection currently uses a heuristic login regex
+  (`codex|bot|connector`) and may require updates if provider naming changes.
 
 ## Validation Snapshot
 
-- `weave compile` succeeds for `patterns/dev-to-merge/PATTERN.md`.
-- Local gates expected by this pattern are runnable and integrated.
-- Alias remains functionally synchronized with `dev2merge`.
+- `weave compile` succeeds for `patterns/dev2merge/PATTERN.md`.
+- Local gates expected by this pattern (`fmt`, `clippy`, `test`, review)
+  are runnable and integrated.
+- Pattern and workflow definitions are synchronized for current behavior.

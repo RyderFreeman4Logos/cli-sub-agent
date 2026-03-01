@@ -340,14 +340,15 @@ done
 | Pattern | What it does |
 |---------|--------------|
 | `sa` | Three-layer recursive sub-agent orchestration |
-| `dev-to-merge` | Branch-to-merge: implement, validate, PR, review, merge |
+| `dev2merge` | Branch-to-merge: plan (mktd+debate), implement, validate, PR, review, merge |
+| `dev-to-merge` | Backward-compatible alias of `dev2merge` |
 | `csa-issue-reporter` | Structured GitHub issue filing for CSA errors |
 
 **Install**:
 
 ```bash
 mkdir -p .csa/plans
-for pattern in sa dev-to-merge csa-issue-reporter; do
+for pattern in sa dev2merge dev-to-merge csa-issue-reporter; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
 done
