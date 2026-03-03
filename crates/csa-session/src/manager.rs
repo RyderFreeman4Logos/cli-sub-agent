@@ -802,9 +802,36 @@ fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
     match key {
         "status" | "summary" | "tool" | "started_at" | "completed_at" => value.is_str(),
         "exit_code" | "events_count" => value.is_integer(),
-        "artifacts" => value.is_array(),
+        "artifacts" => artifacts_value_matches_runtime_schema(value),
         _ => false,
     }
+}
+
+fn artifacts_value_matches_runtime_schema(value: &toml::Value) -> bool {
+    let Some(entries) = value.as_array() else {
+        return false;
+    };
+
+    entries.iter().all(|entry| match entry {
+        toml::Value::String(_) => true,
+        toml::Value::Table(table) => {
+            let Some(path) = table.get("path") else {
+                return false;
+            };
+            if !path.is_str() {
+                return false;
+            }
+
+            table.iter().all(|(key, value)| match key.as_str() {
+                "path" => value.is_str(),
+                "line_count" | "size_bytes" => {
+                    value.as_integer().map(|num| num >= 0).unwrap_or(false)
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    })
 }
 
 /// Load a session result
