@@ -108,6 +108,91 @@ name = "gemini-cli"
 }
 
 #[test]
+fn test_save_result_does_not_overwrite_existing_sidecar_snapshot() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let existing_result = r#"
+status = "partial"
+exit_code = 0
+summary = "manager report"
+started_at = "2026-01-01T00:00:00Z"
+completed_at = "2026-01-01T00:10:00Z"
+
+[result]
+done = false
+
+[tool]
+name = "gemini-cli"
+"#;
+    std::fs::write(session_dir.join("result.toml"), existing_result).unwrap();
+
+    let now = chrono::Utc::now();
+    let first_runtime = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "first run".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![],
+    };
+    save_result_in(td.path(), &state.meta_session_id, &first_runtime).unwrap();
+
+    let second_runtime = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "second run".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 2,
+        artifacts: vec![],
+    };
+    save_result_in(td.path(), &state.meta_session_id, &second_runtime).unwrap();
+
+    let sidecar = std::fs::read_to_string(session_dir.join("output/user-result.toml")).unwrap();
+    assert!(sidecar.contains("[tool]"));
+    assert!(sidecar.contains("name = \"gemini-cli\""));
+}
+
+#[test]
+fn test_save_result_errors_when_sidecar_path_is_not_file() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let existing_result = r#"
+status = "partial"
+exit_code = 0
+summary = "manager report"
+started_at = "2026-01-01T00:00:00Z"
+completed_at = "2026-01-01T00:10:00Z"
+
+[result]
+done = false
+"#;
+    std::fs::write(session_dir.join("result.toml"), existing_result).unwrap();
+
+    let sidecar_dir = session_dir.join("output/user-result.toml");
+    std::fs::create_dir_all(&sidecar_dir).unwrap();
+
+    let now = chrono::Utc::now();
+    let runtime_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "run".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: vec![],
+    };
+    let err = save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap_err();
+    assert!(err.to_string().contains("not a file"));
+}
+
+#[test]
 fn test_save_result_clears_stale_optional_runtime_fields() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();

@@ -766,6 +766,15 @@ fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<(
     fs::create_dir_all(&output_dir)
         .with_context(|| format!("Failed to create output dir: {}", output_dir.display()))?;
     let snapshot_path = output_dir.join(USER_RESULT_FILE_NAME);
+    if snapshot_path.exists() {
+        if snapshot_path.is_file() {
+            return Ok(());
+        }
+        bail!(
+            "User result snapshot path exists but is not a file: {}",
+            snapshot_path.display()
+        );
+    }
     fs::write(&snapshot_path, contents).with_context(|| {
         format!(
             "Failed to write user result snapshot: {}",
