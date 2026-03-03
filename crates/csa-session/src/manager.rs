@@ -1,6 +1,6 @@
 //! Session CRUD operations
 
-use crate::result::{RESULT_FILE_NAME, SessionResult};
+use crate::result::{RESULT_FILE_NAME, SessionArtifact, SessionResult};
 use crate::state::{MetaSessionState, SessionPhase};
 use crate::validate::{new_session_id, resolve_session_prefix, validate_session_id};
 use anyhow::{Context, Result, bail};
@@ -13,6 +13,18 @@ use std::process::Command;
 
 const STATE_FILE_NAME: &str = "state.toml";
 const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
+const USER_RESULT_FILE_NAME: &str = "user-result.toml";
+const USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
+const RUNTIME_RESULT_KEYS: [&str; 8] = [
+    "status",
+    "exit_code",
+    "summary",
+    "tool",
+    "started_at",
+    "completed_at",
+    "events_count",
+    "artifacts",
+];
 
 /// Resolved identifiers for resuming a tool session.
 #[derive(Debug, Clone)]
@@ -698,10 +710,151 @@ pub(crate) fn save_result_in(
     validate_session_id(session_id)?;
     let session_dir = get_session_dir_in(base_dir, session_id);
     let result_path = session_dir.join(RESULT_FILE_NAME);
-    let contents = toml::to_string_pretty(result).context("Failed to serialize session result")?;
+
+    let mut existing_table = None;
+    let mut existing_contents = None;
+    let mut has_custom_schema = false;
+    if result_path.exists() {
+        let contents = fs::read_to_string(&result_path).with_context(|| {
+            format!("Failed to read existing result: {}", result_path.display())
+        })?;
+        match toml::from_str::<toml::Value>(&contents) {
+            Ok(toml::Value::Table(table)) => {
+                has_custom_schema = table_has_custom_schema(&table);
+                existing_table = Some(table);
+            }
+            Ok(_) | Err(_) => {
+                // Preserve malformed/non-table user result in sidecar before overwriting.
+                has_custom_schema = true;
+            }
+        }
+        existing_contents = Some(contents);
+    }
+
+    let mut persisted_result = result.clone();
+    if has_custom_schema {
+        let Some(contents) = existing_contents.as_deref() else {
+            bail!("Expected existing result content when custom schema was detected");
+        };
+        preserve_user_result_snapshot(&session_dir, contents)?;
+    }
+    retain_user_result_artifact_if_snapshot_exists(&session_dir, &mut persisted_result)?;
+
+    let runtime_table = session_result_to_table(&persisted_result)?;
+    let mut merged_table = existing_table.unwrap_or_default();
+    for key in RUNTIME_RESULT_KEYS {
+        merged_table.remove(key);
+    }
+    merged_table.extend(runtime_table);
+    let contents = toml::to_string_pretty(&toml::Value::Table(merged_table))
+        .context("Failed to serialize session result")?;
     fs::write(&result_path, contents)
         .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
     Ok(())
+}
+
+fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<()> {
+    let output_dir = session_dir.join("output");
+    fs::create_dir_all(&output_dir)
+        .with_context(|| format!("Failed to create output dir: {}", output_dir.display()))?;
+    let snapshot_path = output_dir.join(USER_RESULT_FILE_NAME);
+    if snapshot_path.exists() {
+        if snapshot_path.is_file() {
+            return Ok(());
+        }
+        bail!(
+            "User result snapshot path exists but is not a file: {}",
+            snapshot_path.display()
+        );
+    }
+    fs::write(&snapshot_path, contents).with_context(|| {
+        format!(
+            "Failed to write user result snapshot: {}",
+            snapshot_path.display()
+        )
+    })
+}
+
+fn retain_user_result_artifact_if_snapshot_exists(
+    session_dir: &Path,
+    result: &mut SessionResult,
+) -> Result<()> {
+    let snapshot_path = session_dir.join(USER_RESULT_ARTIFACT_PATH);
+    if !snapshot_path.exists() {
+        return Ok(());
+    }
+    if !snapshot_path.is_file() {
+        bail!(
+            "User result snapshot path exists but is not a file: {}",
+            snapshot_path.display()
+        );
+    }
+    ensure_user_result_artifact(result);
+    Ok(())
+}
+
+fn ensure_user_result_artifact(result: &mut SessionResult) {
+    if result
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.path == USER_RESULT_ARTIFACT_PATH)
+    {
+        return;
+    }
+    result
+        .artifacts
+        .push(SessionArtifact::new(USER_RESULT_ARTIFACT_PATH));
+}
+
+fn session_result_to_table(result: &SessionResult) -> Result<toml::Table> {
+    let value =
+        toml::Value::try_from(result).context("Failed to convert session result to TOML value")?;
+    let Some(table) = value.as_table() else {
+        bail!("Session result must serialize to a TOML table");
+    };
+    Ok(table.clone())
+}
+
+fn table_has_custom_schema(table: &toml::Table) -> bool {
+    table
+        .iter()
+        .any(|(key, value)| !value_matches_runtime_schema(key, value))
+}
+
+fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
+    match key {
+        "status" | "summary" | "tool" | "started_at" | "completed_at" => value.is_str(),
+        "exit_code" | "events_count" => value.is_integer(),
+        "artifacts" => artifacts_value_matches_runtime_schema(value),
+        _ => false,
+    }
+}
+
+fn artifacts_value_matches_runtime_schema(value: &toml::Value) -> bool {
+    let Some(entries) = value.as_array() else {
+        return false;
+    };
+
+    entries.iter().all(|entry| match entry {
+        toml::Value::String(_) => true,
+        toml::Value::Table(table) => {
+            let Some(path) = table.get("path") else {
+                return false;
+            };
+            if !path.is_str() {
+                return false;
+            }
+
+            table.iter().all(|(key, value)| match key.as_str() {
+                "path" => value.is_str(),
+                "line_count" | "size_bytes" => {
+                    value.as_integer().map(|num| num >= 0).unwrap_or(false)
+                }
+                _ => false,
+            })
+        }
+        _ => false,
+    })
 }
 
 /// Load a session result
