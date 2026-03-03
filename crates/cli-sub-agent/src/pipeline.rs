@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
@@ -35,8 +36,7 @@ const RESULT_TOML_PATH_CONTRACT_MARKER: &str = "csa_result_toml_path_contract=1"
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct ResultTomlBaseline {
-    modified: Option<std::time::SystemTime>,
-    len: u64,
+    digest_hex: Option<[u8; 32]>,
 }
 
 pub(crate) fn resolve_idle_timeout_seconds(
@@ -921,14 +921,13 @@ fn path_matches_expected_result_toml(
     let meta = std::fs::symlink_metadata(path)
         .ok()
         .filter(|meta| !meta.file_type().is_symlink());
-    let Some(meta) = meta else {
+    let Some(_meta) = meta else {
         return false;
     };
 
     if let Some(baseline) = result_baseline {
         let current = ResultTomlBaseline {
-            modified: meta.modified().ok(),
-            len: meta.len(),
+            digest_hex: digest_file(path),
         };
         if current == *baseline {
             return false;
@@ -973,11 +972,17 @@ fn strip_marker_line_prefix(line: &str) -> &str {
 }
 
 fn capture_result_toml_baseline(path: &Path) -> Option<ResultTomlBaseline> {
-    let meta = std::fs::metadata(path).ok()?;
+    std::fs::metadata(path).ok()?;
     Some(ResultTomlBaseline {
-        modified: meta.modified().ok(),
-        len: meta.len(),
+        digest_hex: digest_file(path),
     })
+}
+
+fn digest_file(path: &Path) -> Option<[u8; 32]> {
+    let data = std::fs::read(path).ok()?;
+    let mut hasher = Sha256::new();
+    hasher.update(&data);
+    Some(hasher.finalize().into())
 }
 
 fn normalize_contract_path_candidate(path: &str) -> &str {

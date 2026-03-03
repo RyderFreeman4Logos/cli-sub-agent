@@ -878,11 +878,7 @@ fn result_toml_path_contract_rejects_unchanged_result_file_against_baseline() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");
     fs::write(&result_path, "status = \"success\"\n").unwrap();
-    let meta = fs::metadata(&result_path).unwrap();
-    let baseline = ResultTomlBaseline {
-        modified: meta.modified().ok(),
-        len: meta.len(),
-    };
+    let baseline = capture_result_toml_baseline(&result_path).unwrap();
     let mut result = ExecutionResult {
         output: String::new(),
         stderr_output: String::new(),
@@ -908,11 +904,7 @@ fn result_toml_path_contract_accepts_result_file_when_baseline_changed() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");
     fs::write(&result_path, "status = \"old\"\n").unwrap();
-    let meta = fs::metadata(&result_path).unwrap();
-    let baseline = ResultTomlBaseline {
-        modified: meta.modified().ok(),
-        len: meta.len(),
-    };
+    let baseline = capture_result_toml_baseline(&result_path).unwrap();
     fs::write(&result_path, "status = \"new-value\"\n").unwrap();
     let mut result = ExecutionResult {
         output: String::new(),
