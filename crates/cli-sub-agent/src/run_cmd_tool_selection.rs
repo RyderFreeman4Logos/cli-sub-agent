@@ -381,6 +381,10 @@ pub(crate) fn resolve_skill_and_prompt(
         // avoid orchestrator-style recursive `csa run` loops.
         let mut parts = vec![
             "<skill-mode>executor</skill-mode>".to_string(),
+            format!(
+                "<workspace-scope root=\"{}\">\nSTRICT SCOPE: Only read/write files under this root. If a tool returns workspace-boundary errors (for example, 'Path not in workspace'), stop and report failure instead of retrying sibling paths.\n</workspace-scope>",
+                project_root.display()
+            ),
             sk.skill_md.clone(),
         ];
 
@@ -479,5 +483,44 @@ pub(crate) fn resolve_return_target_session_id(
                 Ok(None)
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn resolve_skill_and_prompt_injects_workspace_scope_guard() {
+        let tmp = TempDir::new().expect("tempdir");
+        let skill_dir = tmp.path().join(".csa").join("skills").join("demo");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+        fs::write(skill_dir.join("SKILL.md"), "demo skill body").expect("write SKILL.md");
+
+        let resolved = resolve_skill_and_prompt(
+            Some("demo"),
+            Some("user task".to_string()),
+            None,
+            None,
+            None,
+            tmp.path(),
+        )
+        .expect("resolve skill prompt");
+
+        assert!(
+            resolved
+                .prompt_text
+                .contains("<skill-mode>executor</skill-mode>")
+        );
+        assert!(resolved.prompt_text.contains("<workspace-scope root=\""));
+        assert!(
+            resolved
+                .prompt_text
+                .contains("STRICT SCOPE: Only read/write files under this root.")
+        );
+        assert!(resolved.prompt_text.contains("demo skill body"));
+        assert!(resolved.prompt_text.contains("user task"));
     }
 }

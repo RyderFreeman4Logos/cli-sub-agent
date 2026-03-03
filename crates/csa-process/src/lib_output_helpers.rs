@@ -3,6 +3,8 @@ use std::time::{Duration, Instant};
 
 pub(super) const DEFAULT_HEARTBEAT_SECS: u64 = 20;
 pub(super) const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
+const WORKSPACE_BOUNDARY_PATTERN_A: &str = "path not in workspace";
+const WORKSPACE_BOUNDARY_PATTERN_B: &str = "outside the allowed workspace directories";
 
 /// Write a raw byte chunk to the spool file and flush.
 ///
@@ -69,15 +71,20 @@ pub(super) fn accumulate_and_flush_lines(
     line_buf: &mut String,
     output: &mut String,
     stream_mode: StreamMode,
-) {
+) -> usize {
+    let mut boundary_hits = 0usize;
     line_buf.push_str(chunk);
     while let Some(newline_pos) = line_buf.find('\n') {
         let line: String = line_buf.drain(..=newline_pos).collect();
         if stream_mode == StreamMode::TeeToStderr {
             eprint!("[stdout] {line}");
         }
+        if is_workspace_boundary_error_line(&line) {
+            boundary_hits += 1;
+        }
         output.push_str(&line);
     }
+    boundary_hits
 }
 
 /// Flush any remaining partial line from the stdout line buffer on EOF.
@@ -97,15 +104,20 @@ pub(super) fn accumulate_and_flush_stderr(
     line_buf: &mut String,
     stderr_output: &mut String,
     stream_mode: StreamMode,
-) {
+) -> usize {
+    let mut boundary_hits = 0usize;
     line_buf.push_str(chunk);
     while let Some(newline_pos) = line_buf.find('\n') {
         let line: String = line_buf.drain(..=newline_pos).collect();
         if stream_mode == StreamMode::TeeToStderr {
             eprint!("{line}");
         }
+        if is_workspace_boundary_error_line(&line) {
+            boundary_hits += 1;
+        }
         stderr_output.push_str(&line);
     }
+    boundary_hits
 }
 
 /// Flush any remaining partial stderr line on EOF.
@@ -164,4 +176,10 @@ pub(super) fn truncate_line(line: &str, max_chars: usize) -> String {
         let truncated: String = line.chars().take(max_chars - 3).collect();
         format!("{truncated}...")
     }
+}
+
+fn is_workspace_boundary_error_line(line: &str) -> bool {
+    let normalized = line.to_ascii_lowercase();
+    normalized.contains(WORKSPACE_BOUNDARY_PATTERN_A)
+        || normalized.contains(WORKSPACE_BOUNDARY_PATTERN_B)
 }
