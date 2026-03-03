@@ -144,7 +144,7 @@ if [ -z "${SOURCE_OWNER}" ]; then
   SOURCE_OWNER="$(gh repo view --json owner -q '.owner.login')"
 fi
 find_branch_pr() {
-  local owner_matches owner_count
+  local owner_matches owner_count branch_matches branch_count
   owner_matches="$(
     gh pr list --base main --state open --head "${SOURCE_OWNER}:${WORKFLOW_BRANCH}" --json number \
       --jq '.[].number' 2>/dev/null || true
@@ -156,6 +156,20 @@ find_branch_pr() {
   fi
   if [ "${owner_count}" -gt 1 ]; then
     echo "ERROR: Multiple open PRs found for ${SOURCE_OWNER}:${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
+    return 1
+  fi
+
+  branch_matches="$(
+    gh pr list --base main --state open --head "${WORKFLOW_BRANCH}" --json number \
+      --jq '.[].number' 2>/dev/null || true
+  )"
+  branch_count="$(printf '%s\n' "${branch_matches}" | sed '/^$/d' | wc -l | tr -d ' ')"
+  if [ "${branch_count}" = "1" ]; then
+    printf '%s\n' "${branch_matches}" | sed '/^$/d' | head -n 1
+    return 0
+  fi
+  if [ "${branch_count}" -gt 1 ]; then
+    echo "ERROR: Multiple open PRs found for branch ${WORKFLOW_BRANCH}. Resolve ambiguity manually." >&2
     return 1
   fi
   return 2
