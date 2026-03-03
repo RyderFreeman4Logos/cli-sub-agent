@@ -806,7 +806,7 @@ fn enforce_result_toml_contract_now(
     session_dir: &std::path::Path,
     result: &mut ExecutionResult,
 ) {
-    enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, None, result);
+    enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, result);
 }
 
 #[test]
@@ -873,56 +873,33 @@ fn result_toml_path_contract_accepts_existing_absolute_result_file() {
     assert!(result.stderr_output.is_empty());
 }
 
+#[cfg(unix)]
 #[test]
-fn result_toml_path_contract_rejects_unchanged_result_file_against_baseline() {
-    let temp = tempfile::tempdir().unwrap();
-    let result_path = temp.path().join("result.toml");
-    fs::write(&result_path, "status = \"success\"\n").unwrap();
-    let baseline = capture_result_toml_baseline(&result_path).unwrap();
+fn result_toml_path_contract_rejects_hardlinked_session_result_file() {
+    let session_dir = tempfile::tempdir().unwrap();
+    let external_dir = tempfile::tempdir().unwrap();
+    let external_result = external_dir.path().join("result.toml");
+    fs::write(&external_result, "status = \"success\"\n").unwrap();
+
+    let session_result = session_dir.path().join("result.toml");
+    fs::hard_link(&external_result, &session_result).unwrap();
     let mut result = ExecutionResult {
         output: String::new(),
         stderr_output: String::new(),
-        summary: result_path.display().to_string(),
+        summary: session_result.display().to_string(),
         exit_code: 0,
     };
 
-    enforce_result_toml_path_contract(
+    enforce_result_toml_contract_now(
         "CSA_RESULT_TOML_PATH_CONTRACT=1",
         "",
-        temp.path(),
-        Some(&baseline),
+        session_dir.path(),
         &mut result,
     );
 
     assert_eq!(result.exit_code, 1);
     assert!(result.summary.contains("contract violation"));
     assert!(result.stderr_output.contains("contract violation"));
-}
-
-#[test]
-fn result_toml_path_contract_accepts_result_file_when_baseline_changed() {
-    let temp = tempfile::tempdir().unwrap();
-    let result_path = temp.path().join("result.toml");
-    fs::write(&result_path, "status = \"old\"\n").unwrap();
-    let baseline = capture_result_toml_baseline(&result_path).unwrap();
-    fs::write(&result_path, "status = \"new-value\"\n").unwrap();
-    let mut result = ExecutionResult {
-        output: String::new(),
-        stderr_output: String::new(),
-        summary: result_path.display().to_string(),
-        exit_code: 0,
-    };
-
-    enforce_result_toml_path_contract(
-        "CSA_RESULT_TOML_PATH_CONTRACT=1",
-        "",
-        temp.path(),
-        Some(&baseline),
-        &mut result,
-    );
-
-    assert_eq!(result.exit_code, 0);
-    assert!(result.stderr_output.is_empty());
 }
 
 #[test]

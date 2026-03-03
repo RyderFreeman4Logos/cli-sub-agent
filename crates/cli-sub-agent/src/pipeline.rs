@@ -7,7 +7,6 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
-use sha2::{Digest, Sha256};
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
@@ -33,11 +32,6 @@ use prompt_guard::emit_prompt_guard_to_caller;
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
 const RESULT_TOML_PATH_CONTRACT_MARKER: &str = "csa_result_toml_path_contract=1";
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ResultTomlBaseline {
-    digest_hex: Option<[u8; 32]>,
-}
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -639,7 +633,7 @@ pub(crate) async fn execute_with_session_and_meta(
                 })
         });
 
-    let result_baseline = capture_result_toml_baseline(&session_dir.join("result.toml"));
+    clear_expected_result_toml(&session_dir.join("result.toml"));
 
     // Record execution start time before spawning.
     let execution_start_time = chrono::Utc::now();
@@ -788,7 +782,6 @@ pub(crate) async fn execute_with_session_and_meta(
         prompt,
         &effective_prompt,
         &session_dir,
-        result_baseline.as_ref(),
         &mut result,
     );
 
@@ -832,7 +825,6 @@ fn enforce_result_toml_path_contract(
     prompt: &str,
     _effective_prompt: &str,
     session_dir: &Path,
-    result_baseline: Option<&ResultTomlBaseline>,
     result: &mut ExecutionResult,
 ) {
     if result.exit_code != 0 || !prompt_requires_result_toml_path(prompt) {
@@ -841,7 +833,7 @@ fn enforce_result_toml_path_contract(
 
     let path_candidate = contract_result_toml_path_candidate(result);
     let expected_path = session_dir.join("result.toml");
-    if path_matches_expected_result_toml(path_candidate, &expected_path, result_baseline) {
+    if path_matches_expected_result_toml(path_candidate, &expected_path) {
         return;
     }
 
@@ -906,7 +898,6 @@ fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
 fn path_matches_expected_result_toml(
     path_candidate: &str,
     expected_path: &Path,
-    result_baseline: Option<&ResultTomlBaseline>,
 ) -> bool {
     let path = Path::new(path_candidate);
     let has_result_file_name = path
@@ -921,15 +912,14 @@ fn path_matches_expected_result_toml(
     let meta = std::fs::symlink_metadata(path)
         .ok()
         .filter(|meta| !meta.file_type().is_symlink());
-    let Some(_meta) = meta else {
+    let Some(meta) = meta else {
         return false;
     };
 
-    if let Some(baseline) = result_baseline {
-        let current = ResultTomlBaseline {
-            digest_hex: digest_file(path),
-        };
-        if current == *baseline {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() != 1 {
             return false;
         }
     }
@@ -971,18 +961,16 @@ fn strip_marker_line_prefix(line: &str) -> &str {
     trimmed
 }
 
-fn capture_result_toml_baseline(path: &Path) -> Option<ResultTomlBaseline> {
-    std::fs::metadata(path).ok()?;
-    Some(ResultTomlBaseline {
-        digest_hex: digest_file(path),
-    })
-}
-
-fn digest_file(path: &Path) -> Option<[u8; 32]> {
-    let data = std::fs::read(path).ok()?;
-    let mut hasher = Sha256::new();
-    hasher.update(&data);
-    Some(hasher.finalize().into())
+fn clear_expected_result_toml(path: &Path) {
+    match std::fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+        Err(err) => warn!(
+            path = %path.display(),
+            error = %err,
+            "Failed to remove pre-existing result.toml before execution"
+        ),
+    }
 }
 
 fn normalize_contract_path_candidate(path: &str) -> &str {
