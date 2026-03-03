@@ -49,27 +49,40 @@ This step MUST pass through mktd's built-in debate phase and save a TODO.
 
 ## Step 3: Include mktd
 
+Tool: bash
+
 ```bash
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_PROMPT="Plan dev2merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}."
+MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-codex}}"
+MKTD_OUTPUT_FILE="$(mktemp)"
+if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
+  MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
+else
+  MKTD_TOOL_ARGS=()
+fi
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  MKTD_OUTPUT="$(timeout 1800 csa plan run patterns/mktd/workflow.toml \
+  timeout 1800 csa plan run patterns/mktd/workflow.toml \
+    "${MKTD_TOOL_ARGS[@]}" \
     --var CWD="$(pwd)" \
     --var FEATURE="${MKTD_PROMPT}" \
-    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1)"
-  MKTD_STATUS=$?
+    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1 | tee "${MKTD_OUTPUT_FILE}"
+  MKTD_STATUS=${PIPESTATUS[0]}
 else
-  MKTD_OUTPUT="$(csa plan run patterns/mktd/workflow.toml \
+  csa plan run patterns/mktd/workflow.toml \
+    "${MKTD_TOOL_ARGS[@]}" \
     --var CWD="$(pwd)" \
     --var FEATURE="${MKTD_PROMPT}" \
-    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1)"
-  MKTD_STATUS=$?
+    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1 | tee "${MKTD_OUTPUT_FILE}"
+  MKTD_STATUS=${PIPESTATUS[0]}
 fi
 set -e
+MKTD_OUTPUT="$(cat "${MKTD_OUTPUT_FILE}")"
+rm -f "${MKTD_OUTPUT_FILE}"
 printf '%s\n' "${MKTD_OUTPUT}"
 if [ "${MKTD_STATUS}" -eq 124 ]; then
   echo "ERROR: mktd workflow timed out after 1800s." >&2
@@ -233,15 +246,19 @@ Run heterogeneous pre-commit review on uncommitted changes.
 This step is strictly review-only: no commit/push/PR side effects.
 
 ```bash
+set -o pipefail
+REVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  REVIEW_OUTPUT="$(timeout 1800 csa review --diff 2>&1)"
-  REVIEW_STATUS=$?
+  timeout 1800 csa review --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+  REVIEW_STATUS=${PIPESTATUS[0]}
 else
-  REVIEW_OUTPUT="$(csa review --diff 2>&1)"
-  REVIEW_STATUS=$?
+  csa review --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+  REVIEW_STATUS=${PIPESTATUS[0]}
 fi
 set -e
+REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"
+rm -f "${REVIEW_OUTPUT_FILE}"
 printf '%s\n' "${REVIEW_OUTPUT}"
 
 if [ "${REVIEW_STATUS}" -eq 124 ]; then
@@ -274,15 +291,19 @@ Apply fixes for issues found in Step 10 using review-and-fix mode.
 Do not commit/push inside this step; only modify code.
 
 ```bash
+set -o pipefail
+FIX_OUTPUT_FILE="$(mktemp)"
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  FIX_OUTPUT="$(timeout 1800 csa review --diff --fix 2>&1)"
-  FIX_STATUS=$?
+  timeout 1800 csa review --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
+  FIX_STATUS=${PIPESTATUS[0]}
 else
-  FIX_OUTPUT="$(csa review --diff --fix 2>&1)"
-  FIX_STATUS=$?
+  csa review --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
+  FIX_STATUS=${PIPESTATUS[0]}
 fi
 set -e
+FIX_OUTPUT="$(cat "${FIX_OUTPUT_FILE}")"
+rm -f "${FIX_OUTPUT_FILE}"
 printf '%s\n' "${FIX_OUTPUT}"
 if [ "${FIX_STATUS}" -eq 124 ]; then
   echo "ERROR: review --fix timed out after 1800s." >&2
@@ -313,15 +334,19 @@ Re-run review to verify remediation quality.
 If issues remain after fix, fail the workflow.
 
 ```bash
+set -o pipefail
+REREVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  REREVIEW_OUTPUT="$(timeout 1800 csa review --diff 2>&1)"
-  REREVIEW_STATUS=$?
+  timeout 1800 csa review --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
+  REREVIEW_STATUS=${PIPESTATUS[0]}
 else
-  REREVIEW_OUTPUT="$(csa review --diff 2>&1)"
-  REREVIEW_STATUS=$?
+  csa review --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
+  REREVIEW_STATUS=${PIPESTATUS[0]}
 fi
 set -e
+REREVIEW_OUTPUT="$(cat "${REREVIEW_OUTPUT_FILE}")"
+rm -f "${REREVIEW_OUTPUT_FILE}"
 printf '%s\n' "${REREVIEW_OUTPUT}"
 
 if [ "${REREVIEW_STATUS}" -eq 124 ]; then

@@ -237,7 +237,28 @@ fn superproject_root_from_gitdir_path(gitdir: &Path) -> Option<PathBuf> {
 
     let marker = components.get(dotgit_index + 1)?.as_os_str();
     if marker == std::ffi::OsStr::new("modules") {
-        return Some(root);
+        let modules_positions: Vec<usize> = components
+            .iter()
+            .enumerate()
+            .skip(dotgit_index + 1)
+            .filter_map(|(idx, component)| {
+                (component.as_os_str() == std::ffi::OsStr::new("modules")).then_some(idx)
+            })
+            .collect();
+        if modules_positions.len() <= 1 {
+            return Some(root);
+        }
+
+        let first_modules = modules_positions[0];
+        let last_modules = *modules_positions.last()?;
+        let mut parent_root = root.clone();
+        for component in &components[(first_modules + 1)..last_modules] {
+            if component.as_os_str() == std::ffi::OsStr::new("modules") {
+                continue;
+            }
+            parent_root.push(component.as_os_str());
+        }
+        return Some(parent_root);
     }
 
     if marker != std::ffi::OsStr::new("worktrees") {
