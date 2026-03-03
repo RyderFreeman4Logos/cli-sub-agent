@@ -806,7 +806,7 @@ fn enforce_result_toml_contract_now(
     session_dir: &std::path::Path,
     result: &mut ExecutionResult,
 ) {
-    enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, result);
+    enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, true, result);
 }
 
 #[test]
@@ -846,6 +846,31 @@ fn result_toml_path_contract_not_applied_when_marker_only_in_effective_prompt() 
     assert_eq!(result.exit_code, 0);
     assert_eq!(result.summary, "/tmp/missing/result.toml");
     assert!(result.stderr_output.is_empty());
+}
+
+#[test]
+fn result_toml_path_contract_fails_closed_when_preclear_failed() {
+    let temp = tempfile::tempdir().unwrap();
+    let result_path = temp.path().join("result.toml");
+    fs::write(&result_path, "status = \"success\"\n").unwrap();
+    let mut result = ExecutionResult {
+        output: String::new(),
+        stderr_output: String::new(),
+        summary: result_path.display().to_string(),
+        exit_code: 0,
+    };
+
+    enforce_result_toml_path_contract(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        temp.path(),
+        false,
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 1);
+    assert!(result.summary.contains("failed to clear pre-existing result.toml"));
+    assert!(result.stderr_output.contains("contract violation"));
 }
 
 #[test]

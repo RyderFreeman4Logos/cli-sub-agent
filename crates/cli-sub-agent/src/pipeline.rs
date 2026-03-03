@@ -633,7 +633,7 @@ pub(crate) async fn execute_with_session_and_meta(
                 })
         });
 
-    clear_expected_result_toml(&session_dir.join("result.toml"));
+    let result_file_cleared = clear_expected_result_toml(&session_dir.join("result.toml"));
 
     // Record execution start time before spawning.
     let execution_start_time = chrono::Utc::now();
@@ -782,6 +782,7 @@ pub(crate) async fn execute_with_session_and_meta(
         prompt,
         &effective_prompt,
         &session_dir,
+        result_file_cleared,
         &mut result,
     );
 
@@ -825,9 +826,30 @@ fn enforce_result_toml_path_contract(
     prompt: &str,
     _effective_prompt: &str,
     session_dir: &Path,
+    result_file_cleared: bool,
     result: &mut ExecutionResult,
 ) {
     if result.exit_code != 0 || !prompt_requires_result_toml_path(prompt) {
+        return;
+    }
+
+    if !result_file_cleared {
+        let expected_path = session_dir.join("result.toml");
+        let reason = format!(
+            "contract violation: failed to clear pre-existing result.toml '{}' before execution; refusing to trust stale file",
+            expected_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            "Session output violated result.toml path contract after pre-clear failure; coercing run to failure"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&reason);
+        result.stderr_output.push('\n');
+        result.summary = reason;
+        result.exit_code = 1;
         return;
     }
 
@@ -961,15 +983,18 @@ fn strip_marker_line_prefix(line: &str) -> &str {
     trimmed
 }
 
-fn clear_expected_result_toml(path: &Path) {
+fn clear_expected_result_toml(path: &Path) -> bool {
     match std::fs::remove_file(path) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => warn!(
-            path = %path.display(),
-            error = %err,
-            "Failed to remove pre-existing result.toml before execution"
-        ),
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to remove pre-existing result.toml before execution"
+            );
+            false
+        }
     }
 }
 
