@@ -869,7 +869,11 @@ fn result_toml_path_contract_fails_closed_when_preclear_failed() {
     );
 
     assert_eq!(result.exit_code, 1);
-    assert!(result.summary.contains("failed to clear pre-existing result.toml"));
+    assert!(
+        result
+            .summary
+            .contains("failed to clear pre-existing result.toml")
+    );
     assert!(result.stderr_output.contains("contract violation"));
 }
 

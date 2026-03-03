@@ -917,10 +917,7 @@ fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
         .unwrap_or("")
 }
 
-fn path_matches_expected_result_toml(
-    path_candidate: &str,
-    expected_path: &Path,
-) -> bool {
+fn path_matches_expected_result_toml(path_candidate: &str, expected_path: &Path) -> bool {
     let path = Path::new(path_candidate);
     let has_result_file_name = path
         .file_name()
