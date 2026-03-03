@@ -5,9 +5,11 @@
 //! searches for that layout and returns the embedded skill content.
 //!
 //! Search order (first match wins):
-//! 1. `.csa/patterns/<name>/`               (project-local fork)
-//! 2. `patterns/<name>/`                    (repo-shipped patterns)
-//! 3. `<global_store>/<pkg>/<commit>/patterns/<name>/`  (weave global store)
+//! 1. Current root: `.csa/patterns/<name>/`
+//! 2. Current root: `patterns/<name>/`
+//! 3. Superproject root (submodule only): `.csa/patterns/<name>/`
+//! 4. Superproject root (submodule only): `patterns/<name>/`
+//! 5. `<global_store>/<pkg>/<commit>/patterns/<name>/` from lockfiles under current/superproject
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -152,26 +154,30 @@ fn search_paths_with_store(
     project_root: &Path,
     store_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut search_roots = Vec::with_capacity(4);
+    let mut search_roots = Vec::with_capacity(8);
+    let repo_roots = discover_repo_roots(project_root);
 
-    // 1. Project-local fork: .csa/patterns/<name>/
-    search_roots.push(project_root.join(".csa").join("patterns").join(name));
-
-    // 2. Repo-shipped: patterns/<name>/
-    search_roots.push(project_root.join("patterns").join(name));
+    // 1. Project-local and ancestor repo roots:
+    //    .csa/patterns/<name>/ then patterns/<name>/ for each root.
+    for root in &repo_roots {
+        search_roots.push(root.join(".csa").join("patterns").join(name));
+        search_roots.push(root.join("patterns").join(name));
+    }
 
     // 3. Weave global store: <store_root>/<pkg>/<commit>/patterns/<name>/
     if let Some(store) = store_root {
-        if let Some(lockfile_path) = package::find_lockfile(project_root) {
-            if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
-                for pkg in &lockfile.package {
-                    let commit_key = match pkg.source_kind {
-                        SourceKind::Local => "local",
-                        SourceKind::Git if pkg.commit.is_empty() => continue,
-                        SourceKind::Git => &pkg.commit,
-                    };
-                    if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
-                        search_roots.push(pkg_dir.join("patterns").join(name));
+        for root in &repo_roots {
+            if let Some(lockfile_path) = package::find_lockfile(root) {
+                if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
+                    for pkg in &lockfile.package {
+                        let commit_key = match pkg.source_kind {
+                            SourceKind::Local => "local",
+                            SourceKind::Git if pkg.commit.is_empty() => continue,
+                            SourceKind::Git => &pkg.commit,
+                        };
+                        if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
+                            search_roots.push(pkg_dir.join("patterns").join(name));
+                        }
                     }
                 }
             }
@@ -179,6 +185,88 @@ fn search_paths_with_store(
     }
 
     search_roots
+}
+
+fn discover_repo_roots(project_root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![project_root.to_path_buf()];
+    if let Some(super_root) = discover_superproject_root(project_root)
+        && super_root != project_root
+    {
+        roots.push(super_root);
+    }
+    roots
+}
+
+fn discover_superproject_root(project_root: &Path) -> Option<PathBuf> {
+    let git_marker = project_root.join(".git");
+    if !git_marker.is_file() {
+        return None;
+    }
+    let marker = std::fs::read_to_string(git_marker).ok()?;
+    let gitdir_raw = marker.trim().strip_prefix("gitdir:")?.trim();
+    if gitdir_raw.is_empty() {
+        return None;
+    }
+
+    let gitdir_path = Path::new(gitdir_raw);
+    let resolved_gitdir = if gitdir_path.is_absolute() {
+        gitdir_path.to_path_buf()
+    } else {
+        project_root.join(gitdir_path)
+    };
+    let normalized_gitdir = resolved_gitdir
+        .canonicalize()
+        .unwrap_or(resolved_gitdir.clone());
+
+    superproject_root_from_gitdir_path(&normalized_gitdir)
+}
+
+fn superproject_root_from_gitdir_path(gitdir: &Path) -> Option<PathBuf> {
+    let components: Vec<_> = gitdir.components().collect();
+    let dotgit_index = components
+        .iter()
+        .position(|component| component.as_os_str() == std::ffi::OsStr::new(".git"))?;
+
+    let mut root = PathBuf::new();
+    for component in &components[..dotgit_index] {
+        root.push(component.as_os_str());
+    }
+    if root.as_os_str().is_empty() {
+        return None;
+    }
+
+    let marker = components.get(dotgit_index + 1)?.as_os_str();
+    if marker == std::ffi::OsStr::new("modules") {
+        return Some(root);
+    }
+
+    if marker != std::ffi::OsStr::new("worktrees") {
+        return None;
+    }
+
+    // Worktree submodule layout:
+    // <main>/.git/worktrees/<worktree>/modules/<submodule...>
+    let worktree_name = components.get(dotgit_index + 2)?.as_os_str();
+    if components.get(dotgit_index + 3)?.as_os_str() != std::ffi::OsStr::new("modules") {
+        return None;
+    }
+
+    let worktree_admin = root.join(".git").join("worktrees").join(worktree_name);
+    let worktree_gitdir = std::fs::read_to_string(worktree_admin.join("gitdir")).ok()?;
+    let worktree_gitdir = worktree_gitdir.trim();
+    if worktree_gitdir.is_empty() {
+        return None;
+    }
+    let worktree_gitdir_path = Path::new(worktree_gitdir);
+    let resolved_worktree_gitdir = if worktree_gitdir_path.is_absolute() {
+        worktree_gitdir_path.to_path_buf()
+    } else {
+        worktree_admin.join(worktree_gitdir_path)
+    };
+    let normalized_worktree_gitdir = resolved_worktree_gitdir
+        .canonicalize()
+        .unwrap_or(resolved_worktree_gitdir);
+    normalized_worktree_gitdir.parent().map(Path::to_path_buf)
 }
 
 /// Load `.skill.toml` with a three-tier config cascade.
