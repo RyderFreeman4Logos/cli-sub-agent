@@ -11,12 +11,36 @@ const SNAPSHOT_FILE: &str = ".liveness.snapshot";
 
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
 
+/// Fine-grained liveness signals used by idle-timeout watchdog logic.
+///
+/// `pid_alive`/`session_write` indicate coarse liveness, while
+/// `output_growth`/`stderr_activity` indicate concrete progress.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LivenessSignals {
+    pub pid_alive: bool,
+    pub output_growth: bool,
+    pub session_write: bool,
+    pub stderr_activity: bool,
+}
+
+impl LivenessSignals {
+    pub(crate) fn has_progress_signal(self) -> bool {
+        // Treat only stream/log growth as concrete progress. Generic
+        // "recent file write" is retained as a coarse liveness signal but is
+        // too noisy for idle-timeout extension (lock files, snapshots, etc.).
+        self.output_growth || self.stderr_activity
+    }
+
+    pub(crate) fn has_any_signal(self) -> bool {
+        self.pid_alive || self.session_write || self.has_progress_signal()
+    }
+}
+
 #[derive(Debug, Default, Clone, Copy)]
 struct LivenessSnapshot {
     output_log_size: Option<u64>,
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
-    run_log_size: Option<u64>,
 }
 
 /// Filesystem-only liveness probe for a running tool session.
@@ -25,22 +49,27 @@ struct LivenessSnapshot {
 /// 1) live PID from lock files
 /// 2) output growth (`output.log` / ACP events)
 /// 3) recent writes under session directory
-/// 4) stderr/log growth (`stderr.log` or latest run log)
+/// 4) stderr growth (`stderr.log`)
 pub struct ToolLiveness;
 
 impl ToolLiveness {
-    pub fn is_alive(session_dir: &Path) -> bool {
+    pub(crate) fn probe(session_dir: &Path) -> LivenessSignals {
         let now = SystemTime::now();
         let mut snapshot = load_snapshot(session_dir);
 
-        let process_alive = has_live_pid_signal(session_dir);
-        let output_growth = has_output_growth_signal(session_dir, now, &mut snapshot);
-        let session_write = has_recent_session_write_signal(session_dir, now);
-        let stderr_activity = has_stderr_activity_signal(session_dir, now, &mut snapshot);
+        let signals = LivenessSignals {
+            pid_alive: has_live_pid_signal(session_dir),
+            output_growth: has_output_growth_signal(session_dir, &mut snapshot),
+            session_write: has_recent_session_write_signal(session_dir, now),
+            stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
+        };
 
         save_snapshot(session_dir, &snapshot);
+        signals
+    }
 
-        process_alive || output_growth || session_write || stderr_activity
+    pub fn is_alive(session_dir: &Path) -> bool {
+        Self::probe(session_dir).has_any_signal()
     }
 
     /// Zero-cost observation of whether the tool process is actively working.
@@ -178,11 +207,7 @@ fn process_matches_lock_context(pid: u32, lock_path: &Path, session_dir: &Path) 
     }
 }
 
-fn has_output_growth_signal(
-    session_dir: &Path,
-    now: SystemTime,
-    snapshot: &mut LivenessSnapshot,
-) -> bool {
+fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
     let output_path = session_dir.join(OUTPUT_LOG_FILE);
     let (output_growth, output_size) = detect_growth(&output_path, snapshot.output_log_size);
     snapshot.output_log_size = output_size;
@@ -191,10 +216,7 @@ fn has_output_growth_signal(
     let (acp_growth, acp_size) = detect_growth(&acp_path, snapshot.acp_events_size);
     snapshot.acp_events_size = acp_size;
 
-    output_growth
-        || acp_growth
-        || file_modified_recently(&output_path, now)
-        || file_modified_recently(&acp_path, now)
+    output_growth || acp_growth
 }
 
 fn has_recent_session_write_signal(session_dir: &Path, now: SystemTime) -> bool {
@@ -230,45 +252,11 @@ fn has_recent_session_write_signal(session_dir: &Path, now: SystemTime) -> bool 
     false
 }
 
-fn has_stderr_activity_signal(
-    session_dir: &Path,
-    now: SystemTime,
-    snapshot: &mut LivenessSnapshot,
-) -> bool {
+fn has_stderr_activity_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
     let stderr_path = session_dir.join(STDERR_LOG_FILE);
     let (stderr_growth, stderr_size) = detect_growth(&stderr_path, snapshot.stderr_log_size);
     snapshot.stderr_log_size = stderr_size;
-
-    let latest_run_log = newest_log_file(session_dir);
-    let (run_growth, run_size) = latest_run_log
-        .as_ref()
-        .map(|path| detect_growth(path, snapshot.run_log_size))
-        .unwrap_or((false, None));
-    snapshot.run_log_size = run_size;
-
     stderr_growth
-        || latest_run_log
-            .as_ref()
-            .is_some_and(|path| file_modified_recently(path, now))
-        || run_growth
-        || file_modified_recently(&stderr_path, now)
-}
-
-fn newest_log_file(session_dir: &Path) -> Option<PathBuf> {
-    let logs_dir = session_dir.join("logs");
-    let mut newest: Option<(SystemTime, PathBuf)> = None;
-    for entry in fs::read_dir(logs_dir).ok()?.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "log") {
-            continue;
-        }
-        let modified = entry.metadata().ok()?.modified().ok()?;
-        match &newest {
-            Some((current, _)) if &modified <= current => {}
-            _ => newest = Some((modified, path)),
-        }
-    }
-    newest.map(|(_, path)| path)
 }
 
 fn detect_growth(path: &Path, previous_size: Option<u64>) -> (bool, Option<u64>) {
@@ -308,7 +296,6 @@ fn load_snapshot(session_dir: &Path) -> LivenessSnapshot {
             "output_log_size" => snapshot.output_log_size = parsed,
             "acp_events_size" => snapshot.acp_events_size = parsed,
             "stderr_log_size" => snapshot.stderr_log_size = parsed,
-            "run_log_size" => snapshot.run_log_size = parsed,
             _ => {}
         }
     }
@@ -316,7 +303,7 @@ fn load_snapshot(session_dir: &Path) -> LivenessSnapshot {
 }
 
 fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
-    let mut lines = Vec::with_capacity(4);
+    let mut lines = Vec::with_capacity(3);
     if let Some(value) = snapshot.output_log_size {
         lines.push(format!("output_log_size={value}"));
     }
@@ -325,9 +312,6 @@ fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
     }
     if let Some(value) = snapshot.stderr_log_size {
         lines.push(format!("stderr_log_size={value}"));
-    }
-    if let Some(value) = snapshot.run_log_size {
-        lines.push(format!("run_log_size={value}"));
     }
     if lines.is_empty() {
         return;
