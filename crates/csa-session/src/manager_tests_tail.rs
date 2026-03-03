@@ -51,6 +51,105 @@ fn test_save_and_load_result() {
 }
 
 #[test]
+fn test_save_result_preserves_custom_schema_with_sidecar_snapshot() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let existing_result = r#"
+status = "partial"
+exit_code = 0
+summary = "manager report"
+started_at = "2026-01-01T00:00:00Z"
+completed_at = "2026-01-01T00:10:00Z"
+
+[result]
+done = false
+
+[tool]
+name = "gemini-cli"
+"#;
+    std::fs::write(session_dir.join("result.toml"), existing_result).unwrap();
+
+    let now = chrono::Utc::now();
+    let runtime_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "runtime summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+    };
+    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+
+    let persisted = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
+    assert!(persisted.contains("status = \"success\""));
+    assert!(persisted.contains("tool = \"codex\""));
+    assert!(persisted.contains("[result]"));
+    assert!(persisted.contains("done = false"));
+    assert!(!persisted.contains("[tool]"));
+
+    let sidecar_path = session_dir.join("output/user-result.toml");
+    assert!(sidecar_path.is_file());
+    let sidecar = std::fs::read_to_string(sidecar_path).unwrap();
+    assert!(sidecar.contains("[tool]"));
+    assert!(sidecar.contains("name = \"gemini-cli\""));
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        loaded
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/user-result.toml")
+    );
+}
+
+#[test]
+fn test_save_result_clears_stale_optional_runtime_fields() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let now = chrono::Utc::now();
+
+    let old_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "old run".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 7,
+        artifacts: vec![crate::result::SessionArtifact::new("output/old-artifact.txt")],
+    };
+    save_result_in(td.path(), &state.meta_session_id, &old_result).unwrap();
+
+    let new_result = crate::result::SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: "new run".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: vec![],
+    };
+    save_result_in(td.path(), &state.meta_session_id, &new_result).unwrap();
+
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    let persisted = std::fs::read_to_string(session_dir.join("result.toml")).unwrap();
+    assert!(!persisted.contains("events_count"));
+    assert!(!persisted.contains("artifacts"));
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(loaded.events_count, 0);
+    assert!(loaded.artifacts.is_empty());
+}
+
+#[test]
 fn test_load_result_not_found() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, None).unwrap();
