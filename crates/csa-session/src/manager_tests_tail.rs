@@ -201,6 +201,16 @@ name = "gemini-cli"
     let sidecar = std::fs::read_to_string(session_dir.join("output/user-result.toml")).unwrap();
     assert!(sidecar.contains("[tool]"));
     assert!(sidecar.contains("name = \"gemini-cli\""));
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        loaded
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/user-result.toml")
+    );
 }
 
 #[test]

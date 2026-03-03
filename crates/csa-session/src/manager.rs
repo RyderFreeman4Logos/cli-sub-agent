@@ -737,16 +737,8 @@ pub(crate) fn save_result_in(
             bail!("Expected existing result content when custom schema was detected");
         };
         preserve_user_result_snapshot(&session_dir, contents)?;
-        if !persisted_result
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path == USER_RESULT_ARTIFACT_PATH)
-        {
-            persisted_result
-                .artifacts
-                .push(SessionArtifact::new(USER_RESULT_ARTIFACT_PATH));
-        }
     }
+    retain_user_result_artifact_if_snapshot_exists(&session_dir, &mut persisted_result)?;
 
     let runtime_table = session_result_to_table(&persisted_result)?;
     let mut merged_table = existing_table.unwrap_or_default();
@@ -781,6 +773,37 @@ fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<(
             snapshot_path.display()
         )
     })
+}
+
+fn retain_user_result_artifact_if_snapshot_exists(
+    session_dir: &Path,
+    result: &mut SessionResult,
+) -> Result<()> {
+    let snapshot_path = session_dir.join(USER_RESULT_ARTIFACT_PATH);
+    if !snapshot_path.exists() {
+        return Ok(());
+    }
+    if !snapshot_path.is_file() {
+        bail!(
+            "User result snapshot path exists but is not a file: {}",
+            snapshot_path.display()
+        );
+    }
+    ensure_user_result_artifact(result);
+    Ok(())
+}
+
+fn ensure_user_result_artifact(result: &mut SessionResult) {
+    if result
+        .artifacts
+        .iter()
+        .any(|artifact| artifact.path == USER_RESULT_ARTIFACT_PATH)
+    {
+        return;
+    }
+    result
+        .artifacts
+        .push(SessionArtifact::new(USER_RESULT_ARTIFACT_PATH));
 }
 
 fn session_result_to_table(result: &SessionResult) -> Result<toml::Table> {
