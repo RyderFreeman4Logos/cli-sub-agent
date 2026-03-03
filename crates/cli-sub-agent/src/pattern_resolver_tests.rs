@@ -210,6 +210,48 @@ fn search_paths_include_superproject_roots_for_submodule_project_root() {
 }
 
 #[test]
+fn search_paths_include_immediate_parent_for_nested_submodule_project_root() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::create_dir_all(
+        tmp.path()
+            .join(".git")
+            .join("modules")
+            .join("outer")
+            .join("modules")
+            .join("inner"),
+    )
+    .unwrap();
+    let inner_root = tmp.path().join("outer").join("inner");
+    fs::create_dir_all(&inner_root).unwrap();
+    fs::write(
+        inner_root.join(".git"),
+        "gitdir: ../../.git/modules/outer/modules/inner\n",
+    )
+    .unwrap();
+
+    let paths = search_paths_with_store("csa-review", &inner_root, None);
+    assert!(
+        paths.contains(
+            &tmp.path()
+                .join("outer")
+                .join(".csa")
+                .join("patterns")
+                .join("csa-review")
+        ),
+        "expected immediate parent submodule .csa/patterns path in resolver candidates"
+    );
+    assert!(
+        paths.contains(&tmp.path().join("outer").join("patterns").join("csa-review")),
+        "expected immediate parent submodule patterns path in resolver candidates"
+    );
+    assert!(
+        !paths.contains(&tmp.path().join(".csa").join("patterns").join("csa-review")),
+        "must not skip immediate parent and jump straight to top-level root for nested submodule layout"
+    );
+}
+
+#[test]
 fn search_paths_include_superproject_roots_for_worktree_submodule_project_root() {
     let tmp = TempDir::new().unwrap();
     let main_root = tmp.path().join("main-repo");
