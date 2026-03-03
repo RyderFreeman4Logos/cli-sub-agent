@@ -1,10 +1,16 @@
 //! Resolve a skill by name from standard search paths.
 //!
+//! Search scope:
+//! - Current project root
+//! - Optional superproject root when current root is a git submodule
+//!
 //! Search order:
 //! 1. `./.csa/skills/<name>/`                    (project-local, CSA-specific)
 //! 2. `./.claude/skills/<name>/`                 (project-local, Claude Code compat)
-//! 3. `~/.config/cli-sub-agent/skills/<name>/`   (global user)
-//! 4. `<global_store>/<name>/<commit>/`           (weave global store)
+//! 3. `<superproject>/.csa/skills/<name>/`       (submodule only)
+//! 4. `<superproject>/.claude/skills/<name>/`    (submodule only)
+//! 5. `~/.config/cli-sub-agent/skills/<name>/`   (global user)
+//! 6. `<global_store>/<name>/<commit>/`          (weave global store via lockfiles)
 
 use anyhow::{Context, Result, bail};
 use csa_config::paths;
@@ -83,13 +89,15 @@ fn search_paths_with_store(
     project_root: &Path,
     store_root: Option<&Path>,
 ) -> Vec<PathBuf> {
-    let mut search_roots = Vec::with_capacity(4);
+    let mut search_roots = Vec::with_capacity(8);
+    let repo_roots = discover_repo_roots(project_root);
 
-    // 1. Project-local (CSA-specific): .csa/skills/<name>/
-    search_roots.push(project_root.join(".csa").join("skills").join(name));
-
-    // 2. Project-local (Claude Code compat): .claude/skills/<name>/
-    search_roots.push(project_root.join(".claude").join("skills").join(name));
+    // 1. Project-local and ancestor repo roots:
+    //    .csa/skills/<name>/ then .claude/skills/<name>/ for each root.
+    for root in &repo_roots {
+        search_roots.push(root.join(".csa").join("skills").join(name));
+        search_roots.push(root.join(".claude").join("skills").join(name));
+    }
 
     // 3. Global user: ~/.config/cli-sub-agent/skills/<name>/ (legacy fallback supported)
     if let Some(config_dir) = paths::config_dir() {
@@ -98,19 +106,21 @@ fn search_paths_with_store(
 
     // 4. Weave global store: match locked packages by name.
     if let Some(store) = store_root {
-        if let Some(lockfile_path) = package::find_lockfile(project_root) {
-            if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
-                for pkg in &lockfile.package {
-                    if pkg.name != name {
-                        continue;
-                    }
-                    let commit_key = match pkg.source_kind {
-                        SourceKind::Local => "local",
-                        SourceKind::Git if pkg.commit.is_empty() => continue,
-                        SourceKind::Git => &pkg.commit,
-                    };
-                    if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
-                        search_roots.push(pkg_dir);
+        for root in &repo_roots {
+            if let Some(lockfile_path) = package::find_lockfile(root) {
+                if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
+                    for pkg in &lockfile.package {
+                        if pkg.name != name {
+                            continue;
+                        }
+                        let commit_key = match pkg.source_kind {
+                            SourceKind::Local => "local",
+                            SourceKind::Git if pkg.commit.is_empty() => continue,
+                            SourceKind::Git => &pkg.commit,
+                        };
+                        if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
+                            search_roots.push(pkg_dir);
+                        }
                     }
                 }
             }
@@ -118,6 +128,88 @@ fn search_paths_with_store(
     }
 
     search_roots
+}
+
+fn discover_repo_roots(project_root: &Path) -> Vec<PathBuf> {
+    let mut roots = vec![project_root.to_path_buf()];
+    if let Some(super_root) = discover_superproject_root(project_root)
+        && super_root != project_root
+    {
+        roots.push(super_root);
+    }
+    roots
+}
+
+fn discover_superproject_root(project_root: &Path) -> Option<PathBuf> {
+    let git_marker = project_root.join(".git");
+    if !git_marker.is_file() {
+        return None;
+    }
+    let marker = std::fs::read_to_string(git_marker).ok()?;
+    let gitdir_raw = marker.trim().strip_prefix("gitdir:")?.trim();
+    if gitdir_raw.is_empty() {
+        return None;
+    }
+
+    let gitdir_path = Path::new(gitdir_raw);
+    let resolved_gitdir = if gitdir_path.is_absolute() {
+        gitdir_path.to_path_buf()
+    } else {
+        project_root.join(gitdir_path)
+    };
+    let normalized_gitdir = resolved_gitdir
+        .canonicalize()
+        .unwrap_or(resolved_gitdir.clone());
+
+    superproject_root_from_gitdir_path(&normalized_gitdir)
+}
+
+fn superproject_root_from_gitdir_path(gitdir: &Path) -> Option<PathBuf> {
+    let components: Vec<_> = gitdir.components().collect();
+    let dotgit_index = components
+        .iter()
+        .position(|component| component.as_os_str() == std::ffi::OsStr::new(".git"))?;
+
+    let mut root = PathBuf::new();
+    for component in &components[..dotgit_index] {
+        root.push(component.as_os_str());
+    }
+    if root.as_os_str().is_empty() {
+        return None;
+    }
+
+    let marker = components.get(dotgit_index + 1)?.as_os_str();
+    if marker == std::ffi::OsStr::new("modules") {
+        return Some(root);
+    }
+
+    if marker != std::ffi::OsStr::new("worktrees") {
+        return None;
+    }
+
+    // Worktree submodule layout:
+    // <main>/.git/worktrees/<worktree>/modules/<submodule...>
+    let worktree_name = components.get(dotgit_index + 2)?.as_os_str();
+    if components.get(dotgit_index + 3)?.as_os_str() != std::ffi::OsStr::new("modules") {
+        return None;
+    }
+
+    let worktree_admin = root.join(".git").join("worktrees").join(worktree_name);
+    let worktree_gitdir = std::fs::read_to_string(worktree_admin.join("gitdir")).ok()?;
+    let worktree_gitdir = worktree_gitdir.trim();
+    if worktree_gitdir.is_empty() {
+        return None;
+    }
+    let worktree_gitdir_path = Path::new(worktree_gitdir);
+    let resolved_worktree_gitdir = if worktree_gitdir_path.is_absolute() {
+        worktree_gitdir_path.to_path_buf()
+    } else {
+        worktree_admin.join(worktree_gitdir_path)
+    };
+    let normalized_worktree_gitdir = resolved_worktree_gitdir
+        .canonicalize()
+        .unwrap_or(resolved_worktree_gitdir);
+    normalized_worktree_gitdir.parent().map(Path::to_path_buf)
 }
 
 /// Load `.skill.toml` from a skill directory (optional file).
@@ -225,6 +317,117 @@ tool = "claude-code"
 
         let skill_md = fs::read_to_string(found.unwrap().join("SKILL.md")).unwrap();
         assert!(skill_md.contains("Global store"));
+    }
+
+    #[test]
+    fn search_paths_include_superproject_roots_for_submodule_project_root() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join(".git")).unwrap();
+        fs::create_dir_all(
+            tmp.path()
+                .join(".git")
+                .join("modules")
+                .join("demo-submodule"),
+        )
+        .unwrap();
+        let submodule_root = tmp.path().join("crates").join("demo-submodule");
+        fs::create_dir_all(&submodule_root).unwrap();
+        fs::write(
+            submodule_root.join(".git"),
+            "gitdir: ../../.git/modules/demo-submodule\n",
+        )
+        .unwrap();
+
+        let paths = search_paths_with_store("dev2merge", &submodule_root, None);
+        assert!(
+            paths.contains(&tmp.path().join(".csa").join("skills").join("dev2merge")),
+            "expected superproject .csa/skills path in resolver candidates"
+        );
+        assert!(
+            paths.contains(&tmp.path().join(".claude").join("skills").join("dev2merge")),
+            "expected superproject .claude/skills path in resolver candidates"
+        );
+    }
+
+    #[test]
+    fn search_paths_include_superproject_roots_for_worktree_submodule_project_root() {
+        let tmp = TempDir::new().unwrap();
+        let main_root = tmp.path().join("main-repo");
+        let worktree_root = tmp.path().join("main-wt");
+        fs::create_dir_all(main_root.join(".git")).unwrap();
+        fs::create_dir_all(&worktree_root).unwrap();
+        fs::create_dir_all(
+            main_root
+                .join(".git")
+                .join("worktrees")
+                .join("parent-wt")
+                .join("modules")
+                .join("demo-submodule"),
+        )
+        .unwrap();
+        fs::write(
+            main_root.join(".git/worktrees/parent-wt/gitdir"),
+            format!("{}\n", worktree_root.join(".git").display()),
+        )
+        .unwrap();
+        let submodule_root = worktree_root.join("crates").join("demo-submodule");
+        fs::create_dir_all(&submodule_root).unwrap();
+        fs::write(
+            submodule_root.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main_root
+                    .join(".git/worktrees/parent-wt/modules/demo-submodule")
+                    .display()
+            ),
+        )
+        .unwrap();
+
+        let paths = search_paths_with_store("dev2merge", &submodule_root, None);
+        assert!(
+            paths.contains(&worktree_root.join(".csa").join("skills").join("dev2merge")),
+            "expected superproject .csa/skills path in resolver candidates for worktree layout"
+        );
+        assert!(
+            paths.contains(
+                &worktree_root
+                    .join(".claude")
+                    .join("skills")
+                    .join("dev2merge")
+            ),
+            "expected superproject .claude/skills path in resolver candidates for worktree layout"
+        );
+        assert!(
+            !paths.contains(&main_root.join(".csa").join("skills").join("dev2merge")),
+            "must not fall back to main repository root for worktree submodule layout"
+        );
+    }
+
+    #[test]
+    fn search_paths_do_not_include_main_root_for_plain_worktree_project_root() {
+        let tmp = TempDir::new().unwrap();
+        let main_root = tmp.path().join("main-repo");
+        let worktree_root = tmp.path().join("main-wt");
+        fs::create_dir_all(main_root.join(".git").join("worktrees").join("parent-wt")).unwrap();
+        fs::create_dir_all(&worktree_root).unwrap();
+        fs::write(
+            worktree_root.join(".git"),
+            format!(
+                "gitdir: {}\n",
+                main_root.join(".git/worktrees/parent-wt").display()
+            ),
+        )
+        .unwrap();
+
+        let paths = search_paths_with_store("dev2merge", &worktree_root, None);
+        assert!(
+            paths.contains(&worktree_root.join(".csa").join("skills").join("dev2merge")),
+            "expected current worktree root in resolver candidates"
+        );
+        assert!(
+            !paths.contains(&main_root.join(".csa").join("skills").join("dev2merge")),
+            "plain linked worktree must not be treated as submodule lookup context"
+        );
     }
 
     #[test]

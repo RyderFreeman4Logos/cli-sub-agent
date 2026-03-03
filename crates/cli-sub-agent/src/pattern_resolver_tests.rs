@@ -180,6 +180,122 @@ fn resolve_pattern_repo_takes_priority_over_global_store() {
 }
 
 #[test]
+fn search_paths_include_superproject_roots_for_submodule_project_root() {
+    let tmp = TempDir::new().unwrap();
+    fs::create_dir(tmp.path().join(".git")).unwrap();
+    fs::create_dir_all(
+        tmp.path()
+            .join(".git")
+            .join("modules")
+            .join("demo-submodule"),
+    )
+    .unwrap();
+    let submodule_root = tmp.path().join("crates").join("demo-submodule");
+    fs::create_dir_all(&submodule_root).unwrap();
+    fs::write(
+        submodule_root.join(".git"),
+        "gitdir: ../../.git/modules/demo-submodule\n",
+    )
+    .unwrap();
+
+    let paths = search_paths_with_store("csa-review", &submodule_root, None);
+    assert!(
+        paths.contains(&tmp.path().join(".csa").join("patterns").join("csa-review")),
+        "expected superproject .csa/patterns path in resolver candidates"
+    );
+    assert!(
+        paths.contains(&tmp.path().join("patterns").join("csa-review")),
+        "expected superproject patterns/ path in resolver candidates"
+    );
+}
+
+#[test]
+fn search_paths_include_superproject_roots_for_worktree_submodule_project_root() {
+    let tmp = TempDir::new().unwrap();
+    let main_root = tmp.path().join("main-repo");
+    let worktree_root = tmp.path().join("main-wt");
+    fs::create_dir_all(main_root.join(".git")).unwrap();
+    fs::create_dir_all(&worktree_root).unwrap();
+    fs::create_dir_all(
+        main_root
+            .join(".git")
+            .join("worktrees")
+            .join("parent-wt")
+            .join("modules")
+            .join("demo-submodule"),
+    )
+    .unwrap();
+    fs::write(
+        main_root.join(".git/worktrees/parent-wt/gitdir"),
+        format!("{}\n", worktree_root.join(".git").display()),
+    )
+    .unwrap();
+    let submodule_root = worktree_root.join("crates").join("demo-submodule");
+    fs::create_dir_all(&submodule_root).unwrap();
+    fs::write(
+        submodule_root.join(".git"),
+        format!(
+            "gitdir: {}\n",
+            main_root
+                .join(".git/worktrees/parent-wt/modules/demo-submodule")
+                .display()
+        ),
+    )
+    .unwrap();
+
+    let paths = search_paths_with_store("csa-review", &submodule_root, None);
+    assert!(
+        paths.contains(
+            &worktree_root
+                .join(".csa")
+                .join("patterns")
+                .join("csa-review")
+        ),
+        "expected superproject .csa/patterns path in resolver candidates for worktree layout"
+    );
+    assert!(
+        paths.contains(&worktree_root.join("patterns").join("csa-review")),
+        "expected superproject patterns path in resolver candidates for worktree layout"
+    );
+    assert!(
+        !paths.contains(&main_root.join(".csa").join("patterns").join("csa-review")),
+        "must not fall back to main repository root for worktree submodule layout"
+    );
+}
+
+#[test]
+fn search_paths_do_not_include_main_root_for_plain_worktree_project_root() {
+    let tmp = TempDir::new().unwrap();
+    let main_root = tmp.path().join("main-repo");
+    let worktree_root = tmp.path().join("main-wt");
+    fs::create_dir_all(main_root.join(".git").join("worktrees").join("parent-wt")).unwrap();
+    fs::create_dir_all(&worktree_root).unwrap();
+    fs::write(
+        worktree_root.join(".git"),
+        format!(
+            "gitdir: {}\n",
+            main_root.join(".git/worktrees/parent-wt").display()
+        ),
+    )
+    .unwrap();
+
+    let paths = search_paths_with_store("csa-review", &worktree_root, None);
+    assert!(
+        paths.contains(
+            &worktree_root
+                .join(".csa")
+                .join("patterns")
+                .join("csa-review")
+        ),
+        "expected current worktree root in resolver candidates"
+    );
+    assert!(
+        !paths.contains(&main_root.join(".csa").join("patterns").join("csa-review")),
+        "plain linked worktree must not be treated as submodule lookup context"
+    );
+}
+
+#[test]
 fn resolve_pattern_falls_back_to_pattern_md() {
     let tmp = TempDir::new().unwrap();
     // Legacy layout: only PATTERN.md at pattern root, no skills/ directory.
