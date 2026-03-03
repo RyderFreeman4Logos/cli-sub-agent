@@ -315,10 +315,14 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
 # --- Delegate wait to CSA-managed step (max 10 min) ---
 BOT_UNAVAILABLE=true
 FALLBACK_REVIEW_HAS_ISSUES=false
+BOT_HAS_ISSUES=false
+WAIT_RESULT_FILE="$(mktemp)"
 set +e
-WAIT_RESULT="$(run_with_hard_timeout 650 csa run --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
-WAIT_RC=$?
+run_with_hard_timeout 650 csa run --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
+WAIT_RC=${PIPESTATUS[0]}
 set -e
+WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
+rm -f "${WAIT_RESULT_FILE}"
 if [ "${WAIT_RC}" -eq 124 ]; then
   BOT_UNAVAILABLE=true
 elif [ "${WAIT_RC}" -ne 0 ]; then
@@ -334,6 +338,30 @@ else
   )"
   if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     BOT_UNAVAILABLE=false
+    BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+    sleep "${BOT_SETTLE_SECS}"
+    set +e
+    ACTIONABLE_COMMENT_COUNT="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        2>/dev/null
+    )"
+    ACTIONABLE_COMMENT_RC=$?
+    set -e
+    if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
+      echo "ERROR: Failed to query actionable bot comments for trigger window (rc=${ACTIONABLE_COMMENT_RC})." >&2
+      exit 1
+    fi
+    case "${ACTIONABLE_COMMENT_COUNT:-}" in
+      ''|*[!0-9]*)
+        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
+        exit 1
+        ;;
+    esac
+    if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
+      echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
+      BOT_HAS_ISSUES=true
+    fi
   elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
     BOT_UNAVAILABLE=true
   else
@@ -350,6 +378,7 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
 fi
 echo "CSA_VAR:BOT_UNAVAILABLE=${BOT_UNAVAILABLE}"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+echo "CSA_VAR:BOT_HAS_ISSUES=${BOT_HAS_ISSUES}"
 ```
 
 ## IF ${BOT_UNAVAILABLE}
@@ -430,9 +459,12 @@ run_with_hard_timeout() {
   return "${rc}"
 }
 set +e
-FIX_RESULT="$(run_with_hard_timeout 1800 csa run --tool codex --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
-FIX_RC=$?
+FIX_RESULT_FILE="$(mktemp)"
+run_with_hard_timeout 1800 csa run --tool codex --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero." | tee "${FIX_RESULT_FILE}"
+FIX_RC=${PIPESTATUS[0]}
 set -e
+FIX_RESULT="$(cat "${FIX_RESULT_FILE}")"
+rm -f "${FIX_RESULT_FILE}"
 
 if [ "${FIX_RC}" -eq 124 ]; then
   echo "ERROR: Fallback fix cycle exceeded hard timeout (1800s)." >&2
@@ -820,12 +852,20 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   fi
 
   git push --force-with-lease
-  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+  REBASE_CURRENT_SHA="$(git rev-parse HEAD)"
+  REBASE_TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  REBASE_TRIGGER_BODY="@codex review
+
+<!-- csa-trigger:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
 
   set +e
-  GATE_RESULT="$(run_with_hard_timeout 2400 csa run --tool codex --idle-timeout 2400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end: wait up to 10 minutes for @codex response to the latest trigger; if response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check (max 3 rounds); if bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
-  GATE_RC=$?
+  GATE_RESULT_FILE="$(mktemp)"
+  run_with_hard_timeout 2400 csa run --tool codex --idle-timeout 2400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end: wait up to 10 minutes for @codex response to the latest trigger; if response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check (max 3 rounds); if bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
+  GATE_RC=${PIPESTATUS[0]}
   set -e
+  GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"
+  rm -f "${GATE_RESULT_FILE}"
   if [ "${GATE_RC}" -eq 124 ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
@@ -856,6 +896,43 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
     echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
     echo "ERROR: Post-rebase review gate failed."
+    exit 1
+  fi
+
+  BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+  sleep "${BOT_SETTLE_SECS}"
+  set +e
+  LATE_ACTIONABLE_COUNT="$(
+    gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+      --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+      2>/dev/null
+  )"
+  LATE_ACTIONABLE_RC=$?
+  set -e
+  if [ "${LATE_ACTIONABLE_RC}" -ne 0 ]; then
+    REBASE_REVIEW_HAS_ISSUES=true
+    FALLBACK_REVIEW_HAS_ISSUES=true
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "ERROR: Failed to query post-rebase actionable bot comments (rc=${LATE_ACTIONABLE_RC})." >&2
+    exit 1
+  fi
+  case "${LATE_ACTIONABLE_COUNT:-}" in
+    ''|*[!0-9]*)
+      REBASE_REVIEW_HAS_ISSUES=true
+      FALLBACK_REVIEW_HAS_ISSUES=true
+      echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+      echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+      echo "ERROR: Invalid post-rebase actionable comment count from GitHub API: '${LATE_ACTIONABLE_COUNT}'." >&2
+      exit 1
+      ;;
+  esac
+  if [ "${LATE_ACTIONABLE_COUNT}" -gt 0 ]; then
+    REBASE_REVIEW_HAS_ISSUES=true
+    FALLBACK_REVIEW_HAS_ISSUES=true
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "ERROR: Detected ${LATE_ACTIONABLE_COUNT} actionable bot comment(s) after post-rebase trigger window." >&2
     exit 1
   fi
 
