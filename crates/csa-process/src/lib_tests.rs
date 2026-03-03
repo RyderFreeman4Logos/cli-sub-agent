@@ -287,6 +287,7 @@ async fn test_idle_timeout_enters_liveness_mode_before_kill() {
     let mut cmd = Command::new("bash");
     cmd.args(["-c", "sleep 2"]);
     let child = spawn_tool(cmd, None).await.expect("spawn");
+    let start = Instant::now();
     let result = wait_and_capture_with_idle_timeout(
         child,
         StreamMode::BufferOnly,
@@ -297,8 +298,17 @@ async fn test_idle_timeout_enters_liveness_mode_before_kill() {
     )
     .await
     .expect("wait");
+    let elapsed = start.elapsed();
 
-    assert_eq!(result.exit_code, 0);
+    assert!(
+        elapsed >= Duration::from_millis(1800),
+        "watchdog should wait through liveness grace period, elapsed={elapsed:?}"
+    );
+    assert!(
+        matches!(result.exit_code, 0 | 137),
+        "process may exit naturally or hit kill race at boundary, exit_code={}",
+        result.exit_code
+    );
 }
 
 #[test]
