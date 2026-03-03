@@ -31,6 +31,7 @@ use prompt_guard::emit_prompt_guard_to_caller;
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
+const RESULT_TOML_PATH_CONTRACT_MARKER: &str = "csa_result_toml_path_contract=1";
 
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
@@ -632,6 +633,8 @@ pub(crate) async fn execute_with_session_and_meta(
                 })
         });
 
+    let result_file_cleared = clear_expected_result_toml(&session_dir.join("result.toml"));
+
     // Record execution start time before spawning.
     let execution_start_time = chrono::Utc::now();
 
@@ -774,7 +777,14 @@ pub(crate) async fn execute_with_session_and_meta(
     let events_count = transport_result.events.len() as u64;
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
-    let result = transport_result.execution;
+    let mut result = transport_result.execution;
+    enforce_result_toml_path_contract(
+        prompt,
+        &effective_prompt,
+        &session_dir,
+        result_file_cleared,
+        &mut result,
+    );
 
     // Delegate post-execution processing (state updates, persistence, hooks, memory).
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
@@ -810,6 +820,183 @@ pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     };
 
     Ok(path.canonicalize()?)
+}
+
+fn enforce_result_toml_path_contract(
+    prompt: &str,
+    _effective_prompt: &str,
+    session_dir: &Path,
+    result_file_cleared: bool,
+    result: &mut ExecutionResult,
+) {
+    if result.exit_code != 0 || !prompt_requires_result_toml_path(prompt) {
+        return;
+    }
+
+    if !result_file_cleared {
+        let expected_path = session_dir.join("result.toml");
+        let reason = format!(
+            "contract violation: failed to clear pre-existing result.toml '{}' before execution; refusing to trust stale file",
+            expected_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            "Session output violated result.toml path contract after pre-clear failure; coercing run to failure"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&reason);
+        result.stderr_output.push('\n');
+        result.summary = reason;
+        result.exit_code = 1;
+        return;
+    }
+
+    let path_candidate = contract_result_toml_path_candidate(result);
+    let expected_path = session_dir.join("result.toml");
+    if path_matches_expected_result_toml(path_candidate, &expected_path) {
+        return;
+    }
+
+    let reason = if path_candidate.is_empty() {
+        format!(
+            "contract violation: expected existing absolute result.toml path '{}' in output/summary, but output and summary were empty",
+            expected_path.display()
+        )
+    } else {
+        format!(
+            "contract violation: expected existing absolute result.toml path '{}' in output/summary, got '{path_candidate}'",
+            expected_path.display()
+        )
+    };
+
+    warn!(
+        summary = %result.summary,
+        "Session output violated result.toml path contract; coercing run to failure"
+    );
+    if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+        result.stderr_output.push('\n');
+    }
+    result.stderr_output.push_str(&reason);
+    result.stderr_output.push('\n');
+    result.summary = reason;
+    result.exit_code = 1;
+}
+
+fn prompt_requires_result_toml_path(prompt: &str) -> bool {
+    prompt.lines().any(|line| {
+        let normalized = strip_marker_line_prefix(line).trim().to_ascii_lowercase();
+        normalized == RESULT_TOML_PATH_CONTRACT_MARKER
+            || normalized == format!("contract marker: {RESULT_TOML_PATH_CONTRACT_MARKER}")
+    })
+}
+
+fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
+    let output_path_candidate = result
+        .output
+        .lines()
+        .rev()
+        .find(|line| line_looks_like_result_toml_path(line))
+        .map(normalize_contract_path_candidate);
+    if let Some(candidate) = output_path_candidate {
+        return candidate;
+    }
+
+    let summary_candidate = normalize_contract_path_candidate(&result.summary);
+    if !summary_candidate.is_empty() {
+        return summary_candidate;
+    }
+
+    result
+        .output
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .map(normalize_contract_path_candidate)
+        .unwrap_or("")
+}
+
+fn path_matches_expected_result_toml(path_candidate: &str, expected_path: &Path) -> bool {
+    let path = Path::new(path_candidate);
+    let has_result_file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("result.toml"));
+
+    if !path.is_absolute() || !has_result_file_name || !path.is_file() || path != expected_path {
+        return false;
+    }
+
+    let meta = std::fs::symlink_metadata(path)
+        .ok()
+        .filter(|meta| !meta.file_type().is_symlink());
+    let Some(meta) = meta else {
+        return false;
+    };
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if meta.nlink() != 1 {
+            return false;
+        }
+    }
+
+    true
+}
+
+fn line_looks_like_result_toml_path(line: &str) -> bool {
+    let candidate = normalize_contract_path_candidate(line);
+    let path = Path::new(candidate);
+    path.is_absolute()
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("result.toml"))
+}
+
+fn strip_marker_line_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if let Some(stripped) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))
+    {
+        return stripped.trim_start();
+    }
+
+    let digit_count = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digit_count > 0 {
+        let suffix = &trimmed[digit_count..];
+        if let Some(stripped) = suffix
+            .strip_prefix(". ")
+            .or_else(|| suffix.strip_prefix(") "))
+        {
+            return stripped.trim_start();
+        }
+    }
+
+    trimmed
+}
+
+fn clear_expected_result_toml(path: &Path) -> bool {
+    match std::fs::remove_file(path) {
+        Ok(()) => true,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => true,
+        Err(err) => {
+            warn!(
+                path = %path.display(),
+                error = %err,
+                "Failed to remove pre-existing result.toml before execution"
+            );
+            false
+        }
+    }
+}
+
+fn normalize_contract_path_candidate(path: &str) -> &str {
+    path.trim().trim_matches('"').trim_matches('`').trim()
 }
 
 #[cfg(test)]

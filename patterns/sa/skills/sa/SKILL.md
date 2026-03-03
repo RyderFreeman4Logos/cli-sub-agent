@@ -264,9 +264,10 @@ INPUT:
 [user requirements and constraints]
 
 OUTPUT FORMAT:
+- CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Write TODO artifact to $CSA_SESSION_DIR/artifacts/TODO.md
 - Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
-- Print ONLY the result.toml path
+- Print ONLY the absolute result.toml path
 
 SCOPE:
 - You may read code, analyze architecture, and spawn Layer 2 workers.
@@ -303,10 +304,11 @@ INPUT:
 - Session context: [session id if any]
 
 OUTPUT FORMAT:
+- CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Perform implementation and validation autonomously
 - Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
 - Include commit_hash/review_result in [artifacts] when available
-- Print ONLY the result.toml path
+- Print ONLY the absolute result.toml path
 
 SCOPE:
 - You choose HOW to implement.
@@ -338,10 +340,11 @@ INPUT:
 - Verification type: [code-review | design-review]
 
 OUTPUT FORMAT:
+- CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Run independent verification (e.g. csa review --diff or csa debate)
 - Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml
 - In [report], clearly state agreement/disagreement and why
-- Print ONLY the result.toml path
+- Print ONLY the absolute result.toml path
 
 SCOPE:
 - Independent judgment required.
