@@ -311,6 +311,9 @@ fn test_liveness_true_resets_death_timer() {
         format!("{{\"pid\": {}}}", std::process::id()),
     )
     .expect("write lock");
+    std::fs::write(tmp.path().join("output.log"), "progress").expect("write output");
+    std::fs::write(tmp.path().join(".liveness.snapshot"), "output_log_size=0")
+        .expect("seed snapshot");
 
     let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
     let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
@@ -328,11 +331,11 @@ fn test_liveness_true_resets_death_timer() {
     assert!(!terminate);
     assert!(
         dead_since.is_none(),
-        "liveness=true should reset death timer"
+        "progress signal should reset death timer"
     );
     assert!(
         last_activity > before,
-        "liveness=true should reset idle timer"
+        "progress signal should reset idle timer"
     );
 }
 
@@ -638,9 +641,8 @@ async fn test_run_and_capture_with_stdin_passes_stream_mode() {
 // --- idle timeout + liveness integration tests ---
 
 #[test]
-fn test_should_terminate_resets_last_activity_on_liveness_true() {
-    // When liveness returns true, both the death timer AND the idle timer
-    // (last_activity) should be reset, giving the tool another full window.
+fn test_should_terminate_resets_last_activity_on_progress_signal() {
+    // Progress signals should reset both the death timer and idle timer.
     let tmp = tempfile::tempdir().expect("tempdir");
     let locks_dir = tmp.path().join("locks");
     std::fs::create_dir_all(&locks_dir).expect("create locks dir");
@@ -649,6 +651,9 @@ fn test_should_terminate_resets_last_activity_on_liveness_true() {
         format!("{{\"pid\": {}}}", std::process::id()),
     )
     .expect("write lock");
+    std::fs::write(tmp.path().join("output.log"), "progress").expect("write output");
+    std::fs::write(tmp.path().join(".liveness.snapshot"), "output_log_size=0")
+        .expect("seed snapshot");
 
     let mut dead_since = Some(Instant::now() - Duration::from_secs(999));
     let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
@@ -664,7 +669,7 @@ fn test_should_terminate_resets_last_activity_on_liveness_true() {
         &mut next_poll,
     );
 
-    assert!(!terminate, "alive process should not be terminated");
+    assert!(!terminate, "progress should prevent termination");
     assert!(dead_since.is_none(), "death timer should be cleared");
     assert!(
         last_activity > stale_activity,
@@ -672,10 +677,44 @@ fn test_should_terminate_resets_last_activity_on_liveness_true() {
     );
 }
 
+#[cfg(unix)]
+fn set_file_mtime_seconds_ago(path: &std::path::Path, seconds_ago: u64) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock before UNIX_EPOCH");
+    let target_sec = now.as_secs().saturating_sub(seconds_ago) as libc::time_t;
+    let times = [
+        libc::timespec {
+            tv_sec: target_sec,
+            tv_nsec: 0,
+        },
+        libc::timespec {
+            tv_sec: target_sec,
+            tv_nsec: 0,
+        },
+    ];
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path contains interior NUL");
+    // SAFETY: `c_path` is a valid C string, `times` points to two valid
+    // timespec entries for atime/mtime, and flags=0 targets the path itself.
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+    assert_eq!(
+        rc,
+        0,
+        "utimensat failed for {}: {:?}",
+        path.display(),
+        std::io::Error::last_os_error()
+    );
+}
+
 #[tokio::test]
 async fn test_idle_timeout_with_alive_process_does_not_kill() {
     // A silent process (sleep) with a live lock file for our own PID should
-    // NOT be killed by idle timeout — liveness keeps it alive.
+    // NOT be killed when liveness_dead_timeout is much longer than runtime.
     let tmp = tempfile::tempdir().expect("tempdir");
     let locks_dir = tmp.path().join("locks");
     std::fs::create_dir_all(&locks_dir).expect("create locks dir");
@@ -685,7 +724,7 @@ async fn test_idle_timeout_with_alive_process_does_not_kill() {
     )
     .expect("write lock");
 
-    // "sleep 2" produces no output, but our PID in lock makes liveness=true.
+    // "sleep 2" produces no output and exits before liveness_dead_timeout.
     let mut cmd = Command::new("bash");
     cmd.args(["-c", "sleep 2"]);
     let child = spawn_tool(cmd, None).await.expect("spawn");
@@ -704,6 +743,47 @@ async fn test_idle_timeout_with_alive_process_does_not_kill() {
         result.exit_code, 0,
         "process should exit naturally, not be killed (exit={})",
         result.exit_code
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn test_idle_timeout_with_live_pid_but_no_progress_kills_after_dead_timeout() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let locks_dir = tmp.path().join("locks");
+    std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+    let lock_path = locks_dir.join("codex.lock");
+    std::fs::write(&lock_path, format!("{{\"pid\": {}}}", std::process::id())).expect("write lock");
+    // Make metadata stale so lock-file timestamp is not misclassified as progress.
+    set_file_mtime_seconds_ago(&lock_path, 120);
+
+    let output_path = tmp.path().join("output.log");
+    std::fs::write(&output_path, "").expect("seed output");
+    set_file_mtime_seconds_ago(&output_path, 120);
+
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "sleep 30"]);
+    let child = spawn_tool(cmd, None).await.expect("spawn");
+    let start = Instant::now();
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(1), // idle_timeout
+        Duration::from_secs(2), // liveness_dead_timeout
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        Some(&output_path), // enables liveness mode
+    )
+    .await
+    .expect("wait");
+    let elapsed = start.elapsed();
+
+    assert_eq!(
+        result.exit_code, 137,
+        "silent live PID without progress should be treated as hang"
+    );
+    assert!(
+        elapsed < Duration::from_secs(15),
+        "should terminate after idle+liveness_dead window, elapsed={elapsed:?}"
     );
 }
 

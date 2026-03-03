@@ -8,11 +8,11 @@ const LIVENESS_POLL_INTERVAL: Duration = Duration::from_secs(10);
 /// Check whether an idle tool process should be terminated.
 ///
 /// When the tool has been silent (no stdout/stderr) for `idle_timeout`, this
-/// function queries [`ToolLiveness::is_alive`] before killing.  If the tool is
-/// still alive (filesystem activity, live PID, etc.) the idle timer is **reset**
-/// via `last_activity`, giving the tool another full `idle_timeout` window.
-/// Termination only happens when liveness returns false continuously for
-/// `liveness_dead_timeout`.
+/// function queries [`ToolLiveness::probe`] before killing. Only **progress
+/// signals** (output/log growth) reset the idle timer.
+/// Pure "process exists" signals (live PID only) no longer
+/// grant unlimited extensions; in that case, termination happens once
+/// `liveness_dead_timeout` elapses.
 pub(crate) fn should_terminate_for_idle(
     last_activity: &mut Instant,
     idle_timeout: Duration,
@@ -29,9 +29,9 @@ pub(crate) fn should_terminate_for_idle(
 
     // Legacy execute_in path has no spool/session directory context.
     // Preserve original behavior: idle-timeout means immediate termination.
-    if session_dir.is_none() {
+    let Some(dir) = session_dir else {
         return true;
-    }
+    };
 
     let now = Instant::now();
     let should_poll = next_liveness_poll_at
@@ -41,8 +41,9 @@ pub(crate) fn should_terminate_for_idle(
         return false;
     }
 
-    if session_dir.is_some_and(|dir| ToolLiveness::is_alive(dir) || ToolLiveness::is_working(dir)) {
-        // Tool is alive: reset the idle timer so it gets another full window.
+    let signals = ToolLiveness::probe(dir);
+    if signals.has_progress_signal() {
+        // Real progress observed: reset idle/death timers and give a fresh window.
         *last_activity = now;
         *liveness_dead_since = None;
         *next_liveness_poll_at = Some(now + LIVENESS_POLL_INTERVAL);
@@ -103,9 +104,10 @@ mod tests {
     }
 
     #[test]
-    fn test_idle_timer_resets_when_liveness_alive() {
+    fn test_idle_timer_resets_when_progress_signal_present() {
         let tmp = tempfile::tempdir().expect("tempdir");
-        // Create a fresh lock file with our own PID so is_alive() returns true
+        // Create a lock file for live PID and a fresh output log to simulate
+        // concrete progress signal.
         let locks_dir = tmp.path().join("locks");
         std::fs::create_dir_all(&locks_dir).expect("create locks dir");
         std::fs::write(
@@ -113,6 +115,9 @@ mod tests {
             format!("{{\"pid\": {}}}", std::process::id()),
         )
         .expect("write lock");
+        std::fs::write(tmp.path().join("output.log"), "progress").expect("write output");
+        std::fs::write(tmp.path().join(".liveness.snapshot"), "output_log_size=0")
+            .expect("seed snapshot");
 
         let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
         let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
@@ -131,11 +136,11 @@ mod tests {
         assert!(!terminate, "should not terminate when tool is alive");
         assert!(
             dead_since.is_none(),
-            "liveness=true should reset death timer"
+            "progress signal should reset death timer"
         );
         assert!(
             last_activity > before,
-            "liveness=true should reset idle timer"
+            "progress signal should reset idle timer"
         );
     }
 }
