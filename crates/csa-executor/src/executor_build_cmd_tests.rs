@@ -336,6 +336,51 @@ fn test_build_command_gemini_supports_fallback_include_directories_key() {
     assert!(args.contains(&"/tmp/fallback".to_string()));
 }
 
+#[cfg(unix)]
+#[test]
+fn test_build_command_gemini_includes_external_instruction_symlink_target_directory() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let shared = tempfile::tempdir().expect("shared tempdir");
+    let shared_rules = shared.path().join("rules");
+    std::fs::create_dir_all(&shared_rules).expect("create shared rules dir");
+    let shared_agents = shared_rules.join("AGENTS.md");
+    std::fs::write(&shared_agents, "shared agent rules").expect("write shared AGENTS.md");
+
+    std::os::unix::fs::symlink(&shared_agents, workspace.path().join("AGENTS.md"))
+        .expect("link AGENTS.md");
+    std::os::unix::fs::symlink("AGENTS.md", workspace.path().join("GEMINI.md"))
+        .expect("link GEMINI.md -> AGENTS.md");
+
+    let mut session = make_test_session();
+    session.project_path = workspace.path().to_string_lossy().to_string();
+
+    let (cmd, stdin_data) = exec.build_command("run review", None, &session, None);
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+    let expected_external_parent = std::fs::canonicalize(&shared_rules)
+        .unwrap_or_else(|_| shared_rules.clone())
+        .to_string_lossy()
+        .to_string();
+
+    assert!(
+        args.contains(&workspace.path().to_string_lossy().to_string()),
+        "Expected workspace root in include directories"
+    );
+    assert!(
+        args.contains(&expected_external_parent),
+        "Expected external symlink target parent in include directories"
+    );
+}
+
 #[test]
 fn test_build_command_gemini_auto_includes_prompt_absolute_path_parent() {
     let exec = Executor::GeminiCli {

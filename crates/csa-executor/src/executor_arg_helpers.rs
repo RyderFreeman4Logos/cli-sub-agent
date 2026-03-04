@@ -7,6 +7,7 @@ const GEMINI_INCLUDE_DIRS_ENV_KEYS: &[&str] = &[
     "CSA_GEMINI_INCLUDE_DIRECTORIES",
     "GEMINI_INCLUDE_DIRECTORIES",
 ];
+const GEMINI_CONTEXT_SYMLINK_FILES: &[&str] = &["GEMINI.md", "AGENTS.md", "CLAUDE.md"];
 
 /// `"default"` means "delegate model routing to gemini-cli", so omit `-m`.
 pub(crate) fn effective_gemini_model_override(model_override: &Option<String>) -> Option<&str> {
@@ -33,6 +34,7 @@ pub(crate) fn gemini_include_directories(
 
     if let Some(dir) = execution_dir {
         push_unique_directory_string(&mut directories, dir.to_string_lossy().as_ref());
+        append_gemini_context_symlink_target_dirs(&mut directories, dir);
     }
 
     if let Some(env) = extra_env {
@@ -68,6 +70,33 @@ pub(crate) fn gemini_include_directories(
     }
 
     directories
+}
+
+fn append_gemini_context_symlink_target_dirs(directories: &mut Vec<String>, execution_dir: &Path) {
+    let canonical_execution_dir =
+        fs::canonicalize(execution_dir).unwrap_or_else(|_| execution_dir.to_path_buf());
+
+    for file_name in GEMINI_CONTEXT_SYMLINK_FILES {
+        let candidate = execution_dir.join(file_name);
+        let Ok(metadata) = fs::symlink_metadata(&candidate) else {
+            continue;
+        };
+        if !metadata.file_type().is_symlink() {
+            continue;
+        }
+
+        let Ok(resolved) = fs::canonicalize(&candidate) else {
+            continue;
+        };
+        let Some(parent) = resolved.parent() else {
+            continue;
+        };
+        if parent.starts_with(&canonical_execution_dir) {
+            continue;
+        }
+
+        push_unique_directory_string(directories, parent.to_string_lossy().as_ref());
+    }
 }
 
 pub(crate) fn append_gemini_include_directories_args(cmd: &mut Command, directories: &[String]) {
