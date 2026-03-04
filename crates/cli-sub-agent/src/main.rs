@@ -11,6 +11,7 @@ mod debate_cmd;
 mod debate_cmd_output;
 mod debate_errors;
 mod doctor;
+mod edit_restriction_guard;
 mod error_hints;
 mod gc;
 mod mcp_hub;
