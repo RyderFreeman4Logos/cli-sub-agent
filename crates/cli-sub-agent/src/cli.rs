@@ -156,6 +156,10 @@ pub enum Commands {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         idle_timeout: Option<u64>,
 
+        /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
+        #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+        timeout: Option<u64>,
+
         /// Disable idle-timeout killing (run until process exits or wall-clock timeout fires)
         #[arg(long, conflicts_with = "idle_timeout")]
         no_idle_timeout: bool,

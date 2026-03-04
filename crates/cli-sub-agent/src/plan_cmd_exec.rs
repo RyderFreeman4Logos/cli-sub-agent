@@ -153,6 +153,7 @@ pub(super) async fn execute_csa_step(
             idle_timeout_seconds,
             None,
             None,
+            None,
         )
     };
     let result = match execute_once(session_arg.clone()).await {

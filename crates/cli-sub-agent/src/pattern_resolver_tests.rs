@@ -43,6 +43,58 @@ fn write_overlay(path: &Path, content: &str) {
     fs::write(path, content).unwrap();
 }
 
+/// Normalize a path for assertions across platforms.
+///
+/// On macOS, temp directories may be reported as `/var/...` while canonical
+/// resolution yields `/private/var/...`. We canonicalize the longest existing
+/// prefix, then re-append the non-existing tail so logical paths compare equal.
+fn normalize_path_for_compare(path: &Path) -> std::path::PathBuf {
+    let mut existing_prefix = path.to_path_buf();
+    let mut tail = Vec::new();
+    while !existing_prefix.exists() {
+        let Some(name) = existing_prefix.file_name() else {
+            break;
+        };
+        tail.push(name.to_os_string());
+        let Some(parent) = existing_prefix.parent() else {
+            break;
+        };
+        existing_prefix = parent.to_path_buf();
+    }
+
+    let mut normalized = existing_prefix
+        .canonicalize()
+        .unwrap_or_else(|_| existing_prefix.clone());
+    for segment in tail.iter().rev() {
+        normalized.push(segment);
+    }
+    normalized
+}
+
+fn path_equivalent(lhs: &Path, rhs: &Path) -> bool {
+    normalize_path_for_compare(lhs) == normalize_path_for_compare(rhs)
+}
+
+fn assert_paths_include(paths: &[std::path::PathBuf], expected: &Path, msg: &str) {
+    assert!(
+        paths
+            .iter()
+            .any(|candidate| path_equivalent(candidate, expected)),
+        "{msg}. expected={}, candidates={paths:?}",
+        expected.display()
+    );
+}
+
+fn assert_paths_exclude(paths: &[std::path::PathBuf], expected: &Path, msg: &str) {
+    assert!(
+        !paths
+            .iter()
+            .any(|candidate| path_equivalent(candidate, expected)),
+        "{msg}. forbidden={}, candidates={paths:?}",
+        expected.display()
+    );
+}
+
 // ------------------------------------------------------------------
 // Resolution tests
 // ------------------------------------------------------------------
@@ -199,13 +251,15 @@ fn search_paths_include_superproject_roots_for_submodule_project_root() {
     .unwrap();
 
     let paths = search_paths_with_store("csa-review", &submodule_root, None);
-    assert!(
-        paths.contains(&tmp.path().join(".csa").join("patterns").join("csa-review")),
-        "expected superproject .csa/patterns path in resolver candidates"
+    assert_paths_include(
+        &paths,
+        &tmp.path().join(".csa").join("patterns").join("csa-review"),
+        "expected superproject .csa/patterns path in resolver candidates",
     );
-    assert!(
-        paths.contains(&tmp.path().join("patterns").join("csa-review")),
-        "expected superproject patterns/ path in resolver candidates"
+    assert_paths_include(
+        &paths,
+        &tmp.path().join("patterns").join("csa-review"),
+        "expected superproject patterns/ path in resolver candidates",
     );
 }
 
@@ -231,23 +285,24 @@ fn search_paths_include_immediate_parent_for_nested_submodule_project_root() {
     .unwrap();
 
     let paths = search_paths_with_store("csa-review", &inner_root, None);
-    assert!(
-        paths.contains(
-            &tmp.path()
-                .join("outer")
-                .join(".csa")
-                .join("patterns")
-                .join("csa-review")
-        ),
-        "expected immediate parent submodule .csa/patterns path in resolver candidates"
+    assert_paths_include(
+        &paths,
+        &tmp.path()
+            .join("outer")
+            .join(".csa")
+            .join("patterns")
+            .join("csa-review"),
+        "expected immediate parent submodule .csa/patterns path in resolver candidates",
     );
-    assert!(
-        paths.contains(&tmp.path().join("outer").join("patterns").join("csa-review")),
-        "expected immediate parent submodule patterns path in resolver candidates"
+    assert_paths_include(
+        &paths,
+        &tmp.path().join("outer").join("patterns").join("csa-review"),
+        "expected immediate parent submodule patterns path in resolver candidates",
     );
-    assert!(
-        !paths.contains(&tmp.path().join(".csa").join("patterns").join("csa-review")),
-        "must not skip immediate parent and jump straight to top-level root for nested submodule layout"
+    assert_paths_exclude(
+        &paths,
+        &tmp.path().join(".csa").join("patterns").join("csa-review"),
+        "must not skip immediate parent and jump straight to top-level root for nested submodule layout",
     );
 }
 
@@ -286,22 +341,23 @@ fn search_paths_include_superproject_roots_for_worktree_submodule_project_root()
     .unwrap();
 
     let paths = search_paths_with_store("csa-review", &submodule_root, None);
-    assert!(
-        paths.contains(
-            &worktree_root
-                .join(".csa")
-                .join("patterns")
-                .join("csa-review")
-        ),
-        "expected superproject .csa/patterns path in resolver candidates for worktree layout"
+    assert_paths_include(
+        &paths,
+        &worktree_root
+            .join(".csa")
+            .join("patterns")
+            .join("csa-review"),
+        "expected superproject .csa/patterns path in resolver candidates for worktree layout",
     );
-    assert!(
-        paths.contains(&worktree_root.join("patterns").join("csa-review")),
-        "expected superproject patterns path in resolver candidates for worktree layout"
+    assert_paths_include(
+        &paths,
+        &worktree_root.join("patterns").join("csa-review"),
+        "expected superproject patterns path in resolver candidates for worktree layout",
     );
-    assert!(
-        !paths.contains(&main_root.join(".csa").join("patterns").join("csa-review")),
-        "must not fall back to main repository root for worktree submodule layout"
+    assert_paths_exclude(
+        &paths,
+        &main_root.join(".csa").join("patterns").join("csa-review"),
+        "must not fall back to main repository root for worktree submodule layout",
     );
 }
 
@@ -322,18 +378,18 @@ fn search_paths_do_not_include_main_root_for_plain_worktree_project_root() {
     .unwrap();
 
     let paths = search_paths_with_store("csa-review", &worktree_root, None);
-    assert!(
-        paths.contains(
-            &worktree_root
-                .join(".csa")
-                .join("patterns")
-                .join("csa-review")
-        ),
-        "expected current worktree root in resolver candidates"
+    assert_paths_include(
+        &paths,
+        &worktree_root
+            .join(".csa")
+            .join("patterns")
+            .join("csa-review"),
+        "expected current worktree root in resolver candidates",
     );
-    assert!(
-        !paths.contains(&main_root.join(".csa").join("patterns").join("csa-review")),
-        "plain linked worktree must not be treated as submodule lookup context"
+    assert_paths_exclude(
+        &paths,
+        &main_root.join(".csa").join("patterns").join("csa-review"),
+        "plain linked worktree must not be treated as submodule lookup context",
     );
 }
 

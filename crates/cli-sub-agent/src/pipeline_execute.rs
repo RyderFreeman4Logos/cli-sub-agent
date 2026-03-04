@@ -3,12 +3,15 @@
 use anyhow::{Context, Result};
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 use tracing::warn;
 
 use csa_executor::{ExecuteOptions, Executor, SessionConfig, TransportResult};
 use csa_session::{MetaSessionState, SessionResult, ToolState, save_result, save_session};
 
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+
+const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn execute_transport_with_signal(
@@ -22,6 +25,7 @@ pub(crate) async fn execute_transport_with_signal(
     project_root: &Path,
     cleanup_guard: &mut Option<SessionCleanupGuard>,
     execution_start_time: chrono::DateTime<chrono::Utc>,
+    wall_timeout: Option<Duration>,
 ) -> Result<TransportResult> {
     let exec_result = {
         #[cfg(unix)]
@@ -32,56 +36,60 @@ pub(crate) async fn execute_transport_with_signal(
             let mut sigint =
                 tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())
                     .context("Failed to register SIGINT handler")?;
+            let timeout_future = async {
+                if let Some(timeout) = wall_timeout {
+                    tokio::time::sleep(timeout).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            };
+            tokio::pin!(timeout_future);
             tokio::select! {
                 _ = sigterm.recv() => {
-                    let interrupted_at = chrono::Utc::now();
-                    let mut interrupted_session = session.clone();
-                    interrupted_session.termination_reason = Some("sigterm".to_string());
-                    let interrupted_result = SessionResult {
-                        status: "interrupted".to_string(),
-                        exit_code: 143,
-                        summary: "Execution interrupted by SIGTERM".to_string(),
-                        tool: executor.tool_name().to_string(),
-                        started_at: execution_start_time,
-                        completed_at: interrupted_at,
-                        events_count: 0,
-                        artifacts: Vec::new(),
-                    };
-                    if let Err(e) = save_result(project_root, &session.meta_session_id, &interrupted_result) {
-                        warn!("Failed to save interrupted session result: {}", e);
-                    }
-                    if let Err(e) = save_session(&interrupted_session) {
-                        warn!("Failed to save session state after SIGTERM: {}", e);
-                    }
-                    if let Some(cg) = cleanup_guard {
-                        cg.defuse();
-                    }
+                    record_session_termination(
+                        project_root,
+                        session,
+                        executor.tool_name(),
+                        execution_start_time,
+                        "sigterm",
+                        "interrupted",
+                        143,
+                        "Execution interrupted by SIGTERM",
+                        cleanup_guard,
+                    );
                     return Err(anyhow::anyhow!("Execution interrupted by SIGTERM"));
                 }
                 _ = sigint.recv() => {
-                    let interrupted_at = chrono::Utc::now();
-                    let mut interrupted_session = session.clone();
-                    interrupted_session.termination_reason = Some("sigint".to_string());
-                    let interrupted_result = SessionResult {
-                        status: "interrupted".to_string(),
-                        exit_code: 130,
-                        summary: "Execution interrupted by SIGINT".to_string(),
-                        tool: executor.tool_name().to_string(),
-                        started_at: execution_start_time,
-                        completed_at: interrupted_at,
-                        events_count: 0,
-                        artifacts: Vec::new(),
-                    };
-                    if let Err(e) = save_result(project_root, &session.meta_session_id, &interrupted_result) {
-                        warn!("Failed to save interrupted session result: {}", e);
-                    }
-                    if let Err(e) = save_session(&interrupted_session) {
-                        warn!("Failed to save session state after SIGINT: {}", e);
-                    }
-                    if let Some(cg) = cleanup_guard {
-                        cg.defuse();
-                    }
+                    record_session_termination(
+                        project_root,
+                        session,
+                        executor.tool_name(),
+                        execution_start_time,
+                        "sigint",
+                        "interrupted",
+                        130,
+                        "Execution interrupted by SIGINT",
+                        cleanup_guard,
+                    );
                     return Err(anyhow::anyhow!("Execution interrupted by SIGINT"));
+                }
+                _ = &mut timeout_future => {
+                    let timeout_secs = wall_timeout.map_or(1, |timeout| timeout.as_secs().max(1));
+                    let summary = format!("Execution timed out after {timeout_secs}s");
+                    record_session_termination(
+                        project_root,
+                        session,
+                        executor.tool_name(),
+                        execution_start_time,
+                        "timeout",
+                        "timed_out",
+                        RUN_TIMEOUT_EXIT_CODE,
+                        &summary,
+                        cleanup_guard,
+                    );
+                    return Err(anyhow::anyhow!(
+                        "Execution interrupted by WALL_TIMEOUT timeout_secs={timeout_secs}"
+                    ));
                 }
                 exec = executor.execute_with_transport(
                     effective_prompt,
@@ -95,16 +103,52 @@ pub(crate) async fn execute_transport_with_signal(
         }
         #[cfg(not(unix))]
         {
-            executor
-                .execute_with_transport(
-                    effective_prompt,
-                    tool_state,
-                    session,
-                    merged_env_ref,
-                    execute_options,
-                    session_config,
+            if let Some(timeout) = wall_timeout {
+                match tokio::time::timeout(
+                    timeout,
+                    executor.execute_with_transport(
+                        effective_prompt,
+                        tool_state,
+                        session,
+                        merged_env_ref,
+                        execute_options,
+                        session_config,
+                    ),
                 )
                 .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        let timeout_secs = timeout.as_secs().max(1);
+                        let summary = format!("Execution timed out after {timeout_secs}s");
+                        record_session_termination(
+                            project_root,
+                            session,
+                            executor.tool_name(),
+                            execution_start_time,
+                            "timeout",
+                            "timed_out",
+                            RUN_TIMEOUT_EXIT_CODE,
+                            &summary,
+                            cleanup_guard,
+                        );
+                        return Err(anyhow::anyhow!(
+                            "Execution interrupted by WALL_TIMEOUT timeout_secs={timeout_secs}"
+                        ));
+                    }
+                }
+            } else {
+                executor
+                    .execute_with_transport(
+                        effective_prompt,
+                        tool_state,
+                        session,
+                        merged_env_ref,
+                        execute_options,
+                        session_config,
+                    )
+                    .await
+            }
         }
     };
 
@@ -122,5 +166,47 @@ pub(crate) async fn execute_transport_with_signal(
             }
             Err(e).context("Failed to execute tool via transport")
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn record_session_termination(
+    project_root: &Path,
+    session: &MetaSessionState,
+    tool_name: &str,
+    execution_start_time: chrono::DateTime<chrono::Utc>,
+    termination_reason: &str,
+    status: &str,
+    exit_code: i32,
+    summary: &str,
+    cleanup_guard: &mut Option<SessionCleanupGuard>,
+) {
+    let completed_at = chrono::Utc::now();
+    let mut updated_session = session.clone();
+    updated_session.termination_reason = Some(termination_reason.to_string());
+    let updated_result = SessionResult {
+        status: status.to_string(),
+        exit_code,
+        summary: summary.to_string(),
+        tool: tool_name.to_string(),
+        started_at: execution_start_time,
+        completed_at,
+        events_count: 0,
+        artifacts: Vec::new(),
+    };
+    if let Err(e) = save_result(project_root, &session.meta_session_id, &updated_result) {
+        warn!(
+            "Failed to save session result after {}: {}",
+            termination_reason, e
+        );
+    }
+    if let Err(e) = save_session(&updated_session) {
+        warn!(
+            "Failed to save session state after {}: {}",
+            termination_reason, e
+        );
+    }
+    if let Some(cg) = cleanup_guard {
+        cg.defuse();
     }
 }
