@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use super::StreamMode;
 use std::time::{Duration, Instant};
 
@@ -172,6 +174,40 @@ pub(super) fn failure_summary(stdout: &str, stderr: &str, exit_code: i32) -> Str
 
 pub(super) fn sanitize_opaque_object_payloads(text: &str) -> String {
     replace_opaque_object_payload(text, OPAQUE_OBJECT_REPLACEMENT)
+}
+
+/// Best-effort tail sanitization for spool files.
+///
+/// Rewrites only bytes appended during the current run (`start_offset..`) so
+/// historical spool content from previous turns is preserved.
+pub(super) fn sanitize_spool_tail(path: &Path, start_offset: u64) -> std::io::Result<()> {
+    use std::fs::OpenOptions;
+    use std::io::{Read, Seek, SeekFrom, Write};
+
+    let mut file = OpenOptions::new().read(true).write(true).open(path)?;
+    let file_len = file.metadata()?.len();
+    if file_len <= start_offset {
+        return Ok(());
+    }
+
+    file.seek(SeekFrom::Start(start_offset))?;
+    let mut tail_bytes = Vec::new();
+    file.read_to_end(&mut tail_bytes)?;
+    let tail_text = String::from_utf8_lossy(&tail_bytes);
+    if !contains_opaque_object_payload(&tail_text) {
+        return Ok(());
+    }
+
+    let sanitized_tail = sanitize_opaque_object_payloads(&tail_text);
+    if sanitized_tail == tail_text {
+        return Ok(());
+    }
+
+    file.set_len(start_offset)?;
+    file.seek(SeekFrom::Start(start_offset))?;
+    file.write_all(sanitized_tail.as_bytes())?;
+    file.flush()?;
+    Ok(())
 }
 
 /// Return the last non-empty line from the given text, or `""` if none.
