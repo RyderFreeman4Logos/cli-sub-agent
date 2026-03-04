@@ -615,7 +615,7 @@ async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
     let mut cmd = Command::new("bash");
     cmd.args([
         "-c",
-        "echo 'stdout payload:[object Object]'; echo 'An unexpected critical error occurred:[object Object]' >&2; exit 1",
+        "echo 'code: 404'; echo 'An unexpected critical error occurred:[object Object]' >&2; exit 1",
     ]);
 
     let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
@@ -639,6 +639,13 @@ async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
         "captured stderr should not include raw opaque marker"
     );
     assert!(
+        result
+            .stderr_output
+            .contains("resolved failure detail: code: 404"),
+        "captured stderr should append actionable failure detail"
+    );
+    assert_eq!(result.summary, "code: 404");
+    assert!(
         !result
             .output
             .to_ascii_lowercase()
@@ -652,8 +659,8 @@ async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
         "existing output spool prefix should be preserved"
     );
     assert!(
-        output_spool.contains("(opaque error payload)"),
-        "output spool should include sanitized opaque marker"
+        output_spool.contains("code: 404"),
+        "output spool should preserve actionable stdout payload"
     );
     assert!(
         !output_spool
@@ -672,11 +679,20 @@ async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
         "stderr spool should include sanitized opaque marker"
     );
     assert!(
+        stderr_spool.contains("resolved failure detail: code: 404"),
+        "stderr spool should append actionable failure detail"
+    );
+    assert!(
         !stderr_spool
             .to_ascii_lowercase()
             .contains("[object object]"),
         "stderr spool should not keep raw opaque marker"
     );
+    let stderr_tail = stderr_spool
+        .lines()
+        .last()
+        .expect("stderr spool should have at least one line");
+    assert_eq!(stderr_tail, "resolved failure detail: code: 404");
 }
 
 #[tokio::test]

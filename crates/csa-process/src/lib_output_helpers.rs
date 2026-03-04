@@ -9,6 +9,7 @@ const WORKSPACE_BOUNDARY_PATTERN_A: &str = "path not in workspace";
 const WORKSPACE_BOUNDARY_PATTERN_B: &str = "outside the allowed workspace directories";
 const OPAQUE_OBJECT_PATTERN: &str = "[object object]";
 const OPAQUE_OBJECT_REPLACEMENT: &str = "(opaque error payload)";
+const OPAQUE_PAYLOAD_MARKER: &str = "(opaque error payload)";
 
 /// Write a raw byte chunk to the spool file and flush.
 ///
@@ -176,11 +177,45 @@ pub(super) fn sanitize_opaque_object_payloads(text: &str) -> String {
     replace_opaque_object_payload(text, OPAQUE_OBJECT_REPLACEMENT)
 }
 
+pub(super) fn resolve_actionable_failure_detail(summary: &str, exit_code: i32) -> String {
+    let trimmed = summary.trim();
+    if trimmed.is_empty() || is_opaque_failure_detail(trimmed) {
+        return format!("exit code {exit_code}");
+    }
+    trimmed.to_string()
+}
+
+pub(super) fn append_actionable_detail_for_opaque_payload(text: &str, detail: &str) -> String {
+    if detail.trim().is_empty() {
+        return text.to_string();
+    }
+    if !contains_opaque_payload_marker(text) {
+        return text.to_string();
+    }
+
+    let annotation = format!("resolved failure detail: {}", detail.trim());
+    if text.lines().any(|line| line.trim() == annotation) {
+        return text.to_string();
+    }
+
+    let mut output = text.to_string();
+    if !output.is_empty() && !output.ends_with('\n') {
+        output.push('\n');
+    }
+    output.push_str(&annotation);
+    output.push('\n');
+    output
+}
+
 /// Best-effort tail sanitization for spool files.
 ///
 /// Rewrites only bytes appended during the current run (`start_offset..`) so
 /// historical spool content from previous turns is preserved.
-pub(super) fn sanitize_spool_tail(path: &Path, start_offset: u64) -> std::io::Result<()> {
+pub(super) fn sanitize_spool_tail(
+    path: &Path,
+    start_offset: u64,
+    actionable_detail: Option<&str>,
+) -> std::io::Result<()> {
     use std::fs::OpenOptions;
     use std::io::{Read, Seek, SeekFrom, Write};
 
@@ -194,11 +229,14 @@ pub(super) fn sanitize_spool_tail(path: &Path, start_offset: u64) -> std::io::Re
     let mut tail_bytes = Vec::new();
     file.read_to_end(&mut tail_bytes)?;
     let tail_text = String::from_utf8_lossy(&tail_bytes);
-    if !contains_opaque_object_payload(&tail_text) {
+    if !contains_opaque_object_payload(&tail_text) && !contains_opaque_payload_marker(&tail_text) {
         return Ok(());
     }
 
-    let sanitized_tail = sanitize_opaque_object_payloads(&tail_text);
+    let mut sanitized_tail = sanitize_opaque_object_payloads(&tail_text);
+    if let Some(detail) = actionable_detail {
+        sanitized_tail = append_actionable_detail_for_opaque_payload(&sanitized_tail, detail);
+    }
     if sanitized_tail == tail_text {
         return Ok(());
     }
@@ -274,6 +312,15 @@ fn last_opaque_failure_line_with_context(text: &str) -> Option<String> {
 
 fn contains_opaque_object_payload(text: &str) -> bool {
     text.to_ascii_lowercase().contains(OPAQUE_OBJECT_PATTERN)
+}
+
+fn contains_opaque_payload_marker(text: &str) -> bool {
+    text.to_ascii_lowercase().contains(OPAQUE_PAYLOAD_MARKER)
+}
+
+fn is_opaque_failure_detail(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.contains("opaque error payload") || lower.contains("opaque tool error payload")
 }
 
 fn replace_opaque_object_payload(text: &str, replacement: &str) -> String {

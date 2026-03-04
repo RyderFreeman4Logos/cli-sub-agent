@@ -18,9 +18,10 @@ mod tool_liveness;
 #[cfg(test)]
 use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
 use output_helpers::{
-    accumulate_and_flush_lines, accumulate_and_flush_stderr, extract_summary, failure_summary,
-    flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat, resolve_heartbeat_interval,
-    sanitize_opaque_object_payloads, sanitize_spool_tail, spool_chunk,
+    accumulate_and_flush_lines, accumulate_and_flush_stderr,
+    append_actionable_detail_for_opaque_payload, extract_summary, failure_summary, flush_line_buf,
+    flush_stderr_buf, maybe_emit_heartbeat, resolve_actionable_failure_detail,
+    resolve_heartbeat_interval, sanitize_opaque_object_payloads, sanitize_spool_tail, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
@@ -684,7 +685,9 @@ pub async fn wait_and_capture_with_idle_timeout(
         failure_summary(&output, &stderr_output, exit_code)
     };
     let output = sanitize_opaque_object_payloads(&output);
-    let stderr_output = sanitize_opaque_object_payloads(&stderr_output);
+    let mut stderr_output = sanitize_opaque_object_payloads(&stderr_output);
+    let actionable_detail = resolve_actionable_failure_detail(&summary, exit_code);
+    stderr_output = append_actionable_detail_for_opaque_payload(&stderr_output, &actionable_detail);
 
     // Ensure spool artifacts do not keep raw opaque payload markers after a
     // successful capture cycle. Preserve previous turns by rewriting only the
@@ -692,7 +695,7 @@ pub async fn wait_and_capture_with_idle_timeout(
     drop(spool_file);
     drop(stderr_spool_file);
     if let Some((path, start_offset)) = output_spool_target
-        && let Err(e) = sanitize_spool_tail(&path, start_offset)
+        && let Err(e) = sanitize_spool_tail(&path, start_offset, None)
     {
         warn!(
             path = %path.display(),
@@ -701,7 +704,7 @@ pub async fn wait_and_capture_with_idle_timeout(
         );
     }
     if let Some((path, start_offset)) = stderr_spool_target
-        && let Err(e) = sanitize_spool_tail(&path, start_offset)
+        && let Err(e) = sanitize_spool_tail(&path, start_offset, Some(&actionable_detail))
     {
         warn!(
             path = %path.display(),
