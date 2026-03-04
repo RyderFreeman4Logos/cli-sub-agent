@@ -678,6 +678,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
         effective_prompt = executor.apply_restrictions(&effective_prompt, false);
     }
+    let edit_guard = if !can_edit {
+        crate::edit_restriction_guard::maybe_capture_tracked_file_guard(project_root)?
+    } else {
+        None
+    };
 
     // Resolve tool state for session resume.
     let tool_state = session
@@ -849,6 +854,33 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         result_file_cleared,
         &mut result,
     );
+    if let Some(guard) = edit_guard
+        && let Some(violation) = guard.enforce_and_restore()?
+    {
+        let violation_summary = violation.summary();
+        let violation_details = violation.detail_message();
+        let previous_summary = result.summary.clone();
+        warn!(
+            tool = %executor.tool_name(),
+            modified = violation.modified_paths.len(),
+            restored = violation.restored_paths.len(),
+            "Detected and reverted edits to existing tracked files under edit restriction"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        if !previous_summary.trim().is_empty() {
+            result.stderr_output.push_str(&format!(
+                "Original summary before restriction guard: {previous_summary}\n"
+            ));
+        }
+        result.stderr_output.push_str(&violation_details);
+        if !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.summary = violation_summary;
+        result.exit_code = 1;
+    }
 
     // Delegate post-execution processing (state updates, persistence, hooks, memory).
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
