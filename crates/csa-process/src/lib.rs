@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -20,7 +20,7 @@ use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
 use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr, extract_summary, failure_summary,
     flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat, resolve_heartbeat_interval,
-    sanitize_opaque_object_payloads, spool_chunk,
+    sanitize_opaque_object_payloads, sanitize_spool_tail, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
@@ -393,22 +393,42 @@ pub async fn wait_and_capture_with_idle_timeout(
     let stderr = child.stderr.take();
 
     // Open spool file for incremental crash-safe output.
-    let mut spool_file = output_spool.and_then(|path| {
+    let mut spool_file = None;
+    let mut output_spool_target: Option<(PathBuf, u64)> = None;
+    if let Some(path) = output_spool {
         use std::fs::OpenOptions;
         match OpenOptions::new().create(true).append(true).open(path) {
-            Ok(f) => Some(f),
+            Ok(f) => {
+                let start_offset = f.metadata().map(|meta| meta.len()).unwrap_or(0);
+                output_spool_target = Some((path.to_path_buf(), start_offset));
+                spool_file = Some(f);
+            }
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "Failed to open output spool file");
-                None
             }
         }
-    });
+    }
     let session_dir = output_spool.and_then(Path::parent);
-    let mut stderr_spool_file = session_dir.and_then(|dir| {
+    let mut stderr_spool_file = None;
+    let mut stderr_spool_target: Option<(PathBuf, u64)> = None;
+    if let Some(dir) = session_dir {
         use std::fs::OpenOptions;
         let path = dir.join("stderr.log");
-        OpenOptions::new().create(true).append(true).open(path).ok()
-    });
+        match OpenOptions::new().create(true).append(true).open(&path) {
+            Ok(f) => {
+                let start_offset = f.metadata().map(|meta| meta.len()).unwrap_or(0);
+                stderr_spool_target = Some((path, start_offset));
+                stderr_spool_file = Some(f);
+            }
+            Err(e) => {
+                warn!(
+                    path = %path.display(),
+                    error = %e,
+                    "Failed to open stderr spool file"
+                );
+            }
+        }
+    }
 
     // Use byte-level reads instead of read_line() to detect partial output
     // (e.g., progress bars with \r, streaming dots without \n). This prevents
@@ -665,6 +685,30 @@ pub async fn wait_and_capture_with_idle_timeout(
     };
     let output = sanitize_opaque_object_payloads(&output);
     let stderr_output = sanitize_opaque_object_payloads(&stderr_output);
+
+    // Ensure spool artifacts do not keep raw opaque payload markers after a
+    // successful capture cycle. Preserve previous turns by rewriting only the
+    // segment appended during this run.
+    drop(spool_file);
+    drop(stderr_spool_file);
+    if let Some((path, start_offset)) = output_spool_target
+        && let Err(e) = sanitize_spool_tail(&path, start_offset)
+    {
+        warn!(
+            path = %path.display(),
+            error = %e,
+            "Failed to sanitize output spool tail"
+        );
+    }
+    if let Some((path, start_offset)) = stderr_spool_target
+        && let Err(e) = sanitize_spool_tail(&path, start_offset)
+    {
+        warn!(
+            path = %path.display(),
+            error = %e,
+            "Failed to sanitize stderr spool tail"
+        );
+    }
 
     Ok(ExecutionResult {
         output,

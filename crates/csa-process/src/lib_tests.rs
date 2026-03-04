@@ -605,6 +605,81 @@ async fn test_failed_command_sanitizes_opaque_stdout_payload() {
 }
 
 #[tokio::test]
+async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output_log = tmp.path().join("output.log");
+    let stderr_log = tmp.path().join("stderr.log");
+    std::fs::write(&output_log, "legacy stdout line\n").expect("seed output log");
+    std::fs::write(&stderr_log, "legacy stderr line\n").expect("seed stderr log");
+
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        "echo 'stdout payload:[object Object]'; echo 'An unexpected critical error occurred:[object Object]' >&2; exit 1",
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let result = wait_and_capture_with_idle_timeout(
+        child,
+        StreamMode::BufferOnly,
+        Duration::from_secs(DEFAULT_IDLE_TIMEOUT_SECS),
+        Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
+        Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
+        Some(&output_log),
+    )
+    .await
+    .expect("Failed to wait");
+
+    assert_eq!(result.exit_code, 1);
+    assert!(
+        !result
+            .stderr_output
+            .to_ascii_lowercase()
+            .contains("[object object]"),
+        "captured stderr should not include raw opaque marker"
+    );
+    assert!(
+        !result
+            .output
+            .to_ascii_lowercase()
+            .contains("[object object]"),
+        "captured stdout should not include raw opaque marker"
+    );
+
+    let output_spool = std::fs::read_to_string(&output_log).expect("read output spool");
+    assert!(
+        output_spool.starts_with("legacy stdout line\n"),
+        "existing output spool prefix should be preserved"
+    );
+    assert!(
+        output_spool.contains("(opaque error payload)"),
+        "output spool should include sanitized opaque marker"
+    );
+    assert!(
+        !output_spool
+            .to_ascii_lowercase()
+            .contains("[object object]"),
+        "output spool should not keep raw opaque marker"
+    );
+
+    let stderr_spool = std::fs::read_to_string(&stderr_log).expect("read stderr spool");
+    assert!(
+        stderr_spool.starts_with("legacy stderr line\n"),
+        "existing stderr spool prefix should be preserved"
+    );
+    assert!(
+        stderr_spool.contains("(opaque error payload)"),
+        "stderr spool should include sanitized opaque marker"
+    );
+    assert!(
+        !stderr_spool
+            .to_ascii_lowercase()
+            .contains("[object object]"),
+        "stderr spool should not keep raw opaque marker"
+    );
+}
+
+#[tokio::test]
 async fn test_failed_command_exit_code_only() {
     // Command that produces no output and exits non-zero
     let mut cmd = Command::new("bash");
