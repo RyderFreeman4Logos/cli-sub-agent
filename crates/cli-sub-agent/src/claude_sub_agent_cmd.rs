@@ -86,6 +86,7 @@ pub(crate) async fn handle_claude_sub_agent(
         None, // claude-sub-agent does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
+        None, // claude-sub-agent does not set wall-clock timeout
         None, // claude-sub-agent does not use memory injection
         Some(&global_config),
     )

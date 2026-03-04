@@ -272,6 +272,17 @@ fn test_cli_memory_query_flag_parses() {
 }
 
 #[test]
+fn test_cli_timeout_flag_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--timeout", "600", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { timeout, .. } => {
+            assert_eq!(timeout, Some(600));
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
 fn test_cli_fork_call_parses_without_return_to() {
     let cli = try_parse_cli(&["csa", "run", "--fork-call", "task"]).unwrap();
     match cli.command {
@@ -457,4 +468,32 @@ fn session_matches_interrupted_skill_requires_signal_and_skill_tag() {
     session.termination_reason = Some("sigterm".to_string());
     session.description = Some(skill_session_description("mktd"));
     assert!(!session_matches_interrupted_skill(&session, "dev2merge"));
+}
+
+#[test]
+fn resolve_run_timeout_seconds_defaults_for_pr_codex_bot_skill() {
+    assert_eq!(
+        resolve_run_timeout_seconds(None, Some("pr-codex-bot")),
+        Some(DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS)
+    );
+}
+
+#[test]
+fn resolve_run_timeout_seconds_prefers_cli_override() {
+    assert_eq!(
+        resolve_run_timeout_seconds(Some(900), Some("pr-codex-bot")),
+        Some(900)
+    );
+}
+
+#[test]
+fn wall_timeout_seconds_from_error_parses_marker() {
+    let err = anyhow::anyhow!("Execution interrupted by WALL_TIMEOUT timeout_secs=1234");
+    assert_eq!(wall_timeout_seconds_from_error(&err), Some(1234));
+}
+
+#[test]
+fn wall_timeout_seconds_from_error_returns_none_without_marker() {
+    let err = anyhow::anyhow!("Execution interrupted by SIGTERM");
+    assert_eq!(wall_timeout_seconds_from_error(&err), None);
 }

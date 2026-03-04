@@ -7,6 +7,7 @@
 
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
@@ -320,6 +321,7 @@ pub(crate) async fn execute_with_session(
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<ExecutionResult> {
@@ -338,6 +340,7 @@ pub(crate) async fn execute_with_session(
         context_load_options,
         stream_mode,
         idle_timeout_seconds,
+        wall_timeout,
         memory_injection,
         global_config,
     )
@@ -363,6 +366,7 @@ pub(crate) async fn execute_with_session_and_meta(
     context_load_options: Option<&csa_executor::ContextLoadOptions>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<SessionExecutionResult> {
@@ -762,6 +766,7 @@ pub(crate) async fn execute_with_session_and_meta(
         project_root,
         &mut cleanup_guard,
         execution_start_time,
+        wall_timeout,
     )
     .await
     .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;

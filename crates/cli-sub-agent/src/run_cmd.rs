@@ -3,7 +3,7 @@
 //! Extracted from main.rs to keep file sizes manageable.
 
 use std::path::Path;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use tempfile::TempDir;
@@ -31,6 +31,9 @@ use crate::run_cmd_tool_selection::{
 };
 use crate::run_helpers::{is_tool_binary_available, parse_tool_name};
 
+const DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS: u64 = 2400;
+const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
     tool: Option<ToolArg>,
@@ -54,6 +57,7 @@ pub(crate) async fn handle_run(
     no_failover: bool,
     wait: bool,
     idle_timeout: Option<u64>,
+    timeout: Option<u64>,
     no_idle_timeout: bool,
     no_memory: bool,
     memory_query: Option<String>,
@@ -172,6 +176,8 @@ pub(crate) async fn handle_run(
     } else {
         pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout)
     };
+    let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
+    let run_started_at = Instant::now();
 
     // 7. Resolve initial tool based on strategy
     let strategy_result = resolve_tool_by_strategy(
@@ -542,19 +548,65 @@ pub(crate) async fn handle_run(
             effective_prompt.push_str(instructions);
         }
 
+        let remaining_run_timeout =
+            resolve_remaining_run_timeout(run_timeout_seconds, run_started_at);
+        if remaining_run_timeout.is_some_and(|remaining| remaining.is_zero()) {
+            let timeout_resume_session = executed_session_id
+                .clone()
+                .or_else(|| pre_created_fork_session_id.clone())
+                .or_else(|| effective_session_arg.clone());
+            return emit_run_timeout(
+                output_format,
+                run_timeout_seconds.expect("run timeout should be present"),
+                current_tool,
+                skill.as_deref(),
+                timeout_resume_session.as_deref(),
+            );
+        }
+
         // Execute
         let exec_result = if ephemeral {
             let temp_dir = TempDir::new()?;
             info!("Ephemeral session in: {:?}", temp_dir.path());
-            executor
-                .execute_in(
-                    &effective_prompt,
-                    temp_dir.path(),
-                    extra_env.as_ref(),
-                    stream_mode,
-                    idle_timeout_seconds,
+            if let Some(timeout_duration) = remaining_run_timeout {
+                match tokio::time::timeout(
+                    timeout_duration,
+                    executor.execute_in(
+                        &effective_prompt,
+                        temp_dir.path(),
+                        extra_env.as_ref(),
+                        stream_mode,
+                        idle_timeout_seconds,
+                    ),
                 )
                 .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        let timeout_resume_session = executed_session_id
+                            .clone()
+                            .or_else(|| pre_created_fork_session_id.clone())
+                            .or_else(|| effective_session_arg.clone());
+                        return emit_run_timeout(
+                            output_format,
+                            run_timeout_seconds.expect("run timeout should be present"),
+                            current_tool,
+                            skill.as_deref(),
+                            timeout_resume_session.as_deref(),
+                        );
+                    }
+                }
+            } else {
+                executor
+                    .execute_in(
+                        &effective_prompt,
+                        temp_dir.path(),
+                        extra_env.as_ref(),
+                        stream_mode,
+                        idle_timeout_seconds,
+                    )
+                    .await
+            }
         } else {
             // Build fork-aware description and parent
             let effective_description = if let Some(ref fork_res) = fork_resolution {
@@ -591,6 +643,7 @@ pub(crate) async fn handle_run(
                 context_load_options.as_ref(),
                 stream_mode,
                 idle_timeout_seconds,
+                remaining_run_timeout,
                 Some(&memory_injection),
                 Some(&global_config),
             )
@@ -626,6 +679,21 @@ pub(crate) async fn handle_run(
         let exec_result = match exec_result {
             Ok(result) => result,
             Err(e) => {
+                if let Some(timeout_secs) =
+                    wall_timeout_seconds_from_error(&e).or(run_timeout_seconds)
+                {
+                    let interrupted_session_id = extract_meta_session_id_from_error(&e)
+                        .or_else(|| executed_session_id.clone())
+                        .or_else(|| pre_created_fork_session_id.clone())
+                        .or_else(|| effective_session_arg.clone());
+                    return emit_run_timeout(
+                        output_format,
+                        timeout_secs,
+                        current_tool,
+                        skill.as_deref(),
+                        interrupted_session_id.as_deref(),
+                    );
+                }
                 if let Some(signal_exit_code) = signal_interruption_exit_code(&e) {
                     cleanup_pre_created_fork_session(
                         &mut pre_created_fork_session_id,
@@ -828,6 +896,60 @@ pub(crate) async fn handle_run(
     Ok(result.exit_code)
 }
 
+fn resolve_run_timeout_seconds(cli_timeout: Option<u64>, skill: Option<&str>) -> Option<u64> {
+    if cli_timeout.is_some() {
+        return cli_timeout;
+    }
+    if matches!(skill, Some("pr-codex-bot")) {
+        return Some(DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS);
+    }
+    None
+}
+
+fn resolve_remaining_run_timeout(
+    run_timeout_seconds: Option<u64>,
+    run_started_at: Instant,
+) -> Option<Duration> {
+    run_timeout_seconds
+        .map(|seconds| Duration::from_secs(seconds).saturating_sub(run_started_at.elapsed()))
+}
+
+fn emit_run_timeout(
+    output_format: OutputFormat,
+    timeout_seconds: u64,
+    tool: ToolName,
+    skill: Option<&str>,
+    session_id: Option<&str>,
+) -> Result<i32> {
+    let message = format!(
+        "csa run exceeded wall-clock timeout ({}s); execution terminated",
+        timeout_seconds
+    );
+    match output_format {
+        OutputFormat::Text => {
+            if let Some(sid) = session_id {
+                let resume_hint = build_resume_hint_command(sid, tool, skill);
+                eprintln!("{message}. Resume with:\n  {resume_hint}");
+            } else {
+                eprintln!("{message}.");
+            }
+        }
+        OutputFormat::Json => {
+            let resume_hint = session_id.map(|sid| build_resume_hint_command(sid, tool, skill));
+            let payload = serde_json::json!({
+                "error": "timeout",
+                "exit_code": RUN_TIMEOUT_EXIT_CODE,
+                "timeout_seconds": timeout_seconds,
+                "session_id": session_id,
+                "resume_hint": resume_hint,
+                "message": message,
+            });
+            println!("{}", serde_json::to_string_pretty(&payload)?);
+        }
+    }
+    Ok(RUN_TIMEOUT_EXIT_CODE)
+}
+
 fn detect_effective_repo(project_root: &Path) -> Option<String> {
     let output = std::process::Command::new("git")
         .arg("-C")
@@ -876,6 +998,27 @@ fn signal_interruption_exit_code(error: &anyhow::Error) -> Option<i32> {
         }
         if message.contains("sigint") {
             return Some(130);
+        }
+    }
+    None
+}
+
+fn wall_timeout_seconds_from_error(error: &anyhow::Error) -> Option<u64> {
+    const MARKER: &str = "WALL_TIMEOUT timeout_secs=";
+    for cause in error.chain() {
+        let message = cause.to_string();
+        let Some(idx) = message.find(MARKER) else {
+            continue;
+        };
+        let suffix = &message[idx + MARKER.len()..];
+        let digits: String = suffix
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect();
+        if let Ok(value) = digits.parse::<u64>()
+            && value > 0
+        {
+            return Some(value);
         }
     }
     None
