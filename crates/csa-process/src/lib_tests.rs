@@ -482,10 +482,13 @@ fn test_failure_summary_normalizes_opaque_line_with_context() {
 #[test]
 fn test_failure_summary_opaque_marker_only_falls_back_to_explicit_message() {
     let summary = failure_summary("[object Object]\n", "", 17);
-    assert_eq!(
-        summary,
-        "opaque tool error payload ([object Object]); exit code 17"
-    );
+    assert_eq!(summary, "opaque tool error payload; exit code 17");
+}
+
+#[test]
+fn test_failure_summary_skips_structural_stdout_and_prefers_stderr() {
+    let summary = failure_summary("{\n { }\n}\n", "model not found: gemini-pro\n", 1);
+    assert_eq!(summary, "model not found: gemini-pro");
 }
 
 #[test]
@@ -527,6 +530,78 @@ async fn test_failed_command_uses_stderr_summary() {
 
     assert_eq!(result.exit_code, 1);
     assert_eq!(result.summary, "fatal: something went wrong");
+}
+
+#[tokio::test]
+async fn test_failed_command_sanitizes_opaque_stderr_payload() {
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        "echo 'An unexpected critical error occurred:[object Object]' >&2; exit 1",
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let result = wait_and_capture(child, StreamMode::BufferOnly)
+        .await
+        .expect("Failed to wait");
+
+    assert_eq!(result.exit_code, 1);
+    assert!(
+        result.stderr_output.contains("(opaque error payload)"),
+        "stderr should contain normalized opaque marker"
+    );
+    assert!(
+        !result.stderr_output.contains("[object Object]"),
+        "stderr should not expose raw opaque marker"
+    );
+}
+
+#[tokio::test]
+async fn test_failed_command_sanitizes_opaque_stderr_payload_case_insensitive() {
+    let mut cmd = Command::new("bash");
+    cmd.args([
+        "-c",
+        "echo 'An unexpected critical error occurred:[OBJECT OBJECT]' >&2; exit 1",
+    ]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let result = wait_and_capture(child, StreamMode::BufferOnly)
+        .await
+        .expect("Failed to wait");
+
+    assert_eq!(result.exit_code, 1);
+    assert!(
+        result.stderr_output.contains("(opaque error payload)"),
+        "stderr should contain normalized opaque marker"
+    );
+    assert!(
+        !result
+            .stderr_output
+            .to_ascii_lowercase()
+            .contains("[object object]"),
+        "stderr should not expose raw opaque marker in any case"
+    );
+}
+
+#[tokio::test]
+async fn test_failed_command_sanitizes_opaque_stdout_payload() {
+    let mut cmd = Command::new("bash");
+    cmd.args(["-c", "echo '[object Object]'; exit 1"]);
+
+    let child = spawn_tool(cmd, None).await.expect("Failed to spawn");
+    let result = wait_and_capture(child, StreamMode::BufferOnly)
+        .await
+        .expect("Failed to wait");
+
+    assert_eq!(result.exit_code, 1);
+    assert!(
+        result.output.contains("(opaque error payload)"),
+        "stdout should contain normalized opaque marker"
+    );
+    assert!(
+        !result.output.contains("[object Object]"),
+        "stdout should not expose raw opaque marker"
+    );
 }
 
 #[tokio::test]
