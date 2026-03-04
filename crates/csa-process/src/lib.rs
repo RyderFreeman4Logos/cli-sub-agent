@@ -20,7 +20,7 @@ use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
 use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr, extract_summary, failure_summary,
     flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat, resolve_heartbeat_interval,
-    spool_chunk,
+    sanitize_opaque_object_payloads, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
@@ -663,6 +663,8 @@ pub async fn wait_and_capture_with_idle_timeout(
     } else {
         failure_summary(&output, &stderr_output, exit_code)
     };
+    let output = sanitize_opaque_object_payloads(&output);
+    let stderr_output = sanitize_opaque_object_payloads(&stderr_output);
 
     Ok(ExecutionResult {
         output,

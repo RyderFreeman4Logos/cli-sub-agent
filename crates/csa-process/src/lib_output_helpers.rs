@@ -6,6 +6,7 @@ pub(super) const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 const WORKSPACE_BOUNDARY_PATTERN_A: &str = "path not in workspace";
 const WORKSPACE_BOUNDARY_PATTERN_B: &str = "outside the allowed workspace directories";
 const OPAQUE_OBJECT_PATTERN: &str = "[object object]";
+const OPAQUE_OBJECT_REPLACEMENT: &str = "(opaque error payload)";
 
 /// Write a raw byte chunk to the spool file and flush.
 ///
@@ -163,10 +164,14 @@ pub(super) fn failure_summary(stdout: &str, stderr: &str, exit_code: i32) -> Str
     }
 
     if contains_opaque_object_payload(stdout) || contains_opaque_object_payload(stderr) {
-        return format!("opaque tool error payload ([object Object]); exit code {exit_code}");
+        return format!("opaque tool error payload; exit code {exit_code}");
     }
 
     format!("exit code {exit_code}")
+}
+
+pub(super) fn sanitize_opaque_object_payloads(text: &str) -> String {
+    replace_opaque_object_payload(text, OPAQUE_OBJECT_REPLACEMENT)
 }
 
 /// Return the last non-empty line from the given text, or `""` if none.
@@ -200,7 +205,7 @@ fn last_non_opaque_failure_line(text: &str) -> Option<String> {
             continue;
         }
 
-        if contains_opaque_object_payload(trimmed) {
+        if contains_opaque_object_payload(trimmed) || is_structural_failure_noise_line(trimmed) {
             continue;
         }
 
@@ -217,9 +222,7 @@ fn last_opaque_failure_line_with_context(text: &str) -> Option<String> {
             continue;
         }
 
-        let normalized = trimmed
-            .replace("[object Object]", "")
-            .replace("[object object]", "")
+        let normalized = replace_opaque_object_payload(trimmed, "")
             .trim()
             .trim_end_matches(':')
             .trim()
@@ -235,4 +238,37 @@ fn last_opaque_failure_line_with_context(text: &str) -> Option<String> {
 
 fn contains_opaque_object_payload(text: &str) -> bool {
     text.to_ascii_lowercase().contains(OPAQUE_OBJECT_PATTERN)
+}
+
+fn replace_opaque_object_payload(text: &str, replacement: &str) -> String {
+    let lowered = text.to_ascii_lowercase();
+    let mut cursor = 0usize;
+    let mut output = String::with_capacity(text.len());
+
+    while let Some(offset) = lowered[cursor..].find(OPAQUE_OBJECT_PATTERN) {
+        let start = cursor + offset;
+        let end = start + OPAQUE_OBJECT_PATTERN.len();
+        output.push_str(&text[cursor..start]);
+        output.push_str(replacement);
+        cursor = end;
+    }
+
+    output.push_str(&text[cursor..]);
+    output
+}
+
+fn is_structural_failure_noise_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    if trimmed.starts_with("```") {
+        return true;
+    }
+
+    !trimmed.is_empty()
+        && trimmed.chars().all(|ch| {
+            ch.is_whitespace()
+                || matches!(
+                    ch,
+                    '{' | '}' | '[' | ']' | '(' | ')' | ',' | ':' | ';' | '"' | '\''
+                )
+        })
 }
