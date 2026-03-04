@@ -469,7 +469,10 @@ fn test_build_execute_in_command_gemini_includes_external_instruction_symlink_ta
         .get_args()
         .map(|a| a.to_string_lossy().to_string())
         .collect();
-    let expected_external_parent = shared_rules.to_string_lossy().to_string();
+    let expected_external_parent = std::fs::canonicalize(&shared_rules)
+        .unwrap_or_else(|_| shared_rules.clone())
+        .to_string_lossy()
+        .to_string();
 
     assert!(args.contains(&"--include-directories".to_string()));
     assert!(

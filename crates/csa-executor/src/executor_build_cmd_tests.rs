@@ -366,7 +366,10 @@ fn test_build_command_gemini_includes_external_instruction_symlink_target_direct
         .get_args()
         .map(|a| a.to_string_lossy().to_string())
         .collect();
-    let expected_external_parent = shared_rules.to_string_lossy().to_string();
+    let expected_external_parent = std::fs::canonicalize(&shared_rules)
+        .unwrap_or_else(|_| shared_rules.clone())
+        .to_string_lossy()
+        .to_string();
 
     assert!(
         args.contains(&workspace.path().to_string_lossy().to_string()),
