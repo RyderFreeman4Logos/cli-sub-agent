@@ -34,6 +34,15 @@ pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
 const RESULT_TOML_PATH_CONTRACT_MARKER: &str = "csa_result_toml_path_contract=1";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ParentSessionSource {
+    /// Use explicit `parent` argument when provided, otherwise fall back to
+    /// inherited `CSA_SESSION_ID` from environment.
+    ExplicitOrEnv,
+    /// Only use explicit `parent` argument; never inherit `CSA_SESSION_ID`.
+    ExplicitOnly,
+}
+
 pub(crate) fn resolve_idle_timeout_seconds(
     config: Option<&ProjectConfig>,
     cli_override: Option<u64>,
@@ -370,6 +379,51 @@ pub(crate) async fn execute_with_session_and_meta(
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
 ) -> Result<SessionExecutionResult> {
+    execute_with_session_and_meta_with_parent_source(
+        executor,
+        tool,
+        prompt,
+        session_arg,
+        description,
+        parent,
+        project_root,
+        config,
+        extra_env,
+        task_type,
+        tier_name,
+        context_load_options,
+        stream_mode,
+        idle_timeout_seconds,
+        wall_timeout,
+        memory_injection,
+        global_config,
+        ParentSessionSource::ExplicitOrEnv,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tracing::instrument(skip_all, fields(tool = %tool, parent_session_source = ?parent_session_source))]
+pub(crate) async fn execute_with_session_and_meta_with_parent_source(
+    executor: &Executor,
+    tool: &ToolName,
+    prompt: &str,
+    session_arg: Option<String>,
+    description: Option<String>,
+    parent: Option<String>,
+    project_root: &Path,
+    config: Option<&ProjectConfig>,
+    extra_env: Option<&std::collections::HashMap<String, String>>,
+    task_type: Option<&str>,
+    tier_name: Option<&str>,
+    context_load_options: Option<&csa_executor::ContextLoadOptions>,
+    stream_mode: csa_process::StreamMode,
+    idle_timeout_seconds: u64,
+    wall_timeout: Option<Duration>,
+    memory_injection: Option<&MemoryInjectionOptions>,
+    global_config: Option<&GlobalConfig>,
+    parent_session_source: ParentSessionSource,
+) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg {
         if let Ok(env_session) = std::env::var("CSA_SESSION_ID") {
@@ -397,7 +451,12 @@ pub(crate) async fn execute_with_session_and_meta(
     } else {
         // Auto-generate description from prompt when not provided
         let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
-        let parent_id = parent.or_else(|| std::env::var("CSA_SESSION_ID").ok());
+        let parent_id = match parent_session_source {
+            ParentSessionSource::ExplicitOrEnv => {
+                parent.or_else(|| std::env::var("CSA_SESSION_ID").ok())
+            }
+            ParentSessionSource::ExplicitOnly => parent,
+        };
         let mut new_session = create_session(
             project_root,
             effective_description.as_deref(),

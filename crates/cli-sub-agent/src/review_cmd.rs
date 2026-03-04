@@ -315,7 +315,16 @@ async fn execute_review(
     let extra_env = global_config.env_vars(executor.tool_name());
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
-    let execution = crate::pipeline::execute_with_session_and_meta(
+    if session.is_none() {
+        if let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID") {
+            warn!(
+                inherited_session_id = %inherited_session_id,
+                "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
+            );
+        }
+    }
+
+    let execution = crate::pipeline::execute_with_session_and_meta_with_parent_source(
         &executor,
         &tool,
         &effective_prompt,
@@ -333,6 +342,7 @@ async fn execute_review(
         None,
         None,
         Some(global_config),
+        crate::pipeline::ParentSessionSource::ExplicitOnly,
     )
     .await?;
 

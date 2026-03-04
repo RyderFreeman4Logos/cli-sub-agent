@@ -3,7 +3,36 @@ use crate::cli::{Cli, Commands};
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use std::collections::HashMap;
+use std::sync::{LazyLock, Mutex};
 use tempfile::tempdir;
+
+static REVIEW_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+struct ScopedEnvVarRestore {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl ScopedEnvVarRestore {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for ScopedEnvVarRestore {
+    fn drop(&mut self) {
+        // SAFETY: restoration of test-scoped env mutation.
+        unsafe {
+            match self.original.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -777,4 +806,49 @@ fn verify_review_skill_allow_fallback_without_skill() {
         result.is_ok(),
         "missing skill should downgrade to warning when fallback is enabled"
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_review_ignores_inherited_csa_session_id_without_explicit_session() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = REVIEW_ENV_LOCK.lock().expect("review env lock poisoned");
+    let _session_guard = ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
+
+    let project_dir = tempdir().unwrap();
+    let bin_dir = project_dir.path().join("bin");
+    std::fs::create_dir_all(&bin_dir).unwrap();
+    let fake_gemini = bin_dir.join("gemini");
+    std::fs::write(&fake_gemini, "#!/bin/sh\nprintf 'review-ok\\n'\n").unwrap();
+    let mut perms = std::fs::metadata(&fake_gemini).unwrap().permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&fake_gemini, perms).unwrap();
+
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    let patched_path = format!("{}:{inherited_path}", bin_dir.display());
+    let _path_guard = ScopedEnvVarRestore::set("PATH", &patched_path);
+
+    let global = GlobalConfig::default();
+    let result = execute_review(
+        ToolName::GeminiCli,
+        "scope=uncommitted mode=review-only security=auto".to_string(),
+        None,
+        None,
+        "review: stale-session-regression".to_string(),
+        project_dir.path(),
+        None,
+        &global,
+        ReviewRoutingMetadata {
+            project_profile: ProjectProfile::Unknown,
+            detection_method: "auto",
+        },
+        csa_process::StreamMode::BufferOnly,
+        crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
+        false,
+    )
+    .await;
+
+    let execution = result.expect("review should ignore inherited stale CSA_SESSION_ID");
+    assert_eq!(execution.exit_code, 0);
 }

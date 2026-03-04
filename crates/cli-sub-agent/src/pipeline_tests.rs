@@ -22,6 +22,13 @@ impl ScopedEnvVarRestore {
         unsafe { std::env::remove_var(key) };
         Self { key, original }
     }
+
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
 }
 
 impl Drop for ScopedEnvVarRestore {
@@ -1311,5 +1318,71 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
             .execution
             .stderr_output
             .contains("contract violation")
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_session() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let _env_lock = PIPELINE_ENV_LOCK
+        .lock()
+        .expect("pipeline env lock poisoned");
+    let _csa_session_id_guard =
+        ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
+
+    let temp = tempfile::tempdir().unwrap();
+    let project_root = temp.path();
+    let bin_dir = project_root.join("bin");
+    fs::create_dir_all(&bin_dir).unwrap();
+    let fake_gemini = bin_dir.join("gemini");
+    fs::write(&fake_gemini, "#!/bin/sh\nprintf 'review-ok\\n'\n").unwrap();
+    let mut perms = fs::metadata(&fake_gemini).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&fake_gemini, perms).unwrap();
+
+    let mut extra_env = HashMap::new();
+    let inherited_path = std::env::var("PATH").unwrap_or_default();
+    extra_env.insert(
+        "PATH".to_string(),
+        format!("{}:{inherited_path}", bin_dir.display()),
+    );
+
+    let executor = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+
+    let execution = execute_with_session_and_meta_with_parent_source(
+        &executor,
+        &ToolName::GeminiCli,
+        "review prompt",
+        None,
+        Some("review-session".to_string()),
+        None,
+        project_root,
+        None,
+        Some(&extra_env),
+        Some("review"),
+        None,
+        None,
+        csa_process::StreamMode::BufferOnly,
+        DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
+        None,
+        None,
+        ParentSessionSource::ExplicitOnly,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(execution.execution.exit_code, 0);
+
+    let saved_session =
+        csa_session::load_session(project_root, &execution.meta_session_id).unwrap();
+    assert!(
+        saved_session.genealogy.parent_session_id.is_none(),
+        "explicit-only mode must not inherit CSA_SESSION_ID"
     );
 }
