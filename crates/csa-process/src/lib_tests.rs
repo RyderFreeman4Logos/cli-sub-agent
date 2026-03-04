@@ -547,12 +547,18 @@ async fn test_failed_command_sanitizes_opaque_stderr_payload() {
 
     assert_eq!(result.exit_code, 1);
     assert!(
-        result.stderr_output.contains("(opaque error payload)"),
-        "stderr should contain normalized opaque marker"
+        !result.stderr_output.contains("(opaque error payload)"),
+        "stderr should not contain opaque payload marker in final output"
     );
     assert!(
         !result.stderr_output.contains("[object Object]"),
         "stderr should not expose raw opaque marker"
+    );
+    assert!(
+        result
+            .stderr_output
+            .contains("resolved failure detail: exit code 1"),
+        "stderr should include actionable fallback detail"
     );
 }
 
@@ -571,8 +577,8 @@ async fn test_failed_command_sanitizes_opaque_stderr_payload_case_insensitive() 
 
     assert_eq!(result.exit_code, 1);
     assert!(
-        result.stderr_output.contains("(opaque error payload)"),
-        "stderr should contain normalized opaque marker"
+        !result.stderr_output.contains("(opaque error payload)"),
+        "stderr should not contain opaque payload marker in final output"
     );
     assert!(
         !result
@@ -580,6 +586,12 @@ async fn test_failed_command_sanitizes_opaque_stderr_payload_case_insensitive() 
             .to_ascii_lowercase()
             .contains("[object object]"),
         "stderr should not expose raw opaque marker in any case"
+    );
+    assert!(
+        result
+            .stderr_output
+            .contains("resolved failure detail: exit code 1"),
+        "stderr should include actionable fallback detail"
     );
 }
 
@@ -675,8 +687,8 @@ async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
         "existing stderr spool prefix should be preserved"
     );
     assert!(
-        stderr_spool.contains("(opaque error payload)"),
-        "stderr spool should include sanitized opaque marker"
+        !stderr_spool.contains("(opaque error payload)"),
+        "stderr spool should not keep opaque payload marker"
     );
     assert!(
         stderr_spool.contains("resolved failure detail: code: 404"),

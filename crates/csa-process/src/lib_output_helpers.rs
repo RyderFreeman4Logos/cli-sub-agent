@@ -193,12 +193,14 @@ pub(super) fn append_actionable_detail_for_opaque_payload(text: &str, detail: &s
         return text.to_string();
     }
 
+    let mut output = remove_opaque_payload_lines(text);
     let annotation = format!("resolved failure detail: {}", detail.trim());
-    if text.lines().any(|line| line.trim() == annotation) {
-        return text.to_string();
+    if output.lines().any(|line| line.trim() == annotation) {
+        if !output.is_empty() && !output.ends_with('\n') {
+            output.push('\n');
+        }
+        return output;
     }
-
-    let mut output = text.to_string();
     if !output.is_empty() && !output.ends_with('\n') {
         output.push('\n');
     }
@@ -321,6 +323,25 @@ fn contains_opaque_payload_marker(text: &str) -> bool {
 fn is_opaque_failure_detail(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     lower.contains("opaque error payload") || lower.contains("opaque tool error payload")
+}
+
+fn remove_opaque_payload_lines(text: &str) -> String {
+    let mut kept_lines = Vec::new();
+    for line in text.lines() {
+        if !contains_opaque_payload_marker(line) {
+            kept_lines.push(line);
+        }
+    }
+
+    if kept_lines.is_empty() {
+        return String::new();
+    }
+
+    let mut output = kept_lines.join("\n");
+    if text.ends_with('\n') {
+        output.push('\n');
+    }
+    output
 }
 
 fn replace_opaque_object_payload(text: &str, replacement: &str) -> String {
