@@ -87,6 +87,7 @@ pub struct ExecutionResult {
 pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
 pub const DEFAULT_STDIN_WRITE_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
+const WORKSPACE_BOUNDARY_ERROR_THRESHOLD: usize = 3;
 const IDLE_POLL_INTERVAL: Duration = Duration::from_millis(200);
 
 /// Spawn-time process control options.
@@ -426,10 +427,16 @@ pub async fn wait_and_capture_with_idle_timeout(
     let mut liveness_dead_since: Option<Instant> = None;
     let mut next_liveness_poll_at: Option<Instant> = None;
     let mut idle_timed_out = false;
+    let mut workspace_boundary_timed_out = false;
+    let mut workspace_boundary_error_hits = 0usize;
     let timeout_note = format!(
         "idle timeout: no stdout/stderr output for {}s; liveness false for {}s; process killed",
         idle_timeout.as_secs(),
         liveness_dead_timeout.as_secs()
+    );
+    let workspace_boundary_note = format!(
+        "workspace boundary timeout: detected {} repeated boundary errors ('Path not in workspace'); process killed",
+        WORKSPACE_BOUNDARY_ERROR_THRESHOLD
     );
 
     if let Some(stderr_handle) = stderr {
@@ -459,12 +466,22 @@ pub async fn wait_and_capture_with_idle_timeout(
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             // Spool to disk for crash recovery
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
-                            accumulate_and_flush_lines(
+                            workspace_boundary_error_hits += accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
                                 &mut output,
                                 stream_mode,
                             );
+                            if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
+                                workspace_boundary_timed_out = true;
+                                warn!(
+                                    hits = workspace_boundary_error_hits,
+                                    threshold = WORKSPACE_BOUNDARY_ERROR_THRESHOLD,
+                                    "Killing child due to repeated workspace boundary errors"
+                                );
+                                terminate_child_process_group(&mut child, termination_grace_period).await;
+                                break;
+                            }
                         }
                         Err(_) => {
                             flush_line_buf(&mut stdout_line_buf, &mut output, stream_mode);
@@ -489,12 +506,22 @@ pub async fn wait_and_capture_with_idle_timeout(
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stderr_buf[..n]);
                             spool_chunk(&mut stderr_spool_file, &stderr_buf[..n]);
-                            accumulate_and_flush_stderr(
+                            workspace_boundary_error_hits += accumulate_and_flush_stderr(
                                 &chunk,
                                 &mut stderr_line_buf,
                                 &mut stderr_output,
                                 stream_mode,
                             );
+                            if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
+                                workspace_boundary_timed_out = true;
+                                warn!(
+                                    hits = workspace_boundary_error_hits,
+                                    threshold = WORKSPACE_BOUNDARY_ERROR_THRESHOLD,
+                                    "Killing child due to repeated workspace boundary errors"
+                                );
+                                terminate_child_process_group(&mut child, termination_grace_period).await;
+                                break;
+                            }
                         }
                         Err(_) => {
                             flush_stderr_buf(
@@ -552,12 +579,22 @@ pub async fn wait_and_capture_with_idle_timeout(
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
-                            accumulate_and_flush_lines(
+                            workspace_boundary_error_hits += accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
                                 &mut output,
                                 stream_mode,
                             );
+                            if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
+                                workspace_boundary_timed_out = true;
+                                warn!(
+                                    hits = workspace_boundary_error_hits,
+                                    threshold = WORKSPACE_BOUNDARY_ERROR_THRESHOLD,
+                                    "Killing child due to repeated workspace boundary errors"
+                                );
+                                terminate_child_process_group(&mut child, termination_grace_period).await;
+                                break;
+                            }
                         }
                         Err(_) => {
                             flush_line_buf(&mut stdout_line_buf, &mut output, stream_mode);
@@ -608,10 +645,19 @@ pub async fn wait_and_capture_with_idle_timeout(
         }
         stderr_output.push_str(&timeout_note);
         stderr_output.push('\n');
+    } else if workspace_boundary_timed_out {
+        exit_code = 125;
+        if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+            stderr_output.push('\n');
+        }
+        stderr_output.push_str(&workspace_boundary_note);
+        stderr_output.push('\n');
     }
 
     let summary = if idle_timed_out {
         timeout_note
+    } else if workspace_boundary_timed_out {
+        workspace_boundary_note
     } else if exit_code == 0 {
         extract_summary(&output)
     } else {
