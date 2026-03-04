@@ -443,3 +443,41 @@ fn test_build_execute_in_command_gemini_adds_include_directories_from_env() {
     assert!(args.contains(&"/tmp/a".to_string()));
     assert!(args.contains(&"/tmp/b".to_string()));
 }
+
+#[cfg(unix)]
+#[test]
+fn test_build_execute_in_command_gemini_includes_external_instruction_symlink_target_directory() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let workspace = tempfile::tempdir().expect("workspace tempdir");
+    let shared = tempfile::tempdir().expect("shared tempdir");
+    let shared_rules = shared.path().join("rules");
+    std::fs::create_dir_all(&shared_rules).expect("create shared rules dir");
+    let shared_agents = shared_rules.join("AGENTS.md");
+    std::fs::write(&shared_agents, "shared agent rules").expect("write shared AGENTS.md");
+
+    std::os::unix::fs::symlink(&shared_agents, workspace.path().join("AGENTS.md"))
+        .expect("link AGENTS.md");
+    std::os::unix::fs::symlink("AGENTS.md", workspace.path().join("GEMINI.md"))
+        .expect("link GEMINI.md -> AGENTS.md");
+
+    let (cmd, _stdin_data) = exec.build_execute_in_command("review", workspace.path(), None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+    let expected_external_parent = shared_rules.to_string_lossy().to_string();
+
+    assert!(args.contains(&"--include-directories".to_string()));
+    assert!(
+        args.contains(&workspace.path().to_string_lossy().to_string()),
+        "Expected workspace root in include directories"
+    );
+    assert!(
+        args.contains(&expected_external_parent),
+        "Expected external symlink target parent in include directories"
+    );
+}

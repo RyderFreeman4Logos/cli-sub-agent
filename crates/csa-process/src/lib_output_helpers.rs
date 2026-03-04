@@ -5,6 +5,7 @@ pub(super) const DEFAULT_HEARTBEAT_SECS: u64 = 20;
 pub(super) const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 const WORKSPACE_BOUNDARY_PATTERN_A: &str = "path not in workspace";
 const WORKSPACE_BOUNDARY_PATTERN_B: &str = "outside the allowed workspace directories";
+const OPAQUE_OBJECT_PATTERN: &str = "[object object]";
 
 /// Write a raw byte chunk to the spool file and flush.
 ///
@@ -147,14 +148,22 @@ pub(super) fn extract_summary(output: &str) -> String {
 /// 2. stderr last non-empty line (fallback for tools that write errors to stderr)
 /// 3. `"exit code {N}"` (final fallback when both streams are empty)
 pub(super) fn failure_summary(stdout: &str, stderr: &str, exit_code: i32) -> String {
-    let stdout_line = last_non_empty_line(stdout);
-    if !stdout_line.is_empty() {
-        return truncate_line(stdout_line, 200);
+    if let Some(stdout_line) = last_non_opaque_failure_line(stdout) {
+        return truncate_line(&stdout_line, 200);
     }
 
-    let stderr_line = last_non_empty_line(stderr);
-    if !stderr_line.is_empty() {
-        return truncate_line(stderr_line, 200);
+    if let Some(stderr_line) = last_non_opaque_failure_line(stderr) {
+        return truncate_line(&stderr_line, 200);
+    }
+
+    if let Some(opaque_line) = last_opaque_failure_line_with_context(stdout)
+        .or_else(|| last_opaque_failure_line_with_context(stderr))
+    {
+        return truncate_line(&opaque_line, 200);
+    }
+
+    if contains_opaque_object_payload(stdout) || contains_opaque_object_payload(stderr) {
+        return format!("opaque tool error payload ([object Object]); exit code {exit_code}");
     }
 
     format!("exit code {exit_code}")
@@ -182,4 +191,48 @@ fn is_workspace_boundary_error_line(line: &str) -> bool {
     let normalized = line.to_ascii_lowercase();
     normalized.contains(WORKSPACE_BOUNDARY_PATTERN_A)
         || normalized.contains(WORKSPACE_BOUNDARY_PATTERN_B)
+}
+
+fn last_non_opaque_failure_line(text: &str) -> Option<String> {
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        if contains_opaque_object_payload(trimmed) {
+            continue;
+        }
+
+        return Some(trimmed.to_string());
+    }
+
+    None
+}
+
+fn last_opaque_failure_line_with_context(text: &str) -> Option<String> {
+    for line in text.lines().rev() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || !contains_opaque_object_payload(trimmed) {
+            continue;
+        }
+
+        let normalized = trimmed
+            .replace("[object Object]", "")
+            .replace("[object object]", "")
+            .trim()
+            .trim_end_matches(':')
+            .trim()
+            .to_string();
+
+        if !normalized.is_empty() {
+            return Some(format!("{normalized} (opaque error payload)"));
+        }
+    }
+
+    None
+}
+
+fn contains_opaque_object_payload(text: &str) -> bool {
+    text.to_ascii_lowercase().contains(OPAQUE_OBJECT_PATTERN)
 }

@@ -457,6 +457,38 @@ fn test_failure_summary_falls_back_to_stderr() {
 }
 
 #[test]
+fn test_failure_summary_skips_opaque_stdout_and_prefers_stderr() {
+    let summary = failure_summary(
+        "An unexpected critical error occurred:[object Object]\n",
+        "model not found: gemini-pro\n",
+        1,
+    );
+    assert_eq!(summary, "model not found: gemini-pro");
+}
+
+#[test]
+fn test_failure_summary_normalizes_opaque_line_with_context() {
+    let summary = failure_summary(
+        "An unexpected critical error occurred:[object Object]\n",
+        "",
+        1,
+    );
+    assert_eq!(
+        summary,
+        "An unexpected critical error occurred (opaque error payload)"
+    );
+}
+
+#[test]
+fn test_failure_summary_opaque_marker_only_falls_back_to_explicit_message() {
+    let summary = failure_summary("[object Object]\n", "", 17);
+    assert_eq!(
+        summary,
+        "opaque tool error payload ([object Object]); exit code 17"
+    );
+}
+
+#[test]
 fn test_failure_summary_falls_back_to_stderr_when_stdout_whitespace_only() {
     let summary = failure_summary("  \n\n", "stderr msg\n", 42);
     assert_eq!(summary, "stderr msg");
