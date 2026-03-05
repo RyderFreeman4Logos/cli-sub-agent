@@ -625,6 +625,14 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     }
     response_text.push_str(&format!("Tool: {}\n", executor.tool_name()));
     response_text.push_str(&format!("Exit Code: {}\n", result.exit_code));
+    if !result.summary.is_empty() {
+        response_text.push_str(&format!("Summary: {}\n", result.summary));
+    }
+    if !result.stderr_output.trim().is_empty() {
+        response_text.push_str("--- Stderr ---\n");
+        response_text.push_str(result.stderr_output.trim());
+        response_text.push('\n');
+    }
 
     Ok(serde_json::json!({
         "content": [

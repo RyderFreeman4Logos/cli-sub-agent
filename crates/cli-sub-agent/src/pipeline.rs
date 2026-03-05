@@ -11,7 +11,7 @@ use std::time::Duration;
 use tracing::{error, info, warn};
 
 use csa_config::{GlobalConfig, McpRegistry, ProjectConfig};
-use csa_core::types::ToolName;
+use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::{AcpMcpServerConfig, Executor, SessionConfig, create_session_log_writer};
 use csa_hooks::{
     GuardContext, HookEvent, format_guard_output, global_hooks_path, load_hooks_config,
@@ -338,6 +338,7 @@ pub(crate) async fn execute_with_session(
         executor,
         tool,
         prompt,
+        OutputFormat::Json,
         session_arg,
         description,
         parent,
@@ -364,6 +365,7 @@ pub(crate) async fn execute_with_session_and_meta(
     executor: &Executor,
     tool: &ToolName,
     prompt: &str,
+    output_format: OutputFormat,
     session_arg: Option<String>,
     description: Option<String>,
     parent: Option<String>,
@@ -383,6 +385,7 @@ pub(crate) async fn execute_with_session_and_meta(
         executor,
         tool,
         prompt,
+        output_format,
         session_arg,
         description,
         parent,
@@ -408,6 +411,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     executor: &Executor,
     tool: &ToolName,
     prompt: &str,
+    output_format: OutputFormat,
     session_arg: Option<String>,
     description: Option<String>,
     parent: Option<String>,
@@ -684,6 +688,16 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         None
     };
 
+    let commit_guard_enabled = matches!(task_type, Some("run"));
+    let require_commit_on_mutation =
+        commit_guard_enabled && config.is_some_and(|cfg| cfg.session.require_commit_on_mutation);
+    let inside_git_worktree = commit_guard_enabled && crate::run_cmd::is_git_worktree(project_root);
+    let pre_run_workspace = if inside_git_worktree {
+        crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
+    } else {
+        None
+    };
+
     // Resolve tool state for session resume.
     let tool_state = session
         .tools
@@ -880,6 +894,32 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         result.summary = violation_summary;
         result.exit_code = 1;
+    }
+    if commit_guard_enabled {
+        let post_run_workspace = if inside_git_worktree {
+            crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
+        } else {
+            None
+        };
+        let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
+            pre_run_workspace.as_ref(),
+            post_run_workspace.as_ref(),
+        );
+        let policy_evaluation_failed = require_commit_on_mutation
+            && (!inside_git_worktree
+                || pre_run_workspace.is_none()
+                || post_run_workspace.is_none());
+        crate::run_cmd::apply_post_run_commit_policy(
+            &mut result,
+            &output_format,
+            require_commit_on_mutation,
+            commit_guard.as_ref(),
+        );
+        crate::run_cmd::apply_unverifiable_commit_policy(
+            &mut result,
+            &output_format,
+            policy_evaluation_failed,
+        );
     }
 
     // Delegate post-execution processing (state updates, persistence, hooks, memory).

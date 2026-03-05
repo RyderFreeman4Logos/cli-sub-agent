@@ -6,7 +6,7 @@ use anyhow::{Context, Result, bail};
 use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
-use csa_core::types::ToolName;
+use csa_core::types::{OutputFormat, ToolName};
 use csa_process::check_tool_installed;
 
 use crate::pipeline::execute_with_session_and_meta;
@@ -201,6 +201,7 @@ pub(super) async fn execute_csa_step(
             &executor,
             tool_name,
             prompt,
+            OutputFormat::Json,
             session_arg,
             Some("plan-step".to_string()),
             std::env::var("CSA_SESSION_ID").ok(),

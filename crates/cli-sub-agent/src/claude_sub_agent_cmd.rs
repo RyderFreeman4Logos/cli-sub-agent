@@ -101,6 +101,12 @@ pub(crate) async fn handle_claude_sub_agent(
 
     // 14. Print result
     print!("{}", result.output);
+    if !result.summary.trim().is_empty() {
+        eprintln!("summary: {}", result.summary);
+    }
+    if !result.stderr_output.trim().is_empty() {
+        eprintln!("{}", result.stderr_output.trim());
+    }
 
     Ok(result.exit_code)
 }

@@ -82,7 +82,7 @@ async fn run() -> Result<()> {
         .ok();
 
     let cli = Cli::parse();
-    let output_format = cli.format.clone();
+    let output_format = cli.format;
 
     // Check weave.lock version alignment (non-fatal).
     if let Ok(cwd) = std::env::current_dir() {
