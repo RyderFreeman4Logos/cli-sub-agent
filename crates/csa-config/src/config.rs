@@ -81,6 +81,11 @@ pub struct SessionConfig {
     /// Oldest seeds beyond this limit are retired (LRU eviction).
     #[serde(default = "default_max_seed_sessions")]
     pub max_seed_sessions: u32,
+    /// Fail `csa run` when the workspace is mutated without creating a commit.
+    ///
+    /// Fail-closed mode is disabled by default; mutation guard stays warning-only.
+    #[serde(default)]
+    pub require_commit_on_mutation: bool,
 }
 
 fn default_seed_max_age_secs() -> u64 {
@@ -100,6 +105,7 @@ impl Default for SessionConfig {
             seed_max_age_secs: default_seed_max_age_secs(),
             auto_seed_fork: true,
             max_seed_sessions: default_max_seed_sessions(),
+            require_commit_on_mutation: false,
         }
     }
 }
@@ -112,6 +118,7 @@ impl SessionConfig {
             && self.seed_max_age_secs == default_seed_max_age_secs()
             && self.auto_seed_fork
             && self.max_seed_sessions == default_max_seed_sessions()
+            && !self.require_commit_on_mutation
     }
 }
 
@@ -562,6 +569,7 @@ schema_version = 1
 [session]
 transcript_enabled = false
 transcript_redaction = true
+# require_commit_on_mutation = true
 [resources]
 min_free_memory_mb = 4096
 idle_timeout_seconds = 300

@@ -155,7 +155,7 @@ pub enum ToolSelectionStrategy {
 }
 
 /// Output format for CLI responses
-#[derive(Clone, Debug, ValueEnum)]
+#[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum OutputFormat {
     Text,
     Json,

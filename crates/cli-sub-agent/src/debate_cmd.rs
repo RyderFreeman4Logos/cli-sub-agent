@@ -119,6 +119,7 @@ pub(crate) async fn handle_debate(
             &executor,
             &tool,
             &prompt,
+            output_format,
             resume_session.clone(),
             Some(description.clone()),
             None,

@@ -33,6 +33,10 @@ use crate::run_helpers::{is_tool_binary_available, parse_tool_name};
 
 const DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS: u64 = 2400;
 const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
+const POST_RUN_POLICY_BLOCKED_SUMMARY: &str =
+    "post-run policy blocked: workspace mutated without commit";
+const POST_RUN_POLICY_UNVERIFIABLE_SUMMARY: &str =
+    "post-run policy blocked: unable to verify workspace mutation state";
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
@@ -178,7 +182,6 @@ pub(crate) async fn handle_run(
     };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
-
     // 7. Resolve initial tool based on strategy
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
@@ -632,6 +635,7 @@ pub(crate) async fn handle_run(
                 &executor,
                 &current_tool,
                 &effective_prompt,
+                output_format,
                 effective_session_arg.clone(),
                 effective_description,
                 effective_parent,
@@ -790,6 +794,7 @@ pub(crate) async fn handle_run(
         if exec_result.exit_code != 0
             && runtime_fallback_enabled
             && runtime_fallback_attempts < max_runtime_fallback_attempts
+            && !is_post_run_commit_policy_block(&exec_result.summary)
         {
             if let Some(next_tool) = take_next_runtime_fallback_tool(
                 &mut heterogeneous_runtime_fallback_candidates,
@@ -819,6 +824,11 @@ pub(crate) async fn handle_run(
                 cleanup_pre_created_fork_session(&mut pre_created_fork_session_id, &project_root);
                 continue;
             }
+        }
+
+        // Commit-policy failures are terminal and must not be bypassed by rate-limit failover.
+        if is_post_run_commit_policy_block(&exec_result.summary) {
+            break exec_result;
         }
 
         // Check for 429 rate limit and attempt failover
@@ -1118,6 +1128,439 @@ fn find_recent_interrupted_skill_session(
     }
 
     None
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct GitWorkspaceSnapshot {
+    head: Option<String>,
+    status: String,
+    tracked_worktree_fingerprint: Option<u64>,
+    tracked_index_fingerprint: Option<u64>,
+    untracked_fingerprint: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PostRunCommitGuard {
+    workspace_mutated: bool,
+    head_changed: bool,
+    changed_paths: Vec<String>,
+}
+
+pub(crate) fn capture_git_workspace_snapshot(
+    project_root: &Path,
+    deep_fingerprint: bool,
+) -> Option<GitWorkspaceSnapshot> {
+    if !is_git_worktree(project_root) {
+        return None;
+    }
+
+    let head = run_git_capture(project_root, &["rev-parse", "--verify", "HEAD"])
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty());
+    let status = run_git_capture(
+        project_root,
+        &[
+            "status",
+            "--porcelain=v1",
+            "--untracked-files=all",
+            "--no-renames",
+            "-z",
+        ],
+    )?;
+    let tracked_worktree_fingerprint = if deep_fingerprint {
+        Some(capture_tracked_worktree_fingerprint(project_root, &status)?)
+    } else {
+        Some(capture_tracked_worktree_shallow_fingerprint(
+            project_root,
+            &status,
+        ))
+    };
+    let tracked_index_fingerprint = Some(capture_tracked_index_fingerprint(project_root, &status)?);
+    let untracked_fingerprint = Some(capture_untracked_fingerprint(
+        project_root,
+        deep_fingerprint,
+    )?);
+
+    Some(GitWorkspaceSnapshot {
+        head,
+        status,
+        tracked_worktree_fingerprint,
+        tracked_index_fingerprint,
+        untracked_fingerprint,
+    })
+}
+
+pub(crate) fn is_git_worktree(project_root: &Path) -> bool {
+    run_git_capture(project_root, &["rev-parse", "--is-inside-work-tree"])
+        .is_some_and(|value| value.trim() == "true")
+}
+
+fn run_git_capture(project_root: &Path, args: &[&str]) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(args)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_git_capture_with_paths(
+    project_root: &Path,
+    fixed_args: &[&str],
+    paths: &[String],
+) -> Option<String> {
+    let mut command = std::process::Command::new("git");
+    command.arg("-C").arg(project_root).args(fixed_args);
+    for path in paths {
+        command.arg(path);
+    }
+
+    let output = command.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn hash_text(input: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    input.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn capture_untracked_fingerprint(project_root: &Path, deep_content_hash: bool) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+
+    let raw_entries = run_git_capture(
+        project_root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )?;
+
+    let paths: Vec<String> = raw_entries
+        .split(' ')
+        .filter(|entry| !entry.is_empty())
+        .map(ToOwned::to_owned)
+        .collect();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in &paths {
+        path.hash(&mut hasher);
+    }
+
+    if deep_content_hash {
+        let mut hashable_paths = Vec::new();
+        for path in &paths {
+            let full_path = project_root.join(path);
+            match std::fs::symlink_metadata(&full_path) {
+                Ok(metadata) if !metadata.is_dir() => hashable_paths.push(path.clone()),
+                Ok(metadata) => {
+                    "dir".hash(&mut hasher);
+                    metadata.len().hash(&mut hasher);
+                    if let Ok(modified) = metadata.modified()
+                        && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+                    {
+                        since_epoch.as_secs().hash(&mut hasher);
+                        since_epoch.subsec_nanos().hash(&mut hasher);
+                    }
+                }
+                Err(_) => {
+                    "missing".hash(&mut hasher);
+                }
+            }
+        }
+
+        if !hashable_paths.is_empty() {
+            let content_hashes =
+                run_git_capture_with_paths(project_root, &["hash-object", "--"], &hashable_paths)?;
+            content_hashes.hash(&mut hasher);
+        }
+
+        return Some(hasher.finish());
+    }
+
+    for path in &paths {
+        let full_path = project_root.join(path);
+        if let Ok(metadata) = std::fs::metadata(&full_path) {
+            metadata.len().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified()
+                && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                since_epoch.as_secs().hash(&mut hasher);
+                since_epoch.subsec_nanos().hash(&mut hasher);
+            }
+        }
+    }
+
+    Some(hasher.finish())
+}
+
+fn capture_tracked_worktree_fingerprint(project_root: &Path, status: &str) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+
+    let paths = tracked_paths_from_status(status, |x, y| x != '?' && y != ' ');
+    if paths.is_empty() {
+        return Some(0);
+    }
+
+    let mut hashable_paths = Vec::new();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in &paths {
+        path.hash(&mut hasher);
+        let full_path = project_root.join(path);
+        match std::fs::symlink_metadata(&full_path) {
+            Ok(metadata) if !metadata.is_dir() => hashable_paths.push(path.clone()),
+            Ok(metadata) => {
+                "dir".hash(&mut hasher);
+                metadata.len().hash(&mut hasher);
+                if let Ok(modified) = metadata.modified()
+                    && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+                {
+                    since_epoch.as_secs().hash(&mut hasher);
+                    since_epoch.subsec_nanos().hash(&mut hasher);
+                }
+            }
+            Err(_) => {
+                "missing".hash(&mut hasher);
+            }
+        }
+    }
+
+    if !hashable_paths.is_empty() {
+        let content_hashes =
+            run_git_capture_with_paths(project_root, &["hash-object", "--"], &hashable_paths)?;
+        content_hashes.hash(&mut hasher);
+    }
+
+    Some(hasher.finish())
+}
+
+fn capture_tracked_worktree_shallow_fingerprint(project_root: &Path, status: &str) -> u64 {
+    let paths = tracked_paths_from_status(status, |x, y| x != '?' && y != ' ');
+    hash_paths_and_metadata(project_root, &paths)
+}
+
+fn capture_tracked_index_fingerprint(project_root: &Path, status: &str) -> Option<u64> {
+    let paths = tracked_paths_from_status(status, |x, _| x != ' ' && x != '?');
+    if paths.is_empty() {
+        return Some(0);
+    }
+
+    run_git_capture_with_paths(project_root, &["ls-files", "--stage", "--"], &paths)
+        .map(|output| hash_text(&output))
+}
+
+fn tracked_paths_from_status(status: &str, include: impl Fn(char, char) -> bool) -> Vec<String> {
+    collect_status_entries(status)
+        .into_iter()
+        .filter_map(|entry| {
+            let (x, y, path) = parse_status_entry(entry)?;
+            if !include(x, y) {
+                return None;
+            }
+            Some(path.to_string())
+        })
+        .collect()
+}
+
+fn collect_status_entries(status: &str) -> Vec<&str> {
+    if status.contains('\0') {
+        status
+            .split('\0')
+            .filter(|entry| !entry.is_empty())
+            .collect()
+    } else {
+        status.lines().filter(|entry| !entry.is_empty()).collect()
+    }
+}
+
+fn parse_status_entry(entry: &str) -> Option<(char, char, &str)> {
+    let mut chars = entry.chars();
+    let x = chars.next()?;
+    let y = chars.next()?;
+    if chars.next()? != ' ' {
+        return None;
+    }
+    let path = entry.get(3..)?;
+    if path.is_empty() {
+        return None;
+    }
+    Some((x, y, path))
+}
+
+fn hash_paths_and_metadata(project_root: &Path, paths: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    if paths.is_empty() {
+        return 0;
+    }
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for path in paths {
+        path.hash(&mut hasher);
+
+        let full_path = project_root.join(path);
+        if let Ok(metadata) = std::fs::metadata(&full_path) {
+            metadata.len().hash(&mut hasher);
+            if let Ok(modified) = metadata.modified()
+                && let Ok(since_epoch) = modified.duration_since(std::time::UNIX_EPOCH)
+            {
+                since_epoch.as_secs().hash(&mut hasher);
+                since_epoch.subsec_nanos().hash(&mut hasher);
+            }
+        }
+    }
+
+    hasher.finish()
+}
+
+pub(crate) fn evaluate_post_run_commit_guard(
+    before: Option<&GitWorkspaceSnapshot>,
+    after: Option<&GitWorkspaceSnapshot>,
+) -> Option<PostRunCommitGuard> {
+    let after = after?;
+    let before = before?;
+    if after.status.trim().is_empty() {
+        return None;
+    }
+
+    let tracked_fingerprint_changed = before.status != after.status
+        || before.tracked_worktree_fingerprint != after.tracked_worktree_fingerprint
+        || before.tracked_index_fingerprint != after.tracked_index_fingerprint;
+    let untracked_changed = before.untracked_fingerprint != after.untracked_fingerprint;
+    let workspace_mutated = tracked_fingerprint_changed || untracked_changed;
+    if !workspace_mutated {
+        return None;
+    }
+
+    Some(PostRunCommitGuard {
+        workspace_mutated,
+        head_changed: before.head != after.head,
+        changed_paths: changed_paths_from_status(&after.status, 8),
+    })
+}
+
+fn changed_paths_from_status(status: &str, limit: usize) -> Vec<String> {
+    collect_status_entries(status)
+        .into_iter()
+        .filter_map(|entry| parse_status_entry(entry).map(|(_, _, path)| path.to_string()))
+        .take(limit)
+        .collect()
+}
+
+fn is_post_run_commit_policy_block(summary: &str) -> bool {
+    summary == POST_RUN_POLICY_BLOCKED_SUMMARY || summary == POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
+}
+
+pub(crate) fn apply_post_run_commit_policy(
+    result: &mut csa_process::ExecutionResult,
+    output_format: &OutputFormat,
+    require_commit_on_mutation: bool,
+    commit_guard: Option<&PostRunCommitGuard>,
+) {
+    let Some(commit_guard) = commit_guard else {
+        return;
+    };
+
+    let enforce_closed_policy =
+        require_commit_on_mutation && commit_guard.workspace_mutated && !commit_guard.head_changed;
+    let guard_message = format_post_run_commit_guard_message(commit_guard, enforce_closed_policy);
+
+    if enforce_closed_policy {
+        let previous_summary = result.summary.clone();
+        if result.exit_code == 0 {
+            result.exit_code = 1;
+        }
+        if !previous_summary.trim().is_empty()
+            && previous_summary != POST_RUN_POLICY_BLOCKED_SUMMARY
+        {
+            append_stderr_block(
+                &mut result.stderr_output,
+                &format!("Original summary before commit policy: {previous_summary}"),
+            );
+        }
+        result.summary = POST_RUN_POLICY_BLOCKED_SUMMARY.to_string();
+    }
+
+    match output_format {
+        OutputFormat::Text => eprintln!("{guard_message}"),
+        OutputFormat::Json => append_stderr_block(&mut result.stderr_output, &guard_message),
+    }
+}
+
+pub(crate) fn apply_unverifiable_commit_policy(
+    result: &mut csa_process::ExecutionResult,
+    output_format: &OutputFormat,
+    policy_evaluation_failed: bool,
+) {
+    if !policy_evaluation_failed {
+        return;
+    }
+
+    let previous_summary = result.summary.clone();
+    if result.exit_code == 0 {
+        result.exit_code = 1;
+    }
+    if !previous_summary.trim().is_empty()
+        && previous_summary != POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
+    {
+        append_stderr_block(
+            &mut result.stderr_output,
+            &format!("Original summary before commit policy: {previous_summary}"),
+        );
+    }
+    result.summary = POST_RUN_POLICY_UNVERIFIABLE_SUMMARY.to_string();
+
+    let guard_message =
+        "ERROR: strict commit policy could not verify workspace mutation state; run is blocked.";
+    match output_format {
+        OutputFormat::Text => eprintln!("{guard_message}"),
+        OutputFormat::Json => append_stderr_block(&mut result.stderr_output, guard_message),
+    }
+}
+
+fn format_post_run_commit_guard_message(
+    guard: &PostRunCommitGuard,
+    enforce_closed_policy: bool,
+) -> String {
+    let severity = if enforce_closed_policy {
+        "ERROR"
+    } else {
+        "WARNING"
+    };
+    let reason = if guard.head_changed {
+        "run created commit(s) but still left uncommitted workspace mutations"
+    } else {
+        "run left uncommitted workspace mutations compared to start"
+    };
+
+    let mut lines = vec![format!("{severity}: csa run completed but {reason}.")];
+    lines.push(
+        "Next step: run `csa run --skill commit \"<scope>\"` and continue with PR/review workflow."
+            .to_string(),
+    );
+    if !guard.changed_paths.is_empty() {
+        lines.push(format!("Changed paths: {}", guard.changed_paths.join(", ")));
+    }
+    lines.join("\n")
+}
+
+fn append_stderr_block(stderr_output: &mut String, block: &str) {
+    if block.trim().is_empty() {
+        return;
+    }
+    if !stderr_output.is_empty() && !stderr_output.ends_with('\n') {
+        stderr_output.push('\n');
+    }
+    stderr_output.push_str(block);
+    if !stderr_output.ends_with('\n') {
+        stderr_output.push('\n');
+    }
 }
 
 #[cfg(test)]

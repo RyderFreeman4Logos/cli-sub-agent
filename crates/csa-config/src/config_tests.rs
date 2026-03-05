@@ -755,3 +755,26 @@ transcript_enabled = false
     let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
     assert!(cfg.structured_output);
 }
+
+#[test]
+fn test_session_config_default_does_not_require_commit_on_mutation() {
+    let cfg = SessionConfig::default();
+    assert!(!cfg.require_commit_on_mutation);
+}
+
+#[test]
+fn test_session_config_deserializes_require_commit_on_mutation() {
+    let toml_str = r#"
+transcript_enabled = false
+require_commit_on_mutation = true
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert!(cfg.require_commit_on_mutation);
+}
+
+#[test]
+fn test_session_config_is_default_reflects_require_commit_on_mutation() {
+    let mut cfg = SessionConfig::default();
+    cfg.require_commit_on_mutation = true;
+    assert!(!cfg.is_default());
+}

@@ -14,7 +14,7 @@ use crate::review_consensus::{
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
 use csa_config::{GlobalConfig, ProjectConfig, ProjectProfile};
 use csa_core::consensus::AgentResponse;
-use csa_core::types::ToolName;
+use csa_core::types::{OutputFormat, ToolName};
 use csa_session::{
     output_parser::parse_sections, output_section::OutputSection, review_artifact::ReviewArtifact,
 };
@@ -328,6 +328,7 @@ async fn execute_review(
         &executor,
         &tool,
         &effective_prompt,
+        OutputFormat::Json,
         session,
         Some(description),
         None,
