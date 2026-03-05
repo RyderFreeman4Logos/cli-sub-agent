@@ -722,7 +722,55 @@ fn is_post_run_commit_policy_block_detects_known_policy_summaries() {
     assert!(is_post_run_commit_policy_block(
         "post-run policy blocked: unable to verify workspace mutation state"
     ));
+    assert!(is_post_run_commit_policy_block(
+        "post-run policy blocked: forbidden git commit --no-verify detected"
+    ));
     assert!(!is_post_run_commit_policy_block("other failure"));
+}
+
+#[test]
+fn apply_no_verify_commit_policy_sets_failure_when_forbidden_flag_detected() {
+    let mut result = ExecutionResult {
+        output: "git commit --no-verify -m \"feat: unsafe\"\n".to_string(),
+        stderr_output: String::new(),
+        summary: "commit completed".to_string(),
+        exit_code: 0,
+    };
+
+    apply_no_verify_commit_policy(&mut result, &OutputFormat::Json, "normal prompt");
+
+    assert_eq!(result.exit_code, 1);
+    assert_eq!(
+        result.summary,
+        "post-run policy blocked: forbidden git commit --no-verify detected"
+    );
+    assert!(
+        result
+            .stderr_output
+            .contains("Original summary before commit policy: commit completed")
+    );
+    assert!(result.stderr_output.contains("Matched lines:"));
+    assert!(result.stderr_output.contains("git commit --no-verify"));
+}
+
+#[test]
+fn apply_no_verify_commit_policy_allows_explicit_override_marker() {
+    let mut result = ExecutionResult {
+        output: "git commit -n -m \"feat: intentional\"\n".to_string(),
+        stderr_output: String::new(),
+        summary: "ok".to_string(),
+        exit_code: 0,
+    };
+
+    apply_no_verify_commit_policy(
+        &mut result,
+        &OutputFormat::Json,
+        "- POLICY OVERRIDE: ALLOW_GIT_COMMIT_NO_VERIFY=1",
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "ok");
+    assert!(result.stderr_output.is_empty());
 }
 
 #[test]

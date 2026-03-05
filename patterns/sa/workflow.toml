@@ -108,6 +108,12 @@ Layer 1 MUST run `csa review --diff` on the uncommitted changes.
 After the review passes, commit the block.
 Do NOT accumulate all changes for one cumulative review at the end.
 
+COMMIT HOOK POLICY (MANDATORY): NEVER use `git commit --no-verify` or
+`git commit -n` unless the prompt explicitly includes
+`ALLOW_GIT_COMMIT_NO_VERIFY=1`.
+If hooks fail (including failures caused by unrelated workspace crates), STOP
+and return a blocker / `needs_clarification` instead of bypassing hooks.
+
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 csa run --session "${SESSION_ID}" < "${IMPL_FILE}"

@@ -920,6 +920,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &output_format,
             policy_evaluation_failed,
         );
+        crate::run_cmd::apply_no_verify_commit_policy(&mut result, &output_format, prompt);
     }
 
     // Delegate post-execution processing (state updates, persistence, hooks, memory).
@@ -991,19 +992,42 @@ fn enforce_result_toml_path_contract(
 
     let path_candidate = contract_result_toml_path_candidate(result);
     let expected_path = session_dir.join("result.toml");
-    if path_matches_expected_result_toml(path_candidate, &expected_path) {
+    let expected_user_result_path = session_dir.join("output").join("user-result.toml");
+    if path_matches_expected_contract_result(path_candidate, &expected_path)
+        || path_matches_expected_contract_result(path_candidate, &expected_user_result_path)
+    {
+        return;
+    }
+
+    if user_result_fallback_is_valid(&expected_user_result_path) {
+        let warning = format!(
+            "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
+            expected_user_result_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            fallback = %expected_user_result_path.display(),
+            "Session output path did not match contract; accepting verified output/user-result.toml fallback"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&warning);
+        result.stderr_output.push('\n');
         return;
     }
 
     let reason = if path_candidate.is_empty() {
         format!(
-            "contract violation: expected existing absolute result.toml path '{}' in output/summary, but output and summary were empty",
-            expected_path.display()
+            "contract violation: expected existing absolute result path '{}' or '{}' in output/summary, but output and summary were empty",
+            expected_path.display(),
+            expected_user_result_path.display()
         )
     } else {
         format!(
-            "contract violation: expected existing absolute result.toml path '{}' in output/summary, got '{path_candidate}'",
-            expected_path.display()
+            "contract violation: expected existing absolute result path '{}' or '{}' in output/summary, got '{path_candidate}'",
+            expected_path.display(),
+            expected_user_result_path.display()
         )
     };
 
@@ -1053,14 +1077,21 @@ fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
         .unwrap_or("")
 }
 
-fn path_matches_expected_result_toml(path_candidate: &str, expected_path: &Path) -> bool {
+fn path_matches_expected_contract_result(path_candidate: &str, expected_path: &Path) -> bool {
     let path = Path::new(path_candidate);
-    let has_result_file_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("result.toml"));
+    path == expected_path && expected_contract_file_is_valid(expected_path)
+}
 
-    if !path.is_absolute() || !has_result_file_name || !path.is_file() || path != expected_path {
+fn expected_contract_file_is_valid(path: &Path) -> bool {
+    let has_expected_file_name =
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("result.toml")
+                    || name.eq_ignore_ascii_case("user-result.toml")
+            });
+
+    if !path.is_absolute() || !has_expected_file_name || !path.is_file() {
         return false;
     }
 
@@ -1082,6 +1113,21 @@ fn path_matches_expected_result_toml(path_candidate: &str, expected_path: &Path)
     true
 }
 
+fn user_result_fallback_is_valid(path: &Path) -> bool {
+    if !expected_contract_file_is_valid(path) {
+        return false;
+    }
+
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+
+    matches!(
+        toml::from_str::<toml::Value>(&contents),
+        Ok(toml::Value::Table(table)) if !table.is_empty()
+    )
+}
+
 fn line_looks_like_result_toml_path(line: &str) -> bool {
     let candidate = normalize_contract_path_candidate(line);
     let path = Path::new(candidate);
@@ -1089,7 +1135,10 @@ fn line_looks_like_result_toml_path(line: &str) -> bool {
         && path
             .file_name()
             .and_then(|name| name.to_str())
-            .is_some_and(|name| name.eq_ignore_ascii_case("result.toml"))
+            .is_some_and(|name| {
+                name.eq_ignore_ascii_case("result.toml")
+                    || name.eq_ignore_ascii_case("user-result.toml")
+            })
 }
 
 fn strip_marker_line_prefix(line: &str) -> &str {
