@@ -73,10 +73,14 @@ const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
 const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
 #[cfg(not(test))]
 const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 1_000;
+const GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST: &str = "gemini-3.1-pro-preview";
+const GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND: &str = "gemini-3-flash-preview";
 const GEMINI_RATE_LIMIT_PATTERNS: &[&str] = &[
     "429",
     "resource exhausted",
     "resource_exhausted",
+    "quota exhausted",
+    "quota_exhausted",
     "quota exceeded",
     "too many requests",
 ];
@@ -117,17 +121,42 @@ impl LegacyTransport {
         Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS.saturating_mul(multiplier))
     }
 
+    fn gemini_rate_limit_retry_model(attempt: u8) -> Option<&'static str> {
+        match attempt {
+            2 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST),
+            3 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND),
+            _ => None,
+        }
+    }
+
+    fn executor_for_attempt(&self, attempt: u8) -> Executor {
+        match &self.executor {
+            Executor::GeminiCli {
+                thinking_budget, ..
+            } => {
+                if let Some(model) = Self::gemini_rate_limit_retry_model(attempt) {
+                    Executor::GeminiCli {
+                        model_override: Some(model.to_string()),
+                        thinking_budget: thinking_budget.clone(),
+                    }
+                } else {
+                    self.executor.clone()
+                }
+            }
+            _ => self.executor.clone(),
+        }
+    }
+
     async fn execute_in_single_attempt(
         &self,
+        executor: &Executor,
         prompt: &str,
         work_dir: &Path,
         extra_env: Option<&HashMap<String, String>>,
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
-        let (cmd, stdin_data) = self
-            .executor
-            .build_execute_in_command(prompt, work_dir, extra_env);
+        let (cmd, stdin_data) = executor.build_execute_in_command(prompt, work_dir, extra_env);
         let child = spawn_tool_with_options(
             cmd,
             stdin_data,
@@ -157,15 +186,14 @@ impl LegacyTransport {
 
     async fn execute_single_attempt(
         &self,
+        executor: &Executor,
         prompt: &str,
         tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
-        let (cmd, stdin_data) = self
-            .executor
-            .build_command(prompt, tool_state, session, extra_env);
+        let (cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
 
         let sandbox_cfg = options.sandbox.map(|s| &s.config);
         let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
@@ -195,7 +223,7 @@ impl LegacyTransport {
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
                 let child = spawn_tool_with_options(
-                    self.executor
+                    executor
                         .build_command(prompt, tool_state, session, extra_env)
                         .0,
                     stdin_data,
@@ -241,8 +269,10 @@ impl LegacyTransport {
     ) -> Result<TransportResult> {
         let mut attempt = 1u8;
         loop {
+            let executor = self.executor_for_attempt(attempt);
             let result = self
                 .execute_in_single_attempt(
+                    &executor,
                     prompt,
                     work_dir,
                     extra_env,
@@ -252,10 +282,12 @@ impl LegacyTransport {
                 .await?;
             if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
             {
+                let retry_model = Self::gemini_rate_limit_retry_model(attempt.saturating_add(1));
                 tracing::debug!(
                     attempt,
                     max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
                     backoff_ms = backoff.as_millis(),
+                    retry_model = retry_model.unwrap_or("inherit"),
                     "gemini-cli rate limit detected in execute_in; retrying silently"
                 );
                 tokio::time::sleep(backoff).await;
@@ -279,15 +311,25 @@ impl Transport for LegacyTransport {
     ) -> Result<TransportResult> {
         let mut attempt = 1u8;
         loop {
+            let executor = self.executor_for_attempt(attempt);
             let result = self
-                .execute_single_attempt(prompt, tool_state, session, extra_env, options.clone())
+                .execute_single_attempt(
+                    &executor,
+                    prompt,
+                    tool_state,
+                    session,
+                    extra_env,
+                    options.clone(),
+                )
                 .await?;
             if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
             {
+                let retry_model = Self::gemini_rate_limit_retry_model(attempt.saturating_add(1));
                 tracing::debug!(
                     attempt,
                     max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
                     backoff_ms = backoff.as_millis(),
+                    retry_model = retry_model.unwrap_or("inherit"),
                     "gemini-cli rate limit detected; retrying silently"
                 );
                 tokio::time::sleep(backoff).await;
@@ -699,6 +741,25 @@ mod tests {
             transport
                 .should_retry_gemini_rate_limited(&execution, 1)
                 .is_none()
+        );
+    }
+
+    #[test]
+    fn test_should_retry_on_quota_exhausted_marker() {
+        let transport = LegacyTransport::new(Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        });
+        let execution = ExecutionResult {
+            summary: "failed".to_string(),
+            output: String::new(),
+            stderr_output: "reason: 'QUOTA_EXHAUSTED'".to_string(),
+            exit_code: 1,
+        };
+        assert!(
+            transport
+                .should_retry_gemini_rate_limited(&execution, 1)
+                .is_some()
         );
     }
 
