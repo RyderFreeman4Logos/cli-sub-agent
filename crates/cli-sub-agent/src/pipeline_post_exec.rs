@@ -12,7 +12,7 @@ use csa_config::{GlobalConfig, ProjectConfig};
 use csa_executor::Executor;
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_session::{
-    MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState,
+    MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState, load_result,
     persist_structured_output, save_result, save_session,
 };
 
@@ -154,6 +154,61 @@ pub(crate) async fn process_execution_result(
     Ok(())
 }
 
+/// Best-effort fail-safe when post-exec processing returns an error.
+///
+/// If `result.toml` is missing, persist a synthetic failure result so callers
+/// never observe an Active session without a terminal result packet.
+pub(crate) fn ensure_terminal_result_on_post_exec_error(
+    project_root: &Path,
+    session: &mut MetaSessionState,
+    tool_name: &str,
+    execution_start_time: chrono::DateTime<chrono::Utc>,
+    error: &anyhow::Error,
+) {
+    match load_result(project_root, &session.meta_session_id) {
+        Ok(Some(_)) => return,
+        Ok(None) => {}
+        Err(load_err) => {
+            warn!(
+                session = %session.meta_session_id,
+                error = %load_err,
+                "Failed to read existing result.toml during post-exec error fallback; attempting overwrite"
+            );
+        }
+    }
+
+    let completed_at = chrono::Utc::now();
+    let fallback_result = SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: format!("post-exec: {error}"),
+        tool: tool_name.to_string(),
+        started_at: execution_start_time,
+        completed_at,
+        events_count: 0,
+        artifacts: Vec::new(),
+    };
+
+    if let Err(save_err) = save_result(project_root, &session.meta_session_id, &fallback_result) {
+        warn!(
+            session = %session.meta_session_id,
+            error = %save_err,
+            "Failed to write fallback post-exec result.toml"
+        );
+        return;
+    }
+
+    session.termination_reason = Some("post_exec_error".to_string());
+    session.last_accessed = completed_at;
+    if let Err(save_err) = save_session(session) {
+        warn!(
+            session = %session.meta_session_id,
+            error = %save_err,
+            "Failed to persist session state after fallback post-exec result write"
+        );
+    }
+}
+
 fn update_tool_state(
     session: &mut MetaSessionState,
     tool_name: &str,
@@ -249,5 +304,84 @@ fn persist_output_sections(session_dir: &Path) {
                 warn!("Failed to read output.log for structured output: {}", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use csa_session::{create_session, load_session};
+
+    #[test]
+    fn ensure_terminal_result_on_post_exec_error_writes_missing_result() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path();
+        let mut session = create_session(project_root, Some("test"), None, Some("codex"))
+            .expect("create session");
+
+        assert!(
+            load_result(project_root, &session.meta_session_id)
+                .expect("load result")
+                .is_none(),
+            "precondition: result.toml must be missing"
+        );
+
+        let started_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+        let err = anyhow::anyhow!("post-run hook failed");
+        ensure_terminal_result_on_post_exec_error(
+            project_root,
+            &mut session,
+            "codex",
+            started_at,
+            &err,
+        );
+
+        let persisted = load_result(project_root, &session.meta_session_id)
+            .expect("load fallback result")
+            .expect("fallback result should exist");
+        assert_eq!(persisted.status, "failure");
+        assert_eq!(persisted.exit_code, 1);
+        assert!(
+            persisted.summary.contains("post-exec:"),
+            "summary should indicate post-exec fallback"
+        );
+
+        let reloaded = load_session(project_root, &session.meta_session_id)
+            .expect("reload session after fallback");
+        assert_eq!(
+            reloaded.termination_reason.as_deref(),
+            Some("post_exec_error")
+        );
+    }
+
+    #[test]
+    fn ensure_terminal_result_on_post_exec_error_keeps_existing_result() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path();
+        let mut session = create_session(project_root, Some("test"), None, Some("codex"))
+            .expect("create session");
+        let now = chrono::Utc::now();
+        let existing = SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "already persisted".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 1,
+            artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
+        };
+        save_result(project_root, &session.meta_session_id, &existing)
+            .expect("write existing result");
+
+        let err = anyhow::anyhow!("late hook failure");
+        ensure_terminal_result_on_post_exec_error(project_root, &mut session, "codex", now, &err);
+
+        let persisted = load_result(project_root, &session.meta_session_id)
+            .expect("load existing result")
+            .expect("existing result should remain");
+        assert_eq!(persisted.status, "success");
+        assert_eq!(persisted.exit_code, 0);
+        assert_eq!(persisted.summary, "already persisted");
     }
 }

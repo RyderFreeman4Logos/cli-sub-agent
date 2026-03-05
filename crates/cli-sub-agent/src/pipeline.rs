@@ -950,7 +950,18 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         events_count,
         transcript_artifacts,
     };
-    crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &result).await?;
+    if let Err(err) =
+        crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &result).await
+    {
+        crate::pipeline_post_exec::ensure_terminal_result_on_post_exec_error(
+            project_root,
+            &mut session,
+            executor.tool_name(),
+            execution_start_time,
+            &err,
+        );
+        return Err(err).with_context(|| format!("meta_session_id={}", session.meta_session_id));
+    }
 
     Ok(SessionExecutionResult {
         execution: result,
