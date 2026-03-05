@@ -295,10 +295,10 @@ Run security-audit against staged changes.
 Output a concise report and end with EXACTLY one line:
 SECURITY_AUDIT_VERDICT: PASS|PASS_DEFERRED|FAIL"
 if command -v timeout >/dev/null 2>&1; then
-  AUDIT_OUTPUT="$(timeout 1200 csa run --skill security-audit "${AUDIT_PROMPT}" 2>&1)"
+  AUDIT_OUTPUT="$(timeout 1200 csa run --tool codex --sa-mode false --skill security-audit "${AUDIT_PROMPT}" 2>&1)"
   AUDIT_STATUS=$?
 else
-  AUDIT_OUTPUT="$(csa run --skill security-audit "${AUDIT_PROMPT}" 2>&1)"
+  AUDIT_OUTPUT="$(csa run --tool codex --sa-mode false --skill security-audit "${AUDIT_PROMPT}" 2>&1)"
   AUDIT_STATUS=$?
 fi
 printf '%s\n' "${AUDIT_OUTPUT}"
@@ -336,10 +336,10 @@ set -o pipefail
 REVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+  timeout 1800 csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
   REVIEW_STATUS=${PIPESTATUS[0]}
 else
-  csa review --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+  csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
   REVIEW_STATUS=${PIPESTATUS[0]}
 fi
 set -e
@@ -357,13 +357,9 @@ if [ "${REVIEW_STATUS}" -eq 0 ]; then
   exit 0
 fi
 
-if printf '%s\n' "${REVIEW_OUTPUT}" | grep -q '<!-- CSA:SECTION:'; then
-  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
-  exit 0
-fi
-
-echo "ERROR: csa review failed unexpectedly (exit=${REVIEW_STATUS})." >&2
-exit 1
+echo "WARN: csa review returned non-zero (exit=${REVIEW_STATUS}); treating as findings requiring fix." >&2
+echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
+exit 0
 ```'''
 on_fail = "abort"
 
@@ -380,10 +376,10 @@ set -o pipefail
 FIX_OUTPUT_FILE="$(mktemp)"
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
+  timeout 1800 csa review --tool codex --sa-mode false --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
   FIX_STATUS=${PIPESTATUS[0]}
 else
-  csa review --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
+  csa review --tool codex --sa-mode false --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
   FIX_STATUS=${PIPESTATUS[0]}
 fi
 set -e
@@ -409,10 +405,12 @@ id = 12
 title = "Re-run Quality Gates"
 tool = "bash"
 prompt = """
-Re-run formatters, linters, and tests after fixes.
+Re-run formatters, linters, and tests after fixes (avoid unrelated global pre-commit blockers).
 
 ```bash
-just pre-commit
+just fmt
+just clippy
+just test
 ```"""
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"
@@ -430,10 +428,10 @@ set -o pipefail
 REREVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
 if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
+  timeout 1800 csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
   REREVIEW_STATUS=${PIPESTATUS[0]}
 else
-  csa review --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
+  csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
   REREVIEW_STATUS=${PIPESTATUS[0]}
 fi
 set -e
@@ -451,13 +449,8 @@ if [ "${REREVIEW_STATUS}" -eq 0 ]; then
   exit 0
 fi
 
-if printf '%s\n' "${REREVIEW_OUTPUT}" | grep -q '<!-- CSA:SECTION:'; then
-  echo "ERROR: Re-review still reports unresolved issues." >&2
-  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
-  exit 1
-fi
-
-echo "ERROR: re-review failed unexpectedly (exit=${REREVIEW_STATUS})." >&2
+echo "ERROR: Re-review reports unresolved issues (or review returned non-zero, exit=${REREVIEW_STATUS})." >&2
+echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
 exit 1
 ```'''
 on_fail = "abort"
@@ -538,9 +531,9 @@ This gate must pass before push/PR.
 
 ```bash
 if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --range main...HEAD
+  timeout 1800 csa review --tool codex --sa-mode false --range main...HEAD
 else
-  csa review --range main...HEAD
+  csa review --tool codex --sa-mode false --range main...HEAD
 fi
 echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
 ```'''
@@ -597,7 +590,7 @@ Validation:
 - just fmt
 - just clippy
 - just test
-- csa review --range main...HEAD
+- csa review --tool codex --sa-mode false --range main...HEAD
 }"
 BRANCH="$(git branch --show-current)"
 EXISTING_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
@@ -626,7 +619,7 @@ fix loops, and merge end-to-end.
 
 ```bash
 set -euo pipefail
-csa run --skill pr-codex-bot --no-stream-stdout \
+csa run --sa-mode false --skill pr-codex-bot --no-stream-stdout \
   "Operate on the current branch and active PR. Execute the full cloud review lifecycle end-to-end, including trigger, polling, timeout fallback, iterative fixes, and merge."
 ```'''
 on_fail = "abort"

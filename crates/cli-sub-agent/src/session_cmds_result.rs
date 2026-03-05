@@ -5,7 +5,10 @@ use std::path::Path;
 
 use csa_session::SessionResult;
 
-use crate::session_cmds::{format_file_size, resolve_session_prefix_with_fallback};
+use crate::session_cmds::{
+    ensure_terminal_result_for_dead_active_session, format_file_size,
+    resolve_session_prefix_with_fallback,
+};
 
 #[derive(Debug, Clone)]
 struct TranscriptSummary {
@@ -83,6 +86,18 @@ pub(crate) fn handle_session_result(
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
     let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
+
+    if let Err(err) = ensure_terminal_result_for_dead_active_session(
+        &project_root,
+        &resolved_id,
+        "session result",
+    ) {
+        tracing::warn!(
+            session_id = %resolved_id,
+            error = %err,
+            "Failed to reconcile dead Active session in session result"
+        );
+    }
 
     // If structured output flags are active, handle them and return early
     if structured.is_active() {
@@ -366,6 +381,17 @@ pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> R
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
+    if let Err(err) = ensure_terminal_result_for_dead_active_session(
+        &project_root,
+        &resolved_id,
+        "session artifacts",
+    ) {
+        tracing::warn!(
+            session_id = %resolved_id,
+            error = %err,
+            "Failed to reconcile dead Active session in session artifacts"
+        );
+    }
     let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
     let output_dir = session_dir.join("output");
 

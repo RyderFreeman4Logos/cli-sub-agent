@@ -1,14 +1,16 @@
 use super::{
-    display_acp_events, display_log_files, print_content_with_tail,
-    resolve_session_prefix_from_dirs, select_sessions_for_list, session_to_json,
-    status_from_phase_and_result, truncate_with_ellipsis,
+    display_acp_events, display_log_files, ensure_terminal_result_for_dead_active_session,
+    handle_session_is_alive, print_content_with_tail, resolve_session_prefix_from_dirs,
+    select_sessions_for_list, session_to_json, status_from_phase_and_result,
+    truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};
 use chrono::Utc;
 use clap::Parser;
 use csa_session::{
     ContextStatus, Genealogy, MetaSessionState, SessionPhase, SessionResult, TaskContext,
-    TokenUsage, create_session, delete_session, load_session, save_session,
+    TokenUsage, create_session, delete_session, get_session_dir, get_session_root, load_result,
+    load_session, save_result, save_session,
 };
 use std::collections::HashMap;
 use tempfile::tempdir;
@@ -44,6 +46,38 @@ fn make_result(status: &str, exit_code: i32) -> SessionResult {
         events_count: 0,
         artifacts: Vec::new(),
     }
+}
+
+#[cfg(unix)]
+fn set_file_mtime_seconds_ago(path: &std::path::Path, seconds_ago: u64) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch");
+    let target = now.saturating_sub(std::time::Duration::from_secs(seconds_ago));
+    let tv_sec = target.as_secs() as libc::time_t;
+    let tv_nsec = target.subsec_nanos() as libc::c_long;
+    let times = [
+        libc::timespec { tv_sec, tv_nsec },
+        libc::timespec { tv_sec, tv_nsec },
+    ];
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path contains NUL");
+    // SAFETY: `utimensat` is called with a valid NUL-terminated path and stack-allocated timespec array.
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+    assert_eq!(rc, 0, "utimensat failed for {}", path.display());
+}
+
+#[cfg(unix)]
+fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            backdate_tree(&entry.path(), seconds_ago);
+        }
+    }
+    set_file_mtime_seconds_ago(path, seconds_ago);
 }
 
 #[test]
@@ -675,4 +709,200 @@ fn session_to_json_includes_depth_and_parent() {
         Some("01PARENT000000000000000000")
     );
     assert_eq!(value.get("depth").and_then(|v| v.as_u64()), Some(2));
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let session = create_session(project, Some("orphan"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    std::fs::create_dir_all(session_dir.join("output")).unwrap();
+    std::fs::write(
+        session_dir.join("output/acp-events.jsonl"),
+        "{\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\"}\n",
+    )
+    .unwrap();
+
+    backdate_tree(&session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+    assert!(reconciled);
+
+    let result = load_result(project, &session_id).unwrap().unwrap();
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(result.summary.contains("session list"));
+    assert!(
+        result
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/acp-events.jsonl"),
+        "fallback should preserve output artifact references"
+    );
+
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(
+        persisted.termination_reason.as_deref(),
+        Some("orphaned_process")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_is_noop_when_result_exists() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let session = create_session(project, Some("already-has-result"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+
+    let existing = SessionResult {
+        summary: "existing result".to_string(),
+        ..make_result("failure", 9)
+    };
+    save_result(project, &session_id, &existing).unwrap();
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session is-alive")
+            .unwrap();
+    assert!(!reconciled);
+
+    let result = load_result(project, &session_id).unwrap().unwrap();
+    assert_eq!(result.summary, "existing result");
+    assert_eq!(result.exit_code, 9);
+}
+
+#[cfg(unix)]
+#[test]
+fn session_to_json_reconciles_orphaned_active_session_status() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let created = create_session(project, Some("json-reconcile"), None, None).unwrap();
+    let session_id = created.meta_session_id.clone();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+
+    let session = load_session(project, &session_id).unwrap();
+    let value = session_to_json(project, &session);
+    assert_eq!(value.get("status").and_then(|v| v.as_str()), Some("Failed"));
+
+    let persisted = load_result(project, &session_id).unwrap();
+    assert!(
+        persisted.is_some(),
+        "status resolution should persist fallback result"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_is_noop_for_non_active_phase() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let created = create_session(project, Some("available-session"), None, None).unwrap();
+    let session_id = created.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    let mut session = load_session(project, &session_id).unwrap();
+    session.phase = SessionPhase::Available;
+    save_session(&session).unwrap();
+
+    backdate_tree(&session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+    assert!(!reconciled);
+    assert!(load_result(project, &session_id).unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let created = create_session(project, Some("alive-session"), None, None).unwrap();
+    let session_id = created.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let locks_dir = session_dir.join("locks");
+    std::fs::create_dir_all(&locks_dir).unwrap();
+    std::fs::write(
+        locks_dir.join("codex.lock"),
+        format!(r#"{{"pid": {}}}"#, std::process::id()),
+    )
+    .unwrap();
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+    assert!(!reconciled);
+    assert!(load_result(project, &session_id).unwrap().is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_persists_into_legacy_session_dir() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let created = create_session(project, Some("legacy-session"), None, None).unwrap();
+    let session_id = created.meta_session_id;
+    let primary_root = get_session_root(project).unwrap();
+    let primary_session_dir = primary_root.join("sessions").join(&session_id);
+    let legacy_sessions_dir = super::legacy_sessions_dir_from_primary_root(&primary_root)
+        .expect("legacy session dir should resolve");
+    let legacy_session_dir = legacy_sessions_dir.join(&session_id);
+    std::fs::create_dir_all(&legacy_sessions_dir).unwrap();
+    std::fs::rename(&primary_session_dir, &legacy_session_dir).unwrap();
+
+    backdate_tree(&legacy_session_dir, 120);
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+    assert!(reconciled);
+    assert!(
+        legacy_session_dir
+            .join(csa_session::result::RESULT_FILE_NAME)
+            .is_file(),
+        "legacy session dir should receive synthetic result"
+    );
+    assert!(load_result(project, &session_id).unwrap().is_some());
+
+    delete_session(project, &session_id).unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn handle_session_is_alive_reconciles_orphaned_active_session() {
+    let td = tempdir().unwrap();
+    let project = td.path();
+
+    let created = create_session(project, Some("is-alive-reconcile"), None, None).unwrap();
+    let session_id = created.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+
+    let alive = handle_session_is_alive(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+    )
+    .unwrap();
+    assert!(!alive);
+
+    let result = load_result(project, &session_id).unwrap();
+    assert!(
+        result.is_some(),
+        "is-alive should reconcile missing terminal result"
+    );
 }
