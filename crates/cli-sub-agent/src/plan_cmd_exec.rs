@@ -60,16 +60,31 @@ pub(super) async fn execute_bash_step(
         super::validate_variable_name(key)?;
     }
 
-    let output = tokio::process::Command::new("bash")
-        .arg("-c")
-        .arg(script)
-        .envs(env_vars.iter())
-        .current_dir(project_root)
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::inherit())
-        .output()
-        .await
-        .context("Failed to spawn bash")?;
+    let output = match spawn_bash(script, env_vars, project_root).await {
+        Ok(output) => output,
+        Err(spawn_error) if is_argument_list_too_long(&spawn_error) => {
+            let reduced_env = reduce_bash_env_for_spawn(script, env_vars);
+            let dropped_vars = env_vars.len().saturating_sub(reduced_env.len());
+            let dropped_bytes: usize = env_vars
+                .iter()
+                .filter(|(key, _)| !reduced_env.contains_key(*key))
+                .map(|(_, value)| value.len())
+                .sum();
+            if dropped_vars == 0 {
+                return Err(spawn_error).context(
+                    "Failed to spawn bash (E2BIG) and no reducible STEP_<id>_OUTPUT/SESSION vars",
+                );
+            }
+            warn!(
+                "{} - bash spawn hit E2BIG; retrying with reduced STEP_* env (dropped {} vars / {} bytes)",
+                label, dropped_vars, dropped_bytes
+            );
+            spawn_bash(script, &reduced_env, project_root)
+                .await
+                .context("Failed to spawn bash after reducing STEP_* environment")?
+        }
+        Err(spawn_error) => return Err(spawn_error).context("Failed to spawn bash"),
+    };
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if !stdout.is_empty() {
@@ -80,6 +95,52 @@ pub(super) async fn execute_bash_step(
         output: stdout,
         session_id: None,
     })
+}
+
+async fn spawn_bash(
+    script: &str,
+    env_vars: &HashMap<String, String>,
+    project_root: &Path,
+) -> std::io::Result<std::process::Output> {
+    tokio::process::Command::new("bash")
+        .arg("-c")
+        .arg(script)
+        .envs(env_vars.iter())
+        .current_dir(project_root)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::inherit())
+        .output()
+        .await
+}
+
+fn reduce_bash_env_for_spawn(
+    script: &str,
+    env_vars: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    env_vars
+        .iter()
+        .filter(|(key, _)| {
+            let key = key.as_str();
+            !is_step_runtime_var(key) || script.contains(key)
+        })
+        .map(|(key, value)| (key.clone(), value.clone()))
+        .collect()
+}
+
+fn is_step_runtime_var(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("STEP_") else {
+        return false;
+    };
+    let Some((step_id, suffix)) = rest.split_once('_') else {
+        return false;
+    };
+    !step_id.is_empty()
+        && step_id.chars().all(|ch| ch.is_ascii_digit())
+        && matches!(suffix, "OUTPUT" | "SESSION")
+}
+
+fn is_argument_list_too_long(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::E2BIG)
 }
 
 /// Execute a step via CSA tool (codex, claude-code, gemini-cli, opencode).
@@ -224,5 +285,61 @@ pub(super) fn truncate(s: &str, max_len: usize) -> String {
         format!("{}...", &first_line[..max_len])
     } else {
         first_line.to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn is_step_runtime_var_only_matches_step_output_and_session() {
+        assert!(is_step_runtime_var("STEP_1_OUTPUT"));
+        assert!(is_step_runtime_var("STEP_22_SESSION"));
+        assert!(!is_step_runtime_var("STEP_OUTPUT"));
+        assert!(!is_step_runtime_var("STEP_1_OUTPUT_JSON"));
+        assert!(!is_step_runtime_var("STEP_A_OUTPUT"));
+        assert!(!is_step_runtime_var("USER_LANGUAGE"));
+    }
+
+    #[test]
+    fn reduce_bash_env_for_spawn_drops_unreferenced_step_runtime_vars() {
+        let env_vars = HashMap::from([
+            ("STEP_1_OUTPUT".to_string(), "large".to_string()),
+            ("STEP_2_SESSION".to_string(), "sid".to_string()),
+            (
+                "USER_LANGUAGE".to_string(),
+                "Chinese (Simplified)".to_string(),
+            ),
+        ]);
+
+        let reduced = reduce_bash_env_for_spawn("echo ok", &env_vars);
+        assert!(!reduced.contains_key("STEP_1_OUTPUT"));
+        assert!(!reduced.contains_key("STEP_2_SESSION"));
+        assert_eq!(
+            reduced.get("USER_LANGUAGE").map(String::as_str),
+            Some("Chinese (Simplified)")
+        );
+    }
+
+    #[test]
+    fn reduce_bash_env_for_spawn_keeps_referenced_step_runtime_vars() {
+        let env_vars = HashMap::from([
+            ("STEP_1_OUTPUT".to_string(), "payload".to_string()),
+            ("STEP_2_SESSION".to_string(), "sid".to_string()),
+            ("SCOPE".to_string(), "demo".to_string()),
+        ]);
+
+        let script = "printf '%s' \"${STEP_1_OUTPUT}\"; printenv STEP_2_SESSION >/dev/null";
+        let reduced = reduce_bash_env_for_spawn(script, &env_vars);
+        assert_eq!(
+            reduced.get("STEP_1_OUTPUT").map(String::as_str),
+            Some("payload")
+        );
+        assert_eq!(
+            reduced.get("STEP_2_SESSION").map(String::as_str),
+            Some("sid")
+        );
+        assert_eq!(reduced.get("SCOPE").map(String::as_str), Some("demo"));
     }
 }

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::executor::Executor;
 use anyhow::{Result, anyhow};
@@ -66,12 +67,57 @@ pub struct TransportResult {
 pub struct LegacyTransport {
     executor: Executor,
 }
+
+const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
+#[cfg(test)]
+const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
+#[cfg(not(test))]
+const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 1_000;
+const GEMINI_RATE_LIMIT_PATTERNS: &[&str] = &[
+    "429",
+    "resource exhausted",
+    "resource_exhausted",
+    "quota exceeded",
+    "too many requests",
+];
+
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
     }
 
-    pub async fn execute_in(
+    fn should_retry_gemini_rate_limited(
+        &self,
+        execution: &ExecutionResult,
+        attempt: u8,
+    ) -> Option<Duration> {
+        if !matches!(self.executor, Executor::GeminiCli { .. })
+            || attempt >= GEMINI_RATE_LIMIT_MAX_ATTEMPTS
+            || !Self::is_gemini_rate_limited(execution)
+        {
+            return None;
+        }
+        Some(Self::gemini_rate_limit_backoff(attempt))
+    }
+
+    fn is_gemini_rate_limited(execution: &ExecutionResult) -> bool {
+        if execution.exit_code == 0 {
+            return false;
+        }
+        let combined = format!("{}\n{}", execution.stderr_output, execution.output);
+        let combined_lower = combined.to_ascii_lowercase();
+        GEMINI_RATE_LIMIT_PATTERNS
+            .iter()
+            .any(|pattern| combined_lower.contains(pattern))
+    }
+
+    fn gemini_rate_limit_backoff(attempt: u8) -> Duration {
+        let exponent = u32::from(attempt.saturating_sub(1));
+        let multiplier = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
+        Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS.saturating_mul(multiplier))
+    }
+
+    async fn execute_in_single_attempt(
         &self,
         prompt: &str,
         work_dir: &Path,
@@ -108,11 +154,8 @@ impl LegacyTransport {
             events: Vec::new(),
         })
     }
-}
 
-#[async_trait]
-impl Transport for LegacyTransport {
-    async fn execute(
+    async fn execute_single_attempt(
         &self,
         prompt: &str,
         tool_state: Option<&ToolState>,
@@ -186,6 +229,73 @@ impl Transport for LegacyTransport {
             provider_session_id: None,
             events: Vec::new(),
         })
+    }
+
+    pub async fn execute_in(
+        &self,
+        prompt: &str,
+        work_dir: &Path,
+        extra_env: Option<&HashMap<String, String>>,
+        stream_mode: StreamMode,
+        idle_timeout_seconds: u64,
+    ) -> Result<TransportResult> {
+        let mut attempt = 1u8;
+        loop {
+            let result = self
+                .execute_in_single_attempt(
+                    prompt,
+                    work_dir,
+                    extra_env,
+                    stream_mode,
+                    idle_timeout_seconds,
+                )
+                .await?;
+            if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
+            {
+                tracing::debug!(
+                    attempt,
+                    max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
+                    backoff_ms = backoff.as_millis(),
+                    "gemini-cli rate limit detected in execute_in; retrying silently"
+                );
+                tokio::time::sleep(backoff).await;
+                attempt = attempt.saturating_add(1);
+                continue;
+            }
+            return Ok(result);
+        }
+    }
+}
+
+#[async_trait]
+impl Transport for LegacyTransport {
+    async fn execute(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
+        options: TransportOptions<'_>,
+    ) -> Result<TransportResult> {
+        let mut attempt = 1u8;
+        loop {
+            let result = self
+                .execute_single_attempt(prompt, tool_state, session, extra_env, options.clone())
+                .await?;
+            if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
+            {
+                tracing::debug!(
+                    attempt,
+                    max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
+                    backoff_ms = backoff.as_millis(),
+                    "gemini-cli rate limit detected; retrying silently"
+                );
+                tokio::time::sleep(backoff).await;
+                attempt = attempt.saturating_add(1);
+                continue;
+            }
+            return Ok(result);
+        }
     }
 
     #[cfg(test)]
@@ -541,6 +651,67 @@ mod tests {
     fn test_build_summary_falls_back_to_exit_code_when_no_output() {
         let summary = build_summary("", "   \n", -1);
         assert_eq!(summary, "exit code -1");
+    }
+
+    #[test]
+    fn test_should_retry_gemini_rate_limited_until_final_attempt() {
+        let transport = LegacyTransport::new(Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        });
+        let execution = ExecutionResult {
+            summary: "failed".to_string(),
+            output: String::new(),
+            stderr_output: "HTTP 429 Too Many Requests".to_string(),
+            exit_code: 1,
+        };
+
+        assert!(
+            transport
+                .should_retry_gemini_rate_limited(&execution, 1)
+                .is_some()
+        );
+        assert!(
+            transport
+                .should_retry_gemini_rate_limited(&execution, 2)
+                .is_some()
+        );
+        assert!(
+            transport
+                .should_retry_gemini_rate_limited(&execution, 3)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_should_not_retry_on_success_exit_code() {
+        let transport = LegacyTransport::new(Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        });
+        let execution = ExecutionResult {
+            summary: "ok".to_string(),
+            output: "429".to_string(),
+            stderr_output: String::new(),
+            exit_code: 0,
+        };
+        assert!(
+            transport
+                .should_retry_gemini_rate_limited(&execution, 1)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn test_gemini_rate_limit_backoff_is_exponential() {
+        assert_eq!(
+            LegacyTransport::gemini_rate_limit_backoff(1),
+            Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS)
+        );
+        assert_eq!(
+            LegacyTransport::gemini_rate_limit_backoff(2),
+            Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS * 2)
+        );
     }
 
     include!("transport_tests_tail.rs");

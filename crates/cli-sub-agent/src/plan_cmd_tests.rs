@@ -960,6 +960,36 @@ async fn execute_step_bash_passes_variables_as_env() {
 }
 
 #[tokio::test]
+async fn execute_step_bash_recovers_from_e2big_with_reduced_step_env() {
+    // Inject an oversized STEP_* variable to force spawn fallback.
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "recover e2big".into(),
+        tool: Some("bash".into()),
+        prompt: "```bash\nprintf '%s' \"${MSG}\" > output.txt\n```".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let mut vars = HashMap::new();
+    vars.insert("MSG".into(), "ok".into());
+    vars.insert("STEP_1_OUTPUT".into(), "x".repeat(16 * 1024 * 1024));
+
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+    assert_eq!(
+        result.exit_code, 0,
+        "bash step should recover from oversized STEP_* env injection"
+    );
+
+    let content = std::fs::read_to_string(tmp.path().join("output.txt")).unwrap();
+    assert_eq!(content.trim(), "ok");
+}
+
+#[tokio::test]
 async fn execute_step_bash_step_output_with_shell_metacharacters_is_not_executed() {
     let plan = ExecutionPlan {
         name: "injection-check".into(),
