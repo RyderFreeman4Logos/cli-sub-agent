@@ -22,7 +22,8 @@ Resolve planning language for TODO content with deterministic priority:
 1) `${USER_LANGUAGE}` override
 2) `${CSA_USER_LANGUAGE}` environment
 3) detect from `${FEATURE}` text
-4) fallback to English
+4) default to Chinese (Simplified) for mixed/unknown script
+5) fallback to Chinese (Simplified) when `${FEATURE}` is empty
 
 ```bash
 if [[ -n "${USER_LANGUAGE:-}" ]]; then
@@ -54,14 +55,14 @@ if printf '%s' "${FEATURE:-}" | rg -q '[\p{Devanagari}]'; then
   exit 0
 fi
 if printf '%s' "${FEATURE:-}" | rg -q '[\p{Han}]'; then
-  echo "Feature Language (Han script)"
+  echo "Chinese (Simplified)"
   exit 0
 fi
 if [[ -n "${FEATURE:-}" ]]; then
-  echo "Feature Language"
+  echo "Chinese (Simplified)"
   exit 0
 fi
-echo "English"
+echo "Chinese (Simplified)"
 ```
 
 ## Step 1: Phase 1 — RECON Dimension 1 (Structure)
@@ -133,7 +134,7 @@ Capture debate stdout, then normalize into a structured evidence packet
 for mechanical validation.
 
 ```bash
-LANGUAGE="${STEP_50_OUTPUT:-English}"
+LANGUAGE="${STEP_50_OUTPUT:-Chinese (Simplified)}"
 DEBATE_PROMPT="$(printf '%s\n' \
 "Critically evaluate this draft TODO plan and threat model. Act as a devil's advocate." \
 "" \
@@ -145,7 +146,7 @@ DEBATE_PROMPT="$(printf '%s\n' \
 "" \
 "## Output Requirements" \
 "Provide explicit verdict and confidence in your conclusion." )"
-DEBATE_JSON="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3 --format json)" || { echo "csa debate failed" >&2; exit 1; }
+DEBATE_JSON="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --tool gemini-cli --rounds 3 --format json)" || { echo "csa debate failed" >&2; exit 1; }
 [[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
 RAW_VERDICT="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.verdict // "UNKNOWN"' | tr '[:lower:]' '[:upper:]')"
 case "${RAW_VERDICT}" in
@@ -162,6 +163,7 @@ fi
 [[ -n "${KEY_POINTS:-}" ]] || { KEY_POINTS="No concrete concerns surfaced; keep current plan with careful verification."; }
 printf '%s\n' "DEBATE_EVIDENCE:"
 printf '%s\n' "- method: csa debate"
+printf '%s\n' "- tool: gemini-cli"
 printf '%s\n' "- rounds: 3"
 printf '%s\n' "- language: ${LANGUAGE}"
 printf '%s\n' "- raw_verdict: ${RAW_VERDICT:-UNKNOWN}"
@@ -220,7 +222,7 @@ and writing intermediate files outside the TODO path.
 [[ -n "${STEP_7_OUTPUT:-}" ]] || { echo "STEP_7_OUTPUT is empty — Step 7 (revise) must output the finalized TODO as text" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -qE '^- \[ \] .+' || { echo "STEP_7_OUTPUT has no non-empty checkbox tasks" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -q 'DONE WHEN:' || { echo "STEP_7_OUTPUT has no DONE WHEN clauses" >&2; exit 1; }
-RESOLVED_LANGUAGE="${STEP_50_OUTPUT:-English}"
+RESOLVED_LANGUAGE="${STEP_50_OUTPUT:-Chinese (Simplified)}"
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
   TASK_COUNT=$(printf '%s\n' "${STEP_7_OUTPUT}" | grep -cE '^- \[ \] .+')
   MIN_HAN="${TASK_COUNT}"

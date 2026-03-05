@@ -70,8 +70,8 @@ Priority:
 1) Explicit ${USER_LANGUAGE}
 2) Environment ${CSA_USER_LANGUAGE}
 3) Script-aware detection from ${FEATURE}
-4) Preserve feature language when script is unknown
-5) Fallback to English only when ${FEATURE} is empty
+4) Default to Chinese (Simplified) when script is mixed/unknown
+5) Fallback to Chinese (Simplified) when ${FEATURE} is empty
 
 ```bash
 if [[ -n "${USER_LANGUAGE:-}" ]]; then
@@ -103,14 +103,14 @@ if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Devanagari}]'; then
   exit 0
 fi
 if printf '%s' "${FEATURE:-}" | rg -q '[\\p{Han}]'; then
-  echo "Feature Language (Han script)"
+  echo "Chinese (Simplified)"
   exit 0
 fi
 if [[ -n "${FEATURE:-}" ]]; then
-  echo "Feature Language"
+  echo "Chinese (Simplified)"
   exit 0
 fi
-echo "English"
+echo "Chinese (Simplified)"
 ```"""
 on_fail = "abort"
 
@@ -215,7 +215,7 @@ Capture debate stdout, then normalize into a structured evidence packet
 for mechanical validation in Step 6.5.
 
 ```bash
-LANGUAGE="${STEP_50_OUTPUT:-English}"
+LANGUAGE="${STEP_50_OUTPUT:-Chinese (Simplified)}"
 DEBATE_PROMPT="$(printf '%s\n' \
 "Critically evaluate this draft TODO plan and threat model. Act as a devil's advocate." \
 "" \
@@ -321,7 +321,7 @@ and writing intermediate files outside the TODO path.
 [[ -n "${STEP_7_OUTPUT:-}" ]] || { echo "STEP_7_OUTPUT is empty — Step 7 (revise) must output the finalized TODO as text" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -qE '^- \\[ \\] .+' || { echo "STEP_7_OUTPUT has no non-empty checkbox tasks" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -q 'DONE WHEN:' || { echo "STEP_7_OUTPUT has no DONE WHEN clauses" >&2; exit 1; }
-RESOLVED_LANGUAGE="${STEP_50_OUTPUT:-English}"
+RESOLVED_LANGUAGE="${STEP_50_OUTPUT:-Chinese (Simplified)}"
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
   TASK_COUNT=$(printf '%s\n' "${STEP_7_OUTPUT}" | grep -cE '^- \\[ \\] .+')
   MIN_HAN="${TASK_COUNT}"
