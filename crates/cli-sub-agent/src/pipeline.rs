@@ -858,6 +858,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
     let events_count = transport_result.events.len() as u64;
+    let executed_shell_commands =
+        crate::run_cmd::extract_executed_shell_commands_from_events(&transport_result.events);
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let mut result = transport_result.execution;
@@ -920,7 +922,12 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &output_format,
             policy_evaluation_failed,
         );
-        crate::run_cmd::apply_no_verify_commit_policy(&mut result, &output_format, prompt);
+        crate::run_cmd::apply_no_verify_commit_policy(
+            &mut result,
+            &output_format,
+            prompt,
+            &executed_shell_commands,
+        );
     }
 
     // Delegate post-execution processing (state updates, persistence, hooks, memory).
