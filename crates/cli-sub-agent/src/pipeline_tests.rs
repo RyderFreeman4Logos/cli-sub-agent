@@ -1094,6 +1094,99 @@ fn result_toml_path_contract_prefers_summary_path_when_output_has_no_path() {
 }
 
 #[test]
+fn result_toml_path_contract_accepts_user_result_artifact_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_result_path = temp.path().join("output").join("user-result.toml");
+    fs::create_dir_all(user_result_path.parent().unwrap()).unwrap();
+    fs::write(
+        &user_result_path,
+        r#"status = "success"
+summary = "ok"
+"#,
+    )
+    .unwrap();
+
+    let mut result = ExecutionResult {
+        output: format!("{}\n", user_result_path.display()),
+        stderr_output: String::new(),
+        summary: "ok".to_string(),
+        exit_code: 0,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        temp.path(),
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "ok");
+    assert!(result.stderr_output.is_empty());
+}
+
+#[test]
+fn result_toml_path_contract_accepts_verified_user_result_fallback_on_output_mismatch() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_result_path = temp.path().join("output").join("user-result.toml");
+    fs::create_dir_all(user_result_path.parent().unwrap()).unwrap();
+    fs::write(
+        &user_result_path,
+        r#"status = "success"
+summary = "ok"
+"#,
+    )
+    .unwrap();
+
+    let mut result = ExecutionResult {
+        output: "progress line before path\n".to_string(),
+        stderr_output: String::new(),
+        summary: "not-a-path".to_string(),
+        exit_code: 0,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        temp.path(),
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert_eq!(result.summary, "not-a-path");
+    assert!(
+        result
+            .stderr_output
+            .contains("contract warning: output/summary path mismatch")
+    );
+}
+
+#[test]
+fn result_toml_path_contract_rejects_invalid_user_result_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let user_result_path = temp.path().join("output").join("user-result.toml");
+    fs::create_dir_all(user_result_path.parent().unwrap()).unwrap();
+    fs::write(&user_result_path, "not valid toml {{{{").unwrap();
+
+    let mut result = ExecutionResult {
+        output: "progress only\n".to_string(),
+        stderr_output: String::new(),
+        summary: "still-not-a-path".to_string(),
+        exit_code: 0,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        temp.path(),
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 1);
+    assert!(result.summary.contains("contract violation"));
+}
+
+#[test]
 fn result_toml_path_contract_ignores_embedded_marker_substring() {
     let temp = tempfile::tempdir().unwrap();
     let mut result = ExecutionResult {

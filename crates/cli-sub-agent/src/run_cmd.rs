@@ -37,6 +37,9 @@ const POST_RUN_POLICY_BLOCKED_SUMMARY: &str =
     "post-run policy blocked: workspace mutated without commit";
 const POST_RUN_POLICY_UNVERIFIABLE_SUMMARY: &str =
     "post-run policy blocked: unable to verify workspace mutation state";
+const POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY: &str =
+    "post-run policy blocked: forbidden git commit --no-verify detected";
+const ALLOW_NO_VERIFY_COMMIT_MARKER: &str = "allow_git_commit_no_verify=1";
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
@@ -1454,7 +1457,9 @@ fn changed_paths_from_status(status: &str, limit: usize) -> Vec<String> {
 }
 
 fn is_post_run_commit_policy_block(summary: &str) -> bool {
-    summary == POST_RUN_POLICY_BLOCKED_SUMMARY || summary == POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
+    summary == POST_RUN_POLICY_BLOCKED_SUMMARY
+        || summary == POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
+        || summary == POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY
 }
 
 pub(crate) fn apply_post_run_commit_policy(
@@ -1524,6 +1529,49 @@ pub(crate) fn apply_unverifiable_commit_policy(
     }
 }
 
+pub(crate) fn apply_no_verify_commit_policy(
+    result: &mut csa_process::ExecutionResult,
+    output_format: &OutputFormat,
+    prompt: &str,
+) {
+    if prompt_allows_no_verify_commit(prompt) {
+        return;
+    }
+
+    let matched_lines = detect_no_verify_commit_lines(result);
+    if matched_lines.is_empty() {
+        return;
+    }
+
+    let previous_summary = result.summary.clone();
+    if result.exit_code == 0 {
+        result.exit_code = 1;
+    }
+    if !previous_summary.trim().is_empty()
+        && previous_summary != POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY
+    {
+        append_stderr_block(
+            &mut result.stderr_output,
+            &format!("Original summary before commit policy: {previous_summary}"),
+        );
+    }
+    result.summary = POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY.to_string();
+
+    let mut message = String::from(
+        "ERROR: forbidden `git commit --no-verify` (or `git commit -n`) detected in tool output.\n\
+If this is intentional, add `ALLOW_GIT_COMMIT_NO_VERIFY=1` to the prompt.\n\
+Matched lines:",
+    );
+    for line in matched_lines {
+        message.push_str("\n- ");
+        message.push_str(&line);
+    }
+    match output_format {
+        OutputFormat::Text => eprintln!("{message}"),
+        OutputFormat::Json => append_stderr_block(&mut result.stderr_output, &message),
+    }
+}
+
 fn format_post_run_commit_guard_message(
     guard: &PostRunCommitGuard,
     enforce_closed_policy: bool,
@@ -1548,6 +1596,72 @@ fn format_post_run_commit_guard_message(
         lines.push(format!("Changed paths: {}", guard.changed_paths.join(", ")));
     }
     lines.join("\n")
+}
+
+fn prompt_allows_no_verify_commit(prompt: &str) -> bool {
+    prompt.lines().any(|line| {
+        let normalized = strip_marker_line_prefix(line).trim().to_ascii_lowercase();
+        normalized == ALLOW_NO_VERIFY_COMMIT_MARKER
+            || normalized == format!("policy override: {ALLOW_NO_VERIFY_COMMIT_MARKER}")
+    })
+}
+
+fn strip_marker_line_prefix(line: &str) -> &str {
+    let trimmed = line.trim_start();
+    if let Some(stripped) = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("* "))
+        .or_else(|| trimmed.strip_prefix("+ "))
+    {
+        return stripped.trim_start();
+    }
+
+    let digit_count = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digit_count > 0 {
+        let suffix = &trimmed[digit_count..];
+        if let Some(stripped) = suffix
+            .strip_prefix(". ")
+            .or_else(|| suffix.strip_prefix(") "))
+        {
+            return stripped.trim_start();
+        }
+    }
+
+    trimmed
+}
+
+fn detect_no_verify_commit_lines(result: &csa_process::ExecutionResult) -> Vec<String> {
+    let mut matches = Vec::new();
+    collect_no_verify_commit_lines(&result.output, &mut matches);
+    collect_no_verify_commit_lines(&result.summary, &mut matches);
+    collect_no_verify_commit_lines(&result.stderr_output, &mut matches);
+    matches
+}
+
+fn collect_no_verify_commit_lines(source: &str, matches: &mut Vec<String>) {
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let lower = trimmed.to_ascii_lowercase();
+        if !lower.contains("git") || !lower.contains("commit") {
+            continue;
+        }
+
+        let has_long_flag = lower.contains("--no-verify");
+        let has_short_flag = trimmed
+            .split_whitespace()
+            .any(|token| token.trim_matches(|ch: char| ",;:()".contains(ch)) == "-n");
+        if !(has_long_flag || has_short_flag) {
+            continue;
+        }
+
+        if matches.iter().any(|existing| existing == trimmed) {
+            continue;
+        }
+        matches.push(trimmed.to_string());
+    }
 }
 
 fn append_stderr_block(stderr_output: &mut String, block: &str) {
