@@ -210,7 +210,7 @@ id = 6
 title = "Phase 3 — Adversarial Debate"
 tool = "bash"
 prompt = """
-Run explicit adversarial debate via `csa debate --tool gemini-cli`.
+Run explicit adversarial debate via `csa debate`.
 Capture debate stdout, then normalize into a structured evidence packet
 for mechanical validation in Step 6.5.
 
@@ -227,7 +227,7 @@ DEBATE_PROMPT="$(printf '%s\n' \
 "" \
 "## Output Requirements" \
 "Provide explicit verdict and confidence in your conclusion." )"
-DEBATE_JSON="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --tool gemini-cli --rounds 3 --format json)" || { echo "csa debate failed" >&2; exit 1; }
+DEBATE_JSON="$(printf '%s\n' "${DEBATE_PROMPT}" | csa debate --rounds 3 --format json)" || { echo "csa debate failed" >&2; exit 1; }
 [[ -n "${DEBATE_JSON:-}" ]] || { echo "empty debate json output" >&2; exit 1; }
 RAW_VERDICT="$(printf '%s\n' "${DEBATE_JSON}" | jq -r '.verdict // "UNKNOWN"' | tr '[:lower:]' '[:upper:]')"
 case "${RAW_VERDICT}" in
@@ -244,7 +244,6 @@ fi
 [[ -n "${KEY_POINTS:-}" ]] || { KEY_POINTS="No concrete concerns surfaced; keep current plan with careful verification."; }
 printf '%s\n' "DEBATE_EVIDENCE:"
 printf '%s\n' "- method: csa debate"
-printf '%s\n' "- tool: gemini-cli"
 printf '%s\n' "- rounds: 3"
 printf '%s\n' "- language: ${LANGUAGE}"
 printf '%s\n' "- raw_verdict: ${RAW_VERDICT:-UNKNOWN}"
