@@ -1,7 +1,8 @@
 use super::{
-    compute_token_measurement, display_all_sections, display_single_section,
-    display_summary_section, format_number,
+    StructuredOutputOpts, compute_token_measurement, display_all_sections, display_single_section,
+    display_summary_section, format_number, handle_session_artifacts, handle_session_result,
 };
+use csa_session::{create_session, get_session_dir, load_result};
 use tempfile::tempdir;
 
 // ── display_structured_output tests ───────────────────────────────
@@ -200,4 +201,84 @@ fn measure_single_named_section_is_structured() {
     assert!(m.is_structured);
     assert_eq!(m.section_count, 1);
     assert_eq!(m.section_names, vec!["report"]);
+}
+
+#[cfg(unix)]
+fn set_file_mtime_seconds_ago(path: &std::path::Path, seconds_ago: u64) {
+    use std::ffi::CString;
+    use std::os::unix::ffi::OsStrExt;
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock before unix epoch");
+    let target = now.saturating_sub(std::time::Duration::from_secs(seconds_ago));
+    let tv_sec = target.as_secs() as libc::time_t;
+    let tv_nsec = target.subsec_nanos() as libc::c_long;
+    let times = [
+        libc::timespec { tv_sec, tv_nsec },
+        libc::timespec { tv_sec, tv_nsec },
+    ];
+    let c_path = CString::new(path.as_os_str().as_bytes()).expect("path contains NUL");
+    // SAFETY: `utimensat` receives a valid C path pointer and valid timespec array.
+    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+    assert_eq!(rc, 0, "utimensat failed for {}", path.display());
+}
+
+#[cfg(unix)]
+fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path).expect("read_dir") {
+            let entry = entry.expect("dir entry");
+            backdate_tree(&entry.path(), seconds_ago);
+        }
+    }
+    set_file_mtime_seconds_ago(path, seconds_ago);
+}
+
+#[cfg(unix)]
+#[test]
+fn handle_session_result_reconciles_orphaned_active_session() {
+    let tmp = tempdir().unwrap();
+    let project = tmp.path();
+
+    let session = create_session(project, Some("result-reconcile"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+
+    handle_session_result(
+        session_id.clone(),
+        false,
+        Some(project.to_string_lossy().into_owned()),
+        StructuredOutputOpts::default(),
+    )
+    .unwrap();
+
+    assert!(
+        load_result(project, &session_id).unwrap().is_some(),
+        "session result command should reconcile missing terminal result"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn handle_session_artifacts_reconciles_orphaned_active_session() {
+    let tmp = tempdir().unwrap();
+    let project = tmp.path();
+
+    let session = create_session(project, Some("artifacts-reconcile"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+
+    handle_session_artifacts(
+        session_id.clone(),
+        Some(project.to_string_lossy().into_owned()),
+    )
+    .unwrap();
+
+    assert!(
+        load_result(project, &session_id).unwrap().is_some(),
+        "session artifacts command should reconcile missing terminal result"
+    );
 }

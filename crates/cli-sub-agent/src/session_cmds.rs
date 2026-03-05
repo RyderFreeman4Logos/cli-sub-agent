@@ -1,15 +1,16 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use csa_session::checkpoint::CheckpointNote;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tracing::info;
+use tracing::{info, warn};
 
 use csa_config::paths;
 use csa_core::types::OutputFormat;
 use csa_session::{
-    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_sessions,
-    list_sessions_tree_filtered, load_result, load_session, resolve_session_prefix,
+    MetaSessionState, SessionArtifact, SessionPhase, SessionResult, delete_session,
+    get_session_dir, list_sessions, list_sessions_tree_filtered, load_result, load_session,
+    resolve_session_prefix, save_session_in,
 };
 
 // Re-export types and functions from session_cmds_result so that
@@ -69,9 +70,109 @@ fn status_from_phase_and_result(
     }
 }
 
+pub(crate) fn ensure_terminal_result_for_dead_active_session(
+    project_root: &Path,
+    session_id: &str,
+    trigger: &str,
+) -> Result<bool> {
+    let mut session = load_session(project_root, session_id)?;
+    if !matches!(session.phase, SessionPhase::Active) {
+        return Ok(false);
+    }
+
+    let session_dir = get_session_dir(project_root, session_id)?;
+    if csa_process::ToolLiveness::is_alive(&session_dir) {
+        return Ok(false);
+    }
+
+    if load_result(project_root, session_id)?.is_some() {
+        return Ok(false);
+    }
+
+    let now = chrono::Utc::now();
+    let tool_name = session
+        .tools
+        .iter()
+        .max_by_key(|(_, state)| state.updated_at)
+        .map(|(tool, _)| tool.clone())
+        .unwrap_or_else(|| "unknown".to_string());
+    let artifacts = csa_session::list_artifacts(project_root, session_id)?
+        .into_iter()
+        .map(|name| SessionArtifact::new(format!("output/{name}")))
+        .collect::<Vec<_>>();
+    let started_at = std::cmp::min(session.last_accessed, now);
+    let fallback = SessionResult {
+        status: "failure".to_string(),
+        exit_code: 1,
+        summary: format!(
+            "synthetic terminal failure by {trigger}: process not alive and result.toml missing"
+        ),
+        tool: tool_name,
+        started_at,
+        completed_at: now,
+        events_count: 0,
+        artifacts,
+    };
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    if result_path.exists() {
+        return Ok(false);
+    }
+    let result_contents = toml::to_string_pretty(&fallback)
+        .map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
+    fs::write(&result_path, result_contents).map_err(|err| {
+        anyhow!(
+            "Failed to write synthetic result for {session_id} to {}: {err}",
+            result_path.display()
+        )
+    })?;
+    session.termination_reason = Some("orphaned_process".to_string());
+    let session_root = session_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("Invalid session dir layout: {}", session_dir.display()))?;
+    save_session_in(session_root, &session)?;
+    warn!(
+        session_id = %session_id,
+        trigger = %trigger,
+        "Recovered orphaned Active session by persisting synthetic terminal result"
+    );
+    Ok(true)
+}
+
 fn resolve_session_status(project_root: &Path, session: &MetaSessionState) -> String {
     match load_result(project_root, &session.meta_session_id) {
-        Ok(result) => status_from_phase_and_result(&session.phase, result.as_ref()).to_string(),
+        Ok(Some(result)) => status_from_phase_and_result(&session.phase, Some(&result)).to_string(),
+        Ok(None) => {
+            match ensure_terminal_result_for_dead_active_session(
+                project_root,
+                &session.meta_session_id,
+                "session list",
+            ) {
+                Ok(true) => match load_result(project_root, &session.meta_session_id) {
+                    Ok(Some(result)) => {
+                        status_from_phase_and_result(&session.phase, Some(&result)).to_string()
+                    }
+                    Ok(None) => phase_label(&session.phase).to_string(),
+                    Err(err) => {
+                        tracing::warn!(
+                            session_id = %session.meta_session_id,
+                            error = %err,
+                            "Failed to load synthesized result.toml while listing sessions"
+                        );
+                        "Error".to_string()
+                    }
+                },
+                Ok(false) => phase_label(&session.phase).to_string(),
+                Err(err) => {
+                    tracing::warn!(
+                        session_id = %session.meta_session_id,
+                        error = %err,
+                        "Failed to reconcile dead Active session while listing sessions"
+                    );
+                    phase_label(&session.phase).to_string()
+                }
+            }
+        }
         Err(err) => {
             tracing::warn!(
                 session_id = %session.meta_session_id,
@@ -502,6 +603,19 @@ pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Re
     } else {
         "not alive"
     };
+    if !alive
+        && let Err(err) = ensure_terminal_result_for_dead_active_session(
+            &project_root,
+            &resolved_id,
+            "session is-alive",
+        )
+    {
+        tracing::warn!(
+            session_id = %resolved_id,
+            error = %err,
+            "Failed to reconcile dead Active session in session is-alive"
+        );
+    }
     println!("{label}");
     Ok(alive)
 }
