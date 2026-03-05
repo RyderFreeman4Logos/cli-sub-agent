@@ -73,7 +73,8 @@ pub enum Commands {
         /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
         #[arg(long)]
         skill: Option<String>,
-
+        #[arg(long, value_name = "BOOL")]
+        sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
 
@@ -253,7 +254,8 @@ pub enum Commands {
     Batch {
         /// Path to batch TOML file
         file: String,
-
+        #[arg(long, value_name = "BOOL")]
+        sa_mode: Option<bool>,
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
@@ -335,7 +337,8 @@ pub struct ReviewArgs {
     /// Tool to use for review (defaults to global [review] config or project fallback)
     #[arg(long)]
     pub tool: Option<ToolName>,
-
+    #[arg(long, value_name = "BOOL")]
+    pub sa_mode: Option<bool>,
     /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
     #[arg(long)]
     pub force_override_user_config: bool,
@@ -421,7 +424,8 @@ pub struct ReviewArgs {
 pub struct DebateArgs {
     /// The question or problem to debate; reads from stdin if omitted
     pub question: Option<String>,
-
+    #[arg(long, value_name = "BOOL")]
+    pub sa_mode: Option<bool>,
     /// Tool to use for debate (overrides auto heterogeneous selection)
     #[arg(long)]
     pub tool: Option<ToolName>,
@@ -471,7 +475,8 @@ pub struct DebateArgs {
 pub struct ClaudeSubAgentArgs {
     /// Task prompt; reads from stdin if omitted
     pub question: Option<String>,
-
+    #[arg(long, value_name = "BOOL")]
+    pub sa_mode: Option<bool>,
     /// Tool to use (overrides config-based selection)
     #[arg(long)]
     pub tool: Option<ToolArg>,
@@ -774,7 +779,8 @@ pub enum PlanCommands {
     Run {
         /// Path to workflow TOML file
         file: String,
-
+        #[arg(long, value_name = "BOOL")]
+        sa_mode: Option<bool>,
         /// Variable override (KEY=VALUE, repeatable)
         #[arg(long = "var", value_name = "KEY=VALUE")]
         vars: Vec<String>,

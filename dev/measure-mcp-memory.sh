@@ -182,7 +182,7 @@ measure_via_csa() {
         tmpdir=$(mktemp -d)
 
         # shellcheck disable=SC2086
-        env -u CLAUDECODE csa run --tool claude-code $lean_flag \
+        env -u CLAUDECODE csa run --sa-mode false --tool claude-code $lean_flag \
             --no-stream-stdout \
             "Respond with exactly: READY" \
             > "$tmpdir/stdout" 2>"$tmpdir/stderr" &

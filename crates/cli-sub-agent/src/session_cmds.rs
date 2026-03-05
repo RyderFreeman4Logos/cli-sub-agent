@@ -350,7 +350,7 @@ pub(crate) fn handle_session_compress(session: String, cd: Option<String>) -> Re
     println!();
     println!("To compress, resume the session and send the command:");
     println!(
-        "  csa run --tool {} --session {} \"{}\"",
+        "  csa run --sa-mode <true|false> --tool {} --session {} \"{}\"",
         tool_name, resolved_id, compress_cmd
     );
     println!();

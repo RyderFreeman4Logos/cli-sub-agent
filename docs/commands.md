@@ -8,11 +8,12 @@ machine-readable output.
 Run a prompt against an AI tool with session management and resource checks.
 
 ```bash
-csa run [OPTIONS] [PROMPT]
+csa run --sa-mode false [OPTIONS] [PROMPT]
 ```
 
 | Flag | Description |
 |------|-------------|
+| `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
 | `--tool <TOOL>` | Tool selection: `auto` (default), `any-available`, or specific name |
 | `--skill <NAME>` | Run a named skill as a sub-agent |
 | `--session <ID>` | Resume existing session (ULID or prefix) |
@@ -36,11 +37,11 @@ If `PROMPT` is omitted, reads from stdin.
 **Examples:**
 
 ```bash
-csa run "fix the login bug"
-csa run --tool codex --thinking high "refactor error handling"
-csa run --model-spec "codex/openai/gpt-5.3-codex/xhigh" "complex task"
-csa run --last "continue where I left off"
-echo "analyze this" | csa run --tool gemini-cli
+csa run --sa-mode false "fix the login bug"
+csa run --sa-mode false --tool codex --thinking high "refactor error handling"
+csa run --sa-mode false --model-spec "codex/openai/gpt-5.3-codex/xhigh" "complex task"
+csa run --sa-mode false --last "continue where I left off"
+echo "analyze this" | csa run --sa-mode false --tool gemini-cli
 ```
 
 ## `csa review` -- Code review
@@ -48,11 +49,12 @@ echo "analyze this" | csa run --tool gemini-cli
 Review code changes using a heterogeneous AI model.
 
 ```bash
-csa review [OPTIONS]
+csa review --sa-mode false [OPTIONS]
 ```
 
 | Flag | Description |
 |------|-------------|
+| `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
 | `--diff` | Review uncommitted changes (`git diff HEAD`) |
 | `--range <RANGE>` | Review a commit range (e.g., `main...HEAD`) |
 | `--commit <SHA>` | Review a specific commit |
@@ -73,10 +75,10 @@ csa review [OPTIONS]
 **Examples:**
 
 ```bash
-csa review --diff
-csa review --range main...HEAD
-csa review --diff --reviewers 3 --consensus majority
-csa review --diff --fix --security-mode on
+csa review --sa-mode false --diff
+csa review --sa-mode false --range main...HEAD
+csa review --sa-mode false --diff --reviewers 3 --consensus majority
+csa review --sa-mode false --diff --fix --security-mode on
 ```
 
 ## `csa debate` -- Adversarial debate
@@ -84,11 +86,12 @@ csa review --diff --fix --security-mode on
 Run a multi-round debate between heterogeneous AI tools.
 
 ```bash
-csa debate [OPTIONS] [QUESTION]
+csa debate --sa-mode false [OPTIONS] [QUESTION]
 ```
 
 | Flag | Description |
 |------|-------------|
+| `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
 | `--tool <TOOL>` | Override tool selection |
 | `--session <ID>` | Resume existing debate session |
 | `--model <MODEL>` | Override model |
@@ -100,9 +103,9 @@ csa debate [OPTIONS] [QUESTION]
 **Examples:**
 
 ```bash
-csa debate "Should we use anyhow or thiserror?"
-csa debate --session 01JK "reconsider with performance data"
-csa debate --rounds 5 "Redis vs Memcached for session storage"
+csa debate --sa-mode false "Should we use anyhow or thiserror?"
+csa debate --sa-mode false --session 01JK "reconsider with performance data"
+csa debate --sa-mode false --rounds 5 "Redis vs Memcached for session storage"
 ```
 
 ## `csa session` -- Session management
@@ -274,7 +277,7 @@ csa todo status <TIMESTAMP> <STATUS>
 Execute compiled weave workflow files.
 
 ```bash
-csa plan run <FILE> [--var KEY=VALUE...] [--tool <TOOL>] [--dry-run] [--cd <DIR>]
+csa plan run --sa-mode false <FILE> [--var KEY=VALUE...] [--tool <TOOL>] [--dry-run] [--cd <DIR>]
 ```
 
 ## `csa mcp-hub` -- MCP Hub daemon
@@ -360,7 +363,7 @@ csa audit sync
 | `csa doctor` | Check environment and tool availability |
 | `csa gc [--dry-run] [--max-age-days N] [--global]` | Garbage collect expired sessions and locks |
 | `csa tiers list` | List configured tiers with model specs |
-| `csa batch <FILE> [--dry-run]` | Execute tasks from a batch TOML file |
+| `csa batch --sa-mode false <FILE> [--dry-run]` | Execute tasks from a batch TOML file |
 | `csa setup claude-code` | Setup MCP integration for Claude Code |
 | `csa setup codex` | Setup MCP integration for Codex |
 | `csa setup opencode` | Setup MCP integration for OpenCode |

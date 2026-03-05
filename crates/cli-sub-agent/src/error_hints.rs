@@ -13,8 +13,7 @@ const HINT_INSTALL_CLAUDE: &str =
     "hint: install claude-code ACP adapter: npm install -g @zed-industries/claude-code-acp";
 const HINT_INSTALL_OPENCODE: &str =
     "hint: install opencode: go install github.com/opencode-ai/opencode@latest";
-const HINT_RATE_LIMIT: &str =
-    "hint: wait and retry, or try a different tool: csa run --tool <alternative> ...";
+const HINT_RATE_LIMIT: &str = "hint: wait and retry, or try a different tool: csa run --sa-mode <true|false> --tool <alternative> ...";
 const HINT_SLOT_EXHAUSTED: &str = "hint: free slots with 'csa gc' or wait with '--wait' flag";
 const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa session list'";
 const HINT_CONFIG_ERROR: &str =

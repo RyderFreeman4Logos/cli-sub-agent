@@ -106,42 +106,42 @@ For global settings (API keys, concurrency limits), edit
 
 ```bash
 # Auto-select tool from tier config
-csa run "analyze the authentication flow"
+csa run --sa-mode false "analyze the authentication flow"
 
 # Specify a tool
-csa run --tool codex "implement user auth module"
+csa run --sa-mode false --tool codex "implement user auth module"
 
 # Auto-select tool (explicit)
-csa run --tool auto "fix login page bug"
+csa run --sa-mode false --tool auto "fix login page bug"
 ```
 
 ### Resume a session
 
 ```bash
 # Resume the most recent session
-csa run --last "continue the implementation"
+csa run --sa-mode false --last "continue the implementation"
 
 # Resume by ULID prefix
-csa run --session 01JK "continue the refactor"
+csa run --sa-mode false --session 01JK "continue the refactor"
 ```
 
 ### Code review
 
 ```bash
 # Review uncommitted changes (auto-selects heterogeneous model)
-csa review --diff
+csa review --sa-mode false --diff
 
 # Review a commit range
-csa review --range main...HEAD
+csa review --sa-mode false --range main...HEAD
 
 # Multi-reviewer consensus
-csa review --diff --reviewers 3 --consensus majority
+csa review --sa-mode false --diff --reviewers 3 --consensus majority
 ```
 
 ### Adversarial debate
 
 ```bash
-csa debate "Should we use anyhow or thiserror for error handling?"
+csa debate --sa-mode false "Should we use anyhow or thiserror for error handling?"
 ```
 
 ### Session management

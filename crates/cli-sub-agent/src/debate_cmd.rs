@@ -493,7 +493,7 @@ Choose one:\n\
 2) Project config override: {project_path}\n\
    [debate]\n\
    tool = \"codex\"  # or \"claude-code\", \"opencode\", \"gemini-cli\"\n\
-3) CLI override: csa debate --tool codex\n\n\
+3) CLI override: csa debate --sa-mode <true|false> --tool codex\n\n\
 Reason: CSA enforces heterogeneity in auto mode and will not fall back."
     )
 }

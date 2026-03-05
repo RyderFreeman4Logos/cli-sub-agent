@@ -31,16 +31,16 @@ workflows miss.
 
 ```bash
 # Review uncommitted changes
-csa review --diff
+csa review --sa-mode false --diff
 
 # Review a commit range
-csa review --range main...HEAD
+csa review --sa-mode false --range main...HEAD
 
 # Review a specific commit
-csa review --commit abc123
+csa review --sa-mode false --commit abc123
 
 # Review specific files
-csa review --files "src/auth/*.rs"
+csa review --sa-mode false --files "src/auth/*.rs"
 ```
 
 ### Review Scopes
@@ -58,7 +58,7 @@ These are mutually exclusive; specify exactly one.
 ### Review-and-Fix Mode
 
 ```bash
-csa review --diff --fix
+csa review --sa-mode false --diff --fix
 ```
 
 In fix mode, the reviewer applies fixes directly to the codebase
@@ -67,7 +67,7 @@ instead of just reporting issues.
 ### Security Review
 
 ```bash
-csa review --diff --security-mode on
+csa review --sa-mode false --diff --security-mode on
 ```
 
 Security mode (`auto`, `on`, `off`) controls whether the review includes
@@ -80,7 +80,7 @@ For high-stakes reviews, CSA can run multiple reviewers in parallel and
 aggregate their verdicts:
 
 ```bash
-csa review --diff --reviewers 3 --consensus majority
+csa review --sa-mode false --diff --reviewers 3 --consensus majority
 ```
 
 #### How it works
@@ -128,13 +128,13 @@ with a built-in prompt (with a warning).
 
 ```bash
 # Start a debate
-csa debate "Should we use anyhow or thiserror for error handling?"
+csa debate --sa-mode false "Should we use anyhow or thiserror for error handling?"
 
 # Multi-round debate
-csa debate --rounds 5 "Redis vs Memcached for session storage"
+csa debate --sa-mode false --rounds 5 "Redis vs Memcached for session storage"
 
 # Resume a previous debate
-csa debate --session 01JK "reconsider given the benchmark results"
+csa debate --sa-mode false --session 01JK "reconsider given the benchmark results"
 ```
 
 ### How Debate Works
@@ -148,9 +148,9 @@ csa debate --session 01JK "reconsider given the benchmark results"
 ### Debate Configuration
 
 ```bash
-csa debate --rounds 5 --thinking high "complex architecture question"
-csa debate --tool codex "force specific tool"
-csa debate --timeout 600 "time-limited debate"
+csa debate --sa-mode false --rounds 5 --thinking high "complex architecture question"
+csa debate --sa-mode false --tool codex "force specific tool"
+csa debate --sa-mode false --timeout 600 "time-limited debate"
 ```
 
 ### Structured Output
@@ -188,10 +188,10 @@ Both commands stream output to stderr by default when connected to a TTY:
 
 ```bash
 # Force streaming
-csa review --diff --stream-stdout
+csa review --sa-mode false --diff --stream-stdout
 
 # Suppress streaming
-csa review --diff --no-stream-stdout
+csa review --sa-mode false --diff --no-stream-stdout
 ```
 
 ## Related

@@ -172,7 +172,7 @@ smart = "codex/anthropic/claude-opus/xhigh"
 balanced = "codex/anthropic/claude-sonnet/medium"
 ```
 
-Usage: `csa run --model fast "quick check"`
+Usage: `csa run --sa-mode false --model fast "quick check"`
 
 ## Configuration Commands
 

@@ -27,7 +27,7 @@ use crate::pipeline_project_key::resolve_memory_project_key;
 use crate::run_helpers::truncate_prompt;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 #[path = "pipeline_prompt_guard.rs"]
-mod prompt_guard;
+pub(crate) mod prompt_guard;
 use prompt_guard::emit_prompt_guard_to_caller;
 
 pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;

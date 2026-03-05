@@ -22,7 +22,7 @@ Lexicographically Sortable Identifier). Example: `01JH4QWERT1234567890ABCDEF`.
 similar to git commit hashes:
 
 ```bash
-csa run --session 01JH4Q "continue work"
+csa run --sa-mode false --session 01JH4Q "continue work"
 csa session result -s 01JK
 ```
 
@@ -58,7 +58,7 @@ Sessions are created automatically by `csa run` when `--session` is
 not provided:
 
 ```bash
-csa run --tool codex --description "Auth refactor" "analyze auth module"
+csa run --sa-mode false --tool codex --description "Auth refactor" "analyze auth module"
 ```
 
 ### 2. Resume
@@ -66,8 +66,8 @@ csa run --tool codex --description "Auth refactor" "analyze auth module"
 Resume by ID, prefix, or the most recent session:
 
 ```bash
-csa run --session 01JH4Q "continue implementation"
-csa run --last "continue the most recent session"
+csa run --sa-mode false --session 01JH4Q "continue implementation"
+csa run --sa-mode false --last "continue the most recent session"
 ```
 
 ### 3. List
@@ -213,7 +213,7 @@ ACP sessions emit events that are persisted as JSONL transcripts:
 For one-off tasks that don't need persistence:
 
 ```bash
-csa run --ephemeral "quick question about syntax"
+csa run --sa-mode false --ephemeral "quick question about syntax"
 ```
 
 Ephemeral sessions skip project file loading, context injection, and

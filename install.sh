@@ -319,7 +319,7 @@ print_next_steps() {
     echo "  Next steps:"
     echo "    1. Initialize a project:  csa init"
     echo "    2. Check tool status:     csa doctor"
-    echo "    3. Run your first task:   csa run \"hello world\""
+    echo "    3. Run your first task:   csa run --sa-mode false \"hello world\""
     echo ""
     echo "  Documentation: https://github.com/${GITHUB_REPO}"
     echo ""

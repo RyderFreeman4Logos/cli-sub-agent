@@ -176,16 +176,16 @@ condition = "${ISSUES_FOUND}"
 
 ```bash
 # Execute a compiled workflow
-csa plan run workflow.toml
+csa plan run --sa-mode false workflow.toml
 
 # With variable overrides
-csa plan run workflow.toml --var REVIEWERS="security,performance"
+csa plan run --sa-mode false workflow.toml --var REVIEWERS="security,performance"
 
 # Override tool for all steps
-csa plan run workflow.toml --tool codex
+csa plan run --sa-mode false workflow.toml --tool codex
 
 # Dry run (show plan without executing)
-csa plan run workflow.toml --dry-run
+csa plan run --sa-mode false workflow.toml --dry-run
 ```
 
 ### Step Output Forwarding

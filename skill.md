@@ -491,7 +491,7 @@ weave audit
 weave check --fix
 
 # Test a simple run (replace with your preferred tool)
-csa run --tool codex "echo hello from CSA"
+csa run --sa-mode false --tool codex "echo hello from CSA"
 ```
 
 ---
@@ -501,12 +501,12 @@ csa run --tool codex "echo hello from CSA"
 ### CSA Commands
 
 ```bash
-csa run --tool <tool> "prompt"          # Run a task
-csa run --tool auto "prompt"            # Auto-select tool
-csa run --last "continue"               # Resume last session
-csa review --diff                       # Review uncommitted changes
-csa review --reviewers 3                # Multi-reviewer consensus
-csa debate "design question"            # Adversarial model debate
+csa run --sa-mode false --tool <tool> "prompt"          # Run a task
+csa run --sa-mode false --tool auto "prompt"            # Auto-select tool
+csa run --sa-mode false --last "continue"               # Resume last session
+csa review --sa-mode false --diff                       # Review uncommitted changes
+csa review --sa-mode false --reviewers 3                # Multi-reviewer consensus
+csa debate --sa-mode false "design question"            # Adversarial model debate
 csa session list --tree                 # List session tree
 csa gc --dry-run                        # Preview garbage collection
 ```
