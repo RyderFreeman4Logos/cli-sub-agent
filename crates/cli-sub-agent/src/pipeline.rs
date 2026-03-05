@@ -858,6 +858,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
     let events_count = transport_result.events.len() as u64;
+    let execute_events_observed =
+        crate::run_cmd::events_contain_execute_tool_calls(&transport_result.events);
     let executed_shell_commands =
         crate::run_cmd::extract_executed_shell_commands_from_events(&transport_result.events);
     let transcript_artifacts =
@@ -927,6 +929,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &output_format,
             prompt,
             &executed_shell_commands,
+            execute_events_observed,
         );
     }
 

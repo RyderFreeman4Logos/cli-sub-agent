@@ -1534,13 +1534,14 @@ pub(crate) fn apply_no_verify_commit_policy(
     output_format: &OutputFormat,
     prompt: &str,
     executed_shell_commands: &[String],
+    execute_events_observed: bool,
 ) {
     if prompt_allows_no_verify_commit(prompt) {
         return;
     }
 
     let mut matched_commands = detect_no_verify_commit_commands(executed_shell_commands);
-    if matched_commands.is_empty() {
+    if matched_commands.is_empty() && !execute_events_observed {
         matched_commands = detect_no_verify_commit_commands_from_tool_output(
             result,
             !executed_shell_commands.is_empty(),
@@ -1650,6 +1651,35 @@ pub(crate) fn extract_executed_shell_commands_from_events<T: serde::Serialize>(
     commands
 }
 
+pub(crate) fn events_contain_execute_tool_calls<T: serde::Serialize>(events: &[T]) -> bool {
+    for event in events {
+        let Ok(value) = serde_json::to_value(event) else {
+            continue;
+        };
+        if event_value_contains_execute_kind(&value) {
+            return true;
+        }
+    }
+    false
+}
+
+fn event_value_contains_execute_kind(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            if map
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|kind| kind.eq_ignore_ascii_case("execute"))
+            {
+                return true;
+            }
+            map.values().any(event_value_contains_execute_kind)
+        }
+        serde_json::Value::Array(values) => values.iter().any(event_value_contains_execute_kind),
+        _ => false,
+    }
+}
+
 fn collect_execute_titles_from_event_value(value: &serde_json::Value, commands: &mut Vec<String>) {
     match value {
         serde_json::Value::Object(map) => {
@@ -1753,13 +1783,12 @@ fn looks_like_shell_command_line(line: &str) -> bool {
 }
 
 fn has_command_prompt_prefix(line: &str) -> bool {
-    line.starts_with("$ ") || line.starts_with("+ ") || line.starts_with("> ")
+    line.starts_with("$ ") || line.starts_with("+ ")
 }
 
 fn strip_command_prompt_prefix(line: &str) -> &str {
     line.strip_prefix("$ ")
         .or_else(|| line.strip_prefix("+ "))
-        .or_else(|| line.strip_prefix("> "))
         .unwrap_or(line)
 }
 
@@ -1786,6 +1815,7 @@ fn split_shell_segments_preserving_quotes(command: &str) -> Vec<String> {
 
         if in_single_quote {
             if ch == '\'' {
+                current.push(ch);
                 in_single_quote = false;
             } else {
                 current.push(ch);
@@ -1795,7 +1825,10 @@ fn split_shell_segments_preserving_quotes(command: &str) -> Vec<String> {
 
         if in_double_quote {
             match ch {
-                '"' => in_double_quote = false,
+                '"' => {
+                    current.push(ch);
+                    in_double_quote = false;
+                }
                 '\\' => escaped = true,
                 _ => current.push(ch),
             }
@@ -1804,8 +1837,14 @@ fn split_shell_segments_preserving_quotes(command: &str) -> Vec<String> {
 
         match ch {
             '\\' => escaped = true,
-            '\'' => in_single_quote = true,
-            '"' => in_double_quote = true,
+            '\'' => {
+                current.push(ch);
+                in_single_quote = true;
+            }
+            '"' => {
+                current.push(ch);
+                in_double_quote = true;
+            }
             '\n' | ';' => push_shell_segment(&mut segments, &mut current),
             '&' | '|' => {
                 if chars.peek().is_some_and(|next| *next == ch) {
@@ -1848,16 +1887,86 @@ fn segment_contains_forbidden_no_verify_commit(segment: &str) -> bool {
 }
 
 fn tokenize_shell_tokens(segment: &str) -> Vec<String> {
-    segment
-        .split_whitespace()
-        .map(normalize_shell_token)
-        .filter(|token| !token.is_empty())
-        .map(ToString::to_string)
-        .collect()
+    let mut tokens = Vec::new();
+    let mut current = String::new();
+    let mut chars = segment.chars().peekable();
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+    let mut escaped = false;
+
+    while let Some(ch) = chars.next() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if in_single_quote {
+            if ch == '\'' {
+                in_single_quote = false;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        if in_double_quote {
+            if ch == '"' {
+                in_double_quote = false;
+            } else {
+                current.push(ch);
+            }
+            continue;
+        }
+
+        match ch {
+            '\'' => in_single_quote = true,
+            '"' => in_double_quote = true,
+            ch if ch.is_whitespace() => push_shell_token(&mut tokens, &mut current),
+            ';' => {
+                push_shell_token(&mut tokens, &mut current);
+                tokens.push(";".to_string());
+            }
+            '&' => {
+                push_shell_token(&mut tokens, &mut current);
+                if chars.peek().is_some_and(|next| *next == '&') {
+                    let _ = chars.next();
+                    tokens.push("&&".to_string());
+                } else {
+                    tokens.push("&".to_string());
+                }
+            }
+            '|' => {
+                push_shell_token(&mut tokens, &mut current);
+                if chars.peek().is_some_and(|next| *next == '|') {
+                    let _ = chars.next();
+                    tokens.push("||".to_string());
+                } else {
+                    tokens.push("|".to_string());
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if escaped {
+        current.push('\\');
+    }
+    push_shell_token(&mut tokens, &mut current);
+    tokens
 }
 
-fn normalize_shell_token(token: &str) -> &str {
-    token.trim_matches(|ch: char| matches!(ch, '"' | '\'' | '`' | ',' | ':' | '(' | ')'))
+fn push_shell_token(tokens: &mut Vec<String>, current: &mut String) {
+    let trimmed = current.trim();
+    if !trimmed.is_empty() {
+        tokens.push(trimmed.to_string());
+    }
+    current.clear();
 }
 
 fn extract_shell_c_payload_tokens(tokens: &[String]) -> Option<&[String]> {
@@ -1888,18 +1997,33 @@ fn locate_git_commit_command(tokens: &[String]) -> Option<(usize, usize)> {
 }
 
 fn shell_script_contains_forbidden_no_verify_commit(tokens: &[String]) -> bool {
-    for git_idx in 0..tokens.len() {
-        if !is_git_token(tokens[git_idx].as_str()) || !is_shell_command_boundary(tokens, git_idx) {
+    let script_tokens = expand_shell_script_tokens(tokens);
+    for git_idx in 0..script_tokens.len() {
+        if !is_git_token(script_tokens[git_idx].as_str())
+            || !is_shell_command_boundary(&script_tokens, git_idx)
+        {
             continue;
         }
-        let Some(commit_idx) = find_git_commit_subcommand(tokens, git_idx + 1) else {
+        let Some(commit_idx) = find_git_commit_subcommand(&script_tokens, git_idx + 1) else {
             continue;
         };
-        if commit_args_include_no_verify(&tokens[commit_idx + 1..]) {
+        if commit_args_include_no_verify(&script_tokens[commit_idx + 1..]) {
             return true;
         }
     }
     false
+}
+
+fn expand_shell_script_tokens(tokens: &[String]) -> Vec<String> {
+    let mut expanded = Vec::new();
+    for token in tokens {
+        let nested_tokens = tokenize_shell_tokens(token);
+        if nested_tokens.is_empty() {
+            continue;
+        }
+        expanded.extend(nested_tokens);
+    }
+    expanded
 }
 
 fn is_shell_command_boundary(tokens: &[String], idx: usize) -> bool {
@@ -1907,11 +2031,12 @@ fn is_shell_command_boundary(tokens: &[String], idx: usize) -> bool {
 }
 
 fn is_command_separator_token(token: &str) -> bool {
-    matches!(token, ";" | "&&" | "||" | "|")
+    matches!(token, ";" | "&&" | "||" | "|" | "&")
         || token.ends_with(';')
         || token.ends_with("&&")
         || token.ends_with("||")
         || token.ends_with('|')
+        || token.ends_with('&')
 }
 
 fn skip_command_prefix_tokens(tokens: &[String], mut idx: usize) -> usize {
@@ -2112,7 +2237,7 @@ fn consume_option_value(args: &[String], mut idx: usize, message_like: bool) -> 
 }
 
 fn short_option_consumes_value(flag: char) -> bool {
-    matches!(flag, 'm' | 'F' | 'c' | 'C' | 't' | 'S')
+    matches!(flag, 'm' | 'F' | 'c' | 'C' | 't')
 }
 
 fn short_option_is_message_like(flag: char) -> bool {
@@ -2134,7 +2259,6 @@ fn long_option_consumes_value(token: &str) -> bool {
             | "--trailer"
             | "--pathspec-from-file"
             | "--cleanup"
-            | "--gpg-sign"
     )
 }
 
