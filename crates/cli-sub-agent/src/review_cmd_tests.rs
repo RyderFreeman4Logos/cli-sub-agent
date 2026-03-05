@@ -281,6 +281,7 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 fn derive_scope_uncommitted() {
     let args = ReviewArgs {
         tool: None,
+        sa_mode: None,
         session: None,
         model: None,
         diff: true,
@@ -308,6 +309,7 @@ fn derive_scope_uncommitted() {
 fn derive_scope_commit() {
     let args = ReviewArgs {
         tool: None,
+        sa_mode: None,
         session: None,
         model: None,
         diff: false,
@@ -335,6 +337,7 @@ fn derive_scope_commit() {
 fn derive_scope_range() {
     let args = ReviewArgs {
         tool: None,
+        sa_mode: None,
         session: None,
         model: None,
         diff: false,
@@ -362,6 +365,7 @@ fn derive_scope_range() {
 fn derive_scope_files() {
     let args = ReviewArgs {
         tool: None,
+        sa_mode: None,
         session: None,
         model: None,
         diff: false,
@@ -389,6 +393,7 @@ fn derive_scope_files() {
 fn derive_scope_default_branch() {
     let args = ReviewArgs {
         tool: None,
+        sa_mode: None,
         session: None,
         model: None,
         diff: false,

@@ -1,7 +1,5 @@
 use super::prompt_guard::{PROMPT_GUARD_CALLER_INJECTION_ENV, should_emit_prompt_guard_to_caller};
-use std::sync::{LazyLock, Mutex};
-
-static PROMPT_GUARD_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+use crate::test_env_lock::TEST_ENV_LOCK;
 
 fn restore_env_var(key: &str, original: Option<String>) {
     // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
@@ -15,23 +13,32 @@ fn restore_env_var(key: &str, original: Option<String>) {
 
 #[test]
 fn prompt_guard_caller_injection_defaults_to_enabled() {
-    let _env_lock = PROMPT_GUARD_ENV_LOCK
+    let _env_lock = TEST_ENV_LOCK
         .lock()
         .expect("prompt guard env lock poisoned");
-    let original = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
+    let original_guard = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
+    let original_depth = std::env::var("CSA_DEPTH").ok();
     // SAFETY: test-scoped env mutation, restored immediately.
-    unsafe { std::env::remove_var(PROMPT_GUARD_CALLER_INJECTION_ENV) };
+    unsafe {
+        std::env::remove_var(PROMPT_GUARD_CALLER_INJECTION_ENV);
+        std::env::remove_var("CSA_DEPTH");
+    }
     let enabled = should_emit_prompt_guard_to_caller();
-    restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original);
+    restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original_guard);
+    restore_env_var("CSA_DEPTH", original_depth);
     assert!(enabled);
 }
 
 #[test]
 fn prompt_guard_caller_injection_honors_disable_values() {
-    let _env_lock = PROMPT_GUARD_ENV_LOCK
+    let _env_lock = TEST_ENV_LOCK
         .lock()
         .expect("prompt guard env lock poisoned");
-    let original = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
+    let original_guard = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
+    let original_depth = std::env::var("CSA_DEPTH").ok();
+    // SAFETY: test-scoped env mutation, restored immediately.
+    unsafe { std::env::remove_var("CSA_DEPTH") };
+
     for value in ["0", "false", "off", "no", "FALSE"] {
         // SAFETY: test-scoped env mutation, restored immediately.
         unsafe { std::env::set_var(PROMPT_GUARD_CALLER_INJECTION_ENV, value) };
@@ -40,5 +47,30 @@ fn prompt_guard_caller_injection_honors_disable_values() {
             "expected value '{value}' to disable caller injection"
         );
     }
-    restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original);
+
+    restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original_guard);
+    restore_env_var("CSA_DEPTH", original_depth);
+}
+
+#[test]
+fn prompt_guard_caller_injection_disabled_for_recursive_depth() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .expect("prompt guard env lock poisoned");
+    let original_guard = std::env::var(PROMPT_GUARD_CALLER_INJECTION_ENV).ok();
+    let original_depth = std::env::var("CSA_DEPTH").ok();
+
+    // SAFETY: test-scoped env mutation, restored immediately.
+    unsafe {
+        std::env::set_var(PROMPT_GUARD_CALLER_INJECTION_ENV, "true");
+        std::env::set_var("CSA_DEPTH", "1");
+    }
+
+    assert!(
+        !should_emit_prompt_guard_to_caller(),
+        "recursive depth should suppress caller prompt injection"
+    );
+
+    restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original_guard);
+    restore_env_var("CSA_DEPTH", original_depth);
 }

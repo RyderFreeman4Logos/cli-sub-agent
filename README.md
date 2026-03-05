@@ -46,13 +46,13 @@ curl -fsSL https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/ma
 cd my-project && csa init && csa doctor
 
 # Run a task
-csa run "implement user auth module"
+csa run --sa-mode false "implement user auth module"
 
 # Code review (auto-selects heterogeneous model)
-csa review --diff
+csa review --sa-mode false --diff
 
 # Adversarial debate
-csa debate "Should we use Redis or Memcached for caching?"
+csa debate --sa-mode false "Should we use Redis or Memcached for caching?"
 ```
 
 See [Getting Started](docs/getting-started.md) for full installation and setup instructions.

@@ -201,8 +201,8 @@ review:
 push-reviewed base="main":
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "=== Pre-push review: csa review --range {{base}}...HEAD ==="
-    csa review --range "{{base}}...HEAD"
+    echo "=== Pre-push review: csa review --sa-mode false --range {{base}}...HEAD ==="
+    csa review --sa-mode false --range "{{base}}...HEAD"
     echo "=== Review passed. Pushing... ==="
     git push -u origin HEAD
     echo "=== Creating PR targeting {{base}}... ==="

@@ -97,6 +97,14 @@ pub(super) async fn execute_bash_step(
     })
 }
 
+fn next_csa_depth() -> String {
+    let current_depth = std::env::var("CSA_DEPTH")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(0);
+    current_depth.saturating_add(1).to_string()
+}
+
 async fn spawn_bash(
     script: &str,
     env_vars: &HashMap<String, String>,
@@ -106,6 +114,8 @@ async fn spawn_bash(
         .arg("-c")
         .arg(script)
         .envs(env_vars.iter())
+        .env("CSA_DEPTH", next_csa_depth())
+        .env("CSA_INTERNAL_INVOCATION", "1")
         .current_dir(project_root)
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::inherit())
@@ -292,6 +302,7 @@ pub(super) fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::TEST_ENV_LOCK;
 
     #[test]
     fn is_step_runtime_var_only_matches_step_output_and_session() {
@@ -342,5 +353,31 @@ mod tests {
             Some("sid")
         );
         assert_eq!(reduced.get("SCOPE").map(String::as_str), Some("demo"));
+    }
+
+    #[test]
+    fn next_csa_depth_increments_or_defaults() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("plan env lock poisoned");
+        let original_depth = std::env::var("CSA_DEPTH").ok();
+
+        // SAFETY: test-scoped env mutation.
+        unsafe {
+            std::env::remove_var("CSA_DEPTH");
+        }
+        assert_eq!(next_csa_depth(), "1");
+
+        // SAFETY: test-scoped env mutation.
+        unsafe {
+            std::env::set_var("CSA_DEPTH", "2");
+        }
+        assert_eq!(next_csa_depth(), "3");
+
+        // SAFETY: restore original env value.
+        unsafe {
+            match original_depth {
+                Some(value) => std::env::set_var("CSA_DEPTH", value),
+                None => std::env::remove_var("CSA_DEPTH"),
+            }
+        }
     }
 }

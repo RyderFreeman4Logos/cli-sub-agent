@@ -290,7 +290,7 @@ pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
     if let Some(p) = prompt {
         if p.trim().is_empty() {
             anyhow::bail!(
-                "Empty prompt provided. Usage:\n  csa run --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --tool <tool>"
+                "Empty prompt provided. Usage:\n  csa run --sa-mode <true|false> --tool <tool> \"your prompt here\"\n  echo \"prompt\" | csa run --sa-mode <true|false> --tool <tool>"
             );
         }
         Ok(p)
@@ -301,8 +301,8 @@ pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
             anyhow::bail!(
                 "No prompt provided and stdin is a terminal.\n\n\
                  Usage:\n  \
-                 csa run --tool <tool> \"your prompt here\"\n  \
-                 echo \"prompt\" | csa run --tool <tool>"
+                 csa run --sa-mode <true|false> --tool <tool> \"your prompt here\"\n  \
+                 echo \"prompt\" | csa run --sa-mode <true|false> --tool <tool>"
             );
         }
         let mut buffer = String::new();

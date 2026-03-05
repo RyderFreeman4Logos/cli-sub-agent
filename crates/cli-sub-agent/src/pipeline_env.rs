@@ -2,6 +2,14 @@ use std::collections::HashMap;
 
 use csa_config::ProjectConfig;
 
+fn next_depth_value() -> String {
+    let current_depth = std::env::var("CSA_DEPTH")
+        .ok()
+        .and_then(|raw| raw.parse::<u32>().ok())
+        .unwrap_or(0);
+    current_depth.saturating_add(1).to_string()
+}
+
 pub(crate) fn build_merged_env(
     extra_env: Option<&HashMap<String, String>>,
     config: Option<&ProjectConfig>,
@@ -30,6 +38,9 @@ pub(crate) fn build_merged_env(
             })
             .or_insert(heap_flag);
     }
+
+    merged_env.insert("CSA_DEPTH".to_string(), next_depth_value());
+    merged_env.insert("CSA_INTERNAL_INVOCATION".to_string(), "1".to_string());
 
     merged_env
 }
