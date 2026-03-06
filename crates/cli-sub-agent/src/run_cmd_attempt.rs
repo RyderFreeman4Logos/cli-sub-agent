@@ -74,7 +74,7 @@ pub(crate) struct RunLoopRequest<'a> {
 
 pub(crate) enum RunLoopCompletion {
     Exit(i32),
-    Completed(RunLoopOutcome),
+    Completed(Box<RunLoopOutcome>),
 }
 
 pub(crate) struct RunLoopOutcome {
@@ -107,9 +107,10 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut current_model = request.initial_model;
     let mut tried_tools: Vec<String> = Vec::new();
     let mut attempts = 0;
-    let runtime_fallback_enabled =
-        matches!(request.strategy, ToolSelectionStrategy::HeterogeneousPreferred)
-            && !request.no_failover;
+    let runtime_fallback_enabled = matches!(
+        request.strategy,
+        ToolSelectionStrategy::HeterogeneousPreferred
+    ) && !request.no_failover;
     let mut runtime_fallback_candidates = request.runtime_fallback_candidates;
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
@@ -313,6 +314,16 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 .clone()
                 .or_else(|| pre_created_fork_session_id.clone())
                 .or_else(|| effective_session_arg.clone());
+            persist_fork_timeout_result_if_missing(
+                request.project_root,
+                request.is_fork,
+                current_tool,
+                timeout_resume_session.as_deref(),
+                chrono::Utc::now(),
+                request
+                    .run_timeout_seconds
+                    .expect("run timeout should be present"),
+            );
             let exit_code = emit_run_timeout(
                 request.output_format,
                 request
@@ -417,13 +428,22 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             AttemptExecution::Exit(exit_code) => return Ok(RunLoopCompletion::Exit(exit_code)),
             AttemptExecution::Finished(Ok(result)) => result,
             AttemptExecution::Finished(Err(e)) => {
-                if let Some(timeout_secs) =
-                    wall_timeout_seconds_from_error(&e).or(request.run_timeout_seconds)
-                {
+                let wall_timeout_secs = wall_timeout_seconds_from_error(&e);
+                if let Some(timeout_secs) = wall_timeout_secs.or(request.run_timeout_seconds) {
                     let interrupted_session_id = extract_meta_session_id_from_error(&e)
                         .or_else(|| executed_session_id.clone())
                         .or_else(|| pre_created_fork_session_id.clone())
                         .or_else(|| effective_session_arg.clone());
+                    if wall_timeout_secs.is_some() {
+                        persist_fork_timeout_result_if_missing(
+                            request.project_root,
+                            request.is_fork,
+                            current_tool,
+                            interrupted_session_id.as_deref(),
+                            chrono::Utc::now(),
+                            timeout_secs,
+                        );
+                    }
                     let exit_code = emit_run_timeout(
                         request.output_format,
                         timeout_secs,
@@ -593,10 +613,37 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         }
     };
 
-    Ok(RunLoopCompletion::Completed(RunLoopOutcome {
+    Ok(RunLoopCompletion::Completed(Box::new(RunLoopOutcome {
         result,
         current_tool,
         executed_session_id,
         fork_resolution,
-    }))
+    })))
+}
+
+fn persist_fork_timeout_result_if_missing(
+    project_root: &Path,
+    is_fork: bool,
+    tool: ToolName,
+    session_id: Option<&str>,
+    execution_start_time: chrono::DateTime<chrono::Utc>,
+    timeout_seconds: u64,
+) {
+    if !is_fork {
+        return;
+    }
+    let Some(session_id) = session_id else {
+        return;
+    };
+
+    let err = anyhow::anyhow!(
+        "wall-clock timeout interrupted forked execution before normal finalization after {timeout_seconds}s"
+    );
+    crate::pipeline_post_exec::ensure_terminal_result_for_session_on_post_exec_error(
+        project_root,
+        session_id,
+        tool.as_str(),
+        execution_start_time,
+        &err,
+    );
 }

@@ -12,12 +12,14 @@ use csa_config::{GlobalConfig, ProjectConfig};
 use csa_executor::Executor;
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_session::{
-    MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState, load_result,
-    persist_structured_output, save_result, save_session,
+    MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState, get_session_dir,
+    load_result, load_session, persist_structured_output, save_result, save_session,
 };
 
 use crate::memory_capture;
 use crate::run_helpers::{is_compress_command, parse_token_usage};
+
+const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
 
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
@@ -154,6 +156,61 @@ pub(crate) async fn process_execution_result(
     Ok(())
 }
 
+pub(crate) fn ensure_terminal_result_for_session_on_post_exec_error(
+    project_root: &Path,
+    session_id: &str,
+    tool_name: &str,
+    execution_start_time: chrono::DateTime<chrono::Utc>,
+    error: &anyhow::Error,
+) {
+    let mut session = match load_session(project_root, session_id) {
+        Ok(session) => session,
+        Err(load_err) => {
+            warn!(
+                session = %session_id,
+                error = %load_err,
+                "Failed to load session for post-exec error fallback"
+            );
+            return;
+        }
+    };
+
+    ensure_terminal_result_on_post_exec_error(
+        project_root,
+        &mut session,
+        tool_name,
+        execution_start_time,
+        error,
+    );
+}
+
+pub(crate) fn build_fallback_result_summary(session_dir: &Path, summary_prefix: &str) -> String {
+    match read_output_log_tail(session_dir, FALLBACK_OUTPUT_TAIL_LINES) {
+        Some(output_tail) => format!("{summary_prefix}\n\nLast output:\n{output_tail}"),
+        None => summary_prefix.to_string(),
+    }
+}
+
+pub(crate) fn collect_fallback_result_artifacts(
+    project_root: &Path,
+    session_id: &str,
+) -> Vec<SessionArtifact> {
+    match csa_session::list_artifacts(project_root, session_id) {
+        Ok(artifact_names) => artifact_names
+            .into_iter()
+            .map(|name| SessionArtifact::new(format!("output/{name}")))
+            .collect(),
+        Err(err) => {
+            warn!(
+                session = %session_id,
+                error = %err,
+                "Failed to enumerate output artifacts for fallback result"
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Best-effort fail-safe when post-exec processing returns an error.
 ///
 /// If `result.toml` is missing, persist a synthetic failure result so callers
@@ -177,16 +234,29 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         }
     }
 
+    let summary_prefix = format!("post-exec: {error}");
+    let summary = match get_session_dir(project_root, &session.meta_session_id) {
+        Ok(session_dir) => build_fallback_result_summary(&session_dir, &summary_prefix),
+        Err(session_dir_err) => {
+            warn!(
+                session = %session.meta_session_id,
+                error = %session_dir_err,
+                "Failed to resolve session dir for post-exec fallback summary"
+            );
+            summary_prefix
+        }
+    };
+    let artifacts = collect_fallback_result_artifacts(project_root, &session.meta_session_id);
     let completed_at = chrono::Utc::now();
     let fallback_result = SessionResult {
         status: "failure".to_string(),
         exit_code: 1,
-        summary: format!("post-exec: {error}"),
+        summary,
         tool: tool_name.to_string(),
         started_at: execution_start_time,
         completed_at,
         events_count: 0,
-        artifacts: Vec::new(),
+        artifacts,
     };
 
     if let Err(save_err) = save_result(project_root, &session.meta_session_id, &fallback_result) {
@@ -207,6 +277,35 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
             "Failed to persist session state after fallback post-exec result write"
         );
     }
+}
+
+fn read_output_log_tail(session_dir: &Path, max_lines: usize) -> Option<String> {
+    let output_log_path = session_dir.join("output.log");
+    let contents = match fs::read_to_string(&output_log_path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            warn!(
+                path = %output_log_path.display(),
+                error = %err,
+                "Failed to read output.log for fallback summary"
+            );
+            return None;
+        }
+    };
+
+    let tail = contents
+        .lines()
+        .rev()
+        .filter(|line| !line.trim().is_empty())
+        .take(max_lines)
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if tail.is_empty() {
+        return None;
+    }
+
+    Some(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
 }
 
 fn update_tool_state(
@@ -310,7 +409,7 @@ fn persist_output_sections(session_dir: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csa_session::{create_session, load_session};
+    use csa_session::{create_session, get_session_dir, load_session};
 
     #[test]
     fn ensure_terminal_result_on_post_exec_error_writes_missing_result() {
@@ -383,5 +482,66 @@ mod tests {
         assert_eq!(persisted.status, "success");
         assert_eq!(persisted.exit_code, 0);
         assert_eq!(persisted.summary, "already persisted");
+    }
+
+    #[test]
+    fn ensure_terminal_result_for_session_on_post_exec_error_persists_output_tail_for_fork() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project_root = tmp.path();
+        let parent = create_session(project_root, Some("parent"), None, Some("codex"))
+            .expect("create parent session");
+        let child = create_session(
+            project_root,
+            Some("fork"),
+            Some(&parent.meta_session_id),
+            Some("codex"),
+        )
+        .expect("create forked child session");
+        let session_id = child.meta_session_id.clone();
+        let session_dir = get_session_dir(project_root, &session_id).expect("session dir");
+        fs::create_dir_all(session_dir.join("output")).expect("create output dir");
+        fs::write(
+            session_dir.join("output.log"),
+            "first line\nstill running\npartial summary line\n",
+        )
+        .expect("write output log");
+        fs::write(
+            session_dir.join("output").join("user-result.toml"),
+            "status = \"success\"\nsummary = \"sidecar\"\n",
+        )
+        .expect("write sidecar result");
+
+        let started_at = chrono::Utc::now() - chrono::Duration::seconds(1);
+        let err = anyhow::anyhow!("wall timeout interrupted fork before post-exec");
+        ensure_terminal_result_for_session_on_post_exec_error(
+            project_root,
+            &session_id,
+            "codex",
+            started_at,
+            &err,
+        );
+
+        let persisted = load_result(project_root, &session_id)
+            .expect("load fallback result")
+            .expect("fallback result should exist");
+        assert_eq!(persisted.status, "failure");
+        assert_eq!(persisted.exit_code, 1);
+        assert!(
+            persisted.summary.contains("partial summary line"),
+            "summary should include output.log tail"
+        );
+        assert!(
+            persisted
+                .artifacts
+                .iter()
+                .any(|artifact| artifact.path == "output/user-result.toml"),
+            "fallback should register user-result sidecar"
+        );
+
+        let reloaded = load_session(project_root, &session_id).expect("reload session");
+        assert_eq!(
+            reloaded.termination_reason.as_deref(),
+            Some("post_exec_error")
+        );
     }
 }

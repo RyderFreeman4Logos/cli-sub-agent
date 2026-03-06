@@ -753,6 +753,5 @@ fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
     );
 }
 
-
 #[path = "session_cmds_tests_tail.rs"]
 mod tail_tests;

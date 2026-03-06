@@ -8,9 +8,9 @@ use tracing::{info, warn};
 use csa_config::paths;
 use csa_core::types::OutputFormat;
 use csa_session::{
-    MetaSessionState, SessionArtifact, SessionPhase, SessionResult, delete_session,
-    get_session_dir, list_sessions, list_sessions_tree_filtered, load_result, load_session,
-    resolve_session_prefix, save_session_in,
+    MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_sessions,
+    list_sessions_tree_filtered, load_result, load_session, resolve_session_prefix,
+    save_session_in,
 };
 
 // Re-export types and functions from session_cmds_result so that
@@ -96,16 +96,18 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
         .max_by_key(|(_, state)| state.updated_at)
         .map(|(tool, _)| tool.clone())
         .unwrap_or_else(|| "unknown".to_string());
-    let artifacts = csa_session::list_artifacts(project_root, session_id)?
-        .into_iter()
-        .map(|name| SessionArtifact::new(format!("output/{name}")))
-        .collect::<Vec<_>>();
+    let artifacts =
+        crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
     let started_at = std::cmp::min(session.last_accessed, now);
+    let summary_prefix = format!(
+        "synthetic terminal failure by {trigger}: process not alive and result.toml missing"
+    );
     let fallback = SessionResult {
         status: "failure".to_string(),
         exit_code: 1,
-        summary: format!(
-            "synthetic terminal failure by {trigger}: process not alive and result.toml missing"
+        summary: crate::pipeline_post_exec::build_fallback_result_summary(
+            &session_dir,
+            &summary_prefix,
         ),
         tool: tool_name,
         started_at,

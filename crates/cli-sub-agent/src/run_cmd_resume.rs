@@ -11,7 +11,10 @@ use csa_core::types::{OutputFormat, ToolName};
 pub(super) const DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS: u64 = 2400;
 const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
 
-pub(crate) fn resolve_run_timeout_seconds(cli_timeout: Option<u64>, skill: Option<&str>) -> Option<u64> {
+pub(crate) fn resolve_run_timeout_seconds(
+    cli_timeout: Option<u64>,
+    skill: Option<&str>,
+) -> Option<u64> {
     if cli_timeout.is_some() {
         return cli_timeout;
     }

@@ -25,10 +25,10 @@ use output_helpers::{
     flush_stderr_buf, maybe_emit_heartbeat, resolve_actionable_failure_detail,
     resolve_heartbeat_interval, sanitize_opaque_object_payloads, sanitize_spool_tail, spool_chunk,
 };
-pub use subprocess_helpers::check_tool_installed;
-use subprocess_helpers::terminate_child_process_group;
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
+pub use subprocess_helpers::check_tool_installed;
+use subprocess_helpers::terminate_child_process_group;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
 #[cfg(feature = "codex-pty-fork")]

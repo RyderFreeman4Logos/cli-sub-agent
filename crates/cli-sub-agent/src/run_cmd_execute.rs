@@ -318,7 +318,7 @@ pub(crate) async fn handle_run(
 
     let loop_outcome = match loop_completion {
         RunLoopCompletion::Exit(exit_code) => return Ok(exit_code),
-        RunLoopCompletion::Completed(loop_outcome) => loop_outcome,
+        RunLoopCompletion::Completed(loop_outcome) => *loop_outcome,
     };
     let result = loop_outcome.result;
     let current_tool = loop_outcome.current_tool;

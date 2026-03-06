@@ -22,23 +22,21 @@ pub(crate) use git::{
     capture_git_workspace_snapshot, evaluate_post_run_commit_guard, is_git_worktree,
 };
 pub(crate) use policy::{
-    apply_no_verify_commit_policy, apply_post_run_commit_policy,
-    apply_unverifiable_commit_policy, events_contain_execute_tool_calls,
-    extract_executed_shell_commands_from_events,
+    apply_no_verify_commit_policy, apply_post_run_commit_policy, apply_unverifiable_commit_policy,
+    events_contain_execute_tool_calls, extract_executed_shell_commands_from_events,
 };
 
 #[cfg(test)]
 pub(crate) use git::{
-    GitWorkspaceSnapshot, PostRunCommitGuard, changed_paths_from_status,
-    tracked_paths_from_status,
+    GitWorkspaceSnapshot, PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status,
 };
 #[cfg(test)]
 pub(crate) use policy::{format_post_run_commit_guard_message, is_post_run_commit_policy_block};
 #[cfg(test)]
 pub(crate) use resume::{
     build_resume_hint_command, extract_meta_session_id_from_error, resolve_run_timeout_seconds,
-    session_matches_interrupted_skill, signal_interruption_exit_code,
-    skill_session_description, wall_timeout_seconds_from_error,
+    session_matches_interrupted_skill, signal_interruption_exit_code, skill_session_description,
+    wall_timeout_seconds_from_error,
 };
 
 #[cfg(test)]

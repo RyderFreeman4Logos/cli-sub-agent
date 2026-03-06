@@ -1,5 +1,5 @@
-use super::*;
 use super::plan_cmd_exec::run_with_heartbeat;
+use super::*;
 use std::time::Instant;
 use weave::compiler::{FailAction, PlanStep};
 

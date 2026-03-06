@@ -1,5 +1,5 @@
-use super::*;
 use super::resume::DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS;
+use super::*;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 use csa_acp::SessionEvent;
@@ -761,7 +761,6 @@ fn apply_no_verify_commit_policy_sets_failure_when_forbidden_flag_detected() {
     assert!(result.stderr_output.contains("Matched commands:"));
     assert!(result.stderr_output.contains("git commit --no-verify"));
 }
-
 
 #[path = "run_cmd_tests_tail.rs"]
 mod tail_tests;

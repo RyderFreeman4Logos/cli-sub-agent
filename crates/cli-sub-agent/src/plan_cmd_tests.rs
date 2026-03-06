@@ -770,6 +770,5 @@ async fn execute_plan_does_not_inject_markers_from_failed_steps() {
     assert!(!tmp.path().join("should_not_exist.txt").exists());
 }
 
-
 #[path = "plan_cmd_tests_tail.rs"]
 mod tail_tests;

@@ -750,6 +750,5 @@ fn enforce_result_toml_contract_now(
     enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, true, result);
 }
 
-
 #[path = "pipeline_tests_tail.rs"]
 mod tail_tests;

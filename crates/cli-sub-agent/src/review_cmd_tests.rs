@@ -745,6 +745,5 @@ fn sanitize_review_output_falls_back_when_sections_missing() {
     assert_eq!(sanitized, raw);
 }
 
-
 #[path = "review_cmd_tests_tail.rs"]
 mod tail_tests;
