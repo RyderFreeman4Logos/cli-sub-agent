@@ -1,7 +1,57 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-scope_input="${1:-}"
+usage() {
+  cat <<'EOF'
+Usage: gen_commit_msg.sh [--subject|--body] [scope]
+
+Options:
+  --subject   Output only the Conventional Commits subject line
+  --body      Output only the commit body portion
+EOF
+}
+
+mode="full"
+scope_input=""
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --subject)
+      if [[ "${mode}" != "full" ]]; then
+        echo "ERROR: --subject and --body are mutually exclusive" >&2
+        exit 1
+      fi
+      mode="subject"
+      shift
+      ;;
+    --body)
+      if [[ "${mode}" != "full" ]]; then
+        echo "ERROR: --subject and --body are mutually exclusive" >&2
+        exit 1
+      fi
+      mode="body"
+      shift
+      ;;
+    --help|-h)
+      usage
+      exit 0
+      ;;
+    -*)
+      echo "ERROR: unknown option: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+    *)
+      if [[ -n "${scope_input}" ]]; then
+        echo "ERROR: only one optional scope argument is supported" >&2
+        usage >&2
+        exit 1
+      fi
+      scope_input="$1"
+      shift
+      ;;
+  esac
+done
 
 if ! git diff --cached --name-only | grep -q .; then
   echo "ERROR: no staged changes to generate a commit message" >&2
@@ -62,24 +112,31 @@ if [[ -z "${scope}" ]]; then
   esac
 fi
 
+commit_subject=""
 if [[ "${is_release}" == "true" ]]; then
-  printf 'chore(release): bump workspace and lockfiles\n'
-  exit 0
+  commit_subject='chore(release): bump workspace and lockfiles'
+elif [[ "${is_docs_only}" == "true" ]]; then
+  commit_subject="$(printf 'docs(%s): update documentation' "${scope}")"
+elif [[ "${is_tests_only}" == "true" ]]; then
+  commit_subject="$(printf 'test(%s): update test coverage' "${scope}")"
+elif [[ "${has_new_non_test_code}" == "true" ]]; then
+  commit_subject="$(printf 'feat(%s): add staged functionality' "${scope}")"
+else
+  commit_subject="$(printf 'fix(%s): update staged changes' "${scope}")"
 fi
 
-if [[ "${is_docs_only}" == "true" ]]; then
-  printf 'docs(%s): update documentation\n' "${scope}"
-  exit 0
-fi
+commit_body=""
 
-if [[ "${is_tests_only}" == "true" ]]; then
-  printf 'test(%s): update test coverage\n' "${scope}"
-  exit 0
-fi
-
-if [[ "${has_new_non_test_code}" == "true" ]]; then
-  printf 'feat(%s): add staged functionality\n' "${scope}"
-  exit 0
-fi
-
-printf 'fix(%s): update staged changes\n' "${scope}"
+case "${mode}" in
+  subject)
+    printf '%s\n' "${commit_subject}"
+    ;;
+  body)
+    if [[ -n "${commit_body}" ]]; then
+      printf '%s\n' "${commit_body}"
+    fi
+    ;;
+  full)
+    printf '%s\n' "${commit_subject}"
+    ;;
+esac

@@ -12,7 +12,13 @@ name = "AUDIT_PASS_DEFERRED"
 name = "BRANCH"
 
 [[workflow.variables]]
-name = "COMMIT_MSG"
+name = "COMMIT_BODY"
+
+[[workflow.variables]]
+name = "COMMIT_MESSAGE_FILE"
+
+[[workflow.variables]]
+name = "COMMIT_SUBJECT"
 
 [[workflow.variables]]
 name = "ENABLE_REVIEW_LOOP"
@@ -204,43 +210,143 @@ condition = "${ENABLE_REVIEW_LOOP} == \"true\""
 
 [[workflow.steps]]
 id = 13
-title = "Generate Commit Message"
+title = "Generate Commit Message Parts"
 tool = "bash"
 prompt = """
-Generate a deterministic Conventional Commits message from staged files.
+Generate a deterministic Conventional Commits subject/body split from staged files.
 
 ```bash
-scripts/gen_commit_msg.sh "${SCOPE:-}"
+set -euo pipefail
+COMMIT_SUBJECT_LOCAL="$(scripts/gen_commit_msg.sh --subject "${SCOPE:-}")"
+COMMIT_BODY_LOCAL="$(scripts/gen_commit_msg.sh --body "${SCOPE:-}")"
+
+if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
+  echo "ERROR: Commit subject is empty." >&2
+  exit 1
+fi
+
+echo "CSA_VAR:COMMIT_SUBJECT=${COMMIT_SUBJECT_LOCAL}"
+echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
+printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 14
-title = "Commit"
+title = "Inject Spec Trailers"
 tool = "bash"
 prompt = """
 ```bash
-git commit -m "${COMMIT_MSG}"
+set -euo pipefail
+COMMIT_BODY_LOCAL="$(printf '%s' "${COMMIT_BODY:-\"\"}" | jq -r .)"
+CURRENT_BRANCH="$(git branch --show-current)"
+PLAN_JSON="$(csa --format json todo find --branch "${CURRENT_BRANCH}")"
+PLAN_TIMESTAMP="$(printf '%s' "${PLAN_JSON}" | jq -r '.[0].timestamp // empty')"
+
+if [ -n "${PLAN_TIMESTAMP}" ]; then
+  SPEC_OUTPUT="$(csa todo show --timestamp "${PLAN_TIMESTAMP}" --spec)"
+  if [ "${SPEC_OUTPUT}" != "No spec found for this plan" ]; then
+    PLAN_ULID="$(printf '%s\n' "${SPEC_OUTPUT}" | sed -n 's/^Plan ULID: //p' | head -n1)"
+    CRITERIA_SUMMARY="$(printf '%s\n' "${SPEC_OUTPUT}" | sed -n 's/^Summary: //p' | head -n1)"
+    CRITERIA_SUMMARY="$(printf '%s' "${CRITERIA_SUMMARY}" | tr '\r\n' '  ' | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')"
+
+    TRAILERS=""
+    if [ -n "${PLAN_ULID}" ]; then
+      TRAILERS="CSA-Plan: ${PLAN_ULID}"
+    fi
+    if [ -n "${CRITERIA_SUMMARY}" ]; then
+      if [ -n "${TRAILERS}" ]; then
+        TRAILERS="${TRAILERS}"$'\n'
+      fi
+      TRAILERS="${TRAILERS}CSA-Criteria: ${CRITERIA_SUMMARY}"
+    fi
+
+    if [ -n "${TRAILERS}" ]; then
+      if [ -n "${COMMIT_BODY_LOCAL}" ]; then
+        COMMIT_BODY_LOCAL="$(printf '%s\n\n%s' "${COMMIT_BODY_LOCAL}" "${TRAILERS}")"
+      else
+        COMMIT_BODY_LOCAL="${TRAILERS}"
+      fi
+    fi
+  fi
+fi
+
+echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
+printf '%s\n' "${COMMIT_BODY_LOCAL}"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 15
+title = "Write Commit Message File"
+tool = "bash"
+prompt = """
+Persist the subject/body split to a temporary file for `git commit -F`.
+
+```bash
+set -euo pipefail
+COMMIT_SUBJECT_LOCAL="${COMMIT_SUBJECT:-}"
+COMMIT_BODY_LOCAL="$(printf '%s' "${COMMIT_BODY:-\"\"}" | jq -r .)"
+
+if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
+  echo "ERROR: Commit subject is empty." >&2
+  exit 1
+fi
+
+COMMIT_MESSAGE_FILE_LOCAL="$(mktemp)"
+{
+  printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
+  printf '\n'
+  printf '%s' "${COMMIT_BODY_LOCAL}"
+  printf '\n'
+} > "${COMMIT_MESSAGE_FILE_LOCAL}"
+
+echo "CSA_VAR:COMMIT_MESSAGE_FILE=${COMMIT_MESSAGE_FILE_LOCAL}"
+cat "${COMMIT_MESSAGE_FILE_LOCAL}"
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 16
+title = "Commit"
+tool = "bash"
+prompt = """
+```bash
+set -euo pipefail
+COMMIT_MESSAGE_FILE_LOCAL="${COMMIT_MESSAGE_FILE:-}"
+
+if [ -z "${COMMIT_MESSAGE_FILE_LOCAL}" ] || [ ! -f "${COMMIT_MESSAGE_FILE_LOCAL}" ]; then
+  echo "ERROR: Commit message file is missing." >&2
+  exit 1
+fi
+
+trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
+git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 17
 title = "Auto PR"
 tool = "bash"
 prompt = """
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 15-16 are ATOMIC — do not stop after PR creation.
+Steps 17-18 are ATOMIC — do not stop after PR creation.
 
 ```bash
+if [ -z "${COMMIT_SUBJECT:-}" ]; then
+  echo "ERROR: PR title is empty." >&2
+  exit 1
+fi
+
 git push -u origin "${BRANCH}"
-gh pr create --base main --title "${COMMIT_MSG}" --body "${PR_BODY}"
+gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}"
 ```"""
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 16
+id = 18
 title = "Invoke PR Codex Bot"
 prompt = """
 Trigger the pr-codex-bot workflow on the newly created PR:
@@ -254,10 +360,10 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 17
+id = 19
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-14)."""
+Each fix goes through full commit workflow (Steps 1-16)."""
 on_fail = "abort"
 condition = "${HAS_DEFERRED_ISSUES}"
