@@ -31,6 +31,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         },
         true,
         false,
+        false,
     )
     .await;
 
@@ -43,6 +44,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
             project: Some(&cfg),
             global: None,
         },
+        false,
         false,
         false,
     )

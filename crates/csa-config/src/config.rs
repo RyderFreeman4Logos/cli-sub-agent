@@ -238,6 +238,18 @@ pub struct ToolConfig {
     /// `None` = default (load everything).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setting_sources: Option<Vec<String>>,
+    /// Default model override used when `--tool` is explicit but `--model` is omitted.
+    ///
+    /// Lower priority than `--model` and `--model-spec`. Higher priority than the
+    /// tool's internal default model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+    /// Default thinking budget used when `--tool` is explicit but `--thinking` is omitted.
+    ///
+    /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
+    /// Lower priority than `--thinking` and `thinking_lock`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_thinking: Option<String>,
     /// Lock thinking budget for this tool. When set, any CLI `--thinking` or
     /// `--model-spec` thinking override is silently replaced with this value.
     /// Accepts the same values as `--thinking`: low, medium, high, xhigh, or a number.
@@ -261,6 +273,8 @@ impl Default for ToolConfig {
             node_heap_limit_mb: None,
             lean_mode: None,
             setting_sources: None,
+            default_model: None,
+            default_thinking: None,
             thinking_lock: None,
             codex_auto_trust: false,
         }

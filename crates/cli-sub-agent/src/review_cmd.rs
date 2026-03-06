@@ -300,6 +300,7 @@ async fn execute_review(
         },
         false, // skip tier whitelist for review tool selection
         force_override_user_config,
+        false, // review must not inherit `csa run` per-tool defaults
     )
     .await?;
 

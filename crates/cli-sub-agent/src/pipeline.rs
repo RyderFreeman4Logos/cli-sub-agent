@@ -170,8 +170,13 @@ pub(crate) struct ConfigRefs<'a> {
 /// skipped. Review and debate commands use this because they select tools for
 /// heterogeneous evaluation, not for tier-controlled execution.
 ///
+/// When `apply_tool_defaults` is `true`, `default_model` / `default_thinking`
+/// from project config fill missing CLI values before falling back to the
+/// executor's internal defaults.
+///
 /// If the tool has a `thinking_lock` in project or global config, the locked
-/// value silently overrides any CLI-provided thinking budget.
+/// value silently overrides the effective thinking budget.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_and_validate_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
@@ -180,6 +185,7 @@ pub(crate) async fn build_and_validate_executor(
     configs: ConfigRefs<'_>,
     enforce_tier: bool,
     force_override_user_config: bool,
+    apply_tool_defaults: bool,
 ) -> Result<Executor> {
     let mut executor = crate::run_helpers::build_executor(
         tool,
@@ -187,12 +193,26 @@ pub(crate) async fn build_and_validate_executor(
         model,
         thinking_budget,
         configs.project,
+        apply_tool_defaults,
     )?;
 
     // Apply thinking lock: project config takes precedence over global.
-    // When set, silently overrides any CLI-provided thinking budget (including
-    // the one embedded in --model-spec).
+    // When set, silently overrides the effective thinking budget (including
+    // any project default or the one embedded in --model-spec).
     let tool_str = tool.as_str();
+    let default_model_resolved: Option<String> = if apply_tool_defaults && model_spec.is_none() {
+        configs.project.and_then(|cfg| {
+            cfg.tool_default_model(tool_str)
+                .map(|m| cfg.resolve_alias(m))
+        })
+    } else {
+        None
+    };
+    let default_thinking_from_project = (apply_tool_defaults && model_spec.is_none()).then(|| {
+        configs
+            .project
+            .and_then(|cfg| cfg.tool_default_thinking(tool_str))
+    });
     let lock_from_project = configs.project.and_then(|c| c.thinking_lock(tool_str));
     let lock_from_global = configs.global.and_then(|g| g.thinking_lock(tool_str));
     if let Some(lock_str) = lock_from_project.or(lock_from_global) {
@@ -207,13 +227,17 @@ pub(crate) async fn build_and_validate_executor(
         if enforce_tier {
             // Defense-in-depth: enforce tier whitelist at execution boundary
             cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
-            cfg.enforce_tier_model_name(executor.tool_name(), model)?;
+            let effective_model = model.or(default_model_resolved.as_deref());
+            cfg.enforce_tier_model_name(executor.tool_name(), effective_model)?;
         }
 
         // Enforce thinking level is configured in tiers (unless force override).
         // Use the effective thinking level (after thinking_lock override), not the
         // original CLI value, to avoid rejecting locked values that differ from CLI.
-        let effective_thinking = lock_from_project.or(lock_from_global).or(thinking_budget);
+        let effective_thinking = lock_from_project
+            .or(lock_from_global)
+            .or(thinking_budget)
+            .or(default_thinking_from_project.flatten());
         if enforce_tier && !force_override_user_config {
             cfg.enforce_thinking_level(effective_thinking)?;
         }

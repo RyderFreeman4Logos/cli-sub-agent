@@ -487,18 +487,19 @@ async fn execute_task(
     }
 
     // Build executor
-    let executor = match build_executor(&tool_name, None, task.model.as_deref(), None, config) {
-        Ok(e) => e,
-        Err(e) => {
-            error!("{} - Failed to build executor: {}", task_label, e);
-            return TaskResult {
-                name: task.name.clone(),
-                exit_code: 1,
-                duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Failed to build executor: {}", e)),
-            };
-        }
-    };
+    let executor =
+        match build_executor(&tool_name, None, task.model.as_deref(), None, config, false) {
+            Ok(e) => e,
+            Err(e) => {
+                error!("{} - Failed to build executor: {}", task_label, e);
+                return TaskResult {
+                    name: task.name.clone(),
+                    exit_code: 1,
+                    duration_secs: start.elapsed().as_secs_f64(),
+                    error: Some(format!("Failed to build executor: {}", e)),
+                };
+            }
+        };
 
     // Check tool is installed (using runtime binary name for ACP-aware check)
     if let Err(e) = check_tool_installed(executor.runtime_binary_name()).await {
