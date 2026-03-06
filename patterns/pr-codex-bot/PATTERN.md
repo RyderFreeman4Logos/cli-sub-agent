@@ -10,6 +10,14 @@ version = "0.1.0"
 
 Orchestrates iterative fix-and-review loop with cloud review bot on GitHub PRs.
 Two-layer review: local pre-PR cumulative audit + cloud bot review.
+
+**MANDATORY AUDIT TRAIL**: When an agent determines a review finding (local or
+cloud bot) is NOT a real issue or is acceptable in context (e.g., pre-production
+breaking change), the agent MUST post an explanatory comment on the PR page
+BEFORE merging or proceeding. This creates a permanent record of the rationale
+behind every dismissed finding. FORBIDDEN: merging with dismissed findings
+without explanatory PR comments.
+
 Staleness guard: before arbitration, each bot comment is checked against the
 latest HEAD to detect whether the referenced code has been modified since the
 comment was posted. Stale comments (referencing already-modified code) are
@@ -602,6 +610,13 @@ Tier: tier-2-standard
 MUST use independent model for arbitration.
 NEVER dismiss bot comments using own reasoning alone.
 Post full audit trail (model specs for both sides) to PR.
+
+**MANDATORY AUDIT TRAIL**: If the debate determines the finding is NOT a real
+issue (e.g., false positive, project status justifies it), the agent MUST post
+an explanatory comment on the PR page BEFORE proceeding. The comment must
+include the debate result and the specific rationale (e.g., 'Pre-production:
+breaking API changes are acceptable per versioning rule 019').
+FORBIDDEN: dismissing findings without an explanatory PR comment.
 
 ```bash
 csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
