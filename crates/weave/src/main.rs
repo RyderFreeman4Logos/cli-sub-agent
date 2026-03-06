@@ -141,6 +141,9 @@ enum Commands {
         fix: bool,
     },
 
+    /// Remove Gemini skill symlinks whose names match `.agents/skills/` and whose targets are weave-managed or broken.
+    CleanGeminiSkills,
+
     /// Reconcile skill symlinks: create missing, remove stale, fix broken.
     Link {
         #[command(subcommand)]
@@ -571,6 +574,64 @@ fn main() -> Result<()> {
                 }
             }
         }
+        Commands::CleanGeminiSkills => {
+            let project_root = std::env::current_dir().context("cannot determine CWD")?;
+            let result = check::clean_gemini_duplicate_symlinks(&project_root)?;
+
+            if result.missing_dir {
+                eprintln!(
+                    "no Gemini skills directory found at {}",
+                    result.dir.display()
+                );
+                return Ok(());
+            }
+
+            if result.removed.is_empty() {
+                eprintln!(
+                    "no duplicate Gemini skill symlinks found in {}",
+                    result.dir.display()
+                );
+            } else {
+                for entry in &result.removed {
+                    eprintln!(
+                        "  removed {} -> {}",
+                        entry.path.display(),
+                        entry.target.display()
+                    );
+                }
+                eprintln!(
+                    "removed {} duplicate Gemini symlink(s)",
+                    result.removed.len()
+                );
+            }
+
+            if result.skipped_non_duplicate > 0 {
+                eprintln!(
+                    "skipped {} non-duplicate Gemini symlink(s)",
+                    result.skipped_non_duplicate
+                );
+            }
+            if result.skipped_non_weave_target > 0 {
+                eprintln!(
+                    "skipped {} Gemini symlink(s) with non-weave targets",
+                    result.skipped_non_weave_target
+                );
+            }
+            if result.skipped_non_symlink > 0 {
+                eprintln!("skipped {} non-symlink entries", result.skipped_non_symlink);
+            }
+
+            if !result.remove_failures.is_empty() {
+                for failure in &result.remove_failures {
+                    eprintln!(
+                        "warning: failed to remove {}: {}",
+                        failure.path.display(),
+                        failure.error
+                    );
+                }
+                std::process::exit(1);
+            }
+        }
         Commands::Visualize { plan, png, mermaid } => {
             let target = if mermaid {
                 VisualizeTarget::Mermaid
@@ -666,4 +727,15 @@ fn main() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_clean_gemini_skills_command() {
+        let cli = Cli::try_parse_from(["weave", "clean-gemini-skills"]).unwrap();
+        assert!(matches!(cli.command, Commands::CleanGeminiSkills));
+    }
 }
