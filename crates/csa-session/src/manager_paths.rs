@@ -122,6 +122,35 @@ fn find_session_base_dir_anywhere(session_id: &str) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+/// Verify that a globally-found session base dir belongs to the same physical
+/// project (via canonical path comparison). Returns `None` if the session's
+/// stored project_path resolves to a different canonical location.
+fn validate_global_fallback_for_project(
+    base_dir: &Path,
+    session_id: &str,
+    project_path: &Path,
+) -> bool {
+    let state_path = get_session_dir_in(base_dir, session_id).join(super::STATE_FILE_NAME);
+    let Ok(content) = fs::read_to_string(&state_path) else {
+        return true; // can't verify, allow fallback
+    };
+    // Extract project_path from state TOML without full deserialization
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("project_path") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let value = rest.trim().trim_matches('"');
+                let session_canonical =
+                    fs::canonicalize(value).unwrap_or_else(|_| PathBuf::from(value));
+                let request_canonical = normalize_project_path(project_path);
+                return session_canonical == request_canonical;
+            }
+        }
+    }
+    true // no project_path field found, allow fallback
+}
+
 pub(super) fn resolve_read_base_dir(
     project_path: &Path,
     session_id: Option<&str>,
@@ -141,11 +170,13 @@ pub(super) fn resolve_read_base_dir(
                 return Ok(base_dir);
             }
 
-            if let Some(base_dir) = find_session_base_dir_anywhere(session_id)? {
+            if let Some(base_dir) = find_session_base_dir_anywhere(session_id)?
+                && validate_global_fallback_for_project(&base_dir, session_id, project_path)
+            {
                 warn!(
                     session_id,
                     found_root = %base_dir.display(),
-                    "session resolved via global fallback (possible symlink-equivalent path)"
+                    "session resolved via global fallback (symlink-equivalent path)"
                 );
                 return Ok(base_dir);
             }
@@ -169,11 +200,13 @@ pub(super) fn resolve_write_base_dir(project_path: &Path, session_id: &str) -> R
         return Ok(base_dir);
     }
 
-    if let Some(base_dir) = find_session_base_dir_anywhere(session_id)? {
+    if let Some(base_dir) = find_session_base_dir_anywhere(session_id)?
+        && validate_global_fallback_for_project(&base_dir, session_id, project_path)
+    {
         warn!(
             session_id,
             found_root = %base_dir.display(),
-            "session write resolved via global fallback (possible symlink-equivalent path)"
+            "session write resolved via global fallback (symlink-equivalent path)"
         );
         return Ok(base_dir);
     }
@@ -193,7 +226,9 @@ pub fn get_session_dir(project_path: &Path, session_id: &str) -> Result<PathBuf>
         }
     }
 
-    if let Some(base_dir) = find_session_base_dir_anywhere(session_id)? {
+    if let Some(base_dir) = find_session_base_dir_anywhere(session_id)?
+        && validate_global_fallback_for_project(&base_dir, session_id, project_path)
+    {
         let candidate = base_dir.join("sessions").join(session_id);
         if candidate.exists() {
             return Ok(candidate);
