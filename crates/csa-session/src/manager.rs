@@ -1,30 +1,29 @@
 //! Session CRUD operations
 
-use crate::result::{RESULT_FILE_NAME, SessionArtifact, SessionResult};
 use crate::state::{MetaSessionState, SessionPhase};
 use crate::validate::{new_session_id, resolve_session_prefix, validate_session_id};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use csa_config::paths;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
+#[path = "manager_paths.rs"]
+mod manager_paths;
+#[path = "manager_result.rs"]
+mod manager_result;
+
+#[cfg(test)]
+use manager_paths::project_storage_key_from_path;
+pub use manager_paths::{get_session_dir, get_session_root};
+use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_base_dir};
+use manager_paths::{legacy_session_root, normalize_project_path};
+pub use manager_result::{list_artifacts, load_result, save_result};
+#[cfg(test)]
+pub(crate) use manager_result::{list_artifacts_in, load_result_in, save_result_in};
+
 const STATE_FILE_NAME: &str = "state.toml";
-const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
-const USER_RESULT_FILE_NAME: &str = "user-result.toml";
-const USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
-const RUNTIME_RESULT_KEYS: [&str; 8] = [
-    "status",
-    "exit_code",
-    "summary",
-    "tool",
-    "started_at",
-    "completed_at",
-    "events_count",
-    "artifacts",
-];
 
 /// Resolved identifiers for resuming a tool session.
 #[derive(Debug, Clone)]
@@ -33,76 +32,6 @@ pub struct ResumeSessionResolution {
     pub meta_session_id: String,
     /// Provider-native session ID for the requested tool, if present in state.
     pub provider_session_id: Option<String>,
-}
-
-/// Get the session root directory for a project (`~/.local/state/cli-sub-agent/{project_path}`)
-pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
-    let state_dir = paths::state_dir_write().context("Failed to determine project directories")?;
-    Ok(state_dir.join(project_storage_key(project_path)))
-}
-
-fn legacy_session_root(project_path: &Path) -> Option<PathBuf> {
-    paths::legacy_state_dir().map(|state_dir| state_dir.join(project_storage_key(project_path)))
-}
-
-fn project_storage_key(project_path: &Path) -> String {
-    project_path
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace('/', std::path::MAIN_SEPARATOR_STR)
-}
-
-fn session_state_exists(base_dir: &Path, session_id: &str) -> bool {
-    get_session_dir_in(base_dir, session_id)
-        .join(STATE_FILE_NAME)
-        .exists()
-}
-
-fn resolve_read_base_dir(project_path: &Path, session_id: Option<&str>) -> Result<PathBuf> {
-    let primary = get_session_root(project_path)?;
-    let Some(legacy) = legacy_session_root(project_path) else {
-        return Ok(primary);
-    };
-
-    match session_id {
-        Some(session_id) => {
-            if session_state_exists(&primary, session_id)
-                || !session_state_exists(&legacy, session_id)
-            {
-                Ok(primary)
-            } else {
-                Ok(legacy)
-            }
-        }
-        None => {
-            if primary.join("sessions").exists() || !legacy.join("sessions").exists() {
-                Ok(primary)
-            } else {
-                Ok(legacy)
-            }
-        }
-    }
-}
-
-/// Get the directory for a specific session
-pub fn get_session_dir(project_path: &Path, session_id: &str) -> Result<PathBuf> {
-    let primary_root = get_session_root(project_path)?;
-    let primary_dir = primary_root.join("sessions").join(session_id);
-    if primary_dir.exists() {
-        return Ok(primary_dir);
-    }
-    if let Some(legacy_root) = legacy_session_root(project_path) {
-        let legacy_dir = legacy_root.join("sessions").join(session_id);
-        if legacy_dir.exists() {
-            return Ok(legacy_dir);
-        }
-    }
-    Ok(primary_dir)
-}
-
-/// Internal function for testing: get session directory with explicit base
-fn get_session_dir_in(base_dir: &Path, session_id: &str) -> PathBuf {
-    base_dir.join("sessions").join(session_id)
 }
 
 /// Create a new session
@@ -130,6 +59,7 @@ pub(crate) fn create_session_in(
 ) -> Result<MetaSessionState> {
     let session_id = new_session_id();
     let session_dir = get_session_dir_in(base_dir, &session_id);
+    let normalized_project_path = normalize_project_path(project_path);
 
     // Compute depth from parent
     let (parent_session_id, depth) = if let Some(pid) = parent_id {
@@ -170,12 +100,12 @@ pub(crate) fn create_session_in(
     }
 
     let now = Utc::now();
-    let branch = detect_current_branch(project_path);
+    let branch = detect_current_branch(&normalized_project_path);
 
     let state = MetaSessionState {
         meta_session_id: session_id,
         description: description.map(|s| s.to_string()),
-        project_path: project_path.to_string_lossy().to_string(),
+        project_path: normalized_project_path.to_string_lossy().to_string(),
         branch,
         created_at: now,
         last_accessed: now,
@@ -194,7 +124,7 @@ pub(crate) fn create_session_in(
         sandbox_info: None,
         termination_reason: None,
         is_seed_candidate: false,
-        git_head_at_creation: detect_git_head(project_path),
+        git_head_at_creation: detect_git_head(&normalized_project_path),
         last_return_packet: None,
         fork_call_timestamps: Vec::new(),
     };
@@ -275,7 +205,7 @@ pub(crate) fn load_session_in(base_dir: &Path, session_id: &str) -> Result<MetaS
 /// Save session state to disk
 pub fn save_session(state: &MetaSessionState) -> Result<()> {
     let project_path = Path::new(&state.project_path);
-    let base_dir = get_session_root(project_path)?;
+    let base_dir = resolve_write_base_dir(project_path, &state.meta_session_id)?;
     save_session_in(&base_dir, state)
 }
 
@@ -502,8 +432,11 @@ pub(crate) fn find_sessions_in(
     let mut sessions = list_all_sessions_in(base_dir)?;
 
     if let Some(path) = project_path {
-        let project_key = path.to_string_lossy();
-        sessions.retain(|session| session.project_path == project_key);
+        let normalized_key = normalize_project_path(path).to_string_lossy().to_string();
+        let raw_key = path.to_string_lossy().to_string();
+        sessions.retain(|session| {
+            session.project_path == normalized_key || session.project_path == raw_key
+        });
     }
 
     if let Some(branch_filter) = branch {
@@ -538,17 +471,23 @@ pub fn resolve_resume_session(
     session_ref: &str,
     tool: &str,
 ) -> Result<ResumeSessionResolution> {
-    let primary = get_session_root(project_path)?;
-    match resolve_resume_session_in(&primary, session_ref, tool) {
+    let read_base = resolve_read_base_dir(project_path, Some(session_ref))?;
+    match resolve_resume_session_in(&read_base, session_ref, tool) {
         Ok(resolution) => Ok(resolution),
-        Err(primary_error) => {
+        Err(read_error) => {
+            let primary = get_session_root(project_path)?;
+            if primary != read_base {
+                if let Ok(resolution) = resolve_resume_session_in(&primary, session_ref, tool) {
+                    return Ok(resolution);
+                }
+            }
             let Some(legacy) = legacy_session_root(project_path) else {
-                return Err(primary_error);
+                return Err(read_error);
             };
             if !legacy.join("sessions").exists() {
-                return Err(primary_error);
+                return Err(read_error);
             }
-            resolve_resume_session_in(&legacy, session_ref, tool).map_err(|_| primary_error)
+            resolve_resume_session_in(&legacy, session_ref, tool).map_err(|_| read_error)
         }
     }
 }
@@ -694,215 +633,6 @@ pub(crate) fn validate_tool_access_in(base_dir: &Path, session_id: &str, tool: &
         }
     }
     Ok(())
-}
-
-/// Write a session result to disk
-pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
-    let base_dir = get_session_root(project_path)?;
-    save_result_in(&base_dir, session_id, result)
-}
-
-pub(crate) fn save_result_in(
-    base_dir: &Path,
-    session_id: &str,
-    result: &SessionResult,
-) -> Result<()> {
-    validate_session_id(session_id)?;
-    let session_dir = get_session_dir_in(base_dir, session_id);
-    let result_path = session_dir.join(RESULT_FILE_NAME);
-
-    let mut existing_table = None;
-    let mut existing_contents = None;
-    let mut has_custom_schema = false;
-    if result_path.exists() {
-        let contents = fs::read_to_string(&result_path).with_context(|| {
-            format!("Failed to read existing result: {}", result_path.display())
-        })?;
-        match toml::from_str::<toml::Value>(&contents) {
-            Ok(toml::Value::Table(table)) => {
-                has_custom_schema = table_has_custom_schema(&table);
-                existing_table = Some(table);
-            }
-            Ok(_) | Err(_) => {
-                // Preserve malformed/non-table user result in sidecar before overwriting.
-                has_custom_schema = true;
-            }
-        }
-        existing_contents = Some(contents);
-    }
-
-    let mut persisted_result = result.clone();
-    if has_custom_schema {
-        let Some(contents) = existing_contents.as_deref() else {
-            bail!("Expected existing result content when custom schema was detected");
-        };
-        preserve_user_result_snapshot(&session_dir, contents)?;
-    }
-    retain_user_result_artifact_if_snapshot_exists(&session_dir, &mut persisted_result)?;
-
-    let runtime_table = session_result_to_table(&persisted_result)?;
-    let mut merged_table = existing_table.unwrap_or_default();
-    for key in RUNTIME_RESULT_KEYS {
-        merged_table.remove(key);
-    }
-    merged_table.extend(runtime_table);
-    let contents = toml::to_string_pretty(&toml::Value::Table(merged_table))
-        .context("Failed to serialize session result")?;
-    fs::write(&result_path, contents)
-        .with_context(|| format!("Failed to write result: {}", result_path.display()))?;
-    Ok(())
-}
-
-fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<()> {
-    let output_dir = session_dir.join("output");
-    fs::create_dir_all(&output_dir)
-        .with_context(|| format!("Failed to create output dir: {}", output_dir.display()))?;
-    let snapshot_path = output_dir.join(USER_RESULT_FILE_NAME);
-    if snapshot_path.exists() {
-        if snapshot_path.is_file() {
-            return Ok(());
-        }
-        bail!(
-            "User result snapshot path exists but is not a file: {}",
-            snapshot_path.display()
-        );
-    }
-    fs::write(&snapshot_path, contents).with_context(|| {
-        format!(
-            "Failed to write user result snapshot: {}",
-            snapshot_path.display()
-        )
-    })
-}
-
-fn retain_user_result_artifact_if_snapshot_exists(
-    session_dir: &Path,
-    result: &mut SessionResult,
-) -> Result<()> {
-    let snapshot_path = session_dir.join(USER_RESULT_ARTIFACT_PATH);
-    if !snapshot_path.exists() {
-        return Ok(());
-    }
-    if !snapshot_path.is_file() {
-        bail!(
-            "User result snapshot path exists but is not a file: {}",
-            snapshot_path.display()
-        );
-    }
-    ensure_user_result_artifact(result);
-    Ok(())
-}
-
-fn ensure_user_result_artifact(result: &mut SessionResult) {
-    if result
-        .artifacts
-        .iter()
-        .any(|artifact| artifact.path == USER_RESULT_ARTIFACT_PATH)
-    {
-        return;
-    }
-    result
-        .artifacts
-        .push(SessionArtifact::new(USER_RESULT_ARTIFACT_PATH));
-}
-
-fn session_result_to_table(result: &SessionResult) -> Result<toml::Table> {
-    let value =
-        toml::Value::try_from(result).context("Failed to convert session result to TOML value")?;
-    let Some(table) = value.as_table() else {
-        bail!("Session result must serialize to a TOML table");
-    };
-    Ok(table.clone())
-}
-
-fn table_has_custom_schema(table: &toml::Table) -> bool {
-    table
-        .iter()
-        .any(|(key, value)| !value_matches_runtime_schema(key, value))
-}
-
-fn value_matches_runtime_schema(key: &str, value: &toml::Value) -> bool {
-    match key {
-        "status" | "summary" | "tool" | "started_at" | "completed_at" => value.is_str(),
-        "exit_code" | "events_count" => value.is_integer(),
-        "artifacts" => artifacts_value_matches_runtime_schema(value),
-        _ => false,
-    }
-}
-
-fn artifacts_value_matches_runtime_schema(value: &toml::Value) -> bool {
-    let Some(entries) = value.as_array() else {
-        return false;
-    };
-
-    entries.iter().all(|entry| match entry {
-        toml::Value::String(_) => true,
-        toml::Value::Table(table) => {
-            let Some(path) = table.get("path") else {
-                return false;
-            };
-            if !path.is_str() {
-                return false;
-            }
-
-            table.iter().all(|(key, value)| match key.as_str() {
-                "path" => value.is_str(),
-                "line_count" | "size_bytes" => {
-                    value.as_integer().map(|num| num >= 0).unwrap_or(false)
-                }
-                _ => false,
-            })
-        }
-        _ => false,
-    })
-}
-
-/// Load a session result
-pub fn load_result(project_path: &Path, session_id: &str) -> Result<Option<SessionResult>> {
-    let base_dir = resolve_read_base_dir(project_path, Some(session_id))?;
-    load_result_in(&base_dir, session_id)
-}
-
-pub(crate) fn load_result_in(base_dir: &Path, session_id: &str) -> Result<Option<SessionResult>> {
-    validate_session_id(session_id)?;
-    let session_dir = get_session_dir_in(base_dir, session_id);
-    let result_path = session_dir.join(RESULT_FILE_NAME);
-    if !result_path.exists() {
-        return Ok(None);
-    }
-    let contents = fs::read_to_string(&result_path)
-        .with_context(|| format!("Failed to read result: {}", result_path.display()))?;
-    let result: SessionResult = toml::from_str(&contents)
-        .with_context(|| format!("Failed to parse result: {}", result_path.display()))?;
-    Ok(Some(result))
-}
-
-/// List artifacts in a session's output/ directory
-pub fn list_artifacts(project_path: &Path, session_id: &str) -> Result<Vec<String>> {
-    let base_dir = resolve_read_base_dir(project_path, Some(session_id))?;
-    list_artifacts_in(&base_dir, session_id)
-}
-
-pub(crate) fn list_artifacts_in(base_dir: &Path, session_id: &str) -> Result<Vec<String>> {
-    validate_session_id(session_id)?;
-    let session_dir = get_session_dir_in(base_dir, session_id);
-    let output_dir = session_dir.join("output");
-    if !output_dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut artifacts = Vec::new();
-    for entry in fs::read_dir(&output_dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() {
-            artifacts.push(entry.file_name().to_string_lossy().to_string());
-        }
-    }
-    let transcript_path = output_dir.join(TRANSCRIPT_FILE_NAME);
-    if transcript_path.is_file() && !artifacts.iter().any(|name| name == TRANSCRIPT_FILE_NAME) {
-        artifacts.push(TRANSCRIPT_FILE_NAME.to_string());
-    }
-    artifacts.sort();
-    Ok(artifacts)
 }
 
 #[cfg(test)]

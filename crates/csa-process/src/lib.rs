@@ -14,6 +14,8 @@ mod idle_watchdog;
 use idle_watchdog::should_terminate_for_idle;
 #[path = "lib_output_helpers.rs"]
 mod output_helpers;
+#[path = "lib_subprocess_helpers.rs"]
+mod subprocess_helpers;
 mod tool_liveness;
 #[cfg(test)]
 use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
@@ -25,6 +27,8 @@ use output_helpers::{
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
+pub use subprocess_helpers::check_tool_installed;
+use subprocess_helpers::terminate_child_process_group;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
 #[cfg(feature = "codex-pty-fork")]
@@ -752,50 +756,6 @@ pub async fn run_and_capture_with_stdin(
         None,
     )
     .await
-}
-
-async fn terminate_child_process_group(
-    child: &mut tokio::process::Child,
-    termination_grace_period: Duration,
-) {
-    #[cfg(unix)]
-    {
-        if let Some(pid) = child.id() {
-            // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGTERM);
-            }
-            tokio::time::sleep(termination_grace_period).await;
-            if child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            // SAFETY: kill() is async-signal-safe; negative PID targets the process group.
-            unsafe {
-                libc::kill(-(pid as i32), libc::SIGKILL);
-            }
-            let _ = child.start_kill();
-            return;
-        }
-    }
-
-    let _ = child.start_kill();
-}
-
-/// Check if a tool is installed by attempting to locate it.
-///
-/// Uses `which` command on Unix systems.
-pub async fn check_tool_installed(executable: &str) -> Result<()> {
-    let output = Command::new("which")
-        .arg(executable)
-        .output()
-        .await
-        .context("Failed to execute 'which' command")?;
-
-    if !output.status.success() {
-        anyhow::bail!("Tool '{}' is not installed or not in PATH", executable);
-    }
-
-    Ok(())
 }
 
 #[cfg(test)]

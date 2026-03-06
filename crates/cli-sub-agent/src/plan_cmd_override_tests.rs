@@ -1,5 +1,7 @@
+use super::plan_cmd_exec::run_with_heartbeat;
 use super::*;
 use std::time::Instant;
+use weave::compiler::{FailAction, PlanStep};
 
 #[test]
 fn resolve_step_tool_all_explicit_tools() {

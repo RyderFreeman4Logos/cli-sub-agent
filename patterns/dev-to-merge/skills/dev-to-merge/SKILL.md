@@ -55,13 +55,13 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 4. **Stage changes**: `git add -A`, then unstage incidental lockfiles unless scope indicates release/dependency updates.
 5. **Security scan**: Grep staged files for hardcoded secrets.
 6. **Security audit**: Run `security-audit` via bounded bash wrapper with timeout and required `SECURITY_AUDIT_VERDICT`.
-7. **Pre-commit review**: Run `csa review --diff` (heterogeneous reviewer). Fix issues up to 3 rounds.
+7. **Pre-commit review**: Run `csa review --diff` (heterogeneous reviewer) and gate on the `final_decision:` verdict line, not exit code alone. Fix issues up to 3 rounds.
 8. **Re-run quality gates**: `just pre-commit` after any fixes.
 9. **Generate commit message**: Delegate to CSA (tier-1) for Conventional Commits.
 10. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 11. **Version gate precheck**: auto-run `just check-version-bumped`; if needed, `just bump-patch` and create a dedicated release commit before pre-PR review/push.
-12. **Pre-PR cumulative review**: `csa review --range main...HEAD` (covers full branch, NOT just last commit). MUST pass before push.
-13. **Push**: `git push -u origin ${BRANCH}`.
+12. **Pre-PR cumulative review**: `csa review --range main...HEAD` (covers full branch, NOT just last commit) and gate on the `final_decision:` verdict line. MUST pass before push.
+13. **Push**: `git push -u origin ${BRANCH}` only when cumulative review is clean; block push when `CUMULATIVE_REVIEW_HAS_ISSUES=true`.
 14. **Create PR**: `gh pr create --base main`.
 15. **Delegate PR review loop**: invoke `csa run --skill pr-codex-bot --no-stream-stdout ...`.
 16. **Do not poll in caller**: all trigger/poll/timeout/fix/review/merge waiting is handled inside delegated CSA workflow.
@@ -88,11 +88,12 @@ csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
 3. `just fmt`, `just clippy`, `just test` all exit 0.
 4. Security scan found no hardcoded secrets.
 5. Security audit returned PASS or PASS_DEFERRED.
-6. Pre-commit review completed with zero unresolved P0/P1 issues.
-7. Commit created with Conventional Commits format.
-8. PR created on GitHub targeting main.
-9. `pr-codex-bot` delegated workflow completed successfully.
-10. Cloud review polling and fix loops stayed inside delegated CSA session (no caller-side polling loop).
-11. PR merged via squash-merge.
-12. Local main updated: `git checkout main && git pull origin main`.
-13. Feature branch deleted (remote and local).
+6. Pre-commit review gate passed based on the review verdict (`final_decision:`), with zero unresolved P0/P1 issues.
+7. Pre-PR cumulative review gate passed based on the review verdict (`final_decision:`), and push remained blocked whenever `CUMULATIVE_REVIEW_HAS_ISSUES=true`.
+8. Commit created with Conventional Commits format.
+9. PR created on GitHub targeting main.
+10. `pr-codex-bot` delegated workflow completed successfully.
+11. Cloud review polling and fix loops stayed inside delegated CSA session (no caller-side polling loop).
+12. PR merged via squash-merge.
+13. Local main updated: `git checkout main && git pull origin main`.
+14. Feature branch deleted (remote and local).

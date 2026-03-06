@@ -21,6 +21,9 @@ name = "BRANCH"
 name = "COMMIT_MSG_LOCAL"
 
 [[workflow.variables]]
+name = "CUMULATIVE_REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
 name = "CURRENT_BRANCH"
 
 [[workflow.variables]]
@@ -343,6 +346,7 @@ else
   REVIEW_STATUS=${PIPESTATUS[0]}
 fi
 set -e
+REVIEW_VERDICT_LINE="$(grep '^final_decision:' "${REVIEW_OUTPUT_FILE}" | tail -n1 || true)"
 REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"
 rm -f "${REVIEW_OUTPUT_FILE}"
 printf '%s\n' "${REVIEW_OUTPUT}"
@@ -350,6 +354,16 @@ printf '%s\n' "${REVIEW_OUTPUT}"
 if [ "${REVIEW_STATUS}" -eq 124 ]; then
   echo "ERROR: pre-commit review timed out after 1800s." >&2
   exit 1
+fi
+
+if [ "${REVIEW_VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
+  exit 0
+fi
+
+if [ "${REVIEW_VERDICT_LINE}" = "final_decision: CLEAN" ]; then
+  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
+  exit 0
 fi
 
 if [ "${REVIEW_STATUS}" -eq 0 ]; then
@@ -530,12 +544,49 @@ Run cumulative read-only review for the full feature branch range.
 This gate must pass before push/PR.
 
 ```bash
+set -o pipefail
+CUMULATIVE_REVIEW_OUTPUT_FILE="$(mktemp)"
+set +e
 if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --tool codex --sa-mode false --range main...HEAD
+  timeout 1800 csa review --tool codex --sa-mode false --range main...HEAD 2>&1 | tee "${CUMULATIVE_REVIEW_OUTPUT_FILE}"
+  CUMULATIVE_REVIEW_STATUS=${PIPESTATUS[0]}
 else
-  csa review --tool codex --sa-mode false --range main...HEAD
+  csa review --tool codex --sa-mode false --range main...HEAD 2>&1 | tee "${CUMULATIVE_REVIEW_OUTPUT_FILE}"
+  CUMULATIVE_REVIEW_STATUS=${PIPESTATUS[0]}
 fi
+set -e
+CUMULATIVE_REVIEW_VERDICT_LINE="$(grep '^final_decision:' "${CUMULATIVE_REVIEW_OUTPUT_FILE}" | tail -n1 || true)"
+CUMULATIVE_REVIEW_OUTPUT="$(cat "${CUMULATIVE_REVIEW_OUTPUT_FILE}")"
+rm -f "${CUMULATIVE_REVIEW_OUTPUT_FILE}"
+printf '%s\n' "${CUMULATIVE_REVIEW_OUTPUT}"
+
+if [ "${CUMULATIVE_REVIEW_STATUS}" -eq 124 ]; then
+  echo "ERROR: cumulative review timed out after 1800s." >&2
+  exit 1
+fi
+
+if [ "${CUMULATIVE_REVIEW_VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
+  echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=true"
+  echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
+  exit 0
+fi
+
+if [ "${CUMULATIVE_REVIEW_VERDICT_LINE}" = "final_decision: CLEAN" ]; then
+  echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=false"
+  echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
+  exit 0
+fi
+
+if [ "${CUMULATIVE_REVIEW_STATUS}" -eq 0 ]; then
+  echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=false"
+  echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
+  exit 0
+fi
+
+echo "WARN: cumulative review returned non-zero without final_decision (exit=${CUMULATIVE_REVIEW_STATUS}); treating as findings requiring fix." >&2
+echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=true"
 echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
+exit 0
 ```'''
 on_fail = "abort"
 
@@ -547,6 +598,11 @@ prompt = """
 Push the feature branch to the remote origin.
 
 ```bash
+if [ "${CUMULATIVE_REVIEW_HAS_ISSUES}" = "true" ]; then
+  echo "ERROR: Cumulative review has unresolved findings. Push blocked." >&2
+  exit 1
+fi
+
 BRANCH="$(git branch --show-current)"
 if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
   echo "ERROR: Cannot determine current branch for push."

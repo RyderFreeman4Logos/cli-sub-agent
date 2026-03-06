@@ -44,6 +44,8 @@ find-monolith-files:
     case "$file" in
         *.lock|*lock.json|*lock.yaml) exit 0 ;;  # package manager locks
         */AGENTS.md|*/FACTORY.md) exit 0 ;;        # auto-generated rule aggregation
+        */PATTERN.md|*/SKILL.md) exit 0 ;;         # workflow pattern definitions (single-purpose docs)
+        */workflow.toml) exit 0 ;;                   # weave workflow definitions
     esac
     [ -f "$file" ] || exit 0
     grep -Iq '' "$file" 2>/dev/null || exit 0  # skip binary files
