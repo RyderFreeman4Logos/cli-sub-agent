@@ -572,7 +572,9 @@ async fn execute_step_bash_runs_code_block() {
         id: 1,
         title: "echo test".into(),
         tool: Some("bash".into()),
-        prompt: "Run this:\n```bash\necho hello\n```\n".into(),
+        prompt:
+            "Run this:\n```bash\nprintf 'hello' > code_block_output.txt\necho code-block-ran\n```\n"
+                .into(),
         tier: None,
         depends_on: vec![],
         on_fail: FailAction::Abort,
@@ -587,6 +589,18 @@ async fn execute_step_bash_runs_code_block() {
         result.exit_code, 0,
         "error={:?} output={:?}",
         result.error, result.output
+    );
+    assert!(
+        result
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("code-block-ran"),
+        "output should prove the fenced bash block ran"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tmp.path().join("code_block_output.txt")).unwrap(),
+        "hello"
     );
 }
 
@@ -608,6 +622,24 @@ fn load_pr_codex_bot_step(step_id: usize) -> PlanStep {
         loop_var: None,
         ..step
     }
+}
+
+#[test]
+fn pr_codex_bot_workflow_is_v1_loop_free() {
+    let workflow_path = workspace_root().join("patterns/pr-codex-bot/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    let loop_steps: Vec<usize> = plan
+        .steps
+        .iter()
+        .filter_map(|step| step.loop_var.as_ref().map(|_| step.id))
+        .collect();
+
+    assert!(
+        loop_steps.is_empty(),
+        "pr-codex-bot must remain v1-compatible; loop_var found on steps {loop_steps:?}"
+    );
 }
 
 fn install_fake_gh(bin_dir: &Path) -> PathBuf {

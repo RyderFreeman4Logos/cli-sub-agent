@@ -6,9 +6,6 @@ description = "Iterative PR review loop with cloud codex bot: local review, push
 name = "CLOUD_BOT"
 
 [[workflow.variables]]
-name = "BOT_COMMENTS"
-
-[[workflow.variables]]
 name = "BOT_HAS_ISSUES"
 
 [[workflow.variables]]
@@ -18,6 +15,9 @@ name = "BOT_UNAVAILABLE"
 name = "AUDIT_TRAIL_POSTED"
 
 [[workflow.variables]]
+name = "BOT_REVIEW_WINDOW_START"
+
+[[workflow.variables]]
 name = "CLEAN_BRANCH"
 
 [[workflow.variables]]
@@ -25,6 +25,15 @@ name = "COMMENT_IS_FALSE_POSITIVE"
 
 [[workflow.variables]]
 name = "COMMENT_IS_STALE"
+
+[[workflow.variables]]
+name = "COMMENT_PATH"
+
+[[workflow.variables]]
+name = "COMMENT_TIMESTAMP"
+
+[[workflow.variables]]
+name = "CURRENT_COMMENT_ID"
 
 [[workflow.variables]]
 name = "FALLBACK_REVIEW_HAS_ISSUES"
@@ -401,6 +410,7 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
     FALLBACK_REVIEW_HAS_ISSUES=true
   fi
 fi
+echo "CSA_VAR:BOT_REVIEW_WINDOW_START=${WAIT_BASE_TS}"
 echo "CSA_VAR:BOT_UNAVAILABLE=${BOT_UNAVAILABLE}"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
 echo "CSA_VAR:BOT_HAS_ISSUES=${BOT_HAS_ISSUES}"
@@ -545,17 +555,59 @@ condition = "(${BOT_UNAVAILABLE}) && (!(${FALLBACK_REVIEW_HAS_ISSUES})) && (!(${
 
 [[workflow.steps]]
 id = 8
-title = "Evaluate Each Bot Comment"
-tool = "claude-code"
+title = "Select Current Bot Comment"
+tool = "bash"
 prompt = """
-Classify each bot review comment on PR #${PR_NUM} as:
-- Category A (already fixed): the issue was addressed in subsequent commits
-- Category B (suspected false positive): the bot misunderstood the code or context
-- Category C (real issue): a genuine problem that needs fixing
+Select one actionable bot review comment from the current review window for
+v1 flat execution. v1 processes a single current bot comment per review loop
+iteration; additional findings are picked up by the next review trigger after
+Step 12 pushes fixes.
 
-For each comment, read the referenced code at the current HEAD and compare with
-the bot's suggestion. Output a classification table with reasoning."""
-tier = "tier-3-complex"
+Export the selected comment metadata so later steps can run the conservative
+staleness check, arbitration, and fix flow against a single current comment.
+
+```bash
+set -euo pipefail
+if [ -z "${BOT_REVIEW_WINDOW_START:-}" ]; then
+  echo "ERROR: BOT_REVIEW_WINDOW_START is unset. Step 5 must export the current review window start." >&2
+  exit 1
+fi
+
+COMMENT_RECORD="$(
+  gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv' \
+    2>/dev/null || true
+)"
+if [ -z "${COMMENT_RECORD}" ] || [ "${COMMENT_RECORD}" = "null" ]; then
+  echo "ERROR: BOT_HAS_ISSUES=true but no actionable bot comment was found in the current review window." >&2
+  exit 1
+fi
+
+IFS=$'\t' read -r CURRENT_COMMENT_ID COMMENT_PATH COMMENT_TIMESTAMP <<EOF
+${COMMENT_RECORD}
+EOF
+
+if [ -z "${CURRENT_COMMENT_ID}" ] || ! printf '%s' "${CURRENT_COMMENT_ID}" | grep -Eq '^[0-9]+$'; then
+  echo "ERROR: Failed to parse a numeric current bot comment id from '${COMMENT_RECORD}'." >&2
+  exit 1
+fi
+if [ -z "${COMMENT_TIMESTAMP}" ]; then
+  echo "ERROR: Failed to parse the current bot comment timestamp." >&2
+  exit 1
+fi
+
+COMMENT_IS_FALSE_POSITIVE=true
+COMMENT_IS_STALE=false
+AUDIT_TRAIL_POSTED=false
+
+echo "Selected current bot comment ${CURRENT_COMMENT_ID} for v1 flat execution."
+echo "CSA_VAR:CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}"
+echo "CSA_VAR:COMMENT_PATH=${COMMENT_PATH}"
+echo "CSA_VAR:COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}"
+echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=${COMMENT_IS_FALSE_POSITIVE}"
+echo "CSA_VAR:COMMENT_IS_STALE=${COMMENT_IS_STALE}"
+echo "CSA_VAR:AUDIT_TRAIL_POSTED=${AUDIT_TRAIL_POSTED}"
+```"""
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
@@ -564,37 +616,53 @@ id = 9
 title = "Staleness Filter"
 tool = "bash"
 prompt = """
-For each bot comment, check if the referenced code has been modified since the
-comment was posted. Compare comment file paths and line ranges against the latest
-HEAD diff (git diff main...HEAD). Comments that reference lines/hunks modified
-after the comment timestamp are marked as COMMENT_IS_STALE. Stale comments are
-skipped before arbitration — they do not enter the debate step.
+Run a conservative file-level staleness check for the current bot review
+comment selected in Step 8. If the referenced file changed on this branch after
+the comment timestamp, mark COMMENT_IS_STALE=true so arbitration and fixes are
+skipped for this loop iteration.
 
 ```bash
-# For each comment: extract file path and line range from bot comment body.
-# Compare against: git log --since="${COMMENT_TIMESTAMP}" --oneline -- "${FILE}"
-# If file/lines changed after comment: mark COMMENT_IS_STALE=true
-# Stale comments are reclassified as Category A (already addressed).
+set -euo pipefail
+COMMENT_IS_STALE=false
+
+if [ -n "${COMMENT_PATH:-}" ] && [ -n "${COMMENT_TIMESTAMP:-}" ]; then
+  if ! git diff --quiet main...HEAD -- "${COMMENT_PATH}"; then
+    if git log --since="${COMMENT_TIMESTAMP}" --format=%H -- "${COMMENT_PATH}" | grep -q .; then
+      COMMENT_IS_STALE=true
+    fi
+  fi
+fi
+
+echo "CSA_VAR:COMMENT_IS_STALE=${COMMENT_IS_STALE}"
+if [ "${COMMENT_IS_STALE}" = "true" ]; then
+  echo "Current bot comment ${CURRENT_COMMENT_ID} is stale because ${COMMENT_PATH} changed after ${COMMENT_TIMESTAMP}."
+fi
 ```"""
 on_fail = "skip"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
-
-[workflow.steps.loop_var]
-variable = "comment"
-collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
 id = 10
 title = "Arbitrate via Debate"
 tool = "csa"
 prompt = """
-Evaluate this bot review comment independently to determine if it is a
+Evaluate the current bot review comment independently to determine if it is a
 false positive or a real issue.
+
+Current comment context:
+- PR: #${PR_NUM} in ${REPO}
+- Review comment id: ${CURRENT_COMMENT_ID}
+- Referenced path: ${COMMENT_PATH}
+- Comment timestamp: ${COMMENT_TIMESTAMP}
+
+Fetch the review comment body yourself before deciding:
+- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
 
 Read the referenced code at the current HEAD. Consider:
 1. Does the code actually have the problem the bot describes?
 2. Is the bot's suggestion appropriate for this context?
-3. Are there project-specific patterns that justify the current code?
+3. Is the current comment already stale relative to the current HEAD?
+4. Are there project-specific patterns that justify the current code?
 
 Output format (exact markers):
 VERDICT: DISMISSED|CONFIRMED
@@ -623,10 +691,6 @@ VERDICT is CONFIRMED."""
 tier = "tier-2-standard"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
-
-[workflow.steps.loop_var]
-variable = "comment"
-collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
 id = 19
@@ -741,24 +805,27 @@ esac
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
 
-[workflow.steps.loop_var]
-variable = "comment"
-collection = "${BOT_COMMENTS}"
-
 [[workflow.steps]]
 id = 11
 title = "Fix Real Issue"
 tool = "csa"
-prompt = "Fix the real issue. Commit the fix."
+prompt = """
+Fix the real issue described by the current bot review comment.
+
+Current comment context:
+- PR: #${PR_NUM} in ${REPO}
+- Review comment id: ${CURRENT_COMMENT_ID}
+- Referenced path: ${COMMENT_PATH}
+
+Fetch the review comment body yourself via:
+- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
+
+Read the referenced code at the current HEAD, apply the fix, and commit it."""
 tier = "tier-2-standard"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE})) && (!(${COMMENT_IS_STALE})))"
 
 [workflow.steps.on_fail]
 retry = 2
-
-[workflow.steps.loop_var]
-variable = "comment"
-collection = "${BOT_COMMENTS}"
 
 [[workflow.steps]]
 id = 12
