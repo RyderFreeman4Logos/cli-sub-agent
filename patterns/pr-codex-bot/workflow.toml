@@ -15,6 +15,9 @@ name = "BOT_HAS_ISSUES"
 name = "BOT_UNAVAILABLE"
 
 [[workflow.variables]]
+name = "AUDIT_TRAIL_POSTED"
+
+[[workflow.variables]]
 name = "CLEAN_BRANCH"
 
 [[workflow.variables]]
@@ -86,7 +89,8 @@ tool = "bash"
 prompt = """
 Run cumulative local review covering all commits since main, with SHA-verified
 fast-path. This is the FOUNDATION — without it, bot unavailability cannot
-safely merge.
+safely merge. Local pre-PR review findings must be fixed before Step 4; the PR
+audit-trail comment path starts only after a PR exists.
 
 ```bash
 set -euo pipefail
@@ -592,13 +596,148 @@ Read the referenced code at the current HEAD. Consider:
 2. Is the bot's suggestion appropriate for this context?
 3. Are there project-specific patterns that justify the current code?
 
-Output: CONFIRMED (real issue) or DISMISSED (false positive) with reasoning.
+Output format (exact markers):
+VERDICT: DISMISSED|CONFIRMED
+RATIONALE: <one-line summary>
+PR_COMMENT_START
+<Markdown audit trail comment body for the caller to post when VERDICT is
+DISMISSED. If VERDICT is CONFIRMED, explain why the comment must be rerouted to
+the fix step instead of being posted.
 
-MANDATORY AUDIT TRAIL: If DISMISSED, you MUST post an explanatory PR comment
-explaining the rationale (e.g., 'False positive: the bot misunderstood X', or
-'Pre-production: breaking changes allowed per rule 019').
-Post the full audit trail as a PR comment."""
+When VERDICT is DISMISSED, the comment body MUST include:
+- `**Local arbitration result: DISMISSED.**`
+- `## Participants`
+- `## Bot Concern`
+- `## Debate Summary`
+- `## Conclusion`
+- `CSA session ID: ...`
+>
+PR_COMMENT_END
+
+Emit each marker exactly once, in the order shown, and do not repeat the format
+description in the answer.
+
+Do NOT post to GitHub yourself. The next workflow step posts the PR comment
+explicitly when VERDICT is DISMISSED, and reroutes to the fix step when
+VERDICT is CONFIRMED."""
 tier = "tier-2-standard"
+on_fail = "abort"
+condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
+
+[workflow.steps.loop_var]
+variable = "comment"
+collection = "${BOT_COMMENTS}"
+
+[[workflow.steps]]
+id = 19
+title = "Post Debate Audit Trail Comment"
+tool = "bash"
+prompt = """
+Parse the structured debate result from Step 10.
+- If VERDICT is DISMISSED: post the explanatory PR comment explicitly via
+  `gh pr comment`, fail if comment creation fails, and set AUDIT_TRAIL_POSTED.
+- If VERDICT is CONFIRMED: do not post a dismissal comment; reroute this
+  comment to the real-issue fix step by setting COMMENT_IS_FALSE_POSITIVE=false.
+
+```bash
+set -euo pipefail
+DEBATE_OUTPUT="${STEP_10_OUTPUT}"
+VERDICT_COUNT="$(
+  printf '%s\n' "${DEBATE_OUTPUT}" \
+    | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
+    || true
+)"
+if [ "${VERDICT_COUNT}" != "1" ]; then
+  echo "ERROR: Debate output must contain exactly one VERDICT marker." >&2
+  exit 1
+fi
+VERDICT_MARKER="$(
+  printf '%s\n' "${DEBATE_OUTPUT}" \
+    | grep -E '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
+    | tail -n 1 \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    || true
+)"
+
+if [ -z "${VERDICT_MARKER}" ]; then
+  echo "ERROR: Debate output missing VERDICT marker." >&2
+  exit 1
+fi
+
+VERDICT="${VERDICT_MARKER#VERDICT: }"
+
+case "${VERDICT}" in
+  DISMISSED)
+    COMMENT_START_COUNT="$(
+      printf '%s\n' "${DEBATE_OUTPUT}" \
+        | grep -Ec '^[[:space:]]*PR_COMMENT_START[[:space:]]*$' \
+        || true
+    )"
+    COMMENT_END_COUNT="$(
+      printf '%s\n' "${DEBATE_OUTPUT}" \
+        | grep -Ec '^[[:space:]]*PR_COMMENT_END[[:space:]]*$' \
+        || true
+    )"
+    if [ "${COMMENT_START_COUNT}" != "1" ] || [ "${COMMENT_END_COUNT}" != "1" ]; then
+      echo "ERROR: Debate output must contain exactly one PR comment marker pair." >&2
+      exit 1
+    fi
+
+    COMMENT_START_LINE="$(
+      printf '%s\n' "${DEBATE_OUTPUT}" \
+        | grep -n -E '^[[:space:]]*PR_COMMENT_START[[:space:]]*$' \
+        | tail -n 1 \
+        | cut -d: -f1 \
+        || true
+    )"
+    COMMENT_END_LINE="$(
+      printf '%s\n' "${DEBATE_OUTPUT}" \
+        | grep -n -E '^[[:space:]]*PR_COMMENT_END[[:space:]]*$' \
+        | tail -n 1 \
+        | cut -d: -f1 \
+        || true
+    )"
+    if [ -z "${COMMENT_START_LINE}" ] || [ -z "${COMMENT_END_LINE}" ] || [ "${COMMENT_END_LINE}" -le "${COMMENT_START_LINE}" ]; then
+      echo "ERROR: Debate output has an invalid PR comment marker range." >&2
+      exit 1
+    fi
+
+    COMMENT_FILE="$(mktemp)"
+    trap 'rm -f "${COMMENT_FILE}"' EXIT
+    printf '%s\n' "${DEBATE_OUTPUT}" \
+      | sed -n "${COMMENT_START_LINE},${COMMENT_END_LINE}p" \
+      | sed '1d;$d' > "${COMMENT_FILE}"
+    if [ ! -s "${COMMENT_FILE}" ]; then
+      echo "ERROR: Debate output missing PR comment body." >&2
+      exit 1
+    fi
+    grep -Eq '^\\*\\*Local arbitration result: DISMISSED\\.\\*\\*$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing a DISMISSED arbitration result heading." >&2; exit 1; }
+    grep -Eq '^## Participants$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Participants section." >&2; exit 1; }
+    grep -Eq '^## Bot Concern$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Bot Concern section." >&2; exit 1; }
+    grep -Eq '^## Debate Summary$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Debate Summary section." >&2; exit 1; }
+    grep -Eq '^## Conclusion$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Conclusion section." >&2; exit 1; }
+    grep -Eq '^CSA session ID:' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing CSA session ID." >&2; exit 1; }
+
+    gh pr comment "${PR_NUM}" --repo "${REPO}" --body-file "${COMMENT_FILE}"
+    rm -f "${COMMENT_FILE}"
+    trap - EXIT
+
+    AUDIT_TRAIL_POSTED=true
+    echo "CSA_VAR:AUDIT_TRAIL_POSTED=${AUDIT_TRAIL_POSTED}"
+    ;;
+  CONFIRMED)
+    AUDIT_TRAIL_POSTED=false
+    COMMENT_IS_FALSE_POSITIVE=false
+    echo "CSA_VAR:AUDIT_TRAIL_POSTED=${AUDIT_TRAIL_POSTED}"
+    echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=${COMMENT_IS_FALSE_POSITIVE}"
+    echo "Debate confirmed a real issue. Rerouting this comment to the fix step."
+    ;;
+  *)
+    echo "ERROR: Debate output has unsupported VERDICT '${VERDICT}'." >&2
+    exit 1
+    ;;
+esac
+```"""
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
 

@@ -30,12 +30,14 @@ triggers:
 
 Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). When the round limit is reached, the workflow pauses and presents options: merge now, continue, or abort. Before merge, accumulated fix commits are rebased into logical groups (Step 10.5).
 
-**MANDATORY AUDIT TRAIL**: When an agent determines a review finding (local or
-cloud bot) is NOT a real issue or is acceptable in context (e.g., pre-production
-breaking change), the agent MUST post an explanatory comment on the PR page
-BEFORE merging or proceeding. This creates a permanent record of the rationale
-behind every dismissed finding. FORBIDDEN: merging with dismissed findings
-without explanatory PR comments.
+**MANDATORY AUDIT TRAIL**: When an agent determines a PR-page review finding
+(for example, a cloud bot finding) is NOT a real issue or is acceptable in
+context (e.g., pre-production breaking change), the agent MUST post an
+explanatory comment on the PR page BEFORE merging or proceeding. This creates a
+permanent record of the rationale behind every dismissed PR-page finding.
+Local pre-PR review findings must be fixed before PR creation; they do not use
+the PR-page audit trail because no PR page exists yet. FORBIDDEN: merging with
+dismissed PR-page findings without explanatory PR comments.
 
 FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration, auto-merging at round limit.
 
@@ -162,7 +164,7 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
    - Category C (real issue): queue for staleness filter, then fix.
 6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
-7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Post full audit trail to PR.
+7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Require structured debate output, then post the PR audit trail through an explicit `gh pr comment` step. If debate overturns the false-positive classification, reroute that comment into the real-issue fix step instead of posting a dismissal comment.
 8. **Fix non-stale real issues**: For surviving Category C comments, fix, commit, push.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
@@ -201,6 +203,6 @@ csa run --skill pr-codex-bot "Review and merge the current PR"
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
 10a. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
 10b. **Rebase for clean history** (Step 10.5): If branch had > 3 accumulated commits, commits were rebased into logical groups, force-pushed, and delegated post-rebase CSA gate passed before merge (including timeout fallback handling). Backup branch created at `backup-<pr>-pre-rebase`.
-11. **Audit trail**: Every dismissed finding (local or bot) has a corresponding explanatory PR comment posted BEFORE proceeding or merging.
+11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.
 12. PR merged via squash-merge with branch cleanup.
 13. Local main updated: `git checkout main && git pull origin main`.
