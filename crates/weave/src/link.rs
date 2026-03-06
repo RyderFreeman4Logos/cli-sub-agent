@@ -13,10 +13,11 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
 
-use crate::check::DEFAULT_CHECK_DIRS;
+use crate::check::DEFAULT_LINK_DIRS;
 use crate::package::{
     Lockfile, SourceKind, find_lockfile, global_store_root, load_lockfile, package_dir,
 };
+use crate::path_utils::{normalize_path, resolve_symlink_target};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -369,7 +370,7 @@ pub fn link_skills(project_root: &Path, scope: LinkScope, force: bool) -> Result
 
     let mut report = LinkReport::default();
 
-    for target_dir_name in DEFAULT_CHECK_DIRS {
+    for target_dir_name in DEFAULT_LINK_DIRS {
         let target_dir = base_dir.join(target_dir_name);
 
         // Decide whether to create this target directory.
@@ -377,7 +378,7 @@ pub fn link_skills(project_root: &Path, scope: LinkScope, force: bool) -> Result
         //   the standard discovery path and must exist for first-time setups.
         // - Other tool directories are only created if their parent already
         //   exists (e.g., create .codex/skills/ only if .codex/ is present).
-        let is_primary = *target_dir_name == DEFAULT_CHECK_DIRS[0];
+        let is_primary = *target_dir_name == DEFAULT_LINK_DIRS[0];
         let should_create =
             target_dir.is_dir() || is_primary || target_dir.parent().is_some_and(|p| p.is_dir());
 
@@ -435,17 +436,8 @@ fn create_skill_link(
                 reason: LinkErrorKind::Io(format!("cannot read symlink: {e}")),
             })?;
 
-            let resolved_existing = if existing_target.is_absolute() {
-                existing_target.clone()
-            } else {
-                link_parent.join(&existing_target)
-            };
-
-            let resolved_new = if relative_target.is_absolute() {
-                relative_target.clone()
-            } else {
-                link_parent.join(&relative_target)
-            };
+            let resolved_existing = resolve_symlink_target(link_parent, &existing_target);
+            let resolved_new = resolve_symlink_target(link_parent, &relative_target);
 
             // Same effective target → skip.
             if paths_equivalent(&resolved_existing, &resolved_new) {
@@ -571,7 +563,7 @@ pub fn detect_stale_links(project_root: &Path, scope: LinkScope) -> Result<Vec<P
 
     let mut stale = Vec::new();
 
-    for dir_name in DEFAULT_CHECK_DIRS {
+    for dir_name in DEFAULT_LINK_DIRS {
         let dir = base_dir.join(dir_name);
         if !dir.is_dir() {
             continue;
@@ -653,12 +645,7 @@ fn is_stale_link(
         Err(_) => return false,
     };
 
-    let resolved = if target.is_absolute() {
-        target
-    } else {
-        let parent = path.parent().unwrap_or(Path::new("."));
-        parent.join(&target)
-    };
+    let resolved = resolve_symlink_target(path.parent().unwrap_or(Path::new(".")), &target);
 
     if !is_weave_managed_path(&resolved, store_root) {
         return false;
@@ -707,21 +694,6 @@ fn is_weave_managed_path(path: &Path, store_root: &Path) -> bool {
             np.starts_with(&ns)
         }
     }
-}
-
-/// Normalize a path by resolving `.` and `..` components lexically (no I/O).
-fn normalize_path(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            std::path::Component::CurDir => {}
-            c => out.push(c.as_os_str()),
-        }
-    }
-    out
 }
 
 /// Create a symlink (platform-specific).

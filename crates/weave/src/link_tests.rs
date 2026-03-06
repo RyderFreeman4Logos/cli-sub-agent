@@ -576,18 +576,13 @@ fn unique_created_names_preserves_order_and_deduplicates() {
 }
 
 #[test]
-fn unique_counts_with_four_dirs_simulation() {
-    // Simulate the real scenario: 3 unique skills × 4 directories.
+fn unique_counts_with_default_link_dirs_simulation() {
+    // Simulate the real scenario across the default managed link directories.
     let mut outcomes = Vec::new();
     let skill_names = ["commit", "mktd", "sa"];
-    let dirs = [
-        ".claude/skills",
-        ".codex/skills",
-        ".agents/skills",
-        ".gemini/skills",
-    ];
+    let dirs = crate::check::DEFAULT_LINK_DIRS;
 
-    for dir in &dirs {
+    for dir in dirs {
         for name in &skill_names {
             outcomes.push(LinkOutcome::Skipped {
                 name: name.to_string(),
@@ -603,8 +598,8 @@ fn unique_counts_with_four_dirs_simulation() {
         errors: Vec::new(),
     };
 
-    // Raw count: 3 skills × 4 dirs = 12
-    assert_eq!(report.skipped_count(), 12);
+    // Raw count: 3 skills × 3 dirs = 9
+    assert_eq!(report.skipped_count(), 9);
     // Unique: only 3 distinct skills
     assert_eq!(report.unique_skipped_count(), 3);
     assert_eq!(report.unique_created_count(), 0);
