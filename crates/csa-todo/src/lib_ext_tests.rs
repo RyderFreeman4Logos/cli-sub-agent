@@ -218,3 +218,71 @@ fn test_create_collision_suffix() {
     assert_eq!(plan_a.metadata.title, "A");
     assert_eq!(plan_b.metadata.title, "B");
 }
+
+// -- spec.toml support ----------------------------------------------------
+
+fn sample_spec_document(plan_ulid: &str) -> SpecDocument {
+    SpecDocument {
+        schema_version: 1,
+        plan_ulid: plan_ulid.to_string(),
+        summary: "Validate spec persistence.".to_string(),
+        criteria: vec![
+            SpecCriterion {
+                kind: CriterionKind::Scenario,
+                id: "scenario-show-spec".to_string(),
+                description: "todo show can render persisted spec criteria.".to_string(),
+                status: CriterionStatus::Pending,
+            },
+            SpecCriterion {
+                kind: CriterionKind::Check,
+                id: "check-roundtrip".to_string(),
+                description: "Saving then loading spec.toml preserves fields.".to_string(),
+                status: CriterionStatus::Verified,
+            },
+        ],
+    }
+}
+
+#[test]
+fn test_spec_path_points_to_spec_toml() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let path = manager.spec_path("20260211T023000");
+    assert_eq!(path, dir.path().join("20260211T023000").join("spec.toml"));
+}
+
+#[test]
+fn test_load_spec_returns_none_when_missing() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+    let plan = manager.create("Spec Missing", None).unwrap();
+
+    let spec = manager.load_spec(&plan.timestamp).unwrap();
+
+    assert!(spec.is_none());
+}
+
+#[test]
+fn test_save_and_load_spec_roundtrip() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+    let plan = manager.create("Spec Roundtrip", None).unwrap();
+    let spec = sample_spec_document(&plan.timestamp);
+
+    manager.save_spec(&plan.timestamp, &spec).unwrap();
+    let loaded = manager.load_spec(&plan.timestamp).unwrap();
+
+    assert_eq!(loaded, Some(spec));
+}
+
+#[test]
+fn test_save_spec_requires_existing_plan() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+    let spec = sample_spec_document("01JABCDEF0123456789ABCDEFG");
+
+    let result = manager.save_spec("20260211T023000", &spec);
+
+    assert!(result.is_err());
+}

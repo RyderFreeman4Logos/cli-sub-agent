@@ -517,9 +517,10 @@ async fn run() -> Result<()> {
                 timestamp,
                 version,
                 path,
+                spec,
                 cd,
             } => {
-                todo_cmd::handle_show(timestamp, version, path, cd)?;
+                todo_cmd::handle_show(timestamp, version, path, spec, cd)?;
             }
             TodoCommands::Status {
                 timestamp,

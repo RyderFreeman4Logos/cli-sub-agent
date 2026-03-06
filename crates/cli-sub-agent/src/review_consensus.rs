@@ -238,6 +238,9 @@ pub(crate) fn build_consolidated_artifact(
     reviewer_artifacts: Vec<ReviewArtifact>,
     session_id: &str,
 ) -> ReviewArtifact {
+    let review_mode = reviewer_artifacts
+        .iter()
+        .find_map(|artifact| artifact.review_mode.clone());
     let all_findings: Vec<Finding> = reviewer_artifacts
         .into_iter()
         .flat_map(|artifact| artifact.findings)
@@ -248,6 +251,7 @@ pub(crate) fn build_consolidated_artifact(
     ReviewArtifact {
         findings,
         severity_summary,
+        review_mode,
         schema_version: "1.0".to_string(),
         session_id: session_id.to_string(),
         timestamp: chrono::Utc::now(),
@@ -364,6 +368,7 @@ mod tests {
         ReviewArtifact {
             severity_summary: SeveritySummary::from_findings(&findings),
             findings,
+            review_mode: None,
             schema_version: "1.0".to_string(),
             session_id: session_id.to_string(),
             timestamp: chrono::Utc::now(),
@@ -706,11 +711,32 @@ mod tests {
     }
 
     #[test]
+    fn build_consolidated_artifact_preserves_first_review_mode() {
+        let reviewer_one = ReviewArtifact {
+            review_mode: Some("range:main...HEAD".to_string()),
+            ..artifact_with_findings("session-a", vec![finding("FID-A", Severity::High)])
+        };
+        let reviewer_two = ReviewArtifact {
+            review_mode: Some("diff".to_string()),
+            ..artifact_with_findings("session-b", vec![finding("FID-B", Severity::Low)])
+        };
+
+        let consolidated =
+            build_consolidated_artifact(vec![reviewer_one, reviewer_two], "session-final");
+
+        assert_eq!(
+            consolidated.review_mode.as_deref(),
+            Some("range:main...HEAD")
+        );
+    }
+
+    #[test]
     fn build_consolidated_artifact_with_empty_input_produces_empty_artifact() {
         let consolidated = build_consolidated_artifact(Vec::new(), "session-empty");
 
         assert_eq!(consolidated.session_id, "session-empty");
         assert_eq!(consolidated.schema_version, "1.0");
+        assert_eq!(consolidated.review_mode, None);
         assert!(consolidated.findings.is_empty());
         assert_eq!(consolidated.severity_summary, SeveritySummary::default());
     }
