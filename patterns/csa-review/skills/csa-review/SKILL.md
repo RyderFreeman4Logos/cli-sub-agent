@@ -44,9 +44,10 @@ Run structured code reviews through CSA, ensuring:
   - `range:<from>...<to>`
   - `files:<pathspec>`
 - `mode` (optional): `review-only` (default) or `review-and-fix`
+- `review_mode` (optional): `standard` (default) or `red-team`
 - `security_mode` (optional): `auto` (default) | `on` | `off`
 - `tool` (optional): override review tool (default: auto-detect independent reviewer)
-- `context` (optional): path to a TODO plan file (e.g., from `csa todo show -t <timestamp>`) to check implementation alignment against the planned design
+- `context` (optional): path to `TODO.md` or `spec.toml` to check implementation alignment against the planned design
 
 ## Execution Protocol (ORCHESTRATOR ONLY — review agents MUST skip this section)
 
@@ -68,15 +69,15 @@ Since this skill is designed to be invoked from Claude Code, the default auto be
 
 If the user explicitly passes `tool`, use that instead.
 
-### Step 1.5: Pre-PR TODO Plan Alignment (MANDATORY for pre-PR mode)
+### Step 1.5: Pre-PR Review Context Alignment
 
 When the review scope covers `main...HEAD` (i.e., pre-PR review), the orchestrator MUST:
 
-1. **Auto-detect associated TODO**: Run `csa todo find --branch $(git branch --show-current)` to find the TODO plan for the current branch.
-2. **Pass as context**: If a TODO is found, pass its path as the `context` parameter so the review agent performs alignment checking (see [Review Protocol](references/review-protocol.md) Step 2.5).
-3. **FATAL on failure**: If `csa todo find --branch` returns empty or fails, this is a **FATAL error**. Stop immediately and notify the user. Do NOT proceed without a TODO plan. Do NOT fallback to review-without-alignment.
+1. **Auto-detect associated context**: Run `csa todo find --branch $(git branch --show-current)` to find the plan for the current branch.
+2. **Prefer spec.toml when available**: If the plan has `spec.toml`, pass it as `context` so the review agent can check explicit criteria; otherwise pass `TODO.md` when available.
+3. **Continue when no context exists**: If no TODO/spec is found, continue the review normally. Alignment is best-effort, not a hard gate.
 
-**Why strict**: Pre-PR reviews verify that the branch implements its planned work correctly. Without a TODO plan, alignment checking is impossible, and the review provides incomplete assurance.
+**Why**: Pre-PR reviews should align diff behavior with branch intent, but the branch may legitimately lack a stored TODO/spec artifact.
 
 **Exception**: If the user explicitly provides `context=<path>`, skip auto-detection and use the provided path.
 
@@ -86,7 +87,7 @@ Construct a comprehensive review prompt that the review agent will execute auton
 
 **IMPORTANT**: The review agent reads CLAUDE.md itself. Do NOT read CLAUDE.md in the orchestrator and pass its content. The agent needs to build its own project understanding.
 
-The review prompt instructs the agent to: read project context (CLAUDE.md + AGENTS.md), collect the diff for the given scope, perform a three-pass review (discovery, evidence filtering, adversarial security), and generate structured outputs.
+The review prompt instructs the agent to: read project context (CLAUDE.md + AGENTS.md), collect the diff for the given scope, perform a three-pass review (discovery, evidence filtering, adversarial security), apply Spec Alignment when `context` is `TODO.md` or `spec.toml`, switch to adversarial hypothesis generation when `review_mode=red-team`, and generate structured outputs.
 
 > **See**: [Review Protocol](references/review-protocol.md) for the full agent instructions (scope commands, AGENTS.md compliance, three-pass review, non-negotiable rules).
 
@@ -134,8 +135,10 @@ or trigger another review round to verify fixes.
 |---------|--------|
 | `/csa-review` | Auto-selects codex, reviews uncommitted changes, security_mode=auto |
 | `/csa-review scope=base:main security_mode=on` | Reviews all changes since main with mandatory security pass |
+| `/csa-review scope=uncommitted review_mode=red-team` | Reviews adversarially, focusing on breakage paths and counterexamples |
 | `/csa-review scope=uncommitted mode=review-and-fix` | Reviews, then fixes P0/P1 in the same session |
 | `/csa-review scope=uncommitted context=$(csa todo show -t <ts> --path)` | Reviews and checks alignment against a TODO plan |
+| `/csa-review scope=uncommitted context=/abs/path/to/spec.toml` | Reviews against explicit criteria from `spec.toml` |
 | `/csa-review tool=opencode scope=base:dev` | Uses opencode instead of auto-detected tool |
 
 ## Adjudication Protocol (Fix Mode Only)
@@ -180,6 +183,7 @@ Adjudication-specific escalation rule:
 |------|---------|
 | [references/review-protocol.md](references/review-protocol.md) | Full agent review instructions: project context, scope commands, AGENTS.md compliance, three-pass review, non-negotiable rules |
 | [references/output-schema.md](references/output-schema.md) | JSON findings schema (`review-findings.json`) and Markdown report template (`review-report.md`) |
+| [references/red-team-mode.md](references/red-team-mode.md) | Adversarial prompt fragment for `review_mode=red-team` |
 | [references/fix-workflow.md](references/fix-workflow.md) | Fix mode protocol (Step 5) and verification (Step 6) for `review-and-fix` mode |
 | [references/disagreement-escalation.md](references/disagreement-escalation.md) | Finding dispute resolution via `debate` skill with independent models |
 
@@ -196,7 +200,9 @@ Adjudication-specific escalation rule:
 9. `review-findings.json` includes a complete `agents_md_checklist` with no missing applicable rules.
 10. `review-report.md` includes AGENTS.md checklist section with all items checked.
 11. If security_mode required pass 3, adversarial_pass_executed=true.
-12. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
-13. If mode=review-and-fix, every `Critical`/`High` finding includes one adjudication block with `fid`, `verdict`, and 1-2 sentence rationale.
-14. CSA session ID was reported for potential follow-up.
-15. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.
+12. If `context` was `spec.toml`, every criterion is either supported by evidence or surfaced as `spec-deviation` / `unverified-criterion`.
+13. If `review_mode=red-team`, `review-findings.json` contains `review_mode: "red-team"` and keeps the standard finding schema.
+14. If mode=review-and-fix, fix artifacts exist and session was resumed (not new).
+15. If mode=review-and-fix, every `Critical`/`High` finding includes one adjudication block with `fid`, `verdict`, and 1-2 sentence rationale.
+16. CSA session ID was reported for potential follow-up.
+17. **If any finding was contested**: debate skill was used with independent models, and outcome documented with model specs.

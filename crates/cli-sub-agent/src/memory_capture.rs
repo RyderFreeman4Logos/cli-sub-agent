@@ -562,8 +562,9 @@ mod tests {
         store.append(&entry_a).expect("append entry A");
         store.append(&entry_b).expect("append entry B");
         let index = MemoryIndex::open(&index_dir).expect("open memory index");
-        index.index_entry(&entry_a).expect("index entry A");
-        index.index_entry(&entry_b).expect("index entry B");
+        index
+            .rebuild(&[entry_a.clone(), entry_b.clone()])
+            .expect("index entries");
 
         let section = build_memory_section_from_store(
             &config,

@@ -84,11 +84,13 @@ git diff --no-color "{from}...{to}"
 git diff --no-color -- "{pathspec}"
 ```
 
-## Step 2.5: TODO Plan Alignment (when context is provided)
+## Step 2.5: Plan / Spec Alignment (when context is provided)
 
 Context: {context}
 
-When a TODO plan path is provided, read it and verify implementation alignment:
+When a context path is provided, detect its type and verify implementation alignment:
+
+### If `context` points to `TODO.md`
 
 1. **Task completion**: Are all `[ ]` tasks from the plan addressed in the diff?
 2. **Design drift**: Does the implementation deviate from key decisions documented in the plan?
@@ -96,6 +98,26 @@ When a TODO plan path is provided, read it and verify implementation alignment:
 4. **Risk coverage**: Are the mitigations from the plan's "Risks & Mitigations" section actually implemented?
 
 Flag deviations as findings with `finding_type: "plan-deviation"` at P2 priority.
+
+### If `context` points to `spec.toml`
+
+1. Parse the TOML as `SpecDocument`, unless the initial prompt already embeds a parsed
+   "Spec alignment context" block. If both are present, prefer the embedded block because
+   the orchestrator already normalized the criteria list.
+2. For each criterion, ask whether the diff provides concrete evidence that the criterion
+   is implemented or verified.
+3. Emit `spec-deviation` when the diff contradicts, weakens, or omits an explicitly
+   required criterion.
+4. Emit `unverified-criterion` when a criterion remains plausible but lacks direct evidence
+   in code, tests, or documentation touched by the diff.
+5. Use stable, ReviewArtifact-compatible finding fields:
+   - `rule_id`: prefix with `spec-deviation.` or `unverified-criterion.`
+   - `finding_type`: mirror the category for rich consumers
+   - `summary`: name the criterion and the gap succinctly
+
+Spec alignment findings should normally be P2, escalating to P1 when the criterion covers
+correctness, security, tenancy, data loss, or an AGENTS.md MUST/FORBIDDEN rule.
+
 If no context path is provided, skip this step entirely.
 
 ## Step 2.6: Project Profile Routing
@@ -113,6 +135,17 @@ Parse this value and normalize to one of:
 - `unknown`
 
 If metadata is missing or invalid, treat as `unknown`.
+
+## Step 2.7: Review Mode Routing
+
+Review mode: {review_mode}
+
+- `standard`: run the normal three-pass review.
+- `red-team`: before Pass 1, read `references/red-team-mode.md` and adopt an adversarial
+  stance. Generate counterexamples, boundary conditions, misuse attempts, and break
+  hypotheses before concluding the change is clean.
+
+Always write the selected mode into `review-findings.json` as `review_mode`.
 
 ## Step 3: Three-Pass Review
 
@@ -151,6 +184,7 @@ Scan all changed code for:
 - Regressions
 - Missing error handling
 - Test gaps
+- Spec alignment gaps when TODO/spec context exists
 
 ### Pass 2: Evidence Filtering (maximize precision)
 For each candidate finding:
@@ -165,6 +199,7 @@ Security mode: {security_mode}
 - `on`: Always execute this pass.
 - `auto`: Execute when scope touches risky surfaces (auth, crypto, external input boundaries, parser/deserialization, network handlers, permission/tenant checks, query/file/path handling, concurrency/resource limits).
 - `off`: Skip dedicated pass 3, but still report obvious security issues from passes 1-2.
+- `red-team`: Treat as security-mode `on` plus adversarial break attempts from `references/red-team-mode.md`.
 
 When executing, reason from attacker perspective and evaluate exploitability for:
 - Authentication/authorization bypass and privilege escalation
@@ -209,3 +244,5 @@ If P0 or P1 findings exist, set both fields to `null` — the developer needs to
 9. Any high-impact security suspicion without a concrete exploit path must be listed under open_questions instead of findings.
 10. Confidence must be calibrated with evidence strength. High confidence without concrete evidence is invalid.
 11. Review completion is invalid if AGENTS.md checklist has any unchecked item or missing applicable rule.
+12. `review-findings.json` must remain deserializable as a `ReviewArtifact`: include compact fields (`fid`, `severity`, `file`, `line`, `rule_id`, `summary`, `engine`) even when richer metadata is attached.
+13. Always include `review_mode` in `review-findings.json` (`standard` or `red-team`).

@@ -1,5 +1,5 @@
 use anyhow::Result;
-use clap::{ArgGroup, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use csa_core::types::{OutputFormat, ToolArg, ToolName};
 
 #[path = "cli_session.rs"]
@@ -9,6 +9,10 @@ pub use cli_session::*;
 #[path = "cli_todo.rs"]
 mod cli_todo;
 pub use cli_todo::*;
+
+#[path = "cli_review.rs"]
+mod cli_review;
+pub use cli_review::*;
 
 /// Build version string combining Cargo.toml version and git describe.
 fn build_version() -> &'static str {
@@ -325,150 +329,6 @@ pub enum Commands {
     /// Route tasks through CSA with Claude model selection and optional skill injection
     #[command(name = "claude-sub-agent")]
     ClaudeSubAgent(ClaudeSubAgentArgs),
-}
-
-#[derive(clap::Args)]
-#[command(group(
-    ArgGroup::new("review_scope")
-        .args(["diff", "commit", "range", "files"])
-        .multiple(false)
-))]
-pub struct ReviewArgs {
-    /// Tool to use for review (defaults to global [review] config or project fallback)
-    #[arg(long)]
-    pub tool: Option<ToolName>,
-    #[arg(long, value_name = "BOOL")]
-    pub sa_mode: Option<bool>,
-    /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
-    #[arg(long)]
-    pub force_override_user_config: bool,
-
-    /// Resume existing review session
-    #[arg(short, long)]
-    pub session: Option<String>,
-
-    /// Override model
-    #[arg(short, long)]
-    pub model: Option<String>,
-
-    /// Review uncommitted changes (git diff HEAD)
-    #[arg(long)]
-    pub diff: bool,
-
-    /// Compare against branch (default: main)
-    #[arg(long, conflicts_with_all = ["diff", "commit", "range", "files"])]
-    pub branch: Option<String>,
-
-    /// Review specific commit
-    #[arg(long)]
-    pub commit: Option<String>,
-
-    /// Review a commit range (e.g., "main...HEAD")
-    #[arg(long)]
-    pub range: Option<String>,
-
-    /// Review specific files (pathspec)
-    #[arg(long)]
-    pub files: Option<String>,
-
-    /// Review-and-fix mode (apply fixes directly)
-    #[arg(long)]
-    pub fix: bool,
-
-    /// Security review mode: auto, on, off
-    #[arg(long, default_value = "auto")]
-    pub security_mode: String,
-
-    /// Path to context file (e.g., TODO plan)
-    #[arg(long)]
-    pub context: Option<String>,
-
-    /// Number of reviewers to run in parallel (default: 1)
-    #[arg(long, default_value_t = 1, value_parser = clap::value_parser!(u32).range(1..))]
-    pub reviewers: u32,
-
-    /// Consensus strategy for multi-reviewer mode
-    #[arg(
-        long,
-        default_value = "majority",
-        value_parser = ["majority", "weighted", "unanimous"]
-    )]
-    pub consensus: String,
-
-    /// Absolute wall-clock timeout in seconds (kills execution after N seconds when set)
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-    pub timeout: Option<u64>,
-
-    /// Kill sub-agent when no output appears for N seconds (overrides config default)
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-    pub idle_timeout: Option<u64>,
-
-    /// Force stdout streaming to stderr even in non-TTY contexts
-    #[arg(long, conflicts_with = "no_stream_stdout")]
-    pub stream_stdout: bool,
-
-    /// Suppress real-time stdout streaming to stderr
-    #[arg(long)]
-    pub no_stream_stdout: bool,
-
-    /// Continue without csa-review pattern (warn instead of hard error)
-    #[arg(long)]
-    pub allow_fallback: bool,
-
-    /// Working directory
-    #[arg(long)]
-    pub cd: Option<String>,
-}
-
-#[derive(clap::Args)]
-pub struct DebateArgs {
-    /// The question or problem to debate; reads from stdin if omitted
-    pub question: Option<String>,
-    #[arg(long, value_name = "BOOL")]
-    pub sa_mode: Option<bool>,
-    /// Tool to use for debate (overrides auto heterogeneous selection)
-    #[arg(long)]
-    pub tool: Option<ToolName>,
-
-    /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
-    #[arg(long)]
-    pub force_override_user_config: bool,
-
-    /// Resume existing debate session (ULID or prefix match)
-    #[arg(short, long)]
-    pub session: Option<String>,
-
-    /// Override model
-    #[arg(short, long)]
-    pub model: Option<String>,
-
-    /// Thinking budget (low, medium, high, xhigh)
-    #[arg(long)]
-    pub thinking: Option<String>,
-
-    /// Number of debate rounds (default: 3)
-    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
-    pub rounds: u32,
-
-    /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-    pub timeout: Option<u64>,
-
-    /// Kill sub-agent when no output appears for N seconds (overrides config default)
-    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
-    pub idle_timeout: Option<u64>,
-
-    /// Force stdout streaming to stderr even in non-TTY contexts
-    #[arg(long, conflicts_with = "no_stream_stdout")]
-    pub stream_stdout: bool,
-
-    /// Suppress real-time stdout streaming to stderr
-    #[arg(long)]
-    pub no_stream_stdout: bool,
-
-    /// Working directory
-    #[arg(long)]
-    pub cd: Option<String>,
 }
 
 #[derive(clap::Args)]

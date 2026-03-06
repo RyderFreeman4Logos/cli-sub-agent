@@ -4,7 +4,7 @@ use csa_config::global::GlobalConfig;
 use csa_core::types::OutputFormat;
 use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_todo::dag::DependencyGraph;
-use csa_todo::{TodoManager, TodoStatus};
+use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager, TodoStatus};
 use tracing::warn;
 
 pub(crate) fn handle_create(
@@ -302,16 +302,24 @@ pub(crate) fn handle_show(
     timestamp: Option<String>,
     version: Option<usize>,
     path: bool,
+    spec: bool,
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;
     let ts = resolve_timestamp(&manager, timestamp.as_deref())?;
-    let plan = manager.load(&ts)?;
 
     if path {
+        let plan = manager.load(&ts)?;
         println!("{}", plan.todo_md_path().display());
+    } else if spec {
+        manager.load(&ts)?;
+        match manager.load_spec(&ts)? {
+            Some(document) => print!("{}", render_spec_document(&document)),
+            None => println!("No spec found for this plan"),
+        }
     } else {
+        let plan = manager.load(&ts)?;
         let content = if let Some(v) = version {
             csa_todo::git::show_version(manager.todos_dir(), &ts, v)?
         } else {
@@ -322,6 +330,41 @@ pub(crate) fn handle_show(
     }
 
     Ok(())
+}
+
+fn render_spec_document(spec: &SpecDocument) -> String {
+    let mut rendered = String::new();
+    rendered.push_str(&format!("Plan ULID: {}\n", spec.plan_ulid));
+    rendered.push_str(&format!("Summary: {}\n", spec.summary));
+    rendered.push_str("Criteria:\n");
+
+    for criterion in &spec.criteria {
+        rendered.push_str(&format!(
+            "- [{}] {} {}: {}\n",
+            criterion_status_label(criterion.status),
+            criterion_kind_label(criterion.kind),
+            criterion.id,
+            criterion.description
+        ));
+    }
+
+    rendered
+}
+
+fn criterion_kind_label(kind: CriterionKind) -> &'static str {
+    match kind {
+        CriterionKind::Scenario => "scenario",
+        CriterionKind::Property => "property",
+        CriterionKind::Check => "check",
+    }
+}
+
+fn criterion_status_label(status: CriterionStatus) -> &'static str {
+    match status {
+        CriterionStatus::Pending => "pending",
+        CriterionStatus::Verified => "verified",
+        CriterionStatus::Failed => "failed",
+    }
 }
 
 pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String>) -> Result<()> {
@@ -472,6 +515,7 @@ fn truncate(s: &str, max_len: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 
     // --- truncate tests ---
 
@@ -505,6 +549,38 @@ mod tests {
     fn truncate_single_char_max() {
         let result = truncate("abcdef", 1);
         assert_eq!(result, "\u{2026}");
+    }
+
+    #[test]
+    fn render_spec_document_includes_summary_and_criteria() {
+        let spec = SpecDocument {
+            schema_version: 1,
+            plan_ulid: "01JABCDEF0123456789ABCDEFG".to_string(),
+            summary: "Validate spec display.".to_string(),
+            criteria: vec![
+                SpecCriterion {
+                    kind: CriterionKind::Scenario,
+                    id: "scenario-show".to_string(),
+                    description: "show --spec renders criteria".to_string(),
+                    status: CriterionStatus::Pending,
+                },
+                SpecCriterion {
+                    kind: CriterionKind::Check,
+                    id: "check-failure".to_string(),
+                    description: "failed criteria are labeled".to_string(),
+                    status: CriterionStatus::Failed,
+                },
+            ],
+        };
+
+        let rendered = render_spec_document(&spec);
+
+        assert!(rendered.contains("Plan ULID: 01JABCDEF0123456789ABCDEFG"));
+        assert!(rendered.contains("Summary: Validate spec display."));
+        assert!(
+            rendered.contains("- [pending] scenario scenario-show: show --spec renders criteria")
+        );
+        assert!(rendered.contains("- [failed] check check-failure: failed criteria are labeled"));
     }
 
     // --- resolve_timestamp tests ---

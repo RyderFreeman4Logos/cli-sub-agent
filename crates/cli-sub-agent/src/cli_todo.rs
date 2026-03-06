@@ -106,6 +106,10 @@ pub enum TodoCommands {
         #[arg(long, conflicts_with = "version")]
         path: bool,
 
+        /// Show the plan's spec.toml criteria instead of TODO.md
+        #[arg(long, conflicts_with_all = ["path", "version"])]
+        spec: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,

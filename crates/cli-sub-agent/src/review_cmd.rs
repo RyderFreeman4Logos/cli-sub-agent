@@ -1,18 +1,26 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use std::path::Path;
 use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
-use crate::cli::ReviewArgs;
+use crate::cli::{ReviewArgs, ReviewMode};
 use crate::review_consensus::{
     CLEAN, agreement_level, build_consolidated_artifact, build_multi_reviewer_instruction,
     build_reviewer_tools, consensus_strategy_label, consensus_verdict, parse_consensus_strategy,
     parse_review_verdict, resolve_consensus, write_consolidated_artifact,
 };
+#[cfg(test)]
+use crate::review_context::discover_review_context_for_branch;
+use crate::review_context::{
+    ResolvedReviewContext, ResolvedReviewContextKind, render_spec_review_context,
+    resolve_review_context,
+};
+use crate::review_routing::{
+    ReviewRoutingMetadata, detect_review_routing_metadata, persist_review_routing_artifact,
+};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
-use csa_config::{GlobalConfig, ProjectConfig, ProjectProfile};
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
 use csa_core::types::{OutputFormat, ToolName};
 use csa_session::{
@@ -26,12 +34,6 @@ struct ReviewerOutcome {
     output: String,
     exit_code: i32,
     verdict: &'static str,
-}
-
-#[derive(Debug, Clone)]
-struct ReviewRoutingMetadata {
-    project_profile: ProjectProfile,
-    detection_method: &'static str,
 }
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
@@ -55,15 +57,32 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     } else {
         "review-only"
     };
+    let review_mode = args.effective_review_mode();
+    let security_mode = args.effective_security_mode();
+    let auto_discover_context = review_scope_allows_auto_discovery(&args);
+    let context = resolve_review_context(
+        args.context.as_deref(),
+        &project_root,
+        auto_discover_context,
+    )?;
 
-    debug!(scope = %scope, mode = %mode, security_mode = %args.security_mode, "Review parameters");
+    debug!(
+        scope = %scope,
+        mode = %mode,
+        review_mode = %review_mode,
+        security_mode = %security_mode,
+        auto_discover_context,
+        has_context = context.is_some(),
+        "Review parameters"
+    );
 
     // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
     let (prompt, review_routing) = build_review_instruction_for_project(
         &scope,
         mode,
-        &args.security_mode,
-        args.context.as_deref(),
+        security_mode,
+        review_mode,
+        context.as_ref(),
         &project_root,
         config.as_ref(),
     );
@@ -683,6 +702,10 @@ fn derive_scope(args: &ReviewArgs) -> String {
     format!("base:{}", args.branch.as_deref().unwrap_or("main"))
 }
 
+fn review_scope_allows_auto_discovery(args: &ReviewArgs) -> bool {
+    args.range.is_some() || (!args.diff && args.commit.is_none() && args.files.is_none())
+}
+
 /// Anti-recursion preamble injected into every review/debate subprocess prompt.
 ///
 /// Prevents the spawned tool (e.g. claude-code-acp) from reading CLAUDE.md rules
@@ -707,13 +730,20 @@ fn build_review_instruction(
     scope: &str,
     mode: &str,
     security_mode: &str,
-    context: Option<&str>,
+    review_mode: ReviewMode,
+    context: Option<&ResolvedReviewContext>,
 ) -> String {
     let mut instruction = format!(
-        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}."
+        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}."
     );
     if let Some(ctx) = context {
-        instruction.push_str(&format!(" context={ctx}"));
+        instruction.push_str(&format!(" context={}", ctx.path));
+        if let ResolvedReviewContextKind::SpecToml { spec } = &ctx.kind {
+            instruction.push_str(
+                "\nSpec alignment context (parsed from spec.toml; use this criteria set directly):\n",
+            );
+            instruction.push_str(&render_spec_review_context(spec));
+        }
     }
     instruction
 }
@@ -722,71 +752,19 @@ fn build_review_instruction_for_project(
     scope: &str,
     mode: &str,
     security_mode: &str,
-    context: Option<&str>,
+    review_mode: ReviewMode,
+    context: Option<&ResolvedReviewContext>,
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
 ) -> (String, ReviewRoutingMetadata) {
     let review_routing = detect_review_routing_metadata(project_root, project_config);
-    let mut instruction = build_review_instruction(scope, mode, security_mode, context);
+    let mut instruction =
+        build_review_instruction(scope, mode, security_mode, review_mode, context);
     instruction.push_str(&format!(
         "\n[project_profile: {}]",
         review_routing.project_profile
     ));
     (instruction, review_routing)
-}
-
-fn detect_review_routing_metadata(
-    project_root: &Path,
-    _project_config: Option<&ProjectConfig>,
-) -> ReviewRoutingMetadata {
-    // Project-level profile override is not part of ProjectConfig schema yet.
-    let project_profile = csa_config::detect_project_profile(project_root);
-    ReviewRoutingMetadata {
-        project_profile,
-        detection_method: "auto",
-    }
-}
-
-fn persist_review_routing_artifact(
-    project_root: &Path,
-    meta_session_id: &str,
-    review_routing: &ReviewRoutingMetadata,
-) {
-    let session_dir = match csa_session::get_session_dir(project_root, meta_session_id) {
-        Ok(path) => path,
-        Err(err) => {
-            debug!(
-                session_id = %meta_session_id,
-                error = %err,
-                "Skipping review-routing artifact write: failed to resolve session directory"
-            );
-            return;
-        }
-    };
-
-    let output_dir = session_dir.join("output");
-    if !output_dir.is_dir() {
-        debug!(
-            session_id = %meta_session_id,
-            output_dir = %output_dir.display(),
-            "Skipping review-routing artifact write: output directory missing"
-        );
-        return;
-    }
-
-    let artifact = format!(
-        "{{\"project_profile\":\"{}\",\"detection_method\":\"{}\",\"schema_version\":\"1.0\"}}\n",
-        review_routing.project_profile, review_routing.detection_method
-    );
-    let artifact_path = output_dir.join("review-routing.json");
-    if let Err(err) = std::fs::write(&artifact_path, artifact) {
-        warn!(
-            session_id = %meta_session_id,
-            path = %artifact_path.display(),
-            error = %err,
-            "Failed to write review-routing artifact (best-effort)"
-        );
-    }
 }
 
 #[cfg(test)]

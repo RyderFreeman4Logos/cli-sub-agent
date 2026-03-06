@@ -48,16 +48,18 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 3
-title = "Auto-Detect TODO Plan"
+title = "Auto-Detect Review Context"
 tool = "bash"
 prompt = """
-For pre-PR reviews (scope main...HEAD), auto-detect the associated TODO plan.
-FATAL if no TODO found — pre-PR reviews require alignment checking.
+For pre-PR reviews (scope main...HEAD), attempt to auto-detect the associated
+TODO.md or spec.toml for the current branch. If context is found, pass it so the
+review agent performs alignment checking. If no context is found, continue
+without alignment context.
 
 ```bash
 csa todo find --branch "$(git branch --show-current)"
 ```"""
-on_fail = "abort"
+on_fail = "skip"
 condition = "${SCOPE_IS_PRE_PR}"
 
 [[workflow.steps]]
@@ -74,9 +76,13 @@ Review prompt instructs agent to:
 4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules), including:
    - Rule 027 `pattern-workflow-sync` when diff touches `PATTERN.md` or `workflow.toml`
    - Rust rule 015 `subprocess-lifecycle` when diff touches process spawning/lifecycle code
-5. Generate $CSA_SESSION_DIR/reviewer-{N}/review-findings.json and
-   $CSA_SESSION_DIR/reviewer-{N}/review-report.md
-6. Parse `[project_profile: <value>]` metadata from the instruction and apply
+5. Apply Spec Alignment review dimensions when context points to TODO.md or spec.toml.
+   Emit categories `spec-deviation` and `unverified-criterion` when criteria drift
+   or remain unsupported by the diff.
+6. When `review_mode=red-team`, load `references/red-team-mode.md` and review
+   adversarially (counterexamples, boundary conditions, break attempts).
+7. Generate review-findings.json and review-report.md
+8. Parse `[project_profile: <value>]` metadata from the instruction and apply
    framework-aware review dimensions from `references/review-protocol.md`"""
 on_fail = "abort"
 
@@ -85,9 +91,34 @@ id = 5
 title = "Execute Review via CSA"
 tool = "csa"
 prompt = """
-Perform code review: ${SCOPE}.
+The review tool is resolved from `[review] tool` in config (Step 2).
+If `review.tool = "auto"`, CSA selects a heterogeneous counterpart automatically.
 
-${REVIEW_PROMPT}"""
+### Fork-Based Review (Recommended for Post-Implementation)
+
+For post-implementation review, fork the implementer's session to inherit full
+implementation context. Note: `csa review` does not yet support `--fork-from`
+directly. Use `csa run --fork-from` with a review prompt instead:
+
+```bash
+csa run --fork-from <impl-session-id> "Review the uncommitted changes: $(git diff)"
+```
+
+**Benefits**: The reviewer inherits the implementer's context (files read,
+design decisions, constraints, rejected alternatives). This catches
+inconsistencies between intent and implementation that a cold reviewer would
+miss — the forked context knows what the code *should* do, so deviations
+are immediately visible. Also saves tokens by avoiding redundant file reads.
+
+> **Planned**: Native `csa review --fork-from` support is tracked for a future release.
+
+### Standard Review (No Fork)
+
+When no implementation session is available, use standard review:
+
+```bash
+csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
+```"""
 tier = "tier-3-complex"
 on_fail = "abort"
 
@@ -95,8 +126,7 @@ on_fail = "abort"
 id = 6
 title = "Present Results"
 prompt = """
-Read and display $CSA_SESSION_DIR/reviewer-{N}/review-report.md and
-$CSA_SESSION_DIR/reviewer-{N}/review-findings.json summary,
+Read and display review-report.md, review-findings.json summary,
 AGENTS.md checklist summary. Report CSA session ID for follow-up."""
 on_fail = "abort"
 
@@ -105,12 +135,13 @@ id = 7
 title = "Fix Mode"
 tool = "csa"
 prompt = """
-Fix all P0 and P1 issues from the review.
-Generate $CSA_SESSION_DIR/reviewer-{N}/fix-summary.md and
-$CSA_SESSION_DIR/reviewer-{N}/post-fix-review-findings.json.
+Resume same CSA session to fix all P0 and P1 issues.
+Generate fix-summary.md and post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
-${FIX_PROMPT}"""
+```bash
+csa run --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}"
+```"""
 tier = "tier-3-complex"
 on_fail = "abort"
 condition = "${MODE_IS_REVIEW_AND_FIX}"

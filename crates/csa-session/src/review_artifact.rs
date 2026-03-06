@@ -67,6 +67,8 @@ pub struct ReviewArtifact {
     pub findings: Vec<Finding>,
     #[serde(default)]
     pub severity_summary: SeveritySummary,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review_mode: Option<String>,
     #[serde(default = "default_schema_version")]
     pub schema_version: String,
     pub session_id: String,
@@ -162,6 +164,7 @@ mod tests {
         let artifact = ReviewArtifact {
             findings,
             severity_summary,
+            review_mode: Some("single".to_string()),
             schema_version: "1.0".to_string(),
             session_id: "01JABCDEF0123456789ABCDEFG".to_string(),
             timestamp: Utc::now(),
@@ -201,6 +204,23 @@ mod tests {
             serde_json::from_str(json).expect("deserialize with missing schema_version");
 
         assert_eq!(artifact.schema_version, "1.0");
+    }
+
+    #[test]
+    fn test_review_mode_defaults_to_none_for_legacy_json() {
+        let json = r#"
+        {
+            "findings": [],
+            "severity_summary": { "critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0 },
+            "session_id": "01JABCDEF0123456789ABCDEFG",
+            "timestamp": "2026-02-24T00:00:00Z"
+        }
+        "#;
+
+        let artifact: ReviewArtifact =
+            serde_json::from_str(json).expect("deserialize legacy artifact without review_mode");
+
+        assert_eq!(artifact.review_mode, None);
     }
 
     #[test]

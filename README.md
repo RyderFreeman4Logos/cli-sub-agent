@@ -31,6 +31,7 @@ automatically Codex or Gemini, and vice versa. No silent fallback.
 | **Weave Compiler** | skill-lang patterns compile to deterministic workflow plans (`workflow.toml`) |
 | **Consensus Engine** | Multi-reviewer with majority / unanimous / weighted strategies |
 | **Config-Driven** | Tool selection and thinking budget from tiered config; CLI flags are overrides |
+| **Spec-Aware Planning** | `csa todo` plans can persist `spec.toml` criteria and feed them into review prompts and commit trailers |
 
 ## Quick Start
 
@@ -50,6 +51,9 @@ csa run --sa-mode false "implement user auth module"
 
 # Code review (auto-selects heterogeneous model)
 csa review --sa-mode false --diff
+
+# Adversarial review with spec-aware context loading
+csa review --sa-mode false --red-team --context .csa/spec.toml
 
 # Adversarial debate
 csa debate --sa-mode false "Should we use Redis or Memcached for caching?"
@@ -113,6 +117,15 @@ See [Architecture](docs/architecture.md) for design principles and dependency gr
 | [Hooks](docs/hooks.md) | Lifecycle hooks and prompt guards |
 | [Debate & Review](docs/debate-review.md) | Heterogeneous review, consensus engine |
 | [MCP Hub on macOS](docs/mcp-hub-launchd.md) | launchd integration guide |
+
+`csa todo` stores each plan under `~/.local/state/cli-sub-agent/{project_path}/todos/<timestamp>/`
+with `metadata.toml`, `TODO.md`, and optional `spec.toml`. `csa todo show --spec` renders the
+persisted criteria. `csa review --context <path>` accepts TOML spec documents directly, and when
+`--context` is omitted CSA auto-discovers the latest todo plan's `spec.toml` when present.
+Red-team reviews can be enabled with `csa review --red-team` or `--review-mode red-team`; that mode
+forces adversarial prompt framing and upgrades `security_mode=auto` to `on`. Commits generated from
+spec-backed plans add `CSA-Plan:` and `CSA-Criteria:` trailers so the intent and acceptance checks
+stay attached to the audited commit.
 
 ## Development
 
