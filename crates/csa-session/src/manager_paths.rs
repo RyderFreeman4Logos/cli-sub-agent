@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use csa_config::paths;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tracing::warn;
 
 /// Get the session root directory for a project (`~/.local/state/cli-sub-agent/{project_path}`)
 pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
@@ -140,7 +141,16 @@ pub(super) fn resolve_read_base_dir(
                 return Ok(base_dir);
             }
 
-            Ok(find_session_base_dir_anywhere(session_id)?.unwrap_or(primary))
+            if let Some(base_dir) = find_session_base_dir_anywhere(session_id)? {
+                warn!(
+                    session_id,
+                    found_root = %base_dir.display(),
+                    "session resolved via global fallback (possible symlink-equivalent path)"
+                );
+                return Ok(base_dir);
+            }
+
+            Ok(primary)
         }
         None => Ok(roots
             .into_iter()
@@ -159,7 +169,16 @@ pub(super) fn resolve_write_base_dir(project_path: &Path, session_id: &str) -> R
         return Ok(base_dir);
     }
 
-    Ok(find_session_base_dir_anywhere(session_id)?.unwrap_or(primary))
+    if let Some(base_dir) = find_session_base_dir_anywhere(session_id)? {
+        warn!(
+            session_id,
+            found_root = %base_dir.display(),
+            "session write resolved via global fallback (possible symlink-equivalent path)"
+        );
+        return Ok(base_dir);
+    }
+
+    Ok(primary)
 }
 
 /// Get the directory for a specific session
