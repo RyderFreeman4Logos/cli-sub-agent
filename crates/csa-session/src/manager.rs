@@ -471,17 +471,23 @@ pub fn resolve_resume_session(
     session_ref: &str,
     tool: &str,
 ) -> Result<ResumeSessionResolution> {
-    let primary = get_session_root(project_path)?;
-    match resolve_resume_session_in(&primary, session_ref, tool) {
+    let read_base = resolve_read_base_dir(project_path, Some(session_ref))?;
+    match resolve_resume_session_in(&read_base, session_ref, tool) {
         Ok(resolution) => Ok(resolution),
-        Err(primary_error) => {
+        Err(read_error) => {
+            let primary = get_session_root(project_path)?;
+            if primary != read_base {
+                if let Ok(resolution) = resolve_resume_session_in(&primary, session_ref, tool) {
+                    return Ok(resolution);
+                }
+            }
             let Some(legacy) = legacy_session_root(project_path) else {
-                return Err(primary_error);
+                return Err(read_error);
             };
             if !legacy.join("sessions").exists() {
-                return Err(primary_error);
+                return Err(read_error);
             }
-            resolve_resume_session_in(&legacy, session_ref, tool).map_err(|_| primary_error)
+            resolve_resume_session_in(&legacy, session_ref, tool).map_err(|_| read_error)
         }
     }
 }
