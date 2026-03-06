@@ -556,44 +556,72 @@ git checkout main && git pull origin main
 
 ## IF ${BOT_HAS_ISSUES}
 
-## Step 7: Evaluate Each Bot Comment
+## Step 7: Select Current Bot Comment
 
-> **Layer**: 1 (claude-code / Task tool) -- Layer 0 dispatches comment
-> classification to a sub-agent. The sub-agent reads PR comments and code
-> context to classify each one. Orchestrator uses classifications to route
-> to Step 8 (debate) or Step 9 (fix).
+> **Layer**: 0 (Orchestrator) -- shell-only selection of a single current
+> bot comment for v1 flat execution. The workflow handles one current bot
+> comment per loop iteration; after Step 10 pushes, the next bot review
+> trigger picks up any remaining findings.
 
-Tool: claude-code
-Tier: tier-3-complex
+Tool: bash
+OnFail: abort
 
-## FOR comment IN ${BOT_COMMENTS}
+Select one actionable bot review comment from the current review window and
+export its metadata as `CURRENT_COMMENT_ID`, `COMMENT_PATH`, and
+`COMMENT_TIMESTAMP`. Initialize `COMMENT_IS_FALSE_POSITIVE=true` and
+`COMMENT_IS_STALE=false` so the current comment always enters the arbitration
+path first unless the staleness guard suppresses it.
 
-Classify each comment:
-- Category A (already fixed): react and acknowledge
-- Category B (suspected false positive): queue for arbitration
-- Category C (real issue): queue for fix
+```bash
+set -euo pipefail
+if [ -z "${BOT_REVIEW_WINDOW_START:-}" ]; then
+  echo "ERROR: BOT_REVIEW_WINDOW_START is unset."
+  exit 1
+fi
+
+COMMENT_RECORD="$(
+  gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+)"
+if [ -z "${COMMENT_RECORD}" ] || [ "${COMMENT_RECORD}" = "null" ]; then
+  echo "ERROR: BOT_HAS_ISSUES=true but no actionable current bot comment was found."
+  exit 1
+fi
+
+IFS=$'\t' read -r CURRENT_COMMENT_ID COMMENT_PATH COMMENT_TIMESTAMP <<EOF
+${COMMENT_RECORD}
+EOF
+
+echo "CSA_VAR:CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}"
+echo "CSA_VAR:COMMENT_PATH=${COMMENT_PATH}"
+echo "CSA_VAR:COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}"
+echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=true"
+echo "CSA_VAR:COMMENT_IS_STALE=false"
+```
 
 ## Step 7a: Staleness Filter
 
 Tool: bash
 OnFail: skip
 
-For each bot comment, check whether the referenced code has been modified
-since the comment was posted. Compare the comment's file paths and line
-ranges against the latest HEAD diff (`git diff main...HEAD`) and commit
-timestamps (`git log --since`). Comments that reference lines/hunks
-modified after the comment timestamp are marked as "potentially stale"
-(`COMMENT_IS_STALE=true`) and reclassified as Category A (already
-addressed). Stale comments are skipped before entering the debate
-arbitration step, preventing wasted cycles debating already-fixed issues.
+For the current bot comment selected in Step 7, run a conservative file-level
+staleness check. When the referenced file changed on this branch after the
+comment timestamp, set `COMMENT_IS_STALE=true` and skip arbitration/fix for
+this loop iteration.
 
 ```bash
-# For each comment in BOT_COMMENTS:
-#   1. Extract file path and line range from comment body
-#   2. Get comment creation timestamp from GitHub API
-#   3. Check: git log --since="${COMMENT_TIMESTAMP}" --oneline -- "${FILE}"
-#   4. If file changed after comment → COMMENT_IS_STALE=true
-#   5. Stale comments are reclassified as Category A (skip arbitration)
+set -euo pipefail
+COMMENT_IS_STALE=false
+
+if [ -n "${COMMENT_PATH:-}" ] && [ -n "${COMMENT_TIMESTAMP:-}" ]; then
+  if ! git diff --quiet main...HEAD -- "${COMMENT_PATH}"; then
+    if git log --since="${COMMENT_TIMESTAMP}" --format=%H -- "${COMMENT_PATH}" | grep -q .; then
+      COMMENT_IS_STALE=true
+    fi
+  fi
+fi
+
+echo "CSA_VAR:COMMENT_IS_STALE=${COMMENT_IS_STALE}"
 ```
 
 ## IF ${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})
@@ -633,9 +661,13 @@ must include the debate result and the specific rationale (e.g.,
 'Pre-production: breaking API changes are acceptable per versioning rule 019').
 FORBIDDEN: dismissing findings without an explanatory PR comment.
 
-```bash
-csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
-```
+Use the current comment metadata exported by Step 7:
+- `CURRENT_COMMENT_ID`
+- `COMMENT_PATH`
+- `COMMENT_TIMESTAMP`
+
+The debate sub-agent MUST fetch the review comment body itself:
+- `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
 
 ## Step 8a: Post Debate Audit Trail Comment
 
@@ -649,7 +681,7 @@ Parse the structured debate result from Step 8.
 - If `VERDICT=DISMISSED`: post the explanatory PR comment explicitly via
   `gh pr comment` and fail if comment creation fails.
 - If `VERDICT=CONFIRMED`: do not post a dismissal comment; set
-  `COMMENT_IS_FALSE_POSITIVE=false` so the workflow routes this comment into
+  `COMMENT_IS_FALSE_POSITIVE=false` so the workflow routes the current comment into
   Step 9 (fix real issue).
 
 ```bash
@@ -734,11 +766,12 @@ Tool: csa
 Tier: tier-2-standard
 OnFail: retry 2
 
-Fix the real issue (non-stale, non-false-positive). Commit the fix.
+Fix the real issue for the current bot review comment (non-stale,
+non-false-positive). Fetch the comment body via
+`gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`, apply the fix,
+and commit it.
 
 ## ENDIF
-
-## ENDFOR
 
 ## Step 10: Push Fixes and Continue Loop
 
