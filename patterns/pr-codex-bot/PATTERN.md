@@ -10,6 +10,16 @@ version = "0.1.0"
 
 Orchestrates iterative fix-and-review loop with cloud review bot on GitHub PRs.
 Two-layer review: local pre-PR cumulative audit + cloud bot review.
+
+**MANDATORY AUDIT TRAIL**: When an agent determines a PR-page review finding
+(for example, a cloud bot finding) is NOT a real issue or is acceptable in
+context (e.g., pre-production breaking change), the agent MUST post an
+explanatory comment on the PR page BEFORE merging or proceeding. This creates a
+permanent record of the rationale behind every dismissed PR-page finding.
+Local pre-PR review findings must be fixed before PR creation; they do not use
+the PR-page audit trail because no PR page exists yet. FORBIDDEN: merging with
+dismissed PR-page findings without explanatory PR comments.
+
 Staleness guard: before arbitration, each bot comment is checked against the
 latest HEAD to detect whether the referenced code has been modified since the
 comment was posted. Stale comments (referencing already-modified code) are
@@ -601,10 +611,114 @@ Tier: tier-2-standard
 
 MUST use independent model for arbitration.
 NEVER dismiss bot comments using own reasoning alone.
-Post full audit trail (model specs for both sides) to PR.
+Emit structured output for the caller:
+- `VERDICT: DISMISSED|CONFIRMED`
+- `RATIONALE: ...`
+- `PR_COMMENT_START` / `PR_COMMENT_END`
+- For `DISMISSED`, the comment body must include:
+  `**Local arbitration result: DISMISSED.**`, `## Participants`,
+  `## Bot Concern`, `## Debate Summary`, `## Conclusion`, and
+  `CSA session ID: ...`
+
+Emit each marker exactly once, in the order shown, and do not repeat the
+format description in the answer.
+
+The workflow posts the audit trail to PR in a dedicated `gh pr comment` step
+and aborts if comment creation fails.
+
+**MANDATORY AUDIT TRAIL**: If the debate determines the PR-page finding is NOT
+a real issue (e.g., false positive, project status justifies it), the agent
+MUST post an explanatory comment on the PR page BEFORE proceeding. The comment
+must include the debate result and the specific rationale (e.g.,
+'Pre-production: breaking API changes are acceptable per versioning rule 019').
+FORBIDDEN: dismissing findings without an explanatory PR comment.
 
 ```bash
 csa debate "A code reviewer flagged: ${COMMENT_TEXT}. Evaluate independently."
+```
+
+## Step 8a: Post Debate Audit Trail Comment
+
+> **Layer**: 0 (Orchestrator) -- explicit bash step that posts the PR comment
+> or reroutes to the fix path based on the debate verdict.
+
+Tool: bash
+OnFail: abort
+
+Parse the structured debate result from Step 8.
+- If `VERDICT=DISMISSED`: post the explanatory PR comment explicitly via
+  `gh pr comment` and fail if comment creation fails.
+- If `VERDICT=CONFIRMED`: do not post a dismissal comment; set
+  `COMMENT_IS_FALSE_POSITIVE=false` so the workflow routes this comment into
+  Step 9 (fix real issue).
+
+```bash
+DEBATE_OUTPUT="${STEP_10_OUTPUT}"
+VERDICT_COUNT="$(
+  printf '%s\n' "${DEBATE_OUTPUT}" \
+    | grep -Ec '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
+    || true
+)"
+if [ "${VERDICT_COUNT}" != "1" ]; then
+  echo "ERROR: Debate output must contain exactly one VERDICT marker." >&2
+  exit 1
+fi
+VERDICT_MARKER="$(
+  printf '%s\n' "${DEBATE_OUTPUT}" \
+    | grep -E '^[[:space:]]*VERDICT: (DISMISSED|CONFIRMED)[[:space:]]*$' \
+    | tail -n 1 \
+    | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    || true
+)"
+
+if [ -z "${VERDICT_MARKER}" ]; then
+  echo "ERROR: Debate output missing VERDICT marker." >&2
+  exit 1
+fi
+
+VERDICT="${VERDICT_MARKER#VERDICT: }"
+
+case "${VERDICT}" in
+  DISMISSED)
+    COMMENT_START_COUNT="$(printf '%s\n' "${DEBATE_OUTPUT}" | grep -Ec '^[[:space:]]*PR_COMMENT_START[[:space:]]*$' || true)"
+    COMMENT_END_COUNT="$(printf '%s\n' "${DEBATE_OUTPUT}" | grep -Ec '^[[:space:]]*PR_COMMENT_END[[:space:]]*$' || true)"
+    if [ "${COMMENT_START_COUNT}" != "1" ] || [ "${COMMENT_END_COUNT}" != "1" ]; then
+      echo "ERROR: Debate output must contain exactly one PR comment marker pair." >&2
+      exit 1
+    fi
+    COMMENT_START_LINE="$(printf '%s\n' "${DEBATE_OUTPUT}" | grep -n -E '^[[:space:]]*PR_COMMENT_START[[:space:]]*$' | tail -n 1 | cut -d: -f1 || true)"
+    COMMENT_END_LINE="$(printf '%s\n' "${DEBATE_OUTPUT}" | grep -n -E '^[[:space:]]*PR_COMMENT_END[[:space:]]*$' | tail -n 1 | cut -d: -f1 || true)"
+    if [ -z "${COMMENT_START_LINE}" ] || [ -z "${COMMENT_END_LINE}" ] || [ "${COMMENT_END_LINE}" -le "${COMMENT_START_LINE}" ]; then
+      echo "ERROR: Debate output has an invalid PR comment marker range." >&2
+      exit 1
+    fi
+    COMMENT_FILE="$(mktemp)"
+    printf '%s\n' "${DEBATE_OUTPUT}" \
+      | sed -n "${COMMENT_START_LINE},${COMMENT_END_LINE}p" \
+      | sed '1d;$d' > "${COMMENT_FILE}"
+    if [ ! -s "${COMMENT_FILE}" ]; then
+      echo "ERROR: Debate output missing PR comment body." >&2
+      exit 1
+    fi
+    grep -Eq '^\*\*Local arbitration result: DISMISSED\.\*\*$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing a DISMISSED arbitration result heading." >&2; exit 1; }
+    grep -Eq '^## Participants$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Participants section." >&2; exit 1; }
+    grep -Eq '^## Bot Concern$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Bot Concern section." >&2; exit 1; }
+    grep -Eq '^## Debate Summary$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Debate Summary section." >&2; exit 1; }
+    grep -Eq '^## Conclusion$' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing Conclusion section." >&2; exit 1; }
+    grep -Eq '^CSA session ID:' "${COMMENT_FILE}" || { echo "ERROR: Debate output missing CSA session ID." >&2; exit 1; }
+    gh pr comment "${PR_NUM}" --repo "${REPO}" --body-file "${COMMENT_FILE}"
+    rm -f "${COMMENT_FILE}"
+    echo "CSA_VAR:AUDIT_TRAIL_POSTED=true"
+    ;;
+  CONFIRMED)
+    echo "CSA_VAR:AUDIT_TRAIL_POSTED=false"
+    echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=false"
+    ;;
+  *)
+    echo "ERROR: Debate output missing a supported VERDICT marker." >&2
+    exit 1
+    ;;
+esac
 ```
 
 ## ELSE
