@@ -153,3 +153,33 @@ fn handle_session_is_alive_reconciles_orphaned_active_session() {
         "is-alive should reconcile missing terminal result"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn handle_session_is_alive_accepts_symlinked_project_path() {
+    let td = tempdir().unwrap();
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let alias = td.path().join("project-alias");
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+
+    let created = create_session(&alias, Some("is-alive-symlink"), None, None).unwrap();
+    let session_id = created.meta_session_id;
+    let session_dir = get_session_dir(&alias, &session_id).unwrap();
+    backdate_tree(&session_dir, 120);
+
+    let alive = handle_session_is_alive(
+        session_id.clone(),
+        Some(alias.to_string_lossy().into_owned()),
+    )
+    .unwrap();
+    assert!(!alive);
+
+    let canonical_project = project.canonicalize().unwrap();
+    let result = load_result(&canonical_project, &session_id).unwrap();
+    assert!(
+        result.is_some(),
+        "is-alive should find sessions created through symlinked project paths"
+    );
+}

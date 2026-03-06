@@ -31,14 +31,62 @@ pub struct ResumeSessionResolution {
 /// Get the session root directory for a project (`~/.local/state/cli-sub-agent/{project_path}`)
 pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
     let state_dir = paths::state_dir_write().context("Failed to determine project directories")?;
-    Ok(state_dir.join(project_storage_key(project_path)))
+    let normalized = normalize_project_path(project_path);
+    Ok(state_dir.join(project_storage_key(&normalized)))
 }
 
 fn legacy_session_root(project_path: &Path) -> Option<PathBuf> {
-    paths::legacy_state_dir().map(|state_dir| state_dir.join(project_storage_key(project_path)))
+    let normalized = normalize_project_path(project_path);
+    paths::legacy_state_dir().map(|state_dir| state_dir.join(project_storage_key(&normalized)))
+}
+
+fn session_roots_for_reads(project_path: &Path) -> Result<Vec<PathBuf>> {
+    let normalized = normalize_project_path(project_path);
+    let state_dir = paths::state_dir_write().context("Failed to determine project directories")?;
+    let mut roots = Vec::new();
+
+    push_unique_root(
+        &mut roots,
+        state_dir.join(project_storage_key_from_path(&normalized)),
+    );
+    if normalized.as_path() != project_path {
+        push_unique_root(
+            &mut roots,
+            state_dir.join(project_storage_key_from_path(project_path)),
+        );
+    }
+
+    if let Some(legacy_state_dir) = paths::legacy_state_dir() {
+        push_unique_root(
+            &mut roots,
+            legacy_state_dir.join(project_storage_key_from_path(&normalized)),
+        );
+        if normalized.as_path() != project_path {
+            push_unique_root(
+                &mut roots,
+                legacy_state_dir.join(project_storage_key_from_path(project_path)),
+            );
+        }
+    }
+
+    Ok(roots)
+}
+
+fn push_unique_root(roots: &mut Vec<PathBuf>, candidate: PathBuf) {
+    if !roots.contains(&candidate) {
+        roots.push(candidate);
+    }
+}
+
+fn normalize_project_path(project_path: &Path) -> PathBuf {
+    fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf())
 }
 
 fn project_storage_key(project_path: &Path) -> String {
+    project_storage_key_from_path(project_path)
+}
+
+fn project_storage_key_from_path(project_path: &Path) -> String {
     project_path
         .to_string_lossy()
         .trim_start_matches('/')
@@ -52,44 +100,36 @@ fn session_state_exists(base_dir: &Path, session_id: &str) -> bool {
 }
 
 fn resolve_read_base_dir(project_path: &Path, session_id: Option<&str>) -> Result<PathBuf> {
-    let primary = get_session_root(project_path)?;
-    let Some(legacy) = legacy_session_root(project_path) else {
-        return Ok(primary);
-    };
+    let roots = session_roots_for_reads(project_path)?;
+    let primary = roots
+        .first()
+        .cloned()
+        .context("Failed to determine project directories")?;
 
     match session_id {
-        Some(session_id) => {
-            if session_state_exists(&primary, session_id)
-                || !session_state_exists(&legacy, session_id)
-            {
-                Ok(primary)
-            } else {
-                Ok(legacy)
-            }
-        }
-        None => {
-            if primary.join("sessions").exists() || !legacy.join("sessions").exists() {
-                Ok(primary)
-            } else {
-                Ok(legacy)
-            }
-        }
+        Some(session_id) => Ok(roots
+            .into_iter()
+            .find(|root| session_state_exists(root, session_id))
+            .unwrap_or(primary)),
+        None => Ok(roots
+            .into_iter()
+            .find(|root| root.join("sessions").exists())
+            .unwrap_or(primary)),
     }
 }
 
 /// Get the directory for a specific session
 pub fn get_session_dir(project_path: &Path, session_id: &str) -> Result<PathBuf> {
-    let primary_root = get_session_root(project_path)?;
-    let primary_dir = primary_root.join("sessions").join(session_id);
-    if primary_dir.exists() {
-        return Ok(primary_dir);
-    }
-    if let Some(legacy_root) = legacy_session_root(project_path) {
-        let legacy_dir = legacy_root.join("sessions").join(session_id);
-        if legacy_dir.exists() {
-            return Ok(legacy_dir);
+    let primary_dir = get_session_root(project_path)?
+        .join("sessions")
+        .join(session_id);
+    for root in session_roots_for_reads(project_path)? {
+        let candidate = root.join("sessions").join(session_id);
+        if candidate.exists() {
+            return Ok(candidate);
         }
     }
+
     Ok(primary_dir)
 }
 
@@ -123,6 +163,7 @@ pub(crate) fn create_session_in(
 ) -> Result<MetaSessionState> {
     let session_id = new_session_id();
     let session_dir = get_session_dir_in(base_dir, &session_id);
+    let normalized_project_path = normalize_project_path(project_path);
 
     // Compute depth from parent
     let (parent_session_id, depth) = if let Some(pid) = parent_id {
@@ -163,12 +204,12 @@ pub(crate) fn create_session_in(
     }
 
     let now = Utc::now();
-    let branch = detect_current_branch(project_path);
+    let branch = detect_current_branch(&normalized_project_path);
 
     let state = MetaSessionState {
         meta_session_id: session_id,
         description: description.map(|s| s.to_string()),
-        project_path: project_path.to_string_lossy().to_string(),
+        project_path: normalized_project_path.to_string_lossy().to_string(),
         branch,
         created_at: now,
         last_accessed: now,
@@ -187,7 +228,7 @@ pub(crate) fn create_session_in(
         sandbox_info: None,
         termination_reason: None,
         is_seed_candidate: false,
-        git_head_at_creation: detect_git_head(project_path),
+        git_head_at_creation: detect_git_head(&normalized_project_path),
         last_return_packet: None,
         fork_call_timestamps: Vec::new(),
     };
@@ -495,8 +536,11 @@ pub(crate) fn find_sessions_in(
     let mut sessions = list_all_sessions_in(base_dir)?;
 
     if let Some(path) = project_path {
-        let project_key = path.to_string_lossy();
-        sessions.retain(|session| session.project_path == project_key);
+        let normalized_key = normalize_project_path(path).to_string_lossy().to_string();
+        let raw_key = path.to_string_lossy().to_string();
+        sessions.retain(|session| {
+            session.project_path == normalized_key || session.project_path == raw_key
+        });
     }
 
     if let Some(branch_filter) = branch {
