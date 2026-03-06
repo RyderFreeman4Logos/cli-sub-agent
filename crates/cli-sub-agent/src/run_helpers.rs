@@ -118,21 +118,27 @@ pub(crate) fn resolve_tool_and_model(
 }
 
 /// Build an executor from tool, model_spec, model, and thinking parameters.
-///
-/// Keeps a `config` parameter for call-site API stability.
 pub(crate) fn build_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
     model: Option<&str>,
     thinking: Option<&str>,
-    _config: Option<&ProjectConfig>,
+    config: Option<&ProjectConfig>,
 ) -> Result<Executor> {
     let executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         Executor::from_spec(&parsed)?
     } else {
-        let final_model = model.map(|s| s.to_string());
-        let budget = thinking.map(ThinkingBudget::parse).transpose()?;
+        let tool_name = tool.as_str();
+        let final_model = model.map(|s| s.to_string()).or_else(|| {
+            config.and_then(|cfg| {
+                cfg.tool_default_model(tool_name)
+                    .map(|default_model| cfg.resolve_alias(default_model))
+            })
+        });
+        let effective_thinking =
+            thinking.or_else(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)));
+        let budget = effective_thinking.map(ThinkingBudget::parse).transpose()?;
 
         Executor::from_tool_name(tool, final_model, budget)
     };

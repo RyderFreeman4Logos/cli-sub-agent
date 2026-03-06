@@ -1,6 +1,7 @@
 use super::{build_executor, infer_task_edit_requirement, resolve_tool, truncate_prompt};
-use csa_config::GlobalConfig;
+use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::types::ToolName;
+use std::collections::HashMap;
 
 #[test]
 fn truncate_prompt_short_string_unchanged() {
@@ -103,6 +104,81 @@ fn build_executor_thinking_only() {
     let exec = build_executor(&ToolName::Codex, None, None, Some("high"), None).unwrap();
     let debug = format!("{:?}", exec);
     assert!(debug.contains("High"), "thinking budget missing: {debug}");
+}
+
+#[test]
+fn build_executor_uses_project_tool_defaults_when_cli_missing() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("gpt-5.4".to_string()),
+            default_thinking: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+    );
+    let config = ProjectConfig {
+        schema_version: 1,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config)).unwrap();
+    let debug = format!("{:?}", exec);
+    assert!(debug.contains("gpt-5.4"), "default model missing: {debug}");
+    assert!(debug.contains("Xhigh"), "default thinking missing: {debug}");
+}
+
+#[test]
+fn build_executor_cli_overrides_project_tool_defaults() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("gpt-5.4".to_string()),
+            default_thinking: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+    );
+    let config = ProjectConfig {
+        schema_version: 1,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    let exec = build_executor(
+        &ToolName::Codex,
+        None,
+        Some("gpt-5.5"),
+        Some("medium"),
+        Some(&config),
+    )
+    .unwrap();
+    let debug = format!("{:?}", exec);
+    assert!(debug.contains("gpt-5.5"), "cli model should win: {debug}");
+    assert!(debug.contains("Medium"), "cli thinking should win: {debug}");
+    assert!(!debug.contains("gpt-5.4"), "default model leaked: {debug}");
+    assert!(!debug.contains("Xhigh"), "default thinking leaked: {debug}");
 }
 
 #[test]
@@ -302,12 +378,37 @@ fn extract_cost_empty_returns_none() {
 
 #[test]
 fn build_executor_model_spec_overrides_both() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("gpt-5.4".to_string()),
+            default_thinking: Some("low".to_string()),
+            ..Default::default()
+        },
+    );
+    let config = ProjectConfig {
+        schema_version: 1,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
     let exec = build_executor(
         &ToolName::Codex,
         Some("codex/openai/gpt-5.3-codex/xhigh"),
         Some("ignored-model"),
         Some("ignored-thinking"),
-        None,
+        Some(&config),
     )
     .unwrap();
     let debug = format!("{:?}", exec);
@@ -318,6 +419,10 @@ fn build_executor_model_spec_overrides_both() {
     assert!(
         debug.contains("Xhigh"),
         "model_spec thinking missing: {debug}"
+    );
+    assert!(
+        !debug.contains("gpt-5.4"),
+        "tool default model leaked: {debug}"
     );
 }
 

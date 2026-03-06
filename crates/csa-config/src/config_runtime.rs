@@ -213,6 +213,20 @@ impl ProjectConfig {
         }
     }
 
+    /// Resolve the per-tool default model override for explicit `--tool` runs.
+    pub fn tool_default_model(&self, tool: &str) -> Option<&str> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.default_model.as_deref())
+    }
+
+    /// Resolve the per-tool default thinking budget for explicit `--tool` runs.
+    pub fn tool_default_thinking(&self, tool: &str) -> Option<&str> {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.default_thinking.as_deref())
+    }
+
     /// Check if a tool is allowed to edit existing files.
     pub fn can_tool_edit_existing(&self, tool: &str) -> bool {
         self.tools

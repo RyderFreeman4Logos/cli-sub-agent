@@ -185,3 +185,111 @@ async fn no_thinking_lock_passes_cli_thinking_through() {
         );
     }
 }
+
+#[tokio::test]
+async fn project_default_thinking_applies_when_cli_absent() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_thinking: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+    );
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        None,
+        None,
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+        },
+        false,
+        false,
+    )
+    .await;
+
+    if let Ok(exec) = result {
+        let debug = format!("{exec:?}");
+        assert!(
+            debug.contains("Xhigh"),
+            "project default_thinking should apply when CLI omits --thinking, got: {debug}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn project_default_model_is_checked_against_tiers() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("gpt-4o".to_string()),
+            ..Default::default()
+        },
+    );
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-2-standard".to_string(),
+        csa_config::config::TierConfig {
+            description: "test".to_string(),
+            models: vec!["codex/openai/gpt-5.4/xhigh".to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier-2-standard".to_string());
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping,
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        None,
+        None,
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+        },
+        true,
+        false,
+    )
+    .await;
+
+    let err = result.expect_err("tier validation should reject tool default_model");
+    assert!(
+        err.to_string().contains("not configured in any tier"),
+        "unexpected error: {err}"
+    );
+}

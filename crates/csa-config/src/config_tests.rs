@@ -16,13 +16,11 @@ fn test_save_and_load_roundtrip() {
 
     let mut tools = HashMap::new();
     tools.insert(
-        "gemini-cli".to_string(),
+        "codex".to_string(),
         ToolConfig {
             enabled: true,
-            restrictions: Some(ToolRestrictions {
-                allow_edit_existing_files: false,
-            }),
-            suppress_notify: true,
+            default_model: Some("gpt-5.4".to_string()),
+            default_thinking: Some("xhigh".to_string()),
             ..Default::default()
         },
     );
@@ -58,8 +56,11 @@ fn test_save_and_load_roundtrip() {
 
     assert_eq!(loaded.project.name, "test-project");
     assert_eq!(loaded.project.max_recursion_depth, 5);
-    assert!(loaded.tools.contains_key("gemini-cli"));
-    assert!(loaded.tools.get("gemini-cli").unwrap().enabled);
+    assert!(loaded.tools.contains_key("codex"));
+    let codex = loaded.tools.get("codex").unwrap();
+    assert!(codex.enabled);
+    assert_eq!(codex.default_model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(codex.default_thinking.as_deref(), Some("xhigh"));
 }
 
 #[test]

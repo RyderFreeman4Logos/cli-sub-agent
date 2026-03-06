@@ -207,6 +207,8 @@ pub fn init_project(
                 enabled: is_usable,
                 restrictions: None,
                 suppress_notify: true,
+                default_model: (*tool_name == "codex").then(|| "gpt-5.4".to_string()),
+                default_thinking: (*tool_name == "codex").then(|| "xhigh".to_string()),
                 ..Default::default()
             },
         );

@@ -597,3 +597,31 @@ fn codex_auto_trust_reads_tools_codex_setting() {
     );
     assert!(cfg.codex_auto_trust());
 }
+
+#[test]
+fn tool_default_model_reads_tool_override() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("gpt-5.4".to_string()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(cfg.tool_default_model("codex"), Some("gpt-5.4"));
+    assert_eq!(cfg.tool_default_model("claude-code"), None);
+}
+
+#[test]
+fn tool_default_thinking_reads_tool_override() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_thinking: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+    );
+    assert_eq!(cfg.tool_default_thinking("codex"), Some("xhigh"));
+    assert_eq!(cfg.tool_default_thinking("claude-code"), None);
+}

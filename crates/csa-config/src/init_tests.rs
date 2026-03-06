@@ -203,6 +203,19 @@ fn test_init_project_creates_default_tier_mapping() {
     );
 }
 
+#[test]
+fn test_init_project_sets_codex_tool_defaults() {
+    let dir = tempdir().unwrap();
+    let config = init_project(dir.path(), true, false).unwrap();
+
+    let codex = config
+        .tools
+        .get("codex")
+        .expect("codex tool config missing");
+    assert_eq!(codex.default_model.as_deref(), Some("gpt-5.4"));
+    assert_eq!(codex.default_thinking.as_deref(), Some("xhigh"));
+}
+
 // --- New tests below ---
 
 #[test]
