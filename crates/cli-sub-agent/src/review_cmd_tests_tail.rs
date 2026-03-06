@@ -180,7 +180,7 @@ fn resolve_review_context_parses_spec_toml() {
     )
     .unwrap();
 
-    let context = resolve_review_context(Some(spec_path.to_str().unwrap()), temp.path())
+    let context = resolve_review_context(Some(spec_path.to_str().unwrap()), temp.path(), false)
         .unwrap()
         .unwrap();
 
@@ -196,7 +196,7 @@ fn resolve_review_context_parses_spec_toml() {
 
 #[test]
 fn resolve_review_context_keeps_markdown_path_behavior() {
-    let context = resolve_review_context(Some("/tmp/TODO.md"), std::path::Path::new("/tmp"))
+    let context = resolve_review_context(Some("/tmp/TODO.md"), std::path::Path::new("/tmp"), false)
         .unwrap()
         .unwrap();
 

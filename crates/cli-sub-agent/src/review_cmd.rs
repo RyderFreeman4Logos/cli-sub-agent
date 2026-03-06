@@ -59,13 +59,19 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     };
     let review_mode = args.effective_review_mode();
     let security_mode = args.effective_security_mode();
-    let context = resolve_review_context(args.context.as_deref(), &project_root)?;
+    let auto_discover_context = review_scope_allows_auto_discovery(&args);
+    let context = resolve_review_context(
+        args.context.as_deref(),
+        &project_root,
+        auto_discover_context,
+    )?;
 
     debug!(
         scope = %scope,
         mode = %mode,
         review_mode = %review_mode,
         security_mode = %security_mode,
+        auto_discover_context,
         has_context = context.is_some(),
         "Review parameters"
     );
@@ -694,6 +700,10 @@ fn derive_scope(args: &ReviewArgs) -> String {
         return "uncommitted".to_string();
     }
     format!("base:{}", args.branch.as_deref().unwrap_or("main"))
+}
+
+fn review_scope_allows_auto_discovery(args: &ReviewArgs) -> bool {
+    args.range.is_some() || (!args.diff && args.commit.is_none() && args.files.is_none())
 }
 
 /// Anti-recursion preamble injected into every review/debate subprocess prompt.

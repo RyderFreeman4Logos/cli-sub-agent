@@ -458,6 +458,42 @@ fn derive_scope_default_branch() {
 }
 
 #[test]
+fn review_scope_allows_auto_discovery_for_default_branch_review() {
+    let args = parse_review_args(&["csa", "review"]);
+    assert!(review_scope_allows_auto_discovery(&args));
+}
+
+#[test]
+fn review_scope_allows_auto_discovery_for_explicit_branch_review() {
+    let args = parse_review_args(&["csa", "review", "--branch", "develop"]);
+    assert!(review_scope_allows_auto_discovery(&args));
+}
+
+#[test]
+fn review_scope_allows_auto_discovery_for_range_review() {
+    let args = parse_review_args(&["csa", "review", "--range", "main...HEAD"]);
+    assert!(review_scope_allows_auto_discovery(&args));
+}
+
+#[test]
+fn review_scope_disables_auto_discovery_for_diff_review() {
+    let args = parse_review_args(&["csa", "review", "--diff"]);
+    assert!(!review_scope_allows_auto_discovery(&args));
+}
+
+#[test]
+fn review_scope_disables_auto_discovery_for_commit_review() {
+    let args = parse_review_args(&["csa", "review", "--commit", "abc123"]);
+    assert!(!review_scope_allows_auto_discovery(&args));
+}
+
+#[test]
+fn review_scope_disables_auto_discovery_for_files_review() {
+    let args = parse_review_args(&["csa", "review", "--files", "src/**/*.rs"]);
+    assert!(!review_scope_allows_auto_discovery(&args));
+}
+
+#[test]
 fn review_cli_rejects_commit_with_range() {
     let err = parse_review_error(&["csa", "review", "--commit", "abc", "--range", "v1...v2"]);
     assert_eq!(err.kind(), ErrorKind::ArgumentConflict);
