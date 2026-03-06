@@ -1,4 +1,5 @@
 use super::*;
+use csa_core::types::OutputFormat;
 
 #[test]
 fn apply_no_verify_commit_policy_allows_explicit_override_marker() {
