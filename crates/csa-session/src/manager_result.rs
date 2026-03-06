@@ -20,7 +20,7 @@ const RUNTIME_RESULT_KEYS: [&str; 8] = [
 
 /// Write a session result to disk
 pub fn save_result(project_path: &Path, session_id: &str, result: &SessionResult) -> Result<()> {
-    let base_dir = super::get_session_root(project_path)?;
+    let base_dir = super::resolve_write_base_dir(project_path, session_id)?;
     save_result_in(&base_dir, session_id, result)
 }
 

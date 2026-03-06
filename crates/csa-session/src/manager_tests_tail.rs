@@ -50,6 +50,63 @@ fn test_save_and_load_result() {
     assert_eq!(loaded.artifacts.len(), 1);
 }
 
+#[cfg(unix)]
+#[test]
+fn test_save_session_and_result_preserve_legacy_symlink_root() {
+    let td = tempdir().unwrap();
+    let project = td.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+
+    let alias = td.path().join("project-alias");
+    std::os::unix::fs::symlink(&project, &alias).unwrap();
+
+    let state_dir = csa_config::paths::state_dir_write().unwrap();
+    let legacy_raw_root = state_dir.join(project_storage_key_from_path(&alias));
+    let mut state = create_session_in(
+        &legacy_raw_root,
+        &alias,
+        Some("Legacy symlink session"),
+        None,
+        Some("codex"),
+    )
+    .unwrap();
+    state.project_path = alias.to_string_lossy().to_string();
+    save_session_in(&legacy_raw_root, &state).unwrap();
+
+    let result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "saved to legacy raw root".to_string(),
+        tool: "codex".to_string(),
+        started_at: chrono::Utc::now(),
+        completed_at: chrono::Utc::now(),
+        events_count: 0,
+        artifacts: Vec::new(),
+    };
+    let canonical_project = project.canonicalize().unwrap();
+    let mut loaded = load_session(&canonical_project, &state.meta_session_id).unwrap();
+    loaded.description = Some("updated description".to_string());
+    save_session(&loaded).unwrap();
+    save_result(&canonical_project, &loaded.meta_session_id, &result).unwrap();
+
+    let legacy_session_dir = get_session_dir_in(&legacy_raw_root, &loaded.meta_session_id);
+    assert!(
+        legacy_session_dir.join(STATE_FILE_NAME).is_file(),
+        "legacy raw root should retain state writes"
+    );
+    assert!(
+        legacy_session_dir.join(crate::result::RESULT_FILE_NAME).is_file(),
+        "legacy raw root should retain result writes"
+    );
+
+    let canonical_root = get_session_root(&canonical_project).unwrap();
+    let canonical_session_dir = get_session_dir_in(&canonical_root, &loaded.meta_session_id);
+    assert!(
+        !canonical_session_dir.join(crate::result::RESULT_FILE_NAME).exists(),
+        "writes should not migrate live sessions into a different canonical root"
+    );
+}
+
 #[test]
 fn test_save_result_preserves_custom_schema_with_sidecar_snapshot() {
     let td = tempdir().unwrap();

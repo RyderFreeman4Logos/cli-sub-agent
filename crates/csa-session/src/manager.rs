@@ -4,15 +4,21 @@ use crate::state::{MetaSessionState, SessionPhase};
 use crate::validate::{new_session_id, resolve_session_prefix, validate_session_id};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use csa_config::paths;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
+#[path = "manager_paths.rs"]
+mod manager_paths;
 #[path = "manager_result.rs"]
 mod manager_result;
 
+#[cfg(test)]
+use manager_paths::project_storage_key_from_path;
+pub use manager_paths::{get_session_dir, get_session_root};
+use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_base_dir};
+use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{list_artifacts, load_result, save_result};
 #[cfg(test)]
 pub(crate) use manager_result::{list_artifacts_in, load_result_in, save_result_in};
@@ -26,116 +32,6 @@ pub struct ResumeSessionResolution {
     pub meta_session_id: String,
     /// Provider-native session ID for the requested tool, if present in state.
     pub provider_session_id: Option<String>,
-}
-
-/// Get the session root directory for a project (`~/.local/state/cli-sub-agent/{project_path}`)
-pub fn get_session_root(project_path: &Path) -> Result<PathBuf> {
-    let state_dir = paths::state_dir_write().context("Failed to determine project directories")?;
-    let normalized = normalize_project_path(project_path);
-    Ok(state_dir.join(project_storage_key(&normalized)))
-}
-
-fn legacy_session_root(project_path: &Path) -> Option<PathBuf> {
-    let normalized = normalize_project_path(project_path);
-    paths::legacy_state_dir().map(|state_dir| state_dir.join(project_storage_key(&normalized)))
-}
-
-fn session_roots_for_reads(project_path: &Path) -> Result<Vec<PathBuf>> {
-    let normalized = normalize_project_path(project_path);
-    let state_dir = paths::state_dir_write().context("Failed to determine project directories")?;
-    let mut roots = Vec::new();
-
-    push_unique_root(
-        &mut roots,
-        state_dir.join(project_storage_key_from_path(&normalized)),
-    );
-    if normalized.as_path() != project_path {
-        push_unique_root(
-            &mut roots,
-            state_dir.join(project_storage_key_from_path(project_path)),
-        );
-    }
-
-    if let Some(legacy_state_dir) = paths::legacy_state_dir() {
-        push_unique_root(
-            &mut roots,
-            legacy_state_dir.join(project_storage_key_from_path(&normalized)),
-        );
-        if normalized.as_path() != project_path {
-            push_unique_root(
-                &mut roots,
-                legacy_state_dir.join(project_storage_key_from_path(project_path)),
-            );
-        }
-    }
-
-    Ok(roots)
-}
-
-fn push_unique_root(roots: &mut Vec<PathBuf>, candidate: PathBuf) {
-    if !roots.contains(&candidate) {
-        roots.push(candidate);
-    }
-}
-
-fn normalize_project_path(project_path: &Path) -> PathBuf {
-    fs::canonicalize(project_path).unwrap_or_else(|_| project_path.to_path_buf())
-}
-
-fn project_storage_key(project_path: &Path) -> String {
-    project_storage_key_from_path(project_path)
-}
-
-fn project_storage_key_from_path(project_path: &Path) -> String {
-    project_path
-        .to_string_lossy()
-        .trim_start_matches('/')
-        .replace('/', std::path::MAIN_SEPARATOR_STR)
-}
-
-fn session_state_exists(base_dir: &Path, session_id: &str) -> bool {
-    get_session_dir_in(base_dir, session_id)
-        .join(STATE_FILE_NAME)
-        .exists()
-}
-
-fn resolve_read_base_dir(project_path: &Path, session_id: Option<&str>) -> Result<PathBuf> {
-    let roots = session_roots_for_reads(project_path)?;
-    let primary = roots
-        .first()
-        .cloned()
-        .context("Failed to determine project directories")?;
-
-    match session_id {
-        Some(session_id) => Ok(roots
-            .into_iter()
-            .find(|root| session_state_exists(root, session_id))
-            .unwrap_or(primary)),
-        None => Ok(roots
-            .into_iter()
-            .find(|root| root.join("sessions").exists())
-            .unwrap_or(primary)),
-    }
-}
-
-/// Get the directory for a specific session
-pub fn get_session_dir(project_path: &Path, session_id: &str) -> Result<PathBuf> {
-    let primary_dir = get_session_root(project_path)?
-        .join("sessions")
-        .join(session_id);
-    for root in session_roots_for_reads(project_path)? {
-        let candidate = root.join("sessions").join(session_id);
-        if candidate.exists() {
-            return Ok(candidate);
-        }
-    }
-
-    Ok(primary_dir)
-}
-
-/// Internal function for testing: get session directory with explicit base
-fn get_session_dir_in(base_dir: &Path, session_id: &str) -> PathBuf {
-    base_dir.join("sessions").join(session_id)
 }
 
 /// Create a new session
@@ -309,7 +205,7 @@ pub(crate) fn load_session_in(base_dir: &Path, session_id: &str) -> Result<MetaS
 /// Save session state to disk
 pub fn save_session(state: &MetaSessionState) -> Result<()> {
     let project_path = Path::new(&state.project_path);
-    let base_dir = get_session_root(project_path)?;
+    let base_dir = resolve_write_base_dir(project_path, &state.meta_session_id)?;
     save_session_in(&base_dir, state)
 }
 

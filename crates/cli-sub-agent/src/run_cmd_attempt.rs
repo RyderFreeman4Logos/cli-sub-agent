@@ -316,7 +316,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 .or_else(|| effective_session_arg.clone());
             persist_fork_timeout_result_if_missing(
                 request.project_root,
-                request.is_fork,
+                is_fork,
                 current_tool,
                 timeout_resume_session.as_deref(),
                 chrono::Utc::now(),
@@ -437,7 +437,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     if wall_timeout_secs.is_some() {
                         persist_fork_timeout_result_if_missing(
                             request.project_root,
-                            request.is_fork,
+                            is_fork,
                             current_tool,
                             interrupted_session_id.as_deref(),
                             chrono::Utc::now(),
@@ -646,4 +646,67 @@ fn persist_fork_timeout_result_if_missing(
         execution_start_time,
         &err,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::persist_fork_timeout_result_if_missing;
+    use csa_core::types::ToolName;
+    use csa_session::{create_session, load_result};
+
+    #[test]
+    fn persist_fork_timeout_result_if_missing_skips_non_fork_sessions() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let session = create_session(td.path(), Some("regular"), None, Some("codex"))
+            .expect("create session");
+
+        persist_fork_timeout_result_if_missing(
+            td.path(),
+            false,
+            ToolName::Codex,
+            Some(&session.meta_session_id),
+            chrono::Utc::now(),
+            60,
+        );
+
+        assert!(
+            load_result(td.path(), &session.meta_session_id)
+                .expect("load result")
+                .is_none(),
+            "non-fork timeouts should not synthesize fork terminal results"
+        );
+    }
+
+    #[test]
+    fn persist_fork_timeout_result_if_missing_writes_fork_failure() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let parent =
+            create_session(td.path(), Some("parent"), None, Some("codex")).expect("parent");
+        let child = create_session(
+            td.path(),
+            Some("fork child"),
+            Some(&parent.meta_session_id),
+            Some("codex"),
+        )
+        .expect("child");
+
+        persist_fork_timeout_result_if_missing(
+            td.path(),
+            true,
+            ToolName::Codex,
+            Some(&child.meta_session_id),
+            chrono::Utc::now(),
+            60,
+        );
+
+        let result = load_result(td.path(), &child.meta_session_id)
+            .expect("load result")
+            .expect("fork timeout result");
+        assert_eq!(result.status, "failure");
+        assert_eq!(result.exit_code, 1);
+        assert!(
+            result.summary.contains("wall-clock timeout"),
+            "fork timeout result should explain the synthetic failure"
+        );
+    }
 }
