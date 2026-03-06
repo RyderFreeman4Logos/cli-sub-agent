@@ -136,6 +136,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             },
             !request.force,
             request.force_override_user_config,
+            matches!(request.strategy, ToolSelectionStrategy::Explicit(_)),
         )
         .await?;
 

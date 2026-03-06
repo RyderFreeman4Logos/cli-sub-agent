@@ -57,6 +57,7 @@ pub(crate) async fn handle_claude_sub_agent(
         },
         true,  // enforce tier whitelist for sub-agent execution
         false, // claude-sub-agent does not support --force-override-user-config
+        false, // scoped to `csa run --tool`, not sub-agent orchestration
     )
     .await?;
 

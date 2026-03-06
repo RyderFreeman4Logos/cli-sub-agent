@@ -170,7 +170,7 @@ pub(super) async fn execute_csa_step(
 ) -> Result<StepExecutionOutcome> {
     info!("{} - Dispatching to {} ...", label, tool_name.as_str());
 
-    let executor = build_executor(tool_name, model_spec, None, None, config)?;
+    let executor = build_executor(tool_name, model_spec, None, None, config, false)?;
     check_tool_installed(executor.runtime_binary_name()).await?;
 
     let global_config = csa_config::GlobalConfig::load()?;

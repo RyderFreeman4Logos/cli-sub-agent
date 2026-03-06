@@ -170,11 +170,13 @@ pub(crate) struct ConfigRefs<'a> {
 /// skipped. Review and debate commands use this because they select tools for
 /// heterogeneous evaluation, not for tier-controlled execution.
 ///
-/// If the tool has `default_model` / `default_thinking` in project config, those
-/// fill missing CLI values before falling back to the executor's internal defaults.
+/// When `apply_tool_defaults` is `true`, `default_model` / `default_thinking`
+/// from project config fill missing CLI values before falling back to the
+/// executor's internal defaults.
 ///
 /// If the tool has a `thinking_lock` in project or global config, the locked
 /// value silently overrides the effective thinking budget.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_and_validate_executor(
     tool: &ToolName,
     model_spec: Option<&str>,
@@ -183,6 +185,7 @@ pub(crate) async fn build_and_validate_executor(
     configs: ConfigRefs<'_>,
     enforce_tier: bool,
     force_override_user_config: bool,
+    apply_tool_defaults: bool,
 ) -> Result<Executor> {
     let mut executor = crate::run_helpers::build_executor(
         tool,
@@ -190,13 +193,14 @@ pub(crate) async fn build_and_validate_executor(
         model,
         thinking_budget,
         configs.project,
+        apply_tool_defaults,
     )?;
 
     // Apply thinking lock: project config takes precedence over global.
     // When set, silently overrides the effective thinking budget (including
     // any project default or the one embedded in --model-spec).
     let tool_str = tool.as_str();
-    let default_model_resolved: Option<String> = if model_spec.is_none() {
+    let default_model_resolved: Option<String> = if apply_tool_defaults && model_spec.is_none() {
         configs.project.and_then(|cfg| {
             cfg.tool_default_model(tool_str)
                 .map(|m| cfg.resolve_alias(m))
@@ -204,7 +208,7 @@ pub(crate) async fn build_and_validate_executor(
     } else {
         None
     };
-    let default_thinking_from_project = model_spec.is_none().then(|| {
+    let default_thinking_from_project = (apply_tool_defaults && model_spec.is_none()).then(|| {
         configs
             .project
             .and_then(|cfg| cfg.tool_default_thinking(tool_str))

@@ -630,6 +630,7 @@ async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_s
         },
         true,
         false,
+        false,
     )
     .await;
 
@@ -660,6 +661,7 @@ async fn build_and_validate_executor_enforce_tier_false_skips_whitelist_check() 
             project: Some(&cfg),
             global: None,
         },
+        false,
         false,
         false,
     )
@@ -696,6 +698,7 @@ async fn build_and_validate_executor_enforce_tier_true_rejects_non_whitelisted_m
         },
         true,
         false,
+        false,
     )
     .await;
 
@@ -725,6 +728,7 @@ async fn build_and_validate_executor_enforce_tier_false_skips_model_name_check()
             project: Some(&cfg),
             global: None,
         },
+        false,
         false,
         false,
     )

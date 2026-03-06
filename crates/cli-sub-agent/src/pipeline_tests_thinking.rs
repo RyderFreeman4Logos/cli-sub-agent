@@ -43,6 +43,7 @@ async fn thinking_lock_project_config_overrides_cli_thinking() {
         },
         false,
         false,
+        false,
     )
     .await;
 
@@ -83,6 +84,7 @@ async fn thinking_lock_global_config_applies_when_project_absent() {
             project: None,
             global: Some(&global_cfg),
         },
+        false,
         false,
         false,
     )
@@ -148,6 +150,7 @@ async fn thinking_lock_project_overrides_global() {
         },
         false,
         false,
+        false,
     )
     .await;
 
@@ -172,6 +175,7 @@ async fn no_thinking_lock_passes_cli_thinking_through() {
             project: None,
             global: None,
         },
+        false,
         false,
         false,
     )
@@ -223,6 +227,7 @@ async fn project_default_thinking_applies_when_cli_absent() {
         },
         false,
         false,
+        true,
     )
     .await;
 
@@ -236,7 +241,7 @@ async fn project_default_thinking_applies_when_cli_absent() {
 }
 
 #[tokio::test]
-async fn project_default_model_is_checked_against_tiers() {
+async fn project_default_model_is_checked_against_tiers_when_enabled() {
     let mut tools = HashMap::new();
     tools.insert(
         "codex".to_string(),
@@ -284,6 +289,7 @@ async fn project_default_model_is_checked_against_tiers() {
         },
         true,
         false,
+        true,
     )
     .await;
 
@@ -292,4 +298,66 @@ async fn project_default_model_is_checked_against_tiers() {
         err.to_string().contains("not configured in any tier"),
         "unexpected error: {err}"
     );
+}
+
+#[tokio::test]
+async fn project_default_model_is_ignored_when_tool_defaults_disabled() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("gpt-4o".to_string()),
+            ..Default::default()
+        },
+    );
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-2-standard".to_string(),
+        csa_config::config::TierConfig {
+            description: "test".to_string(),
+            models: vec!["codex/openai/gpt-5.4/xhigh".to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier-2-standard".to_string());
+    let cfg = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping,
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    let result = build_and_validate_executor(
+        &ToolName::Codex,
+        None,
+        None,
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+        },
+        true,
+        false,
+        false,
+    )
+    .await;
+
+    if let Err(err) = result {
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("not configured in any tier"),
+            "tool defaults disabled should not inject default_model into tier validation: {msg}"
+        );
+    }
 }

@@ -124,6 +124,7 @@ pub(crate) fn build_executor(
     model: Option<&str>,
     thinking: Option<&str>,
     config: Option<&ProjectConfig>,
+    apply_tool_defaults: bool,
 ) -> Result<Executor> {
     let executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
@@ -131,13 +132,17 @@ pub(crate) fn build_executor(
     } else {
         let tool_name = tool.as_str();
         let final_model = model.map(|s| s.to_string()).or_else(|| {
-            config.and_then(|cfg| {
-                cfg.tool_default_model(tool_name)
-                    .map(|default_model| cfg.resolve_alias(default_model))
-            })
+            apply_tool_defaults.then(|| {
+                config.and_then(|cfg| {
+                    cfg.tool_default_model(tool_name)
+                        .map(|default_model| cfg.resolve_alias(default_model))
+                })
+            })?
         });
-        let effective_thinking =
-            thinking.or_else(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)));
+        let effective_thinking = thinking.or_else(|| {
+            apply_tool_defaults
+                .then(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)))?
+        });
         let budget = effective_thinking.map(ThinkingBudget::parse).transpose()?;
 
         Executor::from_tool_name(tool, final_model, budget)

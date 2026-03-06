@@ -89,6 +89,7 @@ fn build_executor_model_and_thinking_coexist() {
         Some("gpt-5.1-codex-mini"),
         Some("low"),
         None,
+        false,
     )
     .unwrap();
     let debug = format!("{:?}", exec);
@@ -101,7 +102,7 @@ fn build_executor_model_and_thinking_coexist() {
 
 #[test]
 fn build_executor_thinking_only() {
-    let exec = build_executor(&ToolName::Codex, None, None, Some("high"), None).unwrap();
+    let exec = build_executor(&ToolName::Codex, None, None, Some("high"), None, false).unwrap();
     let debug = format!("{:?}", exec);
     assert!(debug.contains("High"), "thinking budget missing: {debug}");
 }
@@ -133,10 +134,49 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
         memory: Default::default(),
     };
 
-    let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config)).unwrap();
+    let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
     let debug = format!("{:?}", exec);
     assert!(debug.contains("gpt-5.4"), "default model missing: {debug}");
     assert!(debug.contains("Xhigh"), "default thinking missing: {debug}");
+}
+
+#[test]
+fn build_executor_ignores_project_tool_defaults_when_disabled() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            default_model: Some("surprise-model".to_string()),
+            default_thinking: Some("xhigh".to_string()),
+            ..Default::default()
+        },
+    );
+    let config = ProjectConfig {
+        schema_version: 1,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), false).unwrap();
+    let debug = format!("{:?}", exec);
+    assert!(
+        !debug.contains("surprise-model"),
+        "tool defaults must not leak when disabled: {debug}"
+    );
+    assert!(
+        !debug.contains("Xhigh"),
+        "tool default thinking must not leak when disabled: {debug}"
+    );
 }
 
 #[test]
@@ -172,6 +212,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         Some("gpt-5.5"),
         Some("medium"),
         Some(&config),
+        true,
     )
     .unwrap();
     let debug = format!("{:?}", exec);
@@ -183,7 +224,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
 
 #[test]
 fn build_executor_invalid_thinking_errors() {
-    let result = build_executor(&ToolName::Codex, None, None, Some("bogus"), None);
+    let result = build_executor(&ToolName::Codex, None, None, Some("bogus"), None, false);
     assert!(result.is_err());
 }
 
@@ -409,6 +450,7 @@ fn build_executor_model_spec_overrides_both() {
         Some("ignored-model"),
         Some("ignored-thinking"),
         Some(&config),
+        true,
     )
     .unwrap();
     let debug = format!("{:?}", exec);

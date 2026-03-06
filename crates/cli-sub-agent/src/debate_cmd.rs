@@ -86,6 +86,7 @@ pub(crate) async fn handle_debate(
         },
         false, // skip tier whitelist for debate tool selection
         args.force_override_user_config,
+        false, // debate must not inherit `csa run` per-tool defaults
     )
     .await?;
 
