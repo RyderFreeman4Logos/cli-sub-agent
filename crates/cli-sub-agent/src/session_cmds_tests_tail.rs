@@ -106,7 +106,7 @@ fn ensure_terminal_result_for_dead_active_session_persists_into_legacy_session_d
     let session_id = created.meta_session_id;
     let primary_root = get_session_root(project).unwrap();
     let primary_session_dir = primary_root.join("sessions").join(&session_id);
-    let legacy_sessions_dir = super::legacy_sessions_dir_from_primary_root(&primary_root)
+    let legacy_sessions_dir = super::super::legacy_sessions_dir_from_primary_root(&primary_root)
         .expect("legacy session dir should resolve");
     let legacy_session_dir = legacy_sessions_dir.join(&session_id);
     std::fs::create_dir_all(&legacy_sessions_dir).unwrap();

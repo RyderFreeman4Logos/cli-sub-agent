@@ -1,6 +1,6 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
-use weave::compiler::VariableDecl;
+use weave::compiler::{FailAction, PlanStep, VariableDecl};
 
 #[test]
 fn safe_plan_name_normalizes_non_alphanumeric_characters() {

@@ -1,4 +1,5 @@
 use super::*;
+use weave::compiler::{FailAction, PlanStep};
 
 #[tokio::test]
 async fn execute_plan_aborts_on_retry_exhaustion() {
