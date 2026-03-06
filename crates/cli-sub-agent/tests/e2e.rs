@@ -5,7 +5,7 @@
 mod cli_defs;
 
 use clap::Parser;
-use cli_defs::{AuditCommands, Cli, Commands, McpHubCommands};
+use cli_defs::{AuditCommands, Cli, Commands, McpHubCommands, validate_command_args};
 use csa_core::types::OutputFormat;
 use std::process::Command;
 
@@ -153,6 +153,37 @@ fn review_help_shows_options() {
     assert!(stdout.contains("--branch"));
     assert!(stdout.contains("--commit"));
     assert!(stdout.contains("--model"));
+}
+
+#[test]
+fn review_cli_validation_applies_red_team_defaults() {
+    let cli = Cli::try_parse_from(["csa", "review", "--red-team", "--diff"])
+        .expect("review args should parse");
+
+    match &cli.command {
+        Commands::Review(args) => {
+            validate_command_args(&cli.command).expect("review args should validate");
+            assert_eq!(args.effective_review_mode().as_str(), "red-team");
+            assert_eq!(args.effective_security_mode(), "on");
+        }
+        _ => panic!("expected review subcommand"),
+    }
+}
+
+#[test]
+fn review_cli_validation_rejects_red_team_with_security_off() {
+    let cli = Cli::try_parse_from([
+        "csa",
+        "review",
+        "--red-team",
+        "--diff",
+        "--security-mode",
+        "off",
+    ])
+    .expect("review args should parse before validation");
+
+    let err = validate_command_args(&cli.command).expect_err("validation should reject conflict");
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 
 // ---------------------------------------------------------------------------

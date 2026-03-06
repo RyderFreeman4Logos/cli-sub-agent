@@ -9,12 +9,14 @@
 {
   "findings": [
     {
-      "id": "string",
-      "priority": "P0|P1|P2|P3",
-      "finding_type": "correctness|regression|security|test-gap|maintainability|agents-md-violation|plan-deviation",
+      "fid": "string",
+      "severity": "critical|high|medium|low|info",
       "file": "string",
       "line": 0,
+      "rule_id": "string",
       "summary": "string",
+      "engine": "reviewer|semgrep|clippy|custom",
+      "finding_type": "correctness|regression|security|test-gap|maintainability|agents-md-violation|plan-deviation|spec-deviation|unverified-criterion",
       "trigger": "string",
       "expected": "string",
       "actual": "string",
@@ -32,6 +34,17 @@
       "confidence": 0.0
     }
   ],
+  "severity_summary": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "info": 0
+  },
+  "review_mode": "standard|red-team",
+  "schema_version": "1.0",
+  "session_id": "string",
+  "timestamp": "RFC3339 string",
   "overall_risk": "low|medium|high|critical",
   "overall_summary": "string",
   "agents_md_checklist": [
@@ -65,6 +78,16 @@
 }
 ```
 
+### Aggregation Compatibility
+
+`review-findings.json` is consumed by `review_consensus.rs`, so the following fields are
+mandatory and must remain ReviewArtifact-compatible:
+
+- Top level: `findings`, `severity_summary`, `review_mode`, `schema_version`, `session_id`, `timestamp`
+- Per finding: `fid`, `severity`, `file`, `line`, `rule_id`, `summary`, `engine`
+
+Additional rich fields are allowed and will be ignored by the consolidator when not needed.
+
 ### generated_outputs
 
 Optional outputs generated when the review finds **no P0 or P1 issues**:
@@ -88,6 +111,7 @@ Mandatory AGENTS.md compliance evidence:
 ## Scope
 - Scope: {scope}
 - Mode: {mode}
+- Review mode: {review_mode}
 - Context source: CLAUDE.md
 - Security mode: {security_mode}
 

@@ -1,7 +1,8 @@
 use super::*;
-use crate::cli::{Cli, Commands};
+use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 use tempfile::tempdir;
@@ -79,7 +80,10 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
 fn parse_review_args(argv: &[&str]) -> ReviewArgs {
     let cli = Cli::try_parse_from(argv).expect("review CLI args should parse");
     match cli.command {
-        Commands::Review(args) => args,
+        Commands::Review(args) => {
+            validate_review_args(&args).expect("review CLI args should validate");
+            args
+        }
         _ => panic!("expected review subcommand"),
     }
 }
@@ -88,6 +92,32 @@ fn parse_review_error(argv: &[&str]) -> clap::Error {
     match Cli::try_parse_from(argv) {
         Ok(_) => panic!("review CLI args should fail to parse"),
         Err(err) => err,
+    }
+}
+
+fn parse_or_validate_review_error(argv: &[&str]) -> clap::Error {
+    match Cli::try_parse_from(argv) {
+        Ok(cli) => match cli.command {
+            Commands::Review(args) => {
+                validate_review_args(&args).expect_err("review CLI args should fail validation")
+            }
+            _ => panic!("expected review subcommand"),
+        },
+        Err(err) => err,
+    }
+}
+
+fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
+    SpecDocument {
+        schema_version: 1,
+        plan_ulid: plan_ulid.to_string(),
+        summary: format!("Spec summary for {plan_ulid}"),
+        criteria: vec![SpecCriterion {
+            kind: CriterionKind::Scenario,
+            id: criterion_id.to_string(),
+            description: format!("Criterion {criterion_id} must be satisfied."),
+            status: CriterionStatus::Pending,
+        }],
     }
 }
 
@@ -290,6 +320,8 @@ fn derive_scope_uncommitted() {
         range: None,
         files: None,
         fix: false,
+        review_mode: None,
+        red_team: false,
         security_mode: "auto".to_string(),
         context: None,
         reviewers: 1,
@@ -318,6 +350,8 @@ fn derive_scope_commit() {
         range: None,
         files: None,
         fix: false,
+        review_mode: None,
+        red_team: false,
         security_mode: "auto".to_string(),
         context: None,
         reviewers: 1,
@@ -346,6 +380,8 @@ fn derive_scope_range() {
         range: Some("main...HEAD".to_string()),
         files: None,
         fix: false,
+        review_mode: None,
+        red_team: false,
         security_mode: "auto".to_string(),
         context: None,
         reviewers: 1,
@@ -374,6 +410,8 @@ fn derive_scope_files() {
         range: None,
         files: Some("src/**/*.rs".to_string()),
         fix: false,
+        review_mode: None,
+        red_team: false,
         security_mode: "auto".to_string(),
         context: None,
         reviewers: 1,
@@ -402,6 +440,8 @@ fn derive_scope_default_branch() {
         range: None,
         files: None,
         fix: false,
+        review_mode: None,
+        red_team: false,
         security_mode: "auto".to_string(),
         context: None,
         reviewers: 1,
@@ -530,105 +570,6 @@ fn review_cli_builds_multi_reviewer_config_from_args() {
     assert_eq!(consensus_strategy_label(strategy), "unanimous");
     assert_eq!(reviewer_tools.len(), reviewers);
     assert!(reviewer_tools.iter().all(|tool| *tool == ToolName::Codex));
-}
-
-// --- build_review_instruction tests ---
-
-#[test]
-fn test_build_review_instruction_basic() {
-    let result = build_review_instruction("uncommitted", "review-only", "auto", None);
-    assert!(result.contains("scope=uncommitted"));
-    assert!(result.contains("mode=review-only"));
-    assert!(result.contains("security_mode=auto"));
-    assert!(result.contains("csa-review skill"));
-    // Must NOT contain review instructions or diff content
-    assert!(!result.contains("git diff"));
-    assert!(!result.contains("Pass 1:"));
-}
-
-#[test]
-fn test_build_review_instruction_with_context() {
-    let result = build_review_instruction(
-        "range:main...HEAD",
-        "review-only",
-        "on",
-        Some("/path/to/todo"),
-    );
-    assert!(result.contains("scope=range:main...HEAD"));
-    assert!(result.contains("context=/path/to/todo"));
-}
-
-#[test]
-fn test_build_review_instruction_fix_mode() {
-    let result = build_review_instruction("uncommitted", "review-and-fix", "auto", None);
-    assert!(result.contains("mode=review-and-fix"));
-}
-
-#[test]
-fn test_build_review_instruction_no_diff_content() {
-    // Critical: the instruction must not contain actual diff output or review protocol.
-    // The anti-recursion preamble (~300 chars) is expected; the instruction body itself
-    // should remain concise.
-    let result = build_review_instruction("uncommitted", "review-only", "auto", None);
-    assert!(
-        result.len() < 900,
-        "Instruction should be concise (preamble + params), got {} chars",
-        result.len()
-    );
-    assert!(!result.contains("git diff"));
-    assert!(!result.contains("Pass 1:"));
-}
-
-#[test]
-fn test_build_review_instruction_contains_anti_recursion_guard() {
-    let result = build_review_instruction("uncommitted", "review-only", "auto", None);
-    assert!(
-        result.contains("INSIDE a CSA subprocess"),
-        "Review instruction must contain anti-recursion preamble"
-    );
-    assert!(
-        result.contains("Do NOT invoke"),
-        "Anti-recursion preamble must warn against csa invocation"
-    );
-}
-
-#[test]
-fn test_build_review_instruction_for_project_includes_rust_profile() {
-    let project_dir = tempdir().unwrap();
-    std::fs::write(
-        project_dir.path().join("Cargo.toml"),
-        "[package]\nname = \"demo\"\nversion = \"0.1.0\"\n",
-    )
-    .unwrap();
-
-    let (instruction, routing) = build_review_instruction_for_project(
-        "uncommitted",
-        "review-only",
-        "auto",
-        None,
-        project_dir.path(),
-        None,
-    );
-
-    assert!(instruction.contains("[project_profile: rust]"));
-    assert_eq!(routing.detection_method, "auto");
-}
-
-#[test]
-fn test_build_review_instruction_for_project_includes_unknown_profile_for_empty_project() {
-    let project_dir = tempdir().unwrap();
-
-    let (instruction, routing) = build_review_instruction_for_project(
-        "uncommitted",
-        "review-only",
-        "auto",
-        None,
-        project_dir.path(),
-        None,
-    );
-
-    assert!(instruction.contains("[project_profile: unknown]"));
-    assert_eq!(routing.detection_method, "auto");
 }
 
 // --- CLI parse tests for timeout/stream flags (#146) ---

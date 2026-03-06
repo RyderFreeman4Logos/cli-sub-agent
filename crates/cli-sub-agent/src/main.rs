@@ -32,6 +32,8 @@ mod plan_display;
 mod process_tree;
 mod review_cmd;
 mod review_consensus;
+mod review_context;
+mod review_routing;
 mod run_cmd;
 mod run_cmd_fork;
 mod run_cmd_post;
@@ -55,7 +57,7 @@ mod test_env_lock;
 
 use cli::{
     Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SessionCommands, SetupCommands,
-    SkillCommands, TiersCommands, TodoCommands,
+    SkillCommands, TiersCommands, TodoCommands, validate_command_args,
 };
 use csa_core::types::OutputFormat;
 
@@ -169,6 +171,9 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
     let output_format = cli.format;
     let command = cli.command;
+    if let Err(err) = validate_command_args(&command) {
+        err.exit();
+    }
 
     apply_sa_mode_prompt_guard(&command, current_depth)?;
 

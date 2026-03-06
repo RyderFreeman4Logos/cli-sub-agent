@@ -12,8 +12,8 @@ Structured code review through CSA with session isolation,
 independent model selection, and three-pass review protocol.
 
 Inputs: scope (uncommitted|base:<branch>|commit:<sha>|range:<from>...<to>|files:<pathspec>),
-mode (review-only|review-and-fix), security_mode (auto|on|off), tool (optional override),
-context (optional TODO plan path for alignment checking).
+mode (review-only|review-and-fix), review_mode (standard|red-team), security_mode (auto|on|off),
+tool (optional override), context (optional TODO.md or spec.toml path for alignment checking).
 
 ## Step 1: Role Detection
 
@@ -35,13 +35,15 @@ csa config get review.tool 2>/dev/null || echo "auto"
 
 ## IF ${SCOPE_IS_PRE_PR}
 
-## Step 3: Auto-Detect TODO Plan
+## Step 3: Auto-Detect Review Context
 
 Tool: bash
-OnFail: abort
+OnFail: skip
 
-For pre-PR reviews (scope main...HEAD), auto-detect the associated TODO plan.
-FATAL if no TODO found — pre-PR reviews require alignment checking.
+For pre-PR reviews (scope main...HEAD), attempt to auto-detect the associated
+TODO.md or spec.toml for the current branch. If context is found, pass it so the
+review agent performs alignment checking. If no context is found, continue
+without alignment context.
 
 ```bash
 csa todo find --branch "$(git branch --show-current)"
@@ -61,8 +63,13 @@ Review prompt instructs agent to:
 4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules), including:
    - Rule 027 `pattern-workflow-sync` when diff touches `PATTERN.md` or `workflow.toml`
    - Rust rule 015 `subprocess-lifecycle` when diff touches process spawning/lifecycle code
-5. Generate review-findings.json and review-report.md
-6. Parse `[project_profile: <value>]` metadata from the instruction and apply
+5. Apply Spec Alignment review dimensions when context points to TODO.md or spec.toml.
+   Emit categories `spec-deviation` and `unverified-criterion` when criteria drift
+   or remain unsupported by the diff.
+6. When `review_mode=red-team`, load `references/red-team-mode.md` and review
+   adversarially (counterexamples, boundary conditions, break attempts).
+7. Generate review-findings.json and review-report.md
+8. Parse `[project_profile: <value>]` metadata from the instruction and apply
    framework-aware review dimensions from `references/review-protocol.md`
 
 ## Step 5: Execute Review via CSA
