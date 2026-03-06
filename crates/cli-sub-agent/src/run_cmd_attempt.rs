@@ -414,6 +414,16 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     .clone()
                     .or_else(|| pre_created_fork_session_id.clone())
                     .or_else(|| effective_session_arg.clone());
+                persist_fork_timeout_result_if_missing(
+                    request.project_root,
+                    is_fork,
+                    current_tool,
+                    timeout_resume_session.as_deref(),
+                    chrono::Utc::now(),
+                    request
+                        .run_timeout_seconds
+                        .expect("run timeout should be present"),
+                );
                 let exit_code = emit_run_timeout(
                     request.output_format,
                     request
