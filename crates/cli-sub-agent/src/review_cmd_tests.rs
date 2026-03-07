@@ -138,7 +138,7 @@ fn resolve_review_tool_prefers_cli_override() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::Codex));
+    assert!(matches!(tool.0, ToolName::Codex));
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::GeminiCli));
+    assert!(matches!(tool.0, ToolName::GeminiCli));
 }
 
 #[test]
@@ -173,7 +173,7 @@ fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::GeminiCli));
+    assert!(matches!(tool.0, ToolName::GeminiCli));
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn resolve_review_tool_prefers_project_override() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::Opencode));
+    assert!(matches!(tool.0, ToolName::Opencode));
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::Codex));
+    assert!(matches!(tool.0, ToolName::Codex));
 }
 
 #[test]
@@ -280,7 +280,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::Opencode));
+    assert!(matches!(tool.0, ToolName::Opencode));
 }
 
 #[test]
@@ -304,7 +304,7 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
         false,
     )
     .unwrap();
-    assert!(matches!(tool, ToolName::Opencode));
+    assert!(matches!(tool.0, ToolName::Opencode));
 }
 
 // --- derive_scope tests ---

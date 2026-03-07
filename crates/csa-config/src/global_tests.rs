@@ -227,6 +227,8 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
         let review = ReviewConfig {
             tool: "codex".to_string(),
             gate_mode: gate_mode.clone(),
+            tier: None,
+            thinking: None,
         };
         let toml = toml::to_string(&review).unwrap();
         let parsed: ReviewConfig = toml::from_str(&toml).unwrap();

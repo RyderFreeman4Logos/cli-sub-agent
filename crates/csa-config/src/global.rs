@@ -102,6 +102,17 @@ pub struct ReviewConfig {
     /// Review enforcement level for quality gates.
     #[serde(default)]
     pub gate_mode: GateMode,
+    /// Tier-based tool selection. When set, the review tool is resolved from the
+    /// named tier's models list with heterogeneous preference. Takes priority
+    /// over `tool` when both are set. The tier must exist in `[tiers]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// Default thinking budget for `csa review` (`low`, `medium`, `high`, `xhigh`).
+    ///
+    /// `csa review --thinking <LEVEL>` (when supported) overrides this.
+    /// When a tier is used, this overrides the tier's model_spec thinking budget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
 }
 
 fn default_review_tool() -> String {
@@ -113,6 +124,8 @@ impl Default for ReviewConfig {
         Self {
             tool: default_review_tool(),
             gate_mode: GateMode::default(),
+            tier: None,
+            thinking: None,
         }
     }
 }
@@ -136,6 +149,7 @@ pub struct DebateConfig {
     /// Default thinking budget for `csa debate` (`low`, `medium`, `high`, `xhigh`).
     ///
     /// `csa debate --thinking <LEVEL>` overrides this per invocation.
+    /// When a tier is used, this overrides the tier's model_spec thinking budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     /// Allow same-model adversarial fallback when heterogeneous models are unavailable.
@@ -147,6 +161,11 @@ pub struct DebateConfig {
     /// Set to `false` to require heterogeneous models (strict mode).
     #[serde(default = "default_true_debate")]
     pub same_model_fallback: bool,
+    /// Tier-based tool selection. When set, the debate tool is resolved from the
+    /// named tier's models list with heterogeneous preference. Takes priority
+    /// over `tool` when both are set. The tier must exist in `[tiers]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 fn default_debate_tool() -> String {
@@ -168,6 +187,7 @@ impl Default for DebateConfig {
             timeout_seconds: default_debate_timeout_seconds(),
             thinking: None,
             same_model_fallback: true,
+            tier: None,
         }
     }
 }
@@ -489,19 +509,27 @@ max_concurrent = 3  # Default max parallel instances per tool
 # "auto" selects the heterogeneous counterpart of the parent tool:
 #   claude-code parent -> codex, codex parent -> claude-code.
 # Set explicitly if auto-detection fails (e.g., parent is opencode).
+# Optional: set `tier` to resolve the tool from a tier's models list
+# with heterogeneous preference. `tier` takes priority over `tool`.
+# Optional: set `thinking` for default thinking budget (low/medium/high/xhigh).
 [review]
 tool = "auto"
+# tier = "tier-4-critical"
+# thinking = "xhigh"
 
 # Debate workflow: which tool to use for adversarial debate / arbitration.
 # "auto" selects the heterogeneous counterpart of the parent tool:
 #   claude-code parent -> codex, codex parent -> claude-code.
 # Set explicitly if auto-detection fails (e.g., parent is opencode).
+# Optional: set `tier` to resolve the tool from a tier's models list
+# with heterogeneous preference. `tier` takes priority over `tool`.
 [debate]
 tool = "auto"
 # Default wall-clock timeout for `csa debate` (30 minutes).
 timeout_seconds = 1800
 # Optional default thinking budget for `csa debate`.
 # thinking = "high"
+# tier = "tier-4-critical"
 # Allow same-model adversarial fallback when heterogeneous models are unavailable.
 # When true, `csa debate` runs two independent sub-agents of the same tool.
 # Output is annotated with "same-model adversarial" to indicate degraded diversity.

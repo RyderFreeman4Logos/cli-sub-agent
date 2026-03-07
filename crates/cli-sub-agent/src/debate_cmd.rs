@@ -51,10 +51,10 @@ pub(crate) async fn handle_debate(
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
     let prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
 
-    // 5. Determine tool (heterogeneous enforcement)
+    // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, debate_mode) = resolve_debate_tool(
+    let (tool, debate_mode, tier_model_spec) = resolve_debate_tool(
         args.tool,
         config.as_ref(),
         &global_config,
@@ -69,15 +69,20 @@ pub(crate) async fn handle_debate(
              Cognitive diversity is degraded."
         );
     }
+    // Thinking precedence: CLI > config debate.thinking > tier model_spec thinking.
     let thinking = resolve_debate_thinking(
         args.thinking.as_deref(),
-        global_config.debate.thinking.as_deref(),
+        config
+            .as_ref()
+            .and_then(|c| c.debate.as_ref())
+            .and_then(|d| d.thinking.as_deref())
+            .or(global_config.debate.thinking.as_deref()),
     );
 
     // 6. Build executor and validate tool
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
-        None,
+        tier_model_spec.as_deref(),
         args.model.as_deref(),
         thinking.as_deref(),
         crate::pipeline::ConfigRefs {
@@ -277,6 +282,7 @@ fn render_debate_cli_output(
 
 const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);
 
+/// Returns (tool, debate_mode, optional_model_spec). When tier resolves, model_spec is set.
 fn resolve_debate_tool(
     arg_tool: Option<ToolName>,
     project_config: Option<&ProjectConfig>,
@@ -284,14 +290,39 @@ fn resolve_debate_tool(
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
-) -> Result<(ToolName, DebateMode)> {
+) -> Result<(ToolName, DebateMode, Option<String>)> {
     // CLI --tool override always wins (explicit tool = heterogeneous intent)
     if let Some(tool) = arg_tool {
-        // Enforce tool enablement when user explicitly selects a tool
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
         }
-        return Ok((tool, DebateMode::Heterogeneous));
+        return Ok((tool, DebateMode::Heterogeneous, None));
+    }
+
+    // Tier-based resolution: project tier > global tier > tool-based fallback.
+    // Tier takes priority over tool when both are set.
+    let tier_name = project_config
+        .and_then(|cfg| cfg.debate.as_ref())
+        .and_then(|d| d.tier.as_deref())
+        .or(global_config.debate.tier.as_deref());
+
+    if let Some(tier) = tier_name {
+        if let Some(cfg) = project_config {
+            if let Some(resolution) =
+                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool)
+            {
+                return Ok((
+                    resolution.tool,
+                    DebateMode::Heterogeneous,
+                    Some(resolution.model_spec),
+                ));
+            }
+        }
+        // Tier set but no available tool found — fall through to tool-based resolution
+        debug!(
+            tier = tier,
+            "Tier set but no available tool found, falling through to tool-based resolution"
+        );
     }
 
     // Project-level [debate] config override
@@ -303,6 +334,7 @@ fn resolve_debate_tool(
             global_config,
             project_root,
         )
+        .map(|(t, m)| (t, m, None))
         .with_context(|| {
             format!(
                 "Failed to resolve debate tool from project config: {}",
@@ -314,23 +346,22 @@ fn resolve_debate_tool(
     // When global [debate].tool is "auto", always try heterogeneous auto-selection first.
     if global_config.debate.tool == "auto" {
         if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config) {
-            return Ok((tool, DebateMode::Heterogeneous));
+            return Ok((tool, DebateMode::Heterogeneous, None));
         }
     }
 
     // Global config [debate] section
     match global_config.resolve_debate_tool(parent_tool) {
         Ok(tool_name) => {
-            // Skip disabled tools from global auto-resolution
             if let Some(cfg) = project_config {
                 if !cfg.is_tool_enabled(&tool_name) {
-                    // Try same-model fallback before giving up
                     return resolve_same_model_fallback(
                         parent_tool,
                         project_config,
                         global_config,
                         project_root,
-                    );
+                    )
+                    .map(|(t, m)| (t, m, None));
                 }
             }
             let tool = crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
@@ -339,11 +370,11 @@ fn resolve_debate_tool(
                     tool_name
                 )
             })?;
-            Ok((tool, DebateMode::Heterogeneous))
+            Ok((tool, DebateMode::Heterogeneous, None))
         }
         Err(_) => {
-            // Heterogeneous selection failed — try same-model fallback
             resolve_same_model_fallback(parent_tool, project_config, global_config, project_root)
+                .map(|(t, m)| (t, m, None))
         }
     }
 }
