@@ -22,6 +22,7 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),

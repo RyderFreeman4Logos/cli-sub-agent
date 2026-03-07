@@ -229,6 +229,7 @@ mod tests {
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
             memory: Default::default(),

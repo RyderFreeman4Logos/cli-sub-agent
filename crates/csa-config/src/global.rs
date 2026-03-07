@@ -52,6 +52,12 @@ pub struct GlobalConfig {
     /// individual MCP server entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_proxy_socket: Option<String>,
+    /// Global tool name aliases: maps short names to canonical tool names.
+    ///
+    /// Example: `gem = "gemini-cli"`, `cc = "claude-code"`.
+    /// Project-level `[tool_aliases]` take precedence over global ones.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tool_aliases: HashMap<String, String>,
 }
 
 /// User preferences for tool selection and routing.

@@ -689,7 +689,7 @@ mod tests {
 
     #[test]
     fn test_discover_crate_roots_multiple() {
-        let files = vec![
+        let files = [
             "crate_a/src/lib.rs".to_string(),
             "crate_a/src/config.rs".to_string(),
             "crate_b/src/main.rs".to_string(),
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn test_discover_crate_roots_root_level_lib() {
         // lib.rs at project root: parent is empty, should normalize to ".".
-        let files = vec!["lib.rs".to_string(), "config.rs".to_string()];
+        let files = ["lib.rs".to_string(), "config.rs".to_string()];
         let refs: Vec<&String> = files.iter().collect();
         let roots = discover_crate_roots(&refs);
         assert!(

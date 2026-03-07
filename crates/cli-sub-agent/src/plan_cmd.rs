@@ -32,7 +32,7 @@ use crate::plan_display::{print_plan, print_summary};
 #[path = "plan_cmd_exec.rs"]
 mod plan_cmd_exec;
 #[cfg(test)]
-use plan_cmd_exec::{extract_bash_code_block, is_stale_session_error, truncate};
+use plan_cmd_exec::{extract_bash_code_block, truncate};
 
 #[path = "plan_cmd_steps.rs"]
 mod plan_cmd_steps;
@@ -525,6 +525,10 @@ fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
 #[cfg(test)]
 #[path = "plan_cmd_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "plan_cmd_tests_tail.rs"]
+mod tests_tail;
 
 #[cfg(test)]
 #[path = "plan_cmd_override_tests.rs"]

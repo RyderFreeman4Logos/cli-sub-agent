@@ -130,16 +130,24 @@ pub(crate) async fn handle_claude_sub_agent(
 fn resolve_claude_tool(
     arg_tool: Option<ToolArg>,
     project_config: Option<&ProjectConfig>,
-    _global_config: &GlobalConfig,
+    global_config: &GlobalConfig,
     parent_tool: Option<&str>,
     project_root: &Path,
 ) -> Result<ToolName> {
     // CLI override is highest priority
     if let Some(tool_arg) = arg_tool {
-        return match tool_arg {
+        // Resolve config-based aliases before matching
+        let tool_aliases = project_config
+            .map(|c| &c.tool_aliases)
+            .unwrap_or(&global_config.tool_aliases);
+        let resolved = tool_arg
+            .resolve_alias(tool_aliases)
+            .map_err(|e| anyhow::anyhow!("{}", e))?;
+        return match resolved {
             ToolArg::Specific(t) => Ok(t),
             ToolArg::Auto => resolve_auto_tool(parent_tool, project_config, project_root),
             ToolArg::AnyAvailable => select_any_available_tool(project_config, project_root),
+            ToolArg::Alias(_) => unreachable!("resolve_alias eliminates Alias variant"),
         };
     }
 
@@ -269,6 +277,7 @@ mod tests {
             tiers,
             tier_mapping,
             aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
             memory: Default::default(),
@@ -361,6 +370,7 @@ mod tests {
             )]),
             tier_mapping: HashMap::from([("default".to_string(), "tier3".to_string())]),
             aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
             memory: Default::default(),

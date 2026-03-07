@@ -164,6 +164,13 @@ pub struct ProjectConfig {
     pub tier_mapping: HashMap<String, String>,
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub aliases: HashMap<String, String>,
+    /// Tool name aliases: maps short names to canonical tool names.
+    ///
+    /// Example: `gem = "gemini-cli"`, `cc = "claude-code"`.
+    /// Built-in aliases (`gemini` → `gemini-cli`, `claude` → `claude-code`)
+    /// are always available without configuration.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub tool_aliases: HashMap<String, String>,
     /// Optional per-project tool priority override.
     /// When set, overrides the global `[preferences].tool_priority`.
     #[serde(default)]
@@ -617,6 +624,9 @@ init_timeout_seconds = 60
 # [aliases]
 # fast = "gemini-cli/google/gemini-2.5-flash/low"
 # smart = "codex/openai/o3/high"
+# [tool_aliases]
+# gem = "gemini-cli"
+# cc = "claude-code"
 "#
         .to_string()
     }
@@ -636,6 +646,10 @@ init_timeout_seconds = 60
 #[cfg(test)]
 #[path = "config_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_tests_tail.rs"]
+mod tests_tail;
 
 #[cfg(test)]
 #[path = "config_tests_tier.rs"]

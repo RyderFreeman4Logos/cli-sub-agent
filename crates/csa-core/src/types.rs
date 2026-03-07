@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 
@@ -93,6 +95,8 @@ pub enum ToolArg {
     AnyAvailable,
     /// Explicit tool, no negotiation.
     Specific(ToolName),
+    /// Unresolved user alias — must be resolved via config `[tool_aliases]` before use.
+    Alias(String),
 }
 
 impl std::str::FromStr for ToolArg {
@@ -102,31 +106,70 @@ impl std::str::FromStr for ToolArg {
         match s {
             "auto" => Ok(Self::Auto),
             "any-available" => Ok(Self::AnyAvailable),
-            other => {
-                // Try to parse as ToolName using clap's ValueEnum
-                // We need to iterate through all possible values
-                match other {
-                    "gemini-cli" => Ok(Self::Specific(ToolName::GeminiCli)),
-                    "opencode" => Ok(Self::Specific(ToolName::Opencode)),
-                    "codex" => Ok(Self::Specific(ToolName::Codex)),
-                    "claude-code" => Ok(Self::Specific(ToolName::ClaudeCode)),
-                    _ => Err(format!(
-                        "Invalid tool argument '{}'. Valid values: auto, any-available, gemini-cli, opencode, codex, claude-code",
-                        other
-                    )),
-                }
-            }
+            // Canonical tool names
+            "gemini-cli" => Ok(Self::Specific(ToolName::GeminiCli)),
+            "opencode" => Ok(Self::Specific(ToolName::Opencode)),
+            "codex" => Ok(Self::Specific(ToolName::Codex)),
+            "claude-code" => Ok(Self::Specific(ToolName::ClaudeCode)),
+            // Built-in aliases for common short names
+            "gemini" => Ok(Self::Specific(ToolName::GeminiCli)),
+            "claude" => Ok(Self::Specific(ToolName::ClaudeCode)),
+            // Unknown string — store for config-based resolution
+            other => Ok(Self::Alias(other.to_string())),
         }
     }
 }
 
 impl ToolArg {
+    /// Resolve a config-based alias to a concrete `ToolArg`.
+    ///
+    /// Built-in aliases (`gemini`, `claude`) are already resolved in `from_str`.
+    /// This method handles user-defined aliases from `[tool_aliases]` in config.
+    /// Non-alias variants pass through unchanged.
+    pub fn resolve_alias(self, tool_aliases: &HashMap<String, String>) -> Result<Self, String> {
+        match self {
+            Self::Alias(ref alias) => {
+                if let Some(canonical) = tool_aliases.get(alias) {
+                    // Recurse once to resolve the canonical name (which may itself
+                    // be a built-in alias or canonical tool name).
+                    let resolved: Self = canonical.parse()?;
+                    match resolved {
+                        Self::Alias(ref inner) => Err(format!(
+                            "tool alias '{}' maps to '{}' which is not a valid tool name. \
+                             Valid targets: gemini-cli, opencode, codex, claude-code",
+                            alias, inner
+                        )),
+                        other => Ok(other),
+                    }
+                } else {
+                    Err(format!(
+                        "unknown tool '{}'. Valid values: auto, any-available, \
+                         gemini-cli, opencode, codex, claude-code. \
+                         Or define it in [tool_aliases] in config.",
+                        alias
+                    ))
+                }
+            }
+            other => Ok(other),
+        }
+    }
+
     /// Convert to execution strategy based on command context.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called on an unresolved `Alias` — callers must call
+    /// `resolve_alias()` first.
     pub fn into_strategy(self) -> ToolSelectionStrategy {
         match self {
             Self::Auto => ToolSelectionStrategy::HeterogeneousPreferred,
             Self::AnyAvailable => ToolSelectionStrategy::AnyAvailable,
             Self::Specific(t) => ToolSelectionStrategy::Explicit(t),
+            Self::Alias(a) => panic!(
+                "BUG: unresolved tool alias '{}' reached into_strategy(); \
+                 resolve_alias() must be called first",
+                a
+            ),
         }
     }
 }
@@ -137,6 +180,7 @@ impl std::fmt::Display for ToolArg {
             Self::Auto => write!(f, "auto"),
             Self::AnyAvailable => write!(f, "any-available"),
             Self::Specific(t) => write!(f, "{}", t.as_str()),
+            Self::Alias(a) => write!(f, "{}", a),
         }
     }
 }
@@ -197,14 +241,66 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_arg_from_str_invalid() {
-        let result = ToolArg::from_str("invalid-tool");
+    fn test_tool_arg_from_str_unknown_becomes_alias() {
+        let arg = ToolArg::from_str("invalid-tool").unwrap();
+        assert!(matches!(arg, ToolArg::Alias(ref s) if s == "invalid-tool"));
+    }
+
+    #[test]
+    fn test_tool_arg_from_str_builtin_alias_gemini() {
+        let arg = ToolArg::from_str("gemini").unwrap();
+        assert!(matches!(arg, ToolArg::Specific(ToolName::GeminiCli)));
+    }
+
+    #[test]
+    fn test_tool_arg_from_str_builtin_alias_claude() {
+        let arg = ToolArg::from_str("claude").unwrap();
+        assert!(matches!(arg, ToolArg::Specific(ToolName::ClaudeCode)));
+    }
+
+    #[test]
+    fn test_resolve_alias_with_config() {
+        let mut aliases = HashMap::new();
+        aliases.insert("gem".to_string(), "gemini-cli".to_string());
+        aliases.insert("cc".to_string(), "claude-code".to_string());
+
+        let arg = ToolArg::from_str("gem").unwrap();
+        let resolved = arg.resolve_alias(&aliases).unwrap();
+        assert!(matches!(resolved, ToolArg::Specific(ToolName::GeminiCli)));
+
+        let arg = ToolArg::from_str("cc").unwrap();
+        let resolved = arg.resolve_alias(&aliases).unwrap();
+        assert!(matches!(resolved, ToolArg::Specific(ToolName::ClaudeCode)));
+    }
+
+    #[test]
+    fn test_resolve_alias_unknown_errors() {
+        let aliases = HashMap::new();
+        let arg = ToolArg::from_str("nonexistent").unwrap();
+        let result = arg.resolve_alias(&aliases);
         assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .contains("Invalid tool argument 'invalid-tool'")
-        );
+        assert!(result.unwrap_err().contains("unknown tool 'nonexistent'"));
+    }
+
+    #[test]
+    fn test_resolve_alias_passthrough_for_non_alias() {
+        let aliases = HashMap::new();
+        let auto = ToolArg::Auto.resolve_alias(&aliases).unwrap();
+        assert!(matches!(auto, ToolArg::Auto));
+        let specific = ToolArg::Specific(ToolName::Codex)
+            .resolve_alias(&aliases)
+            .unwrap();
+        assert!(matches!(specific, ToolArg::Specific(ToolName::Codex)));
+    }
+
+    #[test]
+    fn test_resolve_alias_chained_builtin() {
+        // Config alias pointing to a built-in alias name
+        let mut aliases = HashMap::new();
+        aliases.insert("g".to_string(), "gemini".to_string());
+        let arg = ToolArg::from_str("g").unwrap();
+        let resolved = arg.resolve_alias(&aliases).unwrap();
+        assert!(matches!(resolved, ToolArg::Specific(ToolName::GeminiCli)));
     }
 
     #[test]
@@ -340,16 +436,25 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_arg_from_str_empty_string() {
-        let result = ToolArg::from_str("");
-        assert!(result.is_err());
+    fn test_tool_arg_from_str_empty_string_becomes_alias() {
+        let arg = ToolArg::from_str("").unwrap();
+        assert!(matches!(arg, ToolArg::Alias(ref s) if s.is_empty()));
     }
 
     #[test]
-    fn test_tool_arg_from_str_case_sensitive() {
-        // Tool names are case-sensitive: "Auto" should fail
-        assert!(ToolArg::from_str("Auto").is_err());
-        assert!(ToolArg::from_str("CODEX").is_err());
-        assert!(ToolArg::from_str("Claude-Code").is_err());
+    fn test_tool_arg_from_str_case_sensitive_becomes_alias() {
+        // Tool names are case-sensitive: wrong case becomes Alias
+        assert!(matches!(
+            ToolArg::from_str("Auto").unwrap(),
+            ToolArg::Alias(_)
+        ));
+        assert!(matches!(
+            ToolArg::from_str("CODEX").unwrap(),
+            ToolArg::Alias(_)
+        ));
+        assert!(matches!(
+            ToolArg::from_str("Claude-Code").unwrap(),
+            ToolArg::Alias(_)
+        ));
     }
 }

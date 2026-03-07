@@ -317,6 +317,7 @@ mod tests {
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
             preferences: None,
             session: Default::default(),
             memory: Default::default(),

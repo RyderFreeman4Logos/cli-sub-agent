@@ -156,10 +156,10 @@ mod tests {
         let gb = 1024 * 1024 * 1024_u64;
 
         // Tight RAM (1 GiB avail) + enough swap → enable.
-        assert!(should_enable_balloon(1 * gb, 2 * gb, 1 * gb));
+        assert!(should_enable_balloon(gb, 2 * gb, gb));
 
         // Plenty of RAM (8 GiB avail) + enough swap → skip (RAM is plentiful).
-        assert!(!should_enable_balloon(8 * gb, 2 * gb, 1 * gb));
+        assert!(!should_enable_balloon(8 * gb, 2 * gb, gb));
 
         // Tight RAM but not enough swap → skip.
         assert!(!should_enable_balloon(512, 512, 1024));

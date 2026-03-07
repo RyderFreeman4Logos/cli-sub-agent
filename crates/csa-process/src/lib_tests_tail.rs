@@ -103,7 +103,7 @@ fn test_stream_mode_default_is_tee_to_stderr() {
 fn test_stream_mode_clone_copy_eq() {
     let a = StreamMode::TeeToStderr;
     let b = a; // Copy
-    let c = a.clone(); // Clone
+    let c = a; // Clone (Copy-forwarded)
     assert_eq!(a, b);
     assert_eq!(a, c);
     assert_ne!(StreamMode::BufferOnly, StreamMode::TeeToStderr);

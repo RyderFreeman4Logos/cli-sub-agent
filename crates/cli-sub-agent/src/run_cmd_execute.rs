@@ -154,7 +154,16 @@ pub(crate) async fn handle_run(
     let model = skill_res.model;
     let skill_session_tag = skill.as_deref().map(skill_session_description);
 
-    let strategy = skill_res.tool.unwrap_or(ToolArg::Auto).into_strategy();
+    let tool_aliases = config
+        .as_ref()
+        .map(|c| &c.tool_aliases)
+        .unwrap_or(&global_config.tool_aliases);
+    let strategy = skill_res
+        .tool
+        .unwrap_or(ToolArg::Auto)
+        .resolve_alias(tool_aliases)
+        .map_err(|e| anyhow::anyhow!("{}", e))?
+        .into_strategy();
     let idle_timeout_seconds = if no_idle_timeout {
         info!("Idle timeout disabled via --no-idle-timeout");
         u64::MAX

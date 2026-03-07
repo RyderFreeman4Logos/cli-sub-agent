@@ -4,10 +4,11 @@ use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::collections::HashMap;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 use tempfile::tempdir;
 
-static REVIEW_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static REVIEW_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 struct ScopedEnvVarRestore {
     key: &'static str,
@@ -71,6 +72,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),

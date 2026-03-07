@@ -213,7 +213,7 @@ fn build_plan_empty_tasks_empty_plan() {
 
 #[test]
 fn detect_cycle_no_cycle_returns_ok() {
-    let tasks = vec![
+    let tasks = [
         make_task("a", "codex", vec![]),
         make_task("b", "codex", vec!["a"]),
     ];
@@ -224,7 +224,7 @@ fn detect_cycle_no_cycle_returns_ok() {
 
 #[test]
 fn detect_cycle_direct_cycle_detected() {
-    let tasks = vec![
+    let tasks = [
         make_task("a", "codex", vec!["b"]),
         make_task("b", "codex", vec!["a"]),
     ];

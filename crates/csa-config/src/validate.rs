@@ -296,3 +296,7 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
 #[cfg(test)]
 #[path = "validate_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "validate_tests_tail.rs"]
+mod tests_tail;

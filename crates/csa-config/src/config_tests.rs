@@ -40,6 +40,7 @@ fn test_save_and_load_roundtrip() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -85,6 +86,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -120,6 +122,7 @@ fn test_is_tool_enabled_configured_enabled() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -156,6 +159,7 @@ fn test_is_tool_enabled_configured_disabled() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -181,6 +185,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -220,6 +225,7 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -273,6 +279,7 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -313,6 +320,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -341,6 +349,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -366,6 +375,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -394,6 +404,7 @@ fn test_max_recursion_depth_override() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -523,6 +534,7 @@ fn test_schema_version_current_is_ok() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -549,6 +561,7 @@ fn test_schema_version_older_is_ok() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -574,6 +587,7 @@ fn test_schema_version_newer_fails() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -626,6 +640,7 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -643,139 +658,4 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         msg.contains("--force-override-user-config"),
         "error must mention override flag: {msg}"
     );
-}
-
-#[test]
-fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
-    let mut tools = HashMap::new();
-    tools.insert("codex".to_string(), ToolConfig::default());
-
-    let config = ProjectConfig {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project: ProjectMeta::default(),
-        resources: ResourcesConfig::default(),
-        acp: Default::default(),
-        tools,
-        review: None,
-        debate: None,
-        tiers: HashMap::new(),
-        tier_mapping: HashMap::new(),
-        aliases: HashMap::new(),
-        preferences: None,
-        session: Default::default(),
-        memory: Default::default(),
-    };
-
-    assert!(config.enforce_tool_enabled("codex", false).is_ok());
-}
-
-#[test]
-fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
-    let config = ProjectConfig {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project: ProjectMeta::default(),
-        resources: ResourcesConfig::default(),
-        acp: Default::default(),
-        tools: HashMap::new(),
-        review: None,
-        debate: None,
-        tiers: HashMap::new(),
-        tier_mapping: HashMap::new(),
-        aliases: HashMap::new(),
-        preferences: None,
-        session: Default::default(),
-        memory: Default::default(),
-    };
-
-    assert!(config.enforce_tool_enabled("codex", false).is_ok());
-}
-
-#[test]
-fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
-    let mut tools = HashMap::new();
-    tools.insert(
-        "codex".to_string(),
-        ToolConfig {
-            enabled: false,
-            ..Default::default()
-        },
-    );
-
-    let config = ProjectConfig {
-        schema_version: CURRENT_SCHEMA_VERSION,
-        project: ProjectMeta::default(),
-        resources: ResourcesConfig::default(),
-        acp: Default::default(),
-        tools,
-        review: None,
-        debate: None,
-        tiers: HashMap::new(),
-        tier_mapping: HashMap::new(),
-        aliases: HashMap::new(),
-        preferences: None,
-        session: Default::default(),
-        memory: Default::default(),
-    };
-
-    assert!(config.enforce_tool_enabled("codex", true).is_ok());
-}
-
-// ── SessionConfig tests ──────────────────────────────────────────
-
-#[test]
-fn test_session_config_default_has_structured_output_enabled() {
-    let cfg = SessionConfig::default();
-    assert!(cfg.structured_output);
-}
-
-#[test]
-fn test_session_config_is_default_reflects_structured_output() {
-    let mut cfg = SessionConfig::default();
-    assert!(cfg.is_default());
-
-    cfg.structured_output = false;
-    assert!(!cfg.is_default());
-}
-
-#[test]
-fn test_session_config_deserializes_structured_output() {
-    let toml_str = r#"
-transcript_enabled = false
-transcript_redaction = true
-structured_output = false
-"#;
-    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
-    assert!(!cfg.structured_output);
-}
-
-#[test]
-fn test_session_config_defaults_structured_output_when_missing() {
-    let toml_str = r#"
-transcript_enabled = false
-"#;
-    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
-    assert!(cfg.structured_output);
-}
-
-#[test]
-fn test_session_config_default_does_not_require_commit_on_mutation() {
-    let cfg = SessionConfig::default();
-    assert!(!cfg.require_commit_on_mutation);
-}
-
-#[test]
-fn test_session_config_deserializes_require_commit_on_mutation() {
-    let toml_str = r#"
-transcript_enabled = false
-require_commit_on_mutation = true
-"#;
-    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
-    assert!(cfg.require_commit_on_mutation);
-}
-
-#[test]
-fn test_session_config_is_default_reflects_require_commit_on_mutation() {
-    let mut cfg = SessionConfig::default();
-    cfg.require_commit_on_mutation = true;
-    assert!(!cfg.is_default());
 }

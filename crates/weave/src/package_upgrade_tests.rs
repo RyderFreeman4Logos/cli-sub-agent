@@ -113,7 +113,7 @@ fn push_new_version(work: &Path, version: &str) -> String {
     .unwrap();
     std::fs::write(work.join("SKILL.md"), format!("# {version}\n")).unwrap();
     run_git(work, &["add", "."]);
-    run_git(work, &["commit", "--quiet", "-m", &format!("{version}")]);
+    run_git(work, &["commit", "--quiet", "-m", version]);
     let hash = run_git(work, &["rev-parse", "HEAD"]);
     run_git(work, &["push", "--quiet", "origin", "main"]);
     hash

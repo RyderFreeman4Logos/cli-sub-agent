@@ -354,7 +354,7 @@ mod tests {
         let manifest = AuditManifest::new(".");
         let manifest_path = PathBuf::from("/tmp/test-manifest.toml");
 
-        let rows = vec![
+        let rows = [
             StatusRow {
                 path: "a.rs".to_string(),
                 status: AuditStatus::Generated,
