@@ -185,6 +185,15 @@ fn validate_review(config: &ProjectConfig) -> Result<()> {
             review.tool
         );
     }
+    if let Some(tier_name) = &review.tier {
+        if !config.tiers.contains_key(tier_name) {
+            bail!(
+                "[review].tier references unknown tier '{}'. Available tiers: {:?}",
+                tier_name,
+                config.tiers.keys().collect::<Vec<_>>()
+            );
+        }
+    }
     Ok(())
 }
 
@@ -199,6 +208,15 @@ fn validate_debate(config: &ProjectConfig) -> Result<()> {
             "Invalid [debate].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
             debate.tool
         );
+    }
+    if let Some(tier_name) = &debate.tier {
+        if !config.tiers.contains_key(tier_name) {
+            bail!(
+                "[debate].tier references unknown tier '{}'. Available tiers: {:?}",
+                tier_name,
+                config.tiers.keys().collect::<Vec<_>>()
+            );
+        }
     }
     Ok(())
 }

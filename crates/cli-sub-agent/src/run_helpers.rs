@@ -126,7 +126,7 @@ pub(crate) fn build_executor(
     config: Option<&ProjectConfig>,
     apply_tool_defaults: bool,
 ) -> Result<Executor> {
-    let executor = if let Some(spec) = model_spec {
+    let mut executor = if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
         Executor::from_spec(&parsed)?
     } else {
@@ -147,6 +147,15 @@ pub(crate) fn build_executor(
 
         Executor::from_tool_name(tool, final_model, budget)
     };
+
+    // When model_spec is present, the thinking budget comes from the spec.
+    // An explicit `thinking` argument must override it (CLI > tier spec).
+    if model_spec.is_some() {
+        if let Some(explicit_thinking) = thinking {
+            let budget = ThinkingBudget::parse(explicit_thinking)?;
+            executor.override_thinking_budget(budget);
+        }
+    }
 
     Ok(executor)
 }
@@ -323,6 +332,76 @@ pub(crate) fn read_prompt(prompt: Option<String>) -> Result<String> {
         }
         Ok(buffer)
     }
+}
+
+/// Result of resolving a tool from a tier's models list.
+#[derive(Debug, Clone)]
+pub(crate) struct TierToolResolution {
+    /// The resolved tool name.
+    pub tool: ToolName,
+    /// The full model spec string (e.g., "gemini-cli/google/gemini-3.1-pro-preview/xhigh").
+    pub model_spec: String,
+}
+
+/// Resolve a tool from a named tier's models list with heterogeneous preference.
+///
+/// Filters tier models by enabled + binary available, then prefers a tool from
+/// a different `ModelFamily` than `parent_tool`. Falls back to any available tool
+/// in the tier when no heterogeneous option exists.
+///
+/// Returns `None` if no enabled, available tool is found in the tier.
+pub(crate) fn resolve_tool_from_tier(
+    tier_name: &str,
+    config: &ProjectConfig,
+    parent_tool: Option<&str>,
+) -> Option<TierToolResolution> {
+    let tier = config.tiers.get(tier_name)?;
+
+    let parent_family = parent_tool
+        .and_then(|p| parse_tool_name(p).ok())
+        .map(|t| t.model_family());
+
+    // Collect available (enabled + binary present) models from the tier
+    let available: Vec<(ToolName, &str)> = tier
+        .models
+        .iter()
+        .filter_map(|spec| {
+            let parts: Vec<&str> = spec.splitn(4, '/').collect();
+            if parts.len() != 4 {
+                return None;
+            }
+            let tool_str = parts[0];
+            let tool = parse_tool_name(tool_str).ok()?;
+            if !config.is_tool_enabled(tool_str) || !is_tool_binary_available(tool_str) {
+                return None;
+            }
+            Some((tool, spec.as_str()))
+        })
+        .collect();
+
+    if available.is_empty() {
+        return None;
+    }
+
+    // Prefer heterogeneous (different model family from parent)
+    if let Some(parent_fam) = parent_family {
+        if let Some((tool, spec)) = available
+            .iter()
+            .find(|(t, _)| t.model_family() != parent_fam)
+        {
+            return Some(TierToolResolution {
+                tool: *tool,
+                model_spec: spec.to_string(),
+            });
+        }
+    }
+
+    // No heterogeneous option (or no parent) — use first available
+    let (tool, spec) = &available[0];
+    Some(TierToolResolution {
+        tool: *tool,
+        model_spec: spec.to_string(),
+    })
 }
 
 /// Check if a tool's binary is available on PATH (synchronous).

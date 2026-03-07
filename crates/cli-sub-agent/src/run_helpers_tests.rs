@@ -448,11 +448,13 @@ fn build_executor_model_spec_overrides_both() {
         memory: Default::default(),
     };
 
+    // When explicit thinking is provided alongside model_spec, it overrides
+    // the spec's embedded thinking budget (CLI > tier spec).
     let exec = build_executor(
         &ToolName::Codex,
         Some("codex/openai/gpt-5.3-codex/xhigh"),
         Some("ignored-model"),
-        Some("ignored-thinking"),
+        Some("high"),
         Some(&config),
         true,
     )
@@ -463,12 +465,32 @@ fn build_executor_model_spec_overrides_both() {
         "model_spec model missing: {debug}"
     );
     assert!(
-        debug.contains("Xhigh"),
-        "model_spec thinking missing: {debug}"
+        debug.contains("High"),
+        "explicit thinking should override spec thinking: {debug}"
+    );
+    assert!(
+        !debug.contains("Xhigh"),
+        "spec thinking should be overridden: {debug}"
     );
     assert!(
         !debug.contains("gpt-5.4"),
         "tool default model leaked: {debug}"
+    );
+
+    // When no explicit thinking is provided, spec's thinking is used.
+    let exec2 = build_executor(
+        &ToolName::Codex,
+        Some("codex/openai/gpt-5.3-codex/xhigh"),
+        None,
+        None,
+        Some(&config),
+        true,
+    )
+    .unwrap();
+    let debug2 = format!("{:?}", exec2);
+    assert!(
+        debug2.contains("Xhigh"),
+        "spec thinking should be preserved when no override: {debug2}"
     );
 }
 
@@ -607,4 +629,139 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
     assert!(msg.contains("disabled in user configuration"), "{msg}");
+}
+
+// --- resolve_tool_from_tier tests ---
+
+fn config_with_tier(tier_name: &str, models: Vec<&str>, enabled_tools: &[&str]) -> ProjectConfig {
+    let mut tools = HashMap::new();
+    for tool in csa_config::global::all_known_tools() {
+        let name = tool.as_str();
+        tools.insert(
+            name.to_string(),
+            ToolConfig {
+                enabled: enabled_tools.contains(&name),
+                ..Default::default()
+            },
+        );
+    }
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        tier_name.to_string(),
+        csa_config::config::TierConfig {
+            description: "Test tier".to_string(),
+            models: models.into_iter().map(String::from).collect(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    ProjectConfig {
+        schema_version: csa_config::config::CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: chrono::Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    }
+}
+
+#[test]
+fn resolve_tool_from_tier_returns_none_for_missing_tier() {
+    let cfg = config_with_tier(
+        "tier-1",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    let result = super::resolve_tool_from_tier("nonexistent-tier", &cfg, None);
+    assert!(result.is_none());
+}
+
+#[test]
+fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
+    let cfg = config_with_tier(
+        "test-tier",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None);
+    assert!(result.is_some());
+    let res = result.unwrap();
+    assert_eq!(res.tool, ToolName::GeminiCli);
+    assert_eq!(res.model_spec, "gemini-cli/google/default/xhigh");
+}
+
+#[test]
+fn resolve_tool_from_tier_prefers_heterogeneous() {
+    // Parent is claude-code (Anthropic), tier has gemini-cli (Google) and claude-code (Anthropic).
+    // Should prefer gemini-cli for heterogeneity.
+    let cfg = config_with_tier(
+        "test-tier",
+        vec![
+            "claude-code/anthropic/default/xhigh",
+            "gemini-cli/google/default/xhigh",
+        ],
+        &["claude-code", "gemini-cli"],
+    );
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"));
+    assert!(result.is_some());
+    let res = result.unwrap();
+    assert_eq!(res.tool, ToolName::GeminiCli);
+    assert_eq!(res.model_spec, "gemini-cli/google/default/xhigh");
+}
+
+#[test]
+fn resolve_tool_from_tier_falls_back_to_same_family_when_no_heterogeneous() {
+    // Parent is claude-code, tier only has claude-code models.
+    // No heterogeneous option — should still return the first available.
+    let cfg = config_with_tier(
+        "test-tier",
+        vec!["claude-code/anthropic/default/xhigh"],
+        &["claude-code"],
+    );
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"));
+    assert!(result.is_some());
+    let res = result.unwrap();
+    assert_eq!(res.tool, ToolName::ClaudeCode);
+}
+
+#[test]
+fn resolve_tool_from_tier_skips_disabled_tools() {
+    // gemini-cli is disabled, only claude-code is enabled.
+    let cfg = config_with_tier(
+        "test-tier",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "claude-code/anthropic/default/xhigh",
+        ],
+        &["claude-code"],
+    );
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None);
+    assert!(result.is_some());
+    let res = result.unwrap();
+    assert_eq!(res.tool, ToolName::ClaudeCode);
+}
+
+#[test]
+fn resolve_tool_from_tier_returns_none_when_all_disabled() {
+    // All tools in tier are disabled.
+    let cfg = config_with_tier(
+        "test-tier",
+        vec!["gemini-cli/google/default/xhigh"],
+        &[], // no enabled tools
+    );
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None);
+    assert!(result.is_none());
 }

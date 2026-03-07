@@ -367,3 +367,123 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
     let result = validate_config(dir.path());
     assert!(result.is_ok());
 }
+
+#[test]
+fn test_validate_review_tier_unknown_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: Some(ReviewConfig {
+            tier: Some("nonexistent-tier".to_string()),
+            ..Default::default()
+        }),
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("[review].tier") && err_msg.contains("unknown tier"),
+        "Expected '[review].tier references unknown tier' in error, got: {err_msg}"
+    );
+}
+
+#[test]
+fn test_validate_debate_tier_unknown_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: Some(ReviewConfig {
+            tier: Some("nonexistent-tier".to_string()),
+            ..Default::default()
+        }),
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_err());
+    let err_msg = result.unwrap_err().to_string();
+    assert!(
+        err_msg.contains("[debate].tier") && err_msg.contains("unknown tier"),
+        "Expected '[debate].tier references unknown tier' in error, got: {err_msg}"
+    );
+}
+
+#[test]
+fn test_validate_review_tier_valid_accepted() {
+    let dir = tempdir().unwrap();
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-4-critical".to_string(),
+        TierConfig {
+            description: "Critical tier".to_string(),
+            models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: Some(ReviewConfig {
+            tier: Some("tier-4-critical".to_string()),
+            ..Default::default()
+        }),
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let result = validate_config(dir.path());
+    assert!(result.is_ok(), "review.tier referencing existing tier should be valid");
+}

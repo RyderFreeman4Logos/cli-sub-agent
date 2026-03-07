@@ -87,10 +87,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         config.as_ref(),
     );
 
-    // 5. Determine tool
+    // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let tool = resolve_review_tool(
+    let (tool, tier_model_spec) = resolve_review_tool(
         args.tool,
         config.as_ref(),
         &global_config,
@@ -98,6 +98,17 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
         args.force_override_user_config,
     )?;
+
+    // Resolve thinking: CLI > config review.thinking > tier model_spec thinking.
+    // Tier thinking is embedded in model_spec and applied via build_and_validate_executor.
+    let review_thinking = resolve_review_thinking(
+        None, // review CLI has no --thinking flag yet
+        config
+            .as_ref()
+            .and_then(|c| c.review.as_ref())
+            .and_then(|r| r.thinking.as_deref())
+            .or(global_config.review.thinking.as_deref()),
+    );
 
     // Resolve stream mode from CLI flags (default: BufferOnly for review)
     let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
@@ -111,6 +122,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             prompt,
             args.session,
             args.model,
+            tier_model_spec.clone(),
+            review_thinking.clone(),
             format!(
                 "review: {}",
                 crate::run_helpers::truncate_prompt(&scope, 80)
@@ -181,12 +194,24 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let reviewer_routing = review_routing.clone();
 
         let reviewer_force_override = args.force_override_user_config;
+        // Only pass tier_model_spec to the reviewer whose tool matches the
+        // tier-resolved primary tool.  For other reviewers (selected for
+        // heterogeneity), the model_spec would override their tool via
+        // Executor::from_spec, collapsing cognitive diversity.
+        let reviewer_model_spec = if reviewer_tool == tool {
+            tier_model_spec.clone()
+        } else {
+            None
+        };
+        let reviewer_thinking = review_thinking.clone();
         join_set.spawn(async move {
             let result = execute_review(
                 reviewer_tool,
                 reviewer_prompt,
                 None,
                 reviewer_model,
+                reviewer_model_spec,
+                reviewer_thinking,
                 reviewer_description,
                 &reviewer_project_root,
                 reviewer_config.as_ref(),
@@ -299,6 +324,8 @@ async fn execute_review(
     prompt: String,
     session: Option<String>,
     model: Option<String>,
+    tier_model_spec: Option<String>,
+    thinking: Option<String>,
     description: String,
     project_root: &Path,
     project_config: Option<&ProjectConfig>,
@@ -310,9 +337,9 @@ async fn execute_review(
 ) -> Result<csa_process::ExecutionResult> {
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
-        None,
+        tier_model_spec.as_deref(),
         model.as_deref(),
-        None,
+        thinking.as_deref(),
         crate::pipeline::ConfigRefs {
             project: project_config,
             global: Some(global_config),
@@ -501,6 +528,7 @@ fn extract_section_content(output: &str, section: &OutputSection) -> String {
     lines[start..end_exclusive].join("\n")
 }
 
+/// Returns (tool, optional_model_spec). When tier resolves, model_spec is set.
 fn resolve_review_tool(
     arg_tool: Option<ToolName>,
     project_config: Option<&ProjectConfig>,
@@ -508,13 +536,35 @@ fn resolve_review_tool(
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
-) -> Result<ToolName> {
+) -> Result<(ToolName, Option<String>)> {
+    // CLI --tool override always wins
     if let Some(tool) = arg_tool {
-        // Enforce tool enablement when user explicitly selects a tool
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
         }
-        return Ok(tool);
+        return Ok((tool, None));
+    }
+
+    // Tier-based resolution: project tier > global tier > tool-based fallback.
+    // Tier takes priority over tool when both are set.
+    let tier_name = project_config
+        .and_then(|cfg| cfg.review.as_ref())
+        .and_then(|r| r.tier.as_deref())
+        .or(global_config.review.tier.as_deref());
+
+    if let Some(tier) = tier_name {
+        if let Some(cfg) = project_config {
+            if let Some(resolution) =
+                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool)
+            {
+                return Ok((resolution.tool, Some(resolution.model_spec)));
+            }
+        }
+        // Tier set but no available tool found — fall through to tool-based resolution
+        debug!(
+            tier = tier,
+            "Tier set but no available tool found, falling through to tool-based resolution"
+        );
     }
 
     if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
@@ -525,6 +575,7 @@ fn resolve_review_tool(
             global_config,
             project_root,
         )
+        .map(|t| (t, None))
         .with_context(|| {
             format!(
                 "Failed to resolve review tool from project config: {}",
@@ -536,27 +587,38 @@ fn resolve_review_tool(
     // When global [review].tool is "auto", always try heterogeneous auto-selection first.
     if global_config.review.tool == "auto" {
         if let Some(tool) = select_auto_review_tool(parent_tool, project_config, global_config) {
-            return Ok(tool);
+            return Ok((tool, None));
         }
     }
 
     match global_config.resolve_review_tool(parent_tool) {
         Ok(tool_name) => {
-            // Skip disabled tools from global auto-resolution
             if let Some(cfg) = project_config {
                 if !cfg.is_tool_enabled(&tool_name) {
                     return Err(review_auto_resolution_error(parent_tool, project_root));
                 }
             }
-            crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
-                anyhow::anyhow!(
+            crate::run_helpers::parse_tool_name(&tool_name)
+                .map(|t| (t, None))
+                .map_err(|_| {
+                    anyhow::anyhow!(
                     "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
                     tool_name
                 )
-            })
+                })
         }
         Err(_) => Err(review_auto_resolution_error(parent_tool, project_root)),
     }
+}
+
+/// Resolve review thinking: CLI > config review.thinking.
+fn resolve_review_thinking(
+    cli_thinking: Option<&str>,
+    config_thinking: Option<&str>,
+) -> Option<String> {
+    cli_thinking
+        .map(str::to_string)
+        .or_else(|| config_thinking.map(str::to_string))
 }
 
 fn resolve_review_tool_from_value(
