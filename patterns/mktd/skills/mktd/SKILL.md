@@ -79,10 +79,13 @@ csa run --skill mktd "Plan the implementation of <feature description>"
 1. Three RECON dimensions completed via CSA (structure, patterns, constraints).
 2. Main agent performed zero file reads during Phase 1.
 3. TODO draft synthesized with executor tags and checkbox items.
-4. Threat model completed for all new API surfaces.
-5. Adversarial debate completed via explicit `csa debate`.
-6. Debate evidence packet validated (includes mapped verdict, raw verdict, and confidence).
-7. TODO revised to incorporate debate feedback and threat model findings.
-8. TODO saved via `csa todo create` + `csa todo save` with branch association.
-9. Save gate validated task completeness (`- [ ] ...`, `DONE WHEN`) and language consistency.
-10. User presented with plan for approval decision in resolved language.
+4. Each task has >= 20 words of context/description.
+5. Design Overview section is present with key decisions.
+6. Threat model completed for all new API surfaces.
+7. Adversarial debate completed via explicit `csa debate`.
+8. Debate evidence packet validated (includes mapped verdict, raw verdict, and confidence).
+9. Debate Findings section captures adopted vs deferred points.
+10. TODO revised to incorporate debate feedback and threat model findings.
+11. TODO saved via `csa todo create` + `csa todo save` with branch and language association.
+12. Save gate validated task completeness (`- [ ] ...`, `DONE WHEN`) and language consistency.
+13. User presented with plan for approval decision in resolved language.

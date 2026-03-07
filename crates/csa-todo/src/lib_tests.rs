@@ -221,6 +221,7 @@ fn test_metadata_serialization() {
         status: TodoStatus::Draft,
         title: "Test".to_string(),
         sessions: vec!["01ABC".to_string()],
+        language: None,
         created_at: Utc::now(),
         updated_at: Utc::now(),
     };
@@ -347,6 +348,74 @@ fn test_status_lifecycle() {
         .update_status(&plan.timestamp, TodoStatus::Done)
         .unwrap();
     assert_eq!(plan.metadata.status, TodoStatus::Done);
+}
+
+#[test]
+fn test_create_with_language() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager
+        .create_with_language("Lang Plan", Some("feat/lang"), Some("Chinese (Simplified)"))
+        .unwrap();
+
+    assert_eq!(
+        plan.metadata.language.as_deref(),
+        Some("Chinese (Simplified)")
+    );
+
+    let reloaded = manager.load(&plan.timestamp).unwrap();
+    assert_eq!(
+        reloaded.metadata.language.as_deref(),
+        Some("Chinese (Simplified)")
+    );
+}
+
+#[test]
+fn test_create_without_language() {
+    let dir = tempdir().unwrap();
+    let manager = TodoManager::with_base_dir(dir.path().to_path_buf());
+
+    let plan = manager.create("No Lang", None).unwrap();
+    assert!(plan.metadata.language.is_none());
+
+    let reloaded = manager.load(&plan.timestamp).unwrap();
+    assert!(reloaded.metadata.language.is_none());
+}
+
+#[test]
+fn test_language_field_serde_backward_compat() {
+    // Verify that metadata without a language field deserializes correctly
+    // (backward compatibility with existing plans).
+    let toml_str = r#"
+status = "draft"
+title = "Old Plan"
+sessions = []
+created_at = "2025-01-01T00:00:00Z"
+updated_at = "2025-01-01T00:00:00Z"
+"#;
+    let metadata: TodoMetadata = toml::from_str(toml_str).unwrap();
+    assert!(metadata.language.is_none());
+    assert_eq!(metadata.title, "Old Plan");
+}
+
+#[test]
+fn test_language_field_skip_serializing_if_none() {
+    let metadata = TodoMetadata {
+        branch: None,
+        status: TodoStatus::Draft,
+        title: "Test".to_string(),
+        sessions: Vec::new(),
+        language: None,
+        created_at: Utc::now(),
+        updated_at: Utc::now(),
+    };
+
+    let toml_str = toml::to_string_pretty(&metadata).unwrap();
+    assert!(
+        !toml_str.contains("language"),
+        "language = None should not appear in serialized TOML"
+    );
 }
 
 include!("lib_ext_tests.rs");

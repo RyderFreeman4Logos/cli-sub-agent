@@ -111,6 +111,10 @@ pub struct TodoMetadata {
     pub title: String,
     /// CSA session IDs linked to this plan.
     pub sessions: Vec<String>,
+    /// Language for TODO content (e.g., "Chinese (Simplified)", "English").
+    /// Patterns use this to enforce language consistency in plan content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -176,7 +180,17 @@ impl TodoManager {
 
     /// Create a new TODO plan.
     pub fn create(&self, title: &str, branch: Option<&str>) -> Result<TodoPlan> {
-        self.with_write_lock(|| self.create_inner(title, branch))
+        self.create_with_language(title, branch, None)
+    }
+
+    /// Create a new TODO plan with an optional language tag.
+    pub fn create_with_language(
+        &self,
+        title: &str,
+        branch: Option<&str>,
+        language: Option<&str>,
+    ) -> Result<TodoPlan> {
+        self.with_write_lock(|| self.create_inner(title, branch, language))
     }
 
     /// Update the status of a TODO plan.
@@ -337,7 +351,12 @@ impl TodoManager {
 
     // -- Internal helpers --------------------------------------------------
 
-    fn create_inner(&self, title: &str, branch: Option<&str>) -> Result<TodoPlan> {
+    fn create_inner(
+        &self,
+        title: &str,
+        branch: Option<&str>,
+        language: Option<&str>,
+    ) -> Result<TodoPlan> {
         let base_timestamp = Utc::now().format("%Y%m%dT%H%M%S").to_string();
 
         // Detect collision (multiple creates within the same second) and append suffix
@@ -359,6 +378,7 @@ impl TodoManager {
             status: TodoStatus::Draft,
             title: title.to_string(),
             sessions: Vec::new(),
+            language: language.map(|s| s.to_string()),
             created_at: now,
             updated_at: now,
         };

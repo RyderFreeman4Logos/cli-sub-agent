@@ -10,6 +10,7 @@ use tracing::warn;
 pub(crate) fn handle_create(
     title: String,
     branch: Option<String>,
+    language: Option<String>,
     cd: Option<String>,
     format: OutputFormat,
 ) -> Result<()> {
@@ -19,7 +20,7 @@ pub(crate) fn handle_create(
     // Ensure git repo is initialized for the todos directory
     csa_todo::git::ensure_git_init(manager.todos_dir())?;
 
-    let plan = manager.create(&title, branch.as_deref())?;
+    let plan = manager.create_with_language(&title, branch.as_deref(), language.as_deref())?;
 
     // Auto-commit the initial plan (freshly created, should always have changes)
     let commit_msg = format!("create: {}", title);

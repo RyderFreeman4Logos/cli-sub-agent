@@ -490,8 +490,13 @@ async fn run() -> Result<()> {
             }
         },
         Commands::Todo { cmd } => match cmd {
-            TodoCommands::Create { title, branch, cd } => {
-                todo_cmd::handle_create(title, branch, cd, output_format)?;
+            TodoCommands::Create {
+                title,
+                branch,
+                language,
+                cd,
+            } => {
+                todo_cmd::handle_create(title, branch, language, cd, output_format)?;
             }
             TodoCommands::Save {
                 timestamp,

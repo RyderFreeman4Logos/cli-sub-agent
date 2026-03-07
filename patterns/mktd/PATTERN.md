@@ -160,6 +160,27 @@ ${STEP_4_OUTPUT}
 
 ### Instructions
 
+#### TODO Structure Requirements
+
+The TODO plan MUST include the following sections for context recovery:
+
+a) **"## Design Overview" section** at the top with:
+   - Problem statement (1-2 sentences)
+   - Key design decisions with rationale
+   - Architecture constraints discovered during recon
+
+b) Each task item MUST include:
+   - A descriptive title (not just "Implement X")
+   - Context sub-bullet explaining WHY this task exists and HOW it relates to the design
+   - Dependencies on other tasks with specific details (not just "depends on task 1")
+   - Each task description MUST be >= 20 words to provide sufficient context
+
+c) **"## Debate Findings" section** (left empty in draft, populated after Phase 3):
+   - Which debate points were adopted
+   - Which were deferred and why
+
+#### Formatting Rules
+
 Each item is a [ ] checkbox with executor tag.
 Write all TODO descriptions, section headers, and task names in `${STEP_1_OUTPUT}`.
 Technical terms, code snippets, commit scope strings, and executor tags remain in English.
@@ -324,6 +345,14 @@ Use the generated spec as an acceptance contract.
 If the debate reveals missing coverage, add TODO work that restores alignment
 instead of silently diverging from the spec.
 
+Enrich task descriptions with debate rationale. Each task MUST have enough context
+that a fresh agent (post-compaction) can understand the full design intent without
+any prior conversation history.
+
+Populate the "## Debate Findings" section with:
+- Which debate points were adopted and how they changed the plan
+- Which were deferred and why (with brief justification)
+
 ### Prior Context
 
 ### Draft TODO (Step 5)
@@ -387,7 +416,11 @@ elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
   [[ "${CJK_COUNT_DRAFT:-0}" -ge "${MIN_CJK}" ]] || { echo "STEP_10_OUTPUT language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
 fi
 CURRENT_BRANCH=$(git branch --show-current) || { echo "detect branch failed" >&2; exit 1; }
-TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
+LANG_ARGS=()
+if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
+  LANG_ARGS+=("--language" "${RESOLVED_LANGUAGE}")
+fi
+TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
 SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
 printf '%s\n' "${STEP_10_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
@@ -407,6 +440,14 @@ if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
 elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
   CJK_COUNT_SAVED=$(rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' "${TODO_PATH}" | wc -l | tr -d '[:space:]')
   [[ "${CJK_COUNT_SAVED:-0}" -ge "${MIN_CJK:-2}" ]] || { echo "saved TODO language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK:-2})" >&2; exit 1; }
+fi
+# Validate language metadata consistency: if metadata.language is set,
+# verify TODO content matches (e.g., Chinese plan should have Chinese descriptions)
+if [[ -n "${RESOLVED_LANGUAGE:-}" ]]; then
+  if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
+    HAN_META_CHECK=$(rg -o '[\p{Han}]' "${TODO_PATH}" | wc -l | tr -d '[:space:]')
+    [[ "${HAN_META_CHECK:-0}" -ge 2 ]] || { echo "language metadata mismatch: plan language is ${RESOLVED_LANGUAGE} but content lacks Han characters" >&2; exit 1; }
+  fi
 fi
 csa todo save -t "${TODO_TS}" "finalize: ${FEATURE}" || { echo "csa todo save failed" >&2; exit 1; }
 SPEC_RENDERED=$(csa todo show -t "${TODO_TS}" --spec) || { echo "csa todo show --spec failed" >&2; exit 1; }

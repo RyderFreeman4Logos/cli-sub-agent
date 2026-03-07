@@ -1,7 +1,7 @@
 ---
 name = "mktsk"
 description = "Execute TODO plans as deterministic, resumable serial checklists across auto-compaction"
-allowed-tools = "Read, Grep, Glob, Bash, Write, Edit"
+allowed-tools = "Read, Grep, Glob, Bash, Write, Edit, TaskCreate, TaskUpdate, TaskGet, TaskList"
 tier = "tier-2-standard"
 version = "0.1.0"
 ---
@@ -21,26 +21,30 @@ Extract all unchecked checklist items (`- [ ]`) with:
 
 Fail fast if no executable checklist items are found.
 
-## Step 2: Build Resumable Execution Checklist
+## Step 2: Register Tasks via TaskCreate
 
-Normalize extracted items into a serial execution checklist.
-Each normalized item MUST include:
+TODO.md is a read-only planning artifact. Progress tracking uses TaskCreate/TaskUpdate.
+
+For each parsed TODO item, use TaskCreate to register a tracked task entry.
+Each task MUST include:
 - stable item id
 - source TODO line reference
 - executor tag
 - concrete action
 - mechanically verifiable `DONE WHEN`
 
-Output the full checklist as markdown text.
+Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate status.
 
-## Step 3: Execute Checklist Serially
+## Step 3: Execute Tasks Serially
 
-Execute checklist items strictly in order.
-Do not parallelize implementation work.
-Treat each checklist item as an atomic transaction:
+Execute tasks strictly in order. Do not parallelize implementation work.
+
+Before each task: use TaskUpdate to set status to `in_progress`.
+
+Treat each task as an atomic transaction:
 1. Execute exactly one item.
 2. Run verification/review.
-3. Persist completion in TODO.
+3. Use TaskUpdate to set status to `completed`.
 4. Persist checkpoint before next item.
 
 Dispatch policy by executor tag:
@@ -52,13 +56,13 @@ Dispatch policy by executor tag:
 Checkpoint policy (mandatory):
 - Use `.csa/state/mktsk/checkpoint.json` as progress checkpoint.
 - Write latest completed item id after each completed item.
-- On interruption, resume from unchecked TODO items + checkpoint state.
+- On interruption, resume from TaskList status and checkpoint state.
 
 After each item:
 1. Run quality gates (`just fmt`, `just clippy`, `just test`).
 2. Run `csa review --diff`.
 3. Apply fixes if review reports blocking issues.
-4. Mark the item as completed in the TODO file (`- [x]`), preserving text.
+4. Use TaskUpdate to mark the task as `completed`.
 
 ## Step 4: Compact Context (Conditional)
 
