@@ -44,14 +44,22 @@ Uses the `csa audit` CLI for manifest tracking, ensuring audit progress is persi
 ### Quick Start
 
 ```bash
-csa run --skill codebase-audit "Audit the entire codebase for security vulnerabilities"
+csa run --sa-mode true --skill codebase-audit "Audit the entire codebase for security vulnerabilities"
 ```
 
 Or with a specific scope:
 
 ```bash
-csa run --skill codebase-audit "Audit src/executor/ and src/config/ modules"
+csa run --sa-mode true --skill codebase-audit "Audit src/executor/ and src/config/ modules"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ### Step-by-Step
 

@@ -246,6 +246,14 @@ Manager not fully confident
   -> Manager gives final recommendation to user
 ```
 
+## SA Mode Propagation (MANDATORY)
+
+When operating in SA mode, **ALL `csa` invocations MUST include `--sa-mode true`**.
+This applies to every `csa run`, `csa review`, `csa debate`, and any other execution
+command dispatched by the Layer 0 manager. Omitting `--sa-mode` at root depth causes
+a hard error; passing `false` breaks prompt-guard propagation and disables SA-specific
+safety mechanisms. All dispatch templates below include `--sa-mode true` by default.
+
 ## Practical Dispatch Templates
 
 ### Template A: Planning Dispatch (Manager -> Layer 1)
@@ -279,7 +287,7 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
-csa run < "$PROMPT_FILE"
+csa run --sa-mode true < "$PROMPT_FILE"
 ```
 
 ### Template B: Implementation Dispatch (Manager -> Layer 1)
@@ -320,7 +328,7 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml exists and is self-contained for manager decision
 IMPL_EOF
 
-csa run --session "$SESSION_ID" < "$PROMPT_FILE"
+csa run --sa-mode true --session "$SESSION_ID" < "$PROMPT_FILE"
 ```
 
 ### Template C: Trust Verification Dispatch (Manager -> Reviewer Employee)
@@ -355,7 +363,7 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
-csa run < "$PROMPT_FILE"
+csa run --sa-mode true < "$PROMPT_FILE"
 ```
 
 ## Model Selection Guidelines

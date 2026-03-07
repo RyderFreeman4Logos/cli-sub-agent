@@ -41,23 +41,31 @@ Two usage modes:
 1. **Default Workflow** (single-call + session continuation): The caller proposes, `csa debate` critiques via independent model, caller rebuts, repeat until consensus.
 2. **Deep Orchestrated Debate** (multi-round + tier escalation): The skill orchestrates multiple rounds with tier-based model selection for complex strategy questions.
 
+## SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa debate`,
+`csa run`, `csa review`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
+
 ## CLI Reference
 
 ```bash
 # New debate — independent model analyzes the question
-csa debate "Should we use gRPC or REST for our new microservice API?"
+csa debate --sa-mode true "Should we use gRPC or REST for our new microservice API?"
 
 # Continue debate — pass counterargument in existing session
-csa debate --session <SESSION_ID> "I disagree because gRPC adds complexity for our small team"
+csa debate --sa-mode true --session <SESSION_ID> "I disagree because gRPC adds complexity for our small team"
 
 # Override tool selection (bypass auto routing — only when necessary)
-csa debate --tool codex "How should we handle distributed transactions?"
+csa debate --sa-mode true --tool codex "How should we handle distributed transactions?"
 
 # Override model within selected tool (use models from `csa tiers list`)
-csa debate --model <MODEL> "What caching strategy should we use?"
+csa debate --sa-mode true --model <MODEL> "What caching strategy should we use?"
 
 # Pipe long prompts via stdin
-echo "Given this architecture: ... Should we refactor?" | csa debate
+echo "Given this architecture: ... Should we refactor?" | csa debate --sa-mode true
 ```
 
 ## Default Workflow Integration

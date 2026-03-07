@@ -39,8 +39,16 @@ Enforce "Commit = Audited" discipline: every commit passes branch check, formatt
 ### Quick Start
 
 ```bash
-csa run --skill commit "Commit the current changes with scope: <scope>"
+csa run --sa-mode true --skill commit "Commit the current changes with scope: <scope>"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ### Step-by-Step
 
