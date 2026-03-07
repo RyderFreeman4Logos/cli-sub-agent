@@ -154,14 +154,14 @@ pub(crate) async fn handle_run(
     let model = skill_res.model;
     let skill_session_tag = skill.as_deref().map(skill_session_description);
 
-    let tool_aliases = config
-        .as_ref()
-        .map(|c| &c.tool_aliases)
-        .unwrap_or(&global_config.tool_aliases);
+    let mut merged_aliases = global_config.tool_aliases.clone();
+    if let Some(c) = config.as_ref() {
+        merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
     let strategy = skill_res
         .tool
         .unwrap_or(ToolArg::Auto)
-        .resolve_alias(tool_aliases)
+        .resolve_alias(&merged_aliases)
         .map_err(|e| anyhow::anyhow!("{}", e))?
         .into_strategy();
     let idle_timeout_seconds = if no_idle_timeout {

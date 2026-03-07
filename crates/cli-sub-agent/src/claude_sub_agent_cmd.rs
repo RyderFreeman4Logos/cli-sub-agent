@@ -136,12 +136,13 @@ fn resolve_claude_tool(
 ) -> Result<ToolName> {
     // CLI override is highest priority
     if let Some(tool_arg) = arg_tool {
-        // Resolve config-based aliases before matching
-        let tool_aliases = project_config
-            .map(|c| &c.tool_aliases)
-            .unwrap_or(&global_config.tool_aliases);
+        // Merge global + project aliases (project takes priority)
+        let mut merged_aliases = global_config.tool_aliases.clone();
+        if let Some(c) = project_config {
+            merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
         let resolved = tool_arg
-            .resolve_alias(tool_aliases)
+            .resolve_alias(&merged_aliases)
             .map_err(|e| anyhow::anyhow!("{}", e))?;
         return match resolved {
             ToolArg::Specific(t) => Ok(t),
