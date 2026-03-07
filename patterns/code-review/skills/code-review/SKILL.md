@@ -40,8 +40,16 @@ Perform AI-powered code review on GitHub PRs with automatic scale adaptation. Sm
 ### Quick Start
 
 ```bash
-csa run --skill code-review "Review PR #<number>"
+csa run --sa-mode true --skill code-review "Review PR #<number>"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ### Step-by-Step
 

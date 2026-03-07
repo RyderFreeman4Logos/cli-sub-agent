@@ -16,8 +16,16 @@ fixing issues between rounds until clean or max rounds exhausted.
 ## Usage
 
 ```bash
-csa run --skill review-loop "Review and fix current changes"
+csa run --sa-mode true --skill review-loop "Review and fix current changes"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ## Behavior
 

@@ -50,14 +50,22 @@ does not perform audits.
 ### Quick Start
 
 ```bash
-csa run --skill codebase-blog "Generate technical blogs for all audited modules in English"
+csa run --sa-mode true --skill codebase-blog "Generate technical blogs for all audited modules in English"
 ```
 
 Or with specific parameters:
 
 ```bash
-csa run --skill codebase-blog "Blog src/executor/ modules --language Chinese --style tutorial"
+csa run --sa-mode true --skill codebase-blog "Blog src/executor/ modules --language Chinese --style tutorial"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ### Step-by-Step
 

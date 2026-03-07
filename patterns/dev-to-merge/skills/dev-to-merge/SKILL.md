@@ -44,8 +44,16 @@ Execute the complete development lifecycle on a feature branch: mandatory mktd p
 ### Quick Start
 
 ```bash
-csa run --skill dev-to-merge "Implement, review, and merge <scope description>"
+csa run --sa-mode true --skill dev-to-merge "Implement, review, and merge <scope description>"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ### Step-by-Step
 

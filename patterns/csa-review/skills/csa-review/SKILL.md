@@ -49,6 +49,14 @@ Run structured code reviews through CSA, ensuring:
 - `tool` (optional): override review tool (default: auto-detect independent reviewer)
 - `context` (optional): path to `TODO.md` or `spec.toml` to check implementation alignment against the planned design
 
+## SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
+
 ## Execution Protocol (ORCHESTRATOR ONLY — review agents MUST skip this section)
 
 ### Step 1: Determine Review Tool
@@ -96,7 +104,7 @@ The review prompt instructs the agent to: read project context (CLAUDE.md + AGEN
 ### Step 3: Execute Review via CSA
 
 ```bash
-csa run --tool {review_tool} \
+csa run --sa-mode true --tool {review_tool} \
   --description "code-review: {scope}" \
   "{REVIEW_PROMPT}"
 ```

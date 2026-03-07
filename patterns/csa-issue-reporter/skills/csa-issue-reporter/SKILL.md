@@ -39,9 +39,17 @@ Automatically file a structured GitHub issue on the cli-sub-agent repository whe
 ### Quick Start
 
 ```bash
-csa run --skill csa-issue-reporter \
+csa run --sa-mode true --skill csa-issue-reporter \
   "Report error: <error_summary>. Command: <csa_command>. Output: <error_output>"
 ```
+
+### SA Mode Propagation (MANDATORY)
+
+When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
+**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
+`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
+at root depth causes a hard error; passing `false` when the caller is in SA mode
+breaks prompt-guard propagation.
 
 ### Step-by-Step
 
