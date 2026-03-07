@@ -13,6 +13,10 @@ pub enum TodoCommands {
         #[arg(short, long)]
         branch: Option<String>,
 
+        /// Language for TODO content (e.g., "Chinese (Simplified)", "English")
+        #[arg(short, long)]
+        language: Option<String>,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,

@@ -79,6 +79,7 @@ fn test_list_sorted_newest_first() {
             status: TodoStatus::Draft,
             title: title.to_string(),
             sessions: Vec::new(),
+            language: None,
             created_at: now,
             updated_at: now,
         };
