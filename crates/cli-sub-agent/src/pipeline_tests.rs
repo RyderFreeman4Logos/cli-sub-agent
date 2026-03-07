@@ -7,9 +7,10 @@ use csa_config::{ProjectMeta, ResourcesConfig};
 use csa_hooks::{FailPolicy, HookConfig, HookEvent, HooksConfig, Waiver};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::{LazyLock, Mutex};
+use std::sync::LazyLock;
 
-static PIPELINE_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+static PIPELINE_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
+    LazyLock::new(|| tokio::sync::Mutex::new(()));
 
 struct ScopedEnvVarRestore {
     key: &'static str,
@@ -106,6 +107,7 @@ fn resolve_idle_timeout_prefers_cli_override() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -235,6 +237,7 @@ fn resolve_idle_timeout_uses_config_then_default() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -267,6 +270,7 @@ fn resolve_liveness_dead_seconds_uses_config_then_default() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -403,6 +407,7 @@ fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectC
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -607,6 +612,7 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
         tiers,
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),

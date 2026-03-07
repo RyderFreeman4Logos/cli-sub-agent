@@ -330,7 +330,7 @@ fn verify_review_skill_allow_fallback_without_skill() {
 async fn execute_review_ignores_inherited_csa_session_id_without_explicit_session() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = REVIEW_ENV_LOCK.lock().expect("review env lock poisoned");
+    let _env_lock = REVIEW_ENV_LOCK.lock().await;
     let _session_guard = ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
 
     let project_dir = tempdir().unwrap();

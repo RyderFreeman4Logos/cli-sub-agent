@@ -233,6 +233,7 @@ pub fn init_project(
             tiers: HashMap::new(),
             tier_mapping: HashMap::new(),
             aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
             preferences: None,
         }
     } else {
@@ -257,6 +258,7 @@ pub fn init_project(
             tiers: build_smart_tiers(&installed, &globally_disabled),
             tier_mapping: default_tier_mapping(),
             aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
             preferences: None,
         }
     };

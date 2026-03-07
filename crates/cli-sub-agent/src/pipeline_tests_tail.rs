@@ -15,6 +15,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         tiers: HashMap::new(), // no tiers
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
@@ -597,9 +598,7 @@ fn result_toml_path_contract_not_applied_when_exit_code_nonzero_even_with_marker
 async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = PIPELINE_ENV_LOCK
-        .lock()
-        .expect("pipeline env lock poisoned");
+    let _env_lock = PIPELINE_ENV_LOCK.lock().await;
     let _csa_session_id_guard = ScopedEnvVarRestore::unset("CSA_SESSION_ID");
 
     let temp = tempfile::tempdir().unwrap();
@@ -673,9 +672,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
 async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_session() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = PIPELINE_ENV_LOCK
-        .lock()
-        .expect("pipeline env lock poisoned");
+    let _env_lock = PIPELINE_ENV_LOCK.lock().await;
     let _csa_session_id_guard =
         ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
 

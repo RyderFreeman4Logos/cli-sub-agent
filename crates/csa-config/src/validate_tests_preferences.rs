@@ -20,6 +20,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: Some(crate::global::PreferencesConfig {
             tool_priority: vec!["codexx".into(), "codex".into()],
         }),

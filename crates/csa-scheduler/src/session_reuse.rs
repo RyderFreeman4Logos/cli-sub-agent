@@ -290,7 +290,7 @@ mod tests {
         let score = compute_relevance_score(&session, "default", "gemini-cli");
         // Base (0.3) + no task match (0.0) + recency (0.0 for 48h old)
         assert!(
-            score >= 0.3 && score < 0.35,
+            (0.3..0.35).contains(&score),
             "Old session score should be near base 0.3, was {}",
             score
         );
@@ -321,7 +321,7 @@ mod tests {
 
     #[test]
     fn test_reuse_candidate_sorting_by_score() {
-        let mut candidates = vec![
+        let mut candidates = [
             ReuseCandidate {
                 session_id: "low".to_string(),
                 tool_name: "codex".to_string(),

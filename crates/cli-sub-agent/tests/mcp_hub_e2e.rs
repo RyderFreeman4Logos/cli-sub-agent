@@ -69,10 +69,8 @@ args = ["{}"]
 fn wait_for_socket(socket_path: &Path, timeout: Duration) -> Result<()> {
     let start = Instant::now();
     while start.elapsed() < timeout {
-        if socket_path.exists() {
-            if std::os::unix::net::UnixStream::connect(socket_path).is_ok() {
-                return Ok(());
-            }
+        if socket_path.exists() && std::os::unix::net::UnixStream::connect(socket_path).is_ok() {
+            return Ok(());
         }
         std::thread::sleep(Duration::from_millis(50));
     }
@@ -337,7 +335,7 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget()
         let direct_p95 = p95_ms(&direct_samples);
         let proxy_p95 = p95_ms(&proxy_samples);
         let overhead = proxy_p95 - direct_p95;
-        let max_allowed_overhead = (direct_p95 * 3.0).max(5.0).min(15.0);
+        let max_allowed_overhead = (direct_p95 * 3.0).clamp(5.0, 15.0);
         eprintln!(
             "mcp_hub_latency_ms direct_p95={direct_p95:.3} proxy_p95={proxy_p95:.3} overhead={overhead:.3}"
         );

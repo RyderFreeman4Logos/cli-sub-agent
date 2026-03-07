@@ -139,6 +139,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         tiers: HashMap::new(),
         tier_mapping: HashMap::new(),
         aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
         preferences: prefs,
         session: Default::default(),
         memory: Default::default(),
