@@ -3,6 +3,15 @@ name = "sa"
 description = "Three-layer recursive delegation: Layer 0 dispatches, Layer 1 plans/implements, Layer 2 explores/fixes"
 
 [[workflow.variables]]
+name = "COMMIT_HASH"
+
+[[workflow.variables]]
+name = "CSA_STATE_ROOT"
+
+[[workflow.variables]]
+name = "FILES"
+
+[[workflow.variables]]
 name = "IMPL_FILE"
 
 [[workflow.variables]]
@@ -12,13 +21,34 @@ name = "LAST_LINE"
 name = "PROMPT_FILE"
 
 [[workflow.variables]]
+name = "RESULT_PATH"
+
+[[workflow.variables]]
+name = "RESULT_REAL"
+
+[[workflow.variables]]
 name = "RESUME_FILE"
 
 [[workflow.variables]]
 name = "REVIEW_IS_CLEAN"
 
 [[workflow.variables]]
+name = "REVIEW_RESULT"
+
+[[workflow.variables]]
+name = "SCOPE"
+
+[[workflow.variables]]
 name = "SESSION_ID"
+
+[[workflow.variables]]
+name = "STATUS"
+
+[[workflow.variables]]
+name = "TODO_PATH"
+
+[[workflow.variables]]
+name = "TODO_REAL"
 
 [[workflow.variables]]
 name = "USER_APPROVES"
@@ -28,6 +58,31 @@ name = "USER_MODIFIES"
 
 [[workflow.steps]]
 id = 1
+title = "Variables"
+tool = "bash"
+prompt = """
+Initialize and declare workflow variables.
+
+- `${SESSION_ID}`: The ULID of the Layer 1 implementation session
+- `${STATUS}`: Success/Failure status of the child session
+- `${TODO_PATH}`: Path to the generated TODO.md file
+- `${USER_APPROVES}`: Set to `"true"` if user approves the plan
+- `${USER_MODIFIES}`: Set to `"true"` if user provides feedback for plan revision
+- `${COMMIT_HASH}`: Resulting commit hash from implementation
+- `${REVIEW_RESULT}`: Status of the implementation review
+- `${REVIEW_IS_CLEAN}`: Set to `"true"` if review passed without issues
+- `${FILES}`: Files to commit (passed to nested `commit` pattern)
+- `${SCOPE}`: Commit scope (passed to nested `commit` pattern)
+
+```bash
+# Force weave to pick up these variables
+: "${SESSION_ID}" "${STATUS}" "${TODO_PATH}" "${USER_APPROVES}" "${USER_MODIFIES}" "${COMMIT_HASH}" "${REVIEW_RESULT}" "${REVIEW_IS_CLEAN}" "${FILES}" "${SCOPE}"
+echo "Variables initialized."
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
 title = "Validate Task Scope"
 prompt = """
 Determine if sa is appropriate:
@@ -38,7 +93,7 @@ Determine if sa is appropriate:
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 2
+id = 3
 title = "Prepare Planning Prompt"
 prompt = """
 Build planning prompt with user's requirements.
@@ -47,11 +102,12 @@ Use mktemp for temp files (no race conditions).
 
 ```bash
 PROMPT_FILE=$(mktemp /tmp/sa-planning-XXXXXX.txt)
+echo "CSA_VAR:PROMPT_FILE=$PROMPT_FILE"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 3
+id = 4
 title = "Dispatch Planning to Layer 1"
 tool = "bash"
 prompt = """
@@ -59,7 +115,7 @@ Layer 1 (claude-code) will:
 1. Spawn up to 3 parallel Layer 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
-4. Write `result.toml` (with `todo_path`) in CSA session state dir
+4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
 
 ```bash
 csa run < "${PROMPT_FILE}"
@@ -67,7 +123,7 @@ csa run < "${PROMPT_FILE}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 4
+id = 5
 title = "Parse Planning Result"
 tool = "bash"
 prompt = """
@@ -75,9 +131,11 @@ Extract session_id, status, and todo_path from CSA session `result.toml`.
 Validate result and TODO paths stay inside CSA state directories.
 
 ```bash
+# RESULT_PATH comes from CSA structured output (trusted: we invoked csa run)
 RESULT_PATH="${LAST_LINE}"
 RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path invalid: ${RESULT_PATH}" >&2; exit 1; }
 [ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
+# Derive CSA state root: strip /sessions/<id>/result.toml suffix
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
 SESSION_ID=$(grep -- 'session_id = ' "$RESULT_REAL" | cut -d'"' -f2)
@@ -86,64 +144,73 @@ TODO_PATH=$(grep -- 'todo_path = ' "$RESULT_REAL" | cut -d'"' -f2)
 TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: ${TODO_PATH}" >&2; exit 1; }
 [ -f "${TODO_REAL}" ] || { echo "TODO not found: ${TODO_REAL}" >&2; exit 1; }
 [[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
+
+echo "CSA_VAR:SESSION_ID=$SESSION_ID"
+echo "CSA_VAR:STATUS=$STATUS"
+echo "CSA_VAR:TODO_PATH=$TODO_PATH"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 5
+id = 6
 title = "Present TODO to User"
 prompt = "Present the TODO path to user. Let them read and approve/modify."
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
+id = 7
 title = "Dispatch Implementation to Layer 1"
 tool = "bash"
 prompt = """
 Resume the Layer 1 session for implementation.
 Layer 1 will: implement → delegate errors to Layer 2 → review → commit.
 
-INCREMENTAL REVIEW (MANDATORY): Before committing each TODO block,
-Layer 1 MUST run `csa review --diff` on the uncommitted changes.
-After the review passes, commit the block.
-Do NOT accumulate all changes for one cumulative review at the end.
+**Incremental review (MANDATORY)**: Before committing each TODO block,
+Layer 1 MUST run `csa review --diff` on the uncommitted changes immediately.
+After the review passes, commit the block. Do NOT accumulate all changes for
+one cumulative review at the end. Small-scope reviews catch issues when
+context is focused, avoiding large diffs where reviewers can only surface
+2 findings per round.
 
 COMMIT HOOK POLICY (MANDATORY): NEVER use `git commit --no-verify` or
 `git commit -n` unless the prompt explicitly includes
-`ALLOW_GIT_COMMIT_NO_VERIFY=1`.
+`ALLOW_GIT_COMMIT_NO_VERIFY=1`. Bypassing hooks is a critical SOP violation.
 If hooks fail (including failures caused by unrelated workspace crates), STOP
 and return a blocker / `needs_clarification` instead of bypassing hooks.
+Fix the underlying issues to ensure codebase integrity.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
+echo "CSA_VAR:IMPL_FILE=$IMPL_FILE"
 csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
 ```"""
 on_fail = "abort"
 condition = "${USER_APPROVES}"
 
 [[workflow.steps]]
-id = 7
-title = "Step 6a: Resume with Feedback"
+id = 8
+title = "Resume with Feedback"
 tool = "bash"
 prompt = """
 Resume Layer 1 with user's revision feedback.
 
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
+echo "CSA_VAR:RESUME_FILE=$RESUME_FILE"
 csa run --session "${SESSION_ID}" < "${RESUME_FILE}"
 ```"""
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (${USER_MODIFIES})"
 
 [[workflow.steps]]
-id = 8
-title = "Step 6b: Abandon Plan"
+id = 9
+title = "Abandon Plan"
 prompt = "User rejected. Stop and ask for new direction."
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (!(${USER_MODIFIES}))"
 
 [[workflow.steps]]
-id = 9
+id = 10
 title = "Parse Implementation Result"
 tool = "bash"
 prompt = """
@@ -155,13 +222,16 @@ RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path
 [ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
-COMMIT=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
-REVIEW=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
+COMMIT_HASH=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
+REVIEW_RESULT=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
+
+echo "CSA_VAR:COMMIT_HASH=$COMMIT_HASH"
+echo "CSA_VAR:REVIEW_RESULT=$REVIEW_RESULT"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 10
+id = 11
 title = "Report to User"
 prompt = """
 Present implementation results: commit hash, review status,
@@ -169,23 +239,34 @@ number of tasks completed. If HAS_ISSUES, iterate."""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 11
+id = 12
 title = "Auto PR"
-prompt = """
-Push the feature branch to origin and create a PR targeting main.
-Run the full commit workflow: format, lint, test, security audit, review, commit.
-Then create the PR via gh CLI."""
+prompt = ""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 
 [[workflow.steps]]
-id = 12
+id = 13
+title = "Include commit"
+tool = "weave"
+prompt = "commit"
+on_fail = "abort"
+condition = "${REVIEW_IS_CLEAN}"
+
+[[workflow.steps]]
+id = 14
 title = "Invoke pr-codex-bot (MANDATORY)"
-tool = "skill"
 prompt = """
-After PR creation, invoke /pr-codex-bot to trigger cloud review, poll for
-response (with 10 min timeout), and handle the full review loop. This ensures
-the bot review is never forgotten or skipped.
+> **Layer**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
+> Layer 1 executors MUST invoke /pr-codex-bot after PR creation.
+> This is NOT optional — polling for bot review is part of the PR lifecycle.
+
+Tool: skill
+OnFail: abort
+
+After PR creation, invoke the pr-codex-bot skill to trigger cloud review,
+poll for response (with 10 min timeout), and handle the full review loop.
+This ensures the bot review is never forgotten or skipped.
 
 ```
 /pr-codex-bot

@@ -59,6 +59,10 @@ This skill exists to keep the main agent out of code-level work.
 
 ## Operating Contract
 
+<prompt-guard name="no-verify-forbidden">
+ABSOLUTE PROHIBITION: You MUST NOT use `--no-verify` or `-n` with any `git commit` or `git push` command. All quality hooks (pre-commit, etc.) MUST be allowed to run. Bypassing hooks is a critical SOP violation. If hooks fail, fix the underlying code issues instead of bypassing.
+</prompt-guard>
+
 ### Layer 0 Manager: What You MUST Do
 
 1. Dispatch work with clear task contracts.

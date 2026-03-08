@@ -3,19 +3,38 @@ name = "review-loop"
 description = "Bounded iterative review-fix loop for quality convergence"
 
 [[workflow.variables]]
-name = "REVIEW_HAS_ISSUES"
-
-[[workflow.variables]]
-name = "ROUND"
-
-[[workflow.variables]]
 name = "MAX_ROUNDS"
 
 [[workflow.variables]]
 name = "REMAINING_ISSUES"
 
+[[workflow.variables]]
+name = "REVIEW_HAS_ISSUES"
+
+[[workflow.variables]]
+name = "ROUND"
+
 [[workflow.steps]]
 id = 1
+title = "Variables"
+tool = "bash"
+prompt = """
+Initialize and declare workflow variables.
+
+- `${REVIEW_HAS_ISSUES}`: `"true"` if review found issues
+- `${ROUND}`: Current round number (starts at 1)
+- `${MAX_ROUNDS}`: Maximum review-fix rounds (default: 2)
+- `${REMAINING_ISSUES}`: Summary of unfixed issues (if loop exhausted)
+
+```bash
+# Force weave to pick up these variables
+: "${REVIEW_HAS_ISSUES}" "${ROUND}" "${MAX_ROUNDS}" "${REMAINING_ISSUES}"
+echo "Variables initialized."
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
 title = "Review Changes"
 tool = "bash"
 prompt = """
@@ -26,34 +45,36 @@ csa review --diff
 ```
 
 Parse the output to determine if issues were found.
-Set REVIEW_HAS_ISSUES to "true" or "false"."""
-on_fail = "continue"
+Set `${REVIEW_HAS_ISSUES}` to `"true"` or `"false"`."""
+on_fail = "skip"
 
 [[workflow.steps]]
-id = 2
+id = 3
 title = "Evaluate Review Result"
+tool = "bash"
 prompt = """
-If review found no issues (REVIEW_HAS_ISSUES = "false"), report success and stop.
+If review found no issues (`${REVIEW_HAS_ISSUES}` == `"false"`), report success and stop.
 If issues were found, proceed to fix step."""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 3
+id = 4
 title = "Fix Issues"
+tool = "bash"
 prompt = """
 Apply fixes for all issues reported in the review.
 Focus on Critical and High severity first.
 After fixing, stage changes for re-review."""
-on_fail = "continue"
-condition = "${REVIEW_HAS_ISSUES}"
+on_fail = "skip"
 
 [[workflow.steps]]
-id = 4
+id = 5
 title = "Round Check"
+tool = "bash"
 prompt = """
-Increment ROUND counter.
-If ROUND >= MAX_ROUNDS (default 2), set REMAINING_ISSUES with a summary
+Increment `${ROUND}` counter.
+If `${ROUND}` >= `${MAX_ROUNDS}` (default 2), set `${REMAINING_ISSUES}` with a summary
 of any unfixed issues and exit.
-Otherwise, loop back to step 1 for re-review."""
+Otherwise, loop back to Step 2 for re-review."""
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"

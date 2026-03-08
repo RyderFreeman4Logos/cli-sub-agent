@@ -15,10 +15,25 @@ name = "BRANCH"
 name = "COMMIT_BODY"
 
 [[workflow.variables]]
+name = "COMMIT_BODY_LOCAL"
+
+[[workflow.variables]]
 name = "COMMIT_MESSAGE_FILE"
 
 [[workflow.variables]]
+name = "COMMIT_MESSAGE_FILE_LOCAL"
+
+[[workflow.variables]]
 name = "COMMIT_SUBJECT"
+
+[[workflow.variables]]
+name = "COMMIT_SUBJECT_LOCAL"
+
+[[workflow.variables]]
+name = "CRITERIA_SUMMARY"
+
+[[workflow.variables]]
+name = "CURRENT_BRANCH"
 
 [[workflow.variables]]
 name = "ENABLE_REVIEW_LOOP"
@@ -33,6 +48,15 @@ name = "HAS_DEFERRED_ISSUES"
 name = "IS_MILESTONE"
 
 [[workflow.variables]]
+name = "PLAN_JSON"
+
+[[workflow.variables]]
+name = "PLAN_TIMESTAMP"
+
+[[workflow.variables]]
+name = "PLAN_ULID"
+
+[[workflow.variables]]
 name = "PR_BODY"
 
 [[workflow.variables]]
@@ -41,8 +65,41 @@ name = "REVIEW_HAS_ISSUES"
 [[workflow.variables]]
 name = "SCOPE"
 
+[[workflow.variables]]
+name = "SPEC_OUTPUT"
+
+[[workflow.variables]]
+name = "TRAILERS"
+
 [[workflow.steps]]
 id = 1
+title = "Variables"
+tool = "bash"
+prompt = """
+Initialize and declare workflow variables.
+
+- `${FILES}`: Space-separated list of files to stage (default: `.`)
+- `${SCOPE}`: Conventional Commit scope (e.g., `core`, `cli`)
+- `${BRANCH}`: Target branch for push/PR
+- `${COMMIT_SUBJECT}`: Generated or provided commit subject
+- `${COMMIT_BODY}`: Generated or provided commit body
+- `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
+- `${IS_MILESTONE}`: Set to `"true"` to trigger push and PR
+- `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
+- `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
+- `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
+- `${REVIEW_HAS_ISSUES}`: Set by `ai-reviewed-commit` if issues found
+- `${PR_BODY}`: Body for the created Pull Request
+
+```bash
+# Force weave to pick up these variables
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}"
+echo "Variables initialized."
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
 title = "Branch Check"
 tool = "bash"
 prompt = """
@@ -60,7 +117,7 @@ fi
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 2
+id = 3
 title = "Run Formatters"
 tool = "bash"
 prompt = """
@@ -72,7 +129,7 @@ just fmt
 retry = 2
 
 [[workflow.steps]]
-id = 3
+id = 4
 title = "Run Linters"
 tool = "bash"
 prompt = """
@@ -84,7 +141,7 @@ just clippy
 retry = 2
 
 [[workflow.steps]]
-id = 4
+id = 5
 title = "Run Tests"
 tool = "bash"
 prompt = """
@@ -94,7 +151,7 @@ just test
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 5
+id = 6
 title = "Stage Changes"
 tool = "bash"
 prompt = """
@@ -111,7 +168,7 @@ fi
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
+id = 7
 title = "Security Scan"
 tool = "bash"
 prompt = """
@@ -128,32 +185,29 @@ done
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 7
+id = 8
 title = "Security Audit"
 tool = "csa"
-prompt = """
-Perform a three-phase security audit on the staged changes.
-Run 'git diff --staged' yourself to see all changes.
-
-Phase 1 — Test Completeness: For each public function in changed files,
-verify tests exist for normal path, edge cases, and error paths.
-Phase 2 — Vulnerability Scan: Check for injection, hardcoded secrets,
-unsafe patterns, missing input validation, panic-prone code on untrusted input.
-Phase 3 — Code Quality: No debug code, proper error handling, no commented-out code.
-
-Output: structured report with PASS/FAIL per phase. If any phase FAIL, list specific issues."""
+prompt = ""
 tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 8
+id = 9
+title = "Include security-audit"
+tool = "weave"
+prompt = "security-audit"
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 10
 title = "Fix Audit Issues"
 prompt = "Fix blocking issues and re-run from Step 2."
 on_fail = "abort"
 condition = "${AUDIT_FAIL}"
 
 [[workflow.steps]]
-id = 9
+id = 11
 title = "Record Deferred Issues"
 prompt = """
 Record deferred issues (other modules) via TaskCreate for
@@ -162,27 +216,22 @@ on_fail = "abort"
 condition = "${AUDIT_PASS_DEFERRED}"
 
 [[workflow.steps]]
-id = 10
+id = 12
 title = "Pre-Commit Review"
 tool = "csa"
-prompt = """
-Review all staged changes for correctness, security, and code quality.
-Run 'git diff --staged' yourself to see the full patch.
-
-Check each modified file against its AGENTS.md rules (discover the chain from
-repository root to the file's directory). Violations of MUST/CRITICAL rules are P1.
-Verify changes comply with all applicable AGENTS.md rules for this task.
-If staged diff touches `PATTERN.md` or `workflow.toml`, MUST check rule 027 `pattern-workflow-sync`.
-If staged diff touches process spawning/lifecycle code, MUST check Rust rule 015 `subprocess-lifecycle`.
-Explicitly check: error handling (009), security (014), testing (016).
-
-Output: structured review with issues categorized as P0 (blocking), P1 (must fix),
-P2 (should fix). Set REVIEW_HAS_ISSUES if any P0/P1 issues found."""
+prompt = ""
 tier = "tier-2-standard"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 11
+id = 13
+title = "Include ai-reviewed-commit"
+tool = "weave"
+prompt = "ai-reviewed-commit"
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 14
 title = "Fix Review Issues"
 tool = "csa"
 prompt = """
@@ -198,22 +247,29 @@ condition = "${REVIEW_HAS_ISSUES}"
 retry = 3
 
 [[workflow.steps]]
-id = 12
+id = 15
 title = "Optional Review-Loop"
 tool = "csa"
-prompt = """
-Invoke the `review-loop` pattern on staged changes before final commit.
-Apply any required fixes, then keep staged changes ready for commit."""
+prompt = "Run `review-loop` pattern on staged changes before final commit."
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "${ENABLE_REVIEW_LOOP} == \"true\""
+condition = '${ENABLE_REVIEW_LOOP} == "true"'
 
 [[workflow.steps]]
-id = 13
+id = 16
+title = "Include review-loop"
+tool = "weave"
+prompt = "review-loop"
+on_fail = "abort"
+condition = '${ENABLE_REVIEW_LOOP} == "true"'
+
+[[workflow.steps]]
+id = 17
 title = "Generate Commit Message Parts"
 tool = "bash"
-prompt = """
+prompt = '''
 Generate a deterministic Conventional Commits subject/body split from staged files.
+Avoid model-dependent loops in commit-message generation.
 
 ```bash
 set -euo pipefail
@@ -225,17 +281,20 @@ if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
   exit 1
 fi
 
-echo "CSA_VAR:COMMIT_SUBJECT=${COMMIT_SUBJECT_LOCAL}"
-echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
+echo "CSA_VAR:COMMIT_SUBJECT=$COMMIT_SUBJECT_LOCAL"
+echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 18
 title = "Inject Spec Trailers"
 tool = "bash"
-prompt = """
+prompt = '''
+If the current branch has an associated TODO plan with `spec.toml`,
+append audit trailers to the commit body. Skip silently when no plan exists.
+
 ```bash
 set -euo pipefail
 COMMIT_BODY_LOCAL="$(printf '%s' "${COMMIT_BODY:-\"\"}" | jq -r .)"
@@ -271,16 +330,16 @@ if [ -n "${PLAN_TIMESTAMP}" ]; then
   fi
 fi
 
-echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
+echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_BODY_LOCAL}"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 15
+id = 19
 title = "Write Commit Message File"
 tool = "bash"
-prompt = """
+prompt = '''
 Persist the subject/body split to a temporary file for `git commit -F`.
 
 ```bash
@@ -301,13 +360,13 @@ COMMIT_MESSAGE_FILE_LOCAL="$(mktemp)"
   printf '\n'
 } > "${COMMIT_MESSAGE_FILE_LOCAL}"
 
-echo "CSA_VAR:COMMIT_MESSAGE_FILE=${COMMIT_MESSAGE_FILE_LOCAL}"
+echo "CSA_VAR:COMMIT_MESSAGE_FILE=$COMMIT_MESSAGE_FILE_LOCAL"
 cat "${COMMIT_MESSAGE_FILE_LOCAL}"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 16
+id = 20
 title = "Commit"
 tool = "bash"
 prompt = """
@@ -326,12 +385,27 @@ git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 17
+id = 21
+title = "Cumulative Branch Review"
+tool = "csa"
+prompt = """
+Perform a cumulative review of the entire feature branch before pushing.
+This catches cross-commit issues that per-commit reviews might miss.
+
+```bash
+csa review --range main...HEAD
+```"""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${IS_MILESTONE}"
+
+[[workflow.steps]]
+id = 22
 title = "Auto PR"
 tool = "bash"
 prompt = """
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 17-18 are ATOMIC — do not stop after PR creation.
+Steps 18-19 are ATOMIC — do not stop after PR creation.
 
 ```bash
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
@@ -346,24 +420,26 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 18
+id = 23
 title = "Invoke PR Codex Bot"
-prompt = """
-Trigger the pr-codex-bot workflow on the newly created PR:
-1. Trigger @codex review on the PR
-2. Poll for bot response (max 10 min timeout)
-3. Classify and action each bot comment
-4. Arbitrate false positives via debate
-5. Fix real issues and re-trigger
-6. Merge when all issues resolved"""
+tool = "csa"
+prompt = "run --skill pr-codex-bot"
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 19
+id = 24
+title = "Include pr-codex-bot"
+tool = "weave"
+prompt = "pr-codex-bot"
+on_fail = "abort"
+condition = "${IS_MILESTONE}"
+
+[[workflow.steps]]
+id = 25
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-16)."""
+Each fix goes through full commit workflow (Steps 1-17)."""
 on_fail = "abort"
 condition = "${HAS_DEFERRED_ISSUES}"
