@@ -118,6 +118,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut pre_created_fork_session_id: Option<String> = None;
     let mut fork_resolution: Option<ForkResolution> = None;
     let mut is_fork = request.is_fork;
+    let mut failover_context_addendum: Option<String> = None;
     let mut is_auto_seed_fork = request.is_auto_seed_fork;
     let mut session_arg = request.session_arg;
     let mut effective_session_arg = request.effective_session_arg;
@@ -301,6 +302,13 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         } else {
             request.prompt_text.to_string()
         };
+
+        // When retrying after a rate-limit failover, prepend context
+        // recovery instructions so the new tool can access the prior
+        // session's conversation via xurl.
+        if let Some(ref addendum) = failover_context_addendum {
+            effective_prompt = format!("{addendum}\n\n---\n\n{effective_prompt}");
+        }
 
         if request.fork_call
             && let Some(instructions) = structured_output_instructions_for_fork_call(true)
@@ -602,11 +610,16 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             request.prompt_text,
             request.project_root,
             request.config,
+            current_model_spec.as_deref(),
         )? {
             RateLimitAction::Retry {
                 new_tool,
                 new_model_spec,
             } => {
+                // Build xurl context recovery addendum so the failover
+                // tool can retrieve the original session's conversation.
+                failover_context_addendum =
+                    build_failover_context_addendum(tool_name_str, executed_session_id.as_deref());
                 current_tool = new_tool;
                 current_model_spec = new_model_spec;
                 current_model = None;
@@ -630,6 +643,32 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         executed_session_id,
         fork_resolution,
     })))
+}
+
+/// Build a prompt addendum for rate-limit failover that tells the new tool
+/// how to retrieve the original session's conversation context via xurl.
+///
+/// Returns `None` when there is no session to reference.
+fn build_failover_context_addendum(failed_tool: &str, session_id: Option<&str>) -> Option<String> {
+    let sid = session_id?;
+    // Map tool name to xurl provider name
+    let provider = match failed_tool {
+        "gemini-cli" => "gemini",
+        "claude-code" => "claude",
+        "codex" => "codex",
+        "opencode" => "opencode",
+        other => other,
+    };
+    Some(format!(
+        "[Rate-limit failover context]\n\
+         This task was originally being handled by {failed_tool} (session {sid}) \
+         which hit a rate limit / quota exhaustion.\n\
+         If you need the full conversation context from the previous session, run:\n\
+         ```\n\
+         csa xurl threads --keyword {provider}\n\
+         ```\n\
+         Then use the session/thread ID to read the relevant conversation."
+    ))
 }
 
 fn persist_fork_timeout_result_if_missing(
@@ -661,7 +700,7 @@ fn persist_fork_timeout_result_if_missing(
 
 #[cfg(test)]
 mod tests {
-    use super::persist_fork_timeout_result_if_missing;
+    use super::{build_failover_context_addendum, persist_fork_timeout_result_if_missing};
     use csa_core::types::ToolName;
     use csa_session::{create_session, load_result};
 
@@ -718,6 +757,34 @@ mod tests {
         assert!(
             result.summary.contains("wall-clock timeout"),
             "fork timeout result should explain the synthetic failure"
+        );
+    }
+
+    #[test]
+    fn build_failover_context_addendum_includes_xurl_hint() {
+        let addendum = build_failover_context_addendum("gemini-cli", Some("01ABCDEF"));
+        assert!(addendum.is_some());
+        let text = addendum.unwrap();
+        assert!(text.contains("gemini-cli"), "should mention failed tool");
+        assert!(text.contains("01ABCDEF"), "should mention session id");
+        assert!(text.contains("csa xurl"), "should include xurl command");
+        assert!(text.contains("gemini"), "should use gemini provider name");
+    }
+
+    #[test]
+    fn build_failover_context_addendum_none_without_session() {
+        let addendum = build_failover_context_addendum("gemini-cli", None);
+        assert!(addendum.is_none());
+    }
+
+    #[test]
+    fn build_failover_context_addendum_maps_claude_provider() {
+        let addendum = build_failover_context_addendum("claude-code", Some("01XYZ"));
+        assert!(addendum.is_some());
+        let text = addendum.unwrap();
+        assert!(
+            text.contains("claude"),
+            "should map claude-code to claude provider"
         );
     }
 }

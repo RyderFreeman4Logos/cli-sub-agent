@@ -163,12 +163,14 @@ pub(crate) fn evaluate_rate_limit_failover(
     prompt_text: &str,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    current_model_spec: Option<&str>,
 ) -> Result<RateLimitAction> {
     let rate_limit = match csa_scheduler::detect_rate_limit(
         tool_name_str,
         &exec_result.stderr_output,
         &exec_result.output,
         exec_result.exit_code,
+        current_model_spec,
     ) {
         Some(rl) => rl,
         None => return Ok(RateLimitAction::NoRateLimit),

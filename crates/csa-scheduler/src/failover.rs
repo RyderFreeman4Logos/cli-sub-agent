@@ -115,13 +115,19 @@ pub fn decide_failover(
                 };
             }
 
-            // Tool slot occupied → report error to preserve context
-            return FailoverAction::ReportError {
-                reason: format!(
-                    "Session has valuable context and tool '{}' slot is occupied",
-                    new_tool,
-                ),
-                original_error: original_error.to_string(),
+            // Tool slot occupied — create sibling session instead of
+            // reporting an error. Transparent failover is more important
+            // than preserving a single session's context: the caller
+            // should never see a rate-limit error it cannot act on.
+            info!(
+                failed = %failed_tool,
+                new = %new_tool,
+                session = %sess.meta_session_id,
+                "Failover: valuable context but slot occupied, using sibling session"
+            );
+            return FailoverAction::RetrySiblingSession {
+                new_tool,
+                new_model_spec: new_spec,
             };
         }
 
@@ -482,9 +488,10 @@ mod tests {
     }
 
     #[test]
-    fn test_failover_valuable_session_tool_slot_occupied() {
+    fn test_failover_valuable_session_tool_slot_occupied_uses_sibling() {
         let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
         // Session has valuable context (review keyword) + codex slot already occupied
+        // → should create sibling session instead of reporting error (transparent failover)
         let session = make_session(
             vec![
                 ("gemini-cli", "deep security audit in progress"),
@@ -502,11 +509,10 @@ mod tests {
             "429",
         );
         match action {
-            FailoverAction::ReportError { reason, .. } => {
-                assert!(reason.contains("valuable context"), "reason: {}", reason);
-                assert!(reason.contains("occupied"), "reason: {}", reason);
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected ReportError, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {:?}", other),
         }
     }
 
@@ -557,6 +563,185 @@ mod tests {
                 assert_eq!(new_tool, "codex");
             }
             other => panic!("Expected RetrySiblingSession, got {:?}", other),
+        }
+    }
+
+    // --- Quota failover transparency tests ---
+
+    fn make_multi_tier_config(
+        tier1_models: Vec<&str>,
+        tier3_models: Vec<&str>,
+        disabled: Vec<&str>,
+    ) -> ProjectConfig {
+        let mut tools = HashMap::new();
+        for t in disabled {
+            tools.insert(
+                t.to_string(),
+                ToolConfig {
+                    enabled: false,
+                    restrictions: None,
+                    suppress_notify: true,
+                    ..Default::default()
+                },
+            );
+        }
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier1".to_string(),
+            TierConfig {
+                description: "frontier".to_string(),
+                models: tier1_models.iter().map(|s| s.to_string()).collect(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+        tiers.insert(
+            "tier3".to_string(),
+            TierConfig {
+                description: "fast".to_string(),
+                models: tier3_models.iter().map(|s| s.to_string()).collect(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+        let mut tier_mapping = HashMap::new();
+        tier_mapping.insert("default".to_string(), "tier3".to_string());
+        tier_mapping.insert("review".to_string(), "tier1".to_string());
+
+        ProjectConfig {
+            schema_version: 1,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: Default::default(),
+            acp: Default::default(),
+            tools,
+            review: None,
+            debate: None,
+            tiers,
+            tier_mapping,
+            aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+            memory: Default::default(),
+        }
+    }
+
+    #[test]
+    fn test_gemini_pro_failover_to_claude_in_same_tier() {
+        // tier1: gemini-pro + claude-opus → gemini-pro fails → picks claude-opus
+        let config = make_multi_tier_config(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/high",
+                "claude-code/anthropic/claude-sonnet-4-20250514/high",
+            ],
+            vec!["gemini-cli/google/gemini-2.5-flash/0"],
+            vec![],
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "review", // maps to tier1
+            Some(false),
+            None,
+            &[],
+            &config,
+            "Resource exhausted",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession {
+                new_tool,
+                new_model_spec,
+            } => {
+                assert_eq!(new_tool, "claude-code");
+                assert!(
+                    new_model_spec.contains("claude"),
+                    "spec: {}",
+                    new_model_spec
+                );
+            }
+            other => panic!("Expected RetrySiblingSession to claude, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_gemini_flash_failover_to_claude_in_same_tier() {
+        // tier3: gemini-flash + claude-haiku → gemini-flash fails → picks claude-haiku
+        let config = make_multi_tier_config(
+            vec!["gemini-cli/google/gemini-2.5-pro/high"],
+            vec![
+                "gemini-cli/google/gemini-2.5-flash/0",
+                "claude-code/anthropic/claude-haiku-4-5-20251001/0",
+            ],
+            vec![],
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "default", // maps to tier3
+            Some(false),
+            None,
+            &[],
+            &config,
+            "quota exceeded",
+        );
+        match action {
+            FailoverAction::RetrySiblingSession {
+                new_tool,
+                new_model_spec,
+            } => {
+                assert_eq!(new_tool, "claude-code");
+                assert!(new_model_spec.contains("haiku"), "spec: {}", new_model_spec);
+            }
+            other => panic!(
+                "Expected RetrySiblingSession to claude-haiku, got {:?}",
+                other
+            ),
+        }
+    }
+
+    #[test]
+    fn test_failover_never_reports_error_when_alternatives_exist() {
+        // Even with valuable context + occupied slot, should retry via sibling
+        let config = make_multi_tier_config(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/high",
+                "claude-code/anthropic/claude-sonnet-4-20250514/high",
+            ],
+            vec![],
+            vec![],
+        );
+        let session = make_session(
+            vec![
+                ("gemini-cli", "deep code review analysis"),
+                ("claude-code", "prior run"),
+            ],
+            false,
+        );
+        let action = decide_failover(
+            "gemini-cli",
+            "review",
+            Some(false),
+            Some(&session),
+            &[],
+            &config,
+            "RESOURCE_EXHAUSTED",
+        );
+        // Should NOT be ReportError — should be RetrySiblingSession
+        match action {
+            FailoverAction::RetrySiblingSession { new_tool, .. } => {
+                assert_eq!(new_tool, "claude-code");
+            }
+            FailoverAction::RetryInSession { .. } => {
+                // Also acceptable if slot happens to be free
+            }
+            FailoverAction::ReportError { reason, .. } => {
+                panic!(
+                    "Should not report error when alternatives exist: {}",
+                    reason
+                );
+            }
         }
     }
 }
