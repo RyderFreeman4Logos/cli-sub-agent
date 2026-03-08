@@ -414,7 +414,10 @@ pub(crate) fn handle_session_list(
                     println!(
                         "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}",
                         short_id,
-                        session.last_accessed.format("%Y-%m-%d %H:%M"),
+                        session
+                            .last_accessed
+                            .with_timezone(&chrono::Local)
+                            .format("%Y-%m-%d %H:%M"),
                         status_str,
                         desc_display,
                         tools_str,
