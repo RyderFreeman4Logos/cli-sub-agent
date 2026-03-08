@@ -214,17 +214,26 @@ async fn run() -> Result<()> {
 
     let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
     if !legacy_xdg_paths.is_empty() {
-        eprintln!(
-            "WARNING: legacy XDG paths detected ({}). Run `csa migrate` to unify paths.",
-            legacy_xdg_paths.len()
-        );
         for path in &legacy_xdg_paths {
-            eprintln!(
-                "  - {}: legacy={} -> new={}",
-                path.label,
-                path.legacy_path.display(),
-                path.new_path.display()
+            tracing::debug!(
+                label = path.label,
+                legacy = %path.legacy_path.display(),
+                new = %path.new_path.display(),
+                "legacy XDG path detected, auto-migrating"
             );
+        }
+        match csa_config::migrate::run_xdg_migration() {
+            Ok(()) => {
+                tracing::debug!(
+                    "auto-migrated {} legacy XDG path(s)",
+                    legacy_xdg_paths.len()
+                );
+            }
+            Err(e) => {
+                eprintln!(
+                    "WARNING: failed to auto-migrate legacy XDG paths: {e:#}. Run `csa migrate` manually."
+                );
+            }
         }
     }
 

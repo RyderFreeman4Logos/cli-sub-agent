@@ -136,7 +136,7 @@ pub fn xdg_path_pairs() -> Vec<XdgPathPair> {
     pairs
 }
 
-fn is_symlink_to(legacy_path: &std::path::Path, new_path: &std::path::Path) -> bool {
+pub fn is_symlink_to(legacy_path: &std::path::Path, new_path: &std::path::Path) -> bool {
     let Ok(metadata) = std::fs::symlink_metadata(legacy_path) else {
         return false;
     };

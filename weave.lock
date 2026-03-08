@@ -1,6 +1,10 @@
 [versions]
-csa = "0.1.97"
-weave = "0.1.97"
+csa = "0.1.98"
+weave = "0.1.98"
+last_migrated_at = "2026-03-08T12:08:01.820964091Z"
 
 [migrations]
-applied = []
+applied = [
+    "0.1.2-plan-to-workflow",
+    "0.1.27-xdg-paths-unification",
+]

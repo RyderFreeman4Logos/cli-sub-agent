@@ -644,3 +644,36 @@ fn test_xdg_migration_concurrent_flock_blocks_second_migration() {
 
     handle.join().unwrap();
 }
+
+#[test]
+fn test_pending_includes_old_unapplied_migrations_when_lock_version_is_higher() {
+    // Regression test: lock created at 0.1.97 with empty applied list.
+    // Migrations from 0.1.27 should still be pending (not filtered by from_version).
+    let mut registry = MigrationRegistry::new();
+    registry.register(Migration {
+        id: "0.1.27-xdg-paths".to_string(),
+        from_version: Version::new(0, 1, 27),
+        to_version: Version::new(0, 1, 27),
+        description: "XDG paths unification".to_string(),
+        steps: vec![],
+    });
+
+    // Lock is at 0.1.97, binary is at 0.1.98, nothing applied.
+    let current = Version::new(0, 1, 97);
+    let target = Version::new(0, 1, 98);
+    let pending = registry.pending(&current, &target, &[]);
+    assert_eq!(
+        pending.len(),
+        1,
+        "migration with from_version < current should still be pending when not in applied list"
+    );
+    assert_eq!(pending[0].id, "0.1.27-xdg-paths");
+
+    // Once applied, it should not be pending.
+    let applied = vec!["0.1.27-xdg-paths".to_string()];
+    let pending = registry.pending(&current, &target, &applied);
+    assert!(
+        pending.is_empty(),
+        "applied migration should not be pending"
+    );
+}
