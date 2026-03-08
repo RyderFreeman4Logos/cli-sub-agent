@@ -307,14 +307,7 @@ impl AcpConnection {
                                 idle_timeout,
                             );
                             if self.last_activity.borrow().elapsed() >= idle_timeout {
-                                // Check if the child process is still working before
-                                // killing.  Model thinking phases produce no output
-                                // but the process is still alive.
-                                if is_child_working(&self.child) {
-                                    *self.last_activity.borrow_mut() = Instant::now();
-                                } else {
-                                    break PromptOutcome::IdleTimeout;
-                                }
+                                break PromptOutcome::IdleTimeout;
                             }
                         }
                     }
@@ -490,37 +483,60 @@ fn stream_new_agent_messages(
     stream_stdout_to_stderr: bool,
     output_spool: &mut Option<std::fs::File>,
 ) {
-    let new_messages = {
+    let new_events = {
         let events_ref = events.borrow();
         if *processed_index >= events_ref.len() {
             return;
         }
 
-        let mut messages = Vec::new();
-        for event in &events_ref[*processed_index..] {
-            match event {
-                SessionEvent::AgentMessage(chunk) => {
-                    messages.push((chunk.clone(), false));
-                }
-                SessionEvent::AgentThought(chunk) => {
-                    messages.push((chunk.clone(), true));
-                }
-                _ => {}
-            }
-        }
+        let events = events_ref[*processed_index..].to_vec();
         *processed_index = events_ref.len();
-        messages
+        events
     };
 
-    for (chunk, is_thought) in &new_messages {
-        if stream_stdout_to_stderr {
-            if *is_thought {
-                eprint!("[thought] {chunk}");
-            } else {
-                eprint!("[stdout] {chunk}");
+    for event in new_events {
+        match event {
+            SessionEvent::AgentMessage(chunk) => {
+                if stream_stdout_to_stderr {
+                    eprint!("[stdout] {chunk}");
+                }
+                spool_chunk(output_spool, chunk.as_bytes());
+            }
+            SessionEvent::AgentThought(chunk) => {
+                if stream_stdout_to_stderr {
+                    eprint!("[thought] {chunk}");
+                }
+                spool_chunk(output_spool, chunk.as_bytes());
+            }
+            SessionEvent::PlanUpdate(plan) => {
+                let msg = format!("[plan] {plan}\n");
+                if stream_stdout_to_stderr {
+                    eprint!("{msg}");
+                }
+                spool_chunk(output_spool, msg.as_bytes());
+            }
+            SessionEvent::ToolCallStarted { title, kind, .. } => {
+                let msg = format!("[tool:started] {title} ({kind})\n");
+                if stream_stdout_to_stderr {
+                    eprint!("{msg}");
+                }
+                spool_chunk(output_spool, msg.as_bytes());
+            }
+            SessionEvent::ToolCallCompleted { status, .. } => {
+                let msg = format!("[tool:completed] {status}\n");
+                if stream_stdout_to_stderr {
+                    eprint!("{msg}");
+                }
+                spool_chunk(output_spool, msg.as_bytes());
+            }
+            SessionEvent::Other(payload) => {
+                let msg = format!("[other] {payload}\n");
+                if stream_stdout_to_stderr {
+                    eprint!("{msg}");
+                }
+                spool_chunk(output_spool, msg.as_bytes());
             }
         }
-        spool_chunk(output_spool, chunk.as_bytes());
     }
 }
 
@@ -539,45 +555,21 @@ fn collect_agent_output(events: &[SessionEvent]) -> String {
             SessionEvent::AgentMessage(chunk) | SessionEvent::AgentThought(chunk) => {
                 output.push_str(chunk);
             }
-            _ => {}
+            SessionEvent::PlanUpdate(plan) => {
+                output.push_str(&format!("[plan] {plan}\n"));
+            }
+            SessionEvent::ToolCallStarted { title, kind, .. } => {
+                output.push_str(&format!("[tool:started] {title} ({kind})\n"));
+            }
+            SessionEvent::ToolCallCompleted { status, .. } => {
+                output.push_str(&format!("[tool:completed] {status}\n"));
+            }
+            SessionEvent::Other(payload) => {
+                output.push_str(&format!("[other] {payload}\n"));
+            }
         }
     }
     output
-}
-
-/// Check if the ACP child process is still actively working.
-///
-/// Reads `/proc/{pid}/stat` for the process state. States R (running),
-/// S (sleeping), D (disk sleep) indicate the process is working (e.g. model
-/// thinking). Falls back to `kill(pid, 0)` when `/proc` is unavailable.
-fn is_child_working(child: &Rc<RefCell<Child>>) -> bool {
-    let child_ref = child.borrow();
-    let Some(pid) = child_ref.id() else {
-        return false;
-    };
-
-    #[cfg(unix)]
-    {
-        use std::fs;
-        let stat_path = format!("/proc/{pid}/stat");
-        if let Ok(content) = fs::read_to_string(&stat_path) {
-            if let Some(close_paren) = content.rfind(')') {
-                let after_comm = &content[close_paren + 1..];
-                let state = after_comm.trim_start().chars().next().unwrap_or('X');
-                return matches!(state, 'R' | 'S' | 'D');
-            }
-        }
-        // Fallback: kill(pid, 0) probes process existence.
-        // SAFETY: kill() with signal 0 is a pure existence/permission probe.
-        let ret = unsafe { libc::kill(pid as libc::pid_t, 0) };
-        ret == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = pid;
-        false
-    }
 }
 
 fn stop_reason_to_string(reason: StopReason) -> String {

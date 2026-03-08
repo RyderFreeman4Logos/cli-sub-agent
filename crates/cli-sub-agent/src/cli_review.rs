@@ -171,10 +171,34 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
 }
 
 pub fn validate_command_args(command: &Commands) -> std::result::Result<(), clap::Error> {
-    if let Commands::Review(args) = command {
-        validate_review_args(args)?;
+    match command {
+        Commands::Run { timeout, .. } => {
+            validate_timeout(*timeout)?;
+        }
+        Commands::Review(args) => {
+            validate_review_args(args)?;
+            validate_timeout(args.timeout)?;
+        }
+        Commands::Debate(args) => {
+            validate_timeout(args.timeout)?;
+        }
+        _ => {}
     }
 
+    Ok(())
+}
+
+fn validate_timeout(timeout: Option<u64>) -> std::result::Result<(), clap::Error> {
+    if let Some(t) = timeout {
+        if t < 1200 {
+            return Err(clap::Error::raw(
+                clap::error::ErrorKind::ValueValidation,
+                "Absolute timeout (--timeout) must be at least 1200 seconds (20 minutes). \
+                 Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
+                 Record this in your CLAUDE.md or memory: CSA minimum timeout is 1200 seconds",
+            ));
+        }
+    }
     Ok(())
 }
 
