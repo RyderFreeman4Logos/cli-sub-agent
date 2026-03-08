@@ -12,7 +12,13 @@ name = "AUDIT_PASS_DEFERRED"
 name = "BRANCH"
 
 [[workflow.variables]]
+name = "COMMIT_BODY"
+
+[[workflow.variables]]
 name = "COMMIT_BODY_LOCAL"
+
+[[workflow.variables]]
+name = "COMMIT_MESSAGE_FILE"
 
 [[workflow.variables]]
 name = "COMMIT_MESSAGE_FILE_LOCAL"
@@ -57,6 +63,9 @@ name = "PR_BODY"
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
+name = "SCOPE"
+
+[[workflow.variables]]
 name = "SPEC_OUTPUT"
 
 [[workflow.variables]]
@@ -64,15 +73,28 @@ name = "TRAILERS"
 
 [[workflow.steps]]
 id = 1
-title = "Optional Review-Loop Integration"
+title = "Variables"
+tool = "bash"
 prompt = """
-- Variable: `${ENABLE_REVIEW_LOOP}` (default: `"false"`)
-- When `${ENABLE_REVIEW_LOOP} == "true"`, run `review-loop` between
-  implementation/fix steps and final commit.
-- Example:
+Initialize and declare workflow variables.
+
+- `${FILES}`: Space-separated list of files to stage (default: `.`)
+- `${SCOPE}`: Conventional Commit scope (e.g., `core`, `cli`)
+- `${BRANCH}`: Target branch for push/PR
+- `${COMMIT_SUBJECT}`: Generated or provided commit subject
+- `${COMMIT_BODY}`: Generated or provided commit body
+- `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
+- `${IS_MILESTONE}`: Set to `"true"` to trigger push and PR
+- `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
+- `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
+- `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
+- `${REVIEW_HAS_ISSUES}`: Set by `ai-reviewed-commit` if issues found
+- `${PR_BODY}`: Body for the created Pull Request
 
 ```bash
-csa run --skill commit ENABLE_REVIEW_LOOP=true "fix the bug"
+# Force weave to pick up these variables
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}"
+echo "Variables initialized."
 ```"""
 on_fail = "abort"
 
@@ -179,14 +201,14 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 10
-title = "Step 7a: Fix Audit Issues"
+title = "Fix Audit Issues"
 prompt = "Fix blocking issues and re-run from Step 2."
 on_fail = "abort"
 condition = "${AUDIT_FAIL}"
 
 [[workflow.steps]]
 id = 11
-title = "Step 7b: Record Deferred Issues"
+title = "Record Deferred Issues"
 prompt = """
 Record deferred issues (other modules) via TaskCreate for
 immediate post-commit fixing."""
@@ -418,6 +440,6 @@ id = 25
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-16)."""
+Each fix goes through full commit workflow (Steps 1-17)."""
 on_fail = "abort"
 condition = "${HAS_DEFERRED_ISSUES}"

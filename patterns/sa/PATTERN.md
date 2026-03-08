@@ -15,7 +15,31 @@ Layer 0 NEVER reads source files — only reads session metadata from
 the CSA session `result.toml` (path returned by CSA as last output line).
 Heterogeneous review mandatory: author and reviewer must be different tools.
 
-## Step 1: Validate Task Scope
+## Step 1: Variables
+
+Tool: bash
+OnFail: abort
+
+Initialize and declare workflow variables.
+
+- `${SESSION_ID}`: The ULID of the Layer 1 implementation session
+- `${STATUS}`: Success/Failure status of the child session
+- `${TODO_PATH}`: Path to the generated TODO.md file
+- `${USER_APPROVES}`: Set to `"true"` if user approves the plan
+- `${USER_MODIFIES}`: Set to `"true"` if user provides feedback for plan revision
+- `${COMMIT_HASH}`: Resulting commit hash from implementation
+- `${REVIEW_RESULT}`: Status of the implementation review
+- `${REVIEW_IS_CLEAN}`: Set to `"true"` if review passed without issues
+- `${FILES}`: Files to commit (passed to nested `commit` pattern)
+- `${SCOPE}`: Commit scope (passed to nested `commit` pattern)
+
+```bash
+# Force weave to pick up these variables
+: "${SESSION_ID}" "${STATUS}" "${TODO_PATH}" "${USER_APPROVES}" "${USER_MODIFIES}" "${COMMIT_HASH}" "${REVIEW_RESULT}" "${REVIEW_IS_CLEAN}" "${FILES}" "${SCOPE}"
+echo "Variables initialized."
+```
+
+## Step 2: Validate Task Scope
 
 Determine if sa is appropriate:
 - Multi-step feature (planning + implementation) → use sa
@@ -23,7 +47,7 @@ Determine if sa is appropriate:
 - Wants heterogeneous review → use sa
 - Single well-defined task → use csa run directly instead
 
-## Step 2: Prepare Planning Prompt
+## Step 3: Prepare Planning Prompt
 
 Build planning prompt with user's requirements.
 NEVER pre-read files — Layer 1 and Layer 2 read files natively.
@@ -31,9 +55,10 @@ Use mktemp for temp files (no race conditions).
 
 ```bash
 PROMPT_FILE=$(mktemp /tmp/sa-planning-XXXXXX.txt)
+echo "CSA_VAR:PROMPT_FILE=${PROMPT_FILE}"
 ```
 
-## Step 3: Dispatch Planning to Layer 1
+## Step 4: Dispatch Planning to Layer 1
 
 Tool: bash
 OnFail: abort
@@ -48,7 +73,7 @@ Layer 1 (claude-code) will:
 csa run < "${PROMPT_FILE}"
 ```
 
-## Step 4: Parse Planning Result
+## Step 5: Parse Planning Result
 
 Tool: bash
 
@@ -69,15 +94,19 @@ TODO_PATH=$(grep -- 'todo_path = ' "$RESULT_REAL" | cut -d'"' -f2)
 TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: ${TODO_PATH}" >&2; exit 1; }
 [ -f "${TODO_REAL}" ] || { echo "TODO not found: ${TODO_REAL}" >&2; exit 1; }
 [[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
+
+echo "CSA_VAR:SESSION_ID=${SESSION_ID}"
+echo "CSA_VAR:STATUS=${STATUS}"
+echo "CSA_VAR:TODO_PATH=${TODO_PATH}"
 ```
 
-## Step 5: Present TODO to User
+## Step 6: Present TODO to User
 
 Present the TODO path to user. Let them read and approve/modify.
 
 ## IF ${USER_APPROVES}
 
-## Step 6: Dispatch Implementation to Layer 1
+## Step 7: Dispatch Implementation to Layer 1
 
 Tool: bash
 OnFail: abort
@@ -101,6 +130,7 @@ Fix the underlying issues to ensure codebase integrity.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
+echo "CSA_VAR:IMPL_FILE=${IMPL_FILE}"
 csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
 ```
 
@@ -108,7 +138,7 @@ csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
 
 ## IF ${USER_MODIFIES}
 
-## Step 6a: Resume with Feedback
+## Step 8: Resume with Feedback
 
 Tool: bash
 
@@ -116,12 +146,13 @@ Resume Layer 1 with user's revision feedback.
 
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
+echo "CSA_VAR:RESUME_FILE=${RESUME_FILE}"
 csa run --session "${SESSION_ID}" < "${RESUME_FILE}"
 ```
 
 ## ELSE
 
-## Step 6b: Abandon Plan
+## Step 9: Abandon Plan
 
 User rejected. Stop and ask for new direction.
 
@@ -129,7 +160,7 @@ User rejected. Stop and ask for new direction.
 
 ## ENDIF
 
-## Step 7: Parse Implementation Result
+## Step 10: Parse Implementation Result
 
 Tool: bash
 
@@ -141,24 +172,27 @@ RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path
 [ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
-COMMIT=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
-REVIEW=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
+COMMIT_HASH=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
+REVIEW_RESULT=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
+
+echo "CSA_VAR:COMMIT_HASH=${COMMIT_HASH}"
+echo "CSA_VAR:REVIEW_RESULT=${REVIEW_RESULT}"
 ```
 
-## Step 8: Report to User
+## Step 11: Report to User
 
 Present implementation results: commit hash, review status,
 number of tasks completed. If HAS_ISSUES, iterate.
 
 ## IF ${REVIEW_IS_CLEAN}
 
-## Step 9: Auto PR
+## Step 12: Auto PR
 
 ## INCLUDE commit
 
 Evaluate whether to push and create PR (if milestone complete).
 
-## Step 10: Invoke pr-codex-bot (MANDATORY)
+## Step 13: Invoke pr-codex-bot (MANDATORY)
 
 > **Layer**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
 > Layer 1 executors MUST invoke /pr-codex-bot after PR creation.

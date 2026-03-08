@@ -10,29 +10,65 @@ version = "0.1.0"
 
 Bounded iterative review-fix loop for quality convergence.
 
-## Flow
+## Step 1: Variables
 
-1. **Review**: Run `csa review --diff` on current changes.
-2. **Evaluate**: Parse review output for issues.
-   - If no issues found → set `${REVIEW_HAS_ISSUES}` to `"false"`, exit success.
-   - If issues found → set `${REVIEW_HAS_ISSUES}` to `"true"`.
-3. **Fix**: Apply fixes for reported issues.
-4. **Round Check**: Increment `${ROUND}`.
-   - If `${ROUND}` < `${MAX_ROUNDS}` (default: 2) → go to step 1.
-   - If `${ROUND}` >= `${MAX_ROUNDS}` → set `${REMAINING_ISSUES}` with summary, exit.
+Tool: bash
+OnFail: abort
 
-## Variables
+Initialize and declare workflow variables.
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `${REVIEW_HAS_ISSUES}` | `"true"` if review found issues | — |
-| `${ROUND}` | Current round number (starts at 1) | `1` |
-| `${MAX_ROUNDS}` | Maximum review-fix rounds | `2` |
-| `${REMAINING_ISSUES}` | Summary of unfixed issues (if loop exhausted) | — |
+- `${REVIEW_HAS_ISSUES}`: `"true"` if review found issues
+- `${ROUND}`: Current round number (starts at 1)
+- `${MAX_ROUNDS}`: Maximum review-fix rounds (default: 2)
+- `${REMAINING_ISSUES}`: Summary of unfixed issues (if loop exhausted)
 
-## Constraints
+```bash
+# Force weave to pick up these variables
+: "${REVIEW_HAS_ISSUES}" "${ROUND}" "${MAX_ROUNDS}" "${REMAINING_ISSUES}"
+echo "Variables initialized."
+```
 
-- Maximum 2 rounds by default to prevent infinite loops.
-- Uses `csa review --diff` for heterogeneous review (non-self model).
-- Review output is parsed for issue markers; no issues = clean exit.
-- If max rounds exhausted, remaining issues are reported but execution continues.
+## Step 2: Review Changes
+
+Tool: bash
+OnFail: skip
+
+Run heterogeneous code review on current diff.
+
+```bash
+csa review --diff
+```
+
+Parse the output to determine if issues were found.
+Set `${REVIEW_HAS_ISSUES}` to `"true"` or `"false"`.
+
+## Step 3: Evaluate Review Result
+
+Tool: bash
+OnFail: abort
+
+If review found no issues (`${REVIEW_HAS_ISSUES}` == `"false"`), report success and stop.
+If issues were found, proceed to fix step.
+
+## Step 4: Fix Issues
+
+Tool: bash
+OnFail: skip
+
+Apply fixes for all issues reported in the review.
+Focus on Critical and High severity first.
+After fixing, stage changes for re-review.
+
+## IF ${REVIEW_HAS_ISSUES}
+
+## Step 5: Round Check
+
+Tool: bash
+OnFail: abort
+
+Increment `${ROUND}` counter.
+If `${ROUND}` >= `${MAX_ROUNDS}` (default 2), set `${REMAINING_ISSUES}` with a summary
+of any unfixed issues and exit.
+Otherwise, loop back to Step 2 for re-review.
+
+## ENDIF

@@ -11,18 +11,33 @@ version = "0.1.0"
 Commit = Audited. Each commit passes security audit, test completeness
 verification, code review with AGENTS.md compliance, and quality gates.
 
-## Optional Review-Loop Integration
+## Step 1: Variables
 
-- Variable: `${ENABLE_REVIEW_LOOP}` (default: `"false"`)
-- When `${ENABLE_REVIEW_LOOP} == "true"`, run `review-loop` between
-  implementation/fix steps and final commit.
-- Example:
+Tool: bash
+OnFail: abort
+
+Initialize and declare workflow variables.
+
+- `${FILES}`: Space-separated list of files to stage (default: `.`)
+- `${SCOPE}`: Conventional Commit scope (e.g., `core`, `cli`)
+- `${BRANCH}`: Target branch for push/PR
+- `${COMMIT_SUBJECT}`: Generated or provided commit subject
+- `${COMMIT_BODY}`: Generated or provided commit body
+- `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
+- `${IS_MILESTONE}`: Set to `"true"` to trigger push and PR
+- `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
+- `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
+- `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
+- `${REVIEW_HAS_ISSUES}`: Set by `ai-reviewed-commit` if issues found
+- `${PR_BODY}`: Body for the created Pull Request
 
 ```bash
-csa run --skill commit ENABLE_REVIEW_LOOP=true "fix the bug"
+# Force weave to pick up these variables
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}"
+echo "Variables initialized."
 ```
 
-## Step 1: Branch Check
+## Step 2: Branch Check
 
 Tool: bash
 OnFail: abort
@@ -39,7 +54,7 @@ if [ "$branch" = "$default_branch" ] || [ "$branch" = "dev" ]; then
 fi
 ```
 
-## Step 2: Run Formatters
+## Step 3: Run Formatters
 
 Tool: bash
 OnFail: retry 2
@@ -48,7 +63,7 @@ OnFail: retry 2
 just fmt
 ```
 
-## Step 3: Run Linters
+## Step 4: Run Linters
 
 Tool: bash
 OnFail: retry 2
@@ -57,7 +72,7 @@ OnFail: retry 2
 just clippy
 ```
 
-## Step 4: Run Tests
+## Step 5: Run Tests
 
 Tool: bash
 OnFail: abort
@@ -66,7 +81,7 @@ OnFail: abort
 just test
 ```
 
-## Step 5: Stage Changes
+## Step 6: Stage Changes
 
 Tool: bash
 OnFail: abort
@@ -82,7 +97,7 @@ if git ls-files --others --exclude-standard | grep -q .; then
 fi
 ```
 
-## Step 6: Security Scan
+## Step 7: Security Scan
 
 Tool: bash
 OnFail: abort
@@ -98,7 +113,7 @@ git diff --cached --name-only | while read -r file; do
 done
 ```
 
-## Step 7: Security Audit
+## Step 8: Security Audit
 
 Tool: csa
 Tier: tier-2-standard
@@ -111,7 +126,7 @@ Returns PASS, PASS_DEFERRED, or FAIL.
 
 ## IF ${AUDIT_FAIL}
 
-## Step 7a: Fix Audit Issues
+## Step 9: Fix Audit Issues
 
 Fix blocking issues and re-run from Step 2.
 
@@ -119,14 +134,14 @@ Fix blocking issues and re-run from Step 2.
 
 ## IF ${AUDIT_PASS_DEFERRED}
 
-## Step 7b: Record Deferred Issues
+## Step 10: Record Deferred Issues
 
 Record deferred issues (other modules) via TaskCreate for
 immediate post-commit fixing.
 
 ## ENDIF
 
-## Step 10: Pre-Commit Review
+## Step 11: Pre-Commit Review
 
 Tool: csa
 Tier: tier-2-standard
@@ -158,7 +173,7 @@ rather than spending tokens on exploration.
 
 ## IF ${REVIEW_HAS_ISSUES}
 
-## Step 11: Fix Review Issues
+## Step 12: Fix Review Issues
 
 Tool: csa
 Tier: tier-2-standard
@@ -174,7 +189,7 @@ just pre-commit
 
 ## IF ${ENABLE_REVIEW_LOOP} == "true"
 
-## Step 12: Optional Review-Loop
+## Step 13: Optional Review-Loop
 
 Tool: csa
 Tier: tier-2-standard
@@ -186,7 +201,7 @@ Run `review-loop` pattern on staged changes before final commit.
 
 ## ENDIF
 
-## Step 13: Generate Commit Message Parts
+## Step 14: Generate Commit Message Parts
 
 Tool: bash
 OnFail: abort
@@ -209,7 +224,7 @@ echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
 printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
 ```
 
-## Step 14: Inject Spec Trailers
+## Step 15: Inject Spec Trailers
 
 Tool: bash
 OnFail: abort
@@ -256,7 +271,7 @@ echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
 printf '%s\n' "${COMMIT_BODY_LOCAL}"
 ```
 
-## Step 15: Write Commit Message File
+## Step 16: Write Commit Message File
 
 Tool: bash
 OnFail: abort
@@ -285,7 +300,7 @@ echo "CSA_VAR:COMMIT_MESSAGE_FILE=${COMMIT_MESSAGE_FILE_LOCAL}"
 cat "${COMMIT_MESSAGE_FILE_LOCAL}"
 ```
 
-## Step 16: Commit
+## Step 17: Commit
 
 Tool: bash
 OnFail: abort
@@ -305,7 +320,7 @@ git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
 
 ## IF ${IS_MILESTONE}
 
-## Step 17: Cumulative Branch Review
+## Step 18: Cumulative Branch Review
 
 Tool: csa
 Tier: tier-2-standard
@@ -318,7 +333,7 @@ This catches cross-commit issues that per-commit reviews might miss.
 csa review --range main...HEAD
 ```
 
-## Step 18: Auto PR
+## Step 19: Auto PR
 
 Tool: bash
 OnFail: abort
@@ -336,7 +351,7 @@ git push -u origin "${BRANCH}"
 gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}"
 ```
 
-## Step 19: Invoke PR Codex Bot
+## Step 20: Invoke PR Codex Bot
 
 Tool: csa
 OnFail: abort
@@ -352,9 +367,9 @@ Handles local review, cloud bot trigger, false-positive arbitration, merge.
 
 ## IF ${HAS_DEFERRED_ISSUES}
 
-## Step 20: Fix Deferred Issues
+## Step 21: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
-Each fix goes through full commit workflow (Steps 1-16).
+Each fix goes through full commit workflow (Steps 1-17).
 
 ## ENDIF

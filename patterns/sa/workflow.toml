@@ -3,7 +3,13 @@ name = "sa"
 description = "Three-layer recursive delegation: Layer 0 dispatches, Layer 1 plans/implements, Layer 2 explores/fixes"
 
 [[workflow.variables]]
+name = "COMMIT_HASH"
+
+[[workflow.variables]]
 name = "CSA_STATE_ROOT"
+
+[[workflow.variables]]
+name = "FILES"
 
 [[workflow.variables]]
 name = "IMPL_FILE"
@@ -27,7 +33,16 @@ name = "RESUME_FILE"
 name = "REVIEW_IS_CLEAN"
 
 [[workflow.variables]]
+name = "REVIEW_RESULT"
+
+[[workflow.variables]]
+name = "SCOPE"
+
+[[workflow.variables]]
 name = "SESSION_ID"
+
+[[workflow.variables]]
+name = "STATUS"
 
 [[workflow.variables]]
 name = "TODO_PATH"
@@ -43,6 +58,31 @@ name = "USER_MODIFIES"
 
 [[workflow.steps]]
 id = 1
+title = "Variables"
+tool = "bash"
+prompt = """
+Initialize and declare workflow variables.
+
+- `${SESSION_ID}`: The ULID of the Layer 1 implementation session
+- `${STATUS}`: Success/Failure status of the child session
+- `${TODO_PATH}`: Path to the generated TODO.md file
+- `${USER_APPROVES}`: Set to `"true"` if user approves the plan
+- `${USER_MODIFIES}`: Set to `"true"` if user provides feedback for plan revision
+- `${COMMIT_HASH}`: Resulting commit hash from implementation
+- `${REVIEW_RESULT}`: Status of the implementation review
+- `${REVIEW_IS_CLEAN}`: Set to `"true"` if review passed without issues
+- `${FILES}`: Files to commit (passed to nested `commit` pattern)
+- `${SCOPE}`: Commit scope (passed to nested `commit` pattern)
+
+```bash
+# Force weave to pick up these variables
+: "${SESSION_ID}" "${STATUS}" "${TODO_PATH}" "${USER_APPROVES}" "${USER_MODIFIES}" "${COMMIT_HASH}" "${REVIEW_RESULT}" "${REVIEW_IS_CLEAN}" "${FILES}" "${SCOPE}"
+echo "Variables initialized."
+```"""
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 2
 title = "Validate Task Scope"
 prompt = """
 Determine if sa is appropriate:
@@ -53,7 +93,7 @@ Determine if sa is appropriate:
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 2
+id = 3
 title = "Prepare Planning Prompt"
 prompt = """
 Build planning prompt with user's requirements.
@@ -62,11 +102,12 @@ Use mktemp for temp files (no race conditions).
 
 ```bash
 PROMPT_FILE=$(mktemp /tmp/sa-planning-XXXXXX.txt)
+echo "CSA_VAR:PROMPT_FILE=${PROMPT_FILE}"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 3
+id = 4
 title = "Dispatch Planning to Layer 1"
 tool = "bash"
 prompt = """
@@ -82,7 +123,7 @@ csa run < "${PROMPT_FILE}"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 4
+id = 5
 title = "Parse Planning Result"
 tool = "bash"
 prompt = """
@@ -103,17 +144,21 @@ TODO_PATH=$(grep -- 'todo_path = ' "$RESULT_REAL" | cut -d'"' -f2)
 TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: ${TODO_PATH}" >&2; exit 1; }
 [ -f "${TODO_REAL}" ] || { echo "TODO not found: ${TODO_REAL}" >&2; exit 1; }
 [[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
+
+echo "CSA_VAR:SESSION_ID=${SESSION_ID}"
+echo "CSA_VAR:STATUS=${STATUS}"
+echo "CSA_VAR:TODO_PATH=${TODO_PATH}"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 5
+id = 6
 title = "Present TODO to User"
 prompt = "Present the TODO path to user. Let them read and approve/modify."
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
+id = 7
 title = "Dispatch Implementation to Layer 1"
 tool = "bash"
 prompt = """
@@ -136,34 +181,36 @@ Fix the underlying issues to ensure codebase integrity.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
+echo "CSA_VAR:IMPL_FILE=${IMPL_FILE}"
 csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
 ```"""
 on_fail = "abort"
 condition = "${USER_APPROVES}"
 
 [[workflow.steps]]
-id = 7
-title = "Step 6a: Resume with Feedback"
+id = 8
+title = "Resume with Feedback"
 tool = "bash"
 prompt = """
 Resume Layer 1 with user's revision feedback.
 
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
+echo "CSA_VAR:RESUME_FILE=${RESUME_FILE}"
 csa run --session "${SESSION_ID}" < "${RESUME_FILE}"
 ```"""
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (${USER_MODIFIES})"
 
 [[workflow.steps]]
-id = 8
-title = "Step 6b: Abandon Plan"
+id = 9
+title = "Abandon Plan"
 prompt = "User rejected. Stop and ask for new direction."
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (!(${USER_MODIFIES}))"
 
 [[workflow.steps]]
-id = 9
+id = 10
 title = "Parse Implementation Result"
 tool = "bash"
 prompt = """
@@ -175,13 +222,16 @@ RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path
 [ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
-COMMIT=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
-REVIEW=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
+COMMIT_HASH=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
+REVIEW_RESULT=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
+
+echo "CSA_VAR:COMMIT_HASH=${COMMIT_HASH}"
+echo "CSA_VAR:REVIEW_RESULT=${REVIEW_RESULT}"
 ```"""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 10
+id = 11
 title = "Report to User"
 prompt = """
 Present implementation results: commit hash, review status,
@@ -189,14 +239,14 @@ number of tasks completed. If HAS_ISSUES, iterate."""
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 11
+id = 12
 title = "Auto PR"
 prompt = ""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 
 [[workflow.steps]]
-id = 12
+id = 13
 title = "Include commit"
 tool = "weave"
 prompt = "commit"
@@ -204,7 +254,7 @@ on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 
 [[workflow.steps]]
-id = 13
+id = 14
 title = "Invoke pr-codex-bot (MANDATORY)"
 prompt = """
 > **Layer**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
