@@ -219,8 +219,8 @@ if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
   exit 1
 fi
 
-echo "CSA_VAR:COMMIT_SUBJECT=${COMMIT_SUBJECT_LOCAL}"
-echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
+echo "CSA_VAR:COMMIT_SUBJECT=$COMMIT_SUBJECT_LOCAL"
+echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_SUBJECT_LOCAL}"
 ```
 
@@ -267,7 +267,7 @@ if [ -n "${PLAN_TIMESTAMP}" ]; then
   fi
 fi
 
-echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "${COMMIT_BODY_LOCAL}" | jq -Rs .)"
+echo "CSA_VAR:COMMIT_BODY=$(printf '%s' "$COMMIT_BODY_LOCAL" | jq -Rs .)"
 printf '%s\n' "${COMMIT_BODY_LOCAL}"
 ```
 
@@ -296,7 +296,7 @@ COMMIT_MESSAGE_FILE_LOCAL="$(mktemp)"
   printf '\n'
 } > "${COMMIT_MESSAGE_FILE_LOCAL}"
 
-echo "CSA_VAR:COMMIT_MESSAGE_FILE=${COMMIT_MESSAGE_FILE_LOCAL}"
+echo "CSA_VAR:COMMIT_MESSAGE_FILE=$COMMIT_MESSAGE_FILE_LOCAL"
 cat "${COMMIT_MESSAGE_FILE_LOCAL}"
 ```
 

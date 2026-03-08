@@ -55,7 +55,7 @@ Use mktemp for temp files (no race conditions).
 
 ```bash
 PROMPT_FILE=$(mktemp /tmp/sa-planning-XXXXXX.txt)
-echo "CSA_VAR:PROMPT_FILE=${PROMPT_FILE}"
+echo "CSA_VAR:PROMPT_FILE=$PROMPT_FILE"
 ```
 
 ## Step 4: Dispatch Planning to Layer 1
@@ -95,9 +95,9 @@ TODO_REAL=$(realpath "${TODO_PATH}" 2>/dev/null) || { echo "TODO path invalid: $
 [ -f "${TODO_REAL}" ] || { echo "TODO not found: ${TODO_REAL}" >&2; exit 1; }
 [[ "${TODO_REAL}" == "${CSA_STATE_ROOT}"/todos/*/TODO.md ]] || { echo "TODO escapes state root: ${TODO_REAL}" >&2; exit 1; }
 
-echo "CSA_VAR:SESSION_ID=${SESSION_ID}"
-echo "CSA_VAR:STATUS=${STATUS}"
-echo "CSA_VAR:TODO_PATH=${TODO_PATH}"
+echo "CSA_VAR:SESSION_ID=$SESSION_ID"
+echo "CSA_VAR:STATUS=$STATUS"
+echo "CSA_VAR:TODO_PATH=$TODO_PATH"
 ```
 
 ## Step 6: Present TODO to User
@@ -130,7 +130,7 @@ Fix the underlying issues to ensure codebase integrity.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
-echo "CSA_VAR:IMPL_FILE=${IMPL_FILE}"
+echo "CSA_VAR:IMPL_FILE=$IMPL_FILE"
 csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
 ```
 
@@ -146,7 +146,7 @@ Resume Layer 1 with user's revision feedback.
 
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
-echo "CSA_VAR:RESUME_FILE=${RESUME_FILE}"
+echo "CSA_VAR:RESUME_FILE=$RESUME_FILE"
 csa run --session "${SESSION_ID}" < "${RESUME_FILE}"
 ```
 
@@ -175,8 +175,8 @@ CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 COMMIT_HASH=$(grep -- 'commit_hash = ' "$RESULT_REAL" | cut -d'"' -f2)
 REVIEW_RESULT=$(grep -- 'review_result = ' "$RESULT_REAL" | cut -d'"' -f2)
 
-echo "CSA_VAR:COMMIT_HASH=${COMMIT_HASH}"
-echo "CSA_VAR:REVIEW_RESULT=${REVIEW_RESULT}"
+echo "CSA_VAR:COMMIT_HASH=$COMMIT_HASH"
+echo "CSA_VAR:REVIEW_RESULT=$REVIEW_RESULT"
 ```
 
 ## Step 11: Report to User

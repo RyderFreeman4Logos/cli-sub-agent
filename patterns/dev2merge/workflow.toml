@@ -322,7 +322,7 @@ if [ "${VERDICT}" = "FAIL" ]; then
   echo "ERROR: security-audit verdict is FAIL." >&2
   exit 1
 fi
-echo "CSA_VAR:SECURITY_AUDIT_VERDICT=${VERDICT}"
+echo "CSA_VAR:SECURITY_AUDIT_VERDICT=$VERDICT"
 ```'''
 on_fail = "abort"
 
@@ -652,13 +652,13 @@ BRANCH="$(git branch --show-current)"
 EXISTING_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
 if [ -n "${EXISTING_PR}" ] && [ "${EXISTING_PR}" != "null" ]; then
   echo "INFO: Reusing existing PR #${EXISTING_PR} for branch ${BRANCH}."
-  echo "CSA_VAR:PR_NUMBER=${EXISTING_PR}"
+  echo "CSA_VAR:PR_NUMBER=$EXISTING_PR"
   exit 0
 fi
 gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
 CREATED_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
 if [ -n "${CREATED_PR}" ] && [ "${CREATED_PR}" != "null" ]; then
-  echo "CSA_VAR:PR_NUMBER=${CREATED_PR}"
+  echo "CSA_VAR:PR_NUMBER=$CREATED_PR"
 fi
 ```'''
 on_fail = "abort"

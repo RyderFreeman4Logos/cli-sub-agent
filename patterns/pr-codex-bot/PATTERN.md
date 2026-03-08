@@ -51,7 +51,7 @@ clean branch switches in Step 11).
 
 ```bash
 WORKFLOW_BRANCH="$(git branch --show-current)"
-echo "CSA_VAR:WORKFLOW_BRANCH=${WORKFLOW_BRANCH}"
+echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
 ```
 
 ## Step 2: Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)
@@ -81,7 +81,7 @@ else
   csa review --branch main
 fi
 REVIEW_COMPLETED=true
-echo "CSA_VAR:REVIEW_COMPLETED=${REVIEW_COMPLETED}"
+echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
 ```
 
 ## IF ${LOCAL_REVIEW_HAS_ISSUES}
@@ -211,8 +211,8 @@ if [ -z "${PR_NUM:-}" ] || ! printf '%s' "${PR_NUM}" | grep -Eq '^[0-9]+$'; then
   exit 1
 fi
 REPO="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
-echo "CSA_VAR:PR_NUM=${PR_NUM}"
-echo "CSA_VAR:REPO=${REPO}"
+echo "CSA_VAR:PR_NUM=$PR_NUM"
+echo "CSA_VAR:REPO=$REPO"
 ```
 
 ## Step 4a: Check Cloud Bot Configuration
@@ -241,8 +241,8 @@ if [ "${CLOUD_BOT}" = "false" ]; then
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
 FALLBACK_REVIEW_HAS_ISSUES="${FALLBACK_REVIEW_HAS_ISSUES:-false}"
-echo "CSA_VAR:BOT_UNAVAILABLE=${BOT_UNAVAILABLE}"
-echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```
 
 If `CLOUD_BOT` is `false`:
@@ -400,9 +400,9 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
     FALLBACK_REVIEW_HAS_ISSUES=true
   fi
 fi
-echo "CSA_VAR:BOT_UNAVAILABLE=${BOT_UNAVAILABLE}"
-echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
-echo "CSA_VAR:BOT_HAS_ISSUES=${BOT_HAS_ISSUES}"
+echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
+echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 ```
 
 ## IF ${BOT_UNAVAILABLE}
@@ -511,7 +511,7 @@ if [ "${FIX_MARKER}" != "FALLBACK_FIX=clean" ]; then
 fi
 
 FALLBACK_REVIEW_HAS_ISSUES=false
-echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```
 
 ## Step 6a: Merge Without Bot
@@ -592,9 +592,9 @@ IFS=$'\t' read -r CURRENT_COMMENT_ID COMMENT_PATH COMMENT_TIMESTAMP <<EOF
 ${COMMENT_RECORD}
 EOF
 
-echo "CSA_VAR:CURRENT_COMMENT_ID=${CURRENT_COMMENT_ID}"
-echo "CSA_VAR:COMMENT_PATH=${COMMENT_PATH}"
-echo "CSA_VAR:COMMENT_TIMESTAMP=${COMMENT_TIMESTAMP}"
+echo "CSA_VAR:CURRENT_COMMENT_ID=$CURRENT_COMMENT_ID"
+echo "CSA_VAR:COMMENT_PATH=$COMMENT_PATH"
+echo "CSA_VAR:COMMENT_TIMESTAMP=$COMMENT_TIMESTAMP"
 echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=true"
 echo "CSA_VAR:COMMENT_IS_STALE=false"
 ```
@@ -621,7 +621,7 @@ if [ -n "${COMMENT_PATH:-}" ] && [ -n "${COMMENT_TIMESTAMP:-}" ]; then
   fi
 fi
 
-echo "CSA_VAR:COMMENT_IS_STALE=${COMMENT_IS_STALE}"
+echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
 ```
 
 ## IF ${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})
@@ -814,8 +814,8 @@ output markers, NOT exit codes alone. `ROUND_LIMIT_HALT` (exit 0) = ask user.
 ```bash
 REVIEW_ROUND=$((REVIEW_ROUND + 1))
 MAX_REVIEW_ROUNDS="${MAX_REVIEW_ROUNDS:-10}"
-echo "CSA_VAR:REVIEW_ROUND=${REVIEW_ROUND}"
-echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS}"
+echo "CSA_VAR:REVIEW_ROUND=$REVIEW_ROUND"
+echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 
 # --- Handle orchestrator re-entry with user decision (FIRST) ---
 # When the orchestrator re-enters after collecting user choice via
@@ -833,7 +833,7 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       # Push any Category C fixes from Step 9 so remote HEAD includes them.
       # Without this, gh pr merge merges the stale remote head.
       git push origin "${WORKFLOW_BRANCH}"
-      echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
+      echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
       echo "CSA_VAR:ROUND_LIMIT_ACTION="
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
       # Orchestrator MUST route to Step 12/12b upon seeing ROUND_LIMIT_MERGE.
@@ -845,8 +845,8 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
       ROUND_LIMIT_REACHED=false  # Clear so review loop and downstream steps are unblocked
       MAX_REVIEW_ROUNDS=$((REVIEW_ROUND + MAX_REVIEW_ROUNDS))
       unset ROUND_LIMIT_ACTION
-      echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
-      echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS}"
+      echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
+      echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
       echo "CSA_VAR:ROUND_LIMIT_ACTION="
       # Fall through to push loop below (bypasses round cap check)
       ;;
@@ -870,7 +870,7 @@ if [ "${REVIEW_ROUND}" -ge "${MAX_REVIEW_ROUNDS}" ]; then
   echo "  B) Continue for ${MAX_REVIEW_ROUNDS} more rounds"
   echo "  C) Abort and investigate manually"
   echo ""
-  echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
+  echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
   echo "ROUND_LIMIT_HALT: Awaiting user decision."
   # HALT: The orchestrator MUST use AskUserQuestion to collect user's choice.
   # The shell script block ENDS here. The orchestrator handles routing based on
@@ -889,9 +889,9 @@ fi
 # --- Push fixes only (next trigger happens in Step 5) ---
 git push origin "${WORKFLOW_BRANCH}"
 ROUND_LIMIT_REACHED=false
-echo "CSA_VAR:ROUND_LIMIT_REACHED=${ROUND_LIMIT_REACHED}"
-echo "CSA_VAR:REVIEW_ROUND=${REVIEW_ROUND}"
-echo "CSA_VAR:MAX_REVIEW_ROUNDS=${MAX_REVIEW_ROUNDS}"
+echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
+echo "CSA_VAR:REVIEW_ROUND=$REVIEW_ROUND"
+echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 ```
 
 Loop back to Step 5 (delegated wait gate).
@@ -1030,16 +1030,16 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   if [ "${GATE_RC}" -eq 124 ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
     echo "ERROR: Post-rebase delegated gate exceeded hard timeout (2400s)." >&2
     exit 1
   fi
   if [ "${GATE_RC}" -ne 0 ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
     echo "ERROR: Post-rebase delegated gate failed (rc=${GATE_RC})." >&2
     exit 1
   fi
@@ -1054,8 +1054,8 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   if [ "${GATE_MARKER}" != "REBASE_GATE=PASS" ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
     echo "ERROR: Post-rebase review gate failed."
     exit 1
   fi
@@ -1073,8 +1073,8 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   if [ "${LATE_ACTIONABLE_RC}" -ne 0 ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
     echo "ERROR: Failed to query post-rebase actionable bot comments (rc=${LATE_ACTIONABLE_RC})." >&2
     exit 1
   fi
@@ -1082,8 +1082,8 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     ''|*[!0-9]*)
       REBASE_REVIEW_HAS_ISSUES=true
       FALLBACK_REVIEW_HAS_ISSUES=true
-      echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-      echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+      echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+      echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
       echo "ERROR: Invalid post-rebase actionable comment count from GitHub API: '${LATE_ACTIONABLE_COUNT}'." >&2
       exit 1
       ;;
@@ -1091,16 +1091,16 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   if [ "${LATE_ACTIONABLE_COUNT}" -gt 0 ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
-    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+    echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+    echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
     echo "ERROR: Detected ${LATE_ACTIONABLE_COUNT} actionable bot comment(s) after post-rebase trigger window." >&2
     exit 1
   fi
 
   REBASE_REVIEW_HAS_ISSUES=false
   FALLBACK_REVIEW_HAS_ISSUES=false
-  echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=${REBASE_REVIEW_HAS_ISSUES}"
-  echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=${FALLBACK_REVIEW_HAS_ISSUES}"
+  echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
+  echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
   git push origin "${WORKFLOW_BRANCH}"
 fi
 ```
