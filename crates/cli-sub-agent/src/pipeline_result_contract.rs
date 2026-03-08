@@ -70,6 +70,28 @@ pub(crate) fn enforce_result_toml_path_contract(
         return;
     }
 
+    // Disk-based fallback: the agent wrote result.toml to session_dir but the
+    // path was not found in output/summary (e.g. verbose output truncated the
+    // path, or ACP message boundaries split it). Accept the file if it exists,
+    // passes validation, and contains valid TOML.
+    if session_result_fallback_is_valid(&expected_path) {
+        let warning = format!(
+            "contract warning: output/summary path not found; accepted verified session result '{}'",
+            expected_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            fallback = %expected_path.display(),
+            "Session output path not in output/summary; accepting verified session-dir result.toml fallback"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&warning);
+        result.stderr_output.push('\n');
+        return;
+    }
+
     let reason = if path_candidate.is_empty() {
         format!(
             "contract violation: expected existing absolute result path '{}' or '{}' in output/summary, but output and summary were empty",
@@ -106,6 +128,7 @@ fn prompt_requires_result_toml_path(prompt: &str) -> bool {
 }
 
 fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
+    // 1. Whole-line match (exact path on its own line).
     let output_path_candidate = result
         .output
         .lines()
@@ -116,11 +139,24 @@ fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
         return candidate;
     }
 
+    // 2. Summary as path.
     let summary_candidate = normalize_contract_path_candidate(&result.summary);
-    if !summary_candidate.is_empty() {
+    if !summary_candidate.is_empty() && line_looks_like_result_toml_path(summary_candidate) {
         return summary_candidate;
     }
 
+    // 3. Embedded path extraction: scan output lines for an absolute result.toml
+    //    path that appears as a substring within a longer line.
+    if let Some(embedded) = extract_embedded_result_toml_path(&result.output) {
+        return embedded;
+    }
+
+    // 4. Embedded path in summary.
+    if let Some(embedded) = extract_embedded_result_toml_path(&result.summary) {
+        return embedded;
+    }
+
+    // 5. Last non-empty output line (legacy fallback).
     result
         .output
         .lines()
@@ -128,6 +164,91 @@ fn contract_result_toml_path_candidate(result: &ExecutionResult) -> &str {
         .find(|line| !line.trim().is_empty())
         .map(normalize_contract_path_candidate)
         .unwrap_or("")
+}
+
+/// Extract an embedded absolute `result.toml` or `user-result.toml` path from
+/// text that may contain the path as a substring within a longer line.
+///
+/// Scans each line for a `/` character that begins an absolute path ending with
+/// `result.toml` or `user-result.toml`, stripping surrounding quotes/backticks.
+fn extract_embedded_result_toml_path(text: &str) -> Option<&str> {
+    for line in text.lines().rev() {
+        if let Some(path) = find_result_toml_path_in_line(line) {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Find an absolute result.toml path embedded anywhere in a single line.
+/// Returns the longest matching substring that starts with `/` and ends with
+/// `result.toml` or `user-result.toml`.
+fn find_result_toml_path_in_line(line: &str) -> Option<&str> {
+    const SUFFIXES: &[&str] = &["result.toml", "user-result.toml"];
+
+    for suffix in SUFFIXES {
+        // Search from the end to prefer the last occurrence.
+        let mut search_from = line.len();
+        while let Some(end_pos) = line[..search_from].rfind(suffix) {
+            let candidate_end = end_pos + suffix.len();
+            // Walk backwards from end_pos to find the start `/`.
+            // The path must start with `/` and contain only path-legal characters.
+            if let Some(start) = find_absolute_path_start(&line[..end_pos]) {
+                let raw = &line[start..candidate_end];
+                let cleaned = raw.trim_matches(|c: char| c == '"' || c == '`' || c == '\'');
+                let path = Path::new(cleaned);
+                if path.is_absolute()
+                    && path.file_name().and_then(|n| n.to_str()).is_some_and(|n| {
+                        n.eq_ignore_ascii_case("result.toml")
+                            || n.eq_ignore_ascii_case("user-result.toml")
+                    })
+                {
+                    return Some(cleaned);
+                }
+            }
+            // Continue searching before this occurrence.
+            search_from = end_pos;
+            if search_from == 0 {
+                break;
+            }
+        }
+    }
+    None
+}
+
+/// Find the start index of an absolute path that ends at `before_suffix`.
+/// Walks backwards from the end to find a `/` that begins the path,
+/// skipping only characters valid in Unix paths.
+fn find_absolute_path_start(before_suffix: &str) -> Option<usize> {
+    // Walk backwards to find the leading `/` of the absolute path.
+    // Path characters: anything except whitespace and certain delimiters.
+    let bytes = before_suffix.as_bytes();
+    let mut i = bytes.len();
+    while i > 0 {
+        i -= 1;
+        let c = bytes[i];
+        // Stop at whitespace or common non-path delimiters, but allow the
+        // path to start with `/` preceded by whitespace.
+        if c == b'/' {
+            // Check if this is the root `/` (preceded by start-of-string,
+            // whitespace, quote, or backtick).
+            if i == 0
+                || matches!(
+                    bytes[i - 1],
+                    b' ' | b'\t' | b'"' | b'\'' | b'`' | b'(' | b'[' | b'{'
+                )
+            {
+                return Some(i);
+            }
+            // Otherwise it's a path separator within the path, keep going.
+            continue;
+        }
+        if c.is_ascii_whitespace() || c == b'(' || c == b'[' || c == b'{' {
+            // The path starts after this delimiter.
+            return None;
+        }
+    }
+    None
 }
 
 fn path_matches_expected_contract_result(path_candidate: &str, expected_path: &Path) -> bool {
@@ -167,6 +288,25 @@ fn expected_contract_file_is_valid(path: &Path) -> bool {
 }
 
 fn user_result_fallback_is_valid(path: &Path) -> bool {
+    if !expected_contract_file_is_valid(path) {
+        return false;
+    }
+
+    let Ok(contents) = std::fs::read_to_string(path) else {
+        return false;
+    };
+
+    matches!(
+        toml::from_str::<toml::Value>(&contents),
+        Ok(toml::Value::Table(table)) if !table.is_empty()
+    )
+}
+
+/// Validates session-dir result.toml as a disk-based fallback when the path
+/// could not be extracted from output/summary. Applies the same validation as
+/// user-result fallback: file must exist, not be a symlink, have nlink==1,
+/// and contain valid non-empty TOML.
+fn session_result_fallback_is_valid(path: &Path) -> bool {
     if !expected_contract_file_is_valid(path) {
         return false;
     }

@@ -772,3 +772,6 @@ fn enforce_result_toml_contract_now(
 
 #[path = "pipeline_tests_tail.rs"]
 mod tail_tests;
+
+#[path = "pipeline_tests_contract.rs"]
+mod contract_tests;
