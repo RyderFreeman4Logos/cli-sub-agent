@@ -14,6 +14,14 @@ pub use cli_todo::*;
 mod cli_review;
 pub use cli_review::*;
 
+#[path = "cli_tokuin.rs"]
+mod cli_tokuin;
+pub use cli_tokuin::*;
+
+#[path = "cli_xurl.rs"]
+mod cli_xurl;
+pub use cli_xurl::*;
+
 /// Build version string combining Cargo.toml version and git describe.
 fn build_version() -> &'static str {
     static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -329,6 +337,18 @@ pub enum Commands {
     /// Route tasks through CSA with Claude model selection and optional skill injection
     #[command(name = "claude-sub-agent")]
     ClaudeSubAgent(ClaudeSubAgentArgs),
+
+    /// Token estimation for files
+    Tokuin {
+        #[command(subcommand)]
+        cmd: TokuinCommands,
+    },
+
+    /// Query AI tool conversation threads via xurl
+    Xurl {
+        #[command(subcommand)]
+        cmd: XurlCommands,
+    },
 }
 
 #[derive(clap::Args)]

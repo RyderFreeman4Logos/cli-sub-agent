@@ -55,6 +55,9 @@ breaks prompt-guard propagation.
 ### Step-by-Step
 
 1. **Parse TODO plan**: Read the TODO file. Extract each `[ ]` item with executor tag and `DONE WHEN`.
+   Check for associated references via `csa todo ref list` — if references exist
+   (e.g., RECON findings, threat model), consult them for detailed context before
+   executing tasks that need deeper understanding of the design rationale.
 2. **Register tasks**: For each parsed TODO item, use TaskCreate to create a tracked task entry.
    Include the executor tag and `DONE WHEN` condition in the task description.
    TODO.md remains the read-only source of truth — mktsk reads from it, tracks progress via TaskCreate/TaskUpdate.
@@ -80,6 +83,8 @@ breaks prompt-guard propagation.
 
 - **Depends on**: `mktd` (provides TODO plan), `commit` (per-task commit workflow)
 - **Uses**: `csa-review` (per-task review), `security-audit` (via commit skill)
+- **References**: Use `csa todo ref list` to discover plan references (RECON findings,
+  debate evidence, threat model) and `csa todo ref show <name>` for selective loading
 - **Part of**: Full planning pipeline: `mktd` (plan) -> `mktsk` (execute) -> `pr-codex-bot` (merge)
 
 ## Done Criteria

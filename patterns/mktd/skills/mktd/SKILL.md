@@ -76,11 +76,25 @@ breaks prompt-guard propagation.
 | `/mktd global concurrency slots` | Plan implementation of global concurrency slot feature |
 | `/mktd "ACP transport layer"` | Plan ACP transport implementation with debate review |
 
+## Reference Persistence
+
+After the TODO plan is saved, RECON findings, threat model, and debate evidence
+SHOULD be persisted as references for progressive disclosure:
+
+```bash
+csa todo ref add -t <timestamp> --content "$RECON_OUTPUT" recon-structure.md
+```
+
+This allows agents executing the plan (via `mktsk`) to selectively load detailed
+context via `csa todo ref show <name>` without bloating their context window.
+
 ## Integration
 
 - **Uses**: `debate` (Phase 3 adversarial review)
 - **Feeds into**: `mktsk` (converts approved TODO into executable Task entries)
 - **Lifecycle**: Plans managed by `csa todo` (create, show, save, find)
+- **References**: RECON/debate findings persisted via `csa todo ref add` for
+  progressive disclosure during plan execution
 
 ## Done Criteria
 

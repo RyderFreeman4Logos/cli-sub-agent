@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.95"
+version = "0.1.96"
 edition = "2024"
 rust-version = "1.85"
 license = "Apache-2.0"
@@ -59,3 +59,5 @@ sha2 = "0.10"
 glob = "0.3"
 ignore = "0.4"
 tantivy = "0.22"
+tokuin = { git = "https://github.com/nooscraft/tokuin.git", default-features = false, features = ["openai"] }
+xurl-core = { git = "https://github.com/Xuanwo/xurl.git" }

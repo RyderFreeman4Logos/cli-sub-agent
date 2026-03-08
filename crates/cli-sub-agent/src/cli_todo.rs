@@ -114,6 +114,10 @@ pub enum TodoCommands {
         #[arg(long, conflicts_with_all = ["path", "version"])]
         spec: bool,
 
+        /// Append a reference file listing after TODO.md content
+        #[arg(long, conflicts_with_all = ["path", "spec"])]
+        refs: bool,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,
@@ -146,6 +150,12 @@ pub enum TodoCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// Manage reference files attached to TODO plans
+    Ref {
+        #[command(subcommand)]
+        cmd: TodoRefCommands,
+    },
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -153,4 +163,89 @@ pub enum TodoDagFormat {
     Mermaid,
     Terminal,
     Dot,
+}
+
+#[derive(Subcommand)]
+pub enum TodoRefCommands {
+    /// List reference files for a plan
+    List {
+        /// Timestamp of the TODO plan (default: latest)
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Include token estimates for each reference
+        #[arg(long)]
+        tokens: bool,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Show a reference file's content
+    Show {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Reference filename (e.g., recon-summary.md)
+        name: String,
+
+        /// Maximum token budget (error if reference exceeds this)
+        #[arg(long, default_value = "8000")]
+        max_tokens: usize,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Add a reference file to a plan
+    Add {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Reference filename (must end with .md)
+        name: String,
+
+        /// Content as inline text
+        #[arg(long, conflicts_with = "file")]
+        content: Option<String>,
+
+        /// Read content from a file path
+        #[arg(long, conflicts_with = "content")]
+        file: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Import a conversation transcript as a reference file
+    ImportTranscript {
+        /// Timestamp of the TODO plan
+        #[arg(short, long)]
+        timestamp: Option<String>,
+
+        /// Tool/provider name (claude, codex, gemini, opencode)
+        #[arg(long)]
+        tool: String,
+
+        /// Session ID to import
+        #[arg(long)]
+        session: String,
+
+        /// Override reference filename (default: transcript-{tool}-{session_prefix}.md)
+        #[arg(long)]
+        name: Option<String>,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }
