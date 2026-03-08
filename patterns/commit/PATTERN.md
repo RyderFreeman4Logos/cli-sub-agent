@@ -341,6 +341,8 @@ gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}"
 Tool: csa
 OnFail: abort
 
+run --skill pr-codex-bot
+
 ## INCLUDE pr-codex-bot
 
 IMMEDIATELY invoke pr-codex-bot after PR creation.

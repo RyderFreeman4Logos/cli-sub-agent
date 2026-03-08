@@ -1,3 +1,11 @@
+---
+name = "review-loop"
+description = "Bounded iterative review-fix loop for quality convergence"
+allowed-tools = "Bash, Read, Grep, Edit, Task"
+tier = "tier-2-standard"
+version = "0.1.0"
+---
+
 # Review Loop
 
 Bounded iterative review-fix loop for quality convergence.

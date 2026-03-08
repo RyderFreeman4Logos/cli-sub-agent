@@ -3,6 +3,9 @@ name = "sa"
 description = "Three-layer recursive delegation: Layer 0 dispatches, Layer 1 plans/implements, Layer 2 explores/fixes"
 
 [[workflow.variables]]
+name = "CSA_STATE_ROOT"
+
+[[workflow.variables]]
 name = "IMPL_FILE"
 
 [[workflow.variables]]
@@ -12,6 +15,12 @@ name = "LAST_LINE"
 name = "PROMPT_FILE"
 
 [[workflow.variables]]
+name = "RESULT_PATH"
+
+[[workflow.variables]]
+name = "RESULT_REAL"
+
+[[workflow.variables]]
 name = "RESUME_FILE"
 
 [[workflow.variables]]
@@ -19,6 +28,12 @@ name = "REVIEW_IS_CLEAN"
 
 [[workflow.variables]]
 name = "SESSION_ID"
+
+[[workflow.variables]]
+name = "TODO_PATH"
+
+[[workflow.variables]]
+name = "TODO_REAL"
 
 [[workflow.variables]]
 name = "USER_APPROVES"
@@ -59,7 +74,7 @@ Layer 1 (claude-code) will:
 1. Spawn up to 3 parallel Layer 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
-4. Write `result.toml` (with `todo_path`) in CSA session state dir
+4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
 
 ```bash
 csa run < "${PROMPT_FILE}"
@@ -75,9 +90,11 @@ Extract session_id, status, and todo_path from CSA session `result.toml`.
 Validate result and TODO paths stay inside CSA state directories.
 
 ```bash
+# RESULT_PATH comes from CSA structured output (trusted: we invoked csa run)
 RESULT_PATH="${LAST_LINE}"
 RESULT_REAL=$(realpath "${RESULT_PATH}" 2>/dev/null) || { echo "result.toml path invalid: ${RESULT_PATH}" >&2; exit 1; }
 [ -f "${RESULT_REAL}" ] || { echo "result.toml not found: ${RESULT_REAL}" >&2; exit 1; }
+# Derive CSA state root: strip /sessions/<id>/result.toml suffix
 CSA_STATE_ROOT="${RESULT_REAL%/sessions/*/result.toml}"
 [[ "${CSA_STATE_ROOT}" != "${RESULT_REAL}" ]] || { echo "Cannot derive state root: ${RESULT_REAL}" >&2; exit 1; }
 SESSION_ID=$(grep -- 'session_id = ' "$RESULT_REAL" | cut -d'"' -f2)
@@ -103,16 +120,19 @@ prompt = """
 Resume the Layer 1 session for implementation.
 Layer 1 will: implement → delegate errors to Layer 2 → review → commit.
 
-INCREMENTAL REVIEW (MANDATORY): Before committing each TODO block,
-Layer 1 MUST run `csa review --diff` on the uncommitted changes.
-After the review passes, commit the block.
-Do NOT accumulate all changes for one cumulative review at the end.
+**Incremental review (MANDATORY)**: Before committing each TODO block,
+Layer 1 MUST run `csa review --diff` on the uncommitted changes immediately.
+After the review passes, commit the block. Do NOT accumulate all changes for
+one cumulative review at the end. Small-scope reviews catch issues when
+context is focused, avoiding large diffs where reviewers can only surface
+2 findings per round.
 
 COMMIT HOOK POLICY (MANDATORY): NEVER use `git commit --no-verify` or
 `git commit -n` unless the prompt explicitly includes
-`ALLOW_GIT_COMMIT_NO_VERIFY=1`.
+`ALLOW_GIT_COMMIT_NO_VERIFY=1`. Bypassing hooks is a critical SOP violation.
 If hooks fail (including failures caused by unrelated workspace crates), STOP
 and return a blocker / `needs_clarification` instead of bypassing hooks.
+Fix the underlying issues to ensure codebase integrity.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
@@ -171,21 +191,32 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 11
 title = "Auto PR"
-prompt = """
-Push the feature branch to origin and create a PR targeting main.
-Run the full commit workflow: format, lint, test, security audit, review, commit.
-Then create the PR via gh CLI."""
+prompt = ""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 
 [[workflow.steps]]
 id = 12
+title = "Include commit"
+tool = "weave"
+prompt = "commit"
+on_fail = "abort"
+condition = "${REVIEW_IS_CLEAN}"
+
+[[workflow.steps]]
+id = 13
 title = "Invoke pr-codex-bot (MANDATORY)"
-tool = "skill"
 prompt = """
-After PR creation, invoke /pr-codex-bot to trigger cloud review, poll for
-response (with 10 min timeout), and handle the full review loop. This ensures
-the bot review is never forgotten or skipped.
+> **Layer**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
+> Layer 1 executors MUST invoke /pr-codex-bot after PR creation.
+> This is NOT optional — polling for bot review is part of the PR lifecycle.
+
+Tool: skill
+OnFail: abort
+
+After PR creation, invoke the pr-codex-bot skill to trigger cloud review,
+poll for response (with 10 min timeout), and handle the full review loop.
+This ensures the bot review is never forgotten or skipped.
 
 ```
 /pr-codex-bot
