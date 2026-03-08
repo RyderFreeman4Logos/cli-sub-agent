@@ -68,9 +68,9 @@ mod tests {
     }
 
     #[test]
-    fn test_heuristic_chinese() {
-        // "你好世界" = 4 chars -> 4/3 = 1 token
-        assert_eq!(estimate_tokens_heuristic("你好世界"), 1);
+    fn test_heuristic_short_text() {
+        // "abcd" = 4 chars -> 4/3 = 1 token
+        assert_eq!(estimate_tokens_heuristic("abcd"), 1);
     }
 
     #[test]

@@ -25,6 +25,16 @@ allow = [
     "Zlib",
     "CDLA-Permissive-2.0",
 ]
+# xurl-core is pre-release (0.0.0-dev) with no license field in manifest yet.
+# Upstream repo (github.com/Xuanwo/xurl) is Apache-2.0 licensed.
+exceptions = [
+    { allow = ["Apache-2.0"], crate = "xurl-core" },
+]
+
+[[licenses.clarify]]
+crate = "xurl-core"
+expression = "Apache-2.0"
+license-files = []
 
 [bans]
 multiple-versions = "warn"
@@ -34,4 +44,8 @@ wildcards = "allow"
 unknown-registry = "warn"
 unknown-git = "warn"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = ["https://github.com/ZhangHanDong/agent-teams-rs.git"]
+allow-git = [
+    "https://github.com/ZhangHanDong/agent-teams-rs.git",
+    "https://github.com/Xuanwo/xurl.git",
+    "https://github.com/nooscraft/tokuin.git",
+]
