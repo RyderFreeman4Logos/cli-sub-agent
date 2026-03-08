@@ -42,6 +42,8 @@ glob.workspace = true
 ignore.workspace = true
 regex.workspace = true
 sha2.workspace = true
+tokuin.workspace = true
+xurl-core.workspace = true
 
 [features]
 codex-pty-fork = ["csa-executor/codex-pty-fork"]

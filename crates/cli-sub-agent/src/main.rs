@@ -57,7 +57,8 @@ mod test_env_lock;
 
 use cli::{
     Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SessionCommands, SetupCommands,
-    SkillCommands, TiersCommands, TodoCommands, validate_command_args,
+    SkillCommands, TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
+    validate_command_args,
 };
 use csa_core::types::OutputFormat;
 
@@ -528,9 +529,10 @@ async fn run() -> Result<()> {
                 version,
                 path,
                 spec,
+                refs,
                 cd,
             } => {
-                todo_cmd::handle_show(timestamp, version, path, spec, cd)?;
+                todo_cmd::handle_show(timestamp, version, path, spec, refs, cd)?;
             }
             TodoCommands::Status {
                 timestamp,
@@ -546,6 +548,42 @@ async fn run() -> Result<()> {
             } => {
                 todo_cmd::handle_dag(timestamp, format, cd)?;
             }
+            TodoCommands::Ref { cmd } => match cmd {
+                TodoRefCommands::List {
+                    timestamp,
+                    tokens,
+                    json,
+                    cd,
+                } => {
+                    todo_cmd::handle_ref_list(timestamp, tokens, json, cd)?;
+                }
+                TodoRefCommands::Show {
+                    timestamp,
+                    name,
+                    max_tokens,
+                    cd,
+                } => {
+                    todo_cmd::handle_ref_show(timestamp, name, max_tokens, cd)?;
+                }
+                TodoRefCommands::Add {
+                    timestamp,
+                    name,
+                    content,
+                    file,
+                    cd,
+                } => {
+                    todo_cmd::handle_ref_add(timestamp, name, content, file, cd)?;
+                }
+                TodoRefCommands::ImportTranscript {
+                    timestamp,
+                    tool,
+                    session,
+                    name,
+                    cd,
+                } => {
+                    todo_cmd::handle_ref_import_transcript(timestamp, tool, session, name, cd)?;
+                }
+            },
         },
         Commands::Plan { cmd } => match cmd {
             PlanCommands::Run {
@@ -569,6 +607,12 @@ async fn run() -> Result<()> {
             let exit_code =
                 claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth).await?;
             std::process::exit(exit_code);
+        }
+        Commands::Tokuin { cmd } => {
+            handle_tokuin(cmd)?;
+        }
+        Commands::Xurl { cmd } => {
+            handle_xurl(cmd)?;
         }
     }
 

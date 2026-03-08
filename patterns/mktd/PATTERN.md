@@ -143,6 +143,35 @@ Identify constraints and risks for implementing ${FEATURE}.
 Report: potential breaking changes, security considerations, performance, compatibility.
 Working directory: ${CWD}
 
+## Step 4b: Phase 1 — Persist RECON References
+
+Tool: bash
+
+Save RECON findings as TODO references for progressive disclosure.
+Each dimension's output is stored as a reference file so the full plan
+can link to detailed findings without bloating TODO.md itself.
+
+```bash
+[[ -n "${STEP_11_OUTPUT:-}" ]] || { echo "no TODO path yet — skip ref persistence" >&2; exit 0; }
+TODO_DIR="$(dirname "${STEP_11_OUTPUT}")"
+if [[ -n "${STEP_2_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-structure" --source "csa:recon" - <<< "${STEP_2_OUTPUT}" 2>/dev/null || true
+fi
+if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-patterns" --source "csa:recon" - <<< "${STEP_3_OUTPUT}" 2>/dev/null || true
+fi
+if [[ -n "${STEP_4_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-constraints" --source "csa:recon" - <<< "${STEP_4_OUTPUT}" 2>/dev/null || true
+fi
+echo "RECON references persisted"
+```
+
+> **Note**: This step runs best AFTER Step 11 (Save TODO) creates the todo
+> directory. When run before save, the step is a no-op. The orchestrator MAY
+> re-invoke this step after save to persist references retroactively, or agents
+> can call `csa todo ref add` directly during RECON to attach findings as they
+> become available.
+
 ## Step 5: Phase 2 — DRAFT TODO
 
 Synthesize CSA findings into a structured TODO plan.
@@ -455,6 +484,37 @@ SPEC_RENDERED=$(csa todo show -t "${TODO_TS}" --spec) || { echo "csa todo show -
 printf '%s\n' "${SPEC_RENDERED}" | grep -q '^Criteria:$' || { echo "csa todo show --spec missing criteria section" >&2; exit 1; }
 printf '%s\n' "${SPEC_RENDERED}" | grep -q '^- \[pending\] ' || { echo "csa todo show --spec did not render pending criteria" >&2; exit 1; }
 csa todo show -t "${TODO_TS}" --path
+```
+
+## Step 11b: Persist References
+
+Tool: bash
+
+After TODO is saved, persist RECON, threat model, and debate findings as
+references for progressive disclosure. Agents executing the plan can
+retrieve detailed context via `csa todo ref show` without loading the
+full plan into their context window.
+
+```bash
+TODO_PATH="${STEP_11_OUTPUT}"
+[[ -n "${TODO_PATH:-}" ]] || { echo "STEP_11_OUTPUT empty — cannot persist refs" >&2; exit 1; }
+TODO_DIR="$(dirname "${TODO_PATH}")"
+if [[ -n "${STEP_2_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-structure" --source "csa:recon" - <<< "${STEP_2_OUTPUT}" 2>/dev/null || true
+fi
+if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-patterns" --source "csa:recon" - <<< "${STEP_3_OUTPUT}" 2>/dev/null || true
+fi
+if [[ -n "${STEP_4_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-constraints" --source "csa:recon" - <<< "${STEP_4_OUTPUT}" 2>/dev/null || true
+fi
+if [[ -n "${STEP_7_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "threat-model" --source "csa:threat-model" - <<< "${STEP_7_OUTPUT}" 2>/dev/null || true
+fi
+if [[ -n "${STEP_8_OUTPUT:-}" ]]; then
+  csa todo ref add --todo-dir "${TODO_DIR}" --label "debate-evidence" --source "csa:debate" - <<< "${STEP_8_OUTPUT}" 2>/dev/null || true
+fi
+csa todo ref list --todo-dir "${TODO_DIR}" 2>/dev/null || echo "(no refs persisted)"
 ```
 
 ## Step 12: Phase 4 — User Approval

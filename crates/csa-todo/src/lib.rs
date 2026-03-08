@@ -27,8 +27,10 @@ const TODO_MD_FILE: &str = "TODO.md";
 const SPEC_FILE: &str = "spec.toml";
 const LOCK_FILE: &str = ".lock";
 
+pub use reference::{ReferenceFile, ReferenceIndex, ReferenceSource};
 pub use spec::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument};
 
+pub mod reference;
 mod spec;
 
 /// Validate a timestamp string to prevent path traversal.
@@ -471,6 +473,9 @@ fn atomic_write(target: &Path, data: &[u8]) -> Result<()> {
 
 pub mod dag;
 pub mod git;
+pub mod redact;
+pub mod token_estimate;
+pub mod xurl_integration;
 
 // ---------------------------------------------------------------------------
 // Tests

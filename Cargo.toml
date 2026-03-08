@@ -59,3 +59,5 @@ sha2 = "0.10"
 glob = "0.3"
 ignore = "0.4"
 tantivy = "0.22"
+tokuin = { git = "https://github.com/nooscraft/tokuin.git", default-features = false, features = ["openai"] }
+xurl-core = { git = "https://github.com/Xuanwo/xurl.git" }
