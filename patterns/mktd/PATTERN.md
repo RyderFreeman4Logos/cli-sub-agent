@@ -154,14 +154,15 @@ can link to detailed findings without bloating TODO.md itself.
 ```bash
 [[ -n "${STEP_11_OUTPUT:-}" ]] || { echo "no TODO path yet — skip ref persistence" >&2; exit 0; }
 TODO_DIR="$(dirname "${STEP_11_OUTPUT}")"
+TODO_TS="$(basename "${TODO_DIR}")"
 if [[ -n "${STEP_2_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-structure" --source "csa:recon" - <<< "${STEP_2_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_2_OUTPUT}" recon-structure.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-patterns" --source "csa:recon" - <<< "${STEP_3_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_3_OUTPUT}" recon-patterns.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_4_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-constraints" --source "csa:recon" - <<< "${STEP_4_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_4_OUTPUT}" recon-constraints.md 2>/dev/null || true
 fi
 echo "RECON references persisted"
 ```
@@ -499,22 +500,23 @@ full plan into their context window.
 TODO_PATH="${STEP_11_OUTPUT}"
 [[ -n "${TODO_PATH:-}" ]] || { echo "STEP_11_OUTPUT empty — cannot persist refs" >&2; exit 1; }
 TODO_DIR="$(dirname "${TODO_PATH}")"
+TODO_TS="$(basename "${TODO_DIR}")"
 if [[ -n "${STEP_2_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-structure" --source "csa:recon" - <<< "${STEP_2_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_2_OUTPUT}" recon-structure.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_3_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-patterns" --source "csa:recon" - <<< "${STEP_3_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_3_OUTPUT}" recon-patterns.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_4_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "recon-constraints" --source "csa:recon" - <<< "${STEP_4_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_4_OUTPUT}" recon-constraints.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_7_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "threat-model" --source "csa:threat-model" - <<< "${STEP_7_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_7_OUTPUT}" threat-model.md 2>/dev/null || true
 fi
 if [[ -n "${STEP_8_OUTPUT:-}" ]]; then
-  csa todo ref add --todo-dir "${TODO_DIR}" --label "debate-evidence" --source "csa:debate" - <<< "${STEP_8_OUTPUT}" 2>/dev/null || true
+  csa todo ref add -t "${TODO_TS}" --content "${STEP_8_OUTPUT}" debate-evidence.md 2>/dev/null || true
 fi
-csa todo ref list --todo-dir "${TODO_DIR}" 2>/dev/null || echo "(no refs persisted)"
+csa todo ref list -t "${TODO_TS}" 2>/dev/null || echo "(no refs persisted)"
 ```
 
 ## Step 12: Phase 4 — User Approval

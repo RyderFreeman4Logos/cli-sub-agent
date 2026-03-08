@@ -82,11 +82,11 @@ After the TODO plan is saved, RECON findings, threat model, and debate evidence
 SHOULD be persisted as references for progressive disclosure:
 
 ```bash
-csa todo ref add --todo-dir <dir> --label "recon-structure" --source "csa:recon" - <<< "$RECON_OUTPUT"
+csa todo ref add -t <timestamp> --content "$RECON_OUTPUT" recon-structure.md
 ```
 
 This allows agents executing the plan (via `mktsk`) to selectively load detailed
-context via `csa todo ref show <label>` without bloating their context window.
+context via `csa todo ref show <name>` without bloating their context window.
 
 ## Integration
 

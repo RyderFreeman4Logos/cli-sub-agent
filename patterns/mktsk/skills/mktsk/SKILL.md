@@ -84,7 +84,7 @@ breaks prompt-guard propagation.
 - **Depends on**: `mktd` (provides TODO plan), `commit` (per-task commit workflow)
 - **Uses**: `csa-review` (per-task review), `security-audit` (via commit skill)
 - **References**: Use `csa todo ref list` to discover plan references (RECON findings,
-  debate evidence, threat model) and `csa todo ref show <label>` for selective loading
+  debate evidence, threat model) and `csa todo ref show <name>` for selective loading
 - **Part of**: Full planning pipeline: `mktd` (plan) -> `mktsk` (execute) -> `pr-codex-bot` (merge)
 
 ## Done Criteria
