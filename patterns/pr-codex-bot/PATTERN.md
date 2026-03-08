@@ -549,7 +549,17 @@ gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
   "**Merge rationale**: Cloud bot (@codex) is disabled or unavailable. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
-git checkout main && git pull origin main
+
+# Post-merge: sync local main with remote
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+git log --oneline -1  # verify local matches remote
+
+# Clean up feature branch locally (remote already deleted by --delete-branch)
+if [ -n "${WORKFLOW_BRANCH}" ] && [ "${WORKFLOW_BRANCH}" != "main" ]; then
+  git branch -d "${WORKFLOW_BRANCH}" 2>/dev/null || true
+fi
 ```
 
 ## ELSE
@@ -1155,7 +1165,17 @@ fi
 
 git push origin "${WORKFLOW_BRANCH}"
 gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
-git checkout main && git pull origin main
+
+# Post-merge: sync local main with remote
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+git log --oneline -1  # verify local matches remote
+
+# Clean up feature branch locally (remote already deleted by --delete-branch)
+if [ -n "${WORKFLOW_BRANCH}" ] && [ "${WORKFLOW_BRANCH}" != "main" ]; then
+  git branch -d "${WORKFLOW_BRANCH}" 2>/dev/null || true
+fi
 ```
 
 ## ELSE
@@ -1184,7 +1204,17 @@ fi
 
 git push origin "${WORKFLOW_BRANCH}"
 gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
-git checkout main && git pull origin main
+
+# Post-merge: sync local main with remote
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+git log --oneline -1  # verify local matches remote
+
+# Clean up feature branch locally (remote already deleted by --delete-branch)
+if [ -n "${WORKFLOW_BRANCH}" ] && [ "${WORKFLOW_BRANCH}" != "main" ]; then
+  git branch -d "${WORKFLOW_BRANCH}" 2>/dev/null || true
+fi
 ```
 
 ## ENDIF
