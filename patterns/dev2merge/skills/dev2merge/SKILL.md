@@ -79,7 +79,7 @@ breaks prompt-guard propagation.
 14. **Create PR**: `gh pr create --base main`.
 15. **Delegate PR review loop**: invoke `csa run --skill pr-codex-bot --no-stream-stdout ...`.
 16. **Do not poll in caller**: all trigger/poll/timeout/fix/review/merge waiting is handled inside delegated CSA workflow.
-17. **Post-merge sync**: ensure local `main` is updated after delegated workflow completes.
+17. **Post-merge sync**: `git fetch origin && git checkout main && git merge origin/main --ff-only`. Delete feature branch locally and remotely.
 
 ## Example Usage
 
@@ -109,5 +109,5 @@ breaks prompt-guard propagation.
 10. `pr-codex-bot` delegated workflow completed successfully.
 11. Cloud review polling and fix loops stayed inside delegated CSA session (no caller-side polling loop).
 12. PR merged via squash-merge.
-13. Local main updated: `git checkout main && git pull origin main`.
+13. Local main updated: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 14. Feature branch deleted (remote and local).

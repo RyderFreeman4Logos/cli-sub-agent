@@ -578,3 +578,38 @@ set -euo pipefail
 csa run --sa-mode false --skill pr-codex-bot --no-stream-stdout \
   "Operate on the current branch and active PR. Execute the full cloud review lifecycle end-to-end, including trigger, polling, timeout fallback, iterative fixes, and merge."
 ```
+
+## Step 21: Post-Merge Local Sync
+
+Tool: bash
+OnFail: abort
+
+After the delegated pr-codex-bot workflow completes (which includes
+`gh pr merge`), sync the local main branch to match remote and clean up
+the feature branch. This ensures local state is consistent with remote
+after the remote-side squash-merge.
+
+```bash
+set -euo pipefail
+FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+
+# Sync local main with remote
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+
+# Verify local main matches remote
+LOCAL_SHA="$(git rev-parse HEAD)"
+REMOTE_SHA="$(git rev-parse origin/main)"
+if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
+  echo "ERROR: Local main (${LOCAL_SHA}) does not match origin/main (${REMOTE_SHA}) after sync." >&2
+  exit 1
+fi
+echo "Local main synced to ${LOCAL_SHA}."
+
+# Clean up feature branch (local and remote)
+if [ -n "${FEATURE_BRANCH}" ] && [ "${FEATURE_BRANCH}" != "main" ] && [ "${FEATURE_BRANCH}" != "dev" ]; then
+  git branch -d "${FEATURE_BRANCH}" 2>/dev/null || echo "INFO: Local branch ${FEATURE_BRANCH} already deleted."
+  git push origin --delete "${FEATURE_BRANCH}" 2>/dev/null || echo "INFO: Remote branch ${FEATURE_BRANCH} already deleted."
+fi
+```
