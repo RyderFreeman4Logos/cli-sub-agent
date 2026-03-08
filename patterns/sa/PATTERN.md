@@ -94,9 +94,10 @@ context is focused, avoiding large diffs where reviewers can only surface
 
 COMMIT HOOK POLICY (MANDATORY): NEVER use `git commit --no-verify` or
 `git commit -n` unless the prompt explicitly includes
-`ALLOW_GIT_COMMIT_NO_VERIFY=1`.
+`ALLOW_GIT_COMMIT_NO_VERIFY=1`. Bypassing hooks is a critical SOP violation.
 If hooks fail (including failures caused by unrelated workspace crates), STOP
 and return a blocker / `needs_clarification` instead of bypassing hooks.
+Fix the underlying issues to ensure codebase integrity.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)

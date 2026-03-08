@@ -327,11 +327,24 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 17
+title = "Cumulative Branch Review"
+tool = "csa"
+prompt = """
+Perform a cumulative review of the entire feature branch before pushing.
+This catches cross-commit issues that per-commit reviews might miss.
+
+Run 'csa review --range main...HEAD' and verify the verdict is clean."""
+tier = "tier-2-standard"
+on_fail = "abort"
+condition = "${IS_MILESTONE}"
+
+[[workflow.steps]]
+id = 18
 title = "Auto PR"
 tool = "bash"
 prompt = """
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 17-18 are ATOMIC — do not stop after PR creation.
+Steps 18-19 are ATOMIC — do not stop after PR creation.
 
 ```bash
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
@@ -346,21 +359,15 @@ on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 18
+id = 19
 title = "Invoke PR Codex Bot"
-prompt = """
-Trigger the pr-codex-bot workflow on the newly created PR:
-1. Trigger @codex review on the PR
-2. Poll for bot response (max 10 min timeout)
-3. Classify and action each bot comment
-4. Arbitrate false positives via debate
-5. Fix real issues and re-trigger
-6. Merge when all issues resolved"""
+tool = "csa"
+prompt = "run --pattern pr-codex-bot"
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
-id = 19
+id = 20
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).

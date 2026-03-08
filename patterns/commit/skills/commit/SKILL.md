@@ -30,6 +30,10 @@ Enforce "Commit = Audited" discipline: every commit passes branch check, formatt
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
+<prompt-guard name="no-verify-forbidden">
+ABSOLUTE PROHIBITION: You MUST NOT use `--no-verify` or `-n` with any `git commit` or `git push` command. All quality hooks (pre-commit, etc.) MUST be allowed to run. Bypassing hooks is a critical SOP violation. If hooks fail, fix the underlying code issues instead of bypassing.
+</prompt-guard>
+
 ### Prerequisites
 
 - `csa` binary MUST be in PATH: `which csa`

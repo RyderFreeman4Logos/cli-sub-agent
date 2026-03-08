@@ -305,13 +305,26 @@ git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
 
 ## IF ${IS_MILESTONE}
 
-## Step 17: Auto PR
+## Step 17: Cumulative Branch Review
+
+Tool: csa
+Tier: tier-2-standard
+OnFail: abort
+
+Perform a cumulative review of the entire feature branch before pushing.
+This catches cross-commit issues that per-commit reviews might miss.
+
+```bash
+csa review --range main...HEAD
+```
+
+## Step 18: Auto PR
 
 Tool: bash
 OnFail: abort
 
 Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 17-18 are ATOMIC — do not stop after PR creation.
+Steps 18-19 are ATOMIC — do not stop after PR creation.
 
 ```bash
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
@@ -323,7 +336,10 @@ git push -u origin "${BRANCH}"
 gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}"
 ```
 
-## Step 18: Invoke PR Codex Bot
+## Step 19: Invoke PR Codex Bot
+
+Tool: csa
+OnFail: abort
 
 ## INCLUDE pr-codex-bot
 
@@ -334,7 +350,7 @@ Handles local review, cloud bot trigger, false-positive arbitration, merge.
 
 ## IF ${HAS_DEFERRED_ISSUES}
 
-## Step 19: Fix Deferred Issues
+## Step 20: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
 Each fix goes through full commit workflow (Steps 1-16).

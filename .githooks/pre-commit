@@ -23,3 +23,9 @@ for pb in $PROTECTED; do
     exit 1
   fi
 done
+
+# Run just pre-commit if it exists
+if command -v just >/dev/null 2>&1 && [ -f justfile ]; then
+  echo "Running just pre-commit..."
+  just pre-commit
+fi
