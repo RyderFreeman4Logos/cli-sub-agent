@@ -26,6 +26,8 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
         }),
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

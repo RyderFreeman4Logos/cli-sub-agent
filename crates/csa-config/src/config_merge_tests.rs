@@ -437,3 +437,195 @@ suppress_notify = true
         "project can still disable a globally-enabled tool"
     );
 }
+
+#[test]
+fn test_global_gate_command_ignored_during_merge() {
+    // gate_command is project-only. If global sets it, it should be stripped
+    // and the merged config should not inherit it.
+    let tmp = tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[review]
+tool = "auto"
+gate_command = "make lint"
+gate_timeout_secs = 999
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[project]
+name = "test"
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    // gate_command from global must be stripped (project-only field)
+    assert!(
+        config
+            .review
+            .as_ref()
+            .map_or(true, |r| r.gate_command.is_none()),
+        "global gate_command must not be inherited by project config"
+    );
+    // gate_timeout_secs from global must be stripped, falling back to default 300
+    assert!(
+        config
+            .review
+            .as_ref()
+            .map_or(true, |r| r.gate_timeout_secs == 300),
+        "global gate_timeout_secs must not be inherited; should be default 300"
+    );
+}
+
+#[test]
+fn test_project_gate_command_preserved_during_merge() {
+    // When the project sets gate_command, it should be preserved.
+    let tmp = tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[review]
+tool = "auto"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[review]
+gate_command = "just pre-commit"
+gate_timeout_secs = 600
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    assert_eq!(
+        config
+            .review
+            .as_ref()
+            .and_then(|r| r.gate_command.as_deref()),
+        Some("just pre-commit"),
+        "project gate_command must be preserved"
+    );
+    assert_eq!(
+        config.review.as_ref().map(|r| r.gate_timeout_secs),
+        Some(600),
+        "project gate_timeout_secs must be preserved"
+    );
+}
+
+#[test]
+fn test_project_gate_command_overrides_global_gate_command() {
+    // When both global and project set gate_command, project wins
+    // AND global value is stripped (not merely overridden).
+    let tmp = tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[review]
+tool = "codex"
+gate_command = "make lint"
+gate_timeout_secs = 999
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[review]
+gate_command = "just pre-commit"
+gate_timeout_secs = 120
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    // Project gate_command wins
+    assert_eq!(
+        config
+            .review
+            .as_ref()
+            .and_then(|r| r.gate_command.as_deref()),
+        Some("just pre-commit"),
+    );
+    assert_eq!(
+        config.review.as_ref().map(|r| r.gate_timeout_secs),
+        Some(120),
+    );
+    // tool should still be inherited from global (since project didn't set it)
+    assert_eq!(
+        config.review.as_ref().map(|r| r.tool.as_str()),
+        Some("codex"),
+    );
+}
+
+#[test]
+fn test_gate_mode_still_inherits_from_global() {
+    // gate_mode is NOT project-only; normal merge applies.
+    let tmp = tempdir().unwrap();
+    let user_path = tmp.path().join("user.toml");
+    let project_path = tmp.path().join("project.toml");
+
+    std::fs::write(
+        &user_path,
+        r#"
+schema_version = 1
+[review]
+gate_mode = "full"
+"#,
+    )
+    .unwrap();
+
+    std::fs::write(
+        &project_path,
+        r#"
+schema_version = 1
+[project]
+name = "test"
+"#,
+    )
+    .unwrap();
+
+    let config = ProjectConfig::load_with_paths(Some(&user_path), &project_path)
+        .unwrap()
+        .expect("Should load merged config");
+
+    // gate_mode from global should be inherited (not project-only)
+    assert_eq!(
+        config.review.as_ref().map(|r| r.gate_mode.clone()),
+        Some(crate::global::GateMode::Full),
+        "gate_mode should be inherited from global config"
+    );
+}

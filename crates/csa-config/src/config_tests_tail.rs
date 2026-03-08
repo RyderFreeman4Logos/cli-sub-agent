@@ -20,6 +20,8 @@ fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.enforce_tool_enabled("codex", false).is_ok());
@@ -42,6 +44,8 @@ fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.enforce_tool_enabled("codex", false).is_ok());
@@ -73,6 +77,8 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.enforce_tool_enabled("codex", true).is_ok());

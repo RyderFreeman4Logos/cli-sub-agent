@@ -1,0 +1,334 @@
+use super::*;
+
+/// Set CSA_DEPTH env var for test isolation.
+///
+/// # Safety
+/// Tests using this must be run with `--test-threads=1` or accept
+/// that env mutations are process-global. All gate tests restore the
+/// env var after use.
+unsafe fn set_depth(val: &str) {
+    // SAFETY: Test-only; env var is restored after each test.
+    unsafe { std::env::set_var("CSA_DEPTH", val) };
+}
+
+/// Remove CSA_DEPTH env var after test.
+///
+/// # Safety
+/// Same concurrency caveat as `set_depth`.
+unsafe fn clear_depth() {
+    // SAFETY: Test-only; restoring env to clean state.
+    unsafe { std::env::remove_var("CSA_DEPTH") };
+}
+
+// ---------------------------------------------------------------------------
+// GateResult helpers
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_gate_result_skipped_is_passed() {
+    let result = GateResult::skipped("test reason");
+    assert!(result.skipped);
+    assert!(result.passed());
+    assert_eq!(result.skip_reason.as_deref(), Some("test reason"));
+    assert!(result.command.is_empty());
+}
+
+#[test]
+fn test_gate_result_exit_0_is_passed() {
+    let result = GateResult {
+        command: "true".to_string(),
+        exit_code: Some(0),
+        stdout: String::new(),
+        stderr: String::new(),
+        skipped: false,
+        skip_reason: None,
+    };
+    assert!(result.passed());
+}
+
+#[test]
+fn test_gate_result_exit_1_is_not_passed() {
+    let result = GateResult {
+        command: "false".to_string(),
+        exit_code: Some(1),
+        stdout: String::new(),
+        stderr: String::new(),
+        skipped: false,
+        skip_reason: None,
+    };
+    assert!(!result.passed());
+}
+
+#[test]
+fn test_gate_result_no_exit_code_is_not_passed() {
+    let result = GateResult {
+        command: "killed".to_string(),
+        exit_code: None,
+        stdout: String::new(),
+        stderr: String::new(),
+        skipped: false,
+        skip_reason: None,
+    };
+    assert!(!result.passed());
+}
+
+// ---------------------------------------------------------------------------
+// evaluate_quality_gate
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_gate_skipped_when_csa_depth_set() {
+    // SAFETY: Test-only env mutation; gate tests are not parallel-safe by nature.
+    unsafe { set_depth("1") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = evaluate_quality_gate(
+        dir.path(),
+        Some("echo should-not-run"),
+        300,
+        &GateMode::Full,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.skipped);
+    assert!(result.passed());
+    assert!(result.skip_reason.as_deref().unwrap().contains("CSA_DEPTH"));
+
+    // SAFETY: Restoring env to clean state.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_gate_skipped_when_no_command_and_no_hooks_path() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    // Initialize a git repo without core.hooksPath
+    tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    let result = evaluate_quality_gate(dir.path(), None, 300, &GateMode::Full)
+        .await
+        .unwrap();
+
+    assert!(result.skipped);
+    assert!(result.passed());
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_gate_runs_explicit_command_success() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let result =
+        evaluate_quality_gate(dir.path(), Some("echo 'gate passed'"), 300, &GateMode::Full)
+            .await
+            .unwrap();
+
+    assert!(!result.skipped);
+    assert!(result.passed());
+    assert_eq!(result.exit_code, Some(0));
+    assert!(result.stdout.contains("gate passed"));
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_gate_runs_explicit_command_failure() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = evaluate_quality_gate(
+        dir.path(),
+        Some("echo 'lint error' >&2; exit 1"),
+        300,
+        &GateMode::Full,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.skipped);
+    assert!(!result.passed());
+    assert_eq!(result.exit_code, Some(1));
+    assert!(result.stderr.contains("lint error"));
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_gate_timeout() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = evaluate_quality_gate(
+        dir.path(),
+        Some("sleep 60"),
+        1, // 1 second timeout
+        &GateMode::Full,
+    )
+    .await
+    .unwrap();
+
+    assert!(!result.skipped);
+    assert!(!result.passed());
+    assert!(result.stderr.contains("timed out"));
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_gate_monitor_mode_still_runs() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    // Even in monitor mode, the gate runs — the mode only affects how callers
+    // handle the result.
+    let result = evaluate_quality_gate(dir.path(), Some("exit 1"), 300, &GateMode::Monitor)
+        .await
+        .unwrap();
+
+    assert!(!result.skipped);
+    assert!(!result.passed());
+    // In monitor mode the function still returns a GateResult; caller decides.
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_gate_captures_stdout_and_stderr() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let result = evaluate_quality_gate(
+        dir.path(),
+        Some("echo 'stdout-content'; echo 'stderr-content' >&2"),
+        300,
+        &GateMode::Full,
+    )
+    .await
+    .unwrap();
+
+    assert!(result.passed());
+    assert!(result.stdout.contains("stdout-content"));
+    assert!(result.stderr.contains("stderr-content"));
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+// ---------------------------------------------------------------------------
+// detect_git_hooks_pre_commit
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_detect_no_hooks_path() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    let result = detect_git_hooks_pre_commit(dir.path()).await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_detect_hooks_path_with_pre_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    // Create a hooks directory with a pre-commit script
+    let hooks_dir = dir.path().join("my-hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    let pre_commit = hooks_dir.join("pre-commit");
+    std::fs::write(&pre_commit, "#!/bin/sh\nexit 0\n").unwrap();
+
+    // Set core.hooksPath
+    tokio::process::Command::new("git")
+        .args(["config", "core.hooksPath", hooks_dir.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    let result = detect_git_hooks_pre_commit(dir.path()).await.unwrap();
+    assert!(result.is_some());
+    assert!(result.unwrap().contains("pre-commit"));
+}
+
+#[tokio::test]
+async fn test_detect_hooks_path_without_pre_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    // Create hooks directory but NO pre-commit script
+    let hooks_dir = dir.path().join("my-hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+
+    tokio::process::Command::new("git")
+        .args(["config", "core.hooksPath", hooks_dir.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    let result = detect_git_hooks_pre_commit(dir.path()).await.unwrap();
+    assert!(result.is_none());
+}
+
+#[tokio::test]
+async fn test_detect_hooks_path_relative() {
+    let dir = tempfile::tempdir().unwrap();
+    tokio::process::Command::new("git")
+        .args(["init"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    // Create relative hooks directory
+    let hooks_dir = dir.path().join("relative-hooks");
+    std::fs::create_dir_all(&hooks_dir).unwrap();
+    std::fs::write(hooks_dir.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+
+    // Set relative path
+    tokio::process::Command::new("git")
+        .args(["config", "core.hooksPath", "relative-hooks"])
+        .current_dir(dir.path())
+        .output()
+        .await
+        .unwrap();
+
+    let result = detect_git_hooks_pre_commit(dir.path()).await.unwrap();
+    assert!(result.is_some());
+}

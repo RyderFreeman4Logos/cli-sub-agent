@@ -80,6 +80,8 @@ mod tests {
             tool_aliases: HashMap::new(),
             preferences: None,
             memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
         }
     }
 

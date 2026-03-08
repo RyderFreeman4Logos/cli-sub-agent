@@ -369,5 +369,5 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
     .await;
 
     let execution = result.expect("review should ignore inherited stale CSA_SESSION_ID");
-    assert_eq!(execution.exit_code, 0);
+    assert_eq!(execution.execution.exit_code, 0);
 }

@@ -105,7 +105,8 @@ fn review_mode_parses_standard_and_red_team_cli_args() {
 fn review_cli_validation_and_consensus_helpers_remain_compatible() {
     let cli = Cli::try_parse_from(["csa", "review", "--red-team", "--diff"])
         .expect("red-team review args should parse");
-    cli_defs::validate_command_args(&cli.command).expect("red-team review args should validate");
+    cli_defs::validate_command_args(&cli.command, 1800)
+        .expect("red-team review args should validate");
 
     let instruction =
         review_consensus::build_multi_reviewer_instruction("Base prompt", 2, ToolName::Codex);

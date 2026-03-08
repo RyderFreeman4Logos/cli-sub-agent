@@ -26,6 +26,8 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     }
 }
 

@@ -76,6 +76,8 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     }
 }
 
@@ -322,6 +324,7 @@ fn derive_scope_uncommitted() {
         range: None,
         files: None,
         fix: false,
+        max_rounds: 3,
         review_mode: None,
         red_team: false,
         security_mode: "auto".to_string(),
@@ -352,6 +355,7 @@ fn derive_scope_commit() {
         range: None,
         files: None,
         fix: false,
+        max_rounds: 3,
         review_mode: None,
         red_team: false,
         security_mode: "auto".to_string(),
@@ -382,6 +386,7 @@ fn derive_scope_range() {
         range: Some("main...HEAD".to_string()),
         files: None,
         fix: false,
+        max_rounds: 3,
         review_mode: None,
         red_team: false,
         security_mode: "auto".to_string(),
@@ -412,6 +417,7 @@ fn derive_scope_files() {
         range: None,
         files: Some("src/**/*.rs".to_string()),
         fix: false,
+        max_rounds: 3,
         review_mode: None,
         red_team: false,
         security_mode: "auto".to_string(),
@@ -442,6 +448,7 @@ fn derive_scope_default_branch() {
         range: None,
         files: None,
         fix: false,
+        max_rounds: 3,
         review_mode: None,
         red_team: false,
         security_mode: "auto".to_string(),

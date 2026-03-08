@@ -47,6 +47,8 @@ fn test_validate_config_succeeds_on_valid() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -78,6 +80,8 @@ fn test_validate_config_fails_on_empty_name() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -113,6 +117,8 @@ fn test_validate_config_fails_on_unknown_tool() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -149,6 +155,8 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -189,6 +197,8 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -237,6 +247,8 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -288,6 +300,8 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -348,6 +362,8 @@ fn test_validate_config_fails_on_empty_models() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -399,6 +415,8 @@ fn test_validate_config_accepts_custom_tier_names() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -433,6 +451,8 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -470,6 +490,8 @@ fn test_validate_max_recursion_depth_boundary_20() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -500,6 +522,8 @@ fn test_validate_max_recursion_depth_boundary_21() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
