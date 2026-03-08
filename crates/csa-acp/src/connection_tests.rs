@@ -101,6 +101,40 @@ async fn env_remove_strips_claudecode_from_child() {
 }
 
 #[test]
+fn test_collect_agent_output_includes_thoughts() {
+    let events = vec![
+        SessionEvent::AgentMessage("Hello".to_string()),
+        SessionEvent::AgentThought("Thinking...".to_string()),
+        SessionEvent::AgentMessage(" world".to_string()),
+    ];
+    let output = collect_agent_output(&events);
+    assert_eq!(output, "HelloThinking... world");
+}
+
+#[test]
+fn stream_new_agent_messages_includes_thoughts_in_spool() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    events
+        .borrow_mut()
+        .push(SessionEvent::AgentMessage("hello".to_string()));
+    events
+        .borrow_mut()
+        .push(SessionEvent::AgentThought("...thinking".to_string()));
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let spool_path = temp.path().join("output.log");
+    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut index = 0;
+
+    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    assert_eq!(
+        std::fs::read_to_string(&spool_path).expect("read spool"),
+        "hello...thinking"
+    );
+    assert_eq!(index, 2);
+}
+
+#[test]
 fn stream_new_agent_messages_writes_spool_incrementally() {
     let events = Rc::new(RefCell::new(Vec::new()));
     events

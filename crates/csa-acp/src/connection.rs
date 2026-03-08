@@ -498,17 +498,27 @@ fn stream_new_agent_messages(
 
         let mut messages = Vec::new();
         for event in &events_ref[*processed_index..] {
-            if let SessionEvent::AgentMessage(chunk) = event {
-                messages.push(chunk.clone());
+            match event {
+                SessionEvent::AgentMessage(chunk) => {
+                    messages.push((chunk.clone(), false));
+                }
+                SessionEvent::AgentThought(chunk) => {
+                    messages.push((chunk.clone(), true));
+                }
+                _ => {}
             }
         }
         *processed_index = events_ref.len();
         messages
     };
 
-    for chunk in &new_messages {
+    for (chunk, is_thought) in &new_messages {
         if stream_stdout_to_stderr {
-            eprint!("[stdout] {chunk}");
+            if *is_thought {
+                eprint!("[thought] {chunk}");
+            } else {
+                eprint!("[stdout] {chunk}");
+            }
         }
         spool_chunk(output_spool, chunk.as_bytes());
     }
@@ -525,8 +535,11 @@ fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
 fn collect_agent_output(events: &[SessionEvent]) -> String {
     let mut output = String::new();
     for event in events {
-        if let SessionEvent::AgentMessage(chunk) = event {
-            output.push_str(chunk);
+        match event {
+            SessionEvent::AgentMessage(chunk) | SessionEvent::AgentThought(chunk) => {
+                output.push_str(chunk);
+            }
+            _ => {}
         }
     }
     output
