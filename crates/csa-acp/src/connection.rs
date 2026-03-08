@@ -548,6 +548,14 @@ fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
     }
 }
 
+/// Collect agent output for the caller (stdout / summary extraction).
+///
+/// Only `AgentMessage` and `AgentThought` events contribute to the return
+/// value.  Diagnostic events (plan updates, tool-call lifecycle, other) are
+/// intentionally excluded — they are already written to the `output.log`
+/// spool by [`stream_new_agent_messages`] for audit purposes, but including
+/// them in the caller-facing output pollutes stdout and corrupts summary
+/// extraction (which uses the last non-empty line).
 fn collect_agent_output(events: &[SessionEvent]) -> String {
     let mut output = String::new();
     for event in events {
@@ -555,18 +563,11 @@ fn collect_agent_output(events: &[SessionEvent]) -> String {
             SessionEvent::AgentMessage(chunk) | SessionEvent::AgentThought(chunk) => {
                 output.push_str(chunk);
             }
-            SessionEvent::PlanUpdate(plan) => {
-                output.push_str(&format!("[plan] {plan}\n"));
-            }
-            SessionEvent::ToolCallStarted { title, kind, .. } => {
-                output.push_str(&format!("[tool:started] {title} ({kind})\n"));
-            }
-            SessionEvent::ToolCallCompleted { status, .. } => {
-                output.push_str(&format!("[tool:completed] {status}\n"));
-            }
-            SessionEvent::Other(payload) => {
-                output.push_str(&format!("[other] {payload}\n"));
-            }
+            // Diagnostic events: spool-only, not forwarded to caller.
+            SessionEvent::PlanUpdate(_)
+            | SessionEvent::ToolCallStarted { .. }
+            | SessionEvent::ToolCallCompleted { .. }
+            | SessionEvent::Other(_) => {}
         }
     }
     output

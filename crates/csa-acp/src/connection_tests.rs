@@ -181,6 +181,83 @@ fn stream_new_agent_messages_skips_non_message_events() {
 }
 
 #[test]
+fn collect_agent_output_excludes_diagnostic_events() {
+    let events = vec![
+        SessionEvent::AgentMessage("Hello".to_string()),
+        SessionEvent::PlanUpdate("step 1".to_string()),
+        SessionEvent::ToolCallStarted {
+            id: "t1".to_string(),
+            title: "Read".to_string(),
+            kind: "tool_use".to_string(),
+        },
+        SessionEvent::AgentThought("hmm".to_string()),
+        SessionEvent::ToolCallCompleted {
+            id: "t1".to_string(),
+            status: "completed".to_string(),
+        },
+        SessionEvent::Other("misc".to_string()),
+        SessionEvent::AgentMessage(" world".to_string()),
+    ];
+    let output = collect_agent_output(&events);
+    assert_eq!(
+        output, "Hellohmm world",
+        "collect_agent_output must only include AgentMessage and AgentThought"
+    );
+}
+
+#[test]
+fn stream_new_agent_messages_writes_all_event_types_to_spool() {
+    let events = Rc::new(RefCell::new(vec![
+        SessionEvent::AgentMessage("msg".to_string()),
+        SessionEvent::PlanUpdate("plan step".to_string()),
+        SessionEvent::ToolCallStarted {
+            id: "t1".to_string(),
+            title: "Edit".to_string(),
+            kind: "tool_use".to_string(),
+        },
+        SessionEvent::ToolCallCompleted {
+            id: "t1".to_string(),
+            status: "done".to_string(),
+        },
+        SessionEvent::Other("extra".to_string()),
+        SessionEvent::AgentThought("thought".to_string()),
+    ]));
+
+    let temp = tempfile::tempdir().expect("tempdir");
+    let spool_path = temp.path().join("output.log");
+    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut index = 0;
+
+    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    let spool_content = std::fs::read_to_string(&spool_path).expect("read spool");
+    assert!(
+        spool_content.contains("msg"),
+        "spool must include AgentMessage"
+    );
+    assert!(
+        spool_content.contains("[plan] plan step"),
+        "spool must include PlanUpdate"
+    );
+    assert!(
+        spool_content.contains("[tool:started] Edit"),
+        "spool must include ToolCallStarted"
+    );
+    assert!(
+        spool_content.contains("[tool:completed] done"),
+        "spool must include ToolCallCompleted"
+    );
+    assert!(
+        spool_content.contains("[other] extra"),
+        "spool must include Other"
+    );
+    assert!(
+        spool_content.contains("thought"),
+        "spool must include AgentThought"
+    );
+    assert_eq!(index, 6);
+}
+
+#[test]
 fn heartbeat_interval_defaults_to_enabled() {
     let _env_lock = HEARTBEAT_ENV_LOCK
         .lock()
