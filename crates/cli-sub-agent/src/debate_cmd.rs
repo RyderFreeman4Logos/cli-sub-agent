@@ -45,6 +45,68 @@ pub(crate) async fn handle_debate(
     // 2b. Verify debate skill is available (fail fast before any execution)
     verify_debate_skill_available(&project_root)?;
 
+    // 2c. Run pre-review quality gate (reuses [review] gate settings)
+    //
+    // Debate reuses the review section's gate settings because the gate is a
+    // shared pre-execution quality check (lint/test) that applies equally to
+    // both review and debate workflows.
+    {
+        let gate_command = config
+            .as_ref()
+            .and_then(|c| c.review.as_ref())
+            .and_then(|r| r.gate_command.as_deref());
+        let gate_timeout = config
+            .as_ref()
+            .and_then(|c| c.review.as_ref())
+            .map(|r| r.gate_timeout_secs)
+            .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
+        let gate_mode = &global_config.review.gate_mode;
+
+        let gate_result = crate::pipeline::gate::evaluate_quality_gate(
+            &project_root,
+            gate_command,
+            gate_timeout,
+            gate_mode,
+        )
+        .await?;
+
+        if gate_result.skipped {
+            debug!(
+                reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
+                "Quality gate skipped"
+            );
+        } else if !gate_result.passed() {
+            match gate_mode {
+                csa_config::GateMode::Monitor => {
+                    warn!(
+                        command = %gate_result.command,
+                        exit_code = ?gate_result.exit_code,
+                        "Quality gate failed (monitor mode — continuing with debate)"
+                    );
+                }
+                csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
+                    let mut msg = format!(
+                        "Pre-debate quality gate failed (mode={gate_mode:?}).\n\
+                         Command: {}\nExit code: {:?}",
+                        gate_result.command, gate_result.exit_code
+                    );
+                    if !gate_result.stdout.is_empty() {
+                        msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
+                    }
+                    if !gate_result.stderr.is_empty() {
+                        msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
+                    }
+                    anyhow::bail!(msg);
+                }
+            }
+        } else {
+            debug!(
+                command = %gate_result.command,
+                "Quality gate passed"
+            );
+        }
+    }
+
     // 3. Read question (from arg or stdin)
     let question = read_prompt(args.question)?;
 

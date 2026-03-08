@@ -29,6 +29,34 @@ pub(crate) fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml
     }
 }
 
+/// Project-only keys under `[review]`. These fields are meaningful only in
+/// project config; values from global config are stripped before merge to
+/// prevent accidental inheritance.
+const REVIEW_PROJECT_ONLY_KEYS: &[&str] = &["gate_command", "gate_timeout_secs"];
+
+/// Strip project-only keys from the global `[review]` table before merge.
+///
+/// Some review config fields (e.g. `gate_command`, `gate_timeout_secs`) are
+/// project-specific and must not be inherited from the global config.
+/// If the global config sets them, emit a warning and remove them so the
+/// merge only preserves values from the project config.
+pub(crate) fn strip_review_project_only_from_global(global: &mut toml::Value) {
+    let review_table = match global.get_mut("review").and_then(|t| t.as_table_mut()) {
+        Some(t) => t,
+        None => return,
+    };
+
+    for key in REVIEW_PROJECT_ONLY_KEYS {
+        if review_table.remove(*key).is_some() {
+            tracing::warn!(
+                key = *key,
+                "Global config sets review.{} which is project-only; ignoring global value",
+                key
+            );
+        }
+    }
+}
+
 /// Re-apply `tools.*.enabled = false` from the global config into a merged
 /// TOML value.  This ensures that global disablement is a hard override:
 /// project configs cannot set a globally-disabled tool back to `enabled = true`.

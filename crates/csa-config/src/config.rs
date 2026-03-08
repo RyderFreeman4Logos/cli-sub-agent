@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::acp::AcpConfig;
-use crate::config_merge::{enforce_global_tool_disables, merge_toml_values, warn_deprecated_keys};
+use crate::config_merge::{
+    enforce_global_tool_disables, merge_toml_values, strip_review_project_only_from_global,
+    warn_deprecated_keys,
+};
 pub use crate::config_resources::ResourcesConfig;
 use crate::global::{PreferencesConfig, ReviewConfig};
 use crate::memory::MemoryConfig;
@@ -122,6 +125,99 @@ impl SessionConfig {
     }
 }
 
+/// Project-level hook overrides (`[hooks]` in `.csa/config.toml`).
+///
+/// When set, these commands take PRIORITY over `hooks.toml` PreRun/PostRun
+/// entries. They are injected as runtime overrides into the hook loading
+/// pipeline, so they sit at the highest-priority layer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HooksSection {
+    /// Shell command to run before every `csa run`/`review`/`debate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pre_run: Option<String>,
+    /// Shell command to run after every `csa run`/`review`/`debate`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub post_run: Option<String>,
+    /// Timeout (seconds) for hook commands (default: 60).
+    #[serde(
+        default = "default_hooks_timeout_secs",
+        skip_serializing_if = "is_default_hooks_timeout"
+    )]
+    pub timeout_secs: u64,
+}
+
+const fn default_hooks_timeout_secs() -> u64 {
+    60
+}
+
+fn is_default_hooks_timeout(val: &u64) -> bool {
+    *val == default_hooks_timeout_secs()
+}
+
+impl Default for HooksSection {
+    fn default() -> Self {
+        Self {
+            pre_run: None,
+            post_run: None,
+            timeout_secs: default_hooks_timeout_secs(),
+        }
+    }
+}
+
+impl HooksSection {
+    /// Returns true when all fields are at their defaults (per rust/016 serde-default rule).
+    pub fn is_default(&self) -> bool {
+        self.pre_run.is_none()
+            && self.post_run.is_none()
+            && self.timeout_secs == default_hooks_timeout_secs()
+    }
+}
+
+/// Execution tuning (`[execution]` in config).
+///
+/// Present in both project and global configs. Project values override global
+/// during config merge (standard TOML deep-merge).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionConfig {
+    /// Floor for the `--timeout` flag (seconds).
+    ///
+    /// Any `--timeout` value below this is rejected at the CLI validation layer.
+    /// Default: 1800 (30 minutes). The previous hardcoded floor was 1200.
+    #[serde(
+        default = "default_min_timeout_seconds",
+        skip_serializing_if = "is_default_min_timeout"
+    )]
+    pub min_timeout_seconds: u64,
+}
+
+const fn default_min_timeout_seconds() -> u64 {
+    1800
+}
+
+fn is_default_min_timeout(val: &u64) -> bool {
+    *val == default_min_timeout_seconds()
+}
+
+impl Default for ExecutionConfig {
+    fn default() -> Self {
+        Self {
+            min_timeout_seconds: default_min_timeout_seconds(),
+        }
+    }
+}
+
+impl ExecutionConfig {
+    /// Returns true when all fields are at their defaults (per rust/016 serde-default rule).
+    pub fn is_default(&self) -> bool {
+        self.min_timeout_seconds == default_min_timeout_seconds()
+    }
+
+    /// The compile-time default minimum timeout in seconds.
+    pub const fn default_min_timeout() -> u64 {
+        default_min_timeout_seconds()
+    }
+}
+
 /// Current schema version for config.toml
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -175,6 +271,16 @@ pub struct ProjectConfig {
     /// When set, overrides the global `[preferences].tool_priority`.
     #[serde(default)]
     pub preferences: Option<PreferencesConfig>,
+    /// Project-level hook overrides for pre/post run commands.
+    ///
+    /// When set, `.csa/config.toml` hooks take PRIORITY over `hooks.toml`
+    /// for PreRun/PostRun events. The commands specified here are injected
+    /// as runtime overrides into the hook loading pipeline.
+    #[serde(default, skip_serializing_if = "HooksSection::is_default")]
+    pub hooks: HooksSection,
+    /// Execution tuning knobs (timeout floors, etc.).
+    #[serde(default, skip_serializing_if = "ExecutionConfig::is_default")]
+    pub execution: ExecutionConfig,
 }
 
 fn default_schema_version() -> u32 {
@@ -389,7 +495,12 @@ impl ProjectConfig {
             .get("schema_version")
             .and_then(|v| v.as_integer());
 
-        let mut merged = merge_toml_values(base_val.clone(), overlay_val);
+        // Strip project-only review keys from global config before merge.
+        // These fields are meaningful only in project config.
+        let mut base_for_merge = base_val.clone();
+        strip_review_project_only_from_global(&mut base_for_merge);
+
+        let mut merged = merge_toml_values(base_for_merge, overlay_val);
         // Set schema_version to max of both sources (only when at least one is explicit)
         if let Some(max_ver) = match (base_schema, overlay_schema) {
             (Some(b), Some(o)) => Some(b.max(o)),
@@ -627,6 +738,12 @@ init_timeout_seconds = 60
 # [tool_aliases]
 # gem = "gemini-cli"
 # cc = "claude-code"
+# [hooks]
+# pre_run = "cargo fmt --all"
+# post_run = "cargo fmt --all"
+# timeout_secs = 60
+# [execution]
+# min_timeout_seconds = 1800
 "#
         .to_string()
     }
@@ -658,3 +775,7 @@ mod tier_tests;
 #[cfg(test)]
 #[path = "config_merge_tests.rs"]
 mod merge_tests;
+
+#[cfg(test)]
+#[path = "config_merge_tests_tail.rs"]
+mod merge_tests_tail;

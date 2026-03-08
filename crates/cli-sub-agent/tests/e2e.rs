@@ -162,7 +162,7 @@ fn review_cli_validation_applies_red_team_defaults() {
 
     match &cli.command {
         Commands::Review(args) => {
-            validate_command_args(&cli.command).expect("review args should validate");
+            validate_command_args(&cli.command, 1800).expect("review args should validate");
             assert_eq!(args.effective_review_mode().as_str(), "red-team");
             assert_eq!(args.effective_security_mode(), "on");
         }
@@ -182,7 +182,8 @@ fn review_cli_validation_rejects_red_team_with_security_off() {
     ])
     .expect("review args should parse before validation");
 
-    let err = validate_command_args(&cli.command).expect_err("validation should reject conflict");
+    let err =
+        validate_command_args(&cli.command, 1800).expect_err("validation should reject conflict");
     assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
 }
 

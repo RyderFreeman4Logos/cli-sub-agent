@@ -124,6 +124,34 @@ pub(crate) fn validate_sa_mode(command: &Commands, current_depth: u32) -> anyhow
     Ok(sa_mode_arg.unwrap_or(false))
 }
 
+/// Resolve the effective minimum timeout from project and global configs.
+///
+/// Priority: project `[execution].min_timeout_seconds` > global > compile-time default.
+/// Config loading errors are silently ignored (fall back to compile-time default).
+fn resolve_effective_min_timeout() -> u64 {
+    let compile_default = csa_config::ExecutionConfig::default_min_timeout();
+
+    // Try to load project config (merged with user-level).
+    // This is the same merged config that pipeline uses, so project overrides global
+    // via the standard TOML deep-merge path.
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(Some(config)) = csa_config::ProjectConfig::load(&cwd) {
+            if !config.execution.is_default() {
+                return config.execution.min_timeout_seconds;
+            }
+        }
+    }
+
+    // Fall back to global config.
+    if let Ok(global) = csa_config::GlobalConfig::load() {
+        if !global.execution.is_default() {
+            return global.execution.min_timeout_seconds;
+        }
+    }
+
+    compile_default
+}
+
 fn apply_sa_mode_prompt_guard(command: &Commands, current_depth: u32) -> anyhow::Result<()> {
     if command_sa_mode_arg(command).is_none() {
         return Ok(());
@@ -173,7 +201,12 @@ async fn run() -> Result<()> {
     let cli = Cli::parse();
     let output_format = cli.format;
     let command = cli.command;
-    if let Err(err) = validate_command_args(&command) {
+
+    // Resolve effective min_timeout_seconds from configs (project overrides global).
+    // This is a lightweight load; config errors are ignored (fall back to compile-time default).
+    let min_timeout = resolve_effective_min_timeout();
+
+    if let Err(err) = validate_command_args(&command, min_timeout) {
         err.exit();
     }
 

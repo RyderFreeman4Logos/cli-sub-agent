@@ -469,6 +469,37 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         Some(&merged_env)
     };
 
+    // Build runtime overrides from .csa/config.toml [hooks] section.
+    // These take PRIORITY over hooks.toml PreRun/PostRun entries.
+    let project_hook_overrides = config.filter(|c| !c.hooks.is_default()).map(|c| {
+        let mut overrides = std::collections::HashMap::new();
+        if let Some(ref cmd) = c.hooks.pre_run {
+            overrides.insert(
+                "pre_run".to_string(),
+                csa_hooks::HookConfig {
+                    enabled: true,
+                    command: Some(cmd.clone()),
+                    timeout_secs: c.hooks.timeout_secs,
+                    fail_policy: csa_hooks::FailPolicy::default(),
+                    waivers: Vec::new(),
+                },
+            );
+        }
+        if let Some(ref cmd) = c.hooks.post_run {
+            overrides.insert(
+                "post_run".to_string(),
+                csa_hooks::HookConfig {
+                    enabled: true,
+                    command: Some(cmd.clone()),
+                    timeout_secs: c.hooks.timeout_secs,
+                    fail_policy: csa_hooks::FailPolicy::default(),
+                    waivers: Vec::new(),
+                },
+            );
+        }
+        overrides
+    });
+
     // Load hooks config once, reused by PreRun, PostRun, and SessionComplete hooks.
     let hooks_config = load_hooks_config(
         csa_session::get_session_root(project_root)
@@ -476,7 +507,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             .map(|r| r.join("hooks.toml"))
             .as_deref(),
         global_hooks_path().as_deref(),
-        None,
+        project_hook_overrides.as_ref(),
     );
     // PreRun hook: fires before tool execution starts.
     let sessions_root = session_dir

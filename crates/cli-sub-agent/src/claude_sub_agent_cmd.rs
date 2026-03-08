@@ -282,6 +282,8 @@ mod tests {
             preferences: None,
             session: Default::default(),
             memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
         }
     }
 
@@ -375,6 +377,8 @@ mod tests {
             preferences: None,
             session: Default::default(),
             memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
         };
 
         let tools = get_auto_selectable_tools(Some(&cfg), std::path::Path::new("/tmp"));

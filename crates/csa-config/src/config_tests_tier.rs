@@ -42,6 +42,8 @@ fn test_resolve_tier_default_selection() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     let result = config.resolve_tier_tool("default");
@@ -86,6 +88,8 @@ fn test_resolve_tier_fallback_to_tier3() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     // Should fallback to tier3
@@ -146,6 +150,8 @@ fn test_resolve_tier_skips_disabled_tools() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     // Should skip disabled gemini-cli and select codex
@@ -186,6 +192,8 @@ fn test_resolve_alias() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     // Resolve alias
@@ -238,6 +246,8 @@ fn enabled_tier_models_returns_all_when_no_tools_disabled() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     let models = config.enabled_tier_models("tier-1");
@@ -287,6 +297,8 @@ fn enabled_tier_models_excludes_disabled_tool() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     let models = config.enabled_tier_models("tier-3");
@@ -313,6 +325,8 @@ fn enabled_tier_models_returns_empty_for_unknown_tier() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.enabled_tier_models("nonexistent").is_empty());
@@ -365,6 +379,8 @@ fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.enabled_tier_models("tier-1").is_empty());

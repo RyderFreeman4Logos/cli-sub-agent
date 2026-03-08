@@ -143,6 +143,8 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         preferences: prefs,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     }
 }
 

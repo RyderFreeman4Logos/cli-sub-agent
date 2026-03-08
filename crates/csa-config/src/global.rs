@@ -58,6 +58,11 @@ pub struct GlobalConfig {
     /// Project-level `[tool_aliases]` take precedence over global ones.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tool_aliases: HashMap<String, String>,
+    /// Execution tuning (timeout floors, etc.).
+    ///
+    /// Project-level `[execution]` overrides global values during config merge.
+    #[serde(default)]
+    pub execution: crate::config::ExecutionConfig,
 }
 
 /// User preferences for tool selection and routing.
@@ -113,10 +118,31 @@ pub struct ReviewConfig {
     /// When a tier is used, this overrides the tier's model_spec thinking budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+    /// Custom pre-review gate command. Overrides auto-detection of git hooks.
+    ///
+    /// PROJECT-ONLY: values set in global config are ignored during merge.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gate_command: Option<String>,
+    /// Timeout (seconds) for the pre-review quality gate command.
+    ///
+    /// PROJECT-ONLY: values set in global config are ignored during merge.
+    #[serde(
+        default = "default_gate_timeout_secs",
+        skip_serializing_if = "is_default_gate_timeout"
+    )]
+    pub gate_timeout_secs: u64,
 }
 
 fn default_review_tool() -> String {
     "auto".to_string()
+}
+
+const fn default_gate_timeout_secs() -> u64 {
+    300
+}
+
+fn is_default_gate_timeout(val: &u64) -> bool {
+    *val == default_gate_timeout_secs()
 }
 
 impl Default for ReviewConfig {
@@ -126,7 +152,26 @@ impl Default for ReviewConfig {
             gate_mode: GateMode::default(),
             tier: None,
             thinking: None,
+            gate_command: None,
+            gate_timeout_secs: default_gate_timeout_secs(),
         }
+    }
+}
+
+impl ReviewConfig {
+    /// Returns true when all fields match defaults (per rust/016 serde-default rule).
+    pub fn is_default(&self) -> bool {
+        self.tool == default_review_tool()
+            && self.gate_mode == GateMode::Monitor
+            && self.tier.is_none()
+            && self.thinking.is_none()
+            && self.gate_command.is_none()
+            && self.gate_timeout_secs == default_gate_timeout_secs()
+    }
+
+    /// Default gate timeout in seconds.
+    pub const fn default_gate_timeout() -> u64 {
+        default_gate_timeout_secs()
     }
 }
 
@@ -574,6 +619,10 @@ cloud_review_exhausted = "ask-user"
 #
 # Optional shared MCP hub socket path.
 # mcp_proxy_socket = "/run/user/1000/cli-sub-agent/mcp-hub.sock"
+
+# Execution tuning. Project-level [execution] overrides these values.
+# [execution]
+# min_timeout_seconds = 1800  # Floor for --timeout flag (seconds)
 "#
         .to_string()
     }

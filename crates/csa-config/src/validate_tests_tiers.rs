@@ -55,6 +55,8 @@ fn test_validate_multiple_tiers_all_valid() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -99,6 +101,8 @@ fn test_validate_tier_with_multiple_models_all_valid() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -143,6 +147,8 @@ fn test_validate_tier_with_one_bad_model_in_list() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -190,6 +196,8 @@ fn test_validate_tier_token_budget_zero_rejected() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -232,6 +240,8 @@ fn test_validate_tier_max_turns_zero_rejected() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -274,6 +284,8 @@ fn test_validate_tier_with_valid_budget_and_turns() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -315,6 +327,8 @@ fn test_validate_tier_model_spec_unknown_tool_rejected() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -361,6 +375,8 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -394,6 +410,8 @@ fn test_validate_review_tier_unknown_rejected() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -432,6 +450,8 @@ fn test_validate_debate_tier_unknown_rejected() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -481,6 +501,8 @@ fn test_validate_review_tier_valid_accepted() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

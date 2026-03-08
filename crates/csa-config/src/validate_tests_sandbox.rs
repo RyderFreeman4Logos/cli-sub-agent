@@ -26,6 +26,8 @@ fn test_validate_liveness_dead_seconds_zero_rejected() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -65,6 +67,8 @@ fn test_validate_memory_max_mb_too_low() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -104,6 +108,8 @@ fn test_validate_memory_max_mb_at_minimum() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -137,6 +143,8 @@ fn test_validate_pids_max_too_low() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -176,6 +184,8 @@ fn test_validate_pids_max_at_minimum() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -209,6 +219,8 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -254,6 +266,8 @@ fn test_validate_per_tool_required_enforcement_without_memory_fails() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -303,6 +317,8 @@ fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -346,6 +362,8 @@ fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -389,6 +407,8 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

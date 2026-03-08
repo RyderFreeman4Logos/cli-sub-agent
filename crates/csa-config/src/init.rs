@@ -235,6 +235,8 @@ pub fn init_project(
             aliases: HashMap::new(),
             tool_aliases: HashMap::new(),
             preferences: None,
+            hooks: Default::default(),
+            execution: Default::default(),
         }
     } else {
         ProjectConfig {
@@ -260,6 +262,8 @@ pub fn init_project(
             aliases: HashMap::new(),
             tool_aliases: HashMap::new(),
             preferences: None,
+            hooks: Default::default(),
+            execution: Default::default(),
         }
     };
 

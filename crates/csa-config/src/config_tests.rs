@@ -44,6 +44,8 @@ fn test_save_and_load_roundtrip() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -90,6 +92,8 @@ fn test_save_and_load_roundtrip_with_review_override() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -126,6 +130,8 @@ fn test_is_tool_enabled_configured_enabled() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.is_tool_enabled("codex"));
@@ -163,6 +169,8 @@ fn test_is_tool_enabled_configured_disabled() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(!config.is_tool_enabled("codex"));
@@ -189,6 +197,8 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.is_tool_enabled("codex"));
@@ -229,6 +239,8 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.is_tool_configured_in_tiers("codex"));
@@ -283,6 +295,8 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.is_tool_auto_selectable("codex"));
@@ -324,6 +338,8 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(!config.can_tool_edit_existing("gemini-cli"));
@@ -353,6 +369,8 @@ fn test_can_tool_edit_existing_without_restrictions() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.can_tool_edit_existing("codex"));
@@ -379,6 +397,8 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.can_tool_edit_existing("codex"));
@@ -408,6 +428,8 @@ fn test_max_recursion_depth_override() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -538,6 +560,8 @@ fn test_schema_version_current_is_ok() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.check_schema_version().is_ok());
@@ -565,6 +589,8 @@ fn test_schema_version_older_is_ok() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     assert!(config.check_schema_version().is_ok());
@@ -591,6 +617,8 @@ fn test_schema_version_newer_fails() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     let result = config.check_schema_version();
@@ -644,6 +672,8 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         preferences: None,
         session: Default::default(),
         memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
     };
 
     let result = config.enforce_tool_enabled("codex", false);

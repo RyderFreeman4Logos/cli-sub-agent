@@ -229,12 +229,88 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
             gate_mode: gate_mode.clone(),
             tier: None,
             thinking: None,
+            gate_command: None,
+            gate_timeout_secs: ReviewConfig::default_gate_timeout(),
         };
         let toml = toml::to_string(&review).unwrap();
         let parsed: ReviewConfig = toml::from_str(&toml).unwrap();
         assert_eq!(parsed.tool, review.tool);
         assert_eq!(parsed.gate_mode, review.gate_mode);
+        assert_eq!(parsed.gate_command, review.gate_command);
+        assert_eq!(parsed.gate_timeout_secs, review.gate_timeout_secs);
     }
+}
+
+#[test]
+fn test_review_config_gate_command_parses() {
+    let toml_str = r#"
+[review]
+tool = "auto"
+gate_command = "just pre-commit"
+gate_timeout_secs = 600
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(
+        config.review.gate_command.as_deref(),
+        Some("just pre-commit")
+    );
+    assert_eq!(config.review.gate_timeout_secs, 600);
+}
+
+#[test]
+fn test_review_config_gate_fields_default() {
+    let config = ReviewConfig::default();
+    assert!(config.gate_command.is_none());
+    assert_eq!(config.gate_timeout_secs, 300);
+}
+
+#[test]
+fn test_review_config_is_default() {
+    let config = ReviewConfig::default();
+    assert!(config.is_default());
+}
+
+#[test]
+fn test_review_config_is_not_default_with_gate_command() {
+    let mut config = ReviewConfig::default();
+    config.gate_command = Some("make lint".to_string());
+    assert!(!config.is_default());
+}
+
+#[test]
+fn test_review_config_is_not_default_with_gate_timeout() {
+    let mut config = ReviewConfig::default();
+    config.gate_timeout_secs = 600;
+    assert!(!config.is_default());
+}
+
+#[test]
+fn test_review_config_gate_timeout_default_skipped_in_serialization() {
+    let config = ReviewConfig::default();
+    let toml_str = toml::to_string(&config).unwrap();
+    // Default gate_timeout_secs (300) should be skipped via skip_serializing_if
+    assert!(
+        !toml_str.contains("gate_timeout_secs"),
+        "Default gate_timeout_secs should be omitted from TOML output"
+    );
+    // gate_command=None should also be omitted
+    assert!(
+        !toml_str.contains("gate_command"),
+        "None gate_command should be omitted from TOML output"
+    );
+}
+
+#[test]
+fn test_review_config_gate_timeout_non_default_serialized() {
+    let config = ReviewConfig {
+        gate_timeout_secs: 600,
+        ..Default::default()
+    };
+    let toml_str = toml::to_string(&config).unwrap();
+    assert!(
+        toml_str.contains("gate_timeout_secs = 600"),
+        "Non-default gate_timeout_secs should appear in TOML output"
+    );
 }
 
 #[test]
@@ -624,5 +700,59 @@ fn test_state_base_dir_returns_ok() {
     assert!(
         path_str.contains("cli-sub-agent") || path_str.contains("csa"),
         "unexpected state dir path: {path_str}"
+    );
+}
+
+// ── Task 5: ExecutionConfig in GlobalConfig ─────────────────────────
+
+#[test]
+fn test_global_execution_config_default() {
+    let config = GlobalConfig::default();
+    assert!(config.execution.is_default());
+    assert_eq!(config.execution.min_timeout_seconds, 1800);
+}
+
+#[test]
+fn test_global_execution_config_parses_from_toml() {
+    let toml_str = r#"
+[execution]
+min_timeout_seconds = 2400
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.execution.min_timeout_seconds, 2400);
+    assert!(!config.execution.is_default());
+}
+
+#[test]
+fn test_global_execution_config_empty_toml_uses_default() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.execution.min_timeout_seconds, 1800);
+    assert!(config.execution.is_default());
+}
+
+#[test]
+fn test_global_execution_config_coexists_with_other_sections() {
+    let toml_str = r#"
+[defaults]
+max_concurrent = 5
+
+[execution]
+min_timeout_seconds = 3600
+
+[review]
+tool = "codex"
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.defaults.max_concurrent, 5);
+    assert_eq!(config.execution.min_timeout_seconds, 3600);
+    assert_eq!(config.review.tool, "codex");
+}
+
+#[test]
+fn test_global_default_template_mentions_execution() {
+    let template = GlobalConfig::default_template();
+    assert!(
+        template.contains("min_timeout_seconds"),
+        "Default template should mention min_timeout_seconds"
     );
 }

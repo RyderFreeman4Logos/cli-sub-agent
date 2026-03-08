@@ -18,6 +18,9 @@ use csa_executor::{AcpMcpServerConfig, Executor};
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_process::{ExecutionResult, check_tool_installed};
 
+#[path = "pipeline_gate.rs"]
+pub(crate) mod gate;
+
 #[path = "pipeline_prompt_guard.rs"]
 pub(crate) mod prompt_guard;
 

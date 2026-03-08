@@ -239,6 +239,8 @@ mod tests {
             preferences: None,
             session: Default::default(),
             memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
         }
     }
 
@@ -627,6 +629,8 @@ mod tests {
             preferences: None,
             session: Default::default(),
             memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
         }
     }
 

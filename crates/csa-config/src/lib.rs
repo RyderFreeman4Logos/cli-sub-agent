@@ -19,13 +19,13 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    EnforcementMode, ProjectConfig, ProjectMeta, SessionConfig, TierConfig, ToolConfig,
-    ToolResourceProfile, ToolRestrictions,
+    EnforcementMode, ExecutionConfig, HooksSection, ProjectConfig, ProjectMeta, SessionConfig,
+    TierConfig, ToolConfig, ToolResourceProfile, ToolRestrictions,
 };
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
-pub use global::{GateMode, GlobalConfig, GlobalMcpConfig};
+pub use global::{GateMode, GlobalConfig, GlobalMcpConfig, ReviewConfig};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use memory::{MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};

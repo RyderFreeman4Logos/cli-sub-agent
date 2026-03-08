@@ -73,6 +73,10 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub fix: bool,
 
+    /// Maximum fix iterations when --fix is enabled (default: 3)
+    #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u8).range(1..))]
+    pub max_rounds: u8,
+
     /// Review mode: standard (default) or red-team
     #[arg(long, value_enum)]
     pub review_mode: Option<ReviewMode>,
@@ -170,17 +174,20 @@ pub fn validate_review_args(args: &ReviewArgs) -> std::result::Result<(), clap::
     Ok(())
 }
 
-pub fn validate_command_args(command: &Commands) -> std::result::Result<(), clap::Error> {
+pub fn validate_command_args(
+    command: &Commands,
+    min_timeout: u64,
+) -> std::result::Result<(), clap::Error> {
     match command {
         Commands::Run { timeout, .. } => {
-            validate_timeout(*timeout)?;
+            validate_timeout(*timeout, min_timeout)?;
         }
         Commands::Review(args) => {
             validate_review_args(args)?;
-            validate_timeout(args.timeout)?;
+            validate_timeout(args.timeout, min_timeout)?;
         }
         Commands::Debate(args) => {
-            validate_timeout(args.timeout)?;
+            validate_timeout(args.timeout, min_timeout)?;
         }
         _ => {}
     }
@@ -188,14 +195,21 @@ pub fn validate_command_args(command: &Commands) -> std::result::Result<(), clap
     Ok(())
 }
 
-fn validate_timeout(timeout: Option<u64>) -> std::result::Result<(), clap::Error> {
+fn validate_timeout(
+    timeout: Option<u64>,
+    min_timeout: u64,
+) -> std::result::Result<(), clap::Error> {
     if let Some(t) = timeout {
-        if t < 1200 {
+        if t < min_timeout {
+            let min_minutes = min_timeout / 60;
             return Err(clap::Error::raw(
                 clap::error::ErrorKind::ValueValidation,
-                "Absolute timeout (--timeout) must be at least 1200 seconds (20 minutes). \
-                 Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
-                 Record this in your CLAUDE.md or memory: CSA minimum timeout is 1200 seconds",
+                format!(
+                    "Absolute timeout (--timeout) must be at least {min_timeout} seconds ({min_minutes} minutes). \
+                     Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
+                     Record this in your CLAUDE.md or memory: CSA minimum timeout is {min_timeout} seconds. \
+                     Configure via [execution] min_timeout_seconds in .csa/config.toml or global config."
+                ),
             ));
         }
     }
