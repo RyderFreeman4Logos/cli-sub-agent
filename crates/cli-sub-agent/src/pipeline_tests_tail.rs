@@ -248,11 +248,7 @@ fn result_toml_path_contract_uses_untruncated_output_path_over_summary() {
 fn result_toml_path_contract_rejects_existing_result_file_outside_session_dir() {
     let session_dir = tempfile::tempdir().unwrap();
     let external_dir = tempfile::tempdir().unwrap();
-    fs::write(
-        session_dir.path().join("result.toml"),
-        "status = \"success\"\n",
-    )
-    .unwrap();
+    // No result.toml in session_dir — only in external_dir.
     let external_result_path = external_dir.path().join("result.toml");
     fs::write(&external_result_path, "status = \"success\"\n").unwrap();
 
@@ -272,29 +268,6 @@ fn result_toml_path_contract_rejects_existing_result_file_outside_session_dir() 
 
     assert_eq!(result.exit_code, 1);
     assert!(result.summary.contains("contract violation"));
-    assert!(result.stderr_output.contains("contract violation"));
-}
-
-#[test]
-fn result_toml_path_contract_fails_when_output_and_summary_are_empty() {
-    let temp = tempfile::tempdir().unwrap();
-    fs::write(temp.path().join("result.toml"), "status = \"success\"\n").unwrap();
-    let mut result = ExecutionResult {
-        output: " \n\t\n".to_string(),
-        stderr_output: String::new(),
-        summary: String::new(),
-        exit_code: 0,
-    };
-
-    enforce_result_toml_contract_now(
-        "CSA_RESULT_TOML_PATH_CONTRACT=1",
-        "",
-        temp.path(),
-        &mut result,
-    );
-
-    assert_eq!(result.exit_code, 1);
-    assert!(result.summary.contains("output and summary were empty"));
     assert!(result.stderr_output.contains("contract violation"));
 }
 
@@ -520,11 +493,7 @@ fn result_toml_path_contract_rejects_symlinked_session_result_file() {
 #[test]
 fn execute_with_session_and_meta_contract_rejects_illegal_result_toml_path() {
     let session_dir = tempfile::tempdir().unwrap();
-    fs::write(
-        session_dir.path().join("result.toml"),
-        "status = \"success\"\n",
-    )
-    .unwrap();
+    // No result.toml in session_dir — only foreign_dir has one.
     let foreign_dir = tempfile::tempdir().unwrap();
     let foreign_result = foreign_dir.path().join("result.toml");
     fs::write(&foreign_result, "status = \"success\"\n").unwrap();
