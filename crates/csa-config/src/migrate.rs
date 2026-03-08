@@ -128,21 +128,23 @@ impl MigrationRegistry {
         &self.migrations
     }
 
-    /// Find migrations that need to run to get from `current` to `target`,
+    /// Find migrations that need to run to reach `target`,
     /// excluding those already applied (by id).
+    ///
+    /// Previous versions incorrectly filtered by `m.from_version >= current`,
+    /// which skipped unapplied migrations when the lock was created at a
+    /// version higher than the migration's `from_version` (e.g., lock at
+    /// 0.1.97 would skip a migration with from_version 0.1.27). The
+    /// `applied` list is the authoritative record of what has run.
     pub fn pending(
         &self,
-        current: &Version,
+        _current: &Version,
         target: &Version,
         applied: &[String],
     ) -> Vec<&Migration> {
         self.migrations
             .iter()
-            .filter(|m| {
-                m.from_version >= *current
-                    && m.to_version <= *target
-                    && !applied.iter().any(|id| id == &m.id)
-            })
+            .filter(|m| m.to_version <= *target && !applied.iter().any(|id| id == &m.id))
             .collect()
     }
 }
@@ -484,6 +486,11 @@ fn migrate_xdg_paths_for_pairs(pairs: Vec<paths::XdgPathPair>, admin_dir: &Path)
                 continue;
             }
 
+            // Already a correct symlink — nothing to do.
+            if paths::is_symlink_to(&pair.legacy_path, &pair.new_path) {
+                continue;
+            }
+
             if pair.new_path.exists() {
                 let should_merge = if pair.legacy_path.is_dir() {
                     !is_directory_empty(&pair.legacy_path)?
@@ -574,6 +581,14 @@ fn migrate_xdg_paths_for_pairs(pairs: Vec<paths::XdgPathPair>, admin_dir: &Path)
 }
 
 fn migrate_xdg_paths(_project_root: &Path) -> Result<()> {
+    run_xdg_migration()
+}
+
+/// Run the XDG paths migration directly (idempotent).
+///
+/// This can be called from startup code to proactively fix legacy paths
+/// without requiring `csa migrate`. Safe to call multiple times.
+pub fn run_xdg_migration() -> Result<()> {
     migrate_xdg_paths_for_pairs(paths::xdg_path_pairs(), &migration_admin_dir())
 }
 
