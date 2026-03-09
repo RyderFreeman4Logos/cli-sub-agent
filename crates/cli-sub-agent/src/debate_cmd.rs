@@ -131,6 +131,16 @@ pub(crate) async fn handle_debate(
              Cognitive diversity is degraded."
         );
     }
+    // Model precedence: CLI --model > project config debate.model > global config debate.model.
+    // When tier is also set, build_executor applies model override after tier spec construction.
+    let debate_model = args.model.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.debate.as_ref())
+            .and_then(|d| d.model.clone())
+            .or_else(|| global_config.debate.model.clone())
+    });
+
     // Thinking precedence: CLI > config debate.thinking > tier model_spec thinking.
     let thinking = resolve_debate_thinking(
         args.thinking.as_deref(),
@@ -145,7 +155,7 @@ pub(crate) async fn handle_debate(
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),
-        args.model.as_deref(),
+        debate_model.as_deref(),
         thinking.as_deref(),
         crate::pipeline::ConfigRefs {
             project: config.as_ref(),

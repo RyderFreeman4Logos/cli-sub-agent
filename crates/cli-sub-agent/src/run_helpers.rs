@@ -148,9 +148,12 @@ pub(crate) fn build_executor(
         Executor::from_tool_name(tool, final_model, budget)
     };
 
-    // When model_spec is present, the thinking budget comes from the spec.
-    // An explicit `thinking` argument must override it (CLI > tier spec).
+    // When model_spec is present, the model and thinking come from the spec.
+    // Explicit arguments must override them (CLI/config > tier spec).
     if model_spec.is_some() {
+        if let Some(explicit_model) = model {
+            executor.override_model(explicit_model.to_string());
+        }
         if let Some(explicit_thinking) = thinking {
             let budget = ThinkingBudget::parse(explicit_thinking)?;
             executor.override_thinking_budget(budget);

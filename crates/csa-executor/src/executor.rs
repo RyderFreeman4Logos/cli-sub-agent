@@ -255,10 +255,7 @@ impl Executor {
         }
     }
 
-    /// Override the thinking budget for this executor.
-    ///
-    /// Used by thinking lock: when a tool has `thinking_lock` configured,
-    /// the locked value replaces whatever thinking budget was set.
+    /// Override the thinking budget (thinking_lock replaces whatever was set).
     pub fn override_thinking_budget(&mut self, budget: ThinkingBudget) {
         match self {
             Self::GeminiCli {
@@ -274,6 +271,18 @@ impl Executor {
                 thinking_budget, ..
             } => {
                 *thinking_budget = Some(budget);
+            }
+        }
+    }
+
+    /// Override the model (CLI `--model` / config `[review].model` > tier model_spec).
+    pub fn override_model(&mut self, model: String) {
+        match self {
+            Self::GeminiCli { model_override, .. }
+            | Self::Opencode { model_override, .. }
+            | Self::Codex { model_override, .. }
+            | Self::ClaudeCode { model_override, .. } => {
+                *model_override = Some(model);
             }
         }
     }

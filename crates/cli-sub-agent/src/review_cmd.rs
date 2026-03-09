@@ -165,6 +165,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         args.force_override_user_config,
     )?;
 
+    // Resolve model: CLI --model > project config review.model > global config review.model.
+    // When tier is also set, build_executor applies model override after tier spec construction.
+    let review_model = args.model.clone().or_else(|| {
+        config
+            .as_ref()
+            .and_then(|c| c.review.as_ref())
+            .and_then(|r| r.model.clone())
+            .or_else(|| global_config.review.model.clone())
+    });
+
     // Resolve thinking: CLI > config review.thinking > tier model_spec thinking.
     // Tier thinking is embedded in model_spec and applied via build_and_validate_executor.
     let review_thinking = resolve_review_thinking(
@@ -187,7 +197,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             tool,
             prompt.clone(),
             args.session.clone(),
-            args.model.clone(),
+            review_model.clone(),
             tier_model_spec.clone(),
             review_thinking.clone(),
             format!(
@@ -251,7 +261,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 tool,
                 fix_prompt,
                 Some(session_id.clone()),
-                args.model.clone(),
+                review_model.clone(),
                 tier_model_spec.clone(),
                 review_thinking.clone(),
                 format!("fix round {round}/{max_rounds}"),
@@ -349,7 +359,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
         let reviewer_prompt =
             build_multi_reviewer_instruction(&prompt, reviewer_index + 1, reviewer_tool);
-        let reviewer_model = args.model.clone();
+        let reviewer_model = review_model.clone();
         let reviewer_project_root = project_root.clone();
         let reviewer_config = config.clone();
         let reviewer_global = global_config.clone();
