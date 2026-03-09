@@ -112,6 +112,12 @@ pub struct ReviewConfig {
     /// over `tool` when both are set. The tier must exist in `[tiers]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
+    /// Default model for `csa review`. Overrides the tool's own default model
+    /// selection (e.g., gemini-cli model steering) without requiring a tier.
+    ///
+    /// Priority: CLI `--model` > this field > tier model_spec > tool default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Default thinking budget for `csa review` (`low`, `medium`, `high`, `xhigh`).
     ///
     /// `csa review --thinking <LEVEL>` (when supported) overrides this.
@@ -151,6 +157,7 @@ impl Default for ReviewConfig {
             tool: default_review_tool(),
             gate_mode: GateMode::default(),
             tier: None,
+            model: None,
             thinking: None,
             gate_command: None,
             gate_timeout_secs: default_gate_timeout_secs(),
@@ -164,6 +171,7 @@ impl ReviewConfig {
         self.tool == default_review_tool()
             && self.gate_mode == GateMode::Monitor
             && self.tier.is_none()
+            && self.model.is_none()
             && self.thinking.is_none()
             && self.gate_command.is_none()
             && self.gate_timeout_secs == default_gate_timeout_secs()
@@ -191,6 +199,12 @@ pub struct DebateConfig {
     /// `csa debate --timeout <N>` overrides this per invocation.
     #[serde(default = "default_debate_timeout_seconds")]
     pub timeout_seconds: u64,
+    /// Default model for `csa debate`. Overrides the tool's own default model
+    /// selection (e.g., gemini-cli model steering) without requiring a tier.
+    ///
+    /// Priority: CLI `--model` > this field > tier model_spec > tool default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Default thinking budget for `csa debate` (`low`, `medium`, `high`, `xhigh`).
     ///
     /// `csa debate --thinking <LEVEL>` overrides this per invocation.
@@ -230,10 +244,23 @@ impl Default for DebateConfig {
         Self {
             tool: default_debate_tool(),
             timeout_seconds: default_debate_timeout_seconds(),
+            model: None,
             thinking: None,
             same_model_fallback: true,
             tier: None,
         }
+    }
+}
+
+impl DebateConfig {
+    /// Returns true when all fields match defaults (per rust/016 serde-default rule).
+    pub fn is_default(&self) -> bool {
+        self.tool == default_debate_tool()
+            && self.timeout_seconds == default_debate_timeout_seconds()
+            && self.model.is_none()
+            && self.thinking.is_none()
+            && self.same_model_fallback
+            && self.tier.is_none()
     }
 }
 
@@ -707,6 +734,10 @@ fn resolve_auto_tool(section: &str, parent_tool: Option<&str>) -> Result<String>
 #[cfg(test)]
 #[path = "global_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "global_tests_heterogeneous.rs"]
+mod tests_heterogeneous;
 
 #[cfg(test)]
 #[path = "global_tests_priority.rs"]

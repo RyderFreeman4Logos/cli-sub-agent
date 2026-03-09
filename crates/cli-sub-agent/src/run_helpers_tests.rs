@@ -456,12 +456,12 @@ fn build_executor_model_spec_overrides_both() {
         execution: Default::default(),
     };
 
-    // When explicit thinking is provided alongside model_spec, it overrides
-    // the spec's embedded thinking budget (CLI > tier spec).
+    // When explicit model and thinking are provided alongside model_spec,
+    // they override the spec's embedded values (CLI/config > tier spec).
     let exec = build_executor(
         &ToolName::Codex,
         Some("codex/openai/gpt-5.3-codex/xhigh"),
-        Some("ignored-model"),
+        Some("explicit-model"),
         Some("high"),
         Some(&config),
         true,
@@ -469,8 +469,12 @@ fn build_executor_model_spec_overrides_both() {
     .unwrap();
     let debug = format!("{:?}", exec);
     assert!(
-        debug.contains("gpt-5.3-codex"),
-        "model_spec model missing: {debug}"
+        debug.contains("explicit-model"),
+        "explicit model should override model_spec model: {debug}"
+    );
+    assert!(
+        !debug.contains("gpt-5.3-codex"),
+        "model_spec model should be overridden by explicit model: {debug}"
     );
     assert!(
         debug.contains("High"),

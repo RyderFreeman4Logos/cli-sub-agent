@@ -120,6 +120,48 @@ fn test_build_command_prompt_with_special_characters() {
 }
 
 #[test]
+fn test_override_model_replaces_existing() {
+    let mut exec = Executor::GeminiCli {
+        model_override: Some("gemini-3-flash-preview".to_string()),
+        thinking_budget: None,
+    };
+    exec.override_model("gemini-3.1-pro-preview".to_string());
+    let debug = format!("{:?}", exec);
+    assert!(
+        debug.contains("gemini-3.1-pro-preview"),
+        "override_model should replace existing model: {debug}"
+    );
+    assert!(
+        !debug.contains("flash"),
+        "original model should be gone: {debug}"
+    );
+}
+
+#[test]
+fn test_override_model_sets_none_to_some() {
+    let mut exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    exec.override_model("gemini-3.1-pro-preview".to_string());
+    let session = make_test_session();
+    let (cmd, _) = exec.build_command("test", None, &session, None);
+    let args: Vec<_> = cmd
+        .as_std()
+        .get_args()
+        .map(|a| a.to_string_lossy().to_string())
+        .collect();
+    assert!(
+        args.contains(&"-m".to_string()),
+        "Should have -m flag after override_model: {args:?}"
+    );
+    assert!(
+        args.contains(&"gemini-3.1-pro-preview".to_string()),
+        "Should have the overridden model value: {args:?}"
+    );
+}
+
+#[test]
 fn test_build_command_no_model_override_omits_model_flag() {
     let exec = Executor::ClaudeCode {
         model_override: None,
