@@ -117,7 +117,7 @@ impl ExecuteOptions {
     }
 }
 
-/// Executor: Closed enum for 4 AI tools.
+/// Executor: Closed enum for AI tools.
 ///
 /// Uses data enum pattern (not trait + dynamic dispatch) for a fixed set of tools.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,6 +140,11 @@ pub enum Executor {
         model_override: Option<String>,
         thinking_budget: Option<ThinkingBudget>,
     },
+    /// OpenAI-compatible HTTP API tool (no CLI process, pure HTTP).
+    OpenaiCompat {
+        model_override: Option<String>,
+        thinking_budget: Option<ThinkingBudget>,
+    },
 }
 
 impl Executor {
@@ -150,33 +155,30 @@ impl Executor {
             Self::Opencode { .. } => "opencode",
             Self::Codex { .. } => "codex",
             Self::ClaudeCode { .. } => "claude-code",
+            Self::OpenaiCompat { .. } => "openai-compat",
         }
     }
 
-    /// Get the executable name for legacy CLI transport.
-    ///
-    /// Used only by `LegacyTransport` to build the CLI command.
-    /// For pre-flight availability checks, use `runtime_binary_name()` instead.
+    /// Executable name for `LegacyTransport` CLI commands.
+    /// For availability checks, use `runtime_binary_name()`.
     pub fn executable_name(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "gemini",
             Self::Opencode { .. } => "opencode",
             Self::Codex { .. } => "codex",
             Self::ClaudeCode { .. } => "claude",
+            Self::OpenaiCompat { .. } => "openai-compat", // no CLI binary
         }
     }
 
-    /// Get the binary name that will actually be spawned at runtime.
-    ///
-    /// ACP-routed tools use standalone adapter binaries (`codex-acp`,
-    /// `claude-code-acp`). Legacy tools use the native CLI binary.
-    /// Use this for pre-flight `check_tool_installed` calls.
+    /// Binary spawned at runtime (ACP adapters or native CLI).
     pub fn runtime_binary_name(&self) -> &'static str {
         match self {
             Self::GeminiCli { .. } => "gemini",
             Self::Opencode { .. } => "opencode",
             Self::Codex { .. } => "codex-acp",
             Self::ClaudeCode { .. } => "claude-code-acp",
+            Self::OpenaiCompat { .. } => "openai-compat", // no binary; HTTP-only
         }
     }
 
@@ -189,6 +191,9 @@ impl Executor {
             Self::ClaudeCode { .. } => {
                 "Install ACP adapter: npm install -g @zed-industries/claude-code-acp"
             }
+            Self::OpenaiCompat { .. } => {
+                "Configure [tools.openai-compat] with base_url and api_key in config.toml"
+            }
         }
     }
 
@@ -199,6 +204,7 @@ impl Executor {
             Self::Opencode { .. } => &[] as &[&str], // opencode does not have a yolo mode
             Self::Codex { .. } => &["--dangerously-bypass-approvals-and-sandbox"],
             Self::ClaudeCode { .. } => &["--dangerously-skip-permissions"],
+            Self::OpenaiCompat { .. } => &[] as &[&str], // HTTP-only, no CLI args
         }
     }
 
@@ -221,6 +227,10 @@ impl Executor {
                 thinking_budget: budget,
             }),
             "claude-code" => Ok(Self::ClaudeCode {
+                model_override: model,
+                thinking_budget: budget,
+            }),
+            "openai-compat" => Ok(Self::OpenaiCompat {
                 model_override: model,
                 thinking_budget: budget,
             }),
@@ -252,6 +262,10 @@ impl Executor {
                 model_override: model,
                 thinking_budget,
             },
+            ToolName::OpenaiCompat => Self::OpenaiCompat {
+                model_override: model,
+                thinking_budget,
+            },
         }
     }
 
@@ -269,6 +283,9 @@ impl Executor {
             }
             | Self::ClaudeCode {
                 thinking_budget, ..
+            }
+            | Self::OpenaiCompat {
+                thinking_budget, ..
             } => {
                 *thinking_budget = Some(budget);
             }
@@ -281,7 +298,8 @@ impl Executor {
             Self::GeminiCli { model_override, .. }
             | Self::Opencode { model_override, .. }
             | Self::Codex { model_override, .. }
-            | Self::ClaudeCode { model_override, .. } => {
+            | Self::ClaudeCode { model_override, .. }
+            | Self::OpenaiCompat { model_override, .. } => {
                 *model_override = Some(model);
             }
         }
@@ -311,14 +329,7 @@ impl Executor {
         }
     }
 
-    /// Build a configured Command ready for execution.
-    ///
-    /// Returns the Command object without executing it, allowing caller to:
-    /// - Spawn the process and get its PID
-    /// - Start resource monitoring
-    /// - Wait for completion separately
-    ///
-    /// `extra_env`: optional environment variables to inject (e.g., API keys from GlobalConfig).
+    /// Build a configured Command ready for execution (without spawning).
     pub fn build_command(
         &self,
         prompt: &str,
@@ -445,13 +456,6 @@ impl Executor {
     }
 
     /// Build command for execute_in() legacy path.
-    ///
-    /// For Codex legacy CLI, this translates `CSA_SUPPRESS_NOTIFY=1` from
-    /// `extra_env` into `-c notify=[]`, because Codex does not consume that
-    /// environment variable directly.
-    ///
-    /// TODO(acp-notify): ACP `session/new` currently has no dedicated notify
-    /// option, so this suppression path only applies to legacy CLI execution.
     pub(crate) fn build_execute_in_command(
         &self,
         prompt: &str,
@@ -493,14 +497,8 @@ impl Executor {
     /// These prevent recursive-invocation guards in CLI tools from blocking
     /// legitimate CSA sub-agent launches.  Mirrors the same list in
     /// `csa-acp::AcpConnection::STRIPPED_ENV_VARS`.
-    const STRIPPED_ENV_VARS: &[&str] = &[
-        // Claude Code sets this to detect recursive invocations.  When
-        // inherited by a child process, the child refuses to start.
-        "CLAUDECODE",
-        // Entrypoint tracking for the parent session — not meaningful for
-        // a fresh sub-agent invocation.
-        "CLAUDE_CODE_ENTRYPOINT",
-    ];
+    /// Env vars stripped from child processes to prevent recursive-invocation guards.
+    const STRIPPED_ENV_VARS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"];
 
     /// Build base command with session environment variables.
     fn build_base_command(&self, session: &MetaSessionState) -> Command {
@@ -584,6 +582,7 @@ impl Executor {
                 cmd.arg("--dangerously-skip-permissions");
                 cmd.arg("--output-format").arg("json");
             }
+            Self::OpenaiCompat { .. } => {} // HTTP-only
         }
 
         // Model and thinking budget (shared with execute_in)
@@ -611,6 +610,7 @@ impl Executor {
                     Self::ClaudeCode { .. } => {
                         cmd.arg("--resume").arg(session_id);
                     }
+                    Self::OpenaiCompat { .. } => {} // HTTP-only
                 }
             }
         }
@@ -624,17 +624,14 @@ impl Executor {
                 Self::Opencode { .. } | Self::Codex { .. } => {
                     cmd.arg(prompt);
                 }
+                Self::OpenaiCompat { .. } => {} // HTTP-only
             },
             PromptTransport::Stdin => {
-                // When prompt is delivered via stdin, tools that use `-p` for
-                // non-interactive/pipe mode still need the flag (without the
-                // prompt argument) so they read from stdin instead of entering
-                // interactive mode.
                 match self {
                     Self::GeminiCli { .. } | Self::ClaudeCode { .. } => {
                         cmd.arg("-p");
                     }
-                    Self::Opencode { .. } | Self::Codex { .. } => {
+                    Self::Opencode { .. } | Self::Codex { .. } | Self::OpenaiCompat { .. } => {
                         // These tools read from stdin natively without extra flags.
                     }
                 }
@@ -708,6 +705,7 @@ impl Executor {
                         .arg(budget.token_count().to_string());
                 }
             }
+            Self::OpenaiCompat { .. } => {} // HTTP-only: model/thinking via API body
         }
     }
 
@@ -752,6 +750,7 @@ impl Executor {
                     cmd.arg("-p").arg(prompt);
                 }
             }
+            Self::OpenaiCompat { .. } => {} // HTTP-only
         }
     }
 
@@ -781,6 +780,7 @@ impl Executor {
             Self::Opencode { .. } => ToolName::Opencode,
             Self::Codex { .. } => ToolName::Codex,
             Self::ClaudeCode { .. } => ToolName::ClaudeCode,
+            Self::OpenaiCompat { .. } => ToolName::OpenaiCompat,
         }
     }
 }

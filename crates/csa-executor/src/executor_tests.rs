@@ -573,6 +573,9 @@ fn test_execute_in_preserves_model_override() {
                     "Opencode missing thinking: {debug_str}"
                 );
             }
+            Executor::OpenaiCompat { .. } => {
+                // HTTP-only tool — no CLI args. Nothing to assert on Command.
+            }
         }
     }
 }

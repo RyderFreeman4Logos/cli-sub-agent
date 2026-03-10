@@ -366,9 +366,7 @@ impl AcpTransport {
     }
 
     fn acp_command_for_tool(tool_name: &str) -> (String, Vec<String>) {
-        // ACP adapters are standalone binaries from Zed Industries:
-        //   npm: @zed-industries/codex-acp, @zed-industries/claude-code-acp
-        // They bridge the tool's SDK to ACP protocol over stdio.
+        // ACP adapters: @zed-industries/{codex,claude-code}-acp via npm.
         match tool_name {
             "claude-code" => ("claude-code-acp".into(), vec![]),
             "codex" => ("codex-acp".into(), vec![]),
@@ -535,16 +533,17 @@ impl Transport for AcpTransport {
 pub enum TransportMode {
     Legacy,
     Acp,
+    OpenaiCompat,
 }
 
 pub struct TransportFactory;
 
 impl TransportFactory {
     pub fn mode_for_tool(tool_name: &str) -> TransportMode {
-        if matches!(tool_name, "claude-code" | "codex") {
-            TransportMode::Acp
-        } else {
-            TransportMode::Legacy
+        match tool_name {
+            "claude-code" | "codex" => TransportMode::Acp,
+            "openai-compat" => TransportMode::OpenaiCompat,
+            _ => TransportMode::Legacy,
         }
     }
 
@@ -555,7 +554,25 @@ impl TransportFactory {
         match Self::mode_for_tool(executor.tool_name()) {
             TransportMode::Legacy => Box::new(LegacyTransport::new(executor.clone())),
             TransportMode::Acp => Box::new(AcpTransport::new(executor.tool_name(), session_config)),
+            TransportMode::OpenaiCompat => {
+                let default_model = if let Executor::OpenaiCompat { model_override, .. } = executor
+                {
+                    model_override.clone()
+                } else {
+                    None
+                };
+                Box::new(crate::transport_openai_compat::OpenaiCompatTransport::new(
+                    default_model,
+                ))
+            }
         }
+    }
+
+    /// Create an OpenAI-compat transport with explicit config.
+    pub fn create_openai_compat(
+        config: crate::transport_openai_compat::OpenaiCompatConfig,
+    ) -> Box<dyn Transport> {
+        Box::new(crate::transport_openai_compat::OpenaiCompatTransport::with_config(config))
     }
 }
 

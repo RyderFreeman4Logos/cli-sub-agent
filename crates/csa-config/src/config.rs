@@ -372,6 +372,12 @@ pub struct ToolConfig {
     /// Defaults to false for explicit safety.
     #[serde(default)]
     pub codex_auto_trust: bool,
+    /// OpenAI-compat only: base URL for the API endpoint (e.g., "http://localhost:8317").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+    /// API key for authentication. Used by openai-compat and gemini-cli (fallback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 impl Default for ToolConfig {
@@ -390,6 +396,8 @@ impl Default for ToolConfig {
             default_thinking: None,
             thinking_lock: None,
             codex_auto_trust: false,
+            base_url: None,
+            api_key: None,
         }
     }
 }

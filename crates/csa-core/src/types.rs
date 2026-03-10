@@ -10,6 +10,7 @@ pub enum ToolName {
     Opencode,
     Codex,
     ClaudeCode,
+    OpenaiCompat,
 }
 
 impl ToolName {
@@ -20,6 +21,7 @@ impl ToolName {
             Self::Opencode => "opencode",
             Self::Codex => "codex",
             Self::ClaudeCode => "claude-code",
+            Self::OpenaiCompat => "openai-compat",
         }
     }
 
@@ -30,6 +32,7 @@ impl ToolName {
             Self::GeminiCli => ModelFamily::Gemini,
             Self::Codex => ModelFamily::OpenAI,
             Self::Opencode => ModelFamily::Other,
+            Self::OpenaiCompat => ModelFamily::Other,
         }
     }
 
@@ -57,6 +60,9 @@ pub fn prompt_transport_capabilities(tool: &ToolName) -> &'static [PromptTranspo
         ToolName::GeminiCli => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::ClaudeCode => PROMPT_TRANSPORT_ARGV_AND_STDIN,
         ToolName::Opencode => PROMPT_TRANSPORT_ARGV_ONLY,
+        // OpenAI-compat is HTTP-only; prompt transport is irrelevant (no CLI process).
+        // Return Stdin to satisfy callers that check capabilities.
+        ToolName::OpenaiCompat => PROMPT_TRANSPORT_ARGV_AND_STDIN,
     }
 }
 
@@ -111,6 +117,7 @@ impl std::str::FromStr for ToolArg {
             "opencode" => Ok(Self::Specific(ToolName::Opencode)),
             "codex" => Ok(Self::Specific(ToolName::Codex)),
             "claude-code" => Ok(Self::Specific(ToolName::ClaudeCode)),
+            "openai-compat" => Ok(Self::Specific(ToolName::OpenaiCompat)),
             // Built-in aliases for common short names
             "gemini" => Ok(Self::Specific(ToolName::GeminiCli)),
             "claude" => Ok(Self::Specific(ToolName::ClaudeCode)),
@@ -144,7 +151,7 @@ impl ToolArg {
                 } else {
                     Err(format!(
                         "unknown tool '{}'. Valid values: auto, any-available, \
-                         gemini-cli, opencode, codex, claude-code. \
+                         gemini-cli, opencode, codex, claude-code, openai-compat. \
                          Or define it in [tool_aliases] in config.",
                         alias
                     ))

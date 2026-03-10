@@ -123,7 +123,13 @@ fn validate_acp(config: &ProjectConfig) -> Result<()> {
 }
 
 fn validate_tools(config: &ProjectConfig) -> Result<()> {
-    let known_tools = ["gemini-cli", "opencode", "codex", "claude-code"];
+    let known_tools = [
+        "gemini-cli",
+        "opencode",
+        "codex",
+        "claude-code",
+        "openai-compat",
+    ];
     for (tool_name, tool_config) in &config.tools {
         if !known_tools.contains(&tool_name.as_str()) {
             bail!(
@@ -267,7 +273,13 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
 /// Warn (non-fatal) if `preferences.tool_priority` contains unrecognized tool names.
 /// Unknown entries are harmless (sorted to end) but likely indicate a typo.
 fn warn_unknown_tool_priority(config: &ProjectConfig) {
-    let known_tools = ["gemini-cli", "opencode", "codex", "claude-code"];
+    let known_tools = [
+        "gemini-cli",
+        "opencode",
+        "codex",
+        "claude-code",
+        "openai-compat",
+    ];
     if let Some(prefs) = &config.preferences {
         for name in &prefs.tool_priority {
             if !known_tools.contains(&name.as_str()) {

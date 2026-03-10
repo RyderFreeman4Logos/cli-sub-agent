@@ -48,7 +48,9 @@ impl ExecutorAgentBackend {
         match executor {
             Executor::ClaudeCode { .. } => BackendType::ClaudeCode,
             Executor::GeminiCli { .. } => BackendType::GeminiCli,
-            Executor::Codex { .. } | Executor::Opencode { .. } => BackendType::Codex,
+            Executor::Codex { .. } | Executor::Opencode { .. } | Executor::OpenaiCompat { .. } => {
+                BackendType::Codex
+            }
         }
     }
 
@@ -70,6 +72,9 @@ impl ExecutorAgentBackend {
                     model_override: m, ..
                 } => *m = Some(model_override.clone()),
                 Executor::ClaudeCode {
+                    model_override: m, ..
+                } => *m = Some(model_override.clone()),
+                Executor::OpenaiCompat {
                     model_override: m, ..
                 } => *m = Some(model_override),
             }
@@ -93,6 +98,9 @@ impl ExecutorAgentBackend {
                     thinking_budget, ..
                 } => *thinking_budget = Some(budget.clone()),
                 Executor::ClaudeCode {
+                    thinking_budget, ..
+                } => *thinking_budget = Some(budget.clone()),
+                Executor::OpenaiCompat {
                     thinking_budget, ..
                 } => *thinking_budget = Some(budget),
             }
