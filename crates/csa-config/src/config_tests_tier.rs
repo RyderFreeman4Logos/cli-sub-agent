@@ -385,3 +385,118 @@ fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
 
     assert!(config.enabled_tier_models("tier-1").is_empty());
 }
+
+// ── resolve_tier_tool_filtered tests ───────────────────────────────
+
+#[test]
+fn filtered_skips_restricted_tool_when_needs_edit() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            restrictions: Some(ToolRestrictions {
+                allow_edit_existing_files: false,
+            }),
+            ..Default::default()
+        },
+    );
+    tools.insert("codex".to_string(), ToolConfig::default());
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier3".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec![
+                "gemini-cli/google/gemini-2.5-pro/xhigh".to_string(),
+                "codex/openai/o4-mini/0".to_string(),
+            ],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier3".to_string());
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping,
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+    };
+
+    // needs_edit=true → should skip gemini-cli, select codex
+    let result = config.resolve_tier_tool_filtered("default", true);
+    assert!(result.is_some());
+    let (tool, _) = result.unwrap();
+    assert_eq!(tool, "codex");
+
+    // needs_edit=false → should select gemini-cli (first enabled)
+    let result = config.resolve_tier_tool_filtered("default", false);
+    assert!(result.is_some());
+    let (tool, _) = result.unwrap();
+    assert_eq!(tool, "gemini-cli");
+}
+
+#[test]
+fn filtered_returns_none_when_all_restricted_and_needs_edit() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "gemini-cli".to_string(),
+        ToolConfig {
+            restrictions: Some(ToolRestrictions {
+                allow_edit_existing_files: false,
+            }),
+            ..Default::default()
+        },
+    );
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier3".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec!["gemini-cli/google/gemini-2.5-pro/xhigh".to_string()],
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let mut tier_mapping = HashMap::new();
+    tier_mapping.insert("default".to_string(), "tier3".to_string());
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping,
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+    };
+
+    let result = config.resolve_tier_tool_filtered("default", true);
+    assert!(result.is_none());
+}

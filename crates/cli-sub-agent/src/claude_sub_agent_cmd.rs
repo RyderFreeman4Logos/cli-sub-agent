@@ -43,6 +43,7 @@ pub(crate) async fn handle_claude_sub_agent(
             &project_root,
             false, // claude-sub-agent does not support --force
             false, // claude-sub-agent does not support --force-override-user-config
+            false, // sub-agent dispatch always uses explicit tool
         )?;
 
     // 8. Build executor and validate tool

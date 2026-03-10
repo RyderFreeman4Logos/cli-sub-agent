@@ -172,6 +172,7 @@ pub(crate) async fn handle_run(
     };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
+    let needs_edit = crate::run_helpers::infer_task_edit_requirement(&prompt_text).unwrap_or(false);
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
         model_spec.as_deref(),
@@ -181,6 +182,7 @@ pub(crate) async fn handle_run(
         &project_root,
         force,
         force_override_user_config,
+        needs_edit,
     )?;
     let heterogeneous_runtime_fallback_candidates = strategy_result.runtime_fallback_candidates;
     let resolved_model_spec = strategy_result.model_spec;

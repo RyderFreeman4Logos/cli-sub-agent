@@ -133,6 +133,7 @@ pub(crate) fn resolve_tool_by_strategy(
     project_root: &Path,
     force: bool,
     force_override_user_config: bool,
+    needs_edit: bool,
 ) -> Result<StrategyResolution> {
     match strategy {
         ToolSelectionStrategy::Explicit(t) => {
@@ -144,6 +145,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 project_root,
                 force,
                 force_override_user_config,
+                needs_edit,
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -161,6 +163,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 project_root,
                 force,
                 force_override_user_config,
+                needs_edit,
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -177,6 +180,7 @@ pub(crate) fn resolve_tool_by_strategy(
             project_root,
             force,
             force_override_user_config,
+            needs_edit,
         ),
         ToolSelectionStrategy::HeterogeneousStrict => {
             let res = resolve_heterogeneous_strict(
@@ -187,6 +191,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 project_root,
                 force,
                 force_override_user_config,
+                needs_edit,
             )?;
             Ok(StrategyResolution {
                 tool: res.0,
@@ -216,6 +221,7 @@ fn collect_enabled_tools(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_heterogeneous_preferred(
     model_spec: Option<&str>,
     model: Option<&str>,
@@ -224,6 +230,7 @@ fn resolve_heterogeneous_preferred(
     project_root: &Path,
     force: bool,
     force_override_user_config: bool,
+    needs_edit: bool,
 ) -> Result<StrategyResolution> {
     let detected_parent_tool = detect_parent_tool();
     let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
@@ -245,6 +252,7 @@ fn resolve_heterogeneous_preferred(
                     project_root,
                     force,
                     force_override_user_config,
+                    needs_edit,
                 )?;
                 Ok(StrategyResolution {
                     tool: t,
@@ -267,6 +275,7 @@ fn resolve_heterogeneous_preferred(
                     project_root,
                     force,
                     force_override_user_config,
+                    needs_edit,
                 )?;
                 Ok(StrategyResolution {
                     tool: t,
@@ -288,6 +297,7 @@ fn resolve_heterogeneous_preferred(
             project_root,
             force,
             force_override_user_config,
+            needs_edit,
         )?;
         Ok(StrategyResolution {
             tool: t,
@@ -298,6 +308,7 @@ fn resolve_heterogeneous_preferred(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn resolve_heterogeneous_strict(
     model_spec: Option<&str>,
     model: Option<&str>,
@@ -306,6 +317,7 @@ fn resolve_heterogeneous_strict(
     project_root: &Path,
     force: bool,
     force_override_user_config: bool,
+    needs_edit: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     let detected_parent_tool = detect_parent_tool();
     let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
@@ -323,6 +335,7 @@ fn resolve_heterogeneous_strict(
                 project_root,
                 force,
                 force_override_user_config,
+                needs_edit,
             ),
             None => {
                 anyhow::bail!(
@@ -346,6 +359,7 @@ fn resolve_heterogeneous_strict(
             project_root,
             force,
             force_override_user_config,
+            needs_edit,
         )
     }
 }

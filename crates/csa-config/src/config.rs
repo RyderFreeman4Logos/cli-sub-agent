@@ -636,13 +636,23 @@ impl ProjectConfig {
     /// Falls back to tier3 if task_type not found in tier_mapping.
     /// Returns None if no enabled tools found.
     pub fn resolve_tier_tool(&self, task_type: &str) -> Option<(String, String)> {
-        // 1. Look up task_type in tier_mapping to get tier name
+        self.resolve_tier_tool_filtered(task_type, false)
+    }
+
+    /// Resolve tier-based tool selection with edit restriction filtering.
+    ///
+    /// When `needs_edit` is true, skips tools whose
+    /// `restrictions.allow_edit_existing_files` is `false`.
+    pub fn resolve_tier_tool_filtered(
+        &self,
+        task_type: &str,
+        needs_edit: bool,
+    ) -> Option<(String, String)> {
         let tier_name = self
             .tier_mapping
             .get(task_type)
             .map(String::as_str)
             .or_else(|| {
-                // Fallback: try to find tier3 or tier-3-*
                 if self.tiers.contains_key("tier3") {
                     Some("tier3")
                 } else {
@@ -653,23 +663,21 @@ impl ProjectConfig {
                 }
             })?;
 
-        // 2. Find that tier in tiers map
         let tier = self.tiers.get(tier_name)?;
 
-        // 3. Iterate through tier's models (format: tool/provider/model/thinking_budget)
         for model_spec_str in &tier.models {
-            // Parse model spec to extract tool name
             let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
             if parts.len() != 4 {
-                continue; // Invalid format, skip
+                continue;
             }
-
             let tool_name = parts[0];
-
-            // 4. Check if this tool is enabled
-            if self.is_tool_enabled(tool_name) {
-                return Some((tool_name.to_string(), model_spec_str.clone()));
+            if !self.is_tool_enabled(tool_name) {
+                continue;
             }
+            if needs_edit && !self.can_tool_edit_existing(tool_name) {
+                continue;
+            }
+            return Some((tool_name.to_string(), model_spec_str.clone()));
         }
 
         None
