@@ -123,7 +123,14 @@ if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
 fi
 
 set -euo pipefail
-git push -u origin "${WORKFLOW_BRANCH}"
+
+# --- Early-push detection: warn if branch was already pushed before review ---
+if git ls-remote --heads origin "${WORKFLOW_BRANCH}" 2>/dev/null | grep -q .; then
+  echo "WARNING: Branch '${WORKFLOW_BRANCH}' was already pushed to remote before this skill ran."
+  echo "Unreviewed code may have been visible to CI/reviewers. Continuing with force-push of reviewed code."
+fi
+
+git push --force-with-lease -u origin "${WORKFLOW_BRANCH}"
 ORIGIN_URL="$(git remote get-url origin)"
 SOURCE_OWNER="$(
   printf '%s\n' "${ORIGIN_URL}" | sed -nE \
