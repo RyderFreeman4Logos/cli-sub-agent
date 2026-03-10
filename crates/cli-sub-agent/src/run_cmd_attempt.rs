@@ -288,7 +288,19 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             effective_session_arg = new_eff;
         }
 
-        let extra_env = request.global_config.env_vars(tool_name_str).cloned();
+        let extra_env = {
+            let mut env = request
+                .global_config
+                .env_vars(tool_name_str)
+                .cloned()
+                .unwrap_or_default();
+            if tool_name_str == "gemini-cli" {
+                if let Some(key) = request.global_config.api_key_fallback(tool_name_str) {
+                    env.insert("_CSA_API_KEY_FALLBACK".to_string(), key.to_string());
+                }
+            }
+            if env.is_empty() { None } else { Some(env) }
+        };
         let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(
@@ -303,9 +315,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             request.prompt_text.to_string()
         };
 
-        // When retrying after a rate-limit failover, prepend context
-        // recovery instructions so the new tool can access the prior
-        // session's conversation via xurl.
+        // Prepend context recovery instructions for rate-limit failover retries.
         if let Some(ref addendum) = failover_context_addendum {
             effective_prompt = format!("{addendum}\n\n---\n\n{effective_prompt}");
         }

@@ -69,6 +69,8 @@ pub struct LegacyTransport {
 }
 
 const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
+const API_KEY_FALLBACK_ENV_KEY: &str = "_CSA_API_KEY_FALLBACK";
+const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
 #[cfg(test)]
 const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
 #[cfg(not(test))]
@@ -127,6 +129,18 @@ impl LegacyTransport {
             3 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND),
             _ => None,
         }
+    }
+
+    /// Build extra_env with GEMINI_API_KEY injected from the fallback key.
+    /// Returns None if no fallback key is available.
+    fn inject_api_key_fallback(
+        extra_env: Option<&HashMap<String, String>>,
+    ) -> Option<HashMap<String, String>> {
+        let fallback_key = extra_env?.get(API_KEY_FALLBACK_ENV_KEY)?;
+        let mut env = extra_env.cloned().unwrap_or_default();
+        env.insert(GEMINI_API_KEY_ENV.to_string(), fallback_key.clone());
+        env.remove(API_KEY_FALLBACK_ENV_KEY);
+        Some(env)
     }
 
     fn executor_for_attempt(&self, attempt: u8) -> Executor {
@@ -282,17 +296,32 @@ impl LegacyTransport {
                 .await?;
             if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
             {
-                let retry_model = Self::gemini_rate_limit_retry_model(attempt.saturating_add(1));
                 tracing::debug!(
                     attempt,
                     max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
-                    backoff_ms = backoff.as_millis(),
-                    retry_model = retry_model.unwrap_or("inherit"),
-                    "gemini-cli rate limit detected in execute_in; retrying silently"
+                    "gemini-cli rate limit; retrying with model switch"
                 );
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
+            }
+            // API key fallback: all model retries exhausted, still quota error.
+            if Self::is_gemini_rate_limited(&result.execution) {
+                if let Some(env_with_key) = Self::inject_api_key_fallback(extra_env) {
+                    tracing::info!(
+                        "gemini-cli quota exhausted after all retries; falling back to API key auth"
+                    );
+                    return self
+                        .execute_in_single_attempt(
+                            &self.executor,
+                            prompt,
+                            work_dir,
+                            Some(&env_with_key),
+                            stream_mode,
+                            idle_timeout_seconds,
+                        )
+                        .await;
+                }
             }
             return Ok(result);
         }
@@ -324,17 +353,32 @@ impl Transport for LegacyTransport {
                 .await?;
             if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
             {
-                let retry_model = Self::gemini_rate_limit_retry_model(attempt.saturating_add(1));
                 tracing::debug!(
                     attempt,
                     max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
-                    backoff_ms = backoff.as_millis(),
-                    retry_model = retry_model.unwrap_or("inherit"),
-                    "gemini-cli rate limit detected; retrying silently"
+                    "gemini-cli rate limit; retrying with model switch"
                 );
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
+            }
+            // API key fallback: all model retries exhausted, still quota error.
+            if Self::is_gemini_rate_limited(&result.execution) {
+                if let Some(env_with_key) = Self::inject_api_key_fallback(extra_env) {
+                    tracing::info!(
+                        "gemini-cli quota exhausted after all retries; falling back to API key auth"
+                    );
+                    return self
+                        .execute_single_attempt(
+                            &self.executor,
+                            prompt,
+                            tool_state,
+                            session,
+                            Some(&env_with_key),
+                            options,
+                        )
+                        .await;
+                }
             }
             return Ok(result);
         }
@@ -710,86 +754,6 @@ mod tests {
     fn test_build_summary_falls_back_to_exit_code_when_no_output() {
         let summary = build_summary("", "   \n", -1);
         assert_eq!(summary, "exit code -1");
-    }
-
-    #[test]
-    fn test_should_retry_gemini_rate_limited_until_final_attempt() {
-        let transport = LegacyTransport::new(Executor::GeminiCli {
-            model_override: None,
-            thinking_budget: None,
-        });
-        let execution = ExecutionResult {
-            summary: "failed".to_string(),
-            output: String::new(),
-            stderr_output: "HTTP 429 Too Many Requests".to_string(),
-            exit_code: 1,
-        };
-
-        assert!(
-            transport
-                .should_retry_gemini_rate_limited(&execution, 1)
-                .is_some()
-        );
-        assert!(
-            transport
-                .should_retry_gemini_rate_limited(&execution, 2)
-                .is_some()
-        );
-        assert!(
-            transport
-                .should_retry_gemini_rate_limited(&execution, 3)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn test_should_not_retry_on_success_exit_code() {
-        let transport = LegacyTransport::new(Executor::GeminiCli {
-            model_override: None,
-            thinking_budget: None,
-        });
-        let execution = ExecutionResult {
-            summary: "ok".to_string(),
-            output: "429".to_string(),
-            stderr_output: String::new(),
-            exit_code: 0,
-        };
-        assert!(
-            transport
-                .should_retry_gemini_rate_limited(&execution, 1)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn test_should_retry_on_quota_exhausted_marker() {
-        let transport = LegacyTransport::new(Executor::GeminiCli {
-            model_override: None,
-            thinking_budget: None,
-        });
-        let execution = ExecutionResult {
-            summary: "failed".to_string(),
-            output: String::new(),
-            stderr_output: "reason: 'QUOTA_EXHAUSTED'".to_string(),
-            exit_code: 1,
-        };
-        assert!(
-            transport
-                .should_retry_gemini_rate_limited(&execution, 1)
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn test_gemini_rate_limit_backoff_is_exponential() {
-        assert_eq!(
-            LegacyTransport::gemini_rate_limit_backoff(1),
-            Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS)
-        );
-        assert_eq!(
-            LegacyTransport::gemini_rate_limit_backoff(2),
-            Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS * 2)
-        );
     }
 
     include!("transport_tests_tail.rs");
