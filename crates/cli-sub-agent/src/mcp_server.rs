@@ -488,6 +488,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             &project_root,
             false, // MCP server does not support --force
             false, // MCP server does not support --force-override-user-config
+            false, // MCP tool dispatch always uses explicit tool
         )?;
 
     // Build executor

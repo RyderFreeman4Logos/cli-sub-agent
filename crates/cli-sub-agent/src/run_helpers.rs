@@ -17,6 +17,8 @@ use csa_session::TokenUsage;
 /// - model: optional model string (from CLI, with alias resolution applied)
 ///
 /// When tool is None, uses tier-based round-robin selection.
+/// `needs_edit`: when true, filters out tools with `allow_edit_existing_files = false`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_tool_and_model(
     tool: Option<ToolName>,
     model_spec: Option<&str>,
@@ -25,6 +27,7 @@ pub(crate) fn resolve_tool_and_model(
     project_root: &Path,
     force: bool,
     force_override_user_config: bool,
+    needs_edit: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
@@ -84,13 +87,15 @@ pub(crate) fn resolve_tool_and_model(
     if let Some(cfg) = config {
         // Try round-robin rotation first (needs project root to persist state)
         if let Ok(Some((tool_name_str, tier_model_spec))) =
-            csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, false)
+            csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, needs_edit)
         {
             let tool_name = parse_tool_name(&tool_name_str)?;
             return Ok((tool_name, Some(tier_model_spec), None));
         }
-        // Fallback: original non-rotating selection
-        if let Some((tool_name_str, tier_model_spec)) = cfg.resolve_tier_tool("default") {
+        // Fallback: original non-rotating selection (also respects edit restrictions)
+        if let Some((tool_name_str, tier_model_spec)) =
+            cfg.resolve_tier_tool_filtered("default", needs_edit)
+        {
             let tool_name = parse_tool_name(&tool_name_str)?;
             return Ok((tool_name, Some(tier_model_spec), None));
         }

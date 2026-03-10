@@ -602,4 +602,104 @@ mod tests {
         let state = RotationState::default();
         assert!(state.tiers.is_empty());
     }
+
+    fn make_config_with_restrictions(
+        models: Vec<&str>,
+        restricted_tools: Vec<&str>,
+    ) -> ProjectConfig {
+        use csa_config::ToolRestrictions;
+
+        let mut tools = HashMap::new();
+        for tool in restricted_tools {
+            tools.insert(
+                tool.to_string(),
+                ToolConfig {
+                    restrictions: Some(ToolRestrictions {
+                        allow_edit_existing_files: false,
+                    }),
+                    ..Default::default()
+                },
+            );
+        }
+
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier3".to_string(),
+            TierConfig {
+                description: "test tier".to_string(),
+                models: models.iter().map(|s| s.to_string()).collect(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+
+        let mut tier_mapping = HashMap::new();
+        tier_mapping.insert("default".to_string(), "tier3".to_string());
+
+        ProjectConfig {
+            schema_version: 1,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: Default::default(),
+            acp: Default::default(),
+            tools,
+            review: None,
+            debate: None,
+            tiers,
+            tier_mapping,
+            aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+            memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
+        }
+    }
+
+    #[test]
+    fn test_rotated_skips_restricted_tool_when_needs_edit() {
+        let temp = tempdir().unwrap();
+        let config = make_config_with_restrictions(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/0",
+                "codex/openai/o4-mini/0",
+            ],
+            vec!["gemini-cli"],
+        );
+
+        // needs_edit=true → skip gemini-cli (restricted), pick codex
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), true)
+            .unwrap()
+            .unwrap();
+        assert_eq!(result.0, "codex", "Should skip restricted gemini-cli");
+
+        // needs_edit=false → normal rotation (picks gemini-cli)
+        let temp2 = tempdir().unwrap();
+        let result = resolve_tier_tool_rotated(&config, "default", temp2.path(), false)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            result.0, "codex",
+            "Without restriction, normal round-robin from index 1"
+        );
+    }
+
+    #[test]
+    fn test_rotated_returns_none_when_all_restricted_and_needs_edit() {
+        let temp = tempdir().unwrap();
+        let config = make_config_with_restrictions(
+            vec!["gemini-cli/google/gemini-2.5-pro/0"],
+            vec!["gemini-cli"],
+        );
+
+        let result = resolve_tier_tool_rotated(&config, "default", temp.path(), true).unwrap();
+        assert!(
+            result.is_none(),
+            "Should return None when only tool is restricted and needs_edit"
+        );
+    }
 }

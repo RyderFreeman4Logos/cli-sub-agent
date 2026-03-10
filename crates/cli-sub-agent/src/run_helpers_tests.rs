@@ -549,6 +549,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         std::path::Path::new("/tmp"),
         true,  // force tier bypass
         false, // no override
+        false, // needs_edit
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -594,8 +595,9 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         None,
         Some(&config),
         std::path::Path::new("/tmp"),
-        true, // force tier bypass
-        true, // override enabled
+        true,  // force tier bypass
+        true,  // override enabled
+        false, // needs_edit
     );
     assert!(result.is_ok());
     let (tool, _, _) = result.unwrap();
@@ -643,6 +645,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         std::path::Path::new("/tmp"),
         true,
         false,
+        false, // needs_edit
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
