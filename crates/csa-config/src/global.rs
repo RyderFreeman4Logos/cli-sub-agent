@@ -435,6 +435,11 @@ pub struct GlobalToolConfig {
     /// Accepts: low, medium, high, xhigh, or a numeric token count.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking_lock: Option<String>,
+    /// API key for fallback authentication. Used when OAuth quota is exhausted
+    /// (e.g., gemini-cli falls back to API key auth after 429 retries fail).
+    /// NOT injected into env by default — only used as a last resort.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
 }
 
 fn default_max_concurrent() -> u32 {
@@ -448,6 +453,11 @@ impl GlobalConfig {
     pub fn redacted_for_display(&self) -> Self {
         let mut redacted = self.clone();
         redacted.memory.llm = redacted.memory.llm.redacted_for_display();
+        for tool_cfg in redacted.tools.values_mut() {
+            if tool_cfg.api_key.is_some() {
+                tool_cfg.api_key = Some("***REDACTED***".to_string());
+            }
+        }
         redacted
     }
 
@@ -495,6 +505,11 @@ impl GlobalConfig {
             .get(tool)
             .map(|t| &t.env)
             .filter(|m| !m.is_empty())
+    }
+
+    /// Get API key fallback for a tool (used when OAuth quota is exhausted).
+    pub fn api_key_fallback(&self, tool: &str) -> Option<&str> {
+        self.tools.get(tool).and_then(|t| t.api_key.as_deref())
     }
 
     /// Get the thinking budget lock for a tool from global config.
