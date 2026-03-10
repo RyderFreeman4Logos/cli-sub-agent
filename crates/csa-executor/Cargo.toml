@@ -22,6 +22,7 @@ tracing.workspace = true
 tracing-appender.workspace = true
 chrono.workspace = true
 regex.workspace = true
+reqwest.workspace = true
 
 [features]
 codex-pty-fork = ["csa-process/codex-pty-fork"]

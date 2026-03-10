@@ -18,6 +18,8 @@ pub fn extract_session_id(tool: &ToolName, output: &str) -> Option<String> {
         ToolName::Opencode => extract_opencode_session_id(output),
         ToolName::Codex => extract_codex_session_id(output),
         ToolName::ClaudeCode => extract_claude_session_id(output),
+        // OpenAI-compat is HTTP-only; session ID comes from API response, not output parsing.
+        ToolName::OpenaiCompat => None,
     }
 }
 

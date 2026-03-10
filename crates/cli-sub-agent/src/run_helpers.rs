@@ -181,6 +181,7 @@ pub(crate) fn parse_tool_name(name: &str) -> Result<ToolName> {
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
+        "openai-compat" => Ok(ToolName::OpenaiCompat),
         _ => anyhow::bail!("Unknown tool: {}", name),
     }
 }
@@ -418,6 +419,10 @@ pub(crate) fn resolve_tool_from_tier(
 /// binary (`codex-acp`, `claude-code-acp`). For legacy tools, checks the
 /// native CLI binary.
 pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
+    // OpenAI-compat is HTTP-only — no binary to check.
+    if tool_name == "openai-compat" {
+        return true;
+    }
     let binary = match tool_name {
         "gemini-cli" => "gemini",
         "opencode" => "opencode",

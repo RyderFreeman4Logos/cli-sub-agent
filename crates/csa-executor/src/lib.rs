@@ -1,4 +1,4 @@
-//! Executor enum for 4 AI tools with unified model spec.
+//! Executor enum for AI tools with unified model spec.
 
 pub mod agent_backend_adapter;
 pub mod context_loader;
@@ -7,6 +7,7 @@ pub mod logging;
 pub mod model_spec;
 pub mod session_id;
 pub mod transport;
+pub mod transport_openai_compat;
 
 pub use agent_backend_adapter::ExecutorAgentBackend;
 pub use context_loader::{
