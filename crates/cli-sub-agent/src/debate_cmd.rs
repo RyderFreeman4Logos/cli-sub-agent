@@ -167,8 +167,19 @@ pub(crate) async fn handle_debate(
     )
     .await?;
 
-    // 7. Get env injection from global config
-    let extra_env = global_config.env_vars(executor.tool_name());
+    // 7. Get env injection from global config (with no-flash + api key fallback)
+    let extra_env_owned = {
+        let mut env = global_config
+            .env_vars(executor.tool_name())
+            .cloned()
+            .unwrap_or_default();
+        env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
+        if let Some(key) = global_config.api_key_fallback(executor.tool_name()) {
+            env.insert("_CSA_API_KEY_FALLBACK".to_string(), key.to_string());
+        }
+        env
+    };
+    let extra_env = Some(&extra_env_owned);
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
 

@@ -537,7 +537,18 @@ async fn execute_review(
         prompt
     };
 
-    let extra_env = global_config.env_vars(executor.tool_name());
+    let extra_env_owned = {
+        let mut env = global_config
+            .env_vars(executor.tool_name())
+            .cloned()
+            .unwrap_or_default();
+        env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
+        if let Some(key) = global_config.api_key_fallback(executor.tool_name()) {
+            env.insert("_CSA_API_KEY_FALLBACK".to_string(), key.to_string());
+        }
+        env
+    };
+    let extra_env = Some(&extra_env_owned);
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
     if session.is_none() {
