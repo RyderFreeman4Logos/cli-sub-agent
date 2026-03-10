@@ -69,7 +69,9 @@ pub struct LegacyTransport {
 }
 
 const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
+const GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS: u8 = 2;
 const API_KEY_FALLBACK_ENV_KEY: &str = "_CSA_API_KEY_FALLBACK";
+const NO_FLASH_FALLBACK_ENV_KEY: &str = "_CSA_NO_FLASH_FALLBACK";
 const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
 #[cfg(test)]
 const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
@@ -96,14 +98,24 @@ impl LegacyTransport {
         &self,
         execution: &ExecutionResult,
         attempt: u8,
+        extra_env: Option<&HashMap<String, String>>,
     ) -> Option<Duration> {
+        let max = if Self::is_no_flash(extra_env) {
+            GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS
+        } else {
+            GEMINI_RATE_LIMIT_MAX_ATTEMPTS
+        };
         if !matches!(self.executor, Executor::GeminiCli { .. })
-            || attempt >= GEMINI_RATE_LIMIT_MAX_ATTEMPTS
+            || attempt >= max
             || !Self::is_gemini_rate_limited(execution)
         {
             return None;
         }
         Some(Self::gemini_rate_limit_backoff(attempt))
+    }
+
+    fn is_no_flash(extra_env: Option<&HashMap<String, String>>) -> bool {
+        extra_env.is_some_and(|env| env.contains_key(NO_FLASH_FALLBACK_ENV_KEY))
     }
 
     fn is_gemini_rate_limited(execution: &ExecutionResult) -> bool {
@@ -294,13 +306,10 @@ impl LegacyTransport {
                     idle_timeout_seconds,
                 )
                 .await?;
-            if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
+            if let Some(backoff) =
+                self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
             {
-                tracing::debug!(
-                    attempt,
-                    max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
-                    "gemini-cli rate limit; retrying with model switch"
-                );
+                tracing::debug!(attempt, "gemini-cli rate limit; retrying with model switch");
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
@@ -308,9 +317,7 @@ impl LegacyTransport {
             // API key fallback: all model retries exhausted, still quota error.
             if Self::is_gemini_rate_limited(&result.execution) {
                 if let Some(env_with_key) = Self::inject_api_key_fallback(extra_env) {
-                    tracing::info!(
-                        "gemini-cli quota exhausted after all retries; falling back to API key auth"
-                    );
+                    tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
                     return self
                         .execute_in_single_attempt(
                             &self.executor,
@@ -351,13 +358,10 @@ impl Transport for LegacyTransport {
                     options.clone(),
                 )
                 .await?;
-            if let Some(backoff) = self.should_retry_gemini_rate_limited(&result.execution, attempt)
+            if let Some(backoff) =
+                self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
             {
-                tracing::debug!(
-                    attempt,
-                    max_attempts = GEMINI_RATE_LIMIT_MAX_ATTEMPTS,
-                    "gemini-cli rate limit; retrying with model switch"
-                );
+                tracing::debug!(attempt, "gemini-cli rate limit; retrying with model switch");
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
@@ -365,9 +369,7 @@ impl Transport for LegacyTransport {
             // API key fallback: all model retries exhausted, still quota error.
             if Self::is_gemini_rate_limited(&result.execution) {
                 if let Some(env_with_key) = Self::inject_api_key_fallback(extra_env) {
-                    tracing::info!(
-                        "gemini-cli quota exhausted after all retries; falling back to API key auth"
-                    );
+                    tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
                     return self
                         .execute_single_attempt(
                             &self.executor,
