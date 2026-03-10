@@ -120,6 +120,9 @@ Session: ${STEP_0_OUTPUT}
 Tier: tier-1-quick
 
 Analyze codebase structure relevant to ${FEATURE}.
+
+CONSTRAINT ANCHOR: The user prompt above may specify target crates, key files, integration points, or architectural approach. If so, these are HARD CONSTRAINTS — start exploration from the specified files/modules and expand outward only as needed. Do NOT explore unrelated crates as primary targets. If the user specified key files, those MUST appear in your report.
+
 Report: relevant files (path + purpose, max 20), key types, module dependencies, entry points.
 Working directory: ${CWD}
 
@@ -130,6 +133,9 @@ Session: ${STEP_0_OUTPUT}
 Tier: tier-1-quick
 
 Find existing patterns or similar features to ${FEATURE} in this codebase.
+
+CONSTRAINT ANCHOR: If the user prompt specifies an architectural approach or target crate, pattern discovery MUST be scoped to that context first. Do NOT let codebase pattern matching override the user's explicit requirements. Report patterns that SUPPORT the user's specified approach, not patterns that suggest a different approach.
+
 Report: file paths with approach, reusable components, conventions to follow.
 Working directory: ${CWD}
 
@@ -140,6 +146,9 @@ Session: ${STEP_0_OUTPUT}
 Tier: tier-1-quick
 
 Identify constraints and risks for implementing ${FEATURE}.
+
+CONSTRAINT ANCHOR: If the user prompt specifies scope boundaries (target crate, specific modules), evaluate constraints WITHIN that scope. Flag risks that affect the user's specified approach, not risks that argue for a different approach.
+
 Report: potential breaking changes, security considerations, performance, compatibility.
 Working directory: ${CWD}
 
@@ -189,6 +198,8 @@ ${STEP_3_OUTPUT}
 ${STEP_4_OUTPUT}
 
 ### Instructions
+
+CONSTRAINT VERIFICATION: Before drafting, check that RECON findings align with the user's original feature request (${FEATURE}). If the user specified a target crate, architecture, or key files, the plan MUST target those — not alternatives suggested by codebase pattern matching. If RECON findings contradict user constraints, note the conflict and follow the user's intent.
 
 #### TODO Structure Requirements
 
