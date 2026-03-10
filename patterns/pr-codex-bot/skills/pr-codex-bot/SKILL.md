@@ -116,6 +116,10 @@ Layer 0 (Orchestrator)
 - `gh` CLI MUST be authenticated: `gh auth status`
 - All changes must be committed on a feature branch
 - Feature branch must be ahead of main
+- **FORBIDDEN**: Pushing the feature branch to remote BEFORE invoking this skill.
+  Step 2 (local review) MUST complete before any push. If you push first,
+  unreviewed code reaches the remote and CI/reviewers may act on it prematurely.
+  The skill's Step 4 handles push after review passes.
 
 ### Configuration
 
@@ -156,7 +160,7 @@ breaks prompt-guard propagation.
 
 1. **Commit check**: Ensure all changes are committed. Record `WORKFLOW_BRANCH`.
 2. **Local pre-PR review** (SYNCHRONOUS -- MUST NOT background): use SHA-verified fast-path first (`CURRENT_HEAD` vs latest reviewed session HEAD SHA). If matched, skip review; if mismatched/missing, run full `csa review --branch main`. This is the foundation -- without it, bot unavailability cannot safely merge. Fix any issues found (max 3 rounds). Sets `REVIEW_COMPLETED=true` on success.
-3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): `git push -u origin`, derive `source_owner` from `origin` remote URL, then resolve PR strictly by owner-aware lookup (`base=main + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
+3. **Push and ensure PR** (PRECONDITION: `REVIEW_COMPLETED=true`): Detect if branch was already pushed (early-push warning). Push with `--force-with-lease`, derive `source_owner` from `origin` remote URL, then resolve PR strictly by owner-aware lookup (`base=main + head=<source_owner>:${WORKFLOW_BRANCH}`). If none exists, create with `--head <source_owner>:<branch>` and re-resolve; handle create races where PR was created concurrently. FORBIDDEN: creating/reusing PR without Step 2 completion.
 3a. **Check cloud bot config**: Run `csa config get pr_review.cloud_bot --default true`.
     If `false` → skip Steps 4-9. Apply the same SHA-verified fast-path before
     supplementary review. If SHA matches, skip review; if SHA mismatches/missing
