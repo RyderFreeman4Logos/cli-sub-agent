@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Git pre-push hook: verify that a csa review has been run on the current HEAD.
+#
+# Install: ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
+#
+# This hook prevents pushing code that hasn't been reviewed by csa.
+# It checks that the most recent csa review session's commit hash matches HEAD.
+
+set -euo pipefail
+
+# Skip if not in a csa-managed project
+if ! command -v csa >/dev/null 2>&1; then
+  exit 0
+fi
+
+CURRENT_HEAD="$(git rev-parse HEAD)"
+CURRENT_BRANCH="$(git branch --show-current)"
+
+# Skip for main/dev branches (direct pushes are blocked by branch protection)
+if [ "${CURRENT_BRANCH}" = "main" ] || [ "${CURRENT_BRANCH}" = "dev" ]; then
+  exit 0
+fi
+
+# Find the most recent review session for this project
+REVIEW_SESSION_HEAD=""
+if csa session list --json >/dev/null 2>&1; then
+  REVIEW_SESSION_HEAD="$(csa session list --json 2>/dev/null \
+    | jq -r '[.[] | select(.command | test("review"))] | sort_by(.created) | last | .change_id // empty' \
+    2>/dev/null || true)"
+fi
+
+if [ -z "${REVIEW_SESSION_HEAD}" ]; then
+  echo "WARNING: No csa review session found. Push allowed (review tracking not available)." >&2
+  exit 0
+fi
+
+# Compare: review session's change_id should match or be a prefix of current HEAD
+if [ "${CURRENT_HEAD}" = "${REVIEW_SESSION_HEAD}" ] || \
+   [ "${CURRENT_HEAD#"${REVIEW_SESSION_HEAD}"}" != "${CURRENT_HEAD}" ]; then
+  echo "pre-push: Review verified for HEAD ${CURRENT_HEAD:0:11}."
+  exit 0
+fi
+
+echo "ERROR: Push blocked — csa review HEAD (${REVIEW_SESSION_HEAD:0:11}) does not match current HEAD (${CURRENT_HEAD:0:11})." >&2
+echo "Run 'csa review --range main...HEAD' before pushing." >&2
+exit 1
