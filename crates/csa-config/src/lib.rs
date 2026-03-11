@@ -25,7 +25,7 @@ pub use config::{
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
-pub use global::{GateMode, GlobalConfig, GlobalMcpConfig, ReviewConfig};
+pub use global::{GateMode, GateStep, GlobalConfig, GlobalMcpConfig, ReviewConfig};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use memory::{MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};

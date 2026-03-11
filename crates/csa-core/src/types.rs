@@ -212,6 +212,60 @@ pub enum OutputFormat {
     Json,
 }
 
+/// Four-value review decision semantics.
+///
+/// Replaces binary CLEAN/HAS_ISSUES with richer verdict vocabulary:
+/// - `Pass`: All checks passed, no issues found.
+/// - `Fail`: One or more blocking issues found.
+/// - `Skip`: Review was skipped (e.g., gate not configured, depth guard).
+/// - `Uncertain`: Reviewer could not reach a confident verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewDecision {
+    Pass,
+    Fail,
+    Skip,
+    Uncertain,
+}
+
+impl ReviewDecision {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pass => "pass",
+            Self::Fail => "fail",
+            Self::Skip => "skip",
+            Self::Uncertain => "uncertain",
+        }
+    }
+
+    /// Whether this decision is considered "clean" (no blocking issues).
+    pub fn is_clean(self) -> bool {
+        matches!(self, Self::Pass | Self::Skip)
+    }
+}
+
+impl std::fmt::Display for ReviewDecision {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ReviewDecision {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "pass" | "clean" => Ok(Self::Pass),
+            "fail" | "has_issues" => Ok(Self::Fail),
+            "skip" | "skipped" => Ok(Self::Skip),
+            "uncertain" | "unknown" => Ok(Self::Uncertain),
+            _ => Err(format!(
+                "Unknown review decision '{s}'. Expected: pass, fail, skip, or uncertain."
+            )),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -463,5 +517,50 @@ mod tests {
             ToolArg::from_str("Claude-Code").unwrap(),
             ToolArg::Alias(_)
         ));
+    }
+
+    #[test]
+    fn test_review_decision_from_str() {
+        assert_eq!(
+            ReviewDecision::from_str("pass").unwrap(),
+            ReviewDecision::Pass
+        );
+        assert_eq!(
+            ReviewDecision::from_str("CLEAN").unwrap(),
+            ReviewDecision::Pass
+        );
+        assert_eq!(
+            ReviewDecision::from_str("fail").unwrap(),
+            ReviewDecision::Fail
+        );
+        assert_eq!(
+            ReviewDecision::from_str("HAS_ISSUES").unwrap(),
+            ReviewDecision::Fail
+        );
+        assert_eq!(
+            ReviewDecision::from_str("skip").unwrap(),
+            ReviewDecision::Skip
+        );
+        assert_eq!(
+            ReviewDecision::from_str("uncertain").unwrap(),
+            ReviewDecision::Uncertain
+        );
+        assert!(ReviewDecision::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn test_review_decision_is_clean() {
+        assert!(ReviewDecision::Pass.is_clean());
+        assert!(ReviewDecision::Skip.is_clean());
+        assert!(!ReviewDecision::Fail.is_clean());
+        assert!(!ReviewDecision::Uncertain.is_clean());
+    }
+
+    #[test]
+    fn test_review_decision_display() {
+        assert_eq!(ReviewDecision::Pass.to_string(), "pass");
+        assert_eq!(ReviewDecision::Fail.to_string(), "fail");
+        assert_eq!(ReviewDecision::Skip.to_string(), "skip");
+        assert_eq!(ReviewDecision::Uncertain.to_string(), "uncertain");
     }
 }

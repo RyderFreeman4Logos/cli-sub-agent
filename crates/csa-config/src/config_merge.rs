@@ -32,7 +32,7 @@ pub(crate) fn merge_toml_values(base: toml::Value, overlay: toml::Value) -> toml
 /// Project-only keys under `[review]`. These fields are meaningful only in
 /// project config; values from global config are stripped before merge to
 /// prevent accidental inheritance.
-const REVIEW_PROJECT_ONLY_KEYS: &[&str] = &["gate_command", "gate_timeout_secs"];
+const REVIEW_PROJECT_ONLY_KEYS: &[&str] = &["gate_command", "gate_commands", "gate_timeout_secs"];
 
 /// Strip project-only keys from the global `[review]` table before merge.
 ///

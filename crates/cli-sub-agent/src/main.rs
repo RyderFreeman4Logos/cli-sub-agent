@@ -300,6 +300,7 @@ async fn run() -> Result<()> {
             memory_query,
             stream_stdout,
             no_stream_stdout,
+            spec: _spec,
         } => {
             // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
             // default: stream for Text output in all contexts.

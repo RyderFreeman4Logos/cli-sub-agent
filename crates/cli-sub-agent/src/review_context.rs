@@ -31,7 +31,15 @@ pub(crate) fn resolve_review_context(
 
 fn resolve_explicit_review_context(path: &str) -> Result<ResolvedReviewContext> {
     let path_ref = Path::new(path);
-    if has_extension(path_ref, "toml") {
+
+    // Security: reject paths with null bytes (potential injection)
+    anyhow::ensure!(
+        !path.contains('\0'),
+        "Spec path contains null byte: rejected for security"
+    );
+
+    // Accept .toml and .spec as spec document formats (both parsed as TOML)
+    if has_extension(path_ref, "toml") || has_extension(path_ref, "spec") {
         return load_spec_review_context(path_ref);
     }
 
@@ -248,6 +256,31 @@ mod tests {
         assert!(output.contains("Failed to auto-discover review context"));
         assert!(output.contains("Failed to parse spec context"));
         assert!(output.contains("feat/broken-spec"));
+    }
+
+    #[test]
+    fn resolve_review_context_accepts_dot_spec_extension() {
+        let temp = tempdir().unwrap();
+        let spec_path = temp.path().join("contract.spec");
+        std::fs::write(
+            &spec_path,
+            toml::to_string_pretty(&sample_spec_document(
+                "01JTESTPLAN0000000000000001",
+                "criterion-spec-ext",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+
+        let context = resolve_review_context(Some(spec_path.to_str().unwrap()), temp.path(), false)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(context.path, spec_path.display().to_string());
+        assert!(matches!(
+            context.kind,
+            ResolvedReviewContextKind::SpecToml { .. }
+        ));
     }
 
     #[test]

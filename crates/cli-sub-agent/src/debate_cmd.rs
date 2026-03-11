@@ -45,16 +45,13 @@ pub(crate) async fn handle_debate(
     // 2b. Verify debate skill is available (fail fast before any execution)
     verify_debate_skill_available(&project_root)?;
 
-    // 2c. Run pre-review quality gate (reuses [review] gate settings)
+    // 2c. Run pre-debate quality gate (reuses [review] gate settings)
     //
     // Debate reuses the review section's gate settings because the gate is a
     // shared pre-execution quality check (lint/test) that applies equally to
     // both review and debate workflows.
     {
-        let gate_command = config
-            .as_ref()
-            .and_then(|c| c.review.as_ref())
-            .and_then(|r| r.gate_command.as_deref());
+        let gate_steps = global_config.review.effective_gate_steps();
         let gate_timeout = config
             .as_ref()
             .and_then(|c| c.review.as_ref())
@@ -62,48 +59,90 @@ pub(crate) async fn handle_debate(
             .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
         let gate_mode = &global_config.review.gate_mode;
 
-        let gate_result = crate::pipeline::gate::evaluate_quality_gate(
-            &project_root,
-            gate_command,
-            gate_timeout,
-            gate_mode,
-        )
-        .await?;
+        if gate_steps.is_empty() {
+            // Legacy single-command path
+            let gate_command = config
+                .as_ref()
+                .and_then(|c| c.review.as_ref())
+                .and_then(|r| r.gate_command.as_deref());
+            let gate_result = crate::pipeline::gate::evaluate_quality_gate(
+                &project_root,
+                gate_command,
+                gate_timeout,
+                gate_mode,
+            )
+            .await?;
 
-        if gate_result.skipped {
-            debug!(
-                reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
-                "Quality gate skipped"
-            );
-        } else if !gate_result.passed() {
-            match gate_mode {
-                csa_config::GateMode::Monitor => {
-                    warn!(
-                        command = %gate_result.command,
-                        exit_code = ?gate_result.exit_code,
-                        "Quality gate failed (monitor mode — continuing with debate)"
-                    );
-                }
-                csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
-                    let mut msg = format!(
-                        "Pre-debate quality gate failed (mode={gate_mode:?}).\n\
-                         Command: {}\nExit code: {:?}",
-                        gate_result.command, gate_result.exit_code
-                    );
-                    if !gate_result.stdout.is_empty() {
-                        msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
+            if gate_result.skipped {
+                debug!(
+                    reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
+                    "Quality gate skipped"
+                );
+            } else if !gate_result.passed() {
+                match gate_mode {
+                    csa_config::GateMode::Monitor => {
+                        warn!(
+                            command = %gate_result.command,
+                            exit_code = ?gate_result.exit_code,
+                            "Quality gate failed (monitor mode — continuing with debate)"
+                        );
                     }
-                    if !gate_result.stderr.is_empty() {
-                        msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
+                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
+                        let mut msg = format!(
+                            "Pre-debate quality gate failed (mode={gate_mode:?}).\n\
+                             Command: {}\nExit code: {:?}",
+                            gate_result.command, gate_result.exit_code
+                        );
+                        if !gate_result.stdout.is_empty() {
+                            msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
+                        }
+                        if !gate_result.stderr.is_empty() {
+                            msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
+                        }
+                        anyhow::bail!(msg);
                     }
-                    anyhow::bail!(msg);
                 }
+            } else {
+                debug!(command = %gate_result.command, "Quality gate passed");
             }
         } else {
-            debug!(
-                command = %gate_result.command,
-                "Quality gate passed"
-            );
+            // Multi-step pipeline
+            let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
+                &project_root,
+                &gate_steps,
+                gate_timeout,
+                gate_mode,
+            )
+            .await?;
+
+            if pipeline_result.passed {
+                debug!("Quality gate pipeline passed");
+            } else {
+                match gate_mode {
+                    csa_config::GateMode::Monitor => {
+                        warn!("Quality gate pipeline failed (monitor mode — continuing)");
+                    }
+                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
+                        let failed = pipeline_result.failed_step.as_deref().unwrap_or("unknown");
+                        let mut msg = format!(
+                            "Pre-debate quality gate pipeline FAILED at step: {failed}\n\
+                             (mode={gate_mode:?})\n"
+                        );
+                        for step in &pipeline_result.steps {
+                            if !step.passed() {
+                                msg.push_str(&format!(
+                                    "\nL{} {} ({}): exit {:?}",
+                                    step.level, step.name, step.command, step.exit_code
+                                ));
+                                if !step.stderr.is_empty() {
+                                    msg.push_str(&format!("\n  stderr: {}", step.stderr));
+                                }
+                            }
+                        }
+                        anyhow::bail!(msg);
+                    }
+                }
+            }
         }
     }
 

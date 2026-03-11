@@ -126,6 +126,8 @@ pub(crate) fn create_session_in(
         is_seed_candidate: false,
         git_head_at_creation: detect_git_head(&normalized_project_path),
         last_return_packet: None,
+        change_id: detect_change_id(&normalized_project_path),
+        spec_id: None,
         fork_call_timestamps: Vec::new(),
     };
 
@@ -156,24 +158,18 @@ pub fn detect_git_head(project_path: &Path) -> Option<String> {
     }
 }
 
+/// Detect a VCS change identifier for session-change binding.
+///
+/// Uses VcsBackend to detect the appropriate change ID (jj change-id or git HEAD).
+fn detect_change_id(project_path: &Path) -> Option<String> {
+    let backend = crate::vcs_backends::create_vcs_backend(project_path);
+    backend.head_id(project_path).ok().flatten()
+}
+
+/// Detect the current branch using the appropriate VCS backend.
 fn detect_current_branch(project_path: &Path) -> Option<String> {
-    let output = Command::new("git")
-        .args(["rev-parse", "--abbrev-ref", "HEAD"])
-        .current_dir(project_path)
-        .output()
-        .ok()?;
-
-    if !output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8(output.stdout).ok()?;
-    let trimmed = branch.trim();
-    if trimmed.is_empty() || trimmed == "HEAD" {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
+    let backend = crate::vcs_backends::create_vcs_backend(project_path);
+    backend.current_branch(project_path).ok().flatten()
 }
 
 /// Load an existing session
@@ -355,6 +351,8 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     is_seed_candidate: false,
                     git_head_at_creation: None,
                     last_return_packet: None,
+                    change_id: None,
+                    spec_id: None,
                     fork_call_timestamps: Vec::new(),
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {

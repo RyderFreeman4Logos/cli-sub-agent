@@ -231,6 +231,7 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
             model: None,
             thinking: None,
             gate_command: None,
+            gate_commands: vec![],
             gate_timeout_secs: ReviewConfig::default_gate_timeout(),
         };
         let toml = toml::to_string(&review).unwrap();

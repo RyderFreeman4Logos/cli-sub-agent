@@ -192,6 +192,10 @@ pub enum Commands {
         /// Suppress real-time stdout streaming to stderr (streams by default for text output)
         #[arg(long)]
         no_stream_stdout: bool,
+
+        /// Path to agent-spec file (.spec or .toml) for contract-based verification
+        #[arg(long, value_name = "PATH")]
+        spec: Option<String>,
     },
 
     /// Manage sessions

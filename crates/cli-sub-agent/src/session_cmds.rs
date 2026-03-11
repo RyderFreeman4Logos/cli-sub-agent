@@ -224,6 +224,12 @@ fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_jso
         value["parent_session_id"] = serde_json::json!(parent);
     }
     value["depth"] = serde_json::json!(session.genealogy.depth);
+    if let Some(ref change_id) = session.change_id {
+        value["change_id"] = serde_json::json!(change_id);
+    }
+    if let Some(ref spec_id) = session.spec_id {
+        value["spec_id"] = serde_json::json!(spec_id);
+    }
     value
 }
 
@@ -411,8 +417,16 @@ pub(crate) fn handle_session_list(
                             String::new()
                         };
 
+                    // Change binding indicator
+                    let change_suffix = if let Some(ref cid) = session.change_id {
+                        let short_cid = &cid[..11.min(cid.len())];
+                        format!("  change:{}", short_cid)
+                    } else {
+                        String::new()
+                    };
+
                     println!(
-                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}",
+                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}{}",
                         short_id,
                         session
                             .last_accessed
@@ -424,6 +438,7 @@ pub(crate) fn handle_session_list(
                         branch_str,
                         tokens_str,
                         fork_suffix,
+                        change_suffix,
                     );
                 }
             }

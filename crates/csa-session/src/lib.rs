@@ -16,6 +16,7 @@ pub mod review_artifact;
 pub mod soft_fork;
 pub mod state;
 pub mod validate;
+pub mod vcs_backends;
 
 // Re-export key types
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
@@ -40,6 +41,7 @@ pub use redact::{redact_event, redact_text_content};
 pub use result::{SessionArtifact, SessionResult};
 pub use review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 pub use soft_fork::{SoftForkContext, soft_fork_session};
+pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 
 // Re-export manager functions
 pub use manager::{

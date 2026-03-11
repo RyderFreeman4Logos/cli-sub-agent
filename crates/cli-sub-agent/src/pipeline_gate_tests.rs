@@ -36,6 +36,8 @@ fn test_gate_result_skipped_is_passed() {
 #[test]
 fn test_gate_result_exit_0_is_passed() {
     let result = GateResult {
+        name: String::new(),
+        level: 0,
         command: "true".to_string(),
         exit_code: Some(0),
         stdout: String::new(),
@@ -49,6 +51,8 @@ fn test_gate_result_exit_0_is_passed() {
 #[test]
 fn test_gate_result_exit_1_is_not_passed() {
     let result = GateResult {
+        name: String::new(),
+        level: 0,
         command: "false".to_string(),
         exit_code: Some(1),
         stdout: String::new(),
@@ -62,6 +66,8 @@ fn test_gate_result_exit_1_is_not_passed() {
 #[test]
 fn test_gate_result_no_exit_code_is_not_passed() {
     let result = GateResult {
+        name: String::new(),
+        level: 0,
         command: "killed".to_string(),
         exit_code: None,
         stdout: String::new(),
@@ -332,3 +338,158 @@ async fn test_detect_hooks_path_relative() {
     let result = detect_git_hooks_pre_commit(dir.path()).await.unwrap();
     assert!(result.is_some());
 }
+
+// ---------------------------------------------------------------------------
+// evaluate_quality_gates (multi-step pipeline)
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_pipeline_skipped_when_csa_depth_set() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("1") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let steps = vec![GateStep {
+        name: "lint".to_string(),
+        command: "echo should-not-run".to_string(),
+        level: 1,
+    }];
+
+    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+        .await
+        .unwrap();
+
+    assert!(result.passed);
+    assert_eq!(result.steps.len(), 1);
+    assert!(result.steps[0].skipped);
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_pipeline_empty_steps_skipped() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+
+    let dir = tempfile::tempdir().unwrap();
+    let result = evaluate_quality_gates(dir.path(), &[], 300, &GateMode::Full)
+        .await
+        .unwrap();
+
+    assert!(result.passed);
+    assert!(result.steps[0].skipped);
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_pipeline_sequential_all_pass() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let steps = vec![
+        GateStep {
+            name: "lint".to_string(),
+            command: "echo L1-lint".to_string(),
+            level: 1,
+        },
+        GateStep {
+            name: "typecheck".to_string(),
+            command: "echo L2-typecheck".to_string(),
+            level: 2,
+        },
+        GateStep {
+            name: "test".to_string(),
+            command: "echo L3-test".to_string(),
+            level: 3,
+        },
+    ];
+
+    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+        .await
+        .unwrap();
+
+    assert!(result.passed);
+    assert!(result.failed_step.is_none());
+    assert_eq!(result.steps.len(), 3);
+    assert_eq!(result.steps[0].name, "lint");
+    assert_eq!(result.steps[0].level, 1);
+    assert!(result.steps[0].stdout.contains("L1-lint"));
+    assert_eq!(result.steps[1].name, "typecheck");
+    assert_eq!(result.steps[1].level, 2);
+    assert_eq!(result.steps[2].name, "test");
+    assert_eq!(result.steps[2].level, 3);
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_pipeline_fail_fast_on_first_failure() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let steps = vec![
+        GateStep {
+            name: "lint".to_string(),
+            command: "exit 1".to_string(),
+            level: 1,
+        },
+        GateStep {
+            name: "test".to_string(),
+            command: "echo should-not-run".to_string(),
+            level: 3,
+        },
+    ];
+
+    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+        .await
+        .unwrap();
+
+    assert!(!result.passed);
+    assert_eq!(result.failed_step.as_deref(), Some("lint"));
+    // In Full mode, pipeline aborts after first failure — only 1 step ran
+    assert_eq!(result.steps.len(), 1);
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+#[tokio::test]
+async fn test_pipeline_summary_for_review() {
+    // SAFETY: Test-only env mutation.
+    unsafe { set_depth("0") };
+    let dir = tempfile::tempdir().unwrap();
+
+    let steps = vec![
+        GateStep {
+            name: "lint".to_string(),
+            command: "echo ok".to_string(),
+            level: 1,
+        },
+        GateStep {
+            name: "test".to_string(),
+            command: "echo ok".to_string(),
+            level: 3,
+        },
+    ];
+
+    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+        .await
+        .unwrap();
+
+    let summary = result.summary_for_review();
+    assert!(summary.contains("Pre-review gate results:"));
+    assert!(summary.contains("L1 [PASS] lint"));
+    assert!(summary.contains("L3 [PASS] test"));
+    assert!(summary.contains("All gates passed."));
+
+    // SAFETY: Restoring env.
+    unsafe { clear_depth() };
+}
+
+use csa_config::GateStep;

@@ -84,6 +84,16 @@ pub struct MetaSessionState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_return_packet: Option<ReturnPacketRef>,
 
+    /// VCS change identifier bound to this session (e.g., jj change-id or git commit hash).
+    /// Enables session-change binding so sessions can be grouped by logical change.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_id: Option<String>,
+
+    /// Spec document ULID or path associated with this session.
+    /// Links the session to a specific agent-spec contract for traceability.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec_id: Option<String>,
+
     /// In-memory fork-call timestamps for simple per-session rate limiting.
     ///
     /// This is intentionally runtime-only and is not persisted to state.toml.

@@ -76,13 +76,19 @@ Review prompt instructs agent to:
 4. AGENTS.md compliance checklist (root-to-leaf, all applicable rules), including:
    - Rule 027 `pattern-workflow-sync` when diff touches `PATTERN.md` or `workflow.toml`
    - Rust rule 015 `subprocess-lifecycle` when diff touches process spawning/lifecycle code
-5. Apply Spec Alignment review dimensions when context points to TODO.md or spec.toml.
-   Emit categories `spec-deviation` and `unverified-criterion` when criteria drift
-   or remain unsupported by the diff.
+5. **Contract Alignment** (when spec context available via TODO.md, spec.toml, or .spec):
+   - **Intent verification**: Does the diff fulfill the spec's stated intent and decisions?
+   - **Boundary compliance**: Are the spec's boundary constraints (what NOT to do) respected?
+   - **Completion criteria**: Can each criterion's DONE WHEN condition be mechanically verified?
+   - Emit categories: `spec-deviation` (implementation contradicts spec),
+     `unverified-criterion` (criterion not addressed by diff),
+     `boundary-violation` (change exceeds spec scope)
 6. When `review_mode=red-team`, load `references/red-team-mode.md` and review
    adversarially (counterexamples, boundary conditions, break attempts).
-7. Generate review-findings.json and review-report.md
-8. Parse `[project_profile: <value>]` metadata from the instruction and apply
+7. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN.
+   Legacy aliases accepted: CLEAN → PASS, HAS_ISSUES → FAIL.
+8. Generate review-findings.json and review-report.md
+9. Parse `[project_profile: <value>]` metadata from the instruction and apply
    framework-aware review dimensions from `references/review-protocol.md`"""
 on_fail = "abort"
 
