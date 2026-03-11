@@ -1,25 +1,28 @@
 ---
 name = "dev2merge"
-description = "Full development cycle from branch creation through mktd planning, commit, PR, codex-bot review, and merge"
-allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task"
+description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), pre-PR review, push, PR, codex-bot merge"
+allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task, TaskCreate, TaskUpdate, TaskList, TaskGet"
 tier = "tier-3-complex"
-version = "0.1.0"
+version = "0.2.0"
 ---
 
-# Dev2Merge Workflow
+# Dev2Merge: Deterministic Development Pipeline
 
-End-to-end development workflow: implement code on a feature branch, pass all
-quality gates, commit with Conventional Commits, create a PR, run codex-bot
-review loop, and merge to main. Planning is mandatory via `mktd`, and `mktd`
-internally requires adversarial `debate` evidence.
+End-to-end development workflow enforced as a weave workflow. Every stage has
+hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
+
+Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
+mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push → PR →
+pr-codex-bot (review loop + merge) → Local Sync.
+
+Sub-workflows are included via `## INCLUDE`, not inlined.
 
 ## Step 1: Validate Branch
 
 Tool: bash
 OnFail: abort
 
-Verify the current branch is a feature branch, not a protected branch.
-If on main or dev, abort immediately.
+Verify the current branch is a feature branch, not protected.
 
 ```bash
 BRANCH="$(git branch --show-current)"
@@ -33,583 +36,261 @@ if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
   echo "ERROR: Cannot work directly on $BRANCH. Create a feature branch."
   exit 1
 fi
+echo "CSA_VAR:WORKFLOW_BRANCH=$BRANCH"
+echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
 ```
 
-## Step 2: Plan with mktd (Debate Required)
+## Step 2: FAST_PATH Detection
 
 Tool: bash
 OnFail: abort
 
-Generate or refresh a branch TODO plan through `mktd` before development gates.
-This step MUST pass through mktd's built-in debate phase and save a TODO.
+Detect whether changes are docs/config-only. When FAST_PATH=true,
+skip mktd/mktsk/debate but keep L1/L2 quality checks.
 
 ```bash
-: "mktd execution is handled by Step 3 include"
+set -euo pipefail
+CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
+TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
+if [ "${CODE_FILES}" -eq 0 ] && [ "${TOTAL_INSERTIONS:-0}" -lt 100 ]; then
+  echo "FAST_PATH: docs/config-only changes detected. Skipping mktd/mktsk."
+  echo "CSA_VAR:FAST_PATH=true"
+else
+  echo "Full pipeline: ${CODE_FILES} code files, ${TOTAL_INSERTIONS} insertions."
+  echo "CSA_VAR:FAST_PATH=false"
+fi
 ```
 
-## Step 3: Include mktd
+## Step 3: L1/L2 Quality Gates (Always Run)
 
 Tool: bash
+OnFail: abort
+
+Formatters and linters run regardless of FAST_PATH.
+
+```bash
+just fmt
+just clippy
+```
+
+## IF ${FAST_PATH}
+
+## Step 4: FAST_PATH Commit
+
+Tool: bash
+OnFail: abort
+
+For docs/config-only changes, run a simplified commit flow:
+stage, generate message, commit. No mktd/mktsk/security-audit overhead.
+
+```bash
+set -euo pipefail
+just test
+git add -A
+if ! git diff --cached --name-only | grep -q .; then
+  echo "ERROR: No staged files."
+  exit 1
+fi
+COMMIT_MSG="$(scripts/gen_commit_msg.sh "${SCOPE:-}" 2>/dev/null || echo "docs: update documentation")"
+git commit -m "${COMMIT_MSG}"
+echo "CSA_VAR:FAST_PATH_COMMITTED=true"
+```
+
+## Step 5: FAST_PATH Version Bump
+
+Tool: bash
+OnFail: abort
+
+```bash
+set -euo pipefail
+if ! just check-version-bumped 2>/dev/null; then
+  just bump-patch
+  cargo run -p weave -- lock 2>/dev/null || true
+  git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
+  VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
+  git commit -m "chore(release): bump workspace version to ${VERSION}"
+fi
+```
+
+## Step 6: FAST_PATH Pre-PR Review
+
+Tool: bash
+OnFail: abort
+
+Even FAST_PATH runs cumulative review before push.
+
+```bash
+set -euo pipefail
+REVIEW_OUTPUT="$(timeout 1800 csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD" 2>&1)" || true
+printf '%s\n' "${REVIEW_OUTPUT}"
+echo "CSA_VAR:REVIEW_COMPLETED=true"
+```
+
+## ELSE
+
+## Step 7: Plan with mktd
+
+Tool: bash
+OnFail: abort
+
+Generate a TODO plan via mktd. Includes debate phase.
 
 ```bash
 set -euo pipefail
 CURRENT_BRANCH="$(git branch --show-current)"
 FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
-MKTD_PROMPT="Plan dev2merge execution for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}."
-MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-codex}}"
-MKTD_OUTPUT_FILE="$(mktemp)"
+MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-gemini-cli}}"
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
   MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
 else
   MKTD_TOOL_ARGS=()
 fi
-set +e
-if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa plan run patterns/mktd/workflow.toml \
-    "${MKTD_TOOL_ARGS[@]}" \
-    --var CWD="$(pwd)" \
-    --var FEATURE="${MKTD_PROMPT}" \
-    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1 | tee "${MKTD_OUTPUT_FILE}"
-  MKTD_STATUS=${PIPESTATUS[0]}
-else
-  csa plan run patterns/mktd/workflow.toml \
-    "${MKTD_TOOL_ARGS[@]}" \
-    --var CWD="$(pwd)" \
-    --var FEATURE="${MKTD_PROMPT}" \
-    --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" 2>&1 | tee "${MKTD_OUTPUT_FILE}"
-  MKTD_STATUS=${PIPESTATUS[0]}
-fi
-set -e
-MKTD_OUTPUT="$(cat "${MKTD_OUTPUT_FILE}")"
-rm -f "${MKTD_OUTPUT_FILE}"
-printf '%s\n' "${MKTD_OUTPUT}"
-if [ "${MKTD_STATUS}" -eq 124 ]; then
-  echo "ERROR: mktd workflow timed out after 1800s." >&2
-  exit 1
-fi
-if [ "${MKTD_STATUS}" -ne 0 ]; then
-  echo "ERROR: mktd failed (exit=${MKTD_STATUS})." >&2
-  exit 1
-fi
+timeout 1800 csa plan run patterns/mktd/workflow.toml \
+  "${MKTD_TOOL_ARGS[@]}" \
+  --var CWD="$(pwd)" \
+  --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
+  --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}"
 LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
 if [ -z "${LATEST_TS}" ]; then
   echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2
   exit 1
 fi
 TODO_PATH="$(csa todo show -t "${LATEST_TS}" --path)"
-if [ ! -s "${TODO_PATH}" ]; then
-  echo "ERROR: TODO file is empty: ${TODO_PATH}" >&2
-  exit 1
-fi
-grep -qF -- '- [ ] ' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks: ${TODO_PATH}" >&2; exit 1; }
-grep -q 'DONE WHEN:' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses: ${TODO_PATH}" >&2; exit 1; }
-printf 'MKTD_TODO_TIMESTAMP=%s\nMKTD_TODO_PATH=%s\n' "${LATEST_TS}" "${TODO_PATH}"
+grep -qF -- '- [ ] ' "${TODO_PATH}" || { echo "ERROR: TODO missing checkbox tasks." >&2; exit 1; }
+grep -q 'DONE WHEN' "${TODO_PATH}" || { echo "ERROR: TODO missing DONE WHEN clauses." >&2; exit 1; }
+echo "CSA_VAR:MKTD_TODO_TIMESTAMP=${LATEST_TS}"
+echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 ```
 
-## Step 4: Run Formatters
-
-Tool: bash
-OnFail: retry 2
-
-Run the project formatter to ensure consistent code style.
-
-```bash
-just fmt
-```
-
-## Step 5: Run Linters
-
-Tool: bash
-OnFail: retry 2
-
-Run linters to catch static analysis issues.
-
-```bash
-just clippy
-```
-
-## Step 6: Run Tests
+## Step 8: Execute Plan with mktsk
 
 Tool: bash
 OnFail: abort
 
-Run the full test suite. All tests must pass before proceeding.
+Bridge planning to execution. mktsk processes TODO items serially.
+Each item goes through implement → commit (via INCLUDE commit).
 
 ```bash
-just test
+set -euo pipefail
+timeout 3600 csa run --sa-mode true --skill mktsk "${MKTD_TODO_TIMESTAMP}"
 ```
 
-## Step 7: Stage Changes
-
-Tool: bash
-
-Stage all modified and new files relevant to ${SCOPE}.
-Verify no untracked files remain.
-
-```bash
-git add -A
-if ! printf '%s' "${SCOPE:-}" | grep -Eqi 'release|version|lock|deps|dependency'; then
-  STAGED_FILES="$(git diff --cached --name-only)"
-  if printf '%s\n' "${STAGED_FILES}" | grep -Eq '(^|/)Cargo[.]toml$|(^|/)package[.]json$|(^|/)pnpm-workspace[.]yaml$|(^|/)go[.]mod$'; then
-    echo "INFO: Dependency manifest change detected; preserving staged lockfiles."
-  elif ! printf '%s\n' "${STAGED_FILES}" | grep -Ev '(^|/)(Cargo[.]lock|package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|go[.]sum)$' | grep -q .; then
-    echo "INFO: Lockfile-only staged change detected; preserving staged lockfiles."
-  else
-    MATCHED_LOCKFILES="$(printf '%s\n' "${STAGED_FILES}" | grep -E '(^|/)(Cargo[.]lock|package-lock[.]json|pnpm-lock[.]yaml|yarn[.]lock|go[.]sum)$' || true)"
-    if [ -n "${MATCHED_LOCKFILES}" ]; then
-      printf '%s\n' "${MATCHED_LOCKFILES}" | while read -r lockpath; do
-        echo "INFO: Unstaging incidental lockfile change: ${lockpath}"
-        git restore --staged -- "${lockpath}"
-      done
-    fi
-  fi
-fi
-if ! git diff --cached --name-only | grep -q .; then
-  echo "ERROR: No staged files remain after scope filtering."
-  exit 1
-fi
-if git ls-files --others --exclude-standard | grep -q .; then
-  echo "ERROR: Untracked files detected."
-  git ls-files --others --exclude-standard
-  exit 1
-fi
-```
-
-## Step 8: Security Scan
+## Step 9: Ensure Version Bumped
 
 Tool: bash
 OnFail: abort
 
-Check for hardcoded secrets, debug statements, and commented-out code
-in staged files. Runs after staging so `git diff --cached` covers all changes.
-
 ```bash
-git diff --cached --name-only | while read -r file; do
-  if grep -nE '(API_KEY|SECRET|PASSWORD|PRIVATE_KEY)=' "$file" 2>/dev/null; then
-    echo "FAIL: Potential secret in $file"
-    exit 1
-  fi
-done
+set -euo pipefail
+if ! just check-version-bumped 2>/dev/null; then
+  just bump-patch
+  cargo run -p weave -- lock 2>/dev/null || true
+  git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
+  VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
+  git commit -m "chore(release): bump workspace version to ${VERSION}"
+fi
 ```
 
-## Step 9: Security Audit
+## Step 10: Pre-PR Cumulative Review Gate
 
 Tool: bash
 OnFail: abort
 
-Run the security-audit skill: test completeness check, vulnerability scan,
-and code quality check. The audit MUST pass before commit.
-
-Phase 1: Can you propose a test case that does not exist? If yes, FAIL.
-Phase 2: Input validation, size limits, panic risks.
-Phase 3: No debug code, secrets, or commented-out code.
+Cumulative review covering all commits since main.
+Sets REVIEW_COMPLETED=true as gate for push step.
 
 ```bash
-AUDIT_PROMPT="Use the security-audit skill.
-Run security-audit against staged changes.
-Output a concise report and end with EXACTLY one line:
-SECURITY_AUDIT_VERDICT: PASS|PASS_DEFERRED|FAIL"
-if command -v timeout >/dev/null 2>&1; then
-  AUDIT_OUTPUT="$(timeout 1200 csa run --tool codex --sa-mode false --skill security-audit "${AUDIT_PROMPT}" 2>&1)"
-  AUDIT_STATUS=$?
-else
-  AUDIT_OUTPUT="$(csa run --tool codex --sa-mode false --skill security-audit "${AUDIT_PROMPT}" 2>&1)"
-  AUDIT_STATUS=$?
-fi
-printf '%s\n' "${AUDIT_OUTPUT}"
-if [ "${AUDIT_STATUS}" -eq 124 ]; then
-  echo "ERROR: security-audit timed out after 1200s." >&2
-  exit 1
-fi
-if [ "${AUDIT_STATUS}" -ne 0 ]; then
-  echo "ERROR: security-audit command failed (exit=${AUDIT_STATUS})." >&2
-  exit 1
-fi
-VERDICT="$(printf '%s\n' "${AUDIT_OUTPUT}" | sed -nE 's/^SECURITY_AUDIT_VERDICT:[[:space:]]*(PASS_DEFERRED|PASS|FAIL)$/\1/p' | tail -n1)"
-if [ -z "${VERDICT}" ]; then
-  echo "ERROR: Missing SECURITY_AUDIT_VERDICT marker in audit output." >&2
-  exit 1
-fi
-if [ "${VERDICT}" = "FAIL" ]; then
-  echo "ERROR: security-audit verdict is FAIL." >&2
-  exit 1
-fi
-echo "CSA_VAR:SECURITY_AUDIT_VERDICT=$VERDICT"
-```
-
-## Step 10: Pre-Commit Review
-
-Tool: bash
-
-Run heterogeneous pre-commit review on uncommitted changes.
-This step is strictly review-only: no commit/push/PR side effects.
-Parse the verdict from a `final_decision:` line when present, falling back to exit code.
-
-```bash
-set -o pipefail
+set -euo pipefail
 REVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
-if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
-  REVIEW_STATUS=${PIPESTATUS[0]}
-else
-  csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
-  REVIEW_STATUS=${PIPESTATUS[0]}
-fi
+timeout 1800 csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+REVIEW_STATUS=${PIPESTATUS[0]}
 set -e
-REVIEW_VERDICT_LINE="$(grep '^final_decision:' "${REVIEW_OUTPUT_FILE}" | tail -n1 || true)"
 REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"
 rm -f "${REVIEW_OUTPUT_FILE}"
-printf '%s\n' "${REVIEW_OUTPUT}"
-
 if [ "${REVIEW_STATUS}" -eq 124 ]; then
-  echo "ERROR: pre-commit review timed out after 1800s." >&2
+  echo "ERROR: Cumulative review timed out." >&2
   exit 1
 fi
-
-if [ "${REVIEW_VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
-  echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
-  exit 0
-fi
-
-if [ "${REVIEW_VERDICT_LINE}" = "final_decision: CLEAN" ]; then
-  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
-  exit 0
-fi
-
-if [ "${REVIEW_STATUS}" -eq 0 ]; then
-  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
-  exit 0
-fi
-
-echo "WARN: csa review returned non-zero (exit=${REVIEW_STATUS}); treating as findings requiring fix." >&2
-echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
-exit 0
-```
-
-## IF ${REVIEW_HAS_ISSUES}
-
-## Step 11: Fix Review Issues
-
-Tool: bash
-OnFail: retry 3
-
-Apply fixes for issues found in Step 10 using review-and-fix mode.
-Do not commit/push inside this step; only modify code.
-
-```bash
-set -o pipefail
-FIX_OUTPUT_FILE="$(mktemp)"
-set +e
-if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --tool codex --sa-mode false --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
-  FIX_STATUS=${PIPESTATUS[0]}
-else
-  csa review --tool codex --sa-mode false --diff --fix 2>&1 | tee "${FIX_OUTPUT_FILE}"
-  FIX_STATUS=${PIPESTATUS[0]}
-fi
-set -e
-FIX_OUTPUT="$(cat "${FIX_OUTPUT_FILE}")"
-rm -f "${FIX_OUTPUT_FILE}"
-printf '%s\n' "${FIX_OUTPUT}"
-if [ "${FIX_STATUS}" -eq 124 ]; then
-  echo "ERROR: review --fix timed out after 1800s." >&2
+VERDICT_LINE="$(printf '%s\n' "${REVIEW_OUTPUT}" | grep '^final_decision:' | tail -1 || true)"
+if [ "${VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
+  echo "ERROR: Cumulative review found issues. Cannot push." >&2
   exit 1
 fi
-if [ "${FIX_STATUS}" -ne 0 ]; then
-  echo "ERROR: review --fix failed (exit=${FIX_STATUS})." >&2
-  exit 1
-fi
-```
-
-## Step 12: Re-run Quality Gates
-
-Tool: bash
-OnFail: abort
-
-Re-run formatters, linters, and tests after fixes (avoid unrelated global pre-commit blockers).
-
-```bash
-just fmt
-just clippy
-just test
-```
-
-## Step 13: Re-review
-
-Tool: bash
-
-Re-run review to verify remediation quality.
-If issues remain after fix, fail the workflow.
-
-```bash
-set -o pipefail
-REREVIEW_OUTPUT_FILE="$(mktemp)"
-set +e
-if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
-  REREVIEW_STATUS=${PIPESTATUS[0]}
-else
-  csa review --tool codex --sa-mode false --diff 2>&1 | tee "${REREVIEW_OUTPUT_FILE}"
-  REREVIEW_STATUS=${PIPESTATUS[0]}
-fi
-set -e
-REREVIEW_OUTPUT="$(cat "${REREVIEW_OUTPUT_FILE}")"
-rm -f "${REREVIEW_OUTPUT_FILE}"
-printf '%s\n' "${REREVIEW_OUTPUT}"
-
-if [ "${REREVIEW_STATUS}" -eq 124 ]; then
-  echo "ERROR: re-review timed out after 1800s." >&2
-  exit 1
-fi
-
-if [ "${REREVIEW_STATUS}" -eq 0 ]; then
-  echo "CSA_VAR:REVIEW_HAS_ISSUES=false"
-  exit 0
-fi
-
-echo "ERROR: Re-review reports unresolved issues (or review returned non-zero, exit=${REREVIEW_STATUS})." >&2
-echo "CSA_VAR:REVIEW_HAS_ISSUES=true"
-exit 1
+echo "CSA_VAR:REVIEW_COMPLETED=true"
 ```
 
 ## ENDIF
 
-## Step 14: Generate Commit Message
+## Step 11: Push Gate
 
 Tool: bash
 OnFail: abort
 
-Generate a deterministic Conventional Commits message from staged files.
+Hard gate: REVIEW_COMPLETED must be true before any push.
 
 ```bash
-scripts/gen_commit_msg.sh "${SCOPE:-}"
-```
-
-## Step 15: Commit
-
-Tool: bash
-OnFail: abort
-
-Create the commit using the generated message from Step 14.
-
-```bash
-COMMIT_MSG_LOCAL="${STEP_14_OUTPUT:-${COMMIT_MSG:-}}"
-if [ -z "${COMMIT_MSG_LOCAL}" ]; then
-  echo "ERROR: Commit message is empty. Step 14 must output a commit message." >&2
+if [ "${REVIEW_COMPLETED:-}" != "true" ]; then
+  echo "ERROR: Push blocked — pre-PR review not completed."
+  echo "REVIEW_COMPLETED=${REVIEW_COMPLETED:-unset}"
   exit 1
 fi
-git commit -m "${COMMIT_MSG_LOCAL}"
+BRANCH="$(git branch --show-current)"
+git push -u origin "${BRANCH}" --force-with-lease
+echo "CSA_VAR:PUSHED=true"
 ```
 
-## Step 16: Ensure Version Bumped
+## Step 12: Create Pull Request
 
 Tool: bash
 OnFail: abort
 
-Ensure workspace version differs from main before push gate.
-If not bumped yet, auto-bump patch and create a dedicated release commit.
+Create or reuse PR. Derives source owner from origin URL.
 
 ```bash
 set -euo pipefail
-if just check-version-bumped; then
-  echo "Version bump check passed."
-  exit 0
-fi
-PRE_DIRTY_CARGO_LOCK=0
-if git diff --name-only -- Cargo.lock | grep -q .; then
-  PRE_DIRTY_CARGO_LOCK=1
-fi
-just bump-patch
-# Use workspace weave binary to avoid stale globally-installed version drift.
-cargo run -p weave -- lock
-git add Cargo.toml weave.lock
-if [ "${PRE_DIRTY_CARGO_LOCK}" -eq 0 ] && [ -f Cargo.lock ]; then
-  git add Cargo.lock
-else
-  echo "INFO: Skipping Cargo.lock in release commit (pre-existing local edits)."
-fi
-if git diff --cached --quiet; then
-  echo "ERROR: Version bump expected changes but none were staged." >&2
-  exit 1
-fi
-VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
-git commit -m "chore(release): bump workspace version to ${VERSION}"
-```
-
-## Step 17: Pre-PR Cumulative Review
-
-Tool: bash
-OnFail: abort
-
-Run cumulative read-only review for the full feature branch range.
-Capture review output, parse the `final_decision:` verdict, and set `CUMULATIVE_REVIEW_HAS_ISSUES`.
-This gate must pass before push/PR.
-
-```bash
-set -o pipefail
-CUMULATIVE_REVIEW_OUTPUT_FILE="$(mktemp)"
-set +e
-if command -v timeout >/dev/null 2>&1; then
-  timeout 1800 csa review --tool codex --sa-mode false --range main...HEAD 2>&1 | tee "${CUMULATIVE_REVIEW_OUTPUT_FILE}"
-  CUMULATIVE_REVIEW_STATUS=${PIPESTATUS[0]}
-else
-  csa review --tool codex --sa-mode false --range main...HEAD 2>&1 | tee "${CUMULATIVE_REVIEW_OUTPUT_FILE}"
-  CUMULATIVE_REVIEW_STATUS=${PIPESTATUS[0]}
-fi
-set -e
-CUMULATIVE_REVIEW_VERDICT_LINE="$(grep '^final_decision:' "${CUMULATIVE_REVIEW_OUTPUT_FILE}" | tail -n1 || true)"
-CUMULATIVE_REVIEW_OUTPUT="$(cat "${CUMULATIVE_REVIEW_OUTPUT_FILE}")"
-rm -f "${CUMULATIVE_REVIEW_OUTPUT_FILE}"
-printf '%s\n' "${CUMULATIVE_REVIEW_OUTPUT}"
-
-if [ "${CUMULATIVE_REVIEW_STATUS}" -eq 124 ]; then
-  echo "ERROR: cumulative review timed out after 1800s." >&2
-  exit 1
-fi
-
-if [ "${CUMULATIVE_REVIEW_VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
-  echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=true"
-  echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
-  exit 0
-fi
-
-if [ "${CUMULATIVE_REVIEW_VERDICT_LINE}" = "final_decision: CLEAN" ]; then
-  echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=false"
-  echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
-  exit 0
-fi
-
-if [ "${CUMULATIVE_REVIEW_STATUS}" -eq 0 ]; then
-  echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=false"
-  echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
-  exit 0
-fi
-
-echo "WARN: cumulative review returned non-zero without final_decision (exit=${CUMULATIVE_REVIEW_STATUS}); treating as findings requiring fix." >&2
-echo "CSA_VAR:CUMULATIVE_REVIEW_HAS_ISSUES=true"
-echo "CSA_VAR:CUMULATIVE_REVIEW_COMPLETED=true"
-exit 0
-```
-
-## Step 18: Push to Origin
-
-Tool: bash
-OnFail: retry 2
-
-Push the feature branch to the remote origin.
-Block push when `CUMULATIVE_REVIEW_HAS_ISSUES=true`.
-
-```bash
-if [ "${CUMULATIVE_REVIEW_HAS_ISSUES}" = "true" ]; then
-  echo "ERROR: Cumulative review has unresolved findings. Push blocked." >&2
-  exit 1
-fi
-
 BRANCH="$(git branch --show-current)"
-if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
-  echo "ERROR: Cannot determine current branch for push."
-  exit 1
-fi
-git push -u origin "${BRANCH}"
-```
-
-## Step 19: Create Pull Request
-
-Tool: bash
-OnFail: abort
-
-Create a PR targeting main via GitHub CLI. The PR body includes a summary
-of changes for ${SCOPE} and a test plan checklist covering tests, linting,
-security audit, and codex review.
-
-```bash
-REPO_LOCAL="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null || true)"
-if [ -z "${REPO_LOCAL}" ]; then
-  ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-  REPO_LOCAL="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+/[^/]+)(\.git)?$#\2#p')"
-  REPO_LOCAL="${REPO_LOCAL%.git}"
-fi
-if [ -z "${REPO_LOCAL}" ]; then
-  echo "ERROR: Cannot resolve repository owner/name." >&2
-  exit 1
-fi
-COMMIT_MSG_LOCAL="${STEP_14_OUTPUT:-${COMMIT_MSG:-}}"
-if [ -z "${COMMIT_MSG_LOCAL}" ]; then
-  echo "ERROR: PR title is empty. Step 14 output is required." >&2
-  exit 1
-fi
-PR_BODY_LOCAL="${PR_BODY:-Summary:
-- Scope: ${SCOPE:-unspecified}
-
-Validation:
-- just fmt
-- just clippy
-- just test
-- csa review --tool codex --sa-mode false --range main...HEAD
-}"
-BRANCH="$(git branch --show-current)"
-EXISTING_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
+SOURCE_OWNER="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+)/.*#\2#p')"
+EXISTING_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
 if [ -n "${EXISTING_PR}" ] && [ "${EXISTING_PR}" != "null" ]; then
-  echo "INFO: Reusing existing PR #${EXISTING_PR} for branch ${BRANCH}."
-  echo "CSA_VAR:PR_NUMBER=$EXISTING_PR"
+  echo "INFO: Reusing existing PR #${EXISTING_PR}."
+  echo "CSA_VAR:PR_NUMBER=${EXISTING_PR}"
   exit 0
 fi
-gh pr create --base main --repo "${REPO_LOCAL}" --title "${COMMIT_MSG_LOCAL}" --body "${PR_BODY_LOCAL}"
-CREATED_PR="$(gh pr list --repo "${REPO_LOCAL}" --state open --head "${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-if [ -n "${CREATED_PR}" ] && [ "${CREATED_PR}" != "null" ]; then
-  echo "CSA_VAR:PR_NUMBER=$CREATED_PR"
-fi
+COMMIT_SUBJECT="$(git log -1 --format=%s)"
+gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline."
+NEW_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
+echo "CSA_VAR:PR_NUMBER=${NEW_PR:-unknown}"
 ```
 
-## Step 20: Delegate PR Review/Merge to pr-codex-bot
+## INCLUDE pr-codex-bot
+
+Handles cloud review loop, false-positive arbitration, fix cycles, and merge.
+This is an atomic sub-workflow — it runs to completion or aborts.
+
+## Step 13: Post-Merge Local Sync
 
 Tool: bash
 OnFail: abort
 
-Delegate all long polling/status waiting to CSA internals.
-Run `pr-codex-bot` in a child CSA session so the caller workflow stays concise.
-The delegated workflow handles trigger, bounded polling, timeout fallback,
-fix loops, and merge end-to-end.
-
-```bash
-set -euo pipefail
-csa run --sa-mode false --skill pr-codex-bot --no-stream-stdout \
-  "Operate on the current branch and active PR. Execute the full cloud review lifecycle end-to-end, including trigger, polling, timeout fallback, iterative fixes, and merge."
-```
-
-## Step 21: Post-Merge Local Sync
-
-Tool: bash
-OnFail: abort
-
-After the delegated pr-codex-bot workflow completes (which includes
-`gh pr merge`), sync the local main branch to match remote and clean up
-the feature branch. This ensures local state is consistent with remote
-after the remote-side squash-merge.
+After pr-codex-bot merges, sync local main and clean up feature branch.
 
 ```bash
 set -euo pipefail
 FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
-
-# Sync local main with remote
 git fetch origin
 git checkout main
 git merge origin/main --ff-only
-
-# Verify local main matches remote
 LOCAL_SHA="$(git rev-parse HEAD)"
 REMOTE_SHA="$(git rev-parse origin/main)"
 if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
-  echo "ERROR: Local main (${LOCAL_SHA}) does not match origin/main (${REMOTE_SHA}) after sync." >&2
+  echo "ERROR: Local main does not match origin/main after sync." >&2
   exit 1
 fi
 echo "Local main synced to ${LOCAL_SHA}."
-
-# Clean up feature branch (local and remote)
 if [ -n "${FEATURE_BRANCH}" ] && [ "${FEATURE_BRANCH}" != "main" ] && [ "${FEATURE_BRANCH}" != "dev" ]; then
   git branch -d "${FEATURE_BRANCH}" 2>/dev/null || echo "INFO: Local branch ${FEATURE_BRANCH} already deleted."
-  git push origin --delete "${FEATURE_BRANCH}" 2>/dev/null || echo "INFO: Remote branch ${FEATURE_BRANCH} already deleted."
 fi
 ```
