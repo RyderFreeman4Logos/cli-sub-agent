@@ -265,17 +265,12 @@ NEW_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json numb
 echo "CSA_VAR:PR_NUMBER=${NEW_PR:-unknown}"
 ```
 
-## Step 13: Delegate to pr-codex-bot
-
-Tool: csa
-OnFail: abort
-
 ## INCLUDE pr-codex-bot
 
 Handles cloud review loop, false-positive arbitration, fix cycles, and merge.
 This is an atomic sub-workflow — it runs to completion or aborts.
 
-## Step 14: Post-Merge Local Sync
+## Step 13: Post-Merge Local Sync
 
 Tool: bash
 OnFail: abort
