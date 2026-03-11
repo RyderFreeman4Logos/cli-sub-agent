@@ -7,8 +7,8 @@ use tracing::{debug, error, info, warn};
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
     CLEAN, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
-    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_verdict,
-    resolve_consensus,
+    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_decision,
+    parse_review_verdict, resolve_consensus,
 };
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
@@ -58,12 +58,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 2b. Verify review skill is available (fail fast before any execution)
     verify_review_skill_available(&project_root, args.allow_fallback)?;
 
-    // 2c. Run pre-review quality gate (after skill check, before tool execution)
-    {
-        let gate_command = config
-            .as_ref()
-            .and_then(|c| c.review.as_ref())
-            .and_then(|r| r.gate_command.as_deref());
+    // 2c. Run pre-review quality gate pipeline (after skill check, before tool execution)
+    let gate_summary = {
+        let gate_steps = global_config.review.effective_gate_steps();
         let gate_timeout = config
             .as_ref()
             .and_then(|c| c.review.as_ref())
@@ -71,50 +68,100 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
         let gate_mode = &global_config.review.gate_mode;
 
-        let gate_result = crate::pipeline::gate::evaluate_quality_gate(
-            &project_root,
-            gate_command,
-            gate_timeout,
-            gate_mode,
-        )
-        .await?;
+        if gate_steps.is_empty() {
+            // Legacy path: use single gate_command with auto-detection fallback
+            let gate_command = config
+                .as_ref()
+                .and_then(|c| c.review.as_ref())
+                .and_then(|r| r.gate_command.as_deref());
+            let gate_result = crate::pipeline::gate::evaluate_quality_gate(
+                &project_root,
+                gate_command,
+                gate_timeout,
+                gate_mode,
+            )
+            .await?;
 
-        if gate_result.skipped {
-            debug!(
-                reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
-                "Quality gate skipped"
-            );
-        } else if !gate_result.passed() {
-            match gate_mode {
-                csa_config::GateMode::Monitor => {
-                    warn!(
-                        command = %gate_result.command,
-                        exit_code = ?gate_result.exit_code,
-                        "Quality gate failed (monitor mode — continuing with review)"
-                    );
-                }
-                csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
-                    let mut msg = format!(
-                        "Pre-review quality gate failed (mode={gate_mode:?}).\n\
-                         Command: {}\nExit code: {:?}",
-                        gate_result.command, gate_result.exit_code
-                    );
-                    if !gate_result.stdout.is_empty() {
-                        msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
+            if gate_result.skipped {
+                debug!(
+                    reason = gate_result.skip_reason.as_deref().unwrap_or("unknown"),
+                    "Quality gate skipped"
+                );
+                None
+            } else if !gate_result.passed() {
+                match gate_mode {
+                    csa_config::GateMode::Monitor => {
+                        warn!(
+                            command = %gate_result.command,
+                            exit_code = ?gate_result.exit_code,
+                            "Quality gate failed (monitor mode — continuing with review)"
+                        );
+                        None
                     }
-                    if !gate_result.stderr.is_empty() {
-                        msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
+                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
+                        let mut msg = format!(
+                            "Pre-review quality gate failed (mode={gate_mode:?}).\n\
+                             Command: {}\nExit code: {:?}",
+                            gate_result.command, gate_result.exit_code
+                        );
+                        if !gate_result.stdout.is_empty() {
+                            msg.push_str(&format!("\n--- stdout ---\n{}", gate_result.stdout));
+                        }
+                        if !gate_result.stderr.is_empty() {
+                            msg.push_str(&format!("\n--- stderr ---\n{}", gate_result.stderr));
+                        }
+                        anyhow::bail!(msg);
                     }
-                    anyhow::bail!(msg);
                 }
+            } else {
+                debug!(command = %gate_result.command, "Quality gate passed");
+                None
             }
         } else {
-            debug!(
-                command = %gate_result.command,
-                "Quality gate passed"
-            );
+            // Multi-step pipeline: L1 → L2 → L3 sequential execution
+            let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
+                &project_root,
+                &gate_steps,
+                gate_timeout,
+                gate_mode,
+            )
+            .await?;
+
+            let summary = pipeline_result.summary_for_review();
+
+            if !pipeline_result.passed {
+                match gate_mode {
+                    csa_config::GateMode::Monitor => {
+                        warn!("Quality gate pipeline failed (monitor mode — continuing)");
+                        Some(summary)
+                    }
+                    csa_config::GateMode::CriticalOnly | csa_config::GateMode::Full => {
+                        let failed = pipeline_result.failed_step.as_deref().unwrap_or("unknown");
+                        // Include gate output in error for diagnostics
+                        let mut msg = format!(
+                            "Pre-review quality gate pipeline FAILED at step: {failed}\n\
+                             (mode={gate_mode:?})\n"
+                        );
+                        for step in &pipeline_result.steps {
+                            if !step.passed() {
+                                msg.push_str(&format!(
+                                    "\nL{} {} ({}): exit {:?}",
+                                    step.level, step.name, step.command, step.exit_code
+                                ));
+                                if !step.stderr.is_empty() {
+                                    msg.push_str(&format!("\n  stderr: {}", step.stderr));
+                                }
+                            }
+                        }
+                        anyhow::bail!(msg);
+                    }
+                }
+            } else {
+                debug!("Quality gate pipeline passed");
+                Some(summary)
+            }
         }
-    }
+    };
 
     // 3. Derive scope and mode from CLI args
     let scope = derive_scope(&args);
@@ -126,11 +173,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let review_mode = args.effective_review_mode();
     let security_mode = args.effective_security_mode();
     let auto_discover_context = review_scope_allows_auto_discovery(&args);
-    let context = resolve_review_context(
-        args.context.as_deref(),
-        &project_root,
-        auto_discover_context,
-    )?;
+    // --spec takes priority over --context for explicit spec-based review
+    let explicit_context = args.spec.as_deref().or(args.context.as_deref());
+    let context = resolve_review_context(explicit_context, &project_root, auto_discover_context)?;
 
     debug!(
         scope = %scope,
@@ -143,7 +188,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     );
 
     // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
-    let (prompt, review_routing) = build_review_instruction_for_project(
+    let (mut prompt, review_routing) = build_review_instruction_for_project(
         &scope,
         mode,
         security_mode,
@@ -152,6 +197,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
         config.as_ref(),
     );
+
+    // 4b. Inject gate pipeline results into review prompt for reviewer awareness
+    if let Some(ref summary) = gate_summary {
+        prompt.push_str("\n\n");
+        prompt.push_str(summary);
+    }
 
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
@@ -237,6 +288,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
         // If --fix is not enabled or review found no issues, return immediately.
         let verdict = parse_review_verdict(&result.execution.output, result.execution.exit_code);
+        let decision = parse_review_decision(&result.execution.output, result.execution.exit_code);
+        debug!(verdict, decision = %decision, "Review verdict (legacy + four-value)");
         if !args.fix || verdict == CLEAN {
             return Ok(result.execution.exit_code);
         }
@@ -297,37 +350,61 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             session_id = fix_result.meta_session_id.clone();
 
             // Step 2: Run the quality gate after fix
-            let gate_command = config
-                .as_ref()
-                .and_then(|c| c.review.as_ref())
-                .and_then(|r| r.gate_command.as_deref());
-            let gate_timeout = config
+            let fix_gate_steps = global_config.review.effective_gate_steps();
+            let fix_gate_timeout = config
                 .as_ref()
                 .and_then(|c| c.review.as_ref())
                 .map(|r| r.gate_timeout_secs)
                 .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
-            let gate_mode = &global_config.review.gate_mode;
+            let fix_gate_mode = &global_config.review.gate_mode;
 
-            let gate_result = crate::pipeline::gate::evaluate_quality_gate(
-                &project_root,
-                gate_command,
-                gate_timeout,
-                gate_mode,
-            )
-            .await?;
+            let gate_passed = if fix_gate_steps.is_empty() {
+                let gate_command = config
+                    .as_ref()
+                    .and_then(|c| c.review.as_ref())
+                    .and_then(|r| r.gate_command.as_deref());
+                let gate_result = crate::pipeline::gate::evaluate_quality_gate(
+                    &project_root,
+                    gate_command,
+                    fix_gate_timeout,
+                    fix_gate_mode,
+                )
+                .await?;
 
-            if gate_result.passed() {
+                if !gate_result.passed() {
+                    warn!(
+                        round,
+                        max_rounds,
+                        command = %gate_result.command,
+                        exit_code = ?gate_result.exit_code,
+                        "Quality gate still failing after fix round"
+                    );
+                }
+                gate_result.passed()
+            } else {
+                let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
+                    &project_root,
+                    &fix_gate_steps,
+                    fix_gate_timeout,
+                    fix_gate_mode,
+                )
+                .await?;
+
+                if !pipeline_result.passed {
+                    warn!(
+                        round,
+                        max_rounds,
+                        failed_step = ?pipeline_result.failed_step,
+                        "Quality gate pipeline still failing after fix round"
+                    );
+                }
+                pipeline_result.passed
+            };
+
+            if gate_passed {
                 info!(round, "Fix round succeeded — quality gate passed");
                 return Ok(0);
             }
-
-            warn!(
-                round,
-                max_rounds,
-                command = %gate_result.command,
-                exit_code = ?gate_result.exit_code,
-                "Quality gate still failing after fix round"
-            );
         }
 
         // All fix rounds exhausted; gate still fails.

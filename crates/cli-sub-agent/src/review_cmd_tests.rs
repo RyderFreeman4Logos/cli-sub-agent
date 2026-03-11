@@ -338,6 +338,7 @@ fn derive_scope_uncommitted() {
         no_stream_stdout: false,
         allow_fallback: false,
         force_override_user_config: false,
+        spec: None,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -369,6 +370,7 @@ fn derive_scope_commit() {
         no_stream_stdout: false,
         allow_fallback: false,
         force_override_user_config: false,
+        spec: None,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -400,6 +402,7 @@ fn derive_scope_range() {
         no_stream_stdout: false,
         allow_fallback: false,
         force_override_user_config: false,
+        spec: None,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -431,6 +434,7 @@ fn derive_scope_files() {
         no_stream_stdout: false,
         allow_fallback: false,
         force_override_user_config: false,
+        spec: None,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -462,6 +466,7 @@ fn derive_scope_default_branch() {
         no_stream_stdout: false,
         allow_fallback: false,
         force_override_user_config: false,
+        spec: None,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }

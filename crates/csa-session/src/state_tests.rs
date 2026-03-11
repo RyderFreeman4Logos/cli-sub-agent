@@ -22,6 +22,8 @@ fn sample_state_with_phase(phase: SessionPhase) -> MetaSessionState {
         is_seed_candidate: false,
         git_head_at_creation: None,
         last_return_packet: None,
+        change_id: None,
+        spec_id: None,
         fork_call_timestamps: Vec::new(),
     }
 }
@@ -247,6 +249,8 @@ fn test_meta_session_state_toml_roundtrip() {
         is_seed_candidate: false,
         git_head_at_creation: None,
         last_return_packet: None,
+        change_id: None,
+        spec_id: None,
         fork_call_timestamps: Vec::new(),
     };
 
@@ -336,6 +340,8 @@ fn test_meta_session_state_last_return_packet_roundtrip() {
             child_session_id: "01CHILDSESSIONID000000000000".to_string(),
             section_path: "/tmp/test-session/output/return-packet.md".to_string(),
         }),
+        change_id: None,
+        spec_id: None,
         fork_call_timestamps: Vec::new(),
     };
 
@@ -546,6 +552,8 @@ fn test_meta_session_state_with_budget_roundtrip() {
         is_seed_candidate: false,
         git_head_at_creation: None,
         last_return_packet: None,
+        change_id: None,
+        spec_id: None,
         fork_call_timestamps: Vec::new(),
     };
 

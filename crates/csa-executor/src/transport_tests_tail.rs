@@ -29,6 +29,8 @@
             is_seed_candidate: false,
             git_head_at_creation: None,
             last_return_packet: None,
+            change_id: None,
+            spec_id: None,
             fork_call_timestamps: Vec::new(),
         };
 
@@ -79,6 +81,8 @@
             is_seed_candidate: false,
             git_head_at_creation: None,
             last_return_packet: None,
+            change_id: None,
+            spec_id: None,
             fork_call_timestamps: Vec::new(),
         };
 
@@ -199,7 +203,9 @@ fn build_test_meta_session(project_path: &str) -> MetaSessionState {
         is_seed_candidate: false,
         git_head_at_creation: None,
         last_return_packet: None,
-        fork_call_timestamps: Vec::new(),
+        change_id: None,
+            spec_id: None,
+            fork_call_timestamps: Vec::new(),
     }
 }
 

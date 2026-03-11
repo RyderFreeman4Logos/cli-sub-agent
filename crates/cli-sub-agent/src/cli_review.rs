@@ -128,6 +128,10 @@ pub struct ReviewArgs {
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,
+
+    /// Path to agent-spec file (.spec or .toml) for contract-based verification
+    #[arg(long, value_name = "PATH")]
+    pub spec: Option<String>,
 }
 
 impl ReviewArgs {

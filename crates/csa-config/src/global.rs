@@ -93,6 +93,21 @@ pub enum GateMode {
     Full,
 }
 
+/// A single step in the pre-review quality gate pipeline (L1–L3).
+/// Steps execute sequentially in ascending level order; aborts on first failure.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GateStep {
+    pub name: String,
+    pub command: String,
+    /// Verification level: 1 = lint, 2 = type/boundary, 3 = test.
+    #[serde(default = "default_gate_level")]
+    pub level: u8,
+}
+
+const fn default_gate_level() -> u8 {
+    1
+}
+
 /// Configuration for the code review workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewConfig {
@@ -124,11 +139,12 @@ pub struct ReviewConfig {
     /// When a tier is used, this overrides the tier's model_spec thinking budget.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
-    /// Custom pre-review gate command. Overrides auto-detection of git hooks.
-    ///
-    /// PROJECT-ONLY: values set in global config are ignored during merge.
+    /// Deprecated: prefer `gate_commands`. PROJECT-ONLY.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub gate_command: Option<String>,
+    /// Multi-layer gate pipeline (L1→L2→L3). Takes priority over `gate_command`. PROJECT-ONLY.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gate_commands: Vec<GateStep>,
     /// Timeout (seconds) for the pre-review quality gate command.
     ///
     /// PROJECT-ONLY: values set in global config are ignored during merge.
@@ -160,6 +176,7 @@ impl Default for ReviewConfig {
             model: None,
             thinking: None,
             gate_command: None,
+            gate_commands: Vec::new(),
             gate_timeout_secs: default_gate_timeout_secs(),
         }
     }
@@ -174,7 +191,26 @@ impl ReviewConfig {
             && self.model.is_none()
             && self.thinking.is_none()
             && self.gate_command.is_none()
+            && self.gate_commands.is_empty()
             && self.gate_timeout_secs == default_gate_timeout_secs()
+    }
+
+    /// Returns the effective gate steps, preferring `gate_commands` over legacy
+    /// `gate_command`. If both are empty, returns an empty vec.
+    pub fn effective_gate_steps(&self) -> Vec<GateStep> {
+        if !self.gate_commands.is_empty() {
+            let mut steps = self.gate_commands.clone();
+            steps.sort_by_key(|s| s.level);
+            steps
+        } else if let Some(cmd) = &self.gate_command {
+            vec![GateStep {
+                name: "legacy-gate".to_string(),
+                command: cmd.clone(),
+                level: 1,
+            }]
+        } else {
+            Vec::new()
+        }
     }
 
     /// Default gate timeout in seconds.

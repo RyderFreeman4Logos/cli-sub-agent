@@ -2,9 +2,10 @@
 //! commands before `csa review` / `csa debate` to catch lint/test failures early.
 //!
 //! Detection order (strict):
-//! 1. Explicit `gate_command` from project config
-//! 2. `git config core.hooksPath` → `<hooksPath>/pre-commit`
-//! 3. No gate found → skip with debug log
+//! 1. Explicit `gate_commands` pipeline from project config (multi-layer L1→L3)
+//! 2. Legacy `gate_command` from project config (single command)
+//! 3. `git config core.hooksPath` → `<hooksPath>/pre-commit`
+//! 4. No gate found → skip with debug log
 //!
 //! When `CSA_DEPTH > 0`, the gate is skipped entirely to prevent recursion.
 
@@ -13,13 +14,17 @@ use std::process::Stdio;
 
 use anyhow::Result;
 use tokio::process::Command;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
-use csa_config::GateMode;
+use csa_config::{GateMode, GateStep};
 
-/// Result of running a quality gate command.
+/// Result of running a single quality gate step.
 #[derive(Debug, Clone)]
 pub(crate) struct GateResult {
+    /// Human-readable name of this gate step.
+    pub name: String,
+    /// Verification level (1=structural/lint, 2=type/boundary, 3=test).
+    pub level: u8,
     /// The command that was executed.
     pub command: String,
     /// Process exit code (None if killed by signal).
@@ -37,6 +42,8 @@ pub(crate) struct GateResult {
 impl GateResult {
     fn skipped(reason: &str) -> Self {
         Self {
+            name: String::new(),
+            level: 0,
             command: String::new(),
             exit_code: None,
             stdout: String::new(),
@@ -52,19 +59,119 @@ impl GateResult {
     }
 }
 
-/// Evaluate the pre-review quality gate.
+/// Aggregated result of running all gate steps in a pipeline.
+#[derive(Debug, Clone)]
+pub(crate) struct GatePipelineResult {
+    /// Individual results for each step that ran.
+    pub steps: Vec<GateResult>,
+    /// Whether the entire pipeline passed (all steps passed or skipped).
+    pub passed: bool,
+    /// If failed, which step failed first.
+    pub failed_step: Option<String>,
+}
+
+impl GatePipelineResult {
+    /// Format a concise summary for injection into review context.
+    pub fn summary_for_review(&self) -> String {
+        if self.steps.is_empty() || self.steps.iter().all(|s| s.skipped) {
+            return "No pre-review gates executed.".to_string();
+        }
+        let mut lines = vec!["Pre-review gate results:".to_string()];
+        for step in &self.steps {
+            if step.skipped {
+                continue;
+            }
+            let status = if step.passed() { "PASS" } else { "FAIL" };
+            lines.push(format!(
+                "  L{} [{}] {}: {}",
+                step.level, status, step.name, step.command
+            ));
+        }
+        if self.passed {
+            lines.push("All gates passed.".to_string());
+        } else if let Some(ref name) = self.failed_step {
+            lines.push(format!("Pipeline FAILED at step: {name}"));
+        }
+        lines.join("\n")
+    }
+}
+
+/// Evaluate a multi-step quality gate pipeline.
 ///
-/// Returns `GateResult` describing what happened. The caller decides whether
-/// to abort based on `gate_mode` and the result.
-///
-/// # Gate detection order
-/// 1. `gate_command` from config (explicit override)
-/// 2. `git config core.hooksPath` → `<path>/pre-commit` (if executable)
-/// 3. No gate found → skip
+/// Runs gate steps sequentially in ascending level order (L1 → L2 → L3).
+/// In `CriticalOnly` or `Full` mode, the pipeline aborts on first failure.
 ///
 /// # Recursion guard
-/// When `CSA_DEPTH > 0`, the gate is always skipped to prevent recursive
-/// quality checks when CSA spawns sub-agents.
+/// When `CSA_DEPTH > 0`, the pipeline is always skipped.
+pub(crate) async fn evaluate_quality_gates(
+    project_root: &Path,
+    gate_steps: &[GateStep],
+    gate_timeout_secs: u64,
+    gate_mode: &GateMode,
+) -> Result<GatePipelineResult> {
+    // Recursion guard: skip when running as a sub-agent
+    let depth: u32 = std::env::var("CSA_DEPTH")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if depth > 0 {
+        debug!(depth, "Skipping quality gates (CSA_DEPTH > 0)");
+        return Ok(GatePipelineResult {
+            steps: vec![GateResult::skipped("CSA_DEPTH > 0 (sub-agent)")],
+            passed: true,
+            failed_step: None,
+        });
+    }
+
+    if gate_steps.is_empty() {
+        debug!("No quality gate steps configured; skipping");
+        return Ok(GatePipelineResult {
+            steps: vec![GateResult::skipped(
+                "no gate commands configured or detected",
+            )],
+            passed: true,
+            failed_step: None,
+        });
+    }
+
+    let mut results = Vec::with_capacity(gate_steps.len());
+    let mut pipeline_passed = true;
+    let mut failed_step_name = None;
+
+    for step in gate_steps {
+        info!(name = %step.name, level = step.level, "Running gate step");
+        let result =
+            execute_gate_command(&step.command, project_root, gate_timeout_secs, gate_mode).await?;
+
+        let step_result = GateResult {
+            name: step.name.clone(),
+            level: step.level,
+            ..result
+        };
+
+        if !step_result.passed() {
+            pipeline_passed = false;
+            failed_step_name = Some(step.name.clone());
+            results.push(step_result);
+            // Fail-fast in blocking modes
+            if matches!(gate_mode, GateMode::CriticalOnly | GateMode::Full) {
+                break;
+            }
+        } else {
+            results.push(step_result);
+        }
+    }
+
+    Ok(GatePipelineResult {
+        steps: results,
+        passed: pipeline_passed,
+        failed_step: failed_step_name,
+    })
+}
+
+/// Legacy single-command quality gate evaluation.
+///
+/// Wraps the multi-step pipeline with auto-detection fallback.
 pub(crate) async fn evaluate_quality_gate(
     project_root: &Path,
     gate_command: Option<&str>,
@@ -192,6 +299,8 @@ async fn execute_gate_command(
             let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
             let result = GateResult {
+                name: String::new(),
+                level: 0,
                 command: command.to_string(),
                 exit_code,
                 stdout,
@@ -229,6 +338,8 @@ async fn execute_gate_command(
                 command, "Quality gate timed out after {timeout_secs}s"
             );
             Ok(GateResult {
+                name: String::new(),
+                level: 0,
                 command: command.to_string(),
                 exit_code: None,
                 stdout: String::new(),

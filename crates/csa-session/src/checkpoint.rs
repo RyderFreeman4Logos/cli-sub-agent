@@ -356,6 +356,8 @@ mod tests {
             is_seed_candidate: false,
             git_head_at_creation: None,
             last_return_packet: None,
+            change_id: None,
+            spec_id: None,
             fork_call_timestamps: Vec::new(),
         };
 
@@ -497,6 +499,8 @@ mod tests {
             is_seed_candidate: false,
             git_head_at_creation: None,
             last_return_packet: None,
+            change_id: None,
+            spec_id: None,
             fork_call_timestamps: Vec::new(),
         };
 
