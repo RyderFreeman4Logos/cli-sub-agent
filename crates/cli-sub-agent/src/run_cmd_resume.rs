@@ -39,10 +39,8 @@ pub(crate) fn emit_run_timeout(
     skill: Option<&str>,
     session_id: Option<&str>,
 ) -> Result<i32> {
-    let message = format!(
-        "csa run exceeded wall-clock timeout ({}s); execution terminated",
-        timeout_seconds
-    );
+    let message =
+        format!("csa run exceeded wall-clock timeout ({timeout_seconds}s); execution terminated");
     match output_format {
         OutputFormat::Text => {
             if let Some(sid) = session_id {

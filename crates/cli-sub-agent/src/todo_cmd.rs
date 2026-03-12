@@ -23,7 +23,7 @@ pub(crate) fn handle_create(
     let plan = manager.create_with_language(&title, branch.as_deref(), language.as_deref())?;
 
     // Auto-commit the initial plan (freshly created, should always have changes)
-    let commit_msg = format!("create: {}", title);
+    let commit_msg = format!("create: {title}");
     csa_todo::git::save(manager.todos_dir(), &plan.timestamp, &commit_msg)?
         .ok_or_else(|| anyhow::anyhow!("BUG: newly created plan had no changes to commit"))?;
 
@@ -86,7 +86,7 @@ pub(crate) fn handle_save(
     let commit_msg = message.unwrap_or_else(|| format!("update: {}", plan.metadata.title));
     match csa_todo::git::save(manager.todos_dir(), &ts, &commit_msg)? {
         Some(hash) => {
-            eprintln!("Saved {} ({})", ts, hash);
+            eprintln!("Saved {ts} ({hash})");
 
             // TodoSave hook: fires after successful save (best-effort)
             let hooks_config = load_hooks_config(
@@ -396,7 +396,7 @@ pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String
 
     // Idempotent: skip if status unchanged
     if old_status == new_status {
-        eprintln!("Status already '{}' — no change.", old_status);
+        eprintln!("Status already '{old_status}' — no change.");
         return Ok(());
     }
 
@@ -404,7 +404,7 @@ pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String
 
     // Auto-commit only metadata.toml (don't accidentally commit other changes)
     csa_todo::git::ensure_git_init(manager.todos_dir())?;
-    let metadata_path = format!("{}/metadata.toml", timestamp);
+    let metadata_path = format!("{timestamp}/metadata.toml");
     let commit_msg = format!(
         "status: {} → {} ({})",
         old_status, plan.metadata.status, plan.metadata.title

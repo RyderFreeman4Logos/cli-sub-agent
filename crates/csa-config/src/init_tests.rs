@@ -180,8 +180,7 @@ fn test_smart_tiers_with_no_tools() {
         let tier = tiers.get(*tier_name).unwrap();
         assert!(
             tier.models[0].starts_with("gemini-cli/"),
-            "Tier {} should fallback to gemini-cli",
-            tier_name
+            "Tier {tier_name} should fallback to gemini-cli"
         );
     }
 }
@@ -330,8 +329,7 @@ fn test_build_smart_tiers_descriptions_not_empty() {
     for (name, tier) in &tiers {
         assert!(
             !tier.description.is_empty(),
-            "Tier '{}' should have a non-empty description",
-            name
+            "Tier '{name}' should have a non-empty description"
         );
     }
 }
@@ -357,8 +355,7 @@ fn test_default_tier_mapping_completeness() {
     for key in &expected_keys {
         assert!(
             mapping.contains_key(*key),
-            "tier_mapping should contain '{}'",
-            key
+            "tier_mapping should contain '{key}'"
         );
     }
 
@@ -367,9 +364,7 @@ fn test_default_tier_mapping_completeness() {
     for (task, tier) in &mapping {
         assert!(
             valid_tiers.contains(&tier.as_str()),
-            "task '{}' maps to unknown tier '{}'",
-            task,
-            tier
+            "task '{task}' maps to unknown tier '{tier}'"
         );
     }
 }
@@ -525,9 +520,7 @@ fn test_build_smart_tiers_skips_globally_disabled() {
         for model in &tier.models {
             assert!(
                 !model.starts_with("gemini-cli/"),
-                "tier '{}' should not contain globally-disabled gemini-cli, found: {}",
-                name,
-                model
+                "tier '{name}' should not contain globally-disabled gemini-cli, found: {model}"
             );
         }
     }

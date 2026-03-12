@@ -250,7 +250,7 @@ fn test_from_tool_name_with_model_and_thinking() {
 
     let mut cmd = Command::new(exec.executable_name());
     exec.append_tool_args(&mut cmd, "test prompt", None);
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(
         debug_str.contains("gpt-5.1-codex-mini"),
         "Missing model in args: {debug_str}"
@@ -312,7 +312,7 @@ fn test_thinking_budget_in_gemini_cli_args() {
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
     // gemini-cli runtime no longer accepts thinking-budget flags.
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(!debug_str.contains("--thinking_budget"));
     assert!(!debug_str.contains("32768"));
 }
@@ -329,7 +329,7 @@ fn test_thinking_budget_in_codex_args() {
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
     // Check that the command contains -c model_reasoning_effort=low
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(debug_str.contains("model_reasoning_effort=low"));
 }
 
@@ -341,7 +341,7 @@ fn test_thinking_budget_from_spec_gemini() {
     let mut cmd = Command::new(exec.executable_name());
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(!debug_str.contains("--thinking_budget"));
     assert!(!debug_str.contains("32768"));
 }
@@ -354,7 +354,7 @@ fn test_thinking_budget_from_spec_codex() {
     let mut cmd = Command::new(exec.executable_name());
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(debug_str.contains("model_reasoning_effort=low"));
 }
 
@@ -369,7 +369,7 @@ fn test_thinking_budget_custom_value() {
     let mut cmd = Command::new(exec.executable_name());
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(debug_str.contains("--thinking-budget"));
     assert!(debug_str.contains("10000"));
 }
@@ -453,7 +453,7 @@ fn test_opencode_command_construction() {
     exec.append_tool_args(&mut cmd, "test prompt", None);
 
     // Verify command structure matches opencode run syntax
-    let debug_str = format!("{:?}", cmd);
+    let debug_str = format!("{cmd:?}");
     assert!(debug_str.contains("\"run\""));
     assert!(debug_str.contains("\"--format\""));
     assert!(debug_str.contains("\"json\""));
@@ -488,12 +488,10 @@ fn test_opencode_variant_mapping() {
         let mut cmd = Command::new(exec.executable_name());
         exec.append_tool_args(&mut cmd, "test", None);
 
-        let debug_str = format!("{:?}", cmd);
+        let debug_str = format!("{cmd:?}");
         assert!(
             debug_str.contains(expected_variant),
-            "Expected variant '{}' not found in command: {}",
-            expected_variant,
-            debug_str
+            "Expected variant '{expected_variant}' not found in command: {debug_str}"
         );
     }
 }
@@ -529,7 +527,7 @@ fn test_execute_in_preserves_model_override() {
         exec.append_model_args(&mut cmd);
         exec.append_prompt_args(&mut cmd, "test prompt");
 
-        let debug_str = format!("{:?}", cmd);
+        let debug_str = format!("{cmd:?}");
 
         // Every tool should include its model override
         match exec {

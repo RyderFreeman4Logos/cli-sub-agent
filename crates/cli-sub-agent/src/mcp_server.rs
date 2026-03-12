@@ -40,7 +40,7 @@ pub(crate) async fn run_mcp_server() -> Result<()> {
                     result: None,
                     error: Some(JsonRpcError {
                         code: -32700,
-                        message: format!("Parse error: {}", e),
+                        message: format!("Parse error: {e}"),
                     }),
                     id: None,
                 };
@@ -281,7 +281,7 @@ async fn handle_tool_call(params: Option<Value>) -> Result<Value> {
         "csa_session_delete" => handle_session_delete_tool(arguments).await,
         "csa_gc" => handle_gc_tool(arguments).await,
         "csa_run" => handle_run_tool(arguments).await,
-        _ => anyhow::bail!("Unknown tool: {}", name),
+        _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }
 
@@ -332,18 +332,18 @@ async fn handle_session_list_tool(args: Value) -> Result<Value> {
             let tokens_str = if let Some(ref usage) = session.total_token_usage {
                 if let Some(total) = usage.total_tokens {
                     if let Some(cost) = usage.estimated_cost_usd {
-                        format!("{}tok ${:.4}", total, cost)
+                        format!("{total}tok ${cost:.4}")
                     } else {
-                        format!("{}tok", total)
+                        format!("{total}tok")
                     }
                 } else if let (Some(input), Some(output)) =
                     (usage.input_tokens, usage.output_tokens)
                 {
                     let total = input + output;
                     if let Some(cost) = usage.estimated_cost_usd {
-                        format!("{}tok ${:.4}", total, cost)
+                        format!("{total}tok ${cost:.4}")
                     } else {
-                        format!("{}tok", total)
+                        format!("{total}tok")
                     }
                 } else {
                     "-".to_string()
@@ -618,7 +618,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     response_text.push_str("\n\n--- Execution Metadata ---\n");
     if !ephemeral {
         if let Some(ref sid) = session_arg {
-            response_text.push_str(&format!("Session ID: {}\n", sid));
+            response_text.push_str(&format!("Session ID: {sid}\n"));
         } else {
             // For new sessions, we don't have the session ID here
             // since execute_with_session doesn't return it
@@ -653,7 +653,7 @@ fn parse_tool_name(tool_str: &str) -> Result<ToolName> {
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
-        _ => anyhow::bail!("Unknown tool: {}", tool_str),
+        _ => anyhow::bail!("Unknown tool: {tool_str}"),
     }
 }
 

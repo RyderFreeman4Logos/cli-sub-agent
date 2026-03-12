@@ -511,28 +511,24 @@ fn test_load_actual_project_config() {
         );
         assert!(
             !tier_config.models.is_empty(),
-            "Tier {} should have models",
-            name
+            "Tier {name} should have models"
         );
         for model in &tier_config.models {
             let parts: Vec<&str> = model.split('/').collect();
             assert_eq!(
                 parts.len(),
                 4,
-                "Model spec '{}' should have format 'tool/provider/model/budget'",
-                model
+                "Model spec '{model}' should have format 'tool/provider/model/budget'"
             );
         }
     }
 
     println!("✓ Tier mappings defined: {}", config.tier_mapping.len());
     for (task, tier) in &config.tier_mapping {
-        println!("  - {} -> {}", task, tier);
+        println!("  - {task} -> {tier}");
         assert!(
             config.tiers.contains_key(tier),
-            "Tier mapping {} references undefined tier {}",
-            task,
-            tier
+            "Tier mapping {task} references undefined tier {tier}"
         );
     }
 

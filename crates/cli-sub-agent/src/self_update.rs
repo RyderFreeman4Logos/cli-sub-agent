@@ -6,7 +6,7 @@ use std::process::Command;
 /// Handle self-update command
 pub(crate) fn handle_self_update(check_only: bool) -> Result<()> {
     let current_version = env!("CARGO_PKG_VERSION");
-    eprintln!("Current version: v{}", current_version);
+    eprintln!("Current version: v{current_version}");
 
     // Fetch latest release info from GitHub API
     let release_info = fetch_latest_release()?;
@@ -15,7 +15,7 @@ pub(crate) fn handle_self_update(check_only: bool) -> Result<()> {
         .strip_prefix('v')
         .unwrap_or(&release_info.tag_name);
 
-    eprintln!("Latest version:  v{}", latest_version);
+    eprintln!("Latest version:  v{latest_version}");
 
     // Compare versions
     if current_version == latest_version {
@@ -24,22 +24,16 @@ pub(crate) fn handle_self_update(check_only: bool) -> Result<()> {
     }
 
     if check_only {
-        eprintln!(
-            "\nUpdate available: v{} → v{}",
-            current_version, latest_version
-        );
+        eprintln!("\nUpdate available: v{current_version} → v{latest_version}");
         eprintln!("Run 'csa self-update' to install the latest version.");
         return Ok(());
     }
 
     // Perform update
-    eprintln!("\nUpdating to v{}...", latest_version);
+    eprintln!("\nUpdating to v{latest_version}...");
     perform_update(&release_info, current_version, latest_version)?;
 
-    eprintln!(
-        "\n✓ Successfully updated from v{} to v{}",
-        current_version, latest_version
-    );
+    eprintln!("\n✓ Successfully updated from v{current_version} to v{latest_version}");
     eprintln!("Restart your shell or run 'hash -r' to use the new version.");
 
     Ok(())
@@ -56,7 +50,7 @@ fn fetch_latest_release() -> Result<ReleaseInfo> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to fetch release info: {}", stderr);
+        anyhow::bail!("Failed to fetch release info: {stderr}");
     }
 
     let json = String::from_utf8_lossy(&output.stdout);
@@ -83,10 +77,10 @@ fn perform_update(
 ) -> Result<()> {
     // Determine current platform target
     let target = get_target_triple()?;
-    eprintln!("Detected platform: {}", target);
+    eprintln!("Detected platform: {target}");
 
     // Find matching asset
-    let asset_name = format!("csa-{}.tar.gz", target);
+    let asset_name = format!("csa-{target}.tar.gz");
     let asset = release_info
         .assets
         .iter()
@@ -139,7 +133,7 @@ fn download_file(url: &str, dest: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to download file: {}", stderr);
+        anyhow::bail!("Failed to download file: {stderr}");
     }
 
     Ok(())
@@ -159,7 +153,7 @@ fn extract_tarball(archive: &Path, dest_dir: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to extract archive: {}", stderr);
+        anyhow::bail!("Failed to extract archive: {stderr}");
     }
 
     Ok(())
@@ -213,9 +207,7 @@ fn get_target_triple() -> Result<String> {
         ("x86_64", "macos") => "x86_64-apple-darwin",
         ("aarch64", "macos") => "aarch64-apple-darwin",
         _ => anyhow::bail!(
-            "Unsupported platform: {}-{}. Please install manually from GitHub releases.",
-            arch,
-            os
+            "Unsupported platform: {arch}-{os}. Please install manually from GitHub releases."
         ),
     };
 
@@ -256,21 +248,18 @@ mod tests {
                 // Must contain os and arch components
                 assert!(
                     triple.contains("linux") || triple.contains("darwin"),
-                    "expected linux or darwin in: {}",
-                    triple
+                    "expected linux or darwin in: {triple}"
                 );
                 assert!(
                     triple.contains("x86_64") || triple.contains("aarch64"),
-                    "expected x86_64 or aarch64 in: {}",
-                    triple
+                    "expected x86_64 or aarch64 in: {triple}"
                 );
             }
             Err(e) => {
                 // Only acceptable if running on an unsupported platform
                 assert!(
                     e.to_string().contains("Unsupported platform"),
-                    "unexpected error: {}",
-                    e
+                    "unexpected error: {e}"
                 );
             }
         }
@@ -361,7 +350,7 @@ mod tests {
     #[test]
     fn asset_name_format_matches_expected_pattern() {
         let target = "x86_64-unknown-linux-musl";
-        let expected_name = format!("csa-{}.tar.gz", target);
+        let expected_name = format!("csa-{target}.tar.gz");
         assert_eq!(expected_name, "csa-x86_64-unknown-linux-musl.tar.gz");
     }
 }

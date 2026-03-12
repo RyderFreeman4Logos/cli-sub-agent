@@ -182,7 +182,7 @@ pub(crate) fn parse_tool_name(name: &str) -> Result<ToolName> {
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
         "openai-compat" => Ok(ToolName::OpenaiCompat),
-        _ => anyhow::bail!("Unknown tool: {}", name),
+        _ => anyhow::bail!("Unknown tool: {name}"),
     }
 }
 
@@ -210,7 +210,7 @@ pub(crate) fn truncate_prompt(s: &str, max_len: usize) -> String {
             }
         }
 
-        format!("{}...", substring)
+        format!("{substring}...")
     }
 }
 

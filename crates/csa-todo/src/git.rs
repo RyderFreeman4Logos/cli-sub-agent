@@ -298,7 +298,7 @@ pub fn diff(todos_dir: &Path, timestamp: &str, revision: Option<&str>) -> Result
         anyhow::bail!("No git repository in todos directory (run `csa todo save` first)");
     }
 
-    let file_path = format!("{}/TODO.md", timestamp);
+    let file_path = format!("{timestamp}/TODO.md");
 
     let rev = match revision {
         Some(r) => {
@@ -419,7 +419,7 @@ pub fn history(todos_dir: &Path, timestamp: &str) -> Result<String> {
         anyhow::bail!("No git repository in todos directory (run `csa todo save` first)");
     }
 
-    let plan_prefix = format!("{}/", timestamp);
+    let plan_prefix = format!("{timestamp}/");
 
     let output = Command::new("git")
         .args(["log", "--oneline", "--", &plan_prefix])
@@ -450,7 +450,7 @@ pub fn list_versions(todos_dir: &Path, timestamp: &str) -> Result<Vec<String>> {
 
     // Track TODO.md specifically — versions correspond to document changes,
     // not metadata-only commits (which show in `history` instead).
-    let file_path = format!("{}/TODO.md", timestamp);
+    let file_path = format!("{timestamp}/TODO.md");
 
     let output = Command::new("git")
         .args(["log", "--format=%H", "--", &file_path])
@@ -495,7 +495,7 @@ pub fn show_version(todos_dir: &Path, timestamp: &str, version: usize) -> Result
     }
 
     let hash = &versions[idx];
-    let file_path = format!("{}/TODO.md", timestamp);
+    let file_path = format!("{timestamp}/TODO.md");
 
     let output = Command::new("git")
         .args(["show", &format!("{hash}:{file_path}")])
@@ -539,7 +539,7 @@ pub fn diff_versions(
 
     let from_hash = &versions[from_version - 1];
     let to_hash = &versions[to_version - 1];
-    let file_path = format!("{}/TODO.md", timestamp);
+    let file_path = format!("{timestamp}/TODO.md");
 
     let output = Command::new("git")
         .args(["diff", from_hash, to_hash, "--", &file_path])
@@ -763,7 +763,7 @@ mod tests {
         .unwrap();
 
         // save_file only the metadata — TODO.md should remain dirty
-        let file_path = format!("{}/metadata.toml", ts);
+        let file_path = format!("{ts}/metadata.toml");
         save_file(todos, ts, &file_path, "metadata only").unwrap();
 
         let status = Command::new("git")

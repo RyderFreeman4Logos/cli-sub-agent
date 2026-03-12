@@ -88,7 +88,7 @@ pub(super) async fn execute_bash_step(
 
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     if !stdout.is_empty() {
-        eprint!("{}", stdout);
+        eprint!("{stdout}");
     }
     Ok(StepExecutionOutcome {
         exit_code: output.status.code().unwrap_or(1),

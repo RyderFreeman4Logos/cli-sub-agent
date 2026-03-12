@@ -66,17 +66,15 @@ impl OpenaiCompatTransport {
     ) -> Result<OpenaiCompatConfig> {
         let base_url = Self::resolve_env(ENV_BASE_URL, extra_env).ok_or_else(|| {
             anyhow::anyhow!(
-                "OpenAI-compat base URL not configured. Set {} in [tools.openai-compat.env] \
-                 or as an environment variable.",
-                ENV_BASE_URL
+                "OpenAI-compat base URL not configured. Set {ENV_BASE_URL} in [tools.openai-compat.env] \
+                 or as an environment variable."
             )
         })?;
 
         let api_key = Self::resolve_env(ENV_API_KEY, extra_env).ok_or_else(|| {
             anyhow::anyhow!(
-                "OpenAI-compat API key not configured. Set {} in [tools.openai-compat.env] \
-                 or as an environment variable.",
-                ENV_API_KEY
+                "OpenAI-compat API key not configured. Set {ENV_API_KEY} in [tools.openai-compat.env] \
+                 or as an environment variable."
             )
         })?;
 
@@ -84,9 +82,8 @@ impl OpenaiCompatTransport {
             .or_else(|| self.default_model.clone())
             .ok_or_else(|| {
                 anyhow::anyhow!(
-                    "OpenAI-compat model not configured. Set {} in [tools.openai-compat.env], \
-                 use --model, or set default_model in [tools.openai-compat].",
-                    ENV_MODEL
+                    "OpenAI-compat model not configured. Set {ENV_MODEL} in [tools.openai-compat.env], \
+                 use --model, or set default_model in [tools.openai-compat]."
                 )
             })?;
 

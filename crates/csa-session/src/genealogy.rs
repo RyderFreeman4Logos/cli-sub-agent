@@ -176,14 +176,10 @@ fn format_session_tree(
     let description = session.description.as_deref().unwrap_or("<no description>");
 
     if fork_marker.is_empty() {
-        output.push_str(&format!(
-            "{}{}  {}  {}\n",
-            prefix, short_id, tools_str, description
-        ));
+        output.push_str(&format!("{prefix}{short_id}  {tools_str}  {description}\n"));
     } else {
         output.push_str(&format!(
-            "{}{}  {}  {}  {}\n",
-            prefix, short_id, tools_str, description, fork_marker
+            "{prefix}{short_id}  {tools_str}  {description}  {fork_marker}\n"
         ));
     }
 
@@ -458,8 +454,7 @@ mod tests {
 
         assert!(
             tree.contains("\u{21B1} fork"),
-            "Tree should contain fork marker. Got:\n{}",
-            tree
+            "Tree should contain fork marker. Got:\n{tree}"
         );
         assert!(tree.contains("Spawn child"));
         assert!(tree.contains("Parent"));
@@ -497,8 +492,7 @@ mod tests {
 
         assert!(
             tree.contains("\u{21B1} fork"),
-            "Tree should contain fork marker. Got:\n{}",
-            tree
+            "Tree should contain fork marker. Got:\n{tree}"
         );
     }
 
@@ -566,16 +560,14 @@ mod tests {
         assert_eq!(
             root_lines.len(),
             1,
-            "Should have exactly 1 root. Got:\n{}",
-            tree
+            "Should have exactly 1 root. Got:\n{tree}"
         );
 
         // Two fork markers
         let fork_marker_count = tree.matches("\u{21B1} fork").count();
         assert_eq!(
             fork_marker_count, 2,
-            "Should have 2 fork markers. Got:\n{}",
-            tree
+            "Should have 2 fork markers. Got:\n{tree}"
         );
     }
 }

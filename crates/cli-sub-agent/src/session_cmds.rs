@@ -328,7 +328,7 @@ pub(crate) fn handle_session_list(
     if tree {
         let tree_output =
             list_sessions_tree_filtered(&project_root, tool_filter.as_deref(), branch.as_deref())?;
-        print!("{}", tree_output);
+        print!("{tree_output}");
     } else {
         let sessions =
             select_sessions_for_list(&project_root, branch.as_deref(), tool_filter.as_deref())?;
@@ -388,18 +388,18 @@ pub(crate) fn handle_session_list(
                     let tokens_str = if let Some(ref usage) = session.total_token_usage {
                         if let Some(total) = usage.total_tokens {
                             if let Some(cost) = usage.estimated_cost_usd {
-                                format!("{}tok ${:.4}", total, cost)
+                                format!("{total}tok ${cost:.4}")
                             } else {
-                                format!("{}tok", total)
+                                format!("{total}tok")
                             }
                         } else if let (Some(input), Some(output)) =
                             (usage.input_tokens, usage.output_tokens)
                         {
                             let total = input + output;
                             if let Some(cost) = usage.estimated_cost_usd {
-                                format!("{}tok ${:.4}", total, cost)
+                                format!("{total}tok ${cost:.4}")
                             } else {
-                                format!("{}tok", total)
+                                format!("{total}tok")
                             }
                         } else {
                             "-".to_string()
@@ -412,7 +412,7 @@ pub(crate) fn handle_session_list(
                     let fork_suffix =
                         if let Some(ref fork_of) = session.genealogy.fork_of_session_id {
                             let short_fork = &fork_of[..11.min(fork_of.len())];
-                            format!("  \u{21B1} fork of {}", short_fork)
+                            format!("  \u{21B1} fork of {short_fork}")
                         } else {
                             String::new()
                         };
@@ -420,7 +420,7 @@ pub(crate) fn handle_session_list(
                     // Change binding indicator
                     let change_suffix = if let Some(ref cid) = session.change_id {
                         let short_cid = &cid[..11.min(cid.len())];
-                        format!("  change:{}", short_cid)
+                        format!("  change:{short_cid}")
                     } else {
                         String::new()
                     };
@@ -459,20 +459,19 @@ pub(crate) fn handle_session_compress(session: String, cd: Option<String>) -> Re
         .tools
         .iter()
         .max_by_key(|(_, state)| &state.updated_at)
-        .ok_or_else(|| anyhow::anyhow!("Session '{}' has no tool history", resolved_id))?;
+        .ok_or_else(|| anyhow::anyhow!("Session '{resolved_id}' has no tool history"))?;
 
     let compress_cmd = match tool_name.as_str() {
         "gemini-cli" => "/compress",
         _ => "/compact",
     };
 
-    println!("Session {} uses tool: {}", resolved_id, tool_name);
-    println!("Compress command: {}", compress_cmd);
+    println!("Session {resolved_id} uses tool: {tool_name}");
+    println!("Compress command: {compress_cmd}");
     println!();
     println!("To compress, resume the session and send the command:");
     println!(
-        "  csa run --sa-mode <true|false> --tool {} --session {} \"{}\"",
-        tool_name, resolved_id, compress_cmd
+        "  csa run --sa-mode <true|false> --tool {tool_name} --session {resolved_id} \"{compress_cmd}\""
     );
     println!();
     println!("Note: context status will be updated after the tool confirms compression.");
@@ -489,7 +488,7 @@ pub(crate) fn handle_session_delete(session: String, cd: Option<String>) -> Resu
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
     delete_session(&project_root, &resolved_id)?;
-    eprintln!("Deleted session: {}", resolved_id);
+    eprintln!("Deleted session: {resolved_id}");
     Ok(())
 }
 
@@ -524,7 +523,7 @@ pub(crate) fn handle_session_logs(
         }
     }
 
-    eprintln!("No logs found for session {}", resolved_id);
+    eprintln!("No logs found for session {resolved_id}");
     eprintln!("Hint: use --events to view ACP transcript events (if available)");
     Ok(())
 }
@@ -563,7 +562,7 @@ fn display_log_files(session_dir: &Path, session_id: &str, tail: Option<usize>) 
     for entry in &log_files {
         let path = entry.path();
         let file_name = path.file_name().unwrap_or_default().to_string_lossy();
-        eprintln!("=== {} ===", file_name);
+        eprintln!("=== {file_name} ===");
 
         let content = fs::read_to_string(&path)?;
         print_content_with_tail(&content, tail);
@@ -577,16 +576,13 @@ fn display_log_files(session_dir: &Path, session_id: &str, tail: Option<usize>) 
 fn display_acp_events(session_dir: &Path, session_id: &str, tail: Option<usize>) -> Result<()> {
     let events_path = session_dir.join("output").join("acp-events.jsonl");
     if !events_path.is_file() {
-        eprintln!(
-            "No ACP events found for session {} (no output/acp-events.jsonl)",
-            session_id
-        );
+        eprintln!("No ACP events found for session {session_id} (no output/acp-events.jsonl)");
         return Ok(());
     }
 
     let content = fs::read_to_string(&events_path)?;
     if content.is_empty() {
-        eprintln!("ACP events file is empty for session {}", session_id);
+        eprintln!("ACP events file is empty for session {session_id}");
         return Ok(());
     }
 
@@ -601,10 +597,10 @@ fn print_content_with_tail(content: &str, tail: Option<usize>) {
         let lines: Vec<&str> = content.lines().collect();
         let start = lines.len().saturating_sub(n);
         for line in &lines[start..] {
-            println!("{}", line);
+            println!("{line}");
         }
     } else {
-        print!("{}", content);
+        print!("{content}");
     }
 }
 
@@ -686,7 +682,7 @@ pub(crate) fn handle_session_clean(
 
 pub(crate) fn format_file_size(bytes: u64) -> String {
     if bytes < 1024 {
-        format!("{} B", bytes)
+        format!("{bytes} B")
     } else if bytes < 1024 * 1024 {
         format!("{:.1} KB", bytes as f64 / 1024.0)
     } else {
@@ -701,7 +697,7 @@ pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<
     if log.is_empty() {
         eprintln!("No git history for session '{}'", resolved.session_id);
     } else {
-        print!("{}", log);
+        print!("{log}");
     }
     Ok(())
 }

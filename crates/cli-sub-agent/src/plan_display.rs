@@ -45,12 +45,12 @@ pub(crate) fn print_plan(
         let on_fail = match &step.on_fail {
             FailAction::Abort => "abort",
             FailAction::Skip => "skip",
-            FailAction::Retry(n) => &format!("retry({})", n),
-            FailAction::Delegate(t) => &format!("delegate({})", t),
+            FailAction::Retry(n) => &format!("retry({n})"),
+            FailAction::Delegate(t) => &format!("delegate({t})"),
         };
 
         let flags = [
-            step.condition.as_ref().map(|c| format!("IF {}", c)),
+            step.condition.as_ref().map(|c| format!("IF {c}")),
             step.loop_var
                 .as_ref()
                 .map(|l| format!("FOR {}", l.variable)),
@@ -103,7 +103,7 @@ pub(crate) fn print_summary(results: &[StepResult], total_duration: f64) {
             r.duration_secs,
             r.error
                 .as_ref()
-                .map(|e| format!(" — {}", e))
+                .map(|e| format!(" — {e}"))
                 .unwrap_or_default(),
         );
     }
@@ -111,5 +111,5 @@ pub(crate) fn print_summary(results: &[StepResult], total_duration: f64) {
     println!();
     println!("Total: {} steps", results.len());
     println!("Passed: {pass}, Failed: {fail}, Skipped: {skip}");
-    println!("Duration: {:.2}s", total_duration);
+    println!("Duration: {total_duration:.2}s");
 }

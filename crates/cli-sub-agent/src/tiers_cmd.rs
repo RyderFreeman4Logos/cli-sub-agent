@@ -43,7 +43,7 @@ fn print_tiers_text(config: &ProjectConfig) {
         // Show disabled models with annotation
         for model in &tier.models {
             if !enabled_models.contains(model) {
-                println!("  -  {} (disabled)", model);
+                println!("  -  {model} (disabled)");
             }
         }
         println!();
@@ -55,7 +55,7 @@ fn print_tiers_text(config: &ProjectConfig) {
         let mut mappings: Vec<(&String, &String)> = config.tier_mapping.iter().collect();
         mappings.sort_by_key(|(k, _)| *k);
         for (task_type, tier_name) in mappings {
-            println!("  {} -> {}", task_type, tier_name);
+            println!("  {task_type} -> {tier_name}");
         }
         println!();
     }

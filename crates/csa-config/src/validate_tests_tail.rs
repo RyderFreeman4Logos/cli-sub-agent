@@ -176,8 +176,7 @@ fn test_validate_all_known_review_tools_accepted() {
         let result = validate_config(dir.path());
         assert!(
             result.is_ok(),
-            "Review tool '{}' should be accepted",
-            tool_name
+            "Review tool '{tool_name}' should be accepted"
         );
     }
 }
@@ -218,8 +217,7 @@ fn test_validate_all_known_debate_tools_accepted() {
         let result = validate_config(dir.path());
         assert!(
             result.is_ok(),
-            "Debate tool '{}' should be accepted",
-            tool_name
+            "Debate tool '{tool_name}' should be accepted"
         );
     }
 }

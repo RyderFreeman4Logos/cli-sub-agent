@@ -149,8 +149,7 @@ pub(crate) fn resolve_review_tool(
                 .map(|t| (t, None))
                 .map_err(|_| {
                     anyhow::anyhow!(
-                    "Invalid [review].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
-                    tool_name
+                    "Invalid [review].tool value '{tool_name}'. Supported values: gemini-cli, opencode, codex, claude-code."
                 )
                 })
         }
@@ -188,8 +187,7 @@ fn resolve_review_tool_from_value(
             if counterpart_enabled {
                 return crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                     anyhow::anyhow!(
-                        "BUG: auto review tool resolution returned invalid tool '{}'",
-                        resolved
+                        "BUG: auto review tool resolution returned invalid tool '{resolved}'"
                     )
                 });
             }
@@ -201,8 +199,7 @@ fn resolve_review_tool_from_value(
 
     crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
         anyhow::anyhow!(
-            "Invalid project [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
-            tool_value
+            "Invalid project [review].tool value '{tool_value}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
         )
     })
 }

@@ -14,11 +14,11 @@ pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Re
     match format {
         OutputFormat::Json => {
             let json_str = serde_json::to_string_pretty(&config)?;
-            println!("{}", json_str);
+            println!("{json_str}");
         }
         OutputFormat::Text => {
             let toml_str = toml::to_string_pretty(&config)?;
-            print!("{}", toml_str);
+            print!("{toml_str}");
         }
     }
     Ok(())

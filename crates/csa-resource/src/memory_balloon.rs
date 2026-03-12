@@ -53,9 +53,7 @@ impl MemoryBalloon {
 
         if size_bytes as u64 > MAX_BALLOON_SIZE {
             bail!(
-                "balloon size {} bytes exceeds hard limit of {} bytes (16 GiB)",
-                size_bytes,
-                MAX_BALLOON_SIZE
+                "balloon size {size_bytes} bytes exceeds hard limit of {MAX_BALLOON_SIZE} bytes (16 GiB)"
             );
         }
 
@@ -75,7 +73,7 @@ impl MemoryBalloon {
 
         if ptr == libc::MAP_FAILED {
             return Err(std::io::Error::last_os_error())
-                .context(format!("mmap({} bytes) failed", size_bytes));
+                .context(format!("mmap({size_bytes} bytes) failed"));
         }
 
         Ok(Self {

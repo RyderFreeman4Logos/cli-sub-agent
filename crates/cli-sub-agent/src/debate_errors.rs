@@ -29,13 +29,11 @@ pub(crate) fn classify_execution_outcome(
             || sandbox_memory_limit.is_some()
         {
             return DebateErrorKind::Transient(format!(
-                "exit 137 (termination_reason={:?}, sandbox_memory_max_mb={:?})",
-                termination_reason, sandbox_memory_limit
+                "exit 137 (termination_reason={termination_reason:?}, sandbox_memory_max_mb={sandbox_memory_limit:?})"
             ));
         }
         return DebateErrorKind::Deterministic(format!(
-            "exit 137 without transient signal (termination_reason={:?})",
-            termination_reason
+            "exit 137 without transient signal (termination_reason={termination_reason:?})"
         ));
     }
 

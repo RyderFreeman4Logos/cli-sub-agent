@@ -37,15 +37,19 @@ fn test_hooks_section_is_default_returns_false_with_pre_run() {
 
 #[test]
 fn test_hooks_section_is_default_returns_false_with_post_run() {
-    let mut hooks = crate::config::HooksSection::default();
-    hooks.post_run = Some("echo bye".to_string());
+    let hooks = crate::config::HooksSection {
+        post_run: Some("echo bye".to_string()),
+        ..Default::default()
+    };
     assert!(!hooks.is_default());
 }
 
 #[test]
 fn test_hooks_section_is_default_returns_false_with_custom_timeout() {
-    let mut hooks = crate::config::HooksSection::default();
-    hooks.timeout_secs = 120;
+    let hooks = crate::config::HooksSection {
+        timeout_secs: 120,
+        ..Default::default()
+    };
     assert!(!hooks.is_default());
 }
 
@@ -160,8 +164,9 @@ fn test_execution_config_is_default() {
 
 #[test]
 fn test_execution_config_is_not_default_with_custom_value() {
-    let mut exec = crate::config::ExecutionConfig::default();
-    exec.min_timeout_seconds = 2400;
+    let exec = crate::config::ExecutionConfig {
+        min_timeout_seconds: 2400,
+    };
     assert!(!exec.is_default());
 }
 

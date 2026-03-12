@@ -139,10 +139,7 @@ fn handle_threads(
                 .chars()
                 .take(40)
                 .collect::<String>();
-            println!(
-                "{:<12} {:<40} {:<20} {}",
-                provider, thread_id_display, updated_display, preview
-            );
+            println!("{provider:<12} {thread_id_display:<40} {updated_display:<20} {preview}");
         }
         println!("\nTotal: {} thread(s)", all_items.len());
     }

@@ -125,7 +125,7 @@ pub(crate) fn handle_session_result(
             }
         }
         None => {
-            eprintln!("No result found for session '{}'", resolved_id);
+            eprintln!("No result found for session '{resolved_id}'");
         }
     }
     Ok(())
@@ -153,7 +153,7 @@ fn display_result_text(
     result: &SessionResult,
     transcript_summary: Option<&TranscriptSummary>,
 ) {
-    println!("Session: {}", session_id);
+    println!("Session: {session_id}");
     println!("Status:  {}", result.status);
     println!("Exit:    {}", result.exit_code);
     println!("Tool:    {}", result.tool);
@@ -163,7 +163,7 @@ fn display_result_text(
     if !result.artifacts.is_empty() {
         println!("Artifacts:");
         for a in &result.artifacts {
-            println!("  - {}", a);
+            println!("  - {a}");
         }
     }
     if let Some(summary) = transcript_summary {
@@ -238,7 +238,7 @@ pub(crate) fn display_summary_section(
         if is_full_fallback {
             print_truncated_content(&content, FALLBACK_LINES);
         } else {
-            println!("{}", content);
+            println!("{content}");
         }
     }
     Ok(())
@@ -263,7 +263,7 @@ fn display_summary_fallback(session_dir: &Path, session_id: &str, json: bool) ->
             return Ok(());
         }
     }
-    eprintln!("No output found for session '{}'", session_id);
+    eprintln!("No output found for session '{session_id}'");
     Ok(())
 }
 
@@ -295,7 +295,7 @@ pub(crate) fn display_single_section(
                 });
                 println!("{}", serde_json::to_string_pretty(&payload)?);
             } else {
-                println!("{}", content);
+                println!("{content}");
             }
         }
         None => {
@@ -313,8 +313,7 @@ pub(crate) fn display_single_section(
                 }
                 None => {
                     anyhow::bail!(
-                        "No structured output for session '{}'. Run without --section to see raw result.",
-                        session_id
+                        "No structured output for session '{session_id}'. Run without --section to see raw result."
                     );
                 }
             }
@@ -342,12 +341,12 @@ pub(crate) fn display_all_sections(session_dir: &Path, session_id: &str, json: b
                     });
                     println!("{}", serde_json::to_string_pretty(&payload)?);
                 } else {
-                    print!("{}", content);
+                    print!("{content}");
                 }
                 return Ok(());
             }
         }
-        eprintln!("No output found for session '{}'", session_id);
+        eprintln!("No output found for session '{session_id}'");
         return Ok(());
     }
 
@@ -371,7 +370,7 @@ pub(crate) fn display_all_sections(session_dir: &Path, session_id: &str, json: b
                 println!();
             }
             println!("=== {} ({}) ===", section.title, section.id);
-            println!("{}", content);
+            println!("{content}");
         }
     }
     Ok(())
@@ -429,7 +428,7 @@ pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> R
         entries.sort_by_key(|e| e.file_name());
 
         if entries.is_empty() {
-            eprintln!("No artifacts for session '{}'", resolved_id);
+            eprintln!("No artifacts for session '{resolved_id}'");
         } else {
             println!("Files:");
             for entry in &entries {
@@ -440,7 +439,7 @@ pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> R
             }
         }
     } else {
-        eprintln!("No artifacts for session '{}'", resolved_id);
+        eprintln!("No artifacts for session '{resolved_id}'");
     }
 
     Ok(())
@@ -475,7 +474,7 @@ pub(crate) fn handle_session_measure(
         println!("{}", serde_json::to_string_pretty(&measurement)?);
     } else {
         let short_id = &resolved_id[..11.min(resolved_id.len())];
-        println!("Session: {}", short_id);
+        println!("Session: {short_id}");
         println!(
             "Total output: {} tokens",
             format_number(measurement.total_tokens)

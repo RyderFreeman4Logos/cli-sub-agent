@@ -281,10 +281,7 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget()
                 break;
             }
             if attempt == 19 {
-                bail!(
-                    "hub never registered MCP backend after 5s; last response: {}",
-                    list_response
-                );
+                bail!("hub never registered MCP backend after 5s; last response: {list_response}");
             }
         }
         assert_eq!(list_response["result"]["tools"][0]["name"], "echo_tool");

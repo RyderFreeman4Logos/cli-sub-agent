@@ -274,15 +274,19 @@ fn test_review_config_is_default() {
 
 #[test]
 fn test_review_config_is_not_default_with_gate_command() {
-    let mut config = ReviewConfig::default();
-    config.gate_command = Some("make lint".to_string());
+    let config = ReviewConfig {
+        gate_command: Some("make lint".to_string()),
+        ..Default::default()
+    };
     assert!(!config.is_default());
 }
 
 #[test]
 fn test_review_config_is_not_default_with_gate_timeout() {
-    let mut config = ReviewConfig::default();
-    config.gate_timeout_secs = 600;
+    let config = ReviewConfig {
+        gate_timeout_secs: 600,
+        ..Default::default()
+    };
     assert!(!config.is_default());
 }
 

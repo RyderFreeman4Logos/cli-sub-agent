@@ -142,18 +142,16 @@ impl ToolArg {
                     let resolved: Self = canonical.parse()?;
                     match resolved {
                         Self::Alias(ref inner) => Err(format!(
-                            "tool alias '{}' maps to '{}' which is not a valid tool name. \
-                             Valid targets: gemini-cli, opencode, codex, claude-code",
-                            alias, inner
+                            "tool alias '{alias}' maps to '{inner}' which is not a valid tool \
+                             name. Valid targets: gemini-cli, opencode, codex, claude-code"
                         )),
                         other => Ok(other),
                     }
                 } else {
                     Err(format!(
-                        "unknown tool '{}'. Valid values: auto, any-available, \
+                        "unknown tool '{alias}'. Valid values: auto, any-available, \
                          gemini-cli, opencode, codex, claude-code, openai-compat. \
-                         Or define it in [tool_aliases] in config.",
-                        alias
+                         Or define it in [tool_aliases] in config."
                     ))
                 }
             }
@@ -172,11 +170,11 @@ impl ToolArg {
             Self::Auto => ToolSelectionStrategy::HeterogeneousPreferred,
             Self::AnyAvailable => ToolSelectionStrategy::AnyAvailable,
             Self::Specific(t) => ToolSelectionStrategy::Explicit(t),
-            Self::Alias(a) => panic!(
-                "BUG: unresolved tool alias '{}' reached into_strategy(); \
-                 resolve_alias() must be called first",
-                a
-            ),
+            Self::Alias(a) => {
+                panic!(
+                    "BUG: unresolved tool alias '{a}' reached into_strategy(); resolve_alias() must be called first"
+                )
+            }
         }
     }
 }
@@ -187,7 +185,7 @@ impl std::fmt::Display for ToolArg {
             Self::Auto => write!(f, "auto"),
             Self::AnyAvailable => write!(f, "any-available"),
             Self::Specific(t) => write!(f, "{}", t.as_str()),
-            Self::Alias(a) => write!(f, "{}", a),
+            Self::Alias(a) => write!(f, "{a}"),
         }
     }
 }

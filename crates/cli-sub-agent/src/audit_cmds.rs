@@ -143,7 +143,7 @@ pub(crate) fn handle_audit_approve(files: Vec<String>, approved_by: String) -> R
     }
 
     io::save(&path, &manifest)?;
-    println!("Approved {} file(s).", approved_count);
+    println!("Approved {approved_count} file(s).");
     Ok(())
 }
 
@@ -198,7 +198,7 @@ pub(crate) fn handle_audit_update(
     }
 
     io::save(&path, &manifest)?;
-    println!("Updated {} file(s).", updated_count);
+    println!("Updated {updated_count} file(s).");
     Ok(())
 }
 
@@ -222,7 +222,7 @@ pub(crate) fn handle_audit_reset(files: Vec<String>) -> Result<()> {
     }
 
     io::save(&path, &manifest)?;
-    println!("Reset {} file(s) to pending.", reset_count);
+    println!("Reset {reset_count} file(s) to pending.");
     Ok(())
 }
 

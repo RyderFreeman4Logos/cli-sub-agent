@@ -34,7 +34,7 @@ pub fn apply_rlimits(_memory_max_mb: u64, pids_max: Option<u64>) -> Result<()> {
         let ret = unsafe { libc::setrlimit(libc::RLIMIT_NPROC, &rlim_nproc) };
         if ret != 0 {
             return Err(std::io::Error::last_os_error())
-                .context(format!("setrlimit(RLIMIT_NPROC, {}) failed", nproc));
+                .context(format!("setrlimit(RLIMIT_NPROC, {nproc}) failed"));
         }
     }
 

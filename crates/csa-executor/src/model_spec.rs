@@ -31,10 +31,7 @@ impl ModelSpec {
     pub fn parse(spec: &str) -> Result<Self> {
         let parts: Vec<&str> = spec.splitn(4, '/').collect();
         if parts.len() != 4 {
-            bail!(
-                "Invalid model spec '{}': expected tool/provider/model/thinking_budget",
-                spec
-            );
+            bail!("Invalid model spec '{spec}': expected tool/provider/model/thinking_budget");
         }
         Ok(Self {
             tool: parts[0].to_string(),
@@ -61,8 +58,7 @@ impl ThinkingBudget {
                     Ok(Self::Custom(n))
                 } else {
                     bail!(
-                        "Invalid thinking budget '{}': expected default/low/medium/high/xhigh or a number",
-                        other
+                        "Invalid thinking budget '{other}': expected default/low/medium/high/xhigh or a number"
                     )
                 }
             }

@@ -162,7 +162,7 @@ pub(crate) async fn handle_run(
         .tool
         .unwrap_or(ToolArg::Auto)
         .resolve_alias(&merged_aliases)
-        .map_err(|e| anyhow::anyhow!("{}", e))?
+        .map_err(|e| anyhow::anyhow!("{e}"))?
         .into_strategy();
     let idle_timeout_seconds = if no_idle_timeout {
         info!("Idle timeout disabled via --no-idle-timeout");
@@ -198,8 +198,7 @@ pub(crate) async fn handle_run(
             find_recent_interrupted_skill_session(&project_root, skill_name, &resolved_tool)
     {
         eprintln!(
-            "Auto-resuming interrupted skill session {} for '{}'.",
-            interrupted_session_id, skill_name
+            "Auto-resuming interrupted skill session {interrupted_session_id} for '{skill_name}'."
         );
         session_arg = Some(interrupted_session_id);
     }
@@ -369,7 +368,7 @@ pub(crate) async fn handle_run(
         }
         OutputFormat::Json => {
             let json = serde_json::to_string_pretty(&result)?;
-            println!("{}", json);
+            println!("{json}");
         }
     }
 

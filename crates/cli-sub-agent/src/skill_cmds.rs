@@ -9,7 +9,7 @@ use tracing::info;
 pub(crate) fn handle_skill_install(source: String, target: Option<String>) -> Result<()> {
     // 1. Parse source to get user/repo
     let repo = parse_github_source(&source)?;
-    eprintln!("Installing skills from: {}", repo);
+    eprintln!("Installing skills from: {repo}");
 
     // 2. Clone repo to temp directory
     let temp_dir = TempDir::new().context("Failed to create temporary directory")?;
@@ -34,7 +34,7 @@ pub(crate) fn handle_skill_install(source: String, target: Option<String>) -> Re
     } else {
         eprintln!("\nInstalled {} skill(s):", installed.len());
         for skill in installed {
-            eprintln!("  - {}", skill);
+            eprintln!("  - {skill}");
         }
     }
 
@@ -68,7 +68,7 @@ pub(crate) fn handle_skill_list() -> Result<()> {
         // Try to read SKILL.md to get title
         let title = read_skill_title(&skill_path).unwrap_or_else(|| skill_name.clone());
 
-        println!("  {} - {}", skill_name, title);
+        println!("  {skill_name} - {title}");
     }
 
     Ok(())
@@ -95,8 +95,8 @@ fn parse_github_source(source: &str) -> Result<String> {
 
 /// Clone repository using git
 fn clone_repository(repo: &str, dest: &Path) -> Result<()> {
-    let url = format!("https://github.com/{}", repo);
-    eprintln!("Cloning from: {}", url);
+    let url = format!("https://github.com/{repo}");
+    eprintln!("Cloning from: {url}");
 
     let output = Command::new("git")
         .args(["clone", "--depth", "1", &url, "."])
@@ -106,7 +106,7 @@ fn clone_repository(repo: &str, dest: &Path) -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Git clone failed: {}", stderr);
+        anyhow::bail!("Git clone failed: {stderr}");
     }
 
     info!("Successfully cloned repository");
@@ -142,14 +142,10 @@ fn determine_target_directory(target: Option<&str>) -> Result<PathBuf> {
             // For now, these tools don't have a standard skills directory
             // We could add support later
             anyhow::bail!(
-                "Skills for '{}' are not yet supported. Only 'claude-code' is supported.",
-                target_tool
+                "Skills for '{target_tool}' are not yet supported. Only 'claude-code' is supported."
             )
         }
-        _ => anyhow::bail!(
-            "Unknown target tool: '{}'. Supported: claude-code",
-            target_tool
-        ),
+        _ => anyhow::bail!("Unknown target tool: '{target_tool}'. Supported: claude-code"),
     }
 }
 
@@ -181,13 +177,13 @@ fn copy_skills(source_dir: &Path, target_dir: &Path) -> Result<Vec<String>> {
 
         // Check if skill already exists
         if dest_path.exists() {
-            eprintln!("Skipping '{}' (already exists)", skill_name);
+            eprintln!("Skipping '{skill_name}' (already exists)");
             continue;
         }
 
         // Copy directory recursively
         copy_dir_recursive(&path, &dest_path)
-            .with_context(|| format!("Failed to copy skill '{}'", skill_name))?;
+            .with_context(|| format!("Failed to copy skill '{skill_name}'"))?;
 
         installed.push(skill_name);
     }
@@ -322,8 +318,7 @@ mod tests {
         let path = result.unwrap();
         assert!(
             path.ends_with(".claude/skills"),
-            "expected .claude/skills suffix, got: {:?}",
-            path
+            "expected .claude/skills suffix, got: {path:?}"
         );
     }
 

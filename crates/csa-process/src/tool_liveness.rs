@@ -407,7 +407,7 @@ mod tests {
         let own_pid = std::process::id();
         fs::write(
             locks_dir.join("tool.lock"),
-            format!("{{\"pid\": {}}}", own_pid),
+            format!("{{\"pid\": {own_pid}}}"),
         )
         .expect("write lock");
 

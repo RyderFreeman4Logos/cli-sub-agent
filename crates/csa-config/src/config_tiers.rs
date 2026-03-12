@@ -99,13 +99,8 @@ impl ProjectConfig {
             if let Some(spec_tool) = spec.split('/').next() {
                 if spec_tool != tool {
                     anyhow::bail!(
-                        "Model spec '{}' belongs to tool '{}', not '{}'. \
-                         Use --tool {} or select a spec for '{}'.",
-                        spec,
-                        spec_tool,
-                        tool,
-                        spec_tool,
-                        tool
+                        "Model spec '{spec}' belongs to tool '{spec_tool}', not '{tool}'. \
+                         Use --tool {spec_tool} or select a spec for '{tool}'."
                     );
                 }
             }

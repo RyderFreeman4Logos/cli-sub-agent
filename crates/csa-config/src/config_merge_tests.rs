@@ -477,7 +477,7 @@ name = "test"
         config
             .review
             .as_ref()
-            .map_or(true, |r| r.gate_command.is_none()),
+            .is_none_or(|r| r.gate_command.is_none()),
         "global gate_command must not be inherited by project config"
     );
     // gate_timeout_secs from global must be stripped, falling back to default 300
@@ -485,7 +485,7 @@ name = "test"
         config
             .review
             .as_ref()
-            .map_or(true, |r| r.gate_timeout_secs == 300),
+            .is_none_or(|r| r.gate_timeout_secs == 300),
         "global gate_timeout_secs must not be inherited; should be default 300"
     );
 }

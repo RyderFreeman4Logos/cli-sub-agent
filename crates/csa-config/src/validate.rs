@@ -77,27 +77,24 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if let Some(mem) = config.resources.memory_max_mb {
         if mem < 256 {
             bail!(
-                "resources.memory_max_mb must be >= 256 (got {}). \
-                 Tool processes need at least 256 MB to function.",
-                mem
+                "resources.memory_max_mb must be >= 256 (got {mem}). \
+                 Tool processes need at least 256 MB to function."
             );
         }
     }
     if let Some(heap) = config.resources.node_heap_limit_mb {
         if heap < 512 {
             bail!(
-                "resources.node_heap_limit_mb must be >= 512 (got {}). \
-                 Node-based tools need at least 512 MB heap to function.",
-                heap
+                "resources.node_heap_limit_mb must be >= 512 (got {heap}). \
+                 Node-based tools need at least 512 MB heap to function."
             );
         }
     }
     if let Some(pids) = config.resources.pids_max {
         if pids < 10 {
             bail!(
-                "resources.pids_max must be >= 10 (got {}). \
-                 Tool processes need at least 10 PIDs for process trees.",
-                pids
+                "resources.pids_max must be >= 10 (got {pids}). \
+                 Tool processes need at least 10 PIDs for process trees."
             );
         }
     }
@@ -132,30 +129,22 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
     ];
     for (tool_name, tool_config) in &config.tools {
         if !known_tools.contains(&tool_name.as_str()) {
-            bail!(
-                "Unknown tool '{}'. Known tools: {:?}",
-                tool_name,
-                known_tools
-            );
+            bail!("Unknown tool '{tool_name}'. Known tools: {known_tools:?}");
         }
         // Validate per-tool sandbox memory overrides.
         if let Some(mem) = tool_config.memory_max_mb {
             if mem < 256 {
                 bail!(
-                    "tools.{}.memory_max_mb must be >= 256 (got {}). \
-                     Tool processes need at least 256 MB to function.",
-                    tool_name,
-                    mem
+                    "tools.{tool_name}.memory_max_mb must be >= 256 (got {mem}). \
+                     Tool processes need at least 256 MB to function."
                 );
             }
         }
         if let Some(heap) = tool_config.node_heap_limit_mb {
             if heap < 512 {
                 bail!(
-                    "tools.{}.node_heap_limit_mb must be >= 512 (got {}). \
-                     Node-based tools need at least 512 MB heap to function.",
-                    tool_name,
-                    heap
+                    "tools.{tool_name}.node_heap_limit_mb must be >= 512 (got {heap}). \
+                     Node-based tools need at least 512 MB heap to function."
                 );
             }
         }
@@ -168,10 +157,9 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
                 tool_config.memory_max_mb.is_some() || config.resources.memory_max_mb.is_some();
             if !has_memory {
                 bail!(
-                    "tools.{}.enforcement_mode = \"required\" but no memory_max_mb is set \
-                     (neither tools.{0}.memory_max_mb nor resources.memory_max_mb). \
-                     Required mode needs an explicit memory limit to enforce.",
-                    tool_name
+                    "tools.{tool_name}.enforcement_mode = \"required\" but no memory_max_mb is set \
+                     (neither tools.{tool_name}.memory_max_mb nor resources.memory_max_mb). \
+                     Required mode needs an explicit memory limit to enforce."
                 );
             }
         }
@@ -238,7 +226,7 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
     // Validate each TierConfig
     for (tier_name, tier_config) in &config.tiers {
         if tier_config.models.is_empty() {
-            bail!("Tier '{}' must have at least one model", tier_name);
+            bail!("Tier '{tier_name}' must have at least one model");
         }
         for model_spec in &tier_config.models {
             validate_model_spec(tier_name, model_spec)?;
@@ -246,12 +234,12 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
         // Validate budget constraints
         if let Some(budget) = tier_config.token_budget {
             if budget == 0 {
-                bail!("Tier '{}': token_budget must be > 0 (got 0)", tier_name);
+                bail!("Tier '{tier_name}': token_budget must be > 0 (got 0)");
             }
         }
         if let Some(turns) = tier_config.max_turns {
             if turns == 0 {
-                bail!("Tier '{}': max_turns must be > 0 (got 0)", tier_name);
+                bail!("Tier '{tier_name}': max_turns must be > 0 (got 0)");
             }
         }
     }
@@ -284,9 +272,8 @@ fn warn_unknown_tool_priority(config: &ProjectConfig) {
         for name in &prefs.tool_priority {
             if !known_tools.contains(&name.as_str()) {
                 eprintln!(
-                    "warning: Unrecognized tool in [preferences].tool_priority: '{}'. \
-                     Known tools: {:?}. Entry will be ignored for sorting.",
-                    name, known_tools
+                    "warning: Unrecognized tool in [preferences].tool_priority: '{name}'. \
+                     Known tools: {known_tools:?}. Entry will be ignored for sorting."
                 );
             }
         }
@@ -297,9 +284,7 @@ fn validate_model_spec(tier_name: &str, model_spec: &str) -> Result<()> {
     let parts: Vec<&str> = model_spec.split('/').collect();
     if parts.len() != 4 {
         bail!(
-            "Tier '{}' has invalid model spec '{}'. Expected format: 'tool/provider/model/budget'",
-            tier_name,
-            model_spec
+            "Tier '{tier_name}' has invalid model spec '{model_spec}'. Expected format: 'tool/provider/model/budget'"
         );
     }
 

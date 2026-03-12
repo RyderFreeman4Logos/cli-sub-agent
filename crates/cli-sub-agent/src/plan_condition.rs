@@ -175,7 +175,7 @@ fn looks_malformed(s: &str) -> bool {
 fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {
-        let placeholder = format!("${{{}}}", key);
+        let placeholder = format!("${{{key}}}");
         result = result.replace(&placeholder, value);
     }
     result

@@ -456,7 +456,7 @@ fn run_git(dir: &std::path::Path, args: &[&str]) {
         .current_dir(dir)
         .status()
         .unwrap();
-    assert!(status.success(), "git {:?} failed", args);
+    assert!(status.success(), "git {args:?} failed");
 }
 
 #[test]

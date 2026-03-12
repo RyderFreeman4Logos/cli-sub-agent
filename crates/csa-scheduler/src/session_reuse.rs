@@ -157,7 +157,7 @@ mod tests {
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");
         // Base (0.3) + recency (~0.2 for just-now)
-        assert!(score > 0.4 && score < 0.6, "score was {}", score);
+        assert!(score > 0.4 && score < 0.6, "score was {score}");
     }
 
     #[test]
@@ -193,7 +193,7 @@ mod tests {
 
         let score = compute_relevance_score(&session, "review", "gemini-cli");
         // Base (0.3) + exact match (1.0) + recency (~0.2)
-        assert!(score > 1.4, "score was {}", score);
+        assert!(score > 1.4, "score was {score}");
     }
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
 
         let score = compute_relevance_score(&session, "fix", "gemini-cli");
         // Base (0.3) + related match (0.5) + recency (~0.2) ≈ 1.0
-        assert!(score > 0.9 && score < 1.1, "score was {}", score);
+        assert!(score > 0.9 && score < 1.1, "score was {score}");
     }
 
     #[test]
@@ -265,7 +265,7 @@ mod tests {
 
         let score = compute_relevance_score(&session, "deploy", "gemini-cli");
         // Base (0.3) + no match (0.0) + recency (~0.2) ≈ 0.5
-        assert!(score > 0.4 && score < 0.6, "score was {}", score);
+        assert!(score > 0.4 && score < 0.6, "score was {score}");
     }
 
     #[test]
@@ -301,8 +301,7 @@ mod tests {
         // Base (0.3) + no task match (0.0) + recency (0.0 for 48h old)
         assert!(
             (0.3..0.35).contains(&score),
-            "Old session score should be near base 0.3, was {}",
-            score
+            "Old session score should be near base 0.3, was {score}"
         );
     }
 

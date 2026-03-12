@@ -234,7 +234,7 @@ impl Executor {
                 model_override: model,
                 thinking_budget: budget,
             }),
-            other => bail!("Unknown tool '{}' in model spec", other),
+            other => bail!("Unknown tool '{other}' in model spec"),
         }
     }
 
@@ -314,8 +314,7 @@ impl Executor {
         if !allow_edit {
             format!(
                 "IMPORTANT RESTRICTION: You MUST NOT edit or modify any existing files. \
-                 You may only create new files or perform read-only analysis.\n\n{}",
-                prompt
+                 You may only create new files or perform read-only analysis.\n\n{prompt}"
             )
         } else {
             prompt.to_string()
