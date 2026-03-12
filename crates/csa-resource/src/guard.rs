@@ -51,14 +51,9 @@ impl ResourceGuard {
 
         if available_total < reserve {
             bail!(
-                "OOM Risk Prevention: Not enough memory to launch '{}'.\n\
-                Available: {} MB (physical {} + swap {}), Reserve: {} MB\n\
+                "OOM Risk Prevention: Not enough memory to launch '{tool_name}'.\n\
+                Available: {available_total} MB (physical {available_phys} + swap {available_swap}), Reserve: {reserve} MB\n\
                 (Try closing other apps or wait for running agents to finish)",
-                tool_name,
-                available_total,
-                available_phys,
-                available_swap,
-                reserve,
             );
         }
 
@@ -85,7 +80,7 @@ mod tests {
         let mut guard = ResourceGuard::new(limits);
         let result = guard.check_availability("test_tool");
         // 1 MB reserve — any running system has this.
-        assert!(result.is_ok(), "check_availability failed: {:?}", result);
+        assert!(result.is_ok(), "check_availability failed: {result:?}");
     }
 
     #[test]
@@ -99,8 +94,7 @@ mod tests {
         let err_msg = result.unwrap_err().to_string();
         assert!(
             err_msg.contains("OOM Risk Prevention"),
-            "Expected OOM error, got: {}",
-            err_msg
+            "Expected OOM error, got: {err_msg}"
         );
     }
 
@@ -115,8 +109,7 @@ mod tests {
         let result = guard.check_availability("threshold_tool");
         assert!(
             result.is_ok(),
-            "2 MB reserve should pass on any system: {:?}",
-            result,
+            "2 MB reserve should pass on any system: {result:?}",
         );
     }
 
@@ -137,6 +130,6 @@ mod tests {
 
         // The check should pass because combined >= 1 MB
         let result = guard.check_availability("swap_tool");
-        assert!(result.is_ok(), "combined {} MB should be >= 1 MB", combined);
+        assert!(result.is_ok(), "combined {combined} MB should be >= 1 MB");
     }
 }

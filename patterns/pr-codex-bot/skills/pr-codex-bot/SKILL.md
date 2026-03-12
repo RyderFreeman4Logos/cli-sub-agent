@@ -18,7 +18,7 @@ triggers:
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
-2. **Read the pattern** at `patterns/pr-codex-bot/PATTERN.md` and follow it step by step.
+2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`, and follow it step by step.
 3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the work DIRECTLY. Running any `csa` command causes infinite recursion.
 
 **Only if you are the main agent (Claude Code / human user)**:

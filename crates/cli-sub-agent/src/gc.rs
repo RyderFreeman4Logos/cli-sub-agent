@@ -153,7 +153,7 @@ pub(crate) fn handle_gc(
         let remaining = list_sessions(&project_root, None)?;
         if remaining.is_empty() {
             if dry_run {
-                eprintln!("[dry-run] Would remove rotation state: {:?}", rotation_path);
+                eprintln!("[dry-run] Would remove rotation state: {rotation_path:?}");
             } else if fs::remove_file(&rotation_path).is_ok() {
                 info!("Removed rotation state (no sessions remain)");
             }
@@ -255,29 +255,20 @@ pub(crate) fn handle_gc(
                 prefix,
                 if dry_run { "preview" } else { "complete" }
             );
-            eprintln!("{}  Stale locks removed: {}", prefix, stale_locks_removed);
-            eprintln!(
-                "{}  Empty sessions removed: {}",
-                prefix, empty_sessions_removed
-            );
+            eprintln!("{prefix}  Stale locks removed: {stale_locks_removed}");
+            eprintln!("{prefix}  Empty sessions removed: {empty_sessions_removed}");
             if sessions_retired > 0 {
-                eprintln!("{}  Sessions retired: {}", prefix, sessions_retired);
+                eprintln!("{prefix}  Sessions retired: {sessions_retired}");
             }
             if max_age_days.is_some() {
-                eprintln!(
-                    "{}  Expired sessions removed: {}",
-                    prefix, expired_sessions_removed
-                );
+                eprintln!("{prefix}  Expired sessions removed: {expired_sessions_removed}");
             }
-            eprintln!(
-                "{}  Orphan directories removed: {}",
-                prefix, orphan_dirs_removed
-            );
+            eprintln!("{prefix}  Orphan directories removed: {orphan_dirs_removed}");
             eprintln!(
                 "{}  Transcript files removed: {} ({} bytes)",
                 prefix, transcript_stats.files_removed, transcript_stats.bytes_reclaimed
             );
-            eprintln!("{}  Stale slots cleaned: {}", prefix, stale_slots_cleaned);
+            eprintln!("{prefix}  Stale slots cleaned: {stale_slots_cleaned}");
         }
     }
 
@@ -509,7 +500,7 @@ pub(crate) fn handle_gc_global(
             };
             if no_sessions_remain {
                 if dry_run {
-                    eprintln!("[dry-run] Would remove rotation state: {:?}", rotation_path);
+                    eprintln!("[dry-run] Would remove rotation state: {rotation_path:?}");
                 } else if fs::remove_file(&rotation_path).is_ok() {
                     info!(
                         "Removed rotation state (no sessions remain): {:?}",
@@ -601,31 +592,21 @@ pub(crate) fn handle_gc_global(
             );
             eprintln!("{}  Projects scanned: {}", prefix, project_roots.len());
             if projects_failed > 0 {
-                eprintln!("{}  Projects failed: {}", prefix, projects_failed);
+                eprintln!("{prefix}  Projects failed: {projects_failed}");
             }
-            eprintln!("{}  Stale locks removed: {}", prefix, total_stale_locks);
-            eprintln!(
-                "{}  Empty sessions removed: {}",
-                prefix, total_empty_sessions
-            );
+            eprintln!("{prefix}  Stale locks removed: {total_stale_locks}");
+            eprintln!("{prefix}  Empty sessions removed: {total_empty_sessions}");
             if total_sessions_retired > 0 {
-                eprintln!("{}  Sessions retired: {}", prefix, total_sessions_retired);
+                eprintln!("{prefix}  Sessions retired: {total_sessions_retired}");
             }
             if max_age_days.is_some() {
-                eprintln!(
-                    "{}  Expired sessions removed: {}",
-                    prefix, total_expired_sessions
-                );
+                eprintln!("{prefix}  Expired sessions removed: {total_expired_sessions}");
             }
+            eprintln!("{prefix}  Orphan directories removed: {total_orphan_dirs}");
             eprintln!(
-                "{}  Orphan directories removed: {}",
-                prefix, total_orphan_dirs
+                "{prefix}  Transcript files removed: {total_transcripts_removed} ({total_transcript_bytes_reclaimed} bytes)"
             );
-            eprintln!(
-                "{}  Transcript files removed: {} ({} bytes)",
-                prefix, total_transcripts_removed, total_transcript_bytes_reclaimed
-            );
-            eprintln!("{}  Stale slots cleaned: {}", prefix, stale_slots_cleaned);
+            eprintln!("{prefix}  Stale slots cleaned: {stale_slots_cleaned}");
         }
     }
 

@@ -94,14 +94,14 @@ pub(crate) async fn handle_batch(
     // 4. Load and parse batch TOML file
     let batch_path = PathBuf::from(&file);
     if !batch_path.exists() {
-        anyhow::bail!("Batch file not found: {}", file);
+        anyhow::bail!("Batch file not found: {file}");
     }
 
     let batch_content = std::fs::read_to_string(&batch_path)
-        .with_context(|| format!("Failed to read batch file: {}", file))?;
+        .with_context(|| format!("Failed to read batch file: {file}"))?;
 
     let batch_config: BatchConfig = toml::from_str(&batch_content)
-        .with_context(|| format!("Failed to parse batch file: {}", file))?;
+        .with_context(|| format!("Failed to parse batch file: {file}"))?;
 
     if batch_config.tasks.is_empty() {
         warn!("No tasks found in batch file");
@@ -139,7 +139,7 @@ pub(crate) async fn handle_batch(
     // 10. Exit with non-zero if any task failed
     let failed_count = results.iter().filter(|r| r.exit_code != 0).count();
     if failed_count > 0 {
-        anyhow::bail!("{} tasks failed", failed_count);
+        anyhow::bail!("{failed_count} tasks failed");
     }
 
     Ok(())
@@ -448,7 +448,7 @@ async fn execute_task(
                 name: task.name.clone(),
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Invalid tool name: {}", e)),
+                error: Some(format!("Invalid tool name: {e}")),
             };
         }
     };
@@ -472,7 +472,7 @@ async fn execute_task(
                 name: task.name.clone(),
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("{}", e)),
+                error: Some(format!("{e}")),
             };
         }
         if let Err(e) = cfg.enforce_tier_model_name(tool_name.as_str(), task.model.as_deref()) {
@@ -481,7 +481,7 @@ async fn execute_task(
                 name: task.name.clone(),
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("{}", e)),
+                error: Some(format!("{e}")),
             };
         }
     }
@@ -496,7 +496,7 @@ async fn execute_task(
                     name: task.name.clone(),
                     exit_code: 1,
                     duration_secs: start.elapsed().as_secs_f64(),
-                    error: Some(format!("Failed to build executor: {}", e)),
+                    error: Some(format!("Failed to build executor: {e}")),
                 };
             }
         };
@@ -508,7 +508,7 @@ async fn execute_task(
             name: task.name.clone(),
             exit_code: 1,
             duration_secs: start.elapsed().as_secs_f64(),
-            error: Some(format!("Tool not installed: {}", e)),
+            error: Some(format!("Tool not installed: {e}")),
         };
     }
 
@@ -520,7 +520,7 @@ async fn execute_task(
                 name: task.name.clone(),
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Resource check failed: {}", e)),
+                error: Some(format!("Resource check failed: {e}")),
             };
         }
     }
@@ -533,7 +533,7 @@ async fn execute_task(
                 name: task.name.clone(),
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Failed to load global config: {}", e)),
+                error: Some(format!("Failed to load global config: {e}")),
             };
         }
     };
@@ -550,7 +550,7 @@ async fn execute_task(
                 name: task.name.clone(),
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Failed to resolve slots directory: {}", e)),
+                error: Some(format!("Failed to resolve slots directory: {e}")),
             };
         }
     };
@@ -653,7 +653,7 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
-        _ => anyhow::bail!("Unknown tool: {}", tool),
+        _ => anyhow::bail!("Unknown tool: {tool}"),
     }
 }
 
@@ -686,7 +686,7 @@ fn print_summary(results: &[TaskResult]) {
             result.name,
             result.duration_secs,
             if let Some(ref err) = result.error {
-                format!(" - {}", err)
+                format!(" - {err}")
             } else {
                 String::new()
             }
@@ -695,7 +695,7 @@ fn print_summary(results: &[TaskResult]) {
 
     println!();
     println!("Total: {} tasks", results.len());
-    println!("Success: {}", success_count);
-    println!("Failed: {}", failed_count);
-    println!("Total duration: {:.2}s", total_duration);
+    println!("Success: {success_count}");
+    println!("Failed: {failed_count}");
+    println!("Total duration: {total_duration:.2}s");
 }

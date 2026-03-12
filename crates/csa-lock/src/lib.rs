@@ -170,7 +170,7 @@ fn acquire_lock_at_path(lock_path: &Path, lock_name: &str, reason: &str) -> Resu
 /// - Returns error with diagnostic information
 pub fn acquire_lock(session_dir: &Path, tool_name: &str, reason: &str) -> Result<SessionLock> {
     let locks_dir = session_dir.join("locks");
-    let lock_path = locks_dir.join(format!("{}.lock", tool_name));
+    let lock_path = locks_dir.join(format!("{tool_name}.lock"));
     acquire_lock_at_path(&lock_path, tool_name, reason)
 }
 
@@ -359,7 +359,7 @@ mod tests {
 
         let lock = acquire_lock(session_dir, "debug-tool", "test").expect("Lock should succeed");
 
-        let debug = format!("{:?}", lock);
+        let debug = format!("{lock:?}");
         assert!(debug.contains("SessionLock"));
         assert!(debug.contains("lock_path"));
     }

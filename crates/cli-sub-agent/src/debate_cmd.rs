@@ -488,8 +488,7 @@ fn resolve_debate_tool(
             }
             let tool = crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
                 anyhow::anyhow!(
-                    "Invalid [debate].tool value '{}'. Supported values: gemini-cli, opencode, codex, claude-code.",
-                    tool_name
+                    "Invalid [debate].tool value '{tool_name}'. Supported values: gemini-cli, opencode, codex, claude-code."
                 )
             })?;
             Ok((tool, DebateMode::Heterogeneous, None))
@@ -521,8 +520,7 @@ fn resolve_debate_tool_from_value(
             if counterpart_enabled {
                 let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
                     anyhow::anyhow!(
-                        "BUG: auto debate tool resolution returned invalid tool '{}'",
-                        resolved
+                        "BUG: auto debate tool resolution returned invalid tool '{resolved}'"
                     )
                 })?;
                 return Ok((tool, DebateMode::Heterogeneous));
@@ -540,8 +538,7 @@ fn resolve_debate_tool_from_value(
 
     let tool = crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
         anyhow::anyhow!(
-            "Invalid project [debate].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
-            tool_value
+            "Invalid project [debate].tool value '{tool_value}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
         )
     })?;
     Ok((tool, DebateMode::Heterogeneous))

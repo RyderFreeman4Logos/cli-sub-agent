@@ -144,7 +144,7 @@ fn resolve_claude_tool(
         }
         let resolved = tool_arg
             .resolve_alias(&merged_aliases)
-            .map_err(|e| anyhow::anyhow!("{}", e))?;
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
         return match resolved {
             ToolArg::Specific(t) => Ok(t),
             ToolArg::Auto => resolve_auto_tool(parent_tool, project_config, project_root),

@@ -77,7 +77,7 @@ pub fn write_checkpoint(sessions_dir: &Path, note: &CheckpointNote) -> Result<()
 
 /// Find the most recent commit that modified a session's directory.
 fn find_session_commit(sessions_dir: &Path, session_id: &str) -> Result<String> {
-    let session_path = format!("{}/", session_id);
+    let session_path = format!("{session_id}/");
 
     let output = Command::new("git")
         .args(["log", "-1", "--format=%H", "--", &session_path])
@@ -94,10 +94,7 @@ fn find_session_commit(sessions_dir: &Path, session_id: &str) -> Result<String> 
 
     let sha = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if sha.is_empty() {
-        anyhow::bail!(
-            "No commits found for session '{}' — commit the session first",
-            session_id
-        );
+        anyhow::bail!("No commits found for session '{session_id}' — commit the session first");
     }
 
     Ok(sha)

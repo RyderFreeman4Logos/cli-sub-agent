@@ -73,7 +73,7 @@ impl AcpClient {
                 if let Some(status) = tool_call_update.fields.status {
                     Some(SessionEvent::ToolCallCompleted {
                         id,
-                        status: format!("{:?}", status),
+                        status: format!("{status:?}"),
                     })
                 } else {
                     Some(SessionEvent::Other(

@@ -143,7 +143,7 @@ fn test_list_versions_metadata_only_commit_excluded() {
         "title = \"changed\"\nstatus = \"approved\"\n",
     )
     .unwrap();
-    let meta_path = format!("{}/metadata.toml", ts);
+    let meta_path = format!("{ts}/metadata.toml");
     save_file(todos, ts, &meta_path, "metadata update").unwrap();
 
     let versions = list_versions(todos, ts).unwrap();

@@ -600,11 +600,10 @@ impl ProjectConfig {
         }
         if !self.is_tool_enabled(tool) {
             anyhow::bail!(
-                "Error: tool '{}' is disabled in user configuration.\n\
+                "Error: tool '{tool}' is disabled in user configuration.\n\
                  The user may have temporarily disabled this tool. Respect their preference.\n\
                  To override, use --force-override-user-config (not recommended unless\n\
-                 the user explicitly requested this specific tool).",
-                tool
+                 the user explicitly requested this specific tool)."
             );
         }
         Ok(())

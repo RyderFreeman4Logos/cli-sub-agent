@@ -82,8 +82,7 @@ fn test_soft_fork_truncation_on_large_summary() {
     let estimated = estimate_tokens(&ctx.context_summary);
     assert!(
         estimated <= SUMMARY_TOKEN_BUDGET + 50, // small margin for the wrapper text
-        "Summary should be within budget, got {} tokens",
-        estimated
+        "Summary should be within budget, got {estimated} tokens"
     );
     assert!(ctx.context_summary.contains("[truncated]"));
 }

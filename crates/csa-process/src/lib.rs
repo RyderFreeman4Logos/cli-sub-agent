@@ -460,8 +460,7 @@ pub async fn wait_and_capture_with_idle_timeout(
         liveness_dead_timeout.as_secs()
     );
     let workspace_boundary_note = format!(
-        "workspace boundary timeout: detected {} repeated boundary errors ('Path not in workspace'); process killed",
-        WORKSPACE_BOUNDARY_ERROR_THRESHOLD
+        "workspace boundary timeout: detected {WORKSPACE_BOUNDARY_ERROR_THRESHOLD} repeated boundary errors ('Path not in workspace'); process killed"
     );
 
     if let Some(stderr_handle) = stderr {

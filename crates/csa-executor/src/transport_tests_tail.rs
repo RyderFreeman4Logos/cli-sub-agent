@@ -460,7 +460,7 @@ fn test_inject_api_key_fallback_promotes_key_and_removes_internal() {
     env.insert("OTHER_VAR".to_string(), "keep".to_string());
     let result = LegacyTransport::inject_api_key_fallback(Some(&env)).unwrap();
     assert_eq!(result.get("GEMINI_API_KEY").unwrap(), "test-api-key-123");
-    assert!(result.get("_CSA_API_KEY_FALLBACK").is_none());
+    assert!(!result.contains_key("_CSA_API_KEY_FALLBACK"));
     assert_eq!(result.get("OTHER_VAR").unwrap(), "keep");
 }
 

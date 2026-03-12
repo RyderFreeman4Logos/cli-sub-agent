@@ -21,7 +21,7 @@ Treat the run as executor ONLY when initial prompt contains:
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
-2. **Read the pattern** at `patterns/dev2merge/PATTERN.md` and follow it step by step.
+2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`, and follow it step by step.
 3. **RECURSION GUARD**: Do NOT run `csa run --skill dev2merge` or `csa run --skill dev-to-merge` from inside this skill. Other `csa` commands required by the workflow (for example `csa run --skill mktd`, `csa run --skill mktsk`, `csa review`, `csa debate`) are allowed.
 
 **Only if you are the main agent (Claude Code / human user)**:
@@ -71,7 +71,7 @@ When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workfl
 
 ### Pipeline Steps
 
-The workflow is compiled from `patterns/dev2merge/PATTERN.md` into `workflow.toml`.
+The workflow is compiled from the companion `../../PATTERN.md` file (relative to this `SKILL.md`) into `workflow.toml`.
 All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 
 | Step | Name | Gate | Tool |

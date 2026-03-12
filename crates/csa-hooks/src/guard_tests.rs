@@ -443,8 +443,7 @@ mod unix_tests {
                     .collect();
                 assert!(
                     live_pids.is_empty(),
-                    "Escaped descendant should be killed after timeout, found PIDs: {:?}",
-                    live_pids
+                    "Escaped descendant should be killed after timeout, found PIDs: {live_pids:?}"
                 );
             }
             Err(_) => {

@@ -40,6 +40,6 @@ file that tracks applied migrations.
 
 ## Adding New Migrations
 
-Read the pattern at `patterns/migrate/PATTERN.md` for the full migration
+Read the pattern at `../../PATTERN.md` relative to this `SKILL.md` for the full migration
 definition format, version numbering scheme, testing requirements, and
 code templates.

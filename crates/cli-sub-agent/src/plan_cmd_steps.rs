@@ -165,7 +165,7 @@ fn parse_tool_name(tool: &str) -> Result<ToolName> {
         "opencode" => Ok(ToolName::Opencode),
         "codex" => Ok(ToolName::Codex),
         "claude-code" => Ok(ToolName::ClaudeCode),
-        other => bail!("Unknown tool: {}", other),
+        other => bail!("Unknown tool: {other}"),
     }
 }
 
@@ -311,7 +311,7 @@ pub(crate) async fn execute_step(
 ) -> StepResult {
     let start = Instant::now();
     let label = format!("[{}/{}]", step.id, step.title);
-    eprintln!("{} - START", label);
+    eprintln!("{label} - START");
 
     // Evaluate condition: skip step when condition evaluates to false.
     // Steps whose condition is true (or absent) proceed to execution.
@@ -322,7 +322,7 @@ pub(crate) async fn execute_step(
                 "{} - SKIP (condition '{}' evaluated to false)",
                 label, condition
             );
-            eprintln!("{} - SKIP (condition not met)", label);
+            eprintln!("{label} - SKIP (condition not met)");
             return StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
@@ -361,7 +361,7 @@ pub(crate) async fn execute_step(
                 exit_code: 1,
                 duration_secs: start.elapsed().as_secs_f64(),
                 skipped: false,
-                error: Some(format!("Tool resolution failed: {}", e)),
+                error: Some(format!("Tool resolution failed: {e}")),
                 output: None,
                 session_id: None,
             };
@@ -435,10 +435,7 @@ pub(crate) async fn execute_step(
                  Add a descriptive prompt to step {} in the workflow file.",
                 label, step.id
             );
-            eprintln!(
-                "{} - WARNING: empty prompt for CSA step (tool will have no context)",
-                label
-            );
+            eprintln!("{label} - WARNING: empty prompt for CSA step (tool will have no context)");
         }
     }
 
@@ -453,7 +450,7 @@ pub(crate) async fn execute_step(
     for attempt in 1..=max_attempts {
         if attempt > 1 {
             info!("{} - Retry attempt {}/{}", label, attempt, max_attempts);
-            eprintln!("{} - RETRY {}/{}", label, attempt, max_attempts);
+            eprintln!("{label} - RETRY {attempt}/{max_attempts}");
         }
 
         let execution_result = match &target {
@@ -536,14 +533,14 @@ pub(crate) async fn execute_step(
                 "{} - Failed (exit {}), skipping per on_fail=skip",
                 label, exit_code
             );
-            eprintln!("{} - SKIP (exit {}, on_fail=skip)", label, exit_code);
+            eprintln!("{label} - SKIP (exit {exit_code}, on_fail=skip)");
             StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
                 exit_code,
                 duration_secs: duration,
                 skipped: true,
-                error: Some(format!("Skipped after failure (exit code {})", exit_code)),
+                error: Some(format!("Skipped after failure (exit code {exit_code})")),
                 output: None,
                 session_id: None,
             }
@@ -553,10 +550,7 @@ pub(crate) async fn execute_step(
                 "{} - Failed (exit {}), delegate to '{}' not supported in v1 — treating as abort",
                 label, exit_code, target
             );
-            eprintln!(
-                "{} - FAIL (exit {}, delegate '{}' unsupported)",
-                label, exit_code, target
-            );
+            eprintln!("{label} - FAIL (exit {exit_code}, delegate '{target}' unsupported)");
             StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
@@ -564,8 +558,7 @@ pub(crate) async fn execute_step(
                 duration_secs: duration,
                 skipped: false,
                 error: Some(format!(
-                    "Delegate('{}') not supported in v1; step failed with exit code {}",
-                    target, exit_code
+                    "Delegate('{target}') not supported in v1; step failed with exit code {exit_code}"
                 )),
                 output: None,
                 session_id: None,
@@ -574,14 +567,14 @@ pub(crate) async fn execute_step(
         _ => {
             // Abort or Retry (already exhausted retries)
             error!("{} - Failed with exit code {}", label, exit_code);
-            eprintln!("{} - FAIL (exit {})", label, exit_code);
+            eprintln!("{label} - FAIL (exit {exit_code})");
             StepResult {
                 step_id: step.id,
                 title: step.title.clone(),
                 exit_code,
                 duration_secs: duration,
                 skipped: false,
-                error: Some(format!("Exit code {}", exit_code)),
+                error: Some(format!("Exit code {exit_code}")),
                 output: None,
                 session_id: None,
             }

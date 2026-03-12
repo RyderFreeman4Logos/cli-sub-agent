@@ -771,7 +771,7 @@ fn resolve_auto_tool(section: &str, parent_tool: Option<&str>) -> Result<String>
         Some(counterpart) => Ok(counterpart.to_string()),
         None => {
             let context = match parent_tool {
-                Some(p) => format!("parent is '{}'", p),
+                Some(p) => format!("parent is '{p}'"),
                 None => "no parent tool context".to_string(),
             };
             Err(anyhow::anyhow!(

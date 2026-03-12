@@ -58,8 +58,7 @@ impl EditRestrictionViolation {
             .join(", ");
 
         format!(
-            "Edit restriction violated (allow_edit_existing_files=false). Modified tracked files: [{}]. Restored files: [{}].",
-            modified, restored
+            "Edit restriction violated (allow_edit_existing_files=false). Modified tracked files: [{modified}]. Restored files: [{restored}]."
         )
     }
 }

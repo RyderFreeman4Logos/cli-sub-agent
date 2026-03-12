@@ -174,8 +174,8 @@ fn print_platform_info() {
     let arch = env::consts::ARCH;
     let version = env!("CARGO_PKG_VERSION");
 
-    println!("Platform:    {} {}", os, arch);
-    println!("CSA Version: {}", version);
+    println!("Platform:    {os} {arch}");
+    println!("CSA Version: {version}");
 }
 
 /// Print CSA state directory path.
@@ -209,7 +209,7 @@ async fn print_tool_availability() {
 
     // Print summary
     println!();
-    println!("{}/{} tools ready", installed_count, total_count);
+    println!("{installed_count}/{total_count} tools ready");
 }
 
 /// Check if a tool is installed and get its version.
@@ -257,7 +257,7 @@ fn print_tool_status(status: &ToolStatus) {
     let checkmark = if status.installed { "✓" } else { "✗" };
     let status_msg = if status.installed {
         if let Some(ref version) = status.version {
-            format!("installed ({})", version)
+            format!("installed ({version})")
         } else {
             "installed (version unknown)".to_string()
         }
@@ -275,7 +275,7 @@ fn print_tool_status(status: &ToolStatus) {
     // Print install hint if not found
     if !status.installed {
         let hint = install_hint(status.name);
-        println!("             Install: {}", hint);
+        println!("             Install: {hint}");
     }
 }
 
@@ -319,7 +319,7 @@ fn print_project_config() -> Result<()> {
         }
         Err(e) => {
             println!("Config:      .csa/config.toml (invalid)");
-            println!("             Error: {}", e);
+            println!("             Error: {e}");
         }
     }
 
@@ -346,19 +346,19 @@ fn print_resource_status() {
 /// Print sandbox capability status.
 fn print_sandbox_status() {
     let cap = detect_sandbox_capability();
-    println!("Capability:  {}", cap);
+    println!("Capability:  {cap}");
 
     match cap {
         SandboxCapability::CgroupV2 => {
             if let Some(ver) = systemd_version() {
-                println!("Systemd:     {}", ver);
+                println!("Systemd:     {ver}");
             }
             println!("User scope:  supported");
         }
         SandboxCapability::Setrlimit => {
             println!("Enforces:    PID limit only (RLIMIT_NPROC)");
             match current_rlimit_nproc() {
-                Some(n) => println!("RLIMIT_NPROC: {}", n),
+                Some(n) => println!("RLIMIT_NPROC: {n}"),
                 None => println!("RLIMIT_NPROC: unlimited"),
             }
             println!("Memory:      via MemoryBalloon (not setrlimit)");
@@ -373,7 +373,7 @@ fn print_sandbox_status() {
 /// Format bytes as human-readable string (GB).
 fn format_bytes(bytes: u64) -> String {
     let gb = bytes as f64 / 1024.0 / 1024.0 / 1024.0;
-    format!("{:.1} GB", gb)
+    format!("{gb:.1} GB")
 }
 
 #[cfg(test)]

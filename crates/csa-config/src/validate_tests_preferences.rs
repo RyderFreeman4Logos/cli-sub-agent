@@ -35,7 +35,6 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
     let result = validate_config(dir.path());
     assert!(
         result.is_ok(),
-        "unknown tool_priority entry should warn, not fail: {:?}",
-        result
+        "unknown tool_priority entry should warn, not fail: {result:?}"
     );
 }

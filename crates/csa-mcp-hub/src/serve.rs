@@ -237,7 +237,7 @@ impl HttpEndpoint {
 
         let listener = tokio::net::TcpListener::bind(bind_addr)
             .await
-            .with_context(|| format!("failed to bind mcp-hub HTTP endpoint at {}", bind_addr))?;
+            .with_context(|| format!("failed to bind mcp-hub HTTP endpoint at {bind_addr}"))?;
         let local_addr = listener
             .local_addr()
             .context("failed to resolve local mcp-hub HTTP address")?;

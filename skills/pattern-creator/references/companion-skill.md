@@ -27,7 +27,7 @@ triggers:
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator,
    not you.
-2. **Read the pattern** at `patterns/<name>/PATTERN.md` and follow it step by step.
+2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`, and follow it step by step.
 3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`,
    or ANY `csa` command. You must perform the work DIRECTLY. Running any `csa`
    command causes infinite recursion.
@@ -134,7 +134,7 @@ When CSA spawns an executor with `--skill <name>`:
 2. Reads `skills/<name>/SKILL.md` content
 3. Injects it into the executor's initial prompt with `"Use the <name> skill"`
 4. Executor sees the literal string, enters executor mode
-5. Executor reads `patterns/<name>/PATTERN.md` and follows steps
+5. Executor reads `../../PATTERN.md` relative to `skills/<name>/SKILL.md` and follows steps
 6. Executor performs all work DIRECTLY (no `csa` delegation)
 
 This is why the "ABSOLUTE PROHIBITION" on `csa` commands exists in executor

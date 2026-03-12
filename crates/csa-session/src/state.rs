@@ -329,10 +329,7 @@ impl SessionPhase {
             (SessionPhase::Active, PhaseEvent::Retired) => Ok(SessionPhase::Retired),
             (SessionPhase::Available, PhaseEvent::Resumed) => Ok(SessionPhase::Active),
             (SessionPhase::Available, PhaseEvent::Retired) => Ok(SessionPhase::Retired),
-            (current, event) => Err(format!(
-                "invalid phase transition: {:?} + {:?}",
-                current, event
-            )),
+            (current, event) => Err(format!("invalid phase transition: {current:?} + {event:?}")),
         }
     }
 }

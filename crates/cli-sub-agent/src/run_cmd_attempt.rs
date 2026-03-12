@@ -220,7 +220,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     );
                     _slot_guard = Some(slot);
                 } else {
-                    eprintln!("{}", diag_msg);
+                    eprintln!("{diag_msg}");
                     return Ok(RunLoopCompletion::Exit(1));
                 }
             }
@@ -239,7 +239,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             ) {
                 Ok(child_slot) => _slot_guard = Some(child_slot),
                 Err(e) => {
-                    eprintln!("{}", e);
+                    eprintln!("{e}");
                     return Ok(RunLoopCompletion::Exit(1));
                 }
             }
@@ -501,13 +501,11 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                                     request.skill,
                                 );
                                 eprintln!(
-                                    "csa run interrupted by {} (exit {}). Resume with:\n  {}",
-                                    signal_name, signal_exit_code, resume_hint
+                                    "csa run interrupted by {signal_name} (exit {signal_exit_code}). Resume with:\n  {resume_hint}"
                                 );
                             } else {
                                 eprintln!(
-                                    "csa run interrupted by {} (exit {}). Resume by reusing the interrupted session with `csa run --session <session-id> ...`.",
-                                    signal_name, signal_exit_code
+                                    "csa run interrupted by {signal_name} (exit {signal_exit_code}). Resume by reusing the interrupted session with `csa run --session <session-id> ...`."
                                 );
                             }
                         }

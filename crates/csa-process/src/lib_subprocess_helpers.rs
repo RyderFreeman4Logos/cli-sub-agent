@@ -40,7 +40,7 @@ pub async fn check_tool_installed(executable: &str) -> Result<()> {
         .context("Failed to execute 'which' command")?;
 
     if !output.status.success() {
-        anyhow::bail!("Tool '{}' is not installed or not in PATH", executable);
+        anyhow::bail!("Tool '{executable}' is not installed or not in PATH");
     }
 
     Ok(())

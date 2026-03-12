@@ -409,8 +409,7 @@ pub(crate) fn resolve_skill_and_prompt(
                 match std::fs::read_to_string(&extra_path) {
                     Ok(content) => {
                         parts.push(format!(
-                            "<context-file path=\"{}\">\n{}\n</context-file>",
-                            extra, content
+                            "<context-file path=\"{extra}\">\n{content}\n</context-file>"
                         ));
                     }
                     Err(e) => {
@@ -421,7 +420,7 @@ pub(crate) fn resolve_skill_and_prompt(
         }
 
         if let Some(user_prompt) = prompt {
-            parts.push(format!("---\n\n{}", user_prompt));
+            parts.push(format!("---\n\n{user_prompt}"));
         }
 
         parts.join("\n\n")

@@ -325,11 +325,7 @@ pub(crate) async fn handle_plan_run(
         .map(|c| c.project.max_recursion_depth)
         .unwrap_or(5u32);
     if current_depth > max_depth {
-        bail!(
-            "Max recursion depth ({}) exceeded. Current: {}",
-            max_depth,
-            current_depth
-        );
+        bail!("Max recursion depth ({max_depth}) exceeded. Current: {current_depth}");
     }
 
     // 4. Load and parse workflow TOML (resolve relative to project root)
@@ -345,9 +341,9 @@ pub(crate) async fn handle_plan_run(
         bail!("Workflow file not found: {}", workflow_path.display());
     }
     let content = std::fs::read_to_string(&workflow_path)
-        .with_context(|| format!("Failed to read workflow file: {}", file))?;
+        .with_context(|| format!("Failed to read workflow file: {file}"))?;
     let plan = plan_from_toml(&content)
-        .with_context(|| format!("Failed to parse workflow file: {}", file))?;
+        .with_context(|| format!("Failed to parse workflow file: {file}"))?;
 
     // 5. Parse --var KEY=VALUE into HashMap
     let cli_variables = parse_variables(&vars, &plan)?;
@@ -441,16 +437,12 @@ pub(crate) async fn handle_plan_run(
     if total_failures > 0 {
         journal.status = "failed".to_string();
         journal.last_error = Some(format!(
-            "{} step(s) failed ({} execution, {} unsupported-skip)",
-            total_failures, execution_failures, unsupported_skips
+            "{total_failures} step(s) failed ({execution_failures} execution, {unsupported_skips} unsupported-skip)"
         ));
         apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
         persist_plan_journal(&journal_path, &journal)?;
         bail!(
-            "{} step(s) failed ({} execution, {} unsupported-skip)",
-            total_failures,
-            execution_failures,
-            unsupported_skips
+            "{total_failures} step(s) failed ({execution_failures} execution, {unsupported_skips} unsupported-skip)"
         );
     }
 
@@ -480,7 +472,7 @@ fn parse_variables(cli_vars: &[String], plan: &ExecutionPlan) -> Result<HashMap<
     for entry in cli_vars {
         let (key, value) = entry
             .split_once('=')
-            .with_context(|| format!("Invalid --var format '{}': expected KEY=VALUE", entry))?;
+            .with_context(|| format!("Invalid --var format '{entry}': expected KEY=VALUE"))?;
         validate_variable_name(key)?;
         vars.insert(key.to_string(), value.to_string());
     }
@@ -496,19 +488,13 @@ fn validate_variable_name(name: &str) -> Result<()> {
     };
 
     if !(first == '_' || first.is_ascii_alphabetic()) {
-        bail!(
-            "Invalid variable name '{}': must match [A-Za-z_][A-Za-z0-9_]*",
-            name
-        );
+        bail!("Invalid variable name '{name}': must match [A-Za-z_][A-Za-z0-9_]*");
     }
 
     if chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric()) {
         Ok(())
     } else {
-        bail!(
-            "Invalid variable name '{}': must match [A-Za-z_][A-Za-z0-9_]*",
-            name
-        );
+        bail!("Invalid variable name '{name}': must match [A-Za-z_][A-Za-z0-9_]*");
     }
 }
 
@@ -516,7 +502,7 @@ fn validate_variable_name(name: &str) -> Result<()> {
 fn substitute_vars(template: &str, vars: &HashMap<String, String>) -> String {
     let mut result = template.to_string();
     for (key, value) in vars {
-        let placeholder = format!("${{{}}}", key);
+        let placeholder = format!("${{{key}}}");
         result = result.replace(&placeholder, value);
     }
     result

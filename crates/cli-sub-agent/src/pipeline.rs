@@ -254,7 +254,7 @@ pub(crate) async fn build_and_validate_executor(
             executor.install_hint(),
             executor.tool_name()
         );
-        anyhow::bail!("{}", e);
+        anyhow::bail!("{e}");
     }
     ensure_tool_runtime_prerequisites(executor.tool_name()).await?;
 

@@ -128,7 +128,7 @@ pub fn try_acquire_slot(
         .with_context(|| format!("Failed to create slot directory: {}", tool_dir.display()))?;
 
     for index in 0..max_concurrent {
-        let slot_path = tool_dir.join(format!("slot-{:02}.lock", index));
+        let slot_path = tool_dir.join(format!("slot-{index:02}.lock"));
 
         let file = OpenOptions::new()
             .read(true)
@@ -210,11 +210,7 @@ pub fn acquire_slot_blocking(
         }
 
         if start.elapsed() >= timeout {
-            anyhow::bail!(
-                "Timed out waiting for slot '{}' after {:?}",
-                tool_name,
-                timeout
-            );
+            anyhow::bail!("Timed out waiting for slot '{tool_name}' after {timeout:?}");
         }
 
         std::thread::sleep(Duration::from_millis(sleep_ms));
@@ -233,7 +229,7 @@ pub fn slot_usage(slots_dir: &Path, tools: &[(&str, u32)]) -> Vec<SlotStatus> {
             let mut occupied = 0u32;
 
             for index in 0..*max {
-                let slot_path = tool_dir.join(format!("slot-{:02}.lock", index));
+                let slot_path = tool_dir.join(format!("slot-{index:02}.lock"));
                 if let Ok(file) = OpenOptions::new().read(true).write(false).open(&slot_path) {
                     let fd = file.as_raw_fd();
                     // SAFETY: `fd` is valid. LOCK_EX | LOCK_NB to probe.

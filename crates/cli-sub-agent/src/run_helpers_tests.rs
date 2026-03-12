@@ -92,7 +92,7 @@ fn build_executor_model_and_thinking_coexist() {
         false,
     )
     .unwrap();
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(
         debug.contains("gpt-5.1-codex-mini"),
         "model missing: {debug}"
@@ -103,7 +103,7 @@ fn build_executor_model_and_thinking_coexist() {
 #[test]
 fn build_executor_thinking_only() {
     let exec = build_executor(&ToolName::Codex, None, None, Some("high"), None, false).unwrap();
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(debug.contains("High"), "thinking budget missing: {debug}");
 }
 
@@ -138,7 +138,7 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
     };
 
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(debug.contains("gpt-5.4"), "default model missing: {debug}");
     assert!(debug.contains("Xhigh"), "default thinking missing: {debug}");
 }
@@ -174,7 +174,7 @@ fn build_executor_ignores_project_tool_defaults_when_disabled() {
     };
 
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), false).unwrap();
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(
         !debug.contains("surprise-model"),
         "tool defaults must not leak when disabled: {debug}"
@@ -224,7 +224,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         true,
     )
     .unwrap();
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(debug.contains("gpt-5.5"), "cli model should win: {debug}");
     assert!(debug.contains("Medium"), "cli thinking should win: {debug}");
     assert!(!debug.contains("gpt-5.4"), "default model leaked: {debug}");
@@ -467,7 +467,7 @@ fn build_executor_model_spec_overrides_both() {
         true,
     )
     .unwrap();
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(
         debug.contains("explicit-model"),
         "explicit model should override model_spec model: {debug}"
@@ -499,7 +499,7 @@ fn build_executor_model_spec_overrides_both() {
         true,
     )
     .unwrap();
-    let debug2 = format!("{:?}", exec2);
+    let debug2 = format!("{exec2:?}");
     assert!(
         debug2.contains("Xhigh"),
         "spec thinking should be preserved when no override: {debug2}"

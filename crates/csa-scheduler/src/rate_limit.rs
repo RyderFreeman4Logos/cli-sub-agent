@@ -29,7 +29,7 @@ pub fn detect_rate_limit(
         return None;
     }
 
-    let combined = format!("{}\n{}", stderr, stdout);
+    let combined = format!("{stderr}\n{stdout}");
     let patterns = patterns_for_tool(tool_name);
 
     for pattern in patterns {

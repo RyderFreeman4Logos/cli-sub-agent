@@ -638,8 +638,7 @@ fn test_xdg_migration_concurrent_flock_blocks_second_migration() {
     let elapsed = rx.recv_timeout(Duration::from_secs(2)).unwrap();
     assert!(
         elapsed >= Duration::from_millis(150),
-        "expected lock blocking, got {:?}",
-        elapsed
+        "expected lock blocking, got {elapsed:?}"
     );
 
     handle.join().unwrap();

@@ -371,7 +371,7 @@ pub(crate) fn fork_call_slot_handoff(
                     .collect();
                 let all_usage = slot_usage(slots_dir, &all_tools_ref);
                 let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
-                anyhow::bail!("fork-call child slot exhausted: {}", diag_msg);
+                anyhow::bail!("fork-call child slot exhausted: {diag_msg}");
             }
         }
     };

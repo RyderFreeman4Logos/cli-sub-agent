@@ -3,9 +3,8 @@ pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
     if let Some(resources) = raw.get("resources") {
         if resources.get("min_free_swap_mb").is_some() {
             eprintln!(
-                "warning: config '{}': 'resources.min_free_swap_mb' is deprecated and ignored. \
-                 Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead.",
-                source
+                "warning: config '{source}': 'resources.min_free_swap_mb' is deprecated and ignored. \
+                 Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead."
             );
         }
     }

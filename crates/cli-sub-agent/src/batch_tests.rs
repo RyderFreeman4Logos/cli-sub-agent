@@ -33,8 +33,7 @@ fn parse_tool_name_unknown_tool_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("Unknown tool"),
-        "expected 'Unknown tool' in: {}",
-        err_msg
+        "expected 'Unknown tool' in: {err_msg}"
     );
 }
 
@@ -49,7 +48,7 @@ fn make_task(name: &str, tool: &str, depends_on: Vec<&str>) -> BatchTask {
     BatchTask {
         name: name.to_string(),
         tool: tool.to_string(),
-        prompt: format!("do {}", name),
+        prompt: format!("do {name}"),
         mode: TaskMode::default(),
         depends_on: depends_on.into_iter().map(String::from).collect(),
         model: None,
@@ -104,8 +103,7 @@ fn validate_tasks_self_dependency_cycle_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.contains("cycle") || err_msg.contains("Cycle"),
-        "expected cycle error in: {}",
-        err_msg
+        "expected cycle error in: {err_msg}"
     );
 }
 
@@ -120,8 +118,7 @@ fn validate_tasks_two_node_cycle_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.to_lowercase().contains("cycle"),
-        "expected cycle error in: {}",
-        err_msg
+        "expected cycle error in: {err_msg}"
     );
 }
 
@@ -137,8 +134,7 @@ fn validate_tasks_three_node_cycle_errors() {
     let err_msg = result.unwrap_err().to_string();
     assert!(
         err_msg.to_lowercase().contains("cycle"),
-        "expected cycle error in: {}",
-        err_msg
+        "expected cycle error in: {err_msg}"
     );
 }
 

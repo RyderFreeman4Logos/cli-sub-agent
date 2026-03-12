@@ -186,7 +186,7 @@ pub(crate) fn load_session_in(base_dir: &Path, session_id: &str) -> Result<MetaS
     let state_path = session_dir.join(STATE_FILE_NAME);
 
     if !state_path.exists() {
-        bail!("Session '{}' not found", session_id);
+        bail!("Session '{session_id}' not found");
     }
 
     let contents = fs::read_to_string(&state_path)
@@ -231,7 +231,7 @@ pub(crate) fn delete_session_in(base_dir: &Path, session_id: &str) -> Result<()>
     let session_dir = get_session_dir_in(base_dir, session_id);
 
     if !session_dir.exists() {
-        bail!("Session '{}' not found", session_id);
+        bail!("Session '{session_id}' not found");
     }
 
     fs::remove_dir_all(&session_dir).with_context(|| {

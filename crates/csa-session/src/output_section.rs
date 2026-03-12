@@ -118,8 +118,7 @@ impl ReturnPacket {
     pub fn validate(&self) -> Result<()> {
         if self.summary.chars().count() > RETURN_PACKET_MAX_SUMMARY_CHARS {
             return Err(anyhow!(
-                "return packet summary exceeds {} chars",
-                RETURN_PACKET_MAX_SUMMARY_CHARS
+                "return packet summary exceeds {RETURN_PACKET_MAX_SUMMARY_CHARS} chars"
             ));
         }
 

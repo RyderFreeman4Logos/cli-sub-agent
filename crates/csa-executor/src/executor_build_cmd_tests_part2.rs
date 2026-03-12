@@ -126,7 +126,7 @@ fn test_override_model_replaces_existing() {
         thinking_budget: None,
     };
     exec.override_model("gemini-3.1-pro-preview".to_string());
-    let debug = format!("{:?}", exec);
+    let debug = format!("{exec:?}");
     assert!(
         debug.contains("gemini-3.1-pro-preview"),
         "override_model should replace existing model: {debug}"

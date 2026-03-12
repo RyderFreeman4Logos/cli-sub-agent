@@ -58,7 +58,7 @@ pub fn decide_failover(
         Some(t) => t,
         None => {
             return FailoverAction::ReportError {
-                reason: format!("Tier '{}' not found in config", tier_name),
+                reason: format!("Tier '{tier_name}' not found in config"),
                 original_error: original_error.to_string(),
             };
         }
@@ -88,7 +88,7 @@ pub fn decide_failover(
 
     if alternatives.is_empty() {
         return FailoverAction::ReportError {
-            reason: format!("All tools in tier '{}' exhausted", tier_name),
+            reason: format!("All tools in tier '{tier_name}' exhausted"),
             original_error: original_error.to_string(),
         };
     }
@@ -304,7 +304,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -324,7 +324,7 @@ mod tests {
             FailoverAction::ReportError { reason, .. } => {
                 assert!(reason.contains("exhausted"));
             }
-            other => panic!("Expected ReportError, got {:?}", other),
+            other => panic!("Expected ReportError, got {other:?}"),
         }
     }
 
@@ -351,7 +351,7 @@ mod tests {
                 assert_eq!(new_tool, "codex");
                 assert_eq!(session_id, session.meta_session_id);
             }
-            other => panic!("Expected RetryInSession, got {:?}", other),
+            other => panic!("Expected RetryInSession, got {other:?}"),
         }
     }
 
@@ -392,7 +392,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -412,7 +412,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "gemini-cli");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -434,7 +434,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -461,7 +461,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "claude-code");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -484,10 +484,10 @@ mod tests {
         );
         match action {
             FailoverAction::ReportError { reason, .. } => {
-                assert!(reason.contains("tier99"), "reason: {}", reason);
-                assert!(reason.contains("not found"), "reason: {}", reason);
+                assert!(reason.contains("tier99"), "reason: {reason}");
+                assert!(reason.contains("not found"), "reason: {reason}");
             }
-            other => panic!("Expected ReportError, got {:?}", other),
+            other => panic!("Expected ReportError, got {other:?}"),
         }
     }
 
@@ -516,7 +516,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -545,7 +545,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -566,7 +566,7 @@ mod tests {
             FailoverAction::RetrySiblingSession { new_tool, .. } => {
                 assert_eq!(new_tool, "codex");
             }
-            other => panic!("Expected RetrySiblingSession, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession, got {other:?}"),
         }
     }
 
@@ -662,13 +662,9 @@ mod tests {
                 new_model_spec,
             } => {
                 assert_eq!(new_tool, "claude-code");
-                assert!(
-                    new_model_spec.contains("claude"),
-                    "spec: {}",
-                    new_model_spec
-                );
+                assert!(new_model_spec.contains("claude"), "spec: {new_model_spec}");
             }
-            other => panic!("Expected RetrySiblingSession to claude, got {:?}", other),
+            other => panic!("Expected RetrySiblingSession to claude, got {other:?}"),
         }
     }
 
@@ -698,12 +694,9 @@ mod tests {
                 new_model_spec,
             } => {
                 assert_eq!(new_tool, "claude-code");
-                assert!(new_model_spec.contains("haiku"), "spec: {}", new_model_spec);
+                assert!(new_model_spec.contains("haiku"), "spec: {new_model_spec}");
             }
-            other => panic!(
-                "Expected RetrySiblingSession to claude-haiku, got {:?}",
-                other
-            ),
+            other => panic!("Expected RetrySiblingSession to claude-haiku, got {other:?}"),
         }
     }
 
@@ -743,10 +736,7 @@ mod tests {
                 // Also acceptable if slot happens to be free
             }
             FailoverAction::ReportError { reason, .. } => {
-                panic!(
-                    "Should not report error when alternatives exist: {}",
-                    reason
-                );
+                panic!("Should not report error when alternatives exist: {reason}");
             }
         }
     }

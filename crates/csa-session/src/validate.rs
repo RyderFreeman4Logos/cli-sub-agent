@@ -20,7 +20,7 @@ pub fn validate_session_id(id: &str) -> Result<()> {
 
     // Try to parse as ULID
     ulid::Ulid::from_string(id)
-        .with_context(|| format!("Invalid session ID '{}': not a valid ULID", id))?;
+        .with_context(|| format!("Invalid session ID '{id}': not a valid ULID"))?;
 
     Ok(())
 }
@@ -31,7 +31,7 @@ pub fn validate_session_id(id: &str) -> Result<()> {
 /// Returns an error if 0 or more than 1 match is found.
 pub fn resolve_session_prefix(sessions_dir: &Path, prefix: &str) -> Result<String> {
     if !sessions_dir.exists() {
-        bail!("No session matching prefix '{}'", prefix);
+        bail!("No session matching prefix '{prefix}'");
     }
 
     let entries = std::fs::read_dir(sessions_dir).with_context(|| {
@@ -58,7 +58,7 @@ pub fn resolve_session_prefix(sessions_dir: &Path, prefix: &str) -> Result<Strin
     }
 
     match matches.len() {
-        0 => bail!("No session matching prefix '{}'", prefix),
+        0 => bail!("No session matching prefix '{prefix}'"),
         1 => Ok(matches.into_iter().next().unwrap()),
         _ => bail!(
             "Ambiguous session prefix '{}': matches multiple sessions: {}",

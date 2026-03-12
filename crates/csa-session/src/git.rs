@@ -73,7 +73,7 @@ pub fn commit_session(sessions_dir: &Path, session_id: &str, message: &str) -> R
     ensure_git_init(sessions_dir)?;
 
     // Stage the session's files (use `--` to prevent option injection)
-    let session_path = format!("{}/", session_id);
+    let session_path = format!("{session_id}/");
     let output = Command::new("git")
         .args(["add", "--", &session_path])
         .current_dir(sessions_dir)
@@ -157,7 +157,7 @@ pub fn history(sessions_dir: &Path, session_id: &str) -> Result<String> {
         return Ok(String::new()); // No commits yet
     }
 
-    let session_path = format!("{}/", session_id);
+    let session_path = format!("{session_id}/");
 
     let output = Command::new("git")
         .args(["log", "--oneline", "--follow", "--", &session_path])
