@@ -3,6 +3,20 @@ use std::path::Path;
 use super::StreamMode;
 use std::time::{Duration, Instant};
 
+/// Maximum bytes retained in in-memory output accumulators (stdout/stderr).
+///
+/// Matches the ACP `StreamingMetadata::TAIL_BUFFER_MAX_BYTES` so that both
+/// the ACP and legacy capture paths have consistent memory bounds.
+pub(super) const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
+
+/// High-water mark for output accumulator trimming (2× target size).
+///
+/// The accumulator is allowed to grow to this size before being trimmed back
+/// to [`TAIL_BUFFER_MAX_BYTES`].  This amortises the O(N) cost of
+/// `String::drain` so trimming occurs once per MiB of new text rather than
+/// per chunk, avoiding O(N²) behaviour.
+pub(super) const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2; // 2 MiB
+
 pub(super) const DEFAULT_HEARTBEAT_SECS: u64 = 20;
 pub(super) const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 const WORKSPACE_BOUNDARY_PATTERN_A: &str = "path not in workspace";
@@ -20,6 +34,25 @@ pub(super) fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
         use std::io::Write;
         let _ = f.write_all(bytes);
         let _ = f.flush();
+    }
+}
+
+/// Drain the front of an output accumulator if it exceeds the high-water mark.
+///
+/// This bounds the in-memory accumulator to ~[`TAIL_BUFFER_HIGH_WATER`] bytes,
+/// preventing unbounded growth from long-running tools.  After trimming, the
+/// accumulator retains the most recent [`TAIL_BUFFER_MAX_BYTES`] of content.
+///
+/// The trim point is always on a char boundary to avoid splitting multi-byte
+/// UTF-8 characters.
+pub(super) fn drain_if_over_high_water(buf: &mut String) {
+    if buf.len() > TAIL_BUFFER_HIGH_WATER {
+        let excess = buf.len() - TAIL_BUFFER_MAX_BYTES;
+        let mut trim_at = excess;
+        while trim_at < buf.len() && !buf.is_char_boundary(trim_at) {
+            trim_at += 1;
+        }
+        buf.drain(..trim_at);
     }
 }
 

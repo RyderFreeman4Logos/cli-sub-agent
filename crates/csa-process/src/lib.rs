@@ -21,9 +21,10 @@ mod tool_liveness;
 use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
 use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr,
-    append_actionable_detail_for_opaque_payload, extract_summary, failure_summary, flush_line_buf,
-    flush_stderr_buf, maybe_emit_heartbeat, resolve_actionable_failure_detail,
-    resolve_heartbeat_interval, sanitize_opaque_object_payloads, sanitize_spool_tail, spool_chunk,
+    append_actionable_detail_for_opaque_payload, drain_if_over_high_water, extract_summary,
+    failure_summary, flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat,
+    resolve_actionable_failure_detail, resolve_heartbeat_interval, sanitize_opaque_object_payloads,
+    sanitize_spool_tail, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
@@ -496,6 +497,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 &mut output,
                                 stream_mode,
                             );
+                            drain_if_over_high_water(&mut output);
                             if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
                                 workspace_boundary_timed_out = true;
                                 warn!(
@@ -536,6 +538,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 &mut stderr_output,
                                 stream_mode,
                             );
+                            drain_if_over_high_water(&mut stderr_output);
                             if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
                                 workspace_boundary_timed_out = true;
                                 warn!(
@@ -609,6 +612,7 @@ pub async fn wait_and_capture_with_idle_timeout(
                                 &mut output,
                                 stream_mode,
                             );
+                            drain_if_over_high_water(&mut output);
                             if workspace_boundary_error_hits >= WORKSPACE_BOUNDARY_ERROR_THRESHOLD {
                                 workspace_boundary_timed_out = true;
                                 warn!(

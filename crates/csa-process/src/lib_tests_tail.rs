@@ -373,3 +373,90 @@ fn test_is_working_false_for_nonexistent_pid() {
         "is_working should return false for non-existent PID"
     );
 }
+
+// --- drain_if_over_high_water tests ---
+
+#[test]
+fn test_drain_if_over_high_water_no_op_below_threshold() {
+    let mut buf = "x".repeat(output_helpers::TAIL_BUFFER_HIGH_WATER - 1);
+    let original_len = buf.len();
+    output_helpers::drain_if_over_high_water(&mut buf);
+    assert_eq!(buf.len(), original_len, "should not drain below high-water");
+}
+
+#[test]
+fn test_drain_if_over_high_water_drains_at_threshold() {
+    let mut buf = "x".repeat(output_helpers::TAIL_BUFFER_HIGH_WATER + 1);
+    output_helpers::drain_if_over_high_water(&mut buf);
+    assert!(
+        buf.len() <= output_helpers::TAIL_BUFFER_MAX_BYTES + 1,
+        "should drain to ~TAIL_BUFFER_MAX_BYTES, got {}",
+        buf.len()
+    );
+}
+
+#[test]
+fn test_drain_preserves_tail_content() {
+    // Build a large buffer with a known tail marker
+    let padding = "a".repeat(output_helpers::TAIL_BUFFER_HIGH_WATER);
+    let marker = "TAIL_MARKER_UNIQUE";
+    let mut buf = format!("{padding}{marker}");
+    output_helpers::drain_if_over_high_water(&mut buf);
+    assert!(
+        buf.ends_with(marker),
+        "tail marker should be preserved after drain"
+    );
+}
+
+#[test]
+fn test_drain_handles_multibyte_utf8() {
+    // Fill with multi-byte chars (emoji = 4 bytes each)
+    let emoji = "🔥";
+    let count = (output_helpers::TAIL_BUFFER_HIGH_WATER / emoji.len()) + 10;
+    let mut buf: String = emoji.repeat(count);
+    assert!(buf.len() > output_helpers::TAIL_BUFFER_HIGH_WATER);
+    output_helpers::drain_if_over_high_water(&mut buf);
+    // Must be valid UTF-8 (no panic) and bounded
+    assert!(buf.len() <= output_helpers::TAIL_BUFFER_MAX_BYTES + emoji.len());
+    // Every char should still be a valid emoji
+    assert!(buf.chars().all(|c| c == '🔥'));
+}
+
+#[test]
+fn test_output_string_bounded_at_high_water() {
+    // Simulate accumulating 10 MiB of output line by line
+    let mut output = String::new();
+    let line = format!("{}\n", "x".repeat(999)); // ~1KB per line
+    let target_bytes = 10 * 1024 * 1024; // 10 MiB
+    let mut written = 0usize;
+    while written < target_bytes {
+        output.push_str(&line);
+        written += line.len();
+        output_helpers::drain_if_over_high_water(&mut output);
+    }
+    assert!(
+        output.len() <= output_helpers::TAIL_BUFFER_HIGH_WATER + line.len(),
+        "output should be bounded: got {} bytes, limit ~{} bytes",
+        output.len(),
+        output_helpers::TAIL_BUFFER_HIGH_WATER + line.len()
+    );
+}
+
+#[test]
+fn test_stderr_string_bounded_at_high_water() {
+    // Same test for stderr path
+    let mut stderr_output = String::new();
+    let line = format!("warning: {}\n", "w".repeat(200));
+    let target_bytes = 10 * 1024 * 1024;
+    let mut written = 0usize;
+    while written < target_bytes {
+        stderr_output.push_str(&line);
+        written += line.len();
+        output_helpers::drain_if_over_high_water(&mut stderr_output);
+    }
+    assert!(
+        stderr_output.len() <= output_helpers::TAIL_BUFFER_HIGH_WATER + line.len(),
+        "stderr should be bounded: got {} bytes",
+        stderr_output.len()
+    );
+}
