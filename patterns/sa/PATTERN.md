@@ -186,27 +186,14 @@ number of tasks completed. If HAS_ISSUES, iterate.
 
 ## IF ${REVIEW_IS_CLEAN}
 
-## Step 12: Auto PR
+## Step 12: Auto PR Transaction
 
 ## INCLUDE commit
 
 Evaluate whether to push and create PR (if milestone complete).
-
-## Step 13: Invoke pr-codex-bot (MANDATORY)
-
-> **Layer**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
-> Layer 1 executors MUST invoke /pr-codex-bot after PR creation.
-> This is NOT optional — polling for bot review is part of the PR lifecycle.
-
-Tool: skill
-OnFail: abort
-
-After PR creation, invoke the pr-codex-bot skill to trigger cloud review,
-poll for response (with 10 min timeout), and handle the full review loop.
-This ensures the bot review is never forgotten or skipped.
-
-```
-/pr-codex-bot
-```
+The nested `commit` pattern now owns the full PR transaction:
+push → create/reuse PR → `scripts/hooks/post-pr-create.sh` → `pr-codex-bot`.
+Layer 1 executors MUST rely on that transaction instead of dispatching a
+separate follow-up skill step.
 
 ## ENDIF

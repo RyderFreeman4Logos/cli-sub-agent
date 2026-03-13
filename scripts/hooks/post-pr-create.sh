@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/hooks/post-pr-create.sh [--base <branch>]
+
+Confirms that the current feature branch has an open PR, then runs the
+pr-codex-bot workflow as a synchronous post-create transaction.
+EOF
+}
+
+BASE_BRANCH="main"
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --base)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "ERROR: Missing value for --base." >&2
+        exit 1
+      fi
+      BASE_BRANCH="$1"
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "ERROR: Unknown argument: $1" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+if ! command -v gh >/dev/null 2>&1; then
+  echo "ERROR: gh is required for post-pr-create transaction." >&2
+  exit 1
+fi
+
+if ! command -v csa >/dev/null 2>&1; then
+  echo "ERROR: csa is required for post-pr-create transaction." >&2
+  exit 1
+fi
+
+CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || true)"
+if [ -z "${CURRENT_BRANCH}" ] || [ "${CURRENT_BRANCH}" = "HEAD" ]; then
+  echo "ERROR: Cannot determine current branch." >&2
+  exit 1
+fi
+
+DEFAULT_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')"
+if [ -z "${DEFAULT_BRANCH}" ]; then
+  DEFAULT_BRANCH="main"
+fi
+
+if [ "${CURRENT_BRANCH}" = "${DEFAULT_BRANCH}" ] || [ "${CURRENT_BRANCH}" = "dev" ]; then
+  echo "ERROR: post-pr-create must run from a feature branch, not ${CURRENT_BRANCH}." >&2
+  exit 1
+fi
+
+if [ "${BASE_BRANCH}" != "main" ]; then
+  echo "ERROR: post-pr-create currently supports base branch 'main' only." >&2
+  exit 1
+fi
+
+resolve_current_pr() {
+  local pr_view pr_list pr_count
+
+  if pr_view="$(gh pr view --json number,url,headRefName,baseRefName,state 2>/dev/null)"; then
+    if [ "$(printf '%s' "${pr_view}" | jq -r '.headRefName')" = "${CURRENT_BRANCH}" ] \
+      && [ "$(printf '%s' "${pr_view}" | jq -r '.baseRefName')" = "${BASE_BRANCH}" ] \
+      && [ "$(printf '%s' "${pr_view}" | jq -r '.state')" = "OPEN" ]; then
+      printf '%s\n' "${pr_view}"
+      return 0
+    fi
+  fi
+
+  pr_list="$(
+    gh pr list --state open --base "${BASE_BRANCH}" --head "${CURRENT_BRANCH}" \
+      --json number,url,headRefName,baseRefName,state 2>/dev/null || true
+  )"
+  pr_count="$(printf '%s' "${pr_list}" | jq 'length')"
+
+  if [ "${pr_count}" = "1" ]; then
+    printf '%s\n' "${pr_list}" | jq '.[0]'
+    return 0
+  fi
+
+  if [ "${pr_count}" = "0" ]; then
+    return 1
+  fi
+
+  echo "ERROR: Multiple open PRs found for branch ${CURRENT_BRANCH} targeting ${BASE_BRANCH}." >&2
+  return 2
+}
+
+PR_JSON=""
+for attempt in 1 2 3 4 5; do
+  set +e
+  PR_JSON="$(resolve_current_pr)"
+  rc=$?
+  set -e
+
+  if [ "${rc}" -eq 0 ]; then
+    break
+  fi
+
+  if [ "${rc}" -eq 2 ]; then
+    exit 1
+  fi
+
+  if [ "${attempt}" -lt 5 ]; then
+    sleep 2
+  fi
+done
+
+if [ -z "${PR_JSON}" ]; then
+  echo "ERROR: No open PR found for branch ${CURRENT_BRANCH} targeting ${BASE_BRANCH}." >&2
+  exit 1
+fi
+
+PR_NUMBER="$(printf '%s' "${PR_JSON}" | jq -r '.number')"
+PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.url')"
+
+if ! printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
+  echo "ERROR: Failed to resolve a numeric PR number for ${CURRENT_BRANCH}." >&2
+  exit 1
+fi
+
+echo "Confirmed PR #${PR_NUMBER} (${PR_URL}) for branch ${CURRENT_BRANCH}."
+echo "Running pr-codex-bot transaction..."
+csa plan run patterns/pr-codex-bot/workflow.toml

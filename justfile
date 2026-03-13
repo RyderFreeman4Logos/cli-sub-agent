@@ -198,26 +198,32 @@ review:
     @echo ""
     @echo "Review the above before committing."
 
-# Reviewed push: run csa review --range base...HEAD, then push and create PR.
-# Enforces the mandatory pre-push review (see GitHub issue #276).
+# Reviewed push: run csa review --range base...HEAD, then push, create/reuse PR,
+# and synchronously trigger the post-create review transaction.
 push-reviewed base="main":
     #!/usr/bin/env bash
     set -euo pipefail
+    if [ "{{base}}" != "main" ]; then
+        echo "ERROR: push-reviewed currently supports base=main only."
+        exit 1
+    fi
     echo "=== Pre-push review: csa review --sa-mode false --range {{base}}...HEAD ==="
     csa review --sa-mode false --range "{{base}}...HEAD"
     echo "=== Review passed. Pushing... ==="
     git push -u origin HEAD
-    echo "=== Creating PR targeting {{base}}... ==="
-    if ! gh pr create --base "{{base}}" 2>&1; then
-        # Only tolerate "already exists" — fail on other errors.
-        if gh pr view --json state -q '.state' 2>/dev/null | grep -qi 'open'; then
-            echo "PR already exists. Continuing."
-        else
-            echo "ERROR: gh pr create failed and no open PR found."
+    echo "=== Creating or reusing PR targeting {{base}}... ==="
+    set +e
+    CREATE_OUTPUT="$(gh pr create --base "{{base}}" 2>&1)"
+    CREATE_RC=$?
+    set -e
+    if [ "${CREATE_RC}" -ne 0 ]; then
+        if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+            echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}"
             exit 1
         fi
+        echo "PR already exists. Continuing with post-create helper."
     fi
-    echo "=== Done. Run /pr-codex-bot to complete the review loop. ==="
+    scripts/hooks/post-pr-create.sh --base "{{base}}"
 
 # Push to all submodules and the main repo (useful for monorepos).
 git-push-all:

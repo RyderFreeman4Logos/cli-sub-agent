@@ -15,13 +15,16 @@ name = "COMMIT_MSG"
 name = "COMMIT_SUBJECT"
 
 [[workflow.variables]]
+name = "CREATE_OUTPUT"
+
+[[workflow.variables]]
+name = "CREATE_RC"
+
+[[workflow.variables]]
 name = "CURRENT_BRANCH"
 
 [[workflow.variables]]
 name = "DEFAULT_BRANCH"
-
-[[workflow.variables]]
-name = "EXISTING_PR"
 
 [[workflow.variables]]
 name = "FAST_PATH"
@@ -45,9 +48,6 @@ name = "MKTD_TODO_TIMESTAMP"
 name = "MKTD_TOOL_EFFECTIVE"
 
 [[workflow.variables]]
-name = "ORIGIN_URL"
-
-[[workflow.variables]]
 name = "REMOTE_SHA"
 
 [[workflow.variables]]
@@ -58,9 +58,6 @@ name = "REVIEW_OUTPUT_FILE"
 
 [[workflow.variables]]
 name = "REVIEW_STATUS"
-
-[[workflow.variables]]
-name = "SOURCE_OWNER"
 
 [[workflow.variables]]
 name = "TODO_PATH"
@@ -112,7 +109,7 @@ skip mktd/mktsk/debate but keep L1/L2 quality checks.
 ```bash
 set -euo pipefail
 CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
-TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oP '\d+ insertion' | grep -oP '\d+' || echo 0)"
+TOTAL_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
 if [ "${CODE_FILES}" -eq 0 ] && [ "${TOTAL_INSERTIONS:-0}" -lt 100 ]; then
   echo "FAST_PATH: docs/config-only changes detected. Skipping mktd/mktsk."
   echo "CSA_VAR:FAST_PATH=true"
@@ -315,45 +312,33 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 12
-title = "Create Pull Request"
+title = "Create Pull Request Transaction"
 tool = "bash"
 prompt = '''
-Create or reuse PR. Derives source owner from origin URL.
+Create or reuse PR, then synchronously run the post-create helper.
+This makes PR creation + pr-codex-bot a single shell-enforced transaction.
 
 ```bash
 set -euo pipefail
 BRANCH="$(git branch --show-current)"
-ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-SOURCE_OWNER="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+)/.*#\2#p')"
-EXISTING_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-if [ -n "${EXISTING_PR}" ] && [ "${EXISTING_PR}" != "null" ]; then
-  echo "INFO: Reusing existing PR #${EXISTING_PR}."
-  echo "CSA_VAR:PR_NUMBER=${EXISTING_PR}"
-  exit 0
-fi
 COMMIT_SUBJECT="$(git log -1 --format=%s)"
-gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline."
-NEW_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-echo "CSA_VAR:PR_NUMBER=${NEW_PR:-unknown}"
+set +e
+CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
+CREATE_RC=$?
+set -e
+if [ "${CREATE_RC}" -ne 0 ]; then
+  if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "INFO: PR already exists for ${BRANCH}; continuing with post-create helper."
+fi
+scripts/hooks/post-pr-create.sh --base main
 ```'''
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 13
-title = "Delegate to pr-codex-bot"
-tool = "csa"
-prompt = ""
-on_fail = "abort"
-
-[[workflow.steps]]
-id = 14
-title = "Include pr-codex-bot"
-tool = "weave"
-prompt = "pr-codex-bot"
-on_fail = "abort"
-
-[[workflow.steps]]
-id = 15
 title = "Post-Merge Local Sync"
 tool = "bash"
 prompt = """

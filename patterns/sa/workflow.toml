@@ -240,7 +240,7 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 12
-title = "Auto PR"
+title = "Auto PR Transaction"
 prompt = ""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
@@ -250,26 +250,5 @@ id = 13
 title = "Include commit"
 tool = "weave"
 prompt = "commit"
-on_fail = "abort"
-condition = "${REVIEW_IS_CLEAN}"
-
-[[workflow.steps]]
-id = 14
-title = "Invoke pr-codex-bot (MANDATORY)"
-prompt = """
-> **Layer**: 0 (Orchestrator) -- dispatches /pr-codex-bot skill.
-> Layer 1 executors MUST invoke /pr-codex-bot after PR creation.
-> This is NOT optional — polling for bot review is part of the PR lifecycle.
-
-Tool: skill
-OnFail: abort
-
-After PR creation, invoke the pr-codex-bot skill to trigger cloud review,
-poll for response (with 10 min timeout), and handle the full review loop.
-This ensures the bot review is never forgotten or skipped.
-
-```
-/pr-codex-bot
-```"""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
