@@ -241,34 +241,31 @@ git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 ```
 
-## Step 12: Create Pull Request
+## Step 12: Create Pull Request Transaction
 
 Tool: bash
 OnFail: abort
 
-Create or reuse PR. Derives source owner from origin URL.
+Create or reuse PR, then synchronously run the post-create helper.
+This makes PR creation + pr-codex-bot a single shell-enforced transaction.
 
 ```bash
 set -euo pipefail
 BRANCH="$(git branch --show-current)"
-ORIGIN_URL="$(git remote get-url origin 2>/dev/null || true)"
-SOURCE_OWNER="$(printf '%s' "${ORIGIN_URL}" | sed -nE 's#(git@github\.com:|https://github\.com/)([^/]+)/.*#\2#p')"
-EXISTING_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-if [ -n "${EXISTING_PR}" ] && [ "${EXISTING_PR}" != "null" ]; then
-  echo "INFO: Reusing existing PR #${EXISTING_PR}."
-  echo "CSA_VAR:PR_NUMBER=${EXISTING_PR}"
-  exit 0
-fi
 COMMIT_SUBJECT="$(git log -1 --format=%s)"
-gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline."
-NEW_PR="$(gh pr list --state open --head "${SOURCE_OWNER}:${BRANCH}" --json number --jq '.[0].number' 2>/dev/null || true)"
-echo "CSA_VAR:PR_NUMBER=${NEW_PR:-unknown}"
+set +e
+CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
+CREATE_RC=$?
+set -e
+if [ "${CREATE_RC}" -ne 0 ]; then
+  if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "INFO: PR already exists for ${BRANCH}; continuing with post-create helper."
+fi
+scripts/hooks/post-pr-create.sh --base main
 ```
-
-## INCLUDE pr-codex-bot
-
-Handles cloud review loop, false-positive arbitration, fix cycles, and merge.
-This is an atomic sub-workflow — it runs to completion or aborts.
 
 ## Step 13: Post-Merge Local Sync
 

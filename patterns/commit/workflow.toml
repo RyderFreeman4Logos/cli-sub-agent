@@ -30,6 +30,12 @@ name = "COMMIT_SUBJECT"
 name = "COMMIT_SUBJECT_LOCAL"
 
 [[workflow.variables]]
+name = "CREATE_OUTPUT"
+
+[[workflow.variables]]
+name = "CREATE_RC"
+
+[[workflow.variables]]
 name = "CRITERIA_SUMMARY"
 
 [[workflow.variables]]
@@ -401,42 +407,38 @@ condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
 id = 22
-title = "Auto PR"
+title = "Auto PR Transaction"
 tool = "bash"
-prompt = """
-Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 18-19 are ATOMIC — do not stop after PR creation.
+prompt = '''
+Push, create or reuse the PR, then synchronously run the post-create helper.
+This makes PR creation + pr-codex-bot a single shell-enforced transaction.
 
 ```bash
+set -euo pipefail
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
   echo "ERROR: PR title is empty." >&2
   exit 1
 fi
 
 git push -u origin "${BRANCH}"
-gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}"
-```"""
+set +e
+CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}" 2>&1)"
+CREATE_RC=$?
+set -e
+if [ "${CREATE_RC}" -ne 0 ]; then
+  if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "INFO: PR already exists for ${BRANCH}; continuing with post-create helper."
+fi
+scripts/hooks/post-pr-create.sh --base main
+```'''
 on_fail = "abort"
 condition = "${IS_MILESTONE}"
 
 [[workflow.steps]]
 id = 23
-title = "Invoke PR Codex Bot"
-tool = "csa"
-prompt = "run --skill pr-codex-bot"
-on_fail = "abort"
-condition = "${IS_MILESTONE}"
-
-[[workflow.steps]]
-id = 24
-title = "Include pr-codex-bot"
-tool = "weave"
-prompt = "pr-codex-bot"
-on_fail = "abort"
-condition = "${IS_MILESTONE}"
-
-[[workflow.steps]]
-id = 25
 title = "Fix Deferred Issues"
 prompt = """
 Fix deferred issues by priority (Critical > High > Medium).

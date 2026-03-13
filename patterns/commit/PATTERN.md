@@ -333,41 +333,41 @@ This catches cross-commit issues that per-commit reviews might miss.
 csa review --range main...HEAD
 ```
 
-## Step 19: Auto PR
+## Step 19: Auto PR Transaction
 
 Tool: bash
 OnFail: abort
 
-Push and create PR when feature complete, bug fixed, or refactor done.
-Steps 18-19 are ATOMIC — do not stop after PR creation.
+Push, create or reuse the PR, then synchronously run the post-create helper.
+This makes PR creation + pr-codex-bot a single shell-enforced transaction.
 
 ```bash
+set -euo pipefail
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
   echo "ERROR: PR title is empty." >&2
   exit 1
 fi
 
 git push -u origin "${BRANCH}"
-gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}"
+set +e
+CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}" 2>&1)"
+CREATE_RC=$?
+set -e
+if [ "${CREATE_RC}" -ne 0 ]; then
+  if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "INFO: PR already exists for ${BRANCH}; continuing with post-create helper."
+fi
+scripts/hooks/post-pr-create.sh --base main
 ```
-
-## Step 20: Invoke PR Codex Bot
-
-Tool: csa
-OnFail: abort
-
-run --skill pr-codex-bot
-
-## INCLUDE pr-codex-bot
-
-IMMEDIATELY invoke pr-codex-bot after PR creation.
-Handles local review, cloud bot trigger, false-positive arbitration, merge.
 
 ## ENDIF
 
 ## IF ${HAS_DEFERRED_ISSUES}
 
-## Step 21: Fix Deferred Issues
+## Step 20: Fix Deferred Issues
 
 Fix deferred issues by priority (Critical > High > Medium).
 Each fix goes through full commit workflow (Steps 1-17).
