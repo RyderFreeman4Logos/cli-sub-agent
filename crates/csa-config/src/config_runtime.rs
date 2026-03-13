@@ -4,10 +4,15 @@ use crate::config::{EnforcementMode, ProjectConfig, ToolResourceProfile};
 ///
 /// Lightweight: native binaries with predictable memory (Rust, Go).
 /// Heavyweight: Node.js runtimes with dynamic plugin/MCP loading.
+///
+/// Note: codex uses codex-acp (Node.js) as its backend process, which can
+/// consume 5+ GB under load. It must be classified as Heavyweight to ensure
+/// cgroup memory limits are applied by default. See: OOM incident 2026-03-13
+/// where codex+codex-acp reached 21 GB with EnforcementMode::Off.
 fn default_profile(tool: &str) -> ToolResourceProfile {
     match tool {
-        "codex" | "opencode" => ToolResourceProfile::Lightweight,
-        "claude-code" | "gemini-cli" => ToolResourceProfile::Heavyweight,
+        "opencode" => ToolResourceProfile::Lightweight,
+        "claude-code" | "codex" | "gemini-cli" => ToolResourceProfile::Heavyweight,
         _ => ToolResourceProfile::Heavyweight,
     }
 }
@@ -93,6 +98,10 @@ impl ProjectConfig {
     /// because it has `memory_max_mb` overrides should still inherit the enforcement
     /// mode of its inherent profile (e.g. Heavyweight → BestEffort) rather than
     /// falling back to `Off`.
+    ///
+    /// Safety net: if the resolved mode is `Off` (from profile default, not user
+    /// explicit) but the user set `memory_max_mb`, auto-promote to `BestEffort`
+    /// to prevent silent limit bypass. See: serde(default) trap (rule rust/016).
     pub fn tool_enforcement_mode(&self, tool: &str) -> EnforcementMode {
         // 1. Explicit per-tool override
         if let Some(mode) = self.tools.get(tool).and_then(|t| t.enforcement_mode) {
@@ -103,7 +112,27 @@ impl ProjectConfig {
             return mode;
         }
         // 3. Inherent profile default (runtime-based, ignoring Custom overrides)
-        profile_defaults(default_profile(tool)).enforcement
+        let profile_mode = profile_defaults(default_profile(tool)).enforcement;
+
+        // 4. Safety net: auto-promote Off → BestEffort when user set memory limits
+        //    but didn't explicitly set enforcement_mode. Prevents silent limit bypass.
+        if matches!(profile_mode, EnforcementMode::Off) {
+            let has_user_memory_limit = self
+                .tools
+                .get(tool)
+                .is_some_and(|t| t.memory_max_mb.is_some() || t.memory_swap_max_mb.is_some());
+            if has_user_memory_limit {
+                tracing::warn!(
+                    tool,
+                    "Auto-promoting enforcement_mode Off → BestEffort: \
+                     memory limits are set but enforcement_mode was not explicitly configured. \
+                     Set enforcement_mode explicitly to suppress this warning."
+                );
+                return EnforcementMode::BestEffort;
+            }
+        }
+
+        profile_mode
     }
 
     /// Resolve sandbox enforcement mode (defaults to `Off`).

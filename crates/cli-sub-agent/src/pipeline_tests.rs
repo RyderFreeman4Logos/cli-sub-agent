@@ -441,9 +441,9 @@ fn build_merged_env_injects_node_options_when_heap_limit_configured() {
 #[test]
 fn build_merged_env_does_not_inject_node_options_without_heap_limit() {
     let cfg = test_config_with_node_heap_limit(None);
-    // Use a lightweight tool (codex) whose profile does not default node_heap_limit_mb.
-    // Heavyweight tools (claude-code) now default to Some(2048) even without explicit config.
-    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), "codex");
+    // Use a lightweight tool (opencode) whose profile does not default node_heap_limit_mb.
+    // Heavyweight tools (claude-code, codex) now default to Some(2048) even without explicit config.
+    let merged = crate::pipeline_env::build_merged_env(None, Some(&cfg), "opencode");
 
     assert!(
         !merged.contains_key("NODE_OPTIONS"),
