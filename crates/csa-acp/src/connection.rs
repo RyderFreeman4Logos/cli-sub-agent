@@ -347,9 +347,18 @@ impl AcpConnection {
             &mut output_spool,
             &mut metadata,
         );
-        // Flush buffered spool data to disk before returning.
-        if let Some(ref mut writer) = output_spool {
-            let _ = writer.flush();
+        // Finalize spool: flush + run sanitization (rotate cleanup if keep_rotated=false).
+        if let Some(writer) = output_spool.take() {
+            match writer.finalize() {
+                Ok(plan) => {
+                    if let Err(e) = csa_process::sanitize_spool_plan(plan, None) {
+                        tracing::warn!(error = %e, "Failed to sanitize ACP output spool");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to finalize ACP output spool");
+                }
+            }
         }
         // Take all accumulated events for downstream consumers (transcript
         // writing, command extraction).  Events were NOT drained during

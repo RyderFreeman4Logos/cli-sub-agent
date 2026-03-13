@@ -281,10 +281,12 @@ fn read_session_summary(session_dir: &Path) -> Result<String> {
         let file = File::open(&output_path)
             .with_context(|| format!("failed to read output log: {}", output_path.display()))?;
         let mut reader = BufReader::new(file).take(OUTPUT_LOG_SUMMARY_READ_BYTES);
-        let mut content = String::new();
+        let mut raw_bytes = Vec::new();
         reader
-            .read_to_string(&mut content)
+            .read_to_end(&mut raw_bytes)
             .with_context(|| format!("failed to read output log: {}", output_path.display()))?;
+        // Lossy decode handles boundary landing mid-UTF-8 char.
+        let content = String::from_utf8_lossy(&raw_bytes);
         let truncated: String = content.chars().take(OUTPUT_TRUNCATE_CHARS).collect();
         return Ok(truncated);
     }

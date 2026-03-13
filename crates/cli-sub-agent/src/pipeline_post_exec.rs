@@ -317,8 +317,9 @@ fn read_output_log_tail(session_dir: &Path, max_lines: usize) -> Option<String> 
         return None;
     }
 
-    let mut contents = String::new();
-    match file.read_to_string(&mut contents) {
+    // Read raw bytes first, then decode — seeking may land mid-UTF-8 char.
+    let mut raw_bytes = Vec::new();
+    match file.read_to_end(&mut raw_bytes) {
         Ok(_) => {}
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
         Err(err) => {
@@ -331,6 +332,8 @@ fn read_output_log_tail(session_dir: &Path, max_lines: usize) -> Option<String> 
         }
     };
 
+    // Lossy decode handles mid-UTF-8 seek boundary gracefully.
+    let mut contents = String::from_utf8_lossy(&raw_bytes).into_owned();
     if tail_start > 0
         && let Some(first_newline) = contents.find('\n')
     {

@@ -19,13 +19,15 @@ mod subprocess_helpers;
 mod tool_liveness;
 #[cfg(test)]
 use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
-pub use output_helpers::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator};
+pub use output_helpers::{
+    DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator, sanitize_spool_plan,
+};
 use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr,
     append_actionable_detail_for_opaque_payload, drain_if_over_high_water, extract_summary,
     failure_summary, flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat,
     resolve_actionable_failure_detail, resolve_heartbeat_interval, sanitize_opaque_object_payloads,
-    sanitize_spool_plan, spool_chunk,
+    spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};

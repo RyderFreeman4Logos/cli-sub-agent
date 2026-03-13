@@ -45,7 +45,7 @@ pub struct SpoolRotator {
 }
 
 #[derive(Debug, Clone)]
-pub(super) struct SpoolSanitizationPlan {
+pub struct SpoolSanitizationPlan {
     current_path: PathBuf,
     current_start_offset: u64,
     rotated: Option<(PathBuf, u64)>,
@@ -96,7 +96,7 @@ impl SpoolRotator {
         self.writer_mut()?.flush()
     }
 
-    pub(super) fn finalize(mut self) -> io::Result<SpoolSanitizationPlan> {
+    pub fn finalize(mut self) -> io::Result<SpoolSanitizationPlan> {
         self.flush()?;
         self.writer.take();
         Ok(self.sanitization_plan())
@@ -429,7 +429,7 @@ pub(super) fn sanitize_spool_tail(
     Ok(())
 }
 
-pub(super) fn sanitize_spool_plan(
+pub fn sanitize_spool_plan(
     plan: SpoolSanitizationPlan,
     actionable_detail: Option<&str>,
 ) -> io::Result<()> {
