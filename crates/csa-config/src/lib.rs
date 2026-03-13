@@ -6,6 +6,7 @@ mod config_merge;
 pub mod config_resources;
 mod config_runtime;
 mod config_tiers;
+pub mod config_tool;
 pub mod gc;
 pub mod global;
 pub mod init;

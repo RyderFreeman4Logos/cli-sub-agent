@@ -4,7 +4,6 @@ use std::time::{Duration, SystemTime};
 
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
-const OUTPUT_LOG_FILE: &str = "output.log";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
@@ -38,7 +37,8 @@ impl LivenessSignals {
 
 #[derive(Debug, Default, Clone, Copy)]
 struct LivenessSnapshot {
-    output_log_size: Option<u64>,
+    spool_bytes_written: Option<u64>,
+    observed_spool_bytes_written: Option<u64>,
     acp_events_size: Option<u64>,
     stderr_log_size: Option<u64>,
 }
@@ -87,6 +87,12 @@ impl ToolLiveness {
         };
         is_pid_working(pid)
     }
+}
+
+pub(crate) fn record_spool_bytes_written(session_dir: &Path, bytes_written: u64) {
+    let mut snapshot = load_snapshot(session_dir);
+    snapshot.spool_bytes_written = Some(bytes_written);
+    save_snapshot(session_dir, &snapshot);
 }
 
 /// Extract the first live PID from session lock files.
@@ -208,9 +214,14 @@ fn process_matches_lock_context(pid: u32, lock_path: &Path, session_dir: &Path) 
 }
 
 fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
-    let output_path = session_dir.join(OUTPUT_LOG_FILE);
-    let (output_growth, output_size) = detect_growth(&output_path, snapshot.output_log_size);
-    snapshot.output_log_size = output_size;
+    let output_growth = matches!(
+        (
+            snapshot.spool_bytes_written,
+            snapshot.observed_spool_bytes_written
+        ),
+        (Some(current), Some(previous)) if current != previous
+    );
+    snapshot.observed_spool_bytes_written = snapshot.spool_bytes_written;
 
     let acp_path = session_dir.join(ACP_EVENTS_LOG_FILE);
     let (acp_growth, acp_size) = detect_growth(&acp_path, snapshot.acp_events_size);
@@ -293,7 +304,8 @@ fn load_snapshot(session_dir: &Path) -> LivenessSnapshot {
         let value = parts.next().unwrap_or_default().trim();
         let parsed = value.parse::<u64>().ok();
         match key {
-            "output_log_size" => snapshot.output_log_size = parsed,
+            "spool_bytes_written" => snapshot.spool_bytes_written = parsed,
+            "observed_spool_bytes_written" => snapshot.observed_spool_bytes_written = parsed,
             "acp_events_size" => snapshot.acp_events_size = parsed,
             "stderr_log_size" => snapshot.stderr_log_size = parsed,
             _ => {}
@@ -303,9 +315,12 @@ fn load_snapshot(session_dir: &Path) -> LivenessSnapshot {
 }
 
 fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
-    let mut lines = Vec::with_capacity(3);
-    if let Some(value) = snapshot.output_log_size {
-        lines.push(format!("output_log_size={value}"));
+    let mut lines = Vec::with_capacity(4);
+    if let Some(value) = snapshot.spool_bytes_written {
+        lines.push(format!("spool_bytes_written={value}"));
+    }
+    if let Some(value) = snapshot.observed_spool_bytes_written {
+        lines.push(format!("observed_spool_bytes_written={value}"));
     }
     if let Some(value) = snapshot.acp_events_size {
         lines.push(format!("acp_events_size={value}"));
@@ -412,5 +427,33 @@ mod tests {
         .expect("write lock");
 
         assert_eq!(find_session_pid(tmp.path()), Some(own_pid));
+    }
+
+    #[test]
+    fn record_spool_bytes_written_persists_monotonic_counter() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        record_spool_bytes_written(tmp.path(), 1234);
+
+        let snapshot = fs::read_to_string(tmp.path().join(SNAPSHOT_FILE)).expect("read snapshot");
+        assert!(snapshot.contains("spool_bytes_written=1234"));
+    }
+
+    #[test]
+    fn probe_detects_spool_byte_growth_after_rotation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        fs::write(
+            tmp.path().join(SNAPSHOT_FILE),
+            "spool_bytes_written=4096\nobserved_spool_bytes_written=2048",
+        )
+        .expect("seed snapshot");
+
+        let signals = ToolLiveness::probe(tmp.path());
+        assert!(
+            signals.output_growth,
+            "monotonic spool bytes should count as progress"
+        );
+
+        let snapshot = fs::read_to_string(tmp.path().join(SNAPSHOT_FILE)).expect("read snapshot");
+        assert!(snapshot.contains("observed_spool_bytes_written=4096"));
     }
 }

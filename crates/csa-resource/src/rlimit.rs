@@ -141,11 +141,13 @@ mod tests {
         // Note: this modifies the current process's OOM score, which is
         // acceptable in test since the test runner's score is non-critical.
         use std::fs;
+        use std::fs::OpenOptions;
 
         let path = "/proc/self/oom_score_adj";
         let before = fs::read_to_string(path)
             .ok()
             .and_then(|s| s.trim().parse::<i32>().ok());
+        let writable = OpenOptions::new().write(true).open(path).is_ok();
 
         let result = apply_oom_score_adj();
         assert!(result.is_ok(), "apply_oom_score_adj should succeed");
@@ -154,8 +156,8 @@ mod tests {
             .ok()
             .and_then(|s| s.trim().parse::<i32>().ok());
 
-        // If we could read the file, verify the value was set.
-        if let (Some(_), Some(after_val)) = (before, after) {
+        // Only assert the mutation when procfs allows writing in this environment.
+        if writable && let (Some(_), Some(after_val)) = (before, after) {
             assert_eq!(after_val, 500, "OOM score adj should be set to 500");
         }
     }

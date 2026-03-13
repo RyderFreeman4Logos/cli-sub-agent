@@ -163,6 +163,7 @@ async fn test_wait_and_capture_with_idle_timeout_kills_silent_process() {
         Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");
@@ -186,6 +187,7 @@ async fn test_wait_and_capture_with_idle_timeout_without_session_dir_does_not_wa
         Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");
@@ -211,6 +213,7 @@ async fn test_wait_and_capture_with_idle_timeout_allows_periodic_output() {
         Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");
@@ -240,6 +243,7 @@ sleep 30"#,
         Duration::from_secs(30),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");
@@ -280,6 +284,7 @@ async fn test_wait_and_capture_single_workspace_boundary_error_does_not_fail_fas
         Duration::from_secs(10),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");
@@ -309,6 +314,7 @@ async fn test_idle_timeout_detects_partial_output_without_newlines() {
         Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");
@@ -370,6 +376,7 @@ async fn test_idle_timeout_enters_liveness_mode_before_kill() {
         Duration::from_secs(1),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         Some(&tmp.path().join("output.log")),
+        SpawnOptions::default(),
     )
     .await
     .expect("wait");
@@ -397,8 +404,11 @@ fn test_liveness_true_resets_death_timer() {
     )
     .expect("write lock");
     std::fs::write(tmp.path().join("output.log"), "progress").expect("write output");
-    std::fs::write(tmp.path().join(".liveness.snapshot"), "output_log_size=0")
-        .expect("seed snapshot");
+    std::fs::write(
+        tmp.path().join(".liveness.snapshot"),
+        "spool_bytes_written=8\nobserved_spool_bytes_written=0",
+    )
+    .expect("seed snapshot");
 
     let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
     let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
@@ -641,6 +651,7 @@ async fn test_output_and_stderr_spools_sanitize_only_appended_segment() {
         Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         Some(&output_log),
+        SpawnOptions::default(),
     )
     .await
     .expect("Failed to wait");

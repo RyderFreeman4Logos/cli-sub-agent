@@ -90,6 +90,8 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
 fn test_session_config_default_has_structured_output_enabled() {
     let cfg = SessionConfig::default();
     assert!(cfg.structured_output);
+    assert_eq!(cfg.resolved_spool_max_mb(), 32);
+    assert!(cfg.resolved_spool_keep_rotated());
 }
 
 #[test]
@@ -141,6 +143,34 @@ require_commit_on_mutation = true
 fn test_session_config_is_default_reflects_require_commit_on_mutation() {
     let cfg = SessionConfig {
         require_commit_on_mutation: true,
+        ..Default::default()
+    };
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_session_config_deserializes_spool_settings() {
+    let toml_str = r#"
+spool_max_mb = 64
+spool_keep_rotated = false
+"#;
+    let cfg: SessionConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.spool_max_mb, Some(64));
+    assert_eq!(cfg.spool_keep_rotated, Some(false));
+    assert_eq!(cfg.resolved_spool_max_mb(), 64);
+    assert!(!cfg.resolved_spool_keep_rotated());
+}
+
+#[test]
+fn test_session_config_is_default_reflects_spool_overrides() {
+    let cfg = SessionConfig {
+        spool_max_mb: Some(64),
+        ..Default::default()
+    };
+    assert!(!cfg.is_default());
+
+    let cfg = SessionConfig {
+        spool_keep_rotated: Some(false),
         ..Default::default()
     };
     assert!(!cfg.is_default());

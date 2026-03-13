@@ -3,7 +3,8 @@
 //! Handles session state updates, token tracking, result persistence,
 //! structured output parsing, hooks, and memory capture after tool execution.
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
@@ -20,6 +21,7 @@ use crate::memory_capture;
 use crate::run_helpers::{is_compress_command, parse_token_usage};
 
 const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
+const OUTPUT_LOG_TAIL_READ_BYTES: u64 = 8 * 1024;
 
 /// All inputs needed for post-execution processing.
 pub(crate) struct PostExecContext<'a> {
@@ -281,8 +283,8 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
 
 fn read_output_log_tail(session_dir: &Path, max_lines: usize) -> Option<String> {
     let output_log_path = session_dir.join("output.log");
-    let contents = match fs::read_to_string(&output_log_path) {
-        Ok(contents) => contents,
+    let mut file = match File::open(&output_log_path) {
+        Ok(file) => file,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
         Err(err) => {
             warn!(
@@ -293,6 +295,50 @@ fn read_output_log_tail(session_dir: &Path, max_lines: usize) -> Option<String> 
             return None;
         }
     };
+
+    let file_len = match file.metadata() {
+        Ok(metadata) => metadata.len(),
+        Err(err) => {
+            warn!(
+                path = %output_log_path.display(),
+                error = %err,
+                "Failed to stat output.log for fallback summary"
+            );
+            return None;
+        }
+    };
+    let tail_start = file_len.saturating_sub(OUTPUT_LOG_TAIL_READ_BYTES);
+    if let Err(err) = file.seek(SeekFrom::Start(tail_start)) {
+        warn!(
+            path = %output_log_path.display(),
+            error = %err,
+            "Failed to seek output.log for fallback summary"
+        );
+        return None;
+    }
+
+    // Read raw bytes first, then decode — seeking may land mid-UTF-8 char.
+    let mut raw_bytes = Vec::new();
+    match file.read_to_end(&mut raw_bytes) {
+        Ok(_) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return None,
+        Err(err) => {
+            warn!(
+                path = %output_log_path.display(),
+                error = %err,
+                "Failed to read output.log for fallback summary"
+            );
+            return None;
+        }
+    };
+
+    // Lossy decode handles mid-UTF-8 seek boundary gracefully.
+    let mut contents = String::from_utf8_lossy(&raw_bytes).into_owned();
+    if tail_start > 0
+        && let Some(first_newline) = contents.find('\n')
+    {
+        contents.drain(..=first_newline);
+    }
 
     let tail = contents
         .lines()
@@ -537,6 +583,24 @@ mod tests {
         assert_eq!(
             reloaded.termination_reason.as_deref(),
             Some("post_exec_error")
+        );
+    }
+
+    #[test]
+    fn read_output_log_tail_reads_from_file_end_window() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_dir = tmp.path();
+        let contents = (0..1500)
+            .map(|idx| format!("line-{idx:04}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        fs::write(session_dir.join("output.log"), format!("{contents}\n")).expect("write output");
+
+        let tail = read_output_log_tail(session_dir, 3).expect("tail");
+        assert_eq!(tail, "line-1497\nline-1498\nline-1499");
+        assert!(
+            !tail.contains("line-0000"),
+            "tail reader should not depend on loading the full file"
         );
     }
 }

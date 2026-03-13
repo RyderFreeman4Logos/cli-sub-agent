@@ -116,8 +116,11 @@ mod tests {
         )
         .expect("write lock");
         std::fs::write(tmp.path().join("output.log"), "progress").expect("write output");
-        std::fs::write(tmp.path().join(".liveness.snapshot"), "output_log_size=0")
-            .expect("seed snapshot");
+        std::fs::write(
+            tmp.path().join(".liveness.snapshot"),
+            "spool_bytes_written=8\nobserved_spool_bytes_written=0",
+        )
+        .expect("seed snapshot");
 
         let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
         let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
@@ -141,6 +144,54 @@ mod tests {
         assert!(
             last_activity > before,
             "progress signal should reset idle timer"
+        );
+    }
+
+    #[test]
+    fn test_idle_timer_survives_spool_rotation_with_monotonic_counter() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let locks_dir = tmp.path().join("locks");
+        std::fs::create_dir_all(&locks_dir).expect("create locks dir");
+        std::fs::write(
+            locks_dir.join("codex.lock"),
+            format!("{{\"pid\": {}}}", std::process::id()),
+        )
+        .expect("write lock");
+        // After rotation the live output.log may be tiny, but the monotonic
+        // counter still proves fresh progress happened.
+        std::fs::write(
+            tmp.path().join("output.log"),
+            "[CSA:TRUNCATED bytes_written=33554500 rotated_at=2026-03-13T00:00:00Z]\n",
+        )
+        .expect("write rotated output");
+        std::fs::write(
+            tmp.path().join(".liveness.snapshot"),
+            "spool_bytes_written=33554500\nobserved_spool_bytes_written=33554400",
+        )
+        .expect("seed snapshot");
+
+        let mut dead_since = Some(Instant::now() - Duration::from_secs(5));
+        let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
+        let mut last_activity = Instant::now() - Duration::from_secs(10);
+        let before = last_activity;
+
+        let terminate = should_terminate_for_idle(
+            &mut last_activity,
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Some(tmp.path()),
+            &mut dead_since,
+            &mut next_poll,
+        );
+
+        assert!(
+            !terminate,
+            "rotated spool progress should prevent termination"
+        );
+        assert!(dead_since.is_none(), "progress should clear death timer");
+        assert!(
+            last_activity > before,
+            "monotonic spool growth should reset idle timer"
         );
     }
 }

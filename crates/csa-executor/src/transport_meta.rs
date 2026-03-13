@@ -163,6 +163,8 @@ pub(super) async fn run_acp_sandboxed(
     session_id: &str,
     stream_stdout_to_stderr: bool,
     output_spool: Option<&Path>,
+    output_spool_max_bytes: u64,
+    output_spool_keep_rotated: bool,
 ) -> csa_acp::AcpResult<csa_acp::transport::AcpOutput> {
     use csa_acp::AcpConnection;
     use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
@@ -220,6 +222,8 @@ pub(super) async fn run_acp_sandboxed(
             csa_acp::connection::PromptIoOptions {
                 stream_stdout_to_stderr,
                 output_spool,
+                spool_max_bytes: output_spool_max_bytes,
+                keep_rotated_spool: output_spool_keep_rotated,
             },
         )
         .await?;

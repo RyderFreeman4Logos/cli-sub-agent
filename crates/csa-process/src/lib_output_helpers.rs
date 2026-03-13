@@ -1,25 +1,204 @@
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::io::{self, BufWriter, Write};
+use std::path::{Path, PathBuf};
 
 use super::StreamMode;
+use chrono::Utc;
 use std::time::{Duration, Instant};
+
+/// Maximum bytes retained in in-memory output accumulators (stdout/stderr).
+///
+/// Matches the ACP `StreamingMetadata::TAIL_BUFFER_MAX_BYTES` so that both
+/// the ACP and legacy capture paths have consistent memory bounds.
+pub(super) const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
+
+/// High-water mark for output accumulator trimming (2× target size).
+///
+/// The accumulator is allowed to grow to this size before being trimmed back
+/// to [`TAIL_BUFFER_MAX_BYTES`].  This amortises the O(N) cost of
+/// `String::drain` so trimming occurs once per MiB of new text rather than
+/// per chunk, avoiding O(N²) behaviour.
+pub(super) const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2; // 2 MiB
 
 pub(super) const DEFAULT_HEARTBEAT_SECS: u64 = 20;
 pub(super) const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
+pub const DEFAULT_SPOOL_MAX_BYTES: u64 = 32 * 1024 * 1024;
+pub const DEFAULT_SPOOL_KEEP_ROTATED: bool = true;
 const WORKSPACE_BOUNDARY_PATTERN_A: &str = "path not in workspace";
 const WORKSPACE_BOUNDARY_PATTERN_B: &str = "outside the allowed workspace directories";
 const OPAQUE_OBJECT_PATTERN: &str = "[object object]";
 const OPAQUE_OBJECT_REPLACEMENT: &str = "(opaque error payload)";
 const OPAQUE_PAYLOAD_MARKER: &str = "(opaque error payload)";
+const SPOOL_BUFFER_CAPACITY: usize = 64 * 1024;
+
+#[derive(Debug)]
+pub struct SpoolRotator {
+    path: PathBuf,
+    rotated_path: PathBuf,
+    writer: Option<BufWriter<File>>,
+    initial_offset: u64,
+    current_file_bytes: u64,
+    bytes_written: u64,
+    max_bytes: u64,
+    keep_rotated: bool,
+    rotation_count: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SpoolSanitizationPlan {
+    current_path: PathBuf,
+    current_start_offset: u64,
+    rotated: Option<(PathBuf, u64)>,
+    keep_rotated: bool,
+}
+
+impl SpoolRotator {
+    pub fn open(path: &Path, max_bytes: u64, keep_rotated: bool) -> io::Result<Self> {
+        let file = OpenOptions::new().create(true).append(true).open(path)?;
+        let initial_offset = file.metadata()?.len();
+        Ok(Self {
+            path: path.to_path_buf(),
+            rotated_path: path.with_extension("log.rotated"),
+            writer: Some(BufWriter::with_capacity(SPOOL_BUFFER_CAPACITY, file)),
+            initial_offset,
+            current_file_bytes: initial_offset,
+            bytes_written: initial_offset,
+            max_bytes: max_bytes.max(1),
+            keep_rotated,
+            rotation_count: 0,
+        })
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if bytes.is_empty() {
+            return Ok(());
+        }
+
+        let incoming = bytes.len() as u64;
+        if self.current_file_bytes > self.max_bytes
+            || (self.current_file_bytes > 0
+                && self.current_file_bytes.saturating_add(incoming) > self.max_bytes)
+        {
+            self.rotate()?;
+        }
+
+        self.writer_mut()?.write_all(bytes)?;
+        self.current_file_bytes = self.current_file_bytes.saturating_add(incoming);
+        self.bytes_written = self.bytes_written.saturating_add(incoming);
+        Ok(())
+    }
+
+    pub fn bytes_written(&self) -> u64 {
+        self.bytes_written
+    }
+
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.writer_mut()?.flush()
+    }
+
+    pub fn finalize(mut self) -> io::Result<SpoolSanitizationPlan> {
+        self.flush()?;
+        self.writer.take();
+        Ok(self.sanitization_plan())
+    }
+
+    fn writer_mut(&mut self) -> io::Result<&mut BufWriter<File>> {
+        self.writer
+            .as_mut()
+            .ok_or_else(|| io::Error::other("spool writer already finalized"))
+    }
+
+    fn rotate(&mut self) -> io::Result<()> {
+        if let Some(mut writer) = self.writer.take() {
+            writer.flush()?;
+            let file = writer.into_inner()?;
+            drop(file);
+        }
+
+        if self.rotated_path.exists() {
+            match std::fs::remove_file(&self.rotated_path) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+                Err(err) => return Err(err),
+            }
+        }
+
+        std::fs::rename(&self.path, &self.rotated_path)?;
+
+        let mut writer = BufWriter::with_capacity(
+            SPOOL_BUFFER_CAPACITY,
+            OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&self.path)?,
+        );
+        let sentinel = format!(
+            "[CSA:TRUNCATED bytes_written={} rotated_at={}]\n",
+            self.bytes_written,
+            Utc::now().to_rfc3339()
+        );
+        writer.write_all(sentinel.as_bytes())?;
+        self.current_file_bytes = sentinel.len() as u64;
+        self.bytes_written = self.bytes_written.saturating_add(sentinel.len() as u64);
+        self.rotation_count = self.rotation_count.saturating_add(1);
+        self.writer = Some(writer);
+        Ok(())
+    }
+
+    fn sanitization_plan(&self) -> SpoolSanitizationPlan {
+        let current_start_offset = if self.rotation_count == 0 {
+            self.initial_offset
+        } else {
+            0
+        };
+        let rotated = if self.rotation_count == 0 {
+            None
+        } else {
+            let rotated_start_offset = if self.rotation_count == 1 {
+                self.initial_offset
+            } else {
+                0
+            };
+            Some((self.rotated_path.clone(), rotated_start_offset))
+        };
+
+        SpoolSanitizationPlan {
+            current_path: self.path.clone(),
+            current_start_offset,
+            rotated,
+            keep_rotated: self.keep_rotated,
+        }
+    }
+}
 
 /// Write a raw byte chunk to the spool file and flush.
 ///
 /// Best-effort: errors are silently ignored because the spool is a crash-recovery
 /// aid, not the primary output path.
-pub(super) fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
-    if let Some(f) = spool {
-        use std::io::Write;
-        let _ = f.write_all(bytes);
-        let _ = f.flush();
+pub(super) fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8]) {
+    if let Some(spool) = spool {
+        let _ = spool.write(bytes);
+        let _ = spool.flush();
+    }
+}
+
+/// Drain the front of an output accumulator if it exceeds the high-water mark.
+///
+/// This bounds the in-memory accumulator to ~[`TAIL_BUFFER_HIGH_WATER`] bytes,
+/// preventing unbounded growth from long-running tools.  After trimming, the
+/// accumulator retains the most recent [`TAIL_BUFFER_MAX_BYTES`] of content.
+///
+/// The trim point is always on a char boundary to avoid splitting multi-byte
+/// UTF-8 characters.
+pub(super) fn drain_if_over_high_water(buf: &mut String) {
+    if buf.len() > TAIL_BUFFER_HIGH_WATER {
+        let excess = buf.len() - TAIL_BUFFER_MAX_BYTES;
+        let mut trim_at = excess;
+        while trim_at < buf.len() && !buf.is_char_boundary(trim_at) {
+            trim_at += 1;
+        }
+        buf.drain(..trim_at);
     }
 }
 
@@ -247,6 +426,34 @@ pub(super) fn sanitize_spool_tail(
     file.seek(SeekFrom::Start(start_offset))?;
     file.write_all(sanitized_tail.as_bytes())?;
     file.flush()?;
+    Ok(())
+}
+
+pub fn sanitize_spool_plan(
+    plan: SpoolSanitizationPlan,
+    actionable_detail: Option<&str>,
+) -> io::Result<()> {
+    sanitize_spool_tail(
+        &plan.current_path,
+        plan.current_start_offset,
+        actionable_detail,
+    )?;
+    if let Some((rotated_path, rotated_start_offset)) = plan.rotated.as_ref()
+        && rotated_path.exists()
+    {
+        sanitize_spool_tail(rotated_path, *rotated_start_offset, actionable_detail)?;
+    }
+
+    if !plan.keep_rotated
+        && let Some((rotated_path, _)) = plan.rotated
+    {
+        match std::fs::remove_file(rotated_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => return Err(err),
+        }
+    }
+
     Ok(())
 }
 

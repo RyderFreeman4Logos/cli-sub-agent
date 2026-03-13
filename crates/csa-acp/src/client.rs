@@ -11,9 +11,11 @@ use agent_client_protocol::{
 /// Agent message and thought text beyond this limit is discarded from memory
 /// after being written to the output spool on disk.  1 MiB is sufficient for
 /// summary extraction and token-usage parsing, which only inspect the tail.
+///
+/// Canonical values shared with `csa-process::output_helpers` (same 1 MiB / 2 MiB).
 const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024;
 
-/// High-water mark for tail buffer trimming (2x the target size).
+/// High-water mark for tail buffer trimming (2× the target size).
 ///
 /// We allow the buffer to grow to this size before trimming it back to
 /// [`TAIL_BUFFER_MAX_BYTES`].  This amortises the O(N) cost of
@@ -36,7 +38,7 @@ pub struct StreamingMetadata {
     /// Tail buffer of agent message/thought text (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
     pub tail_text: String,
     /// Total bytes written to the output spool file.
-    pub(crate) spool_bytes_written: usize,
+    pub(crate) spool_bytes_written: u64,
 }
 
 impl StreamingMetadata {

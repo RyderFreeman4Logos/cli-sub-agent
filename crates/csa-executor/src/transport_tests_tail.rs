@@ -344,6 +344,8 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         acp_init_timeout_seconds: 30,
         termination_grace_period_seconds: 1,
         output_spool: None,
+        output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+        output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: None,
     };
@@ -518,6 +520,8 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
         acp_init_timeout_seconds: 30,
         termination_grace_period_seconds: 1,
         output_spool: None,
+        output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+        output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: None,
     };
@@ -575,6 +579,8 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         acp_init_timeout_seconds: 30,
         termination_grace_period_seconds: 1,
         output_spool: None,
+        output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+        output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
     };

@@ -9,6 +9,7 @@ use agent_client_protocol::{
     Agent, ClientSideConnection, InitializeRequest, LoadSessionRequest, NewSessionRequest,
     PromptRequest, ProtocolVersion, SessionId, StopReason,
 };
+use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator};
 use tokio::{process::Child, task::LocalSet};
 
 // Re-export spawn-related types from the dedicated module.
@@ -45,10 +46,23 @@ pub struct PromptResult {
     pub metadata: StreamingMetadata,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct PromptIoOptions<'a> {
     pub stream_stdout_to_stderr: bool,
     pub output_spool: Option<&'a Path>,
+    pub spool_max_bytes: u64,
+    pub keep_rotated_spool: bool,
+}
+
+impl Default for PromptIoOptions<'_> {
+    fn default() -> Self {
+        Self {
+            stream_stdout_to_stderr: false,
+            output_spool: None,
+            spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
+            keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
+        }
+    }
 }
 
 pub struct AcpConnection {
@@ -275,7 +289,8 @@ impl AcpConnection {
         let heartbeat_interval = resolve_heartbeat_interval();
         let mut last_heartbeat = execution_start;
         let mut streamed_event_index = 0usize;
-        let mut output_spool = open_output_spool_file(io.output_spool);
+        let mut output_spool =
+            open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
         let mut metadata = StreamingMetadata::default();
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
@@ -332,10 +347,18 @@ impl AcpConnection {
             &mut output_spool,
             &mut metadata,
         );
-        // Flush buffered spool data to disk before returning.
-        if let Some(ref mut writer) = output_spool {
-            use std::io::Write;
-            let _ = writer.flush();
+        // Finalize spool: flush + run sanitization (rotate cleanup if keep_rotated=false).
+        if let Some(writer) = output_spool.take() {
+            match writer.finalize() {
+                Ok(plan) => {
+                    if let Err(e) = csa_process::sanitize_spool_plan(plan, None) {
+                        tracing::warn!(error = %e, "Failed to sanitize ACP output spool");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to finalize ACP output spool");
+                }
+            }
         }
         // Take all accumulated events for downstream consumers (transcript
         // writing, command extraction).  Events were NOT drained during
@@ -440,13 +463,14 @@ impl AcpConnection {
 }
 
 /// 64 KiB buffer for spool writes — reduces syscall overhead vs per-chunk flush.
-const SPOOL_BUF_SIZE: usize = 64 * 1024;
-
-fn open_output_spool_file(path: Option<&Path>) -> Option<std::io::BufWriter<std::fs::File>> {
+fn open_output_spool_file(
+    path: Option<&Path>,
+    spool_max_bytes: u64,
+    keep_rotated_spool: bool,
+) -> Option<SpoolRotator> {
     let path = path?;
-    use std::fs::OpenOptions;
-    match OpenOptions::new().create(true).append(true).open(path) {
-        Ok(file) => Some(std::io::BufWriter::with_capacity(SPOOL_BUF_SIZE, file)),
+    match SpoolRotator::open(path, spool_max_bytes, keep_rotated_spool) {
+        Ok(rotator) => Some(rotator),
         Err(error) => {
             tracing::warn!(
                 path = %path.display(),
@@ -505,7 +529,7 @@ fn stream_new_agent_messages(
     events: &SharedEvents,
     processed_index: &mut usize,
     stream_stdout_to_stderr: bool,
-    output_spool: &mut Option<std::io::BufWriter<std::fs::File>>,
+    output_spool: &mut Option<SpoolRotator>,
     metadata: &mut StreamingMetadata,
 ) {
     // Iterate new events by index WITHOUT draining.  Events must stay in
@@ -575,15 +599,10 @@ fn stream_new_agent_messages(
     *processed_index = new_end;
 }
 
-fn spool_chunk(
-    spool: &mut Option<std::io::BufWriter<std::fs::File>>,
-    bytes: &[u8],
-    metadata: &mut StreamingMetadata,
-) {
+fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut StreamingMetadata) {
     if let Some(writer) = spool {
-        use std::io::Write;
-        let _ = writer.write_all(bytes);
-        metadata.spool_bytes_written += bytes.len();
+        let _ = writer.write(bytes);
+        metadata.spool_bytes_written = writer.bytes_written();
         // BufWriter flushes automatically when the buffer fills (64 KiB).
         // No per-chunk flush — the final flush happens on drop or when the
         // prompt_with_io loop ends.
