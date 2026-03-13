@@ -1,9 +1,8 @@
 use super::*;
 use std::sync::{LazyLock, Mutex};
 
-fn flush_spool(spool: &mut Option<std::io::BufWriter<std::fs::File>>) {
+fn flush_spool(spool: &mut Option<SpoolRotator>) {
     if let Some(w) = spool {
-        use std::io::Write;
         w.flush().expect("flush spool");
     }
 }
@@ -115,7 +114,7 @@ fn test_collect_agent_output_includes_thoughts() {
         SessionEvent::AgentMessage(" world".to_string()),
     ]));
     let mut index = 0;
-    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
     stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
@@ -135,7 +134,11 @@ fn stream_new_agent_messages_includes_thoughts_in_spool() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let spool_path = temp.path().join("output.log");
-    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut spool = open_output_spool_file(
+        Some(&spool_path),
+        DEFAULT_SPOOL_MAX_BYTES,
+        DEFAULT_SPOOL_KEEP_ROTATED,
+    );
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
@@ -160,7 +163,11 @@ fn stream_new_agent_messages_writes_spool_incrementally() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let spool_path = temp.path().join("output.log");
-    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut spool = open_output_spool_file(
+        Some(&spool_path),
+        DEFAULT_SPOOL_MAX_BYTES,
+        DEFAULT_SPOOL_KEEP_ROTATED,
+    );
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
@@ -197,7 +204,7 @@ fn stream_new_agent_messages_skips_non_message_events() {
         },
     ]));
     let mut index = 0;
-    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
     stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
@@ -225,7 +232,7 @@ fn collect_agent_output_excludes_diagnostic_events() {
         SessionEvent::AgentMessage(" world".to_string()),
     ]));
     let mut index = 0;
-    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
     stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
@@ -259,7 +266,11 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
 
     let temp = tempfile::tempdir().expect("tempdir");
     let spool_path = temp.path().join("output.log");
-    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut spool = open_output_spool_file(
+        Some(&spool_path),
+        DEFAULT_SPOOL_MAX_BYTES,
+        DEFAULT_SPOOL_KEEP_ROTATED,
+    );
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
@@ -301,7 +312,7 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
 fn stream_preserves_events_for_downstream_consumers() {
     let events = Rc::new(RefCell::new(Vec::new()));
     let mut index = 0;
-    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
     // Push 10000 events and stream them in batches.
@@ -337,7 +348,11 @@ fn spool_writes_all_data_without_truncation() {
     let events = Rc::new(RefCell::new(Vec::new()));
     let temp = tempfile::tempdir().expect("tempdir");
     let spool_path = temp.path().join("output.log");
-    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut spool = open_output_spool_file(
+        Some(&spool_path),
+        DEFAULT_SPOOL_MAX_BYTES,
+        DEFAULT_SPOOL_KEEP_ROTATED,
+    );
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
@@ -362,7 +377,10 @@ fn spool_writes_all_data_without_truncation() {
         "spool must write all data without truncation (preserves tail markers)"
     );
     assert_eq!(metadata.events_count, num_chunks);
-    assert_eq!(metadata.spool_bytes_written, chunk_size * num_chunks);
+    assert_eq!(
+        metadata.spool_bytes_written,
+        (chunk_size * num_chunks) as u64
+    );
 }
 
 #[test]

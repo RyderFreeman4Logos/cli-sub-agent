@@ -2,7 +2,7 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
@@ -19,17 +19,19 @@ mod subprocess_helpers;
 mod tool_liveness;
 #[cfg(test)]
 use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
+pub use output_helpers::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator};
 use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr,
     append_actionable_detail_for_opaque_payload, drain_if_over_high_water, extract_summary,
     failure_summary, flush_line_buf, flush_stderr_buf, maybe_emit_heartbeat,
     resolve_actionable_failure_detail, resolve_heartbeat_interval, sanitize_opaque_object_payloads,
-    sanitize_spool_tail, spool_chunk,
+    sanitize_spool_plan, spool_chunk,
 };
 #[cfg(test)]
 use output_helpers::{last_non_empty_line, truncate_line};
 pub use subprocess_helpers::check_tool_installed;
 use subprocess_helpers::terminate_child_process_group;
+use tool_liveness::record_spool_bytes_written;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
 #[cfg(feature = "codex-pty-fork")]
@@ -106,6 +108,10 @@ pub struct SpawnOptions {
     /// Use this for long-lived interactive processes (e.g. JSON-RPC over stdio)
     /// that require writable stdin beyond initial spawn.
     pub keep_stdin_open: bool,
+    /// Maximum spool file size before rotating to `*.rotated`.
+    pub spool_max_bytes: u64,
+    /// Preserve the rotated spool file after execution completes.
+    pub keep_rotated_spool: bool,
 }
 
 impl Default for SpawnOptions {
@@ -113,6 +119,8 @@ impl Default for SpawnOptions {
         Self {
             stdin_write_timeout: Duration::from_secs(DEFAULT_STDIN_WRITE_TIMEOUT_SECS),
             keep_stdin_open: false,
+            spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
+            keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
         }
     }
 }
@@ -367,6 +375,7 @@ pub async fn wait_and_capture(
     child: tokio::process::Child,
     stream_mode: StreamMode,
 ) -> Result<ExecutionResult> {
+    let spawn_options = SpawnOptions::default();
     wait_and_capture_with_idle_timeout(
         child,
         stream_mode,
@@ -374,6 +383,7 @@ pub async fn wait_and_capture(
         Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        spawn_options,
     )
     .await
 }
@@ -394,20 +404,21 @@ pub async fn wait_and_capture_with_idle_timeout(
     liveness_dead_timeout: Duration,
     termination_grace_period: Duration,
     output_spool: Option<&Path>,
+    spawn_options: SpawnOptions,
 ) -> Result<ExecutionResult> {
     let stdout = child.stdout.take().context("Failed to capture stdout")?;
     let stderr = child.stderr.take();
 
     // Open spool file for incremental crash-safe output.
     let mut spool_file = None;
-    let mut output_spool_target: Option<(PathBuf, u64)> = None;
     if let Some(path) = output_spool {
-        use std::fs::OpenOptions;
-        match OpenOptions::new().create(true).append(true).open(path) {
-            Ok(f) => {
-                let start_offset = f.metadata().map(|meta| meta.len()).unwrap_or(0);
-                output_spool_target = Some((path.to_path_buf(), start_offset));
-                spool_file = Some(f);
+        match SpoolRotator::open(
+            path,
+            spawn_options.spool_max_bytes,
+            spawn_options.keep_rotated_spool,
+        ) {
+            Ok(rotator) => {
+                spool_file = Some(rotator);
             }
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "Failed to open output spool file");
@@ -416,15 +427,15 @@ pub async fn wait_and_capture_with_idle_timeout(
     }
     let session_dir = output_spool.and_then(Path::parent);
     let mut stderr_spool_file = None;
-    let mut stderr_spool_target: Option<(PathBuf, u64)> = None;
     if let Some(dir) = session_dir {
-        use std::fs::OpenOptions;
         let path = dir.join("stderr.log");
-        match OpenOptions::new().create(true).append(true).open(&path) {
-            Ok(f) => {
-                let start_offset = f.metadata().map(|meta| meta.len()).unwrap_or(0);
-                stderr_spool_target = Some((path, start_offset));
-                stderr_spool_file = Some(f);
+        match SpoolRotator::open(
+            &path,
+            spawn_options.spool_max_bytes,
+            spawn_options.keep_rotated_spool,
+        ) {
+            Ok(rotator) => {
+                stderr_spool_file = Some(rotator);
             }
             Err(e) => {
                 warn!(
@@ -491,6 +502,9 @@ pub async fn wait_and_capture_with_idle_timeout(
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             // Spool to disk for crash recovery
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
+                            if let (Some(dir), Some(spool)) = (session_dir, spool_file.as_ref()) {
+                                record_spool_bytes_written(dir, spool.bytes_written());
+                            }
                             workspace_boundary_error_hits += accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
@@ -606,6 +620,9 @@ pub async fn wait_and_capture_with_idle_timeout(
                             next_liveness_poll_at = None;
                             let chunk = String::from_utf8_lossy(&stdout_buf[..n]);
                             spool_chunk(&mut spool_file, &stdout_buf[..n]);
+                            if let (Some(dir), Some(spool)) = (session_dir, spool_file.as_ref()) {
+                                record_spool_bytes_written(dir, spool.bytes_written());
+                            }
                             workspace_boundary_error_hits += accumulate_and_flush_lines(
                                 &chunk,
                                 &mut stdout_line_buf,
@@ -699,25 +716,31 @@ pub async fn wait_and_capture_with_idle_timeout(
     // Ensure spool artifacts do not keep raw opaque payload markers after a
     // successful capture cycle. Preserve previous turns by rewriting only the
     // segment appended during this run.
-    drop(spool_file);
-    drop(stderr_spool_file);
-    if let Some((path, start_offset)) = output_spool_target
-        && let Err(e) = sanitize_spool_tail(&path, start_offset, None)
-    {
-        warn!(
-            path = %path.display(),
-            error = %e,
-            "Failed to sanitize output spool tail"
-        );
+    let output_spool_plan = spool_file.take().map(|rotator| rotator.finalize());
+    let stderr_spool_plan = stderr_spool_file.take().map(|rotator| rotator.finalize());
+    if let Some(plan_result) = output_spool_plan {
+        match plan_result {
+            Ok(plan) => {
+                if let Err(e) = sanitize_spool_plan(plan, None) {
+                    warn!(error = %e, "Failed to sanitize output spool tail");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to finalize output spool file");
+            }
+        }
     }
-    if let Some((path, start_offset)) = stderr_spool_target
-        && let Err(e) = sanitize_spool_tail(&path, start_offset, Some(&actionable_detail))
-    {
-        warn!(
-            path = %path.display(),
-            error = %e,
-            "Failed to sanitize stderr spool tail"
-        );
+    if let Some(plan_result) = stderr_spool_plan {
+        match plan_result {
+            Ok(plan) => {
+                if let Err(e) = sanitize_spool_plan(plan, Some(&actionable_detail)) {
+                    warn!(error = %e, "Failed to sanitize stderr spool tail");
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to finalize stderr spool file");
+            }
+        }
     }
 
     Ok(ExecutionResult {
@@ -750,6 +773,7 @@ pub async fn run_and_capture_with_stdin(
     stream_mode: StreamMode,
 ) -> Result<ExecutionResult> {
     let child = spawn_tool(cmd, stdin_data).await?;
+    let spawn_options = SpawnOptions::default();
     wait_and_capture_with_idle_timeout(
         child,
         stream_mode,
@@ -757,6 +781,7 @@ pub async fn run_and_capture_with_stdin(
         Duration::from_secs(DEFAULT_LIVENESS_DEAD_SECS),
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None,
+        spawn_options,
     )
     .await
 }

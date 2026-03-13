@@ -580,6 +580,15 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             return Err(err);
         }
     };
+    let spool_max_mb = config
+        .map(|cfg| cfg.session.resolved_spool_max_mb())
+        .unwrap_or((csa_process::DEFAULT_SPOOL_MAX_BYTES / (1024 * 1024)) as u32);
+    let spool_max_bytes = u64::from(spool_max_mb).saturating_mul(1024 * 1024);
+    let spool_keep_rotated = config
+        .map(|cfg| cfg.session.resolved_spool_keep_rotated())
+        .unwrap_or(csa_process::DEFAULT_SPOOL_KEEP_ROTATED);
+    execute_options =
+        execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
 
     // Record sandbox telemetry in session state (first turn only).

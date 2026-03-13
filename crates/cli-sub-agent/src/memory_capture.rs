@@ -1,4 +1,5 @@
-use std::fs;
+use std::fs::{self, File};
+use std::io::{BufReader, Read};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -11,6 +12,7 @@ use ulid::Ulid;
 
 const APP_NAME: &str = "cli-sub-agent";
 const OUTPUT_TRUNCATE_CHARS: usize = 500;
+const OUTPUT_LOG_SUMMARY_READ_BYTES: u64 = 2 * 1024;
 const INJECT_MAX_RESULTS: usize = 5;
 const INJECT_QUERY_MAX_CHARS: usize = 200;
 const INJECT_FALLBACK_TERMS: usize = 10;
@@ -276,7 +278,12 @@ fn read_session_summary(session_dir: &Path) -> Result<String> {
 
     let output_path = session_dir.join("output.log");
     if output_path.is_file() {
-        let content = fs::read_to_string(&output_path)
+        let file = File::open(&output_path)
+            .with_context(|| format!("failed to read output log: {}", output_path.display()))?;
+        let mut reader = BufReader::new(file).take(OUTPUT_LOG_SUMMARY_READ_BYTES);
+        let mut content = String::new();
+        reader
+            .read_to_string(&mut content)
             .with_context(|| format!("failed to read output log: {}", output_path.display()))?;
         let truncated: String = content.chars().take(OUTPUT_TRUNCATE_CHARS).collect();
         return Ok(truncated);
@@ -481,6 +488,25 @@ mod tests {
 
         let summary = read_session_summary(session_dir.path()).expect("read session summary");
         assert_eq!(summary, "preferred summary");
+    }
+
+    #[test]
+    fn test_read_session_summary_bounds_output_log_read() {
+        let session_dir = tempdir().expect("create temp session dir");
+        let prefix = "a".repeat(OUTPUT_LOG_SUMMARY_READ_BYTES as usize);
+        let marker = "THIS_SUFFIX_MUST_NOT_BE_READ";
+        fs::write(
+            session_dir.path().join("output.log"),
+            format!("{prefix}{marker}"),
+        )
+        .expect("write output.log");
+
+        let summary = read_session_summary(session_dir.path()).expect("read session summary");
+        assert_eq!(summary.len(), OUTPUT_TRUNCATE_CHARS);
+        assert!(
+            !summary.contains(marker),
+            "summary reader should only inspect the bounded prefix"
+        );
     }
 
     #[test]

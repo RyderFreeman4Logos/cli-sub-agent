@@ -38,6 +38,8 @@ pub struct TransportOptions<'a> {
     pub acp_init_timeout_seconds: u64,
     pub termination_grace_period_seconds: u64,
     pub output_spool: Option<&'a Path>,
+    pub output_spool_max_bytes: u64,
+    pub output_spool_keep_rotated: bool,
     pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
 }
@@ -183,17 +185,15 @@ impl LegacyTransport {
         idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         let (cmd, stdin_data) = executor.build_execute_in_command(prompt, work_dir, extra_env);
-        let child = spawn_tool_with_options(
-            cmd,
-            stdin_data,
-            SpawnOptions {
-                stdin_write_timeout: std::time::Duration::from_secs(
-                    csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
-                ),
-                keep_stdin_open: false,
-            },
-        )
-        .await?;
+        let spawn_options = SpawnOptions {
+            stdin_write_timeout: std::time::Duration::from_secs(
+                csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
+            ),
+            keep_stdin_open: false,
+            spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+            keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+        };
+        let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
         let execution = wait_and_capture_with_idle_timeout(
             child,
             stream_mode,
@@ -201,6 +201,7 @@ impl LegacyTransport {
             std::time::Duration::from_secs(csa_process::DEFAULT_LIVENESS_DEAD_SECS),
             std::time::Duration::from_secs(csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
             None,
+            spawn_options,
         )
         .await?;
         Ok(TransportResult {
@@ -228,15 +229,18 @@ impl LegacyTransport {
             .map(|s| (s.tool_name.as_str(), s.session_id.as_str()))
             .unwrap_or(("", ""));
 
+        let spawn_options = SpawnOptions {
+            stdin_write_timeout: std::time::Duration::from_secs(
+                options.stdin_write_timeout_seconds,
+            ),
+            keep_stdin_open: false,
+            spool_max_bytes: options.output_spool_max_bytes,
+            keep_rotated_spool: options.output_spool_keep_rotated,
+        };
         let (child, _sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
             stdin_data.clone(),
-            SpawnOptions {
-                stdin_write_timeout: std::time::Duration::from_secs(
-                    options.stdin_write_timeout_seconds,
-                ),
-                keep_stdin_open: false,
-            },
+            spawn_options,
             sandbox_cfg,
             tool_name,
             session_id,
@@ -253,12 +257,7 @@ impl LegacyTransport {
                         .build_command(prompt, tool_state, session, extra_env)
                         .0,
                     stdin_data,
-                    SpawnOptions {
-                        stdin_write_timeout: std::time::Duration::from_secs(
-                            options.stdin_write_timeout_seconds,
-                        ),
-                        keep_stdin_open: false,
-                    },
+                    spawn_options,
                 )
                 .await?;
                 (child, csa_process::SandboxHandle::None)
@@ -273,6 +272,7 @@ impl LegacyTransport {
             std::time::Duration::from_secs(options.liveness_dead_seconds),
             std::time::Duration::from_secs(options.termination_grace_period_seconds),
             options.output_spool,
+            spawn_options,
         )
         .await?;
 
@@ -456,6 +456,8 @@ impl Transport for AcpTransport {
         );
         let stream_stdout_to_stderr = options.stream_mode != StreamMode::BufferOnly;
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
+        let output_spool_max_bytes = options.output_spool_max_bytes;
+        let output_spool_keep_rotated = options.output_spool_keep_rotated;
 
         let output =
             tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
@@ -484,6 +486,8 @@ impl Transport for AcpTransport {
                         sess_id,
                         stream_stdout_to_stderr,
                         output_spool.as_deref(),
+                        output_spool_max_bytes,
+                        output_spool_keep_rotated,
                     )) {
                         Ok(output) => Ok(output),
                         Err(e) if sandbox_best_effort => {
@@ -515,6 +519,8 @@ impl Transport for AcpTransport {
                                     io: csa_acp::transport::AcpOutputIoOptions {
                                         stream_stdout_to_stderr,
                                         output_spool: output_spool.as_deref(),
+                                        spool_max_bytes: output_spool_max_bytes,
+                                        keep_rotated_spool: output_spool_keep_rotated,
                                     },
                                 },
                             ))
@@ -546,6 +552,8 @@ impl Transport for AcpTransport {
                             io: csa_acp::transport::AcpOutputIoOptions {
                                 stream_stdout_to_stderr,
                                 output_spool: output_spool.as_deref(),
+                                spool_max_bytes: output_spool_max_bytes,
+                                keep_rotated_spool: output_spool_keep_rotated,
                             },
                         },
                     ))

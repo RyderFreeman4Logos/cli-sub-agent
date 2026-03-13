@@ -38,7 +38,7 @@ pub struct StreamingMetadata {
     /// Tail buffer of agent message/thought text (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
     pub tail_text: String,
     /// Total bytes written to the output spool file.
-    pub(crate) spool_bytes_written: usize,
+    pub(crate) spool_bytes_written: u64,
 }
 
 impl StreamingMetadata {

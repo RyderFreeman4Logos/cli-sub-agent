@@ -174,8 +174,11 @@ fn test_should_terminate_resets_last_activity_on_progress_signal() {
     )
     .expect("write lock");
     std::fs::write(tmp.path().join("output.log"), "progress").expect("write output");
-    std::fs::write(tmp.path().join(".liveness.snapshot"), "output_log_size=0")
-        .expect("seed snapshot");
+    std::fs::write(
+        tmp.path().join(".liveness.snapshot"),
+        "spool_bytes_written=8\nobserved_spool_bytes_written=0",
+    )
+    .expect("seed snapshot");
 
     let mut dead_since = Some(Instant::now() - Duration::from_secs(999));
     let mut next_poll = Some(Instant::now() - Duration::from_secs(1));
@@ -257,6 +260,7 @@ async fn test_idle_timeout_with_alive_process_does_not_kill() {
         Duration::from_secs(600), // liveness_dead_timeout: very long
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         Some(&tmp.path().join("output.log")),
+        SpawnOptions::default(),
     )
     .await
     .expect("wait");
@@ -294,6 +298,7 @@ async fn test_idle_timeout_with_live_pid_but_no_progress_kills_after_dead_timeou
         Duration::from_secs(2), // liveness_dead_timeout
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         Some(&output_path), // enables liveness mode
+        SpawnOptions::default(),
     )
     .await
     .expect("wait");
@@ -325,6 +330,7 @@ async fn test_idle_timeout_with_dead_process_kills_after_dead_timeout() {
         Duration::from_secs(2), // liveness_dead_timeout
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None, // no session_dir → immediate kill after idle
+        SpawnOptions::default(),
     )
     .await
     .expect("wait");
@@ -458,5 +464,31 @@ fn test_stderr_string_bounded_at_high_water() {
         stderr_output.len() <= output_helpers::TAIL_BUFFER_HIGH_WATER + line.len(),
         "stderr should be bounded: got {} bytes",
         stderr_output.len()
+    );
+}
+
+#[test]
+fn test_spool_rotator_rotates_and_writes_truncation_sentinel() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let output_path = tmp.path().join("output.log");
+    let rotated_path = output_path.with_extension("log.rotated");
+    let mut rotator = SpoolRotator::open(&output_path, 16, true).expect("open rotator");
+
+    rotator.write(b"1234567890").expect("write first chunk");
+    rotator.write(b"abcdefghij").expect("write second chunk");
+    rotator.flush().expect("flush rotator");
+    drop(rotator);
+
+    let rotated = std::fs::read_to_string(&rotated_path).expect("read rotated file");
+    assert_eq!(rotated, "1234567890");
+
+    let current = std::fs::read_to_string(&output_path).expect("read current file");
+    assert!(
+        current.starts_with("[CSA:TRUNCATED bytes_written=10 rotated_at="),
+        "rotation should prepend truncation sentinel, got: {current}"
+    );
+    assert!(
+        current.ends_with("abcdefghij"),
+        "new output should continue in fresh output.log"
     );
 }

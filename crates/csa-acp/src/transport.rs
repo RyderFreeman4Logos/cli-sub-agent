@@ -1,6 +1,8 @@
 use std::time::Duration;
 use std::{collections::HashMap, path::Path};
 
+use csa_process::{DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES};
+
 use crate::{
     client::SessionEvent,
     connection::{AcpConnection, PromptIoOptions},
@@ -30,10 +32,23 @@ pub struct AcpOutput {
     pub metadata: crate::client::StreamingMetadata,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct AcpOutputIoOptions<'a> {
     pub stream_stdout_to_stderr: bool,
     pub output_spool: Option<&'a Path>,
+    pub spool_max_bytes: u64,
+    pub keep_rotated_spool: bool,
+}
+
+impl Default for AcpOutputIoOptions<'_> {
+    fn default() -> Self {
+        Self {
+            stream_stdout_to_stderr: false,
+            output_spool: None,
+            spool_max_bytes: DEFAULT_SPOOL_MAX_BYTES,
+            keep_rotated_spool: DEFAULT_SPOOL_KEEP_ROTATED,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -242,6 +257,8 @@ pub async fn run_prompt_with_io(
             PromptIoOptions {
                 stream_stdout_to_stderr: options.io.stream_stdout_to_stderr,
                 output_spool: options.io.output_spool,
+                spool_max_bytes: options.io.spool_max_bytes,
+                keep_rotated_spool: options.io.keep_rotated_spool,
             },
         )
         .await?;

@@ -547,6 +547,8 @@ impl BackendTransport {
                             csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
                         ),
                         keep_stdin_open: true,
+                        spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
+                        keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
                     },
                     Some(&sandbox_config),
                     &config.name,
