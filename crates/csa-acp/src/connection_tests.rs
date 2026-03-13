@@ -1,6 +1,13 @@
 use super::*;
 use std::sync::{LazyLock, Mutex};
 
+fn flush_spool(spool: &mut Option<std::io::BufWriter<std::fs::File>>) {
+    if let Some(w) = spool {
+        use std::io::Write;
+        w.flush().expect("flush spool");
+    }
+}
+
 static HEARTBEAT_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn restore_env_var(key: &str, original: Option<String>) {
@@ -102,12 +109,17 @@ async fn env_remove_strips_claudecode_from_child() {
 
 #[test]
 fn test_collect_agent_output_includes_thoughts() {
-    let events = vec![
+    let events = Rc::new(RefCell::new(vec![
         SessionEvent::AgentMessage("Hello".to_string()),
         SessionEvent::AgentThought("Thinking...".to_string()),
         SessionEvent::AgentMessage(" world".to_string()),
-    ];
-    let output = collect_agent_output(&events);
+    ]));
+    let mut index = 0;
+    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut metadata = StreamingMetadata::default();
+
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    let output = collect_agent_output(&metadata);
     assert_eq!(output, "HelloThinking... world");
 }
 
@@ -125,13 +137,18 @@ fn stream_new_agent_messages_includes_thoughts_in_spool() {
     let spool_path = temp.path().join("output.log");
     let mut spool = open_output_spool_file(Some(&spool_path));
     let mut index = 0;
+    let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    flush_spool(&mut spool);
     assert_eq!(
         std::fs::read_to_string(&spool_path).expect("read spool"),
         "hello...thinking"
     );
+    // Events stay in the vec for downstream consumers; index advances.
     assert_eq!(index, 2);
+    assert_eq!(events.borrow().len(), 2, "events must NOT be drained");
+    assert_eq!(metadata.events_count, 2);
 }
 
 #[test]
@@ -145,23 +162,29 @@ fn stream_new_agent_messages_writes_spool_incrementally() {
     let spool_path = temp.path().join("output.log");
     let mut spool = open_output_spool_file(Some(&spool_path));
     let mut index = 0;
+    let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    flush_spool(&mut spool);
     assert_eq!(
         std::fs::read_to_string(&spool_path).expect("read spool"),
         "hello"
     );
     assert_eq!(index, 1);
+    assert_eq!(events.borrow().len(), 1);
 
     events
         .borrow_mut()
         .push(SessionEvent::AgentMessage(" world".to_string()));
-    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    flush_spool(&mut spool);
     assert_eq!(
         std::fs::read_to_string(&spool_path).expect("read spool"),
         "hello world"
     );
     assert_eq!(index, 2);
+    assert_eq!(events.borrow().len(), 2);
+    assert_eq!(metadata.events_count, 2);
 }
 
 #[test]
@@ -174,15 +197,18 @@ fn stream_new_agent_messages_skips_non_message_events() {
         },
     ]));
     let mut index = 0;
-    let mut spool = None;
+    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
     assert_eq!(index, 2);
+    assert_eq!(events.borrow().len(), 2);
+    assert_eq!(metadata.events_count, 2);
 }
 
 #[test]
 fn collect_agent_output_excludes_diagnostic_events() {
-    let events = vec![
+    let events = Rc::new(RefCell::new(vec![
         SessionEvent::AgentMessage("Hello".to_string()),
         SessionEvent::PlanUpdate("step 1".to_string()),
         SessionEvent::ToolCallStarted {
@@ -197,12 +223,20 @@ fn collect_agent_output_excludes_diagnostic_events() {
         },
         SessionEvent::Other("misc".to_string()),
         SessionEvent::AgentMessage(" world".to_string()),
-    ];
-    let output = collect_agent_output(&events);
+    ]));
+    let mut index = 0;
+    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut metadata = StreamingMetadata::default();
+
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    let output = collect_agent_output(&metadata);
     assert_eq!(
         output, "Hellohmm world",
         "collect_agent_output must only include AgentMessage and AgentThought"
     );
+    assert!(metadata.has_tool_calls);
+    assert!(metadata.has_plan_updates);
+    assert_eq!(metadata.events_count, 7);
 }
 
 #[test]
@@ -227,8 +261,10 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
     let spool_path = temp.path().join("output.log");
     let mut spool = open_output_spool_file(Some(&spool_path));
     let mut index = 0;
+    let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool);
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    flush_spool(&mut spool);
     let spool_content = std::fs::read_to_string(&spool_path).expect("read spool");
     assert!(
         spool_content.contains("msg"),
@@ -255,6 +291,78 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
         "spool must include AgentThought"
     );
     assert_eq!(index, 6);
+    assert_eq!(events.borrow().len(), 6);
+    assert_eq!(metadata.events_count, 6);
+    assert!(metadata.has_tool_calls);
+    assert!(metadata.has_plan_updates);
+}
+
+#[test]
+fn stream_preserves_events_for_downstream_consumers() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let mut index = 0;
+    let mut spool: Option<std::io::BufWriter<std::fs::File>> = None;
+    let mut metadata = StreamingMetadata::default();
+
+    // Push 10000 events and stream them in batches.
+    // Events must NOT be drained — they stay in the vec so downstream
+    // consumers (acp-events.jsonl transcript, --no-verify command
+    // extraction) can access them via `std::mem::take` at prompt completion.
+    // Memory bounding comes from the tail buffer in StreamingMetadata (1 MiB cap),
+    // not from draining the event vec.
+    for i in 0..10_000 {
+        events
+            .borrow_mut()
+            .push(SessionEvent::AgentMessage(format!("msg-{i}\n")));
+        if i % 100 == 99 {
+            stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+            // Index advances to match the number of events seen so far.
+            assert_eq!(index, i + 1, "processed_index must track event count");
+        }
+    }
+    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    // All 10000 events are still in the vec for downstream consumers.
+    assert_eq!(events.borrow().len(), 10_000);
+    assert_eq!(index, 10_000);
+    assert_eq!(metadata.events_count, 10_000);
+    // Tail buffer is bounded by TAIL_BUFFER_MAX_BYTES (1 MiB), not unbounded.
+    assert!(
+        metadata.tail_text.len() <= 1024 * 1024 + 64,
+        "tail_text must be bounded by TAIL_BUFFER_MAX_BYTES"
+    );
+}
+
+#[test]
+fn spool_writes_all_data_without_truncation() {
+    let events = Rc::new(RefCell::new(Vec::new()));
+    let temp = tempfile::tempdir().expect("tempdir");
+    let spool_path = temp.path().join("output.log");
+    let mut spool = open_output_spool_file(Some(&spool_path));
+    let mut index = 0;
+    let mut metadata = StreamingMetadata::default();
+
+    // Write several chunks and verify none are truncated.
+    let chunk_size = 1024; // 1 KB per event
+    let chunk = "x".repeat(chunk_size);
+    let num_chunks = 100;
+    for _ in 0..num_chunks {
+        events
+            .borrow_mut()
+            .push(SessionEvent::AgentMessage(chunk.clone()));
+        stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    }
+    flush_spool(&mut spool);
+
+    let file_size = std::fs::metadata(&spool_path)
+        .expect("spool file exists")
+        .len() as usize;
+    assert_eq!(
+        file_size,
+        chunk_size * num_chunks,
+        "spool must write all data without truncation (preserves tail markers)"
+    );
+    assert_eq!(metadata.events_count, num_chunks);
+    assert_eq!(metadata.spool_bytes_written, chunk_size * num_chunks);
 }
 
 #[test]

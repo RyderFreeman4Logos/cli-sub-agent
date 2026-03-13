@@ -246,6 +246,7 @@ pub(super) async fn run_acp_sandboxed(
         events: result.events,
         session_id: acp_session_id,
         exit_code,
+        metadata: result.metadata,
     })
 }
 

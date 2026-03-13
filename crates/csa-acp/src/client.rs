@@ -6,6 +6,60 @@ use agent_client_protocol::{
     RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, SessionUpdate,
 };
 
+/// Maximum bytes retained in the tail text buffer.
+///
+/// Agent message and thought text beyond this limit is discarded from memory
+/// after being written to the output spool on disk.  1 MiB is sufficient for
+/// summary extraction and token-usage parsing, which only inspect the tail.
+const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024;
+
+/// High-water mark for tail buffer trimming (2x the target size).
+///
+/// We allow the buffer to grow to this size before trimming it back to
+/// [`TAIL_BUFFER_MAX_BYTES`].  This amortises the O(N) cost of
+/// `String::drain` so that trimming occurs once per MiB of new text
+/// rather than once per chunk, avoiding O(N²) behaviour.
+const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2;
+
+/// Incrementally accumulated metadata from streamed ACP events.
+///
+/// Built up by [`super::connection::stream_new_agent_messages`] as events flow
+/// through, avoiding the need to keep the full event vector in memory.
+#[derive(Debug, Clone, Default)]
+pub struct StreamingMetadata {
+    /// Total number of events seen across the entire prompt turn.
+    pub events_count: usize,
+    /// Whether any `ToolCallStarted` event was observed.
+    pub has_tool_calls: bool,
+    /// Whether any `PlanUpdate` event was observed.
+    pub has_plan_updates: bool,
+    /// Tail buffer of agent message/thought text (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
+    pub tail_text: String,
+    /// Total bytes written to the output spool file.
+    pub(crate) spool_bytes_written: usize,
+}
+
+impl StreamingMetadata {
+    /// Append agent text to the tail buffer, trimming from the front if needed.
+    ///
+    /// Uses a high-water mark ([`TAIL_BUFFER_HIGH_WATER`]) so trimming occurs
+    /// once per MiB of new text rather than once per chunk, amortising the
+    /// O(N) cost of `String::drain` and avoiding O(N²) behaviour.
+    pub(crate) fn append_text(&mut self, text: &str) {
+        self.tail_text.push_str(text);
+        if self.tail_text.len() > TAIL_BUFFER_HIGH_WATER {
+            // Trim back to TAIL_BUFFER_MAX_BYTES.  Find a char boundary
+            // at or after the excess point to avoid splitting multi-byte chars.
+            let excess = self.tail_text.len() - TAIL_BUFFER_MAX_BYTES;
+            let mut trim_at = excess;
+            while trim_at < self.tail_text.len() && !self.tail_text.is_char_boundary(trim_at) {
+                trim_at += 1;
+            }
+            self.tail_text.drain(..trim_at);
+        }
+    }
+}
+
 /// Streaming session events collected from ACP notifications.
 #[derive(Debug, Clone, serde::Serialize)]
 pub enum SessionEvent {

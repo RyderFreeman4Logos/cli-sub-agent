@@ -5,7 +5,7 @@ pub mod mcp_proxy_client;
 pub mod session_config;
 pub mod transport;
 
-pub use client::SessionEvent;
+pub use client::{SessionEvent, StreamingMetadata};
 pub use connection::{
     AcpConnection, AcpConnectionOptions, AcpSandboxHandle, CliForkResult, PromptIoOptions,
     fork_session_via_cli,

@@ -31,7 +31,8 @@ pub use event_writer::{EventWriteStats, EventWriter};
 pub use finding_id::{FindingId, anchor_hash, normalize_path};
 pub use output_parser::{
     estimate_tokens, load_output_index, parse_return_packet, persist_structured_output,
-    read_all_sections, read_section, validate_return_packet_path,
+    persist_structured_output_from_file, read_all_sections, read_section,
+    validate_return_packet_path,
 };
 pub use output_section::{
     ChangedFile, FileAction, OutputIndex, OutputSection, RETURN_PACKET_MAX_SUMMARY_CHARS,

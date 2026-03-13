@@ -13,7 +13,7 @@ use csa_executor::Executor;
 use csa_hooks::{HookEvent, run_hooks_for_event};
 use csa_session::{
     MetaSessionState, SessionArtifact, SessionResult, TokenUsage, ToolState, get_session_dir,
-    load_result, load_session, persist_structured_output, save_result, save_session,
+    load_result, load_session, save_result, save_session,
 };
 
 use crate::memory_capture;
@@ -393,15 +393,10 @@ fn write_prompt_audit(session_dir: &Path, effective_prompt: &str) {
 fn persist_output_sections(session_dir: &Path) {
     let output_log_path = session_dir.join("output.log");
     if output_log_path.exists() {
-        match fs::read_to_string(&output_log_path) {
-            Ok(output_log) => {
-                if let Err(e) = persist_structured_output(session_dir, &output_log) {
-                    warn!("Failed to persist structured output: {}", e);
-                }
-            }
-            Err(e) => {
-                warn!("Failed to read output.log for structured output: {}", e);
-            }
+        if let Err(e) =
+            csa_session::persist_structured_output_from_file(session_dir, &output_log_path)
+        {
+            warn!("Failed to persist structured output: {}", e);
         }
     }
 }

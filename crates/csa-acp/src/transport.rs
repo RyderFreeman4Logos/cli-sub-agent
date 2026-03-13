@@ -27,6 +27,7 @@ pub struct AcpOutput {
     pub events: Vec<SessionEvent>,
     pub session_id: String,
     pub exit_code: i32,
+    pub metadata: crate::client::StreamingMetadata,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -274,6 +275,7 @@ pub async fn run_prompt_with_io(
         events: result.events,
         session_id: session.session_id().to_string(),
         exit_code,
+        metadata: result.metadata,
     })
 }
 

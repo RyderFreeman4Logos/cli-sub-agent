@@ -11,8 +11,10 @@ use anyhow::{Context, Result};
 
 use crate::output_section::{OutputIndex, OutputSection};
 
+mod persist_streaming;
 mod return_packet;
 
+pub use persist_streaming::persist_structured_output_from_file;
 pub use return_packet::{parse_return_packet, validate_return_packet_path};
 
 /// Marker prefix and suffix for section delimiters.
@@ -28,7 +30,7 @@ pub fn estimate_tokens(content: &str) -> usize {
 
 /// A raw marker detected during scanning.
 #[derive(Debug)]
-enum Marker {
+pub(super) enum Marker {
     /// Section start: `<!-- CSA:SECTION:<id> -->`
     Start { id: String, line: usize },
     /// Section end: `<!-- CSA:SECTION:<id>:END -->`
@@ -170,7 +172,7 @@ fn extract_content(lines: &[&str], start: usize, end: usize) -> String {
 ///
 /// Only allows alphanumeric, `-`, `_`, and `.` characters.
 /// Any other character (including `/`, `\`, and `..` sequences) is replaced with `_`.
-fn sanitize_section_id(id: &str) -> String {
+pub(super) fn sanitize_section_id(id: &str) -> String {
     let sanitized: String = id
         .chars()
         .map(|c| {
@@ -216,7 +218,7 @@ fn build_section(
 }
 
 /// Convert a kebab-case or snake_case id to a title-case string.
-fn id_to_title(id: &str) -> String {
+pub(super) fn id_to_title(id: &str) -> String {
     id.split(['-', '_'])
         .map(|word| {
             let mut chars = word.chars();
@@ -235,7 +237,7 @@ fn id_to_title(id: &str) -> String {
 /// Deduplicate file paths for sections with the same sanitized ID.
 ///
 /// First occurrence keeps `<id>.md`, subsequent occurrences get `<id>-2.md`, `<id>-3.md`, etc.
-fn deduplicate_file_paths(sections: &mut [OutputSection]) {
+pub(super) fn deduplicate_file_paths(sections: &mut [OutputSection]) {
     let mut seen: HashMap<String, u32> = HashMap::new();
     for section in sections.iter_mut() {
         let count = seen.entry(section.id.clone()).or_insert(0);
