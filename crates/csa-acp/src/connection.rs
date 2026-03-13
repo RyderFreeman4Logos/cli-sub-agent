@@ -23,7 +23,7 @@ pub(crate) mod connection_fork;
 pub use connection_fork::{CliForkResult, fork_session_via_cli};
 
 use crate::{
-    client::{SessionEvent, SharedActivity, SharedEvents},
+    client::{SessionEvent, SharedActivity, SharedEvents, StreamingMetadata},
     error::{AcpError, AcpResult},
 };
 
@@ -32,10 +32,17 @@ const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 
 #[derive(Debug, Clone, Default)]
 pub struct PromptResult {
+    /// Agent output text (tail-only for large sessions).
+    ///
+    /// For sessions that produce more than ~1 MiB of agent text, this field
+    /// contains only the trailing portion.  The full output is available on
+    /// disk via the output spool file.
     pub output: String,
     pub events: Vec<SessionEvent>,
     pub exit_reason: Option<String>,
     pub timed_out: bool,
+    /// Incrementally collected metadata from the event stream.
+    pub metadata: StreamingMetadata,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -269,6 +276,7 @@ impl AcpConnection {
         let mut last_heartbeat = execution_start;
         let mut streamed_event_index = 0usize;
         let mut output_spool = open_output_spool_file(io.output_spool);
+        let mut metadata = StreamingMetadata::default();
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
 
@@ -289,6 +297,7 @@ impl AcpConnection {
                                 &mut streamed_event_index,
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
+                                &mut metadata,
                             );
                             break PromptOutcome::Completed(response);
                         }
@@ -298,6 +307,7 @@ impl AcpConnection {
                                 &mut streamed_event_index,
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
+                                &mut metadata,
                             );
                             maybe_emit_heartbeat(
                                 heartbeat_interval,
@@ -320,15 +330,25 @@ impl AcpConnection {
             &mut streamed_event_index,
             io.stream_stdout_to_stderr,
             &mut output_spool,
+            &mut metadata,
         );
+        // Flush buffered spool data to disk before returning.
+        if let Some(ref mut writer) = output_spool {
+            use std::io::Write;
+            let _ = writer.flush();
+        }
+        // Take all accumulated events for downstream consumers (transcript
+        // writing, command extraction).  Events were NOT drained during
+        // streaming — they stayed in the vec so this take captures them all.
         let events = std::mem::take(&mut *self.events.borrow_mut());
-        let output = collect_agent_output(&events);
+        let output = collect_agent_output(&metadata);
         match outcome {
             PromptOutcome::Completed(Ok(response)) => Ok(PromptResult {
                 output,
                 events,
                 exit_reason: Some(stop_reason_to_string(response.stop_reason)),
                 timed_out: false,
+                metadata,
             }),
             PromptOutcome::Completed(Err(err)) => Err(AcpError::PromptFailed(err.to_string())),
             PromptOutcome::IdleTimeout => {
@@ -338,6 +358,7 @@ impl AcpConnection {
                     events,
                     exit_reason: Some("idle_timeout".to_string()),
                     timed_out: true,
+                    metadata,
                 })
             }
         }
@@ -418,11 +439,14 @@ impl AcpConnection {
     }
 }
 
-fn open_output_spool_file(path: Option<&Path>) -> Option<std::fs::File> {
+/// 64 KiB buffer for spool writes — reduces syscall overhead vs per-chunk flush.
+const SPOOL_BUF_SIZE: usize = 64 * 1024;
+
+fn open_output_spool_file(path: Option<&Path>) -> Option<std::io::BufWriter<std::fs::File>> {
     let path = path?;
     use std::fs::OpenOptions;
     match OpenOptions::new().create(true).append(true).open(path) {
-        Ok(file) => Some(file),
+        Ok(file) => Some(std::io::BufWriter::with_capacity(SPOOL_BUF_SIZE, file)),
         Err(error) => {
             tracing::warn!(
                 path = %path.display(),
@@ -481,96 +505,103 @@ fn stream_new_agent_messages(
     events: &SharedEvents,
     processed_index: &mut usize,
     stream_stdout_to_stderr: bool,
-    output_spool: &mut Option<std::fs::File>,
+    output_spool: &mut Option<std::io::BufWriter<std::fs::File>>,
+    metadata: &mut StreamingMetadata,
 ) {
-    let new_events = {
-        let events_ref = events.borrow();
-        if *processed_index >= events_ref.len() {
-            return;
-        }
+    // Iterate new events by index WITHOUT draining.  Events must stay in
+    // the shared vec so downstream consumers (acp-events.jsonl transcript,
+    // --no-verify command extraction) can access them via `std::mem::take`
+    // when the prompt completes.  The tail buffer in StreamingMetadata caps
+    // agent text retention at 1 MiB, avoiding a second full copy.
+    let events_ref = events.borrow();
+    if *processed_index >= events_ref.len() {
+        return;
+    }
+    let new_end = events_ref.len();
+    let new_slice = &events_ref[*processed_index..];
 
-        let events = events_ref[*processed_index..].to_vec();
-        *processed_index = events_ref.len();
-        events
-    };
-
-    for event in new_events {
+    for event in new_slice {
+        metadata.events_count += 1;
         match event {
             SessionEvent::AgentMessage(chunk) => {
                 if stream_stdout_to_stderr {
                     eprint!("[stdout] {chunk}");
                 }
-                spool_chunk(output_spool, chunk.as_bytes());
+                spool_chunk(output_spool, chunk.as_bytes(), metadata);
+                metadata.append_text(chunk);
             }
             SessionEvent::AgentThought(chunk) => {
                 if stream_stdout_to_stderr {
                     eprint!("[thought] {chunk}");
                 }
-                spool_chunk(output_spool, chunk.as_bytes());
+                spool_chunk(output_spool, chunk.as_bytes(), metadata);
+                metadata.append_text(chunk);
             }
             SessionEvent::PlanUpdate(plan) => {
+                metadata.has_plan_updates = true;
                 let msg = format!("[plan] {plan}\n");
                 if stream_stdout_to_stderr {
                     eprint!("{msg}");
                 }
-                spool_chunk(output_spool, msg.as_bytes());
+                spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
             SessionEvent::ToolCallStarted { title, kind, .. } => {
+                metadata.has_tool_calls = true;
                 let msg = format!("[tool:started] {title} ({kind})\n");
                 if stream_stdout_to_stderr {
                     eprint!("{msg}");
                 }
-                spool_chunk(output_spool, msg.as_bytes());
+                spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
             SessionEvent::ToolCallCompleted { status, .. } => {
                 let msg = format!("[tool:completed] {status}\n");
                 if stream_stdout_to_stderr {
                     eprint!("{msg}");
                 }
-                spool_chunk(output_spool, msg.as_bytes());
+                spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
             SessionEvent::Other(payload) => {
                 let msg = format!("[other] {payload}\n");
                 if stream_stdout_to_stderr {
                     eprint!("{msg}");
                 }
-                spool_chunk(output_spool, msg.as_bytes());
+                spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
         }
     }
+
+    // Drop the borrow before updating the index.
+    drop(events_ref);
+    *processed_index = new_end;
 }
 
-fn spool_chunk(spool: &mut Option<std::fs::File>, bytes: &[u8]) {
-    if let Some(file) = spool {
+fn spool_chunk(
+    spool: &mut Option<std::io::BufWriter<std::fs::File>>,
+    bytes: &[u8],
+    metadata: &mut StreamingMetadata,
+) {
+    if let Some(writer) = spool {
         use std::io::Write;
-        let _ = file.write_all(bytes);
-        let _ = file.flush();
+        let _ = writer.write_all(bytes);
+        metadata.spool_bytes_written += bytes.len();
+        // BufWriter flushes automatically when the buffer fills (64 KiB).
+        // No per-chunk flush — the final flush happens on drop or when the
+        // prompt_with_io loop ends.
+        //
+        // Note: no size cap on the spool file.  Disk usage is managed by
+        // `csa gc`, not here.  A HEAD-only cap would truncate tail markers
+        // (e.g. return-packet), breaking fork call chains.  RAM is bounded
+        // by the StreamingMetadata tail buffer instead.
     }
 }
 
 /// Collect agent output for the caller (stdout / summary extraction).
 ///
-/// Only `AgentMessage` and `AgentThought` events contribute to the return
-/// value.  Diagnostic events (plan updates, tool-call lifecycle, other) are
-/// intentionally excluded — they are already written to the `output.log`
-/// spool by [`stream_new_agent_messages`] for audit purposes, but including
-/// them in the caller-facing output pollutes stdout and corrupts summary
-/// extraction (which uses the last non-empty line).
-fn collect_agent_output(events: &[SessionEvent]) -> String {
-    let mut output = String::new();
-    for event in events {
-        match event {
-            SessionEvent::AgentMessage(chunk) | SessionEvent::AgentThought(chunk) => {
-                output.push_str(chunk);
-            }
-            // Diagnostic events: spool-only, not forwarded to caller.
-            SessionEvent::PlanUpdate(_)
-            | SessionEvent::ToolCallStarted { .. }
-            | SessionEvent::ToolCallCompleted { .. }
-            | SessionEvent::Other(_) => {}
-        }
-    }
-    output
+/// Returns the tail text buffer from [`StreamingMetadata`], which contains
+/// only `AgentMessage` and `AgentThought` text, bounded to ~1 MiB.
+/// The full output is on disk in the output spool file.
+fn collect_agent_output(metadata: &StreamingMetadata) -> String {
+    metadata.tail_text.clone()
 }
 
 fn stop_reason_to_string(reason: StopReason) -> String {
