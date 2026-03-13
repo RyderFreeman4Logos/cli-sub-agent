@@ -1,0 +1,15 @@
+# Project-level CSA configuration for cli-sub-agent.
+#
+# These [hooks] entries are injected as runtime overrides and take
+# priority over ~/.config/cli-sub-agent/hooks.toml and session-root
+# hooks.toml entries for PreRun/PostRun events.
+
+[hooks]
+# Safety-net: after every `csa run` session, check whether the current
+# branch has an open PR that hasn't been reviewed by pr-codex-bot yet.
+# Catches cases where `gh pr create` was invoked outside a weave
+# workflow step.
+# CSA sets cwd to project root before hook execution, so relative paths
+# are safe.  The script also resolves project root internally as fallback.
+post_run = "scripts/hooks/post-pr-create-check.sh --base main"
+timeout_secs = 120

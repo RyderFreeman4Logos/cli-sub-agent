@@ -64,7 +64,6 @@ CLAUDE.md
 system_prompt.rs.md
 
 # Other
-.csa
 strix_runs
 .playwright-mcp/
 .claude
@@ -78,7 +77,10 @@ strix_runs
 **/repomix-output.*
 **/*.repomix.lock
 .repomix/
-.csa/
+# CSA local state (plans, sessions, markers) is per-installation.
+# Project-level config (.csa/config.toml) IS tracked for shared hook config.
+.csa/*
+!.csa/config.toml
 
 # Review artifacts
 result.toml
