@@ -23,12 +23,12 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
     );
 }
 
-/// Lightweight tools (codex) with no project config should NOT get a sandbox context.
+/// Lightweight tools (opencode) with no project config should NOT get a sandbox context.
 #[test]
 fn test_none_config_lightweight_skips_sandbox() {
     let result = resolve_sandbox_options(
         None,
-        "codex",
+        "opencode",
         "test-session",
         StreamMode::BufferOnly,
         120,

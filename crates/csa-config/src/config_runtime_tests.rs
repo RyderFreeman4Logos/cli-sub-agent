@@ -36,11 +36,12 @@ fn empty_config() -> ProjectConfig {
 // ── Profile auto-detection ─────────────────────────────────────────────
 
 #[test]
-fn profile_codex_is_lightweight() {
+fn profile_codex_is_heavyweight() {
     let cfg = empty_config();
     assert_eq!(
         cfg.tool_resource_profile("codex"),
-        ToolResourceProfile::Lightweight
+        ToolResourceProfile::Heavyweight,
+        "codex uses codex-acp (Node.js) backend — must be Heavyweight"
     );
 }
 
@@ -118,9 +119,19 @@ fn profile_becomes_custom_when_tool_has_enforcement_override() {
 fn enforcement_lightweight_defaults_to_off() {
     let cfg = empty_config();
     assert_eq!(
-        cfg.tool_enforcement_mode("codex"),
+        cfg.tool_enforcement_mode("opencode"),
         EnforcementMode::Off,
         "Lightweight tools should default to Off"
+    );
+}
+
+#[test]
+fn enforcement_codex_defaults_to_best_effort() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.tool_enforcement_mode("codex"),
+        EnforcementMode::BestEffort,
+        "codex (Heavyweight) should default to BestEffort"
     );
 }
 
@@ -206,9 +217,19 @@ fn memory_max_gemini_cli_defaults_to_none() {
 fn memory_max_lightweight_gets_none() {
     let cfg = empty_config();
     assert_eq!(
-        cfg.sandbox_memory_max_mb("codex"),
+        cfg.sandbox_memory_max_mb("opencode"),
         None,
         "Lightweight profile should not set memory limits"
+    );
+}
+
+#[test]
+fn memory_max_codex_gets_heavyweight_default() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.sandbox_memory_max_mb("codex"),
+        Some(2048),
+        "codex (Heavyweight) should get 2048 MB default"
     );
 }
 
@@ -260,7 +281,7 @@ fn memory_swap_gemini_cli_defaults_to_none() {
 fn memory_swap_lightweight_gets_none() {
     let cfg = empty_config();
     assert_eq!(
-        cfg.sandbox_memory_swap_max_mb("codex"),
+        cfg.sandbox_memory_swap_max_mb("opencode"),
         None,
         "Lightweight profile should not set swap limits"
     );
@@ -293,12 +314,33 @@ fn enforcement_memory_override_inherits_heavyweight_best_effort() {
 }
 
 #[test]
-fn enforcement_memory_override_inherits_lightweight_off() {
+fn enforcement_memory_override_on_lightweight_auto_promotes() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "opencode".to_string(),
+        ToolConfig {
+            memory_max_mb: Some(512),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_resource_profile("opencode"),
+        ToolResourceProfile::Custom,
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("opencode"),
+        EnforcementMode::BestEffort,
+        "Lightweight tool with memory_max_mb should auto-promote to BestEffort"
+    );
+}
+
+#[test]
+fn enforcement_memory_override_on_codex_inherits_heavyweight_best_effort() {
     let mut cfg = empty_config();
     cfg.tools.insert(
         "codex".to_string(),
         ToolConfig {
-            memory_max_mb: Some(512),
+            memory_max_mb: Some(8192),
             ..Default::default()
         },
     );
@@ -308,8 +350,8 @@ fn enforcement_memory_override_inherits_lightweight_off() {
     );
     assert_eq!(
         cfg.tool_enforcement_mode("codex"),
-        EnforcementMode::Off,
-        "Custom profile on Lightweight tool should inherit Off"
+        EnforcementMode::BestEffort,
+        "Custom profile on codex (inherently Heavyweight) should inherit BestEffort"
     );
 }
 
@@ -366,20 +408,84 @@ fn memory_max_enforcement_only_inherits_heavyweight_defaults() {
 fn memory_max_enforcement_only_lightweight_stays_none() {
     let mut cfg = empty_config();
     cfg.tools.insert(
-        "codex".to_string(),
+        "opencode".to_string(),
         ToolConfig {
             enforcement_mode: Some(EnforcementMode::BestEffort),
             ..Default::default()
         },
     );
     assert_eq!(
-        cfg.tool_resource_profile("codex"),
+        cfg.tool_resource_profile("opencode"),
         ToolResourceProfile::Custom,
     );
     assert_eq!(
-        cfg.sandbox_memory_max_mb("codex"),
+        cfg.sandbox_memory_max_mb("opencode"),
         None,
         "Lightweight inherent profile should still return None for memory"
+    );
+}
+
+// ── Safety net: auto-promote Off when memory limits set ────────────────
+
+#[test]
+fn enforcement_auto_promotes_off_when_memory_set_on_lightweight() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "opencode".to_string(),
+        ToolConfig {
+            memory_max_mb: Some(4096),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("opencode"),
+        EnforcementMode::BestEffort,
+        "Off should auto-promote to BestEffort when memory_max_mb is set"
+    );
+}
+
+#[test]
+fn enforcement_no_auto_promote_when_explicitly_off() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "opencode".to_string(),
+        ToolConfig {
+            enforcement_mode: Some(EnforcementMode::Off),
+            memory_max_mb: Some(4096),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("opencode"),
+        EnforcementMode::Off,
+        "Explicit Off should NOT be auto-promoted"
+    );
+}
+
+#[test]
+fn enforcement_no_auto_promote_without_memory_limits() {
+    let cfg = empty_config();
+    assert_eq!(
+        cfg.tool_enforcement_mode("opencode"),
+        EnforcementMode::Off,
+        "No memory limits → no auto-promote"
+    );
+}
+
+#[test]
+fn enforcement_auto_promotes_with_swap_limit_only() {
+    let mut cfg = empty_config();
+    cfg.tools.insert(
+        "opencode".to_string(),
+        ToolConfig {
+            memory_swap_max_mb: Some(2048),
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        cfg.tool_enforcement_mode("opencode"),
+        EnforcementMode::BestEffort,
+        "Off should auto-promote when memory_swap_max_mb is set"
     );
 }
 
@@ -413,7 +519,7 @@ fn lean_mode_heavyweight_defaults_to_true() {
 fn lean_mode_lightweight_defaults_to_false() {
     let cfg = empty_config();
     assert!(
-        !cfg.tool_lean_mode("codex"),
+        !cfg.tool_lean_mode("opencode"),
         "Lightweight tools should default lean_mode to false"
     );
 }
@@ -450,7 +556,7 @@ fn setting_sources_heavyweight_defaults_to_empty_vec() {
 fn setting_sources_lightweight_defaults_to_none() {
     let cfg = empty_config();
     assert_eq!(
-        cfg.tool_setting_sources("codex"),
+        cfg.tool_setting_sources("opencode"),
         None,
         "Lightweight tools should default to None (load everything)"
     );
@@ -514,7 +620,7 @@ fn setting_sources_neither_set_uses_profile_default() {
     // Heavyweight → Some(vec![])
     assert_eq!(cfg.tool_setting_sources("claude-code"), Some(vec![]));
     // Lightweight → None
-    assert_eq!(cfg.tool_setting_sources("codex"), None);
+    assert_eq!(cfg.tool_setting_sources("opencode"), None);
 }
 
 // ── Node heap limit defaults ───────────────────────────────────────────
@@ -558,6 +664,32 @@ fn default_sandbox_for_tool_claude_code() {
 #[test]
 fn default_sandbox_for_tool_codex() {
     let opts = default_sandbox_for_tool("codex");
+    assert_eq!(
+        opts.enforcement,
+        EnforcementMode::BestEffort,
+        "codex (Heavyweight) must default to BestEffort enforcement"
+    );
+    assert_eq!(
+        opts.memory_max_mb,
+        Some(2048),
+        "codex (Heavyweight) must get default memory limit"
+    );
+    assert_eq!(
+        opts.memory_swap_max_mb,
+        Some(0),
+        "codex (Heavyweight) must disable swap by default"
+    );
+    assert_eq!(
+        opts.setting_sources,
+        Some(vec![]),
+        "Heavyweight should default to lean (empty setting_sources)"
+    );
+    assert_eq!(opts.node_heap_limit_mb, Some(2048));
+}
+
+#[test]
+fn default_sandbox_for_tool_opencode() {
+    let opts = default_sandbox_for_tool("opencode");
     assert_eq!(opts.enforcement, EnforcementMode::Off);
     assert_eq!(opts.memory_max_mb, None);
     assert_eq!(opts.memory_swap_max_mb, None);
