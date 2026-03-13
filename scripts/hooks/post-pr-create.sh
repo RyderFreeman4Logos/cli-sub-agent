@@ -132,4 +132,9 @@ fi
 
 echo "Confirmed PR #${PR_NUMBER} (${PR_URL}) for branch ${CURRENT_BRANCH}."
 echo "Running pr-codex-bot transaction..."
+
+# Recursion guard: prevent PostRun hook from re-triggering pr-codex-bot
+# while inner CSA sessions spawned by this workflow complete.
+export CSA_PR_BOT_GUARD=1
+
 csa plan run patterns/pr-codex-bot/workflow.toml
