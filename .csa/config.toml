@@ -5,11 +5,11 @@
 # hooks.toml entries for PreRun/PostRun events.
 
 [hooks]
-# Safety-net: after every `csa run` session, check whether the current
-# branch has an open PR that hasn't been reviewed by pr-codex-bot yet.
-# Catches cases where `gh pr create` was invoked outside a weave
-# workflow step.
+# Safety-net: after every `csa run` session, inspect the session output
+# for a freshly created GitHub PR URL, then trigger the deterministic
+# post-create transaction. Fall back to the branch-based open-PR check
+# only when the session output does not provide an exact PR signal.
 # CSA sets cwd to project root before hook execution, so relative paths
 # are safe.  The script also resolves project root internally as fallback.
-post_run = "scripts/hooks/post-pr-create-check.sh --base main"
+post_run = "scripts/hooks/post-pr-create-check.sh --base main --session-dir {session_dir}"
 timeout_secs = 120
