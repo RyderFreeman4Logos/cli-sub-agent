@@ -2,9 +2,14 @@
 
 use crate::output_section::ReturnPacketRef;
 use chrono::{DateTime, Utc};
+use csa_core::vcs::{VcsIdentity, VcsKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+fn default_identity_version() -> u8 {
+    1
+}
 
 const FORK_CALL_RATE_LIMIT_MAX: usize = 10;
 const FORK_CALL_RATE_LIMIT_WINDOW: Duration = Duration::from_secs(60);
@@ -93,6 +98,17 @@ pub struct MetaSessionState {
     /// Links the session to a specific agent-spec contract for traceability.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spec_id: Option<String>,
+
+    /// Unified VCS identity snapshot at session creation.
+    /// When present, supersedes the legacy `branch`, `git_head_at_creation`,
+    /// and `change_id` fields. Use `resolved_identity()` to get the effective identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vcs_identity: Option<VcsIdentity>,
+
+    /// Identity schema version: 1 = legacy (separate fields), 2 = unified VcsIdentity.
+    /// Used to determine trust level for identity comparisons.
+    #[serde(default = "default_identity_version")]
+    pub identity_version: u8,
 
     /// In-memory fork-call timestamps for simple per-session rate limiting.
     ///
@@ -335,6 +351,28 @@ impl SessionPhase {
 }
 
 impl MetaSessionState {
+    /// Get the effective VCS identity for this session.
+    ///
+    /// If `vcs_identity` is present (v2), returns it directly.
+    /// Otherwise, constructs a legacy identity from the separate fields.
+    pub fn resolved_identity(&self) -> VcsIdentity {
+        if let Some(ref id) = self.vcs_identity {
+            return id.clone();
+        }
+        // Construct from legacy fields — assume Git unless change_id differs from git_head
+        let is_jj = self.change_id.is_some()
+            && self.git_head_at_creation.is_some()
+            && self.change_id != self.git_head_at_creation;
+        VcsIdentity {
+            vcs_kind: if is_jj { VcsKind::Jj } else { VcsKind::Git },
+            commit_id: self.git_head_at_creation.clone(),
+            change_id: if is_jj { self.change_id.clone() } else { None },
+            short_id: None,
+            ref_name: self.branch.clone(),
+            op_id: None,
+        }
+    }
+
     /// Apply a lifecycle event to this session and update `phase` in-place.
     pub fn apply_phase_event(&mut self, event: PhaseEvent) -> Result<(), String> {
         let new_phase = self.phase.transition(&event)?;

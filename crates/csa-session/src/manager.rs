@@ -100,7 +100,27 @@ pub(crate) fn create_session_in(
     }
 
     let now = Utc::now();
-    let branch = detect_current_branch(&normalized_project_path);
+
+    // Unified VCS identity capture — single backend call replaces three
+    let vcs_backend = crate::vcs_backends::create_vcs_backend(&normalized_project_path);
+    let identity = vcs_backend.identity(&normalized_project_path).ok();
+
+    // Populate legacy fields from identity for backward compatibility
+    let branch = identity
+        .as_ref()
+        .and_then(|id| id.ref_name.clone())
+        .or_else(|| detect_current_branch(&normalized_project_path));
+    let git_head = identity
+        .as_ref()
+        .and_then(|id| id.commit_id.clone())
+        .or_else(|| detect_git_head(&normalized_project_path));
+    let change_id = identity
+        .as_ref()
+        .and_then(|id| {
+            // For jj: use change_id; for git: use commit_id (matches legacy behavior)
+            id.change_id.clone().or(id.commit_id.clone())
+        })
+        .or_else(|| detect_change_id(&normalized_project_path));
 
     let state = MetaSessionState {
         meta_session_id: session_id,
@@ -124,10 +144,12 @@ pub(crate) fn create_session_in(
         sandbox_info: None,
         termination_reason: None,
         is_seed_candidate: false,
-        git_head_at_creation: detect_git_head(&normalized_project_path),
+        git_head_at_creation: git_head,
         last_return_packet: None,
-        change_id: detect_change_id(&normalized_project_path),
+        change_id,
         spec_id: None,
+        vcs_identity: identity,
+        identity_version: 2,
         fork_call_timestamps: Vec::new(),
     };
 
@@ -354,6 +376,8 @@ fn list_all_sessions_impl(base_dir: &Path, recover: bool) -> Result<Vec<MetaSess
                     change_id: None,
                     spec_id: None,
                     fork_call_timestamps: Vec::new(),
+                    vcs_identity: None,
+                    identity_version: 1,
                 };
                 if let Err(save_err) = save_session_in(base_dir, &minimal_state) {
                     tracing::warn!(

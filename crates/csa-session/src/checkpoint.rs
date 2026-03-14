@@ -356,6 +356,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         // Should deterministically pick "codex" (alphabetically first)
@@ -499,6 +501,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let note = note_from_session(&session);
