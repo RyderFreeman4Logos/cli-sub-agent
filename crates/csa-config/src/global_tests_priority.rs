@@ -145,6 +145,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     }
 }
 

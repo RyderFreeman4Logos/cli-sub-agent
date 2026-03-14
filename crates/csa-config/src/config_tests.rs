@@ -46,6 +46,7 @@ fn test_save_and_load_roundtrip() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -94,6 +95,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -132,6 +134,7 @@ fn test_is_tool_enabled_configured_enabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.is_tool_enabled("codex"));
@@ -171,6 +174,7 @@ fn test_is_tool_enabled_configured_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(!config.is_tool_enabled("codex"));
@@ -199,6 +203,7 @@ fn test_is_tool_enabled_unconfigured_defaults_to_true() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.is_tool_enabled("codex"));
@@ -241,6 +246,7 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.is_tool_configured_in_tiers("codex"));
@@ -297,6 +303,7 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.is_tool_auto_selectable("codex"));
@@ -340,6 +347,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(!config.can_tool_edit_existing("gemini-cli"));
@@ -371,6 +379,7 @@ fn test_can_tool_edit_existing_without_restrictions() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.can_tool_edit_existing("codex"));
@@ -399,6 +408,7 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.can_tool_edit_existing("codex"));
@@ -430,6 +440,7 @@ fn test_max_recursion_depth_override() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -558,6 +569,7 @@ fn test_schema_version_current_is_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.check_schema_version().is_ok());
@@ -587,6 +599,7 @@ fn test_schema_version_older_is_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     assert!(config.check_schema_version().is_ok());
@@ -615,6 +628,7 @@ fn test_schema_version_newer_fails() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let result = config.check_schema_version();
@@ -670,6 +684,7 @@ fn test_enforce_tool_enabled_disabled_tool_returns_error() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let result = config.enforce_tool_enabled("codex", false);

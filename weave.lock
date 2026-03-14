@@ -1,6 +1,6 @@
 [versions]
-csa = "0.1.121"
-weave = "0.1.121"
+csa = "0.1.123"
+weave = "0.1.123"
 last_migrated_at = "2026-03-08T12:08:01.820964091Z"
 
 [migrations]

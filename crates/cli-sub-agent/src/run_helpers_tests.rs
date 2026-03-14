@@ -135,6 +135,7 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
@@ -171,6 +172,7 @@ fn build_executor_ignores_project_tool_defaults_when_disabled() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), false).unwrap();
@@ -213,6 +215,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let exec = build_executor(
@@ -454,6 +457,7 @@ fn build_executor_model_spec_overrides_both() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     // When explicit model and thinking are provided alongside model_spec,
@@ -539,6 +543,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let result = super::resolve_tool_and_model(
@@ -587,6 +592,7 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let result = super::resolve_tool_and_model(
@@ -635,6 +641,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     let result = super::resolve_tool_and_model(
@@ -698,6 +705,7 @@ fn config_with_tier(tier_name: &str, models: Vec<&str>, enabled_tools: &[&str]) 
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     }
 }
 

@@ -82,6 +82,7 @@ mod tests {
             memory: Default::default(),
             hooks: Default::default(),
             execution: Default::default(),
+            vcs: Default::default(),
         }
     }
 
