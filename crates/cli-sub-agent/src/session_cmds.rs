@@ -227,6 +227,12 @@ fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_jso
     if let Some(ref change_id) = session.change_id {
         value["change_id"] = serde_json::json!(change_id);
     }
+    // Unified VCS identity (v2)
+    let identity = session.resolved_identity();
+    value["vcs_kind"] = serde_json::json!(identity.vcs_kind.to_string());
+    if let Some(ref vcs_id) = session.vcs_identity {
+        value["vcs_identity"] = serde_json::to_value(vcs_id).unwrap_or_default();
+    }
     if let Some(ref spec_id) = session.spec_id {
         value["spec_id"] = serde_json::json!(spec_id);
     }
@@ -417,12 +423,10 @@ pub(crate) fn handle_session_list(
                             String::new()
                         };
 
-                    // Change binding indicator
-                    let change_suffix = if let Some(ref cid) = session.change_id {
-                        let short_cid = &cid[..11.min(cid.len())];
-                        format!("  change:{short_cid}")
-                    } else {
-                        String::new()
+                    // VCS identity indicator
+                    let change_suffix = {
+                        let id = session.resolved_identity();
+                        format!("  {id}")
                     };
 
                     println!(

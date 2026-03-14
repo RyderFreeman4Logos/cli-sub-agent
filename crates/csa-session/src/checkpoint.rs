@@ -21,6 +21,9 @@ pub struct CheckpointNote {
     pub turn_count: u32,
     pub token_usage: Option<TokenUsageSummary>,
     pub description: Option<String>,
+    /// jj operation log ID at checkpoint time (for `jj op restore` rollback).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op_id: Option<String>,
 }
 
 /// Summary of token usage for the checkpoint note.
@@ -184,6 +187,8 @@ pub fn note_from_session(session: &crate::MetaSessionState) -> CheckpointNote {
             output_tokens: u.output_tokens.unwrap_or(0),
         });
 
+    let op_id = session.resolved_identity().op_id;
+
     CheckpointNote {
         session_id: session.meta_session_id.clone(),
         tool,
@@ -193,6 +198,7 @@ pub fn note_from_session(session: &crate::MetaSessionState) -> CheckpointNote {
         turn_count: session.turn_count,
         token_usage,
         description: session.description.clone(),
+        op_id,
     }
 }
 
@@ -214,6 +220,7 @@ mod tests {
                 output_tokens: 1200,
             }),
             description: Some("Test session".to_string()),
+            op_id: None,
         }
     }
 
@@ -246,6 +253,7 @@ mod tests {
             turn_count: 0,
             token_usage: None,
             description: None,
+            op_id: None,
         };
         let toml_str = toml::to_string_pretty(&note).unwrap();
         let parsed: CheckpointNote = toml::from_str(&toml_str).unwrap();
