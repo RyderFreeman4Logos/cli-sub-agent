@@ -32,6 +32,8 @@
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let mut extra = HashMap::new();
@@ -84,6 +86,8 @@
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let env = transport.build_env(&session, None);
@@ -206,6 +210,8 @@ fn build_test_meta_session(project_path: &str) -> MetaSessionState {
         change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
     }
 }
 

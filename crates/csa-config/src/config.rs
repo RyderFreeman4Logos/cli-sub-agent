@@ -13,6 +13,7 @@ pub use crate::config_resources::ResourcesConfig;
 use crate::global::{PreferencesConfig, ReviewConfig};
 use crate::memory::MemoryConfig;
 use crate::paths;
+use csa_core::vcs::VcsKind;
 
 /// Sandbox enforcement mode for resource limits (cgroups, rlimits).
 ///
@@ -240,6 +241,27 @@ impl ExecutionConfig {
     }
 }
 
+/// VCS backend configuration.
+///
+/// Controls which VCS backend CSA uses for the project.
+/// When `backend` is `None`, auto-detection is used (`.jj/` → Jj, `.git` → Git).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct VcsConfig {
+    /// Explicit VCS backend override. `None` means auto-detect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub backend: Option<VcsKind>,
+    /// Default backend for colocated repos (both `.jj` and `.git` present).
+    /// Defaults to Git when not set, overriding auto-detect's jj preference.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub colocated_default: Option<VcsKind>,
+}
+
+impl VcsConfig {
+    pub fn is_default(&self) -> bool {
+        self.backend.is_none() && self.colocated_default.is_none()
+    }
+}
+
 /// Current schema version for config.toml
 pub const CURRENT_SCHEMA_VERSION: u32 = 1;
 
@@ -303,6 +325,9 @@ pub struct ProjectConfig {
     /// Execution tuning knobs (timeout floors, etc.).
     #[serde(default, skip_serializing_if = "ExecutionConfig::is_default")]
     pub execution: ExecutionConfig,
+    /// VCS backend configuration.
+    #[serde(default, skip_serializing_if = "VcsConfig::is_default")]
+    pub vcs: VcsConfig,
 }
 
 fn default_schema_version() -> u32 {

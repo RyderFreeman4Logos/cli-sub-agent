@@ -43,6 +43,7 @@ fn test_validate_model_spec_two_parts() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -92,6 +93,7 @@ fn test_validate_model_spec_five_parts() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -133,6 +135,7 @@ fn test_validate_review_tool_auto_accepted() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -170,6 +173,7 @@ fn test_validate_all_known_review_tools_accepted() {
             memory: Default::default(),
             hooks: Default::default(),
             execution: Default::default(),
+            vcs: Default::default(),
         };
 
         config.save(dir.path()).unwrap();
@@ -211,6 +215,7 @@ fn test_validate_all_known_debate_tools_accepted() {
             memory: Default::default(),
             hooks: Default::default(),
             execution: Default::default(),
+            vcs: Default::default(),
         };
 
         config.save(dir.path()).unwrap();
@@ -252,6 +257,7 @@ fn test_validate_all_four_known_tools_accepted() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -284,6 +290,7 @@ fn test_validate_no_review_no_debate_is_ok() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -316,6 +323,7 @@ fn test_validate_max_recursion_depth_zero() {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

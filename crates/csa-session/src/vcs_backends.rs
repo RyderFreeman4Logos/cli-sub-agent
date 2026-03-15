@@ -8,7 +8,7 @@
 //! messages, paths) are passed via `.args()` or `.arg()`, not string interpolation.
 //! Template strings for jj `-T` flags are hardcoded constants.
 
-use csa_core::vcs::{VcsBackend, VcsKind};
+use csa_core::vcs::{VcsBackend, VcsIdentity, VcsKind};
 use std::path::Path;
 use std::process::Command;
 
@@ -75,6 +75,24 @@ impl VcsBackend for GitBackend {
         } else {
             Ok(Some(short))
         }
+    }
+
+    fn identity(&self, project_root: &Path) -> Result<VcsIdentity, String> {
+        // Single git call to get HEAD SHA, short SHA, and branch in one invocation
+        // is not straightforward with git, so we make two calls (rev-parse for SHA+short,
+        // rev-parse --abbrev-ref for branch). This is still better than 3 separate calls.
+        let commit_id = self.head_id(project_root).ok().flatten();
+        let short_id = self.head_short_id(project_root).ok().flatten();
+        let ref_name = self.current_branch(project_root).ok().flatten();
+
+        Ok(VcsIdentity {
+            vcs_kind: VcsKind::Git,
+            commit_id,
+            change_id: None, // Git has no logical change identity
+            short_id,
+            ref_name,
+            op_id: None, // Git has no operation log
+        })
     }
 
     fn init(&self, path: &Path) -> Result<(), String> {
@@ -213,6 +231,73 @@ impl VcsBackend for JjBackend {
         }
     }
 
+    fn identity(&self, project_root: &Path) -> Result<VcsIdentity, String> {
+        // Get change_id, commit_id, and short change_id in one jj call
+        let id_output = Command::new("jj")
+            .args([
+                "log",
+                "--no-graph",
+                "-r",
+                "@",
+                "-T",
+                r#"change_id ++ "\n" ++ commit_id ++ "\n" ++ change_id.shortest(8)"#,
+            ])
+            .current_dir(project_root)
+            .output()
+            .map_err(|e| format!("Failed to run jj log: {e}"))?;
+
+        let (change_id, commit_id, short_id) = if id_output.status.success() {
+            let text = String::from_utf8_lossy(&id_output.stdout);
+            let mut lines = text.trim().lines();
+            let cid = lines
+                .next()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let cmid = lines
+                .next()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            let sid = lines
+                .next()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty());
+            (cid, cmid, sid)
+        } else {
+            (None, None, None)
+        };
+
+        // Get bookmark (branch equivalent)
+        let ref_name = self.current_branch(project_root).ok().flatten();
+
+        // Get current operation ID
+        let op_output = Command::new("jj")
+            .args([
+                "op",
+                "log",
+                "--no-graph",
+                "-l",
+                "1",
+                "-T",
+                "self.id().short(12)",
+            ])
+            .current_dir(project_root)
+            .output()
+            .ok();
+        let op_id = op_output
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty());
+
+        Ok(VcsIdentity {
+            vcs_kind: VcsKind::Jj,
+            commit_id,
+            change_id,
+            short_id,
+            ref_name,
+            op_id,
+        })
+    }
+
     fn init(&self, path: &Path) -> Result<(), String> {
         let output = Command::new("jj")
             .args(["git", "init"])
@@ -281,9 +366,40 @@ fn validate_commit_message(message: &str) -> Result<(), String> {
 }
 
 /// Create the appropriate VcsBackend for the given project root.
+///
+/// Selection priority: explicit `backend` config > colocated_default > auto-detect.
+/// For colocated repos (both `.jj/` and `.git/` present), `colocated_default`
+/// overrides auto-detect's jj preference (defaults to Git when unset).
 pub fn create_vcs_backend(project_root: &Path) -> Box<dyn VcsBackend> {
-    match csa_core::vcs::detect_vcs_kind(project_root) {
-        Some(VcsKind::Jj) => Box::new(JjBackend),
+    create_vcs_backend_with_config(project_root, None, None)
+}
+
+/// Create a VcsBackend with explicit configuration overrides.
+pub fn create_vcs_backend_with_config(
+    project_root: &Path,
+    backend_override: Option<VcsKind>,
+    colocated_default: Option<VcsKind>,
+) -> Box<dyn VcsBackend> {
+    // Explicit override takes top priority
+    if let Some(kind) = backend_override {
+        return match kind {
+            VcsKind::Jj => Box::new(JjBackend),
+            VcsKind::Git => Box::new(GitBackend),
+        };
+    }
+
+    let has_jj = project_root.join(".jj").is_dir();
+    let has_git = project_root.join(".git").exists();
+
+    match (has_jj, has_git) {
+        // Colocated: both present — use colocated_default (defaults to Git)
+        (true, true) => match colocated_default.unwrap_or(VcsKind::Git) {
+            VcsKind::Jj => Box::new(JjBackend),
+            VcsKind::Git => Box::new(GitBackend),
+        },
+        // jj only
+        (true, false) => Box::new(JjBackend),
+        // git only or neither (default to git)
         _ => Box::new(GitBackend),
     }
 }

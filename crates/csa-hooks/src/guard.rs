@@ -352,7 +352,12 @@ pub fn builtin_prompt_guards() -> Vec<PromptGuardEntry> {
     vec![
         PromptGuardEntry {
             name: "branch-context".to_string(),
-            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || branch=""
+# Fallback to jj bookmark for colocated repos with detached HEAD
+if [ -z "$branch" ] && [ -d ".jj" ] && command -v jj >/dev/null 2>&1; then
+  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk -F: '{print $1}')
+fi
+[ -z "$branch" ] && exit 0
 case "$branch" in main|master|dev|develop|release/*) exit 0 ;; esac
 echo "BRANCH CONTEXT: The caller is on feature branch '${branch}'. Stay on this branch. Do NOT create a new branch or switch branches unless the task prompt explicitly requests it. Do NOT run git stash."
 exit 0"#
@@ -361,7 +366,11 @@ exit 0"#
         },
         PromptGuardEntry {
             name: "branch-protection".to_string(),
-            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || branch=""
+if [ -z "$branch" ] && [ -d ".jj" ] && command -v jj >/dev/null 2>&1; then
+  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk -F: '{print $1}')
+fi
+[ -z "$branch" ] && exit 0
 case "$branch" in
   main|master|dev|develop|release/*)
     echo "WARNING: You are on protected branch '$branch'. Do NOT commit directly. Create a feature branch first."
@@ -382,7 +391,11 @@ fi"#
         },
         PromptGuardEntry {
             name: "commit-workflow".to_string(),
-            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
+            command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || branch=""
+if [ -z "$branch" ] && [ -d ".jj" ] && command -v jj >/dev/null 2>&1; then
+  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk -F: '{print $1}')
+fi
+[ -z "$branch" ] && exit 0
 case "$branch" in main|master|dev|develop|release/*) exit 0 ;; esac
 remote_ref="origin/${branch}"
 if git rev-parse --verify "$remote_ref" >/dev/null 2>&1; then

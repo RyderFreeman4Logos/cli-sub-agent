@@ -116,6 +116,7 @@ fn is_project_root_marker(candidate: &Path) -> bool {
     candidate.join(".csa").join("config.toml").is_file()
         || candidate.join(".csa").is_dir()
         || candidate.join(".git").is_dir()
+        || candidate.join(".jj").is_dir()
         || candidate.join("Cargo.toml").is_file()
 }
 

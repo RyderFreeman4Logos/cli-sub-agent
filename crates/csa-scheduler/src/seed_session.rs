@@ -94,11 +94,23 @@ fn find_seed_session_inner(
                 let age_secs = (now - s.last_accessed).num_seconds().max(0) as u64;
                 age_secs <= seed_max_age_secs
             }
-            // Git HEAD check: if both sides have a HEAD, they must match
-            && match (current_git_head, s.git_head_at_creation.as_deref()) {
-                (Some(current), Some(stored)) => current == stored,
-                // If either side lacks HEAD info, skip this check
-                _ => true,
+            // VCS identity check: compare commit_id for content freshness.
+            // For jj sessions, also accept matching change_id (stable across rebases).
+            && {
+                let stored_id = s.resolved_identity();
+                match current_git_head {
+                    Some(current) => {
+                        // If stored identity has no commit/change info, skip (legacy compat)
+                        if stored_id.commit_id.is_none() && stored_id.change_id.is_none() {
+                            true
+                        } else {
+                            stored_id.commit_id.as_deref() == Some(current)
+                            || stored_id.change_id.as_deref() == Some(current)
+                            || s.git_head_at_creation.as_deref() == Some(current)
+                        }
+                    }
+                    None => true,
+                }
             }
         })
         .collect();
@@ -199,10 +211,19 @@ pub fn is_seed_valid(
         return false;
     }
 
-    // Git HEAD check
-    match (current_git_head, session.git_head_at_creation.as_deref()) {
-        (Some(current), Some(stored)) => current == stored,
-        _ => true,
+    // VCS identity check using resolved_identity()
+    let stored_id = session.resolved_identity();
+    match current_git_head {
+        Some(current) => {
+            // If stored identity has no commit/change info, skip check (legacy compat)
+            if stored_id.commit_id.is_none() && stored_id.change_id.is_none() {
+                return true;
+            }
+            stored_id.commit_id.as_deref() == Some(current)
+                || stored_id.change_id.as_deref() == Some(current)
+                || session.git_head_at_creation.as_deref() == Some(current)
+        }
+        None => true,
     }
 }
 

@@ -33,6 +33,8 @@ fn make_test_session() -> MetaSessionState {
         change_id: None,
         spec_id: None,
         fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     }
 }
 

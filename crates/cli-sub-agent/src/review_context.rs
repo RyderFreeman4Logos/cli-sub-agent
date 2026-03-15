@@ -107,22 +107,9 @@ fn load_spec_review_context(path: &Path) -> Result<ResolvedReviewContext> {
 }
 
 fn current_git_branch(project_root: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["branch", "--show-current"])
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if branch.is_empty() {
-        None
-    } else {
-        Some(branch)
-    }
+    // Use VcsBackend for VCS-aware branch detection (supports both git and jj)
+    let backend = csa_session::vcs_backends::create_vcs_backend(project_root);
+    backend.current_branch(project_root).ok().flatten()
 }
 
 fn has_extension(path: &Path, expected: &str) -> bool {

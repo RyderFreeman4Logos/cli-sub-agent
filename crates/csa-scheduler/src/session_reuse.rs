@@ -153,6 +153,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");
@@ -189,6 +191,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let score = compute_relevance_score(&session, "review", "gemini-cli");
@@ -225,6 +229,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let score = compute_relevance_score(&session, "fix", "gemini-cli");
@@ -261,6 +267,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let score = compute_relevance_score(&session, "deploy", "gemini-cli");
@@ -295,6 +303,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         };
 
         let score = compute_relevance_score(&session, "default", "gemini-cli");

@@ -25,6 +25,8 @@ fn sample_state_with_phase(phase: SessionPhase) -> MetaSessionState {
         change_id: None,
         spec_id: None,
         fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     }
 }
 
@@ -252,6 +254,8 @@ fn test_meta_session_state_toml_roundtrip() {
         change_id: None,
         spec_id: None,
         fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     };
 
     let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");
@@ -343,6 +347,8 @@ fn test_meta_session_state_last_return_packet_roundtrip() {
         change_id: None,
         spec_id: None,
         fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     };
 
     let toml_str = toml::to_string_pretty(&state).expect("serialize");
@@ -555,6 +561,8 @@ fn test_meta_session_state_with_budget_roundtrip() {
         change_id: None,
         spec_id: None,
         fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     };
 
     let toml_str = toml::to_string_pretty(&state).expect("Serialize should succeed");

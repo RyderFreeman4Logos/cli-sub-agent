@@ -241,6 +241,7 @@ mod tests {
             memory: Default::default(),
             hooks: Default::default(),
             execution: Default::default(),
+            vcs: Default::default(),
         }
     }
 
@@ -285,6 +286,8 @@ mod tests {
             change_id: None,
             spec_id: None,
             fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
         }
     }
 
@@ -633,6 +636,7 @@ mod tests {
             memory: Default::default(),
             hooks: Default::default(),
             execution: Default::default(),
+            vcs: Default::default(),
         }
     }
 

@@ -28,6 +28,7 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     }
 }
 

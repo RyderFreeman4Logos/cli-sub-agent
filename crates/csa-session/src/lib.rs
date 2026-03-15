@@ -18,6 +18,10 @@ pub mod state;
 pub mod validate;
 pub mod vcs_backends;
 
+#[cfg(test)]
+#[path = "vcs_identity_tests.rs"]
+mod vcs_identity_tests;
+
 // Re-export key types
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use state::{

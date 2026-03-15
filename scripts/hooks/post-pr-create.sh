@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/hooks/post-pr-create.sh [--base <branch>]
+Usage: scripts/hooks/post-pr-create.sh [--base <branch>] [--pr-number <number>]
 
 Confirms that the current feature branch has an open PR, then runs the
 pr-codex-bot workflow as a synchronous post-create transaction.
@@ -11,6 +11,7 @@ EOF
 }
 
 BASE_BRANCH="main"
+REQUESTED_PR_NUMBER=""
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -21,6 +22,14 @@ while [ "$#" -gt 0 ]; do
         exit 1
       fi
       BASE_BRANCH="$1"
+      ;;
+    --pr-number)
+      shift
+      if [ "$#" -eq 0 ]; then
+        echo "ERROR: Missing value for --pr-number." >&2
+        exit 1
+      fi
+      REQUESTED_PR_NUMBER="$1"
       ;;
     -h|--help)
       usage
@@ -97,25 +106,96 @@ resolve_current_pr() {
   return 2
 }
 
+resolve_requested_pr() {
+  local pr_view
+
+  if [ -z "${REQUESTED_PR_NUMBER}" ]; then
+    return 1
+  fi
+
+  if ! printf '%s' "${REQUESTED_PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
+    echo "ERROR: --pr-number must be numeric, got '${REQUESTED_PR_NUMBER}'." >&2
+    return 2
+  fi
+
+  pr_view="$(
+    gh pr view "${REQUESTED_PR_NUMBER}" --json number,url,headRefName,baseRefName,state \
+      2>/dev/null || true
+  )"
+  if [ -z "${pr_view}" ]; then
+    return 1
+  fi
+
+  if [ "$(printf '%s' "${pr_view}" | jq -r '.headRefName')" = "${CURRENT_BRANCH}" ] \
+    && [ "$(printf '%s' "${pr_view}" | jq -r '.baseRefName')" = "${BASE_BRANCH}" ] \
+    && [ "$(printf '%s' "${pr_view}" | jq -r '.state')" = "OPEN" ]; then
+    printf '%s\n' "${pr_view}"
+    return 0
+  fi
+
+  echo "ERROR: PR #${REQUESTED_PR_NUMBER} is not OPEN on ${CURRENT_BRANCH} -> ${BASE_BRANCH}." >&2
+  return 2
+}
+
+resolve_marker_paths() {
+  local pr_number="$1"
+  local head_sha="$2"
+  PR_BOT_MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+  PR_BOT_MARKER_BASE="${PR_BOT_MARKER_DIR}/${pr_number}-${head_sha}"
+  PR_BOT_DONE_MARKER="${PR_BOT_MARKER_BASE}.done"
+  PR_BOT_LOCK_DIR="${PR_BOT_MARKER_BASE}.lock"
+}
+
+begin_pr_bot_transaction() {
+  mkdir -p "${PR_BOT_MARKER_DIR}"
+
+  if [ -f "${PR_BOT_DONE_MARKER}" ]; then
+    echo "pr-codex-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
+    return 1
+  fi
+
+  if ! mkdir "${PR_BOT_LOCK_DIR}" 2>/dev/null; then
+    echo "pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
+    return 1
+  fi
+
+  PR_BOT_LOCK_HELD=1
+  trap 'if [ "${PR_BOT_LOCK_HELD:-0}" -eq 1 ]; then rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true; fi' EXIT
+  return 0
+}
+
 PR_JSON=""
-for attempt in 1 2 3 4 5; do
+if [ -n "${REQUESTED_PR_NUMBER}" ]; then
   set +e
-  PR_JSON="$(resolve_current_pr)"
+  PR_JSON="$(resolve_requested_pr)"
   rc=$?
   set -e
-
-  if [ "${rc}" -eq 0 ]; then
-    break
-  fi
 
   if [ "${rc}" -eq 2 ]; then
     exit 1
   fi
+fi
 
-  if [ "${attempt}" -lt 5 ]; then
-    sleep 2
-  fi
-done
+if [ -z "${PR_JSON}" ]; then
+  for attempt in 1 2 3 4 5; do
+    set +e
+    PR_JSON="$(resolve_current_pr)"
+    rc=$?
+    set -e
+
+    if [ "${rc}" -eq 0 ]; then
+      break
+    fi
+
+    if [ "${rc}" -eq 2 ]; then
+      exit 1
+    fi
+
+    if [ "${attempt}" -lt 5 ]; then
+      sleep 2
+    fi
+  done
+fi
 
 if [ -z "${PR_JSON}" ]; then
   echo "ERROR: No open PR found for branch ${CURRENT_BRANCH} targeting ${BASE_BRANCH}." >&2
@@ -130,6 +210,17 @@ if ! printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
   exit 1
 fi
 
+HEAD_SHA="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+if [ -z "${HEAD_SHA}" ]; then
+  echo "ERROR: Failed to resolve HEAD SHA for ${CURRENT_BRANCH}." >&2
+  exit 1
+fi
+
+resolve_marker_paths "${PR_NUMBER}" "${HEAD_SHA}"
+if ! begin_pr_bot_transaction; then
+  exit 0
+fi
+
 echo "Confirmed PR #${PR_NUMBER} (${PR_URL}) for branch ${CURRENT_BRANCH}."
 echo "Running pr-codex-bot transaction..."
 
@@ -137,4 +228,11 @@ echo "Running pr-codex-bot transaction..."
 # while inner CSA sessions spawned by this workflow complete.
 export CSA_PR_BOT_GUARD=1
 
-csa plan run patterns/pr-codex-bot/workflow.toml
+if csa plan run patterns/pr-codex-bot/workflow.toml; then
+  touch "${PR_BOT_DONE_MARKER}"
+  rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
+  PR_BOT_LOCK_HELD=0
+else
+  echo "ERROR: pr-codex-bot workflow failed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}." >&2
+  exit 1
+fi

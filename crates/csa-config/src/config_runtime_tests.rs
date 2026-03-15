@@ -30,6 +30,7 @@ fn empty_config() -> ProjectConfig {
         memory: Default::default(),
         hooks: Default::default(),
         execution: Default::default(),
+        vcs: Default::default(),
     }
 }
 
