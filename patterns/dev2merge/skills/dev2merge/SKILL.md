@@ -36,7 +36,7 @@ Every stage has hard gates (`on_fail = "abort"`) — no step can be skipped by t
 
 Pipeline: Branch Validation → FAST_PATH Detection → L1/L2 Quality Gates →
 (FAST_PATH: commit → bump → review) or (Full: mktd → mktsk → bump → cumulative review) →
-Push Gate → PR Transaction (create/reuse PR + `post-pr-create.sh`, which runs `pr-codex-bot`) → Local Sync.
+Push Gate → PR Transaction (create/reuse PR + `post-pr-create.sh`, which triggers `pr-codex-bot` when needed) → Local Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -94,8 +94,9 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 13 | Post-Merge Sync | `git checkout main && git merge --ff-only` | bash |
 
 Step 12 is intentionally a single shell transaction. `scripts/hooks/post-pr-create.sh`
-owns the synchronous handoff to `pr-codex-bot`, so there is no separate Step 13 for
-`pr-codex-bot` in `workflow.toml`.
+is responsible for triggering `pr-codex-bot` when appropriate; if the bot is already
+running for the same PR/HEAD, the helper may exit early. There is no separate Step 13
+for `pr-codex-bot` in `workflow.toml`.
 
 ### FAST_PATH Heuristic
 
@@ -139,6 +140,6 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 7. Pre-PR cumulative review passed (`REVIEW_COMPLETED=true`).
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
 9. PR transaction completed: PR created or reused on GitHub targeting main, then `scripts/hooks/post-pr-create.sh --base main` ran successfully.
-10. That transaction completed the `pr-codex-bot` sub-workflow (review loop + merge).
-11. Local main synced: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
+10. That transaction either triggered `pr-codex-bot` or detected an already-running bot for the same PR/HEAD and exited early.
+11. Local main synced after the PR merge completed: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 12. Feature branch deleted (local and remote).
