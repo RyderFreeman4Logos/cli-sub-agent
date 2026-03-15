@@ -359,10 +359,10 @@ impl MetaSessionState {
         if let Some(ref id) = self.vcs_identity {
             return id.clone();
         }
-        // Construct from legacy fields — assume Git unless change_id differs from git_head
+        // Construct from legacy fields.
+        // Detect jj: change_id present AND (git_head absent OR change_id != git_head)
         let is_jj = self.change_id.is_some()
-            && self.git_head_at_creation.is_some()
-            && self.change_id != self.git_head_at_creation;
+            && (self.git_head_at_creation.is_none() || self.change_id != self.git_head_at_creation);
         VcsIdentity {
             vcs_kind: if is_jj { VcsKind::Jj } else { VcsKind::Git },
             commit_id: self.git_head_at_creation.clone(),

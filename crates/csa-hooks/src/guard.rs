@@ -355,7 +355,7 @@ pub fn builtin_prompt_guards() -> Vec<PromptGuardEntry> {
             command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || branch=""
 # Fallback to jj bookmark for colocated repos with detached HEAD
 if [ -z "$branch" ] && [ -d ".jj" ] && command -v jj >/dev/null 2>&1; then
-  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk '{print $1}')
+  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk -F: '{print $1}')
 fi
 [ -z "$branch" ] && exit 0
 case "$branch" in main|master|dev|develop|release/*) exit 0 ;; esac
@@ -368,7 +368,7 @@ exit 0"#
             name: "branch-protection".to_string(),
             command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || branch=""
 if [ -z "$branch" ] && [ -d ".jj" ] && command -v jj >/dev/null 2>&1; then
-  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk '{print $1}')
+  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk -F: '{print $1}')
 fi
 [ -z "$branch" ] && exit 0
 case "$branch" in
@@ -393,7 +393,7 @@ fi"#
             name: "commit-workflow".to_string(),
             command: r#"branch=$(git symbolic-ref --short HEAD 2>/dev/null) || branch=""
 if [ -z "$branch" ] && [ -d ".jj" ] && command -v jj >/dev/null 2>&1; then
-  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk '{print $1}')
+  branch=$(jj bookmark list --no-pager -r @ 2>/dev/null | head -1 | awk -F: '{print $1}')
 fi
 [ -z "$branch" ] && exit 0
 case "$branch" in main|master|dev|develop|release/*) exit 0 ;; esac
