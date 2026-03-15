@@ -255,7 +255,7 @@ weave install user/repo --no-link                # Skip linking entirely
 
 ## Step 5: Programming Patterns (Interactive)
 
-CSA ships with 13 compiled workflow patterns for coding tasks. Not all projects
+CSA ships with 18 compiled workflow patterns for coding tasks. Not all projects
 need all patterns.
 
 **ASK THE USER**: Present the following categories and let the user choose which
@@ -298,12 +298,15 @@ done
 | `security-audit` | Pre-commit vulnerability scan and test-completeness check |
 | `file-audit` | Per-file AGENTS.md compliance audit with report generation |
 | `csa-review` | Independent CSA-driven code review with structured output |
+| `codebase-audit` | Bottom-up per-module security audit with structured reports |
+| `codebase-blog` | Generate technical deep-dive blogs from audit results |
+| `review-loop` | Bounded iterative review-fix loop until clean or max rounds |
 
 **Install**:
 
 ```bash
 mkdir -p .csa/plans
-for pattern in security-audit file-audit csa-review; do
+for pattern in security-audit file-audit csa-review codebase-audit codebase-blog review-loop; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
 done
@@ -343,12 +346,13 @@ done
 | `dev2merge` | Branch-to-merge: plan (mktd+debate), implement, validate, PR, review, merge |
 | `dev-to-merge` | Backward-compatible alias of `dev2merge` |
 | `csa-issue-reporter` | Structured GitHub issue filing for CSA errors |
+| `migrate` | Configuration and state migration workflows |
 
 **Install**:
 
 ```bash
 mkdir -p .csa/plans
-for pattern in sa dev2merge dev-to-merge csa-issue-reporter; do
+for pattern in sa dev2merge dev-to-merge csa-issue-reporter migrate; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
 done
@@ -501,14 +505,29 @@ csa run --sa-mode false --tool codex "echo hello from CSA"
 ### CSA Commands
 
 ```bash
+# Execution (--sa-mode REQUIRED for root callers; auto-detected for CSA children)
 csa run --sa-mode false --tool <tool> "prompt"          # Run a task
 csa run --sa-mode false --tool auto "prompt"            # Auto-select tool
-csa run --sa-mode false --last "continue"               # Resume last session
+csa run --sa-mode false --fork-last "continue"          # Fork most recent session
+csa run --sa-mode false --fork-from <ULID> "continue"   # Fork specific session
+csa run --sa-mode false --fork-call "task"              # Fork-call (child returns to parent)
+csa run --sa-mode false --ephemeral "quick task"        # Ephemeral (no project files)
+csa run --sa-mode false --model-spec gemini-cli/google/gemini-2.5-pro/xhigh "task"  # Model spec
 csa review --sa-mode false --diff                       # Review uncommitted changes
-csa review --sa-mode false --reviewers 3                # Multi-reviewer consensus
+csa review --sa-mode false --range main...HEAD          # Review commit range
+csa review --sa-mode false --fix                        # Review-and-fix mode
+csa review --sa-mode false --red-team                   # Red-team security review
 csa debate --sa-mode false "design question"            # Adversarial model debate
+csa debate --sa-mode false --thinking xhigh "question"  # Debate with high thinking budget
+
+# Session & management
 csa session list --tree                 # List session tree
+csa memory list                         # List cross-session memories
+csa tiers list                          # List model tiers
+csa tokuin estimate <file>              # Estimate token count
+csa doctor                              # Check environment and tools
 csa gc --dry-run                        # Preview garbage collection
+csa self-update                         # Update to latest release
 ```
 
 ### Weave Commands
