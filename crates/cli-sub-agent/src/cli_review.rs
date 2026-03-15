@@ -35,6 +35,7 @@ pub struct ReviewArgs {
     /// Tool to use for review (defaults to global [review] config or project fallback)
     #[arg(long)]
     pub tool: Option<ToolName>,
+    /// Autonomous mode flag (REQUIRED for root callers)
     #[arg(long, value_name = "BOOL")]
     pub sa_mode: Option<bool>,
     /// Override tool enablement from user config (use when explicitly requesting a disabled tool)
@@ -224,6 +225,7 @@ fn validate_timeout(
 pub struct DebateArgs {
     /// The question or problem to debate; reads from stdin if omitted
     pub question: Option<String>,
+    /// Autonomous mode flag (REQUIRED for root callers)
     #[arg(long, value_name = "BOOL")]
     pub sa_mode: Option<bool>,
     /// Tool to use for debate (overrides auto heterogeneous selection)

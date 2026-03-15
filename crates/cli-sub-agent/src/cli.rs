@@ -85,6 +85,8 @@ pub enum Commands {
         /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
         #[arg(long)]
         skill: Option<String>,
+        /// Autonomous mode flag (REQUIRED for root callers). Enables prompt-guard
+        /// safety mechanisms. Internal CSA-to-CSA calls may omit via CSA_DEPTH env.
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
@@ -270,6 +272,7 @@ pub enum Commands {
     Batch {
         /// Path to batch TOML file
         file: String,
+        /// Autonomous mode flag (REQUIRED for root callers)
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
         /// Working directory
@@ -359,6 +362,7 @@ pub enum Commands {
 pub struct ClaudeSubAgentArgs {
     /// Task prompt; reads from stdin if omitted
     pub question: Option<String>,
+    /// Autonomous mode flag (REQUIRED for root callers)
     #[arg(long, value_name = "BOOL")]
     pub sa_mode: Option<bool>,
     /// Tool to use (overrides config-based selection)
@@ -663,6 +667,7 @@ pub enum PlanCommands {
     Run {
         /// Path to workflow TOML file
         file: String,
+        /// Autonomous mode flag (REQUIRED for root callers)
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
         /// Variable override (KEY=VALUE, repeatable)

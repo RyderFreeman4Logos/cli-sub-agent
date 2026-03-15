@@ -27,6 +27,31 @@ All tools run in yolo mode by default (auto-approve all actions).
 - **Model Spec**: Unified format `tool/provider/model/thinking_budget`.
 - **Resource Guard**: Pre-flight memory check prevents OOM when launching tools.
 
+## --sa-mode (REQUIRED for Root Callers)
+
+Execution commands (`run`, `review`, `debate`, `batch`, `plan run`, `claude-sub-agent`)
+**require** `--sa-mode true|false` when invoked from the top level (root depth).
+
+- `--sa-mode true`: Enable autonomous safety — injects prompt-guard mechanisms
+- `--sa-mode false`: Disable autonomous safety (interactive use)
+
+Internal CSA-to-CSA calls (depth > 0) may omit this flag; it propagates via `CSA_DEPTH` env.
+
+```bash
+# Root caller MUST specify --sa-mode
+csa run --sa-mode true "Implement feature X"
+csa review --sa-mode true --range main...HEAD
+csa debate --sa-mode true "REST vs gRPC?"
+
+# Internal sub-agent call (depth > 0) — --sa-mode is optional
+csa run "Sub-task Y"  # inherits from parent via CSA_DEPTH
+```
+
+**Error if omitted at root depth:**
+```
+Error: --sa-mode true|false is required for root callers on execution commands: command `run`
+```
+
 ## Basic Usage
 
 ### Initialize Project
@@ -38,19 +63,19 @@ csa init --non-interactive
 ### Execute Tasks
 ```bash
 # Analysis (read-only)
-csa run "Analyze the authentication flow"
+csa run --sa-mode false "Analyze the authentication flow"
 
 # Implementation (write, use opencode/codex/claude-code)
-csa run --tool opencode --session my-task "Fix the login bug"
+csa run --sa-mode true --tool opencode "Fix the login bug"
 
-# Resume existing session
-csa run --tool opencode --session 01JK... "Continue the refactor"
+# Resume existing session via fork
+csa run --sa-mode true --tool opencode --fork-from 01JK... "Continue the refactor"
 
 # Override model
-csa run --tool opencode --model "provider/model-name" "Implement feature X"
+csa run --sa-mode true --tool opencode --model "provider/model-name" "Implement feature X"
 
 # Ephemeral session (no project context, auto-cleanup)
-csa run --ephemeral "What is the CAP theorem?"
+csa run --sa-mode false --ephemeral "What is the CAP theorem?"
 ```
 
 ### Session Management
