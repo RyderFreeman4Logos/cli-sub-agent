@@ -59,6 +59,16 @@ csa review --sa-mode false --red-team --context .csa/spec.toml
 csa debate --sa-mode false "Should we use Redis or Memcached for caching?"
 ```
 
+### Agent-Assisted Setup
+
+Have your AI agent (Claude Code, Codex, Openclaw, etc.) read the setup guide directly:
+
+```
+Read https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/main/skill.md
+```
+
+The guide walks the agent through installing CSA, Weave, patterns, and configuration step by step.
+
 See [Getting Started](docs/getting-started.md) for full installation and setup instructions.
 
 ## Architecture
