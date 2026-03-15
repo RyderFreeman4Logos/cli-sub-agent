@@ -30,6 +30,8 @@ triggers:
 
 Execute TODO plans (from `mktd` or user-provided) as deterministic, resumable serial checklists. Enforces strict serial execution: implement, verify, review, persist progress, then next task. Every checklist item carries an executor tag and a mechanically verifiable `DONE WHEN` condition.
 
+mktsk stops at **verified local execution**. It does **not** push branches, create or reuse PRs, invoke `pr-codex-bot`, or merge. Those publication/integration steps are owned by the caller workflow (for example `dev2merge`, `/sa`, or another outer wrapper that continues after mktsk finishes).
+
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
 ### Prerequisites
@@ -85,7 +87,8 @@ breaks prompt-guard propagation.
 - **Uses**: `csa-review` (per-task review), `security-audit` (via commit skill)
 - **References**: Use `csa todo ref list` to discover plan references (RECON findings,
   debate evidence, threat model) and `csa todo ref show <name>` for selective loading
-- **Part of**: Full planning pipeline: `mktd` (plan) -> `mktsk` (execute) -> `pr-codex-bot` (merge)
+- **Boundary**: mktsk owns task execution, local verification, and progress persistence only. Push/PR/merge are caller-owned.
+- **Part of**: Planning/execution segment of a larger pipeline: `mktd` (plan) -> `mktsk` (execute + verify locally). Any later publication flow, including `pr-codex-bot`, happens only if the caller invokes it.
 
 ## Done Criteria
 

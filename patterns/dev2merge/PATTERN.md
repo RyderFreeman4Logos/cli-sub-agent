@@ -12,8 +12,9 @@ End-to-end development workflow enforced as a weave workflow. Every stage has
 hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
-mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push → PR →
-pr-codex-bot (review loop + merge) → Local Sync.
+mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push →
+PR Transaction (create/reuse PR + `post-pr-create.sh`, which triggers `pr-codex-bot` when needed) →
+Local Sync.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
@@ -246,8 +247,8 @@ echo "CSA_VAR:PUSHED=true"
 Tool: bash
 OnFail: abort
 
-Create or reuse PR, then synchronously run the post-create helper.
-This makes PR creation + pr-codex-bot a single shell-enforced transaction.
+Create or reuse PR, then run the post-create helper to trigger `pr-codex-bot` when needed.
+If the bot is already running for the same PR/HEAD, the helper may exit early.
 
 ```bash
 set -euo pipefail
@@ -272,7 +273,7 @@ scripts/hooks/post-pr-create.sh --base main
 Tool: bash
 OnFail: abort
 
-After pr-codex-bot merges, sync local main and clean up feature branch.
+After the PR merge completes, sync local main and clean up feature branch.
 
 ```bash
 set -euo pipefail
