@@ -12,8 +12,9 @@ End-to-end development workflow enforced as a weave workflow. Every stage has
 hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
-mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push → PR →
-pr-codex-bot (review loop + merge) → Local Sync.
+mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push →
+PR Transaction (create/reuse PR + `post-pr-create.sh`, which runs `pr-codex-bot`) →
+Local Sync.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
