@@ -35,7 +35,9 @@ Execution commands (`run`, `review`, `debate`, `batch`, `plan run`, `claude-sub-
 - `--sa-mode true`: Enable autonomous safety — injects prompt-guard mechanisms
 - `--sa-mode false`: Disable autonomous safety (interactive use)
 
-Internal CSA-to-CSA calls (depth > 0) may omit this flag; it propagates via `CSA_DEPTH` env.
+CSA-spawned children auto-detect via `CSA_DEPTH` + `CSA_INTERNAL_INVOCATION` env vars
+(both set automatically by CSA when spawning sub-processes). Manual scripts that only
+set `CSA_DEPTH` without `CSA_INTERNAL_INVOCATION=1` will still get the root-caller error.
 
 ```bash
 # Root caller MUST specify --sa-mode

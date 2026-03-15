@@ -86,7 +86,8 @@ pub enum Commands {
         #[arg(long)]
         skill: Option<String>,
         /// Autonomous mode flag (REQUIRED for root callers). Enables prompt-guard
-        /// safety mechanisms. Internal CSA-to-CSA calls may omit via CSA_DEPTH env.
+        /// safety mechanisms. Auto-detected for CSA-spawned children (CSA_DEPTH +
+        /// CSA_INTERNAL_INVOCATION).
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
