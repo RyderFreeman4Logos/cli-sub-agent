@@ -540,7 +540,10 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     // Load global config for env injection and slot control
     let global_config = csa_config::GlobalConfig::load()?;
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
-    let extra_env = global_config.env_vars(executor.tool_name()).cloned();
+    let extra_env = global_config.build_execution_env(
+        executor.tool_name(),
+        csa_config::ExecutionEnvOptions::default(),
+    );
     let extra_env_ref = extra_env.as_ref();
 
     // Acquire global slot to enforce concurrency limit

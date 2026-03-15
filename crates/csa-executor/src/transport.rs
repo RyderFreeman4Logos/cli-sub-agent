@@ -6,6 +6,11 @@ use crate::executor::Executor;
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use csa_acp::{SessionConfig, SessionEvent};
+use csa_core::gemini::{
+    API_KEY_ENV as GEMINI_API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY,
+    AUTH_MODE_ENV_KEY as GEMINI_AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH, NO_FLASH_FALLBACK_ENV_KEY,
+    detect_rate_limit_pattern,
+};
 use csa_process::{
     ExecutionResult, SpawnOptions, StreamMode, spawn_tool_sandboxed, spawn_tool_with_options,
     wait_and_capture_with_idle_timeout,
@@ -72,24 +77,12 @@ pub struct LegacyTransport {
 
 const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
 const GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS: u8 = 2;
-const API_KEY_FALLBACK_ENV_KEY: &str = "_CSA_API_KEY_FALLBACK";
-const NO_FLASH_FALLBACK_ENV_KEY: &str = "_CSA_NO_FLASH_FALLBACK";
-const GEMINI_API_KEY_ENV: &str = "GEMINI_API_KEY";
 #[cfg(test)]
 const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
 #[cfg(not(test))]
 const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 1_000;
 const GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST: &str = "gemini-3.1-pro-preview";
 const GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND: &str = "gemini-3-flash-preview";
-const GEMINI_RATE_LIMIT_PATTERNS: &[&str] = &[
-    "429",
-    "resource exhausted",
-    "resource_exhausted",
-    "quota exhausted",
-    "quota_exhausted",
-    "quota exceeded",
-    "too many requests",
-];
 
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
@@ -124,11 +117,11 @@ impl LegacyTransport {
         if execution.exit_code == 0 {
             return false;
         }
-        let combined = format!("{}\n{}", execution.stderr_output, execution.output);
-        let combined_lower = combined.to_ascii_lowercase();
-        GEMINI_RATE_LIMIT_PATTERNS
-            .iter()
-            .any(|pattern| combined_lower.contains(pattern))
+        detect_rate_limit_pattern(&format!(
+            "{}\n{}",
+            execution.stderr_output, execution.output
+        ))
+        .is_some()
     }
 
     fn gemini_rate_limit_backoff(attempt: u8) -> Duration {
@@ -145,14 +138,27 @@ impl LegacyTransport {
         }
     }
 
+    fn gemini_auth_mode(extra_env: Option<&HashMap<String, String>>) -> Option<&str> {
+        extra_env
+            .and_then(|env| env.get(GEMINI_AUTH_MODE_ENV_KEY))
+            .map(String::as_str)
+    }
+
     /// Build extra_env with GEMINI_API_KEY injected from the fallback key.
     /// Returns None if no fallback key is available.
     fn inject_api_key_fallback(
         extra_env: Option<&HashMap<String, String>>,
     ) -> Option<HashMap<String, String>> {
+        if Self::gemini_auth_mode(extra_env) != Some(AUTH_MODE_OAUTH) {
+            return None;
+        }
         let fallback_key = extra_env?.get(API_KEY_FALLBACK_ENV_KEY)?;
         let mut env = extra_env.cloned().unwrap_or_default();
         env.insert(GEMINI_API_KEY_ENV.to_string(), fallback_key.clone());
+        env.insert(
+            GEMINI_AUTH_MODE_ENV_KEY.to_string(),
+            AUTH_MODE_API_KEY.to_string(),
+        );
         env.remove(API_KEY_FALLBACK_ENV_KEY);
         Some(env)
     }

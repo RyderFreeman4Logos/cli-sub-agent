@@ -465,9 +465,11 @@ fn test_gemini_rate_limit_backoff_is_exponential() {
 fn test_inject_api_key_fallback_promotes_key_and_removes_internal() {
     let mut env = HashMap::new();
     env.insert("_CSA_API_KEY_FALLBACK".to_string(), "test-api-key-123".to_string());
+    env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     env.insert("OTHER_VAR".to_string(), "keep".to_string());
     let result = LegacyTransport::inject_api_key_fallback(Some(&env)).unwrap();
     assert_eq!(result.get("GEMINI_API_KEY").unwrap(), "test-api-key-123");
+    assert_eq!(result.get("_CSA_GEMINI_AUTH_MODE").unwrap(), "api_key");
     assert!(!result.contains_key("_CSA_API_KEY_FALLBACK"));
     assert_eq!(result.get("OTHER_VAR").unwrap(), "keep");
 }
@@ -479,10 +481,19 @@ fn test_inject_api_key_fallback_returns_none_without_key() {
     assert!(LegacyTransport::inject_api_key_fallback(None).is_none());
 }
 
+#[test]
+fn test_inject_api_key_fallback_returns_none_for_api_key_mode() {
+    let mut env = HashMap::new();
+    env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
+    env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "api_key".to_string());
+    assert!(LegacyTransport::inject_api_key_fallback(Some(&env)).is_none());
+}
+
 #[tokio::test]
 async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
     let (_temp, mut env, _model_log_path) = setup_fake_gemini_environment(99);
     env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
+    env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,
@@ -513,6 +524,7 @@ async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
 async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
     let (temp, mut env, _model_log_path) = setup_fake_gemini_environment(99);
     env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
+    env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,

@@ -66,7 +66,11 @@ pub(crate) async fn handle_claude_sub_agent(
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
     // 10. Get env injection from global config
-    let extra_env = global_config.env_vars(executor.tool_name());
+    let extra_env = global_config.build_execution_env(
+        executor.tool_name(),
+        csa_config::ExecutionEnvOptions::default(),
+    );
+    let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
 
     // 11. Session description (no longer derived from --skill)
@@ -82,7 +86,7 @@ pub(crate) async fn handle_claude_sub_agent(
         None, // parent
         &project_root,
         config.as_ref(),
-        extra_env,
+        extra_env_ref,
         Some("run"),
         None, // claude-sub-agent does not use tier-based selection
         None, // claude-sub-agent does not override context loading options

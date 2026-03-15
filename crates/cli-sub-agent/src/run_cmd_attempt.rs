@@ -8,7 +8,7 @@ use std::time::Instant;
 use anyhow::Result;
 use tracing::{info, warn};
 
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName, ToolSelectionStrategy};
 use csa_executor::structured_output_instructions_for_fork_call;
 use csa_lock::slot::{
@@ -288,19 +288,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             effective_session_arg = new_eff;
         }
 
-        let extra_env = {
-            let mut env = request
-                .global_config
-                .env_vars(tool_name_str)
-                .cloned()
-                .unwrap_or_default();
-            if tool_name_str == "gemini-cli" {
-                if let Some(key) = request.global_config.api_key_fallback(tool_name_str) {
-                    env.insert("_CSA_API_KEY_FALLBACK".to_string(), key.to_string());
-                }
-            }
-            if env.is_empty() { None } else { Some(env) }
-        };
+        let extra_env = request
+            .global_config
+            .build_execution_env(tool_name_str, ExecutionEnvOptions::default());
         let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(
