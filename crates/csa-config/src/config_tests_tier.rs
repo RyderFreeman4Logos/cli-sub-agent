@@ -15,6 +15,8 @@ fn test_resolve_tier_default_selection() {
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
                 "codex/anthropic/claude-opus/high".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -65,6 +67,8 @@ fn test_resolve_tier_fallback_to_tier3() {
         TierConfig {
             description: "Fallback tier".to_string(),
             models: vec!["codex/anthropic/claude-opus/medium".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -125,6 +129,8 @@ fn test_resolve_tier_skips_disabled_tools() {
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
                 "codex/anthropic/claude-opus/high".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -230,6 +236,8 @@ fn enabled_tier_models_returns_all_when_no_tools_disabled() {
                 "codex/openai/o3/high".to_string(),
                 "claude-code/anthropic/default/xhigh".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -273,6 +281,8 @@ fn enabled_tier_models_excludes_disabled_tool() {
                 "claude-code/anthropic/default/xhigh".to_string(),
                 "gemini-cli/google/gemini-2.5-pro/high".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -350,6 +360,8 @@ fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
                 "codex/openai/o3/high".to_string(),
                 "claude-code/anthropic/default/xhigh".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -419,6 +431,8 @@ fn filtered_skips_restricted_tool_when_needs_edit() {
                 "gemini-cli/google/gemini-2.5-pro/xhigh".to_string(),
                 "codex/openai/o4-mini/0".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -479,6 +493,8 @@ fn filtered_returns_none_when_all_restricted_and_needs_edit() {
         TierConfig {
             description: "test".to_string(),
             models: vec!["gemini-cli/google/gemini-2.5-pro/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

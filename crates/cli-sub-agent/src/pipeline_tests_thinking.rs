@@ -1,5 +1,5 @@
 use super::*;
-use csa_config::config::{CURRENT_SCHEMA_VERSION, ToolConfig};
+use csa_config::config::{CURRENT_SCHEMA_VERSION, TierStrategy, ToolConfig};
 use csa_config::global::GlobalToolConfig;
 use csa_config::{ProjectMeta, ResourcesConfig};
 use std::collections::HashMap;
@@ -268,6 +268,8 @@ async fn project_default_model_is_checked_against_tiers_when_enabled() {
         csa_config::config::TierConfig {
             description: "test".to_string(),
             models: vec!["codex/openai/gpt-5.4/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -332,6 +334,8 @@ async fn project_default_model_is_ignored_when_tool_defaults_disabled() {
         csa_config::config::TierConfig {
             description: "test".to_string(),
             models: vec!["codex/openai/gpt-5.4/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

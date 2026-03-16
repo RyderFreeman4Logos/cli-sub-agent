@@ -191,7 +191,7 @@ fn has_valuable_context(session: &MetaSessionState) -> bool {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use csa_config::{ProjectMeta, TierConfig, ToolConfig};
+    use csa_config::{ProjectMeta, TierConfig, TierStrategy, ToolConfig};
     use std::collections::HashMap;
 
     fn make_config(models: Vec<&str>, disabled: Vec<&str>) -> ProjectConfig {
@@ -213,6 +213,8 @@ mod tests {
             TierConfig {
                 description: "test".to_string(),
                 models: models.iter().map(|s| s.to_string()).collect(),
+                strategy: TierStrategy::default(),
+
                 token_budget: None,
                 max_turns: None,
             },
@@ -598,6 +600,8 @@ mod tests {
             TierConfig {
                 description: "frontier".to_string(),
                 models: tier1_models.iter().map(|s| s.to_string()).collect(),
+                strategy: TierStrategy::default(),
+
                 token_budget: None,
                 max_turns: None,
             },
@@ -607,6 +611,8 @@ mod tests {
             TierConfig {
                 description: "fast".to_string(),
                 models: tier3_models.iter().map(|s| s.to_string()).collect(),
+                strategy: TierStrategy::default(),
+
                 token_budget: None,
                 max_turns: None,
             },

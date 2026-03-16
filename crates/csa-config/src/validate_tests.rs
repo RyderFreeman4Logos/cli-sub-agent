@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{
-    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
+    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy,
+    ToolConfig,
 };
 use crate::global::ReviewConfig;
 use chrono::Utc;
@@ -20,6 +21,8 @@ fn test_validate_config_succeeds_on_valid() {
         TierConfig {
             description: "Quick tasks".to_string(),
             models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -228,6 +231,8 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         TierConfig {
             description: "Test tier".to_string(),
             models: vec!["invalid-model-spec".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -279,6 +284,8 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         TierConfig {
             description: "Quick tasks".to_string(),
             models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -345,6 +352,8 @@ fn test_validate_config_fails_on_empty_models() {
         TierConfig {
             description: "Empty tier".to_string(),
             models: vec![],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -396,6 +405,8 @@ fn test_validate_config_accepts_custom_tier_names() {
         TierConfig {
             description: "Custom tier name".to_string(),
             models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

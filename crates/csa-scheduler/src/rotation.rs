@@ -5,7 +5,7 @@
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use csa_config::ProjectConfig;
+use csa_config::{ProjectConfig, TierStrategy};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -83,17 +83,28 @@ pub fn resolve_tier_tool_rotated(
         return Ok(None);
     }
 
+    let strategy = tier.strategy;
+
     // 4. Atomic flock + read/write rotation state
     let state_dir = csa_session::get_session_root(project_root)?;
     let rotation_path = state_dir.join("rotation.toml");
 
     let result = with_rotation_lock(&rotation_path, |state| {
-        let tier_state = state.tiers.get(&tier_name);
-        let last_index = tier_state.map(|t| t.last_index as usize).unwrap_or(0);
-
-        // Find next eligible starting from (last_index + 1) % total
         let total = tier.models.len();
-        let start = (last_index + 1) % total;
+
+        // Priority: always start from 0 (first eligible wins).
+        // RoundRobin: advance from last used position.
+        let start = match strategy {
+            TierStrategy::Priority => 0,
+            TierStrategy::RoundRobin => {
+                let last_index = state
+                    .tiers
+                    .get(&tier_name)
+                    .map(|t| t.last_index as usize)
+                    .unwrap_or(0);
+                (last_index + 1) % total
+            }
+        };
 
         let mut chosen = None;
         for offset in 0..total {
@@ -117,7 +128,8 @@ pub fn resolve_tier_tool_rotated(
                     tier = %tier_name,
                     tool = %tool,
                     index = idx,
-                    "Round-robin selected tool"
+                    ?strategy,
+                    "Selected tool from tier"
                 );
                 Ok(Some((tool, spec)))
             }
@@ -235,10 +247,18 @@ fn write_rotation_state(file: &File, state: &RotationState) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csa_config::{ProjectConfig, ProjectMeta, TierConfig, ToolConfig};
+    use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy, ToolConfig};
     use tempfile::tempdir;
 
     fn make_config(models: Vec<&str>, disabled_tools: Vec<&str>) -> ProjectConfig {
+        make_config_with_strategy(models, disabled_tools, TierStrategy::default())
+    }
+
+    fn make_config_with_strategy(
+        models: Vec<&str>,
+        disabled_tools: Vec<&str>,
+        strategy: TierStrategy,
+    ) -> ProjectConfig {
         let mut tools = HashMap::new();
         for tool in disabled_tools {
             tools.insert(
@@ -258,6 +278,7 @@ mod tests {
             TierConfig {
                 description: "test tier".to_string(),
                 models: models.iter().map(|s| s.to_string()).collect(),
+                strategy,
                 token_budget: None,
                 max_turns: None,
             },
@@ -440,13 +461,14 @@ mod tests {
     #[test]
     fn test_resolve_tier_tool_rotated_round_robin() {
         let temp = tempdir().unwrap();
-        let config = make_config(
+        let config = make_config_with_strategy(
             vec![
                 "gemini-cli/google/gemini-2.5-pro/0",
                 "codex/openai/o4-mini/0",
                 "claude-code/anthropic/sonnet/0",
             ],
             vec![],
+            TierStrategy::RoundRobin,
         );
 
         // First call → index 1 (codex)
@@ -484,15 +506,66 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_tier_tool_rotated_skips_disabled() {
+    fn test_resolve_tier_tool_priority_always_first() {
         let temp = tempdir().unwrap();
-        let config = make_config(
+        let config = make_config_with_strategy(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/0",
+                "codex/openai/o4-mini/0",
+                "claude-code/anthropic/sonnet/0",
+            ],
+            vec![],
+            TierStrategy::Priority,
+        );
+
+        // Every call should pick the first model (gemini-cli)
+        for i in 0..4 {
+            let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                result.0, "gemini-cli",
+                "Priority call {i} should always pick first eligible (gemini-cli)"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_priority_skips_disabled_first() {
+        let temp = tempdir().unwrap();
+        let config = make_config_with_strategy(
+            vec![
+                "gemini-cli/google/gemini-2.5-pro/0",
+                "codex/openai/o4-mini/0",
+                "claude-code/anthropic/sonnet/0",
+            ],
+            vec!["gemini-cli"],
+            TierStrategy::Priority,
+        );
+
+        // First eligible is codex (gemini-cli disabled)
+        for _ in 0..3 {
+            let result = resolve_tier_tool_rotated(&config, "default", temp.path(), false)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                result.0, "codex",
+                "Priority should pick codex when gemini-cli disabled"
+            );
+        }
+    }
+
+    #[test]
+    fn test_resolve_tier_tool_rotated_skips_disabled_round_robin() {
+        let temp = tempdir().unwrap();
+        let config = make_config_with_strategy(
             vec![
                 "gemini-cli/google/gemini-2.5-pro/0",
                 "codex/openai/o4-mini/0",
                 "claude-code/anthropic/sonnet/0",
             ],
             vec!["codex"], // codex disabled
+            TierStrategy::RoundRobin,
         );
 
         // First call → skips codex (disabled), picks claude-code (index 2)
@@ -630,6 +703,7 @@ mod tests {
             TierConfig {
                 description: "test tier".to_string(),
                 models: models.iter().map(|s| s.to_string()).collect(),
+                strategy: TierStrategy::default(),
                 token_budget: None,
                 max_turns: None,
             },
@@ -680,14 +754,14 @@ mod tests {
             .unwrap();
         assert_eq!(result.0, "codex", "Should skip restricted gemini-cli");
 
-        // needs_edit=false → normal rotation (picks gemini-cli)
+        // needs_edit=false → priority picks first eligible (gemini-cli, since restriction only blocks editing)
         let temp2 = tempdir().unwrap();
         let result = resolve_tier_tool_rotated(&config, "default", temp2.path(), false)
             .unwrap()
             .unwrap();
         assert_eq!(
-            result.0, "codex",
-            "Without restriction, normal round-robin from index 1"
+            result.0, "gemini-cli",
+            "Without needs_edit, priority should pick first eligible (gemini-cli)"
         );
     }
 

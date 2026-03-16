@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::TierStrategy;
 
 fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
     let mut tiers = HashMap::new();
@@ -7,6 +8,8 @@ fn config_with_tiers(tier_models: &[&str]) -> ProjectConfig {
         TierConfig {
             description: "test tier".to_string(),
             models: tier_models.iter().map(|s| s.to_string()).collect(),
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

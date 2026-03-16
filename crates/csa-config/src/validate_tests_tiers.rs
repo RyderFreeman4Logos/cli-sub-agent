@@ -8,6 +8,8 @@ fn test_validate_multiple_tiers_all_valid() {
         TierConfig {
             description: "Quick tasks".to_string(),
             models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -17,6 +19,8 @@ fn test_validate_multiple_tiers_all_valid() {
         TierConfig {
             description: "Standard tasks".to_string(),
             models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -26,6 +30,8 @@ fn test_validate_multiple_tiers_all_valid() {
         TierConfig {
             description: "Complex tasks".to_string(),
             models: vec!["claude-code/anthropic/claude-opus-4-6/default".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -78,6 +84,8 @@ fn test_validate_tier_with_multiple_models_all_valid() {
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
                 "codex/anthropic/claude-sonnet-4-5/default".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -125,6 +133,8 @@ fn test_validate_tier_with_one_bad_model_in_list() {
                 "gemini-cli/google/gemini-3-flash-preview/xhigh".to_string(),
                 "bad-spec".to_string(), // invalid
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -175,6 +185,8 @@ fn test_validate_tier_token_budget_zero_rejected() {
         TierConfig {
             description: "Zero budget".to_string(),
             models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: Some(0),
             max_turns: None,
         },
@@ -220,6 +232,8 @@ fn test_validate_tier_max_turns_zero_rejected() {
         TierConfig {
             description: "Zero turns".to_string(),
             models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: Some(0),
         },
@@ -265,6 +279,8 @@ fn test_validate_tier_with_valid_budget_and_turns() {
         TierConfig {
             description: "Has budget".to_string(),
             models: vec!["codex/anthropic/claude-sonnet-4-5/default".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: Some(100_000),
             max_turns: Some(10),
         },
@@ -309,6 +325,8 @@ fn test_validate_tier_model_spec_unknown_tool_rejected() {
         TierConfig {
             description: "Unknown tool in spec".to_string(),
             models: vec!["unknown-tool/provider/model/high".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -358,6 +376,8 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
         TierConfig {
             description: "Known tool in spec".to_string(),
             models: vec!["codex/openai/gpt-5.3-codex/high".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -484,6 +504,8 @@ fn test_validate_review_tier_valid_accepted() {
         TierConfig {
             description: "Critical tier".to_string(),
             models: vec!["gemini-cli/google/gemini-3-flash-preview/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

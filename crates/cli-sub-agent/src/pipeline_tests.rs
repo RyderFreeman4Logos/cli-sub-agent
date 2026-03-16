@@ -2,7 +2,7 @@ use super::result_contract::enforce_result_toml_path_contract;
 use super::*;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 use chrono::Utc;
-use csa_config::config::{CURRENT_SCHEMA_VERSION, TierConfig};
+use csa_config::config::{CURRENT_SCHEMA_VERSION, TierConfig, TierStrategy};
 use csa_config::{ProjectMeta, ResourcesConfig};
 use csa_hooks::{FailPolicy, HookConfig, HookEvent, HooksConfig, Waiver};
 use std::collections::HashMap;
@@ -609,6 +609,8 @@ fn config_with_tier_for_tool(_tool_prefix: &str, model_spec: &str) -> ProjectCon
         TierConfig {
             description: "test tier".to_string(),
             models: vec![model_spec.to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
