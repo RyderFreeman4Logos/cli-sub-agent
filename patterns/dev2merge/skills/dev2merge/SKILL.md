@@ -35,8 +35,8 @@ Execute the complete development lifecycle as a **deterministic weave workflow**
 Every stage has hard gates (`on_fail = "abort"`) — no step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → L1/L2 Quality Gates →
-(FAST_PATH: commit → bump → review) or (Full: mktd → mktsk → bump → cumulative review) →
-Push Gate → PR Transaction (create/reuse PR + `post-pr-create.sh`, which triggers `pr-codex-bot` when needed) → Local Sync.
+(FAST_PATH: commit → bump → review) or (Full: mktd → orchestrator TaskCreate → mktsk → bump → cumulative review) →
+Push Gate → PR Transaction (create/reuse PR + inline pr-codex-bot trigger) → Local Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -85,18 +85,18 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 6 | Pre-PR Review | `csa review --range` | bash |
 | **ELSE (Full Pipeline)** | | | |
 | 7 | Plan with mktd | `csa plan run patterns/mktd/workflow.toml` | bash |
-| 8 | Execute with mktsk | `csa run --skill mktsk` | bash |
-| 9 | Version Bump | `just bump-patch` if needed | bash |
-| 10 | Cumulative Review | `csa review --range main...HEAD` | bash |
+| 8 | Orchestrator Task Registration | Orchestrator calls TaskCreate for each TODO item | orchestrator |
+| 9 | Execute with mktsk | `csa run --skill mktsk` | bash |
+| 10 | Version Bump | `just bump-patch` if needed | bash |
+| 11 | Cumulative Review | `csa review --range main...HEAD` | bash |
 | **ENDIF** | | | |
-| 11 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
-| 12 | Create PR Transaction | `gh pr create` or reuse existing, then `scripts/hooks/post-pr-create.sh --base main` | bash |
-| 13 | Post-Merge Sync | `git checkout main && git merge --ff-only` | bash |
+| 12 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
+| 13 | Create PR Transaction | `gh pr create` or reuse existing, then inline pr-codex-bot trigger | bash |
+| 14 | Post-Merge Sync | `git checkout main && git merge --ff-only` | bash |
 
-Step 12 is intentionally a single shell transaction. `scripts/hooks/post-pr-create.sh`
-is responsible for triggering `pr-codex-bot` when appropriate; if the bot is already
-running for the same PR/HEAD, the helper may exit early. There is no separate Step 13
-for `pr-codex-bot` in `workflow.toml`.
+Step 12 is intentionally a single self-contained shell transaction. The pr-codex-bot
+trigger logic is inlined directly in the workflow step (no external hook scripts required).
+Marker files provide idempotency — if the bot already ran for the same PR/HEAD, it skips.
 
 ### FAST_PATH Heuristic
 
@@ -139,7 +139,7 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 6. Version bumped if needed.
 7. Pre-PR cumulative review passed (`REVIEW_COMPLETED=true`).
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
-9. PR transaction completed: PR created or reused on GitHub targeting main, then `scripts/hooks/post-pr-create.sh --base main` ran successfully.
-10. That transaction either triggered `pr-codex-bot` or detected an already-running bot for the same PR/HEAD and exited early.
+9. PR transaction completed: PR created or reused on GitHub targeting main, pr-codex-bot triggered inline.
+10. That transaction either triggered `pr-codex-bot` or detected an already-completed run for the same PR/HEAD and skipped.
 11. Local main synced after the PR merge completed: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 12. Feature branch deleted (local and remote).

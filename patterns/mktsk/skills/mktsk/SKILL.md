@@ -60,9 +60,11 @@ breaks prompt-guard propagation.
    Check for associated references via `csa todo ref list` — if references exist
    (e.g., RECON findings, threat model), consult them for detailed context before
    executing tasks that need deeper understanding of the design rationale.
-2. **Register tasks**: For each parsed TODO item, use TaskCreate to create a tracked task entry.
-   Include the executor tag and `DONE WHEN` condition in the task description.
-   TODO.md remains the read-only source of truth — mktsk reads from it, tracks progress via TaskCreate/TaskUpdate.
+2. **Verify task registration**: When called from an orchestrator workflow (e.g., dev2merge),
+   tasks are pre-registered by the orchestrator via TaskCreate before mktsk is invoked.
+   Verify that tasks exist via TaskList. When called standalone (not as CSA subprocess),
+   register tasks yourself via TaskCreate with executor tag and `DONE WHEN` condition.
+   TODO.md remains the read-only source of truth — mktsk reads from it, tracks progress via TaskUpdate.
 3. **Execute serially with checkpointing**: Process checklist items strictly in order. NEVER parallelize implementation tasks.
    - Before executing each item: use TaskUpdate to set its status to `in_progress`.
    - Treat each item as an atomic transaction: execute one item -> verify -> review -> persist checkpoint.
@@ -92,7 +94,7 @@ breaks prompt-guard propagation.
 
 ## Done Criteria
 
-1. All TODO items parsed and registered via TaskCreate with executor tags.
+1. All TODO items parsed and tasks verified (pre-registered by orchestrator or self-registered if standalone).
 2. All tasks executed in strict serial order with TaskUpdate status transitions.
 3. Each task's DONE WHEN condition verified before marking complete.
 4. Progress checkpoint is updated after each completed item.

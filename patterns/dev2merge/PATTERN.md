@@ -3,7 +3,7 @@ name = "dev2merge"
 description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), pre-PR review, push, PR, codex-bot merge"
 allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task, TaskCreate, TaskUpdate, TaskList, TaskGet"
 tier = "tier-3-complex"
-version = "0.2.0"
+version = "0.3.0"
 ---
 
 # Dev2Merge: Deterministic Development Pipeline
@@ -13,7 +13,7 @@ hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
 mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push →
-PR Transaction (create/reuse PR + `post-pr-create.sh`, which triggers `pr-codex-bot` when needed) →
+PR Transaction (create/reuse PR + inline pr-codex-bot trigger) →
 Local Sync.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
@@ -164,7 +164,32 @@ echo "CSA_VAR:MKTD_TODO_TIMESTAMP=${LATEST_TS}"
 echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 ```
 
-## Step 8: Execute Plan with mktsk
+## Step 8: Orchestrator Task Registration
+
+Tool: bash
+OnFail: abort
+
+Print the TODO plan produced by mktd in structured format for the orchestrator
+to parse and register tasks via TaskCreate in SA mode.
+
+```bash
+set -euo pipefail
+if [ ! -f "${MKTD_TODO_PATH}" ]; then
+  echo "ERROR: TODO plan not found at ${MKTD_TODO_PATH}" >&2
+  exit 1
+fi
+echo "=== TODO PLAN FOR TASK REGISTRATION ==="
+# Extract checklist items with executor tags and DONE WHEN clauses
+grep -E '^\s*- \[[ x]\]' "${MKTD_TODO_PATH}" | while IFS= read -r line; do
+  echo "TASK: ${line}"
+done
+echo ""
+echo "=== END TODO PLAN ==="
+echo "INFO: Orchestrator (SA mode) should register each TASK item via TaskCreate."
+echo "INFO: Include executor tag and DONE WHEN in each task description."
+```
+
+## Step 9: Execute Plan with mktsk
 
 Tool: bash
 OnFail: abort
@@ -177,7 +202,7 @@ set -euo pipefail
 timeout 3600 csa run --sa-mode true --skill mktsk "${MKTD_TODO_TIMESTAMP}"
 ```
 
-## Step 9: Ensure Version Bumped
+## Step 10: Ensure Version Bumped
 
 Tool: bash
 OnFail: abort
@@ -193,7 +218,7 @@ if ! just check-version-bumped 2>/dev/null; then
 fi
 ```
 
-## Step 10: Pre-PR Cumulative Review Gate
+## Step 11: Pre-PR Cumulative Review Gate
 
 Tool: bash
 OnFail: abort
@@ -224,7 +249,7 @@ echo "CSA_VAR:REVIEW_COMPLETED=true"
 
 ## ENDIF
 
-## Step 11: Push Gate
+## Step 12: Push Gate
 
 Tool: bash
 OnFail: abort
@@ -242,18 +267,20 @@ git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 ```
 
-## Step 12: Create Pull Request Transaction
+## Step 13: Create Pull Request Transaction
 
 Tool: bash
 OnFail: abort
 
-Create or reuse PR, then run the post-create helper to trigger `pr-codex-bot` when needed.
-If the bot is already running for the same PR/HEAD, the helper may exit early.
+Create or reuse PR, then trigger pr-codex-bot inline (self-contained, no external hook scripts).
+Uses marker files to skip duplicate runs for the same PR/HEAD combination.
 
 ```bash
 set -euo pipefail
 BRANCH="$(git branch --show-current)"
 COMMIT_SUBJECT="$(git log -1 --format=%s)"
+
+# --- Create or reuse PR ---
 set +e
 CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by dev2merge pipeline." 2>&1)"
 CREATE_RC=$?
@@ -263,12 +290,74 @@ if [ "${CREATE_RC}" -ne 0 ]; then
     echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
     exit 1
   fi
-  echo "INFO: PR already exists for ${BRANCH}; continuing with post-create helper."
+  echo "INFO: PR already exists for ${BRANCH}; continuing."
 fi
-scripts/hooks/post-pr-create.sh --base main
+
+# --- Resolve PR number (retry + fallback) ---
+PR_NUMBER=""
+PR_URL=""
+for attempt in 1 2 3; do
+  PR_JSON="$(gh pr view --json number,url,state -q 'select(.state == "OPEN")' 2>/dev/null || true)"
+  PR_NUMBER="$(printf '%s' "${PR_JSON}" | jq -r '.number // empty' 2>/dev/null || true)"
+  if [ -n "${PR_NUMBER}" ] && printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
+    PR_URL="$(printf '%s' "${PR_JSON}" | jq -r '.url // empty')"
+    break
+  fi
+  PR_NUMBER=""
+  if [ "${attempt}" -lt 3 ]; then
+    echo "INFO: PR resolution attempt ${attempt} failed, retrying in 5s..."
+    sleep 5
+  fi
+done
+# Fallback: gh pr list --head
+if [ -z "${PR_NUMBER}" ]; then
+  echo "INFO: gh pr view failed; falling back to gh pr list..."
+  PR_NUMBER="$(gh pr list --head "${BRANCH}" --base main --json number -q '.[0].number' 2>/dev/null || true)"
+  if [ -n "${PR_NUMBER}" ] && printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
+    PR_URL="$(gh pr view "${PR_NUMBER}" --json url -q '.url' 2>/dev/null || true)"
+  fi
+fi
+if [ -z "${PR_NUMBER}" ] || ! printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; then
+  echo "ERROR: Cannot resolve open PR number for ${BRANCH} after retries." >&2
+  exit 1
+fi
+HEAD_SHA="$(git rev-parse --verify HEAD)"
+
+# --- Lock + Idempotency: skip if pr-codex-bot already ran or is running ---
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+mkdir -p "${MARKER_DIR}"
+MARKER_BASE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}"
+DONE_MARKER="${MARKER_BASE}.done"
+LOCK_DIR="${MARKER_BASE}.lock"
+LOCK_HELD=0
+
+cleanup_lock() {
+  if [ "${LOCK_HELD}" -eq 1 ]; then
+    rmdir "${LOCK_DIR}" 2>/dev/null || true
+  fi
+}
+trap cleanup_lock EXIT
+
+if [ -f "${DONE_MARKER}" ]; then
+  echo "pr-codex-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
+elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
+  echo "pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
+else
+  LOCK_HELD=1
+  echo "Running pr-codex-bot for PR #${PR_NUMBER} (${PR_URL})..."
+  export CSA_PR_BOT_GUARD=1
+  if csa plan run patterns/pr-codex-bot/workflow.toml; then
+    touch "${DONE_MARKER}"
+    LOCK_HELD=0
+    rmdir "${LOCK_DIR}" 2>/dev/null || true
+  else
+    echo "ERROR: pr-codex-bot workflow failed for PR #${PR_NUMBER}." >&2
+    exit 1
+  fi
+fi
 ```
 
-## Step 13: Post-Merge Local Sync
+## Step 14: Post-Merge Local Sync
 
 Tool: bash
 OnFail: abort

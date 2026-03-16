@@ -3,7 +3,7 @@ name = "mktsk"
 description = "Execute TODO plans as deterministic, resumable serial checklists across auto-compaction"
 allowed-tools = "Read, Grep, Glob, Bash, Write, Edit, TaskCreate, TaskUpdate, TaskGet, TaskList"
 tier = "tier-2-standard"
-version = "0.1.0"
+version = "0.2.0"
 ---
 
 # mktsk: Make Task — Plan-to-Execution Bridge
@@ -21,12 +21,17 @@ Extract all unchecked checklist items (`- [ ]`) with:
 
 Fail fast if no executable checklist items are found.
 
-## Step 2: Register Tasks via TaskCreate
+## Step 2: Verify Task Registration
 
 TODO.md is a read-only planning artifact. Progress tracking uses TaskCreate/TaskUpdate.
 
-For each parsed TODO item, use TaskCreate to register a tracked task entry.
-Each task MUST include:
+**When called from dev2merge or another orchestrator workflow**: Tasks are pre-registered
+by the orchestrator via TaskCreate BEFORE mktsk is invoked. The orchestrator owns
+TaskCreate because it runs in the main agent's context where TaskCreate entries persist.
+mktsk (which runs as a CSA subprocess) verifies that tasks exist and picks them up.
+
+**When called standalone** (not via CSA subprocess): mktsk registers tasks itself via
+TaskCreate for each parsed TODO item. Each task MUST include:
 - stable item id
 - source TODO line reference
 - executor tag
