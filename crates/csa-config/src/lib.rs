@@ -9,6 +9,7 @@ mod config_tiers;
 pub mod config_tool;
 pub mod gc;
 pub mod global;
+mod global_env;
 pub mod init;
 pub mod mcp;
 pub mod memory;
@@ -26,7 +27,9 @@ pub use config::{
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
-pub use global::{GateMode, GateStep, GlobalConfig, GlobalMcpConfig, ReviewConfig};
+pub use global::{
+    ExecutionEnvOptions, GateMode, GateStep, GlobalConfig, GlobalMcpConfig, ReviewConfig,
+};
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
 pub use memory::{MemoryConfig, MemoryEphemeralConfig, MemoryLlmConfig};

@@ -174,7 +174,10 @@ pub(super) async fn execute_csa_step(
     check_tool_installed(executor.runtime_binary_name()).await?;
 
     let global_config = csa_config::GlobalConfig::load()?;
-    let extra_env = global_config.env_vars(executor.tool_name()).cloned();
+    let extra_env = global_config.build_execution_env(
+        executor.tool_name(),
+        csa_config::ExecutionEnvOptions::default(),
+    );
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
 
     let max_concurrent = global_config.max_concurrent(executor.tool_name());

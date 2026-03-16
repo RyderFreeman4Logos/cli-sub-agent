@@ -16,7 +16,7 @@ use crate::review_context::resolve_review_context;
 #[cfg(test)]
 use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
 use csa_core::types::{OutputFormat, ToolName};
 
@@ -614,18 +614,11 @@ async fn execute_review(
         prompt
     };
 
-    let extra_env_owned = {
-        let mut env = global_config
-            .env_vars(executor.tool_name())
-            .cloned()
-            .unwrap_or_default();
-        env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
-        if let Some(key) = global_config.api_key_fallback(executor.tool_name()) {
-            env.insert("_CSA_API_KEY_FALLBACK".to_string(), key.to_string());
-        }
-        env
-    };
-    let extra_env = Some(&extra_env_owned);
+    let extra_env_owned = global_config.build_execution_env(
+        executor.tool_name(),
+        ExecutionEnvOptions::with_no_flash_fallback(),
+    );
+    let extra_env = extra_env_owned.as_ref();
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
     if session.is_none() {

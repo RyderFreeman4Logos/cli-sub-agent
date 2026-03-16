@@ -537,7 +537,10 @@ async fn execute_task(
             };
         }
     };
-    let extra_env = global_config.env_vars(executor.tool_name()).cloned();
+    let extra_env = global_config.build_execution_env(
+        executor.tool_name(),
+        csa_config::ExecutionEnvOptions::default(),
+    );
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
 

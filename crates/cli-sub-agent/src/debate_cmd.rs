@@ -10,7 +10,7 @@ use crate::cli::DebateArgs;
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::read_prompt;
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 
 use crate::debate_cmd_output::{
@@ -207,18 +207,11 @@ pub(crate) async fn handle_debate(
     .await?;
 
     // 7. Get env injection from global config (with no-flash + api key fallback)
-    let extra_env_owned = {
-        let mut env = global_config
-            .env_vars(executor.tool_name())
-            .cloned()
-            .unwrap_or_default();
-        env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
-        if let Some(key) = global_config.api_key_fallback(executor.tool_name()) {
-            env.insert("_CSA_API_KEY_FALLBACK".to_string(), key.to_string());
-        }
-        env
-    };
-    let extra_env = Some(&extra_env_owned);
+    let extra_env_owned = global_config.build_execution_env(
+        executor.tool_name(),
+        ExecutionEnvOptions::with_no_flash_fallback(),
+    );
+    let extra_env = extra_env_owned.as_ref();
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
 

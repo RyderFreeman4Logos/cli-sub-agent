@@ -19,6 +19,7 @@ use crate::paths;
 
 /// Default maximum concurrent instances per tool.
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
+pub use crate::global_env::ExecutionEnvOptions;
 
 /// Global configuration loaded from `~/.config/cli-sub-agent/config.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

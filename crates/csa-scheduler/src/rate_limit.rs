@@ -1,5 +1,6 @@
 //! 429 / rate-limit detection from tool stderr and stdout.
 
+use csa_core::gemini::RATE_LIMIT_PATTERNS as GEMINI_RATE_LIMIT_PATTERNS;
 use serde::Serialize;
 
 /// Information about a detected rate-limit event.
@@ -29,11 +30,11 @@ pub fn detect_rate_limit(
         return None;
     }
 
-    let combined = format!("{stderr}\n{stdout}");
+    let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
     let patterns = patterns_for_tool(tool_name);
 
     for pattern in patterns {
-        if combined.contains(pattern) {
+        if combined_lower.contains(pattern) {
             return Some(RateLimitDetected {
                 tool: tool_name.to_string(),
                 matched_pattern: pattern.to_string(),
@@ -47,15 +48,10 @@ pub fn detect_rate_limit(
 
 fn patterns_for_tool(tool: &str) -> &'static [&'static str] {
     match tool {
-        "gemini-cli" => &[
-            "Resource exhausted",
-            "429",
-            "quota exceeded",
-            "RESOURCE_EXHAUSTED",
-        ],
-        "opencode" => &["rate limit", "429", "too many requests", "Rate limit"],
-        "codex" => &["rate_limit_exceeded", "429", "RateLimitError"],
-        "claude-code" => &["rate limit", "429", "overloaded", "529"],
+        "gemini-cli" => GEMINI_RATE_LIMIT_PATTERNS,
+        "opencode" => &["rate limit", "429", "too many requests"],
+        "codex" => &["rate_limit_exceeded", "429", "ratelimiterror"],
+        "claude-code" => &["rate limit", "529", "429", "overloaded"],
         _ => &["429", "rate limit"],
     }
 }
@@ -74,7 +70,7 @@ mod tests {
             None,
         );
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "Resource exhausted");
+        assert_eq!(result.unwrap().matched_pattern, "resource exhausted");
     }
 
     #[test]
@@ -139,14 +135,14 @@ mod tests {
             None,
         );
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "RESOURCE_EXHAUSTED");
+        assert_eq!(result.unwrap().matched_pattern, "resource_exhausted");
     }
 
     #[test]
     fn test_codex_rate_limit_error_type() {
         let result = detect_rate_limit("codex", "", "RateLimitError: please wait", 1, None);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "RateLimitError");
+        assert_eq!(result.unwrap().matched_pattern, "ratelimiterror");
     }
 
     #[test]
@@ -173,7 +169,7 @@ mod tests {
     fn test_opencode_rate_limit_case_sensitive() {
         let result = detect_rate_limit("opencode", "Rate limit exceeded for account", "", 1, None);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "Rate limit");
+        assert_eq!(result.unwrap().matched_pattern, "rate limit");
     }
 
     #[test]
@@ -225,7 +221,7 @@ mod tests {
     fn test_first_matching_pattern_wins() {
         let result = detect_rate_limit("gemini-cli", "Resource exhausted (429)", "", 1, None);
         assert!(result.is_some());
-        assert_eq!(result.unwrap().matched_pattern, "Resource exhausted");
+        assert_eq!(result.unwrap().matched_pattern, "429");
     }
 
     #[test]
@@ -243,5 +239,12 @@ mod tests {
             detected.model_spec.as_deref(),
             Some("gemini-cli/google/gemini-2.5-pro/high")
         );
+    }
+
+    #[test]
+    fn test_gemini_quota_exhausted_case_insensitive() {
+        let result = detect_rate_limit("gemini-cli", "reason: 'QUOTA_EXHAUSTED'", "", 1, None);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().matched_pattern, "quota_exhausted");
     }
 }
