@@ -61,7 +61,7 @@ pub struct AcpConnectionOptions {
 impl Default for AcpConnectionOptions {
     fn default() -> Self {
         Self {
-            init_timeout: Duration::from_secs(60),
+            init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
         }
     }

@@ -63,7 +63,7 @@ impl Default for AcpRunOptions<'_> {
     fn default() -> Self {
         Self {
             idle_timeout: Duration::from_secs(300),
-            init_timeout: Duration::from_secs(60),
+            init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
             io: AcpOutputIoOptions::default(),
         }
@@ -222,7 +222,7 @@ pub async fn run_prompt(
         prompt,
         AcpRunOptions {
             idle_timeout,
-            init_timeout: Duration::from_secs(60),
+            init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
             io: AcpOutputIoOptions::default(),
         },

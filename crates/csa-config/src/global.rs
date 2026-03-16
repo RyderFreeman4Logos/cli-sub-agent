@@ -41,29 +41,21 @@ pub struct GlobalConfig {
     /// Memory system configuration.
     #[serde(default)]
     pub memory: MemoryConfig,
-    /// Global MCP server registry injected into all tool sessions.
-    ///
-    /// Merged with project-level `.csa/mcp.toml` servers (project takes precedence
-    /// for same-name servers).
+    /// Global MCP servers; merged with project `.csa/mcp.toml` (project wins).
     #[serde(default)]
     pub mcp: GlobalMcpConfig,
-    /// Optional MCP hub unix socket path for shared proxy mode.
-    ///
-    /// When set, ACP sessions may inject a single mcp-hub endpoint instead of
-    /// individual MCP server entries.
+    /// MCP hub unix socket for shared proxy mode.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mcp_proxy_socket: Option<String>,
-    /// Global tool name aliases: maps short names to canonical tool names.
-    ///
-    /// Example: `gem = "gemini-cli"`, `cc = "claude-code"`.
-    /// Project-level `[tool_aliases]` take precedence over global ones.
+    /// Tool name aliases (`gem` → `gemini-cli`). Project-level wins.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub tool_aliases: HashMap<String, String>,
-    /// Execution tuning (timeout floors, etc.).
-    ///
-    /// Project-level `[execution]` overrides global values during config merge.
+    /// Execution tuning; project-level `[execution]` overrides.
     #[serde(default)]
     pub execution: crate::config::ExecutionConfig,
+    /// ACP transport overrides; project-level `[acp]` takes precedence.
+    #[serde(default, skip_serializing_if = "crate::AcpConfig::is_default")]
+    pub acp: crate::AcpConfig,
 }
 
 /// User preferences for tool selection and routing.
@@ -703,6 +695,9 @@ cloud_review_exhausted = "ask-user"
 # Execution tuning. Project-level [execution] overrides these values.
 # [execution]
 # min_timeout_seconds = 1800  # Floor for --timeout flag (seconds)
+# ACP transport tuning. Project-level [acp] overrides these values.
+# [acp]
+# init_timeout_seconds = 120  # Timeout for ACP session creation (seconds)
 "#
         .to_string()
     }

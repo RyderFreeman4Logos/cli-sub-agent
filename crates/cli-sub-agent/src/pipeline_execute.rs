@@ -9,7 +9,7 @@ use tracing::warn;
 use csa_executor::{ExecuteOptions, Executor, SessionConfig, TransportResult};
 use csa_session::{MetaSessionState, SessionResult, ToolState, save_result, save_session};
 
-use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+use crate::session_guard::SessionCleanupGuard;
 
 const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
 
@@ -155,12 +155,23 @@ pub(crate) async fn execute_transport_with_signal(
     match exec_result {
         Ok(result) => Ok(result),
         Err(e) => {
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &e,
-            );
+            // Record a failure result with accurate timing: started_at is when
+            // execution began (before ACP init), not "now", fixing the
+            // Start == End timing bug for slow failures like ACP init timeout.
+            let completed_at = chrono::Utc::now();
+            let result = SessionResult {
+                status: "failure".to_string(),
+                exit_code: 1,
+                summary: format!("transport: {e}"),
+                tool: executor.tool_name().to_string(),
+                started_at: execution_start_time,
+                completed_at,
+                events_count: 0,
+                artifacts: Vec::new(),
+            };
+            if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
+                warn!("Failed to save transport error result: {}", save_err);
+            }
             if let Some(cg) = cleanup_guard {
                 cg.defuse();
             }
