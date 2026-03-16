@@ -227,6 +227,7 @@ mod tests {
             },
             provider_session_id: Some("thread_from_transport".to_string()),
             events: Vec::new(),
+            metadata: Default::default(),
         };
 
         let result = extract_session_id_from_transport(&ToolName::Codex, &transport_result);
@@ -244,6 +245,7 @@ mod tests {
             },
             provider_session_id: None,
             events: Vec::new(),
+            metadata: Default::default(),
         };
 
         let result = extract_session_id_from_transport(&ToolName::Codex, &transport_result);

@@ -96,6 +96,7 @@ mod tests {
             },
             provider_session_id: None,
             events,
+            metadata: Default::default(),
         }
     }
 

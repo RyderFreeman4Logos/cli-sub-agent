@@ -1,10 +1,20 @@
 use super::*;
 use std::sync::{LazyLock, Mutex};
 
+use crate::client::{MAX_RETAINED_EVENTS, SessionEventStore};
+
 fn flush_spool(spool: &mut Option<SpoolRotator>) {
     if let Some(w) = spool {
         w.flush().expect("flush spool");
     }
+}
+
+fn shared_events(retained: Vec<SessionEvent>) -> SharedEvents {
+    let mut store = SessionEventStore::default();
+    for event in retained {
+        store.push(event);
+    }
+    Rc::new(RefCell::new(store))
 }
 
 static HEARTBEAT_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -108,11 +118,11 @@ async fn env_remove_strips_claudecode_from_child() {
 
 #[test]
 fn test_collect_agent_output_includes_thoughts() {
-    let events = Rc::new(RefCell::new(vec![
+    let events = shared_events(vec![
         SessionEvent::AgentMessage("Hello".to_string()),
         SessionEvent::AgentThought("Thinking...".to_string()),
         SessionEvent::AgentMessage(" world".to_string()),
-    ]));
+    ]);
     let mut index = 0;
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
@@ -124,7 +134,7 @@ fn test_collect_agent_output_includes_thoughts() {
 
 #[test]
 fn stream_new_agent_messages_includes_thoughts_in_spool() {
-    let events = Rc::new(RefCell::new(Vec::new()));
+    let events = Rc::new(RefCell::new(SessionEventStore::default()));
     events
         .borrow_mut()
         .push(SessionEvent::AgentMessage("hello".to_string()));
@@ -148,15 +158,15 @@ fn stream_new_agent_messages_includes_thoughts_in_spool() {
         std::fs::read_to_string(&spool_path).expect("read spool"),
         "hello...thinking"
     );
-    // Events stay in the vec for downstream consumers; index advances.
+    // Retained events stay in memory for downstream consumers; index advances.
     assert_eq!(index, 2);
     assert_eq!(events.borrow().len(), 2, "events must NOT be drained");
-    assert_eq!(metadata.events_count, 2);
+    assert_eq!(metadata.total_events_count, 2);
 }
 
 #[test]
 fn stream_new_agent_messages_writes_spool_incrementally() {
-    let events = Rc::new(RefCell::new(Vec::new()));
+    let events = Rc::new(RefCell::new(SessionEventStore::default()));
     events
         .borrow_mut()
         .push(SessionEvent::AgentMessage("hello".to_string()));
@@ -191,18 +201,18 @@ fn stream_new_agent_messages_writes_spool_incrementally() {
     );
     assert_eq!(index, 2);
     assert_eq!(events.borrow().len(), 2);
-    assert_eq!(metadata.events_count, 2);
+    assert_eq!(metadata.total_events_count, 2);
 }
 
 #[test]
 fn stream_new_agent_messages_skips_non_message_events() {
-    let events = Rc::new(RefCell::new(vec![
+    let events = shared_events(vec![
         SessionEvent::Other("x".to_string()),
         SessionEvent::ToolCallCompleted {
             id: "1".to_string(),
             status: "completed".to_string(),
         },
-    ]));
+    ]);
     let mut index = 0;
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
@@ -210,12 +220,12 @@ fn stream_new_agent_messages_skips_non_message_events() {
     stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
     assert_eq!(index, 2);
     assert_eq!(events.borrow().len(), 2);
-    assert_eq!(metadata.events_count, 2);
+    assert_eq!(metadata.total_events_count, 2);
 }
 
 #[test]
 fn collect_agent_output_excludes_diagnostic_events() {
-    let events = Rc::new(RefCell::new(vec![
+    let events = shared_events(vec![
         SessionEvent::AgentMessage("Hello".to_string()),
         SessionEvent::PlanUpdate("step 1".to_string()),
         SessionEvent::ToolCallStarted {
@@ -230,7 +240,7 @@ fn collect_agent_output_excludes_diagnostic_events() {
         },
         SessionEvent::Other("misc".to_string()),
         SessionEvent::AgentMessage(" world".to_string()),
-    ]));
+    ]);
     let mut index = 0;
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
@@ -243,12 +253,12 @@ fn collect_agent_output_excludes_diagnostic_events() {
     );
     assert!(metadata.has_tool_calls);
     assert!(metadata.has_plan_updates);
-    assert_eq!(metadata.events_count, 7);
+    assert_eq!(metadata.total_events_count, 7);
 }
 
 #[test]
 fn stream_new_agent_messages_writes_all_event_types_to_spool() {
-    let events = Rc::new(RefCell::new(vec![
+    let events = shared_events(vec![
         SessionEvent::AgentMessage("msg".to_string()),
         SessionEvent::PlanUpdate("plan step".to_string()),
         SessionEvent::ToolCallStarted {
@@ -262,7 +272,7 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
         },
         SessionEvent::Other("extra".to_string()),
         SessionEvent::AgentThought("thought".to_string()),
-    ]));
+    ]);
 
     let temp = tempfile::tempdir().expect("tempdir");
     let spool_path = temp.path().join("output.log");
@@ -303,25 +313,24 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
     );
     assert_eq!(index, 6);
     assert_eq!(events.borrow().len(), 6);
-    assert_eq!(metadata.events_count, 6);
+    assert_eq!(metadata.total_events_count, 6);
     assert!(metadata.has_tool_calls);
     assert!(metadata.has_plan_updates);
 }
 
 #[test]
 fn stream_preserves_events_for_downstream_consumers() {
-    let events = Rc::new(RefCell::new(Vec::new()));
+    let events = Rc::new(RefCell::new(SessionEventStore::default()));
     let mut index = 0;
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
-    // Push 10000 events and stream them in batches.
-    // Events must NOT be drained — they stay in the vec so downstream
-    // consumers (acp-events.jsonl transcript, --no-verify command
-    // extraction) can access them via `std::mem::take` at prompt completion.
-    // Memory bounding comes from the tail buffer in StreamingMetadata (1 MiB cap),
-    // not from draining the event vec.
-    for i in 0..10_000 {
+    // Push more events than MAX_RETAINED_EVENTS and stream them in batches.
+    // Retained events stay bounded in memory while the total count tracks all
+    // events seen across the full prompt turn.
+    let total = MAX_RETAINED_EVENTS + 5_000;
+    let expected_first = total - MAX_RETAINED_EVENTS;
+    for i in 0..total {
         events
             .borrow_mut()
             .push(SessionEvent::AgentMessage(format!("msg-{i}\n")));
@@ -332,10 +341,16 @@ fn stream_preserves_events_for_downstream_consumers() {
         }
     }
     stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
-    // All 10000 events are still in the vec for downstream consumers.
-    assert_eq!(events.borrow().len(), 10_000);
-    assert_eq!(index, 10_000);
-    assert_eq!(metadata.events_count, 10_000);
+    let retained = events.borrow().events();
+    assert_eq!(retained.len(), MAX_RETAINED_EVENTS);
+    match retained.first() {
+        Some(SessionEvent::AgentMessage(text)) => {
+            assert_eq!(text, &format!("msg-{expected_first}\n"));
+        }
+        other => panic!("unexpected first retained event: {other:?}"),
+    }
+    assert_eq!(index, total);
+    assert_eq!(metadata.total_events_count, total);
     // Tail buffer is bounded by TAIL_BUFFER_MAX_BYTES (1 MiB), not unbounded.
     assert!(
         metadata.tail_text.len() <= 1024 * 1024 + 64,
@@ -345,7 +360,7 @@ fn stream_preserves_events_for_downstream_consumers() {
 
 #[test]
 fn spool_writes_all_data_without_truncation() {
-    let events = Rc::new(RefCell::new(Vec::new()));
+    let events = Rc::new(RefCell::new(SessionEventStore::default()));
     let temp = tempfile::tempdir().expect("tempdir");
     let spool_path = temp.path().join("output.log");
     let mut spool = open_output_spool_file(
@@ -376,7 +391,7 @@ fn spool_writes_all_data_without_truncation() {
         chunk_size * num_chunks,
         "spool must write all data without truncation (preserves tail markers)"
     );
-    assert_eq!(metadata.events_count, num_chunks);
+    assert_eq!(metadata.total_events_count, num_chunks);
     assert_eq!(
         metadata.spool_bytes_written,
         (chunk_size * num_chunks) as u64

@@ -288,7 +288,7 @@ impl AcpConnection {
         let execution_start = Instant::now();
         let heartbeat_interval = resolve_heartbeat_interval();
         let mut last_heartbeat = execution_start;
-        let mut streamed_event_index = 0usize;
+        let mut processed_event_count = 0usize;
         let mut output_spool =
             open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
         let mut metadata = StreamingMetadata::default();
@@ -309,7 +309,7 @@ impl AcpConnection {
                         response = &mut prompt_future => {
                             stream_new_agent_messages(
                                 &self.events,
-                                &mut streamed_event_index,
+                                &mut processed_event_count,
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
                                 &mut metadata,
@@ -319,7 +319,7 @@ impl AcpConnection {
                         _ = tokio::time::sleep(Duration::from_millis(200)) => {
                             stream_new_agent_messages(
                                 &self.events,
-                                &mut streamed_event_index,
+                                &mut processed_event_count,
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
                                 &mut metadata,
@@ -342,7 +342,7 @@ impl AcpConnection {
 
         stream_new_agent_messages(
             &self.events,
-            &mut streamed_event_index,
+            &mut processed_event_count,
             io.stream_stdout_to_stderr,
             &mut output_spool,
             &mut metadata,
@@ -360,10 +360,13 @@ impl AcpConnection {
                 }
             }
         }
-        // Take all accumulated events for downstream consumers (transcript
-        // writing, command extraction).  Events were NOT drained during
-        // streaming — they stayed in the vec so this take captures them all.
-        let events = std::mem::take(&mut *self.events.borrow_mut());
+        // Return the retained tail only.  Total event counts and command/tool
+        // metadata are tracked incrementally in `StreamingMetadata`.
+        {
+            let events_ref = self.events.borrow();
+            metadata.sync_from_store(&events_ref);
+        }
+        let events = self.events.borrow_mut().take_events();
         let output = collect_agent_output(&metadata);
         match outcome {
             PromptOutcome::Completed(Ok(response)) => Ok(PromptResult {
@@ -527,25 +530,34 @@ fn maybe_emit_heartbeat(
 
 fn stream_new_agent_messages(
     events: &SharedEvents,
-    processed_index: &mut usize,
+    processed_event_count: &mut usize,
     stream_stdout_to_stderr: bool,
     output_spool: &mut Option<SpoolRotator>,
     metadata: &mut StreamingMetadata,
 ) {
-    // Iterate new events by index WITHOUT draining.  Events must stay in
-    // the shared vec so downstream consumers (acp-events.jsonl transcript,
-    // --no-verify command extraction) can access them via `std::mem::take`
-    // when the prompt completes.  The tail buffer in StreamingMetadata caps
-    // agent text retention at 1 MiB, avoiding a second full copy.
+    // Iterate new retained events by total event count.  Older events may be
+    // dropped from the front once retention reaches `MAX_RETAINED_EVENTS`, so
+    // the processing cursor is tracked against the total number of events seen
+    // rather than the retained deque length.
     let events_ref = events.borrow();
-    if *processed_index >= events_ref.len() {
+    metadata.sync_from_store(&events_ref);
+    if *processed_event_count >= events_ref.total_events_count() {
         return;
     }
-    let new_end = events_ref.len();
-    let new_slice = &events_ref[*processed_index..];
+    let retained_start = events_ref.retained_start_index();
+    let stream_start = (*processed_event_count).max(retained_start);
+    if stream_start > *processed_event_count {
+        let skipped = stream_start - *processed_event_count;
+        tracing::warn!(
+            skipped,
+            retained_start,
+            processed = *processed_event_count,
+            "ACP event ring buffer overrun: {skipped} events were evicted before being streamed to spool/stderr"
+        );
+    }
+    let skip = stream_start.saturating_sub(retained_start);
 
-    for event in new_slice {
-        metadata.events_count += 1;
+    for event in events_ref.retained_events().iter().skip(skip) {
         match event {
             SessionEvent::AgentMessage(chunk) => {
                 if stream_stdout_to_stderr {
@@ -594,9 +606,7 @@ fn stream_new_agent_messages(
         }
     }
 
-    // Drop the borrow before updating the index.
-    drop(events_ref);
-    *processed_index = new_end;
+    *processed_event_count = events_ref.total_events_count();
 }
 
 fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut StreamingMetadata) {

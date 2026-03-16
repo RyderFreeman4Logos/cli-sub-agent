@@ -2,6 +2,7 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
+use csa_acp::{SessionEvent, StreamingMetadata};
 use csa_core::types::OutputFormat;
 
 use super::git::PostRunCommitGuard;
@@ -199,6 +200,23 @@ fn strip_marker_line_prefix(line: &str) -> &str {
     trimmed
 }
 
+pub(crate) fn extract_executed_shell_commands(
+    metadata: &StreamingMetadata,
+    events: &[SessionEvent],
+) -> Vec<String> {
+    if !metadata.extracted_commands.is_empty() {
+        return dedupe_commands(metadata.extracted_commands.iter().cloned());
+    }
+    extract_executed_shell_commands_from_events(events)
+}
+
+pub(crate) fn execute_tool_calls_observed(
+    metadata: &StreamingMetadata,
+    events: &[SessionEvent],
+) -> bool {
+    metadata.has_execute_tool_calls || events_contain_execute_tool_calls(events)
+}
+
 pub(crate) fn extract_executed_shell_commands_from_events<T: serde::Serialize>(
     events: &[T],
 ) -> Vec<String> {
@@ -265,6 +283,19 @@ fn collect_execute_titles_from_event_value(value: &serde_json::Value, commands: 
         }
         _ => {}
     }
+}
+
+fn dedupe_commands<I>(commands: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut deduped = Vec::new();
+    for command in commands {
+        if !deduped.iter().any(|existing| existing == &command) {
+            deduped.push(command);
+        }
+    }
+    deduped
 }
 
 fn append_stderr_block(stderr_output: &mut String, block: &str) {

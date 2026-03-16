@@ -21,7 +21,7 @@ pub use csa_resource::cgroup::SandboxConfig;
 use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
 
 use crate::{
-    client::AcpClient,
+    client::{AcpClient, SessionEventStore},
     error::{AcpError, AcpResult},
 };
 
@@ -316,7 +316,7 @@ impl AcpConnection {
         })?;
 
         let local_set = LocalSet::new();
-        let events = Rc::new(RefCell::new(Vec::new()));
+        let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now()));
         let client = AcpClient::new(events.clone(), last_activity.clone());
         let stderr_buf = Rc::new(RefCell::new(String::new()));

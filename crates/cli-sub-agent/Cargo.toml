@@ -13,6 +13,7 @@ path = "src/main.rs"
 csa-core.workspace = true
 csa-session.workspace = true
 csa-lock.workspace = true
+csa-acp = { path = "../csa-acp" }
 csa-executor.workspace = true
 csa-process.workspace = true
 csa-config.workspace = true
@@ -47,6 +48,3 @@ xurl-core.workspace = true
 
 [features]
 codex-pty-fork = ["csa-executor/codex-pty-fork"]
-
-[dev-dependencies]
-csa-acp = { path = "../csa-acp" }

@@ -622,6 +622,22 @@ fn extract_executed_shell_commands_from_events_returns_execute_titles() {
 }
 
 #[test]
+fn extract_executed_shell_commands_prefers_incremental_metadata() {
+    let mut metadata = csa_acp::StreamingMetadata::default();
+    metadata.extracted_commands = vec!["git status".to_string(), "cargo test".to_string()];
+    let events = vec![SessionEvent::ToolCallStarted {
+        id: "call-1".to_string(),
+        title: "Read README".to_string(),
+        kind: "Read".to_string(),
+    }];
+    let commands = extract_executed_shell_commands(&metadata, &events);
+    assert_eq!(
+        commands,
+        vec!["git status".to_string(), "cargo test".to_string()]
+    );
+}
+
+#[test]
 fn events_contain_execute_tool_calls_detects_execute_entries() {
     let events = vec![
         SessionEvent::ToolCallStarted {
@@ -637,6 +653,18 @@ fn events_contain_execute_tool_calls_detects_execute_entries() {
     ];
 
     assert!(events_contain_execute_tool_calls(&events));
+}
+
+#[test]
+fn execute_tool_calls_observed_uses_incremental_metadata() {
+    let mut metadata = csa_acp::StreamingMetadata::default();
+    metadata.has_execute_tool_calls = true;
+    let events = vec![SessionEvent::ToolCallStarted {
+        id: "call-1".to_string(),
+        title: "Read README".to_string(),
+        kind: "Read".to_string(),
+    }];
+    assert!(execute_tool_calls_observed(&metadata, &events));
 }
 
 #[test]

@@ -621,11 +621,28 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     // Extract provider session ID from transport metadata or fallback output parsing.
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
-    let events_count = transport_result.events.len() as u64;
-    let execute_events_observed =
-        crate::run_cmd::events_contain_execute_tool_calls(&transport_result.events);
-    let executed_shell_commands =
-        crate::run_cmd::extract_executed_shell_commands_from_events(&transport_result.events);
+    let events_count = transport_result
+        .metadata
+        .total_events_count
+        .max(transport_result.events.len()) as u64;
+    let execute_events_observed = crate::run_cmd::execute_tool_calls_observed(
+        &transport_result.metadata,
+        &transport_result.events,
+    );
+    let mut executed_shell_commands = crate::run_cmd::extract_executed_shell_commands(
+        &transport_result.metadata,
+        &transport_result.events,
+    );
+    // If the streaming metadata caught a --no-verify commit that was
+    // subsequently evicted from the bounded command ring buffer, re-inject
+    // it so that the post-run policy check can still block it.
+    if transport_result.metadata.has_no_verify_commit
+        && !executed_shell_commands
+            .iter()
+            .any(|c| c.contains("--no-verify") || c.contains("-n"))
+    {
+        executed_shell_commands.push("git commit --no-verify".to_string());
+    }
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let mut result = transport_result.execution;
