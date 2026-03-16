@@ -325,10 +325,12 @@ fn stream_preserves_events_for_downstream_consumers() {
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
-    // Push 10000 events and stream them in batches.
+    // Push more events than MAX_RETAINED_EVENTS and stream them in batches.
     // Retained events stay bounded in memory while the total count tracks all
     // events seen across the full prompt turn.
-    for i in 0..10_000 {
+    let total = MAX_RETAINED_EVENTS + 5_000;
+    let expected_first = total - MAX_RETAINED_EVENTS;
+    for i in 0..total {
         events
             .borrow_mut()
             .push(SessionEvent::AgentMessage(format!("msg-{i}\n")));
@@ -342,11 +344,13 @@ fn stream_preserves_events_for_downstream_consumers() {
     let retained = events.borrow().events();
     assert_eq!(retained.len(), MAX_RETAINED_EVENTS);
     match retained.first() {
-        Some(SessionEvent::AgentMessage(text)) => assert_eq!(text, "msg-8000\n"),
+        Some(SessionEvent::AgentMessage(text)) => {
+            assert_eq!(text, &format!("msg-{expected_first}\n"));
+        }
         other => panic!("unexpected first retained event: {other:?}"),
     }
-    assert_eq!(index, 10_000);
-    assert_eq!(metadata.total_events_count, 10_000);
+    assert_eq!(index, total);
+    assert_eq!(metadata.total_events_count, total);
     // Tail buffer is bounded by TAIL_BUFFER_MAX_BYTES (1 MiB), not unbounded.
     assert!(
         metadata.tail_text.len() <= 1024 * 1024 + 64,

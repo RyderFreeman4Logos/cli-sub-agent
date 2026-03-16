@@ -24,7 +24,13 @@ const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024;
 const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2;
 
 /// Maximum number of ACP session events retained in memory.
-pub(crate) const MAX_RETAINED_EVENTS: usize = 2_000;
+///
+/// Set high enough to absorb bursts from parallel test output (cargo
+/// nextest can emit thousands of lines per second) without overrunning
+/// the 200ms polling interval in `stream_new_agent_messages`.  At ~200
+/// bytes per event, 10K events ≈ 2 MiB — negligible vs the old unbounded
+/// accumulation that reached 6+ GiB.
+pub(crate) const MAX_RETAINED_EVENTS: usize = 10_000;
 
 /// Maximum number of execute command titles retained for post-run policy checks.
 const MAX_EXTRACTED_COMMANDS: usize = 100;
