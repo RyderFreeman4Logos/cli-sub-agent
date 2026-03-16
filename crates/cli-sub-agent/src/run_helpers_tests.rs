@@ -462,8 +462,7 @@ fn build_executor_model_spec_overrides_both() {
         vcs: Default::default(),
     };
 
-    // When explicit model and thinking are provided alongside model_spec,
-    // they override the spec's embedded values (CLI/config > tier spec).
+    // Explicit model+thinking override model_spec's embedded values (CLI/config > tier spec).
     let exec = build_executor(
         &ToolName::Codex,
         Some("codex/openai/gpt-5.3-codex/xhigh"),
@@ -739,8 +738,7 @@ fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
 
 #[test]
 fn resolve_tool_from_tier_prefers_heterogeneous() {
-    // Parent is claude-code (Anthropic), tier has gemini-cli (Google) and claude-code (Anthropic).
-    // Should prefer gemini-cli for heterogeneity.
+    // Parent=claude-code(Anthropic), tier has gemini-cli+claude-code; prefer gemini for heterogeneity.
     let cfg = config_with_tier(
         "test-tier",
         vec![

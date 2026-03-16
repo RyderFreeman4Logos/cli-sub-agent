@@ -703,7 +703,7 @@ termination_grace_period_seconds = 5
 transcript_max_age_days = 30
 transcript_max_size_mb = 500
 [acp]
-init_timeout_seconds = 60
+init_timeout_seconds = 120
 # [tools.codex]
 # enabled = true
 # codex_auto_trust = false

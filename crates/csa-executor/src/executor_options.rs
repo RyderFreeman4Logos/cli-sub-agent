@@ -46,7 +46,7 @@ impl ExecuteOptions {
             idle_timeout_seconds,
             liveness_dead_seconds: csa_process::DEFAULT_LIVENESS_DEAD_SECS,
             stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
-            acp_init_timeout_seconds: 60,
+            acp_init_timeout_seconds: 120,
             termination_grace_period_seconds: csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS,
             output_spool: None,
             output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,

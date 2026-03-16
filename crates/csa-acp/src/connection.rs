@@ -138,7 +138,8 @@ impl AcpConnection {
                 let stderr = self.stderr();
                 let _ = self.kill().await;
                 Err(AcpError::InitializationFailed(format!(
-                    "ACP initialize timed out after {}s{}",
+                    "ACP initialize timed out after {}s{}; \
+                     consider increasing [acp] init_timeout_seconds in .csa/config.toml",
                     self.init_timeout.as_secs(),
                     Self::format_stderr(&stderr),
                 )))
@@ -179,7 +180,8 @@ impl AcpConnection {
                 let stderr = self.stderr();
                 let _ = self.kill().await;
                 Err(AcpError::SessionFailed(format!(
-                    "ACP session/new timed out after {}s{}",
+                    "ACP session/new timed out after {}s{}; \
+                     consider increasing [acp] init_timeout_seconds in .csa/config.toml",
                     self.init_timeout.as_secs(),
                     Self::format_stderr(&stderr),
                 )))
@@ -218,7 +220,8 @@ impl AcpConnection {
                 // failure, so the connection must stay alive for that attempt.
                 let stderr = self.stderr();
                 Err(AcpError::SessionFailed(format!(
-                    "ACP session/load timed out after {}s{}",
+                    "ACP session/load timed out after {}s{}; \
+                     consider increasing [acp] init_timeout_seconds in .csa/config.toml",
                     self.init_timeout.as_secs(),
                     Self::format_stderr(&stderr),
                 )))

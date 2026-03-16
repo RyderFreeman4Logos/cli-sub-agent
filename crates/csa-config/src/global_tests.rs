@@ -484,3 +484,30 @@ same_model_fallback = false
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert!(!config.debate.same_model_fallback);
 }
+
+// --- ACP config regression tests (issue #417) ---
+
+#[test]
+fn global_config_acp_init_timeout_from_toml() {
+    let toml_str = r#"
+[acp]
+init_timeout_seconds = 180
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.acp.init_timeout_seconds, 180);
+}
+
+#[test]
+fn global_config_acp_default_is_120() {
+    let config = GlobalConfig::default();
+    assert_eq!(config.acp.init_timeout_seconds, 120);
+}
+
+#[test]
+fn default_template_contains_acp_section() {
+    let template = GlobalConfig::default_template();
+    assert!(
+        template.contains("init_timeout_seconds"),
+        "template should mention init_timeout_seconds"
+    );
+}

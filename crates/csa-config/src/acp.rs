@@ -9,7 +9,7 @@ pub struct AcpConfig {
 }
 
 const fn default_acp_init_timeout_seconds() -> u64 {
-    60
+    120
 }
 
 impl Default for AcpConfig {
