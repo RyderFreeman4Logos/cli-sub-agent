@@ -69,6 +69,7 @@ pub struct TransportResult {
     pub execution: ExecutionResult,
     pub provider_session_id: Option<String>,
     pub events: Vec<SessionEvent>,
+    pub metadata: csa_acp::StreamingMetadata,
 }
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
@@ -214,6 +215,7 @@ impl LegacyTransport {
             execution,
             provider_session_id: None,
             events: Vec::new(),
+            metadata: Default::default(),
         })
     }
 
@@ -288,6 +290,7 @@ impl LegacyTransport {
             execution,
             provider_session_id: None,
             events: Vec::new(),
+            metadata: Default::default(),
         })
     }
 
@@ -580,6 +583,7 @@ impl Transport for AcpTransport {
             execution,
             provider_session_id: Some(output.session_id),
             events: output.events,
+            metadata: output.metadata,
         })
     }
 

@@ -204,6 +204,7 @@ impl Transport for OpenaiCompatTransport {
             },
             provider_session_id: None,
             events: Vec::new(),
+            metadata: Default::default(),
         })
     }
 

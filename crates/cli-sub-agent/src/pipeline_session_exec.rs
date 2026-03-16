@@ -621,11 +621,18 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     // Extract provider session ID from transport metadata or fallback output parsing.
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
-    let events_count = transport_result.events.len() as u64;
-    let execute_events_observed =
-        crate::run_cmd::events_contain_execute_tool_calls(&transport_result.events);
-    let executed_shell_commands =
-        crate::run_cmd::extract_executed_shell_commands_from_events(&transport_result.events);
+    let events_count = transport_result
+        .metadata
+        .total_events_count
+        .max(transport_result.events.len()) as u64;
+    let execute_events_observed = crate::run_cmd::execute_tool_calls_observed(
+        &transport_result.metadata,
+        &transport_result.events,
+    );
+    let executed_shell_commands = crate::run_cmd::extract_executed_shell_commands(
+        &transport_result.metadata,
+        &transport_result.events,
+    );
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let mut result = transport_result.execution;

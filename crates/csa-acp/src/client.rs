@@ -1,5 +1,5 @@
 use std::time::Instant;
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 use agent_client_protocol::{
     Client, ContentBlock, ContentChunk, RequestPermissionOutcome, RequestPermissionRequest,
@@ -23,18 +23,28 @@ const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024;
 /// rather than once per chunk, avoiding O(N²) behaviour.
 const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2;
 
+/// Maximum number of ACP session events retained in memory.
+pub(crate) const MAX_RETAINED_EVENTS: usize = 2_000;
+
+/// Maximum number of execute command titles retained for post-run policy checks.
+const MAX_EXTRACTED_COMMANDS: usize = 100;
+
 /// Incrementally accumulated metadata from streamed ACP events.
 ///
 /// Built up by [`super::connection::stream_new_agent_messages`] as events flow
 /// through, avoiding the need to keep the full event vector in memory.
 #[derive(Debug, Clone, Default)]
 pub struct StreamingMetadata {
-    /// Total number of events seen across the entire prompt turn.
-    pub events_count: usize,
+    /// Total number of events seen across the entire prompt turn, including dropped events.
+    pub total_events_count: usize,
     /// Whether any `ToolCallStarted` event was observed.
     pub has_tool_calls: bool,
+    /// Whether any execute `ToolCallStarted` event was observed.
+    pub has_execute_tool_calls: bool,
     /// Whether any `PlanUpdate` event was observed.
     pub has_plan_updates: bool,
+    /// Tail of execute command titles observed during the prompt turn.
+    pub extracted_commands: Vec<String>,
     /// Tail buffer of agent message/thought text (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
     pub tail_text: String,
     /// Total bytes written to the output spool file.
@@ -42,6 +52,14 @@ pub struct StreamingMetadata {
 }
 
 impl StreamingMetadata {
+    pub(crate) fn sync_from_store(&mut self, store: &SessionEventStore) {
+        self.total_events_count = store.total_events_count();
+        self.has_tool_calls = store.has_tool_calls();
+        self.has_execute_tool_calls = store.has_execute_tool_calls();
+        self.has_plan_updates = store.has_plan_updates();
+        self.extracted_commands = store.extracted_commands();
+    }
+
     /// Append agent text to the tail buffer, trimming from the front if needed.
     ///
     /// Uses a high-water mark ([`TAIL_BUFFER_HIGH_WATER`]) so trimming occurs
@@ -80,7 +98,112 @@ pub enum SessionEvent {
     Other(String),
 }
 
-pub(crate) type SharedEvents = Rc<RefCell<Vec<SessionEvent>>>;
+/// Bounded in-memory ACP event retention with incremental metadata extraction.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SessionEventStore {
+    events: VecDeque<SessionEvent>,
+    total_events_count: usize,
+    has_tool_calls: bool,
+    has_execute_tool_calls: bool,
+    has_plan_updates: bool,
+    extracted_commands: VecDeque<String>,
+}
+
+impl SessionEventStore {
+    pub(crate) fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    pub(crate) fn push(&mut self, event: SessionEvent) {
+        self.total_events_count += 1;
+        self.update_metadata(&event);
+        self.events.push_back(event);
+        if self.events.len() > MAX_RETAINED_EVENTS {
+            let _ = self.events.pop_front();
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.events.len()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn events(&self) -> Vec<SessionEvent> {
+        self.events.iter().cloned().collect()
+    }
+
+    pub(crate) fn retained_events(&self) -> &VecDeque<SessionEvent> {
+        &self.events
+    }
+
+    pub(crate) fn retained_start_index(&self) -> usize {
+        self.total_events_count.saturating_sub(self.events.len())
+    }
+
+    pub(crate) fn total_events_count(&self) -> usize {
+        self.total_events_count
+    }
+
+    pub(crate) fn has_tool_calls(&self) -> bool {
+        self.has_tool_calls
+    }
+
+    pub(crate) fn has_execute_tool_calls(&self) -> bool {
+        self.has_execute_tool_calls
+    }
+
+    pub(crate) fn has_plan_updates(&self) -> bool {
+        self.has_plan_updates
+    }
+
+    pub(crate) fn extracted_commands(&self) -> Vec<String> {
+        self.extracted_commands.iter().cloned().collect()
+    }
+
+    pub(crate) fn take_events(&mut self) -> Vec<SessionEvent> {
+        let retained = self.events.drain(..).collect();
+        self.clear();
+        retained
+    }
+
+    fn update_metadata(&mut self, event: &SessionEvent) {
+        match event {
+            SessionEvent::ToolCallStarted { title, kind, .. } => {
+                self.has_tool_calls = true;
+                if kind.eq_ignore_ascii_case("execute") {
+                    self.has_execute_tool_calls = true;
+                    self.push_extracted_command(title);
+                }
+            }
+            SessionEvent::PlanUpdate(_) => {
+                self.has_plan_updates = true;
+            }
+            SessionEvent::AgentMessage(_)
+            | SessionEvent::AgentThought(_)
+            | SessionEvent::ToolCallCompleted { .. }
+            | SessionEvent::Other(_) => {}
+        }
+    }
+
+    fn push_extracted_command(&mut self, title: &str) {
+        let command = title.trim();
+        if command.is_empty() {
+            return;
+        }
+        if self.extracted_commands.len() == MAX_EXTRACTED_COMMANDS {
+            let _ = self.extracted_commands.pop_front();
+        }
+        self.extracted_commands.push_back(command.to_string());
+    }
+}
+
+pub(crate) type SharedEvents = Rc<RefCell<SessionEventStore>>;
 pub(crate) type SharedActivity = Rc<RefCell<Instant>>;
 
 #[derive(Debug, Clone)]
@@ -210,7 +333,9 @@ mod tests {
         ToolCallUpdate, ToolCallUpdateFields, ToolKind,
     };
 
-    use super::{AcpClient, SessionEvent};
+    use super::{
+        AcpClient, MAX_EXTRACTED_COMMANDS, MAX_RETAINED_EVENTS, SessionEvent, SessionEventStore,
+    };
 
     #[test]
     fn test_update_to_event_agent_message_chunk() {
@@ -286,7 +411,7 @@ mod tests {
     async fn test_session_notification_appends_content_event() {
         use agent_client_protocol::{Client, SessionNotification};
 
-        let events = Rc::new(RefCell::new(Vec::new()));
+        let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
         let before = *last_activity.borrow();
         let client = AcpClient::new(Rc::clone(&events), Rc::clone(&last_activity));
@@ -297,8 +422,9 @@ mod tests {
         client.session_notification(notification).await.unwrap();
 
         let stored = events.borrow();
-        assert_eq!(stored.len(), 1);
-        match &stored[0] {
+        let retained = stored.events();
+        assert_eq!(retained.len(), 1);
+        match &retained[0] {
             SessionEvent::AgentMessage(text) => assert_eq!(text, "hello"),
             other => panic!("unexpected stored event: {other:?}"),
         }
@@ -314,7 +440,7 @@ mod tests {
             AvailableCommand, AvailableCommandsUpdate, Client, SessionNotification,
         };
 
-        let events = Rc::new(RefCell::new(Vec::new()));
+        let events = Rc::new(RefCell::new(SessionEventStore::default()));
         let last_activity = Rc::new(RefCell::new(Instant::now() - Duration::from_secs(2)));
         let before = *last_activity.borrow();
         let client = AcpClient::new(Rc::clone(&events), Rc::clone(&last_activity));
@@ -334,6 +460,49 @@ mod tests {
         assert!(
             *last_activity.borrow() > before,
             "session_notification must refresh last_activity even for suppressed events"
+        );
+    }
+
+    #[test]
+    fn session_event_store_bounds_retained_events_and_metadata() {
+        let mut store = SessionEventStore::default();
+        for i in 0..(MAX_RETAINED_EVENTS + 25) {
+            store.push(SessionEvent::AgentMessage(format!("msg-{i}")));
+        }
+        store.push(SessionEvent::PlanUpdate("step".to_string()));
+        for i in 0..(MAX_EXTRACTED_COMMANDS + 10) {
+            store.push(SessionEvent::ToolCallStarted {
+                id: format!("call-{i}"),
+                title: format!("cmd-{i}"),
+                kind: "Execute".to_string(),
+            });
+        }
+
+        assert_eq!(store.len(), MAX_RETAINED_EVENTS);
+        assert_eq!(
+            store.total_events_count(),
+            MAX_RETAINED_EVENTS + 25 + 1 + MAX_EXTRACTED_COMMANDS + 10
+        );
+        assert!(store.has_tool_calls());
+        assert!(store.has_execute_tool_calls());
+        assert!(store.has_plan_updates());
+
+        let retained = store.events();
+        let first_retained_message_index = store.total_events_count() - MAX_RETAINED_EVENTS;
+        match retained.first() {
+            Some(SessionEvent::AgentMessage(text)) => {
+                assert_eq!(text, &format!("msg-{first_retained_message_index}"))
+            }
+            other => panic!("unexpected first retained event: {other:?}"),
+        }
+
+        let commands = store.extracted_commands();
+        assert_eq!(commands.len(), MAX_EXTRACTED_COMMANDS);
+        assert_eq!(commands.first().map(String::as_str), Some("cmd-10"));
+        let expected_last = format!("cmd-{}", MAX_EXTRACTED_COMMANDS + 9);
+        assert_eq!(
+            commands.last().map(String::as_str),
+            Some(expected_last.as_str())
         );
     }
 }

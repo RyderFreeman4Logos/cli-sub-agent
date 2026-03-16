@@ -23,12 +23,16 @@ pub(crate) use git::{
 };
 pub(crate) use policy::{
     apply_no_verify_commit_policy, apply_post_run_commit_policy, apply_unverifiable_commit_policy,
-    events_contain_execute_tool_calls, extract_executed_shell_commands_from_events,
+    execute_tool_calls_observed, extract_executed_shell_commands,
 };
 
 #[cfg(test)]
 pub(crate) use git::{
     GitWorkspaceSnapshot, PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status,
+};
+#[cfg(test)]
+pub(crate) use policy::{
+    events_contain_execute_tool_calls, extract_executed_shell_commands_from_events,
 };
 #[cfg(test)]
 pub(crate) use policy::{format_post_run_commit_guard_message, is_post_run_commit_policy_block};
