@@ -546,6 +546,15 @@ fn stream_new_agent_messages(
     }
     let retained_start = events_ref.retained_start_index();
     let stream_start = (*processed_event_count).max(retained_start);
+    if stream_start > *processed_event_count {
+        let skipped = stream_start - *processed_event_count;
+        tracing::warn!(
+            skipped,
+            retained_start,
+            processed = *processed_event_count,
+            "ACP event ring buffer overrun: {skipped} events were evicted before being streamed to spool/stderr"
+        );
+    }
     let skip = stream_start.saturating_sub(retained_start);
 
     for event in events_ref.retained_events().iter().skip(skip) {

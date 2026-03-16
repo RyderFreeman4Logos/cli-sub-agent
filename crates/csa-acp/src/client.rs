@@ -41,6 +41,10 @@ pub struct StreamingMetadata {
     pub has_tool_calls: bool,
     /// Whether any execute `ToolCallStarted` event was observed.
     pub has_execute_tool_calls: bool,
+    /// Whether a `--no-verify` or `-n` git commit command was observed.
+    /// Tracked separately from `extracted_commands` because the command ring
+    /// buffer may evict old entries, but this safety flag must never be lost.
+    pub has_no_verify_commit: bool,
     /// Whether any `PlanUpdate` event was observed.
     pub has_plan_updates: bool,
     /// Tail of execute command titles observed during the prompt turn.
@@ -56,6 +60,7 @@ impl StreamingMetadata {
         self.total_events_count = store.total_events_count();
         self.has_tool_calls = store.has_tool_calls();
         self.has_execute_tool_calls = store.has_execute_tool_calls();
+        self.has_no_verify_commit = store.has_no_verify_commit();
         self.has_plan_updates = store.has_plan_updates();
         self.extracted_commands = store.extracted_commands();
     }
@@ -105,6 +110,7 @@ pub(crate) struct SessionEventStore {
     total_events_count: usize,
     has_tool_calls: bool,
     has_execute_tool_calls: bool,
+    has_no_verify_commit: bool,
     has_plan_updates: bool,
     extracted_commands: VecDeque<String>,
 }
@@ -158,6 +164,10 @@ impl SessionEventStore {
         self.has_execute_tool_calls
     }
 
+    pub(crate) fn has_no_verify_commit(&self) -> bool {
+        self.has_no_verify_commit
+    }
+
     pub(crate) fn has_plan_updates(&self) -> bool {
         self.has_plan_updates
     }
@@ -196,11 +206,34 @@ impl SessionEventStore {
         if command.is_empty() {
             return;
         }
+        // Sticky flag: once a --no-verify commit is seen, it can never be
+        // evicted from the ring buffer and lost.
+        if !self.has_no_verify_commit && command_looks_like_no_verify_commit(command) {
+            self.has_no_verify_commit = true;
+        }
         if self.extracted_commands.len() == MAX_EXTRACTED_COMMANDS {
             let _ = self.extracted_commands.pop_front();
         }
         self.extracted_commands.push_back(command.to_string());
     }
+}
+
+/// Quick heuristic: does a tool-call title look like `git commit --no-verify`
+/// or `git commit -n`?  This is intentionally simpler than the full shell
+/// parser in `run_cmd_shell.rs` because it only needs to catch the common
+/// pattern within ACP execute-tool-call titles (which are short, single
+/// commands).  The authoritative check still runs in
+/// `apply_no_verify_commit_policy`; this flag merely ensures the event is
+/// never silently evicted from the bounded ring buffer.
+fn command_looks_like_no_verify_commit(cmd: &str) -> bool {
+    let lower = cmd.to_ascii_lowercase();
+    if !lower.contains("git") || !lower.contains("commit") {
+        return false;
+    }
+    lower.contains("--no-verify")
+        || lower.contains("-n ")
+        || lower.ends_with("-n")
+        || lower.contains("--no-gpg-sign") // also suspicious in same context
 }
 
 pub(crate) type SharedEvents = Rc<RefCell<SessionEventStore>>;
