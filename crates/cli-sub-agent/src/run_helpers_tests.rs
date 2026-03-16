@@ -1,5 +1,7 @@
 use super::{build_executor, infer_task_edit_requirement, resolve_tool, truncate_prompt};
-use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_config::{
+    GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, TierStrategy, ToolConfig,
+};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
 
@@ -679,6 +681,7 @@ fn config_with_tier(tier_name: &str, models: Vec<&str>, enabled_tools: &[&str]) 
         csa_config::config::TierConfig {
             description: "Test tier".to_string(),
             models: models.into_iter().map(String::from).collect(),
+            strategy: TierStrategy::default(),
             token_budget: None,
             max_turns: None,
         },

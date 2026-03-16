@@ -238,7 +238,7 @@ fn select_any_available_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use csa_config::{ProjectMeta, ResourcesConfig, TierConfig, ToolConfig};
+    use csa_config::{ProjectMeta, ResourcesConfig, TierConfig, TierStrategy, ToolConfig};
     use std::collections::HashMap;
 
     fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
@@ -265,6 +265,8 @@ mod tests {
                 TierConfig {
                     description: "test".to_string(),
                     models: tier_models,
+                    strategy: TierStrategy::default(),
+
                     token_budget: None,
                     max_turns: None,
                 },
@@ -373,6 +375,8 @@ mod tests {
                         "gemini-cli/provider/model/medium".to_string(),
                         "opencode/provider/model/medium".to_string(),
                     ],
+                    strategy: TierStrategy::default(),
+
                     token_budget: None,
                     max_turns: None,
                 },

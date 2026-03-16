@@ -220,6 +220,8 @@ fn test_is_tool_configured_in_tiers_detects_presence() {
                 "codex/provider/model/medium".to_string(),
                 "claude-code/provider/model/high".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -277,6 +279,8 @@ fn test_is_tool_auto_selectable_requires_enabled_and_tier_membership() {
                 "codex/provider/model/medium".to_string(),
                 "claude-code/provider/model/high".to_string(),
             ],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

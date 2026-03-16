@@ -49,16 +49,34 @@ pub enum ToolResourceProfile {
     Custom,
 }
 
+/// Model selection strategy within a tier.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TierStrategy {
+    /// Always try the first eligible model; advance only on quota/error.
+    #[default]
+    Priority,
+    /// Cycle through models in order (round-robin).
+    RoundRobin,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TierConfig {
     pub description: String,
     pub models: Vec<String>,
+    /// Model selection strategy: `priority` (default) or `round-robin`.
+    #[serde(default, skip_serializing_if = "is_default_strategy")]
+    pub strategy: TierStrategy,
     /// Optional token budget allocated for sessions using this tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_budget: Option<u64>,
     /// Optional maximum number of execution turns for this tier.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_turns: Option<u32>,
+}
+
+fn is_default_strategy(s: &TierStrategy) -> bool {
+    *s == TierStrategy::Priority
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

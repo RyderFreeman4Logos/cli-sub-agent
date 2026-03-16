@@ -5,8 +5,8 @@ use std::ffi::OsStr;
 use std::path::Path;
 
 use crate::config::{
-    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
-    ToolRestrictions,
+    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy,
+    ToolConfig, ToolRestrictions,
 };
 
 /// Load tool names explicitly disabled (`enabled = false`) in the global config.
@@ -97,6 +97,8 @@ fn build_smart_tiers(
         TierConfig {
             description: "Quick tasks, low cost".to_string(),
             models: vec![tier1_model.to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -121,6 +123,8 @@ fn build_smart_tiers(
         TierConfig {
             description: "Standard development tasks".to_string(),
             models: vec![tier2_model.to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -145,6 +149,8 @@ fn build_smart_tiers(
         TierConfig {
             description: "Complex reasoning, architecture, deep analysis, code review".to_string(),
             models: vec![tier3_model.to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },

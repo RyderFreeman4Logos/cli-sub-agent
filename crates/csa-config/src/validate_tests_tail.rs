@@ -1,6 +1,7 @@
 use super::*;
 use crate::config::{
-    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, ToolConfig,
+    CURRENT_SCHEMA_VERSION, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy,
+    ToolConfig,
 };
 use crate::global::ReviewConfig;
 use chrono::Utc;
@@ -17,6 +18,8 @@ fn test_validate_model_spec_two_parts() {
         TierConfig {
             description: "Bad".to_string(),
             models: vec!["tool/model".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
@@ -67,6 +70,8 @@ fn test_validate_model_spec_five_parts() {
         TierConfig {
             description: "Bad".to_string(),
             models: vec!["a/b/c/d/e".to_string()],
+            strategy: TierStrategy::default(),
+
             token_budget: None,
             max_turns: None,
         },
