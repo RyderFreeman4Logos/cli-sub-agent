@@ -366,6 +366,98 @@ fn test_build_execute_in_command_strips_claudecode_for_all_executors() {
     }
 }
 
+// ── gemini: strip inherited auth env vars ───────────────────────
+
+#[test]
+fn test_build_command_gemini_strips_inherited_api_key_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let (cmd, _) = exec.build_command("test", None, &session, None);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("GEMINI_API_KEY")),
+        Some(&None),
+        "GeminiCli should strip inherited GEMINI_API_KEY"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("GOOGLE_GEMINI_BASE_URL")),
+        Some(&None),
+        "GeminiCli should strip inherited GOOGLE_GEMINI_BASE_URL"
+    );
+}
+
+#[test]
+fn test_build_command_non_gemini_does_not_strip_gemini_env() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let (cmd, _) = exec.build_command("test", None, &session, None);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert!(
+        !env_map.contains_key(std::ffi::OsStr::new("GEMINI_API_KEY")),
+        "Non-gemini executor should not touch GEMINI_API_KEY"
+    );
+}
+
+#[test]
+fn test_build_command_gemini_extra_env_overrides_strip() {
+    // When extra_env explicitly sets GEMINI_API_KEY (e.g., API key fallback),
+    // it must override the strip — inject_env runs AFTER strip.
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert("GEMINI_API_KEY".to_string(), "test-fallback-key".to_string());
+
+    let (cmd, _) = exec.build_command("test", None, &session, Some(&extra));
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    // Command env resolution: env_remove(KEY) then env(KEY, val) → final value is Some(val)
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("GEMINI_API_KEY")),
+        Some(&Some(std::ffi::OsStr::new("test-fallback-key"))),
+        "extra_env GEMINI_API_KEY should override the strip"
+    );
+}
+
+#[test]
+fn test_build_execute_in_command_gemini_strips_inherited_api_key_env() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let work_dir = std::path::Path::new("/tmp/test-project");
+    let (cmd, _) = exec.build_execute_in_command("test", work_dir, None);
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("GEMINI_API_KEY")),
+        Some(&None),
+        "build_execute_in: GeminiCli should strip inherited GEMINI_API_KEY"
+    );
+    assert_eq!(
+        env_map.get(std::ffi::OsStr::new("GOOGLE_GEMINI_BASE_URL")),
+        Some(&None),
+        "build_execute_in: GeminiCli should strip inherited GOOGLE_GEMINI_BASE_URL"
+    );
+}
+
 // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not executor)
 // based on per-tool config. See pipeline.rs suppress_notify logic.
 // TODO(acp-notify): ACP path currently propagates CSA_SUPPRESS_NOTIFY env only;
