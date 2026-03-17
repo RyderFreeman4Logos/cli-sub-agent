@@ -248,6 +248,9 @@ impl Executor {
         extra_env: Option<&HashMap<String, String>>,
     ) -> (Command, Option<Vec<u8>>) {
         let mut cmd = self.build_base_command(session);
+        if matches!(self, Self::GeminiCli { .. }) {
+            Self::strip_gemini_inherited_env(&mut cmd);
+        }
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
@@ -380,6 +383,9 @@ impl Executor {
         for var in Self::STRIPPED_ENV_VARS {
             cmd.env_remove(var);
         }
+        if matches!(self, Self::GeminiCli { .. }) {
+            Self::strip_gemini_inherited_env(&mut cmd);
+        }
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
@@ -409,8 +415,18 @@ impl Executor {
     /// These prevent recursive-invocation guards in CLI tools from blocking
     /// legitimate CSA sub-agent launches.  Mirrors the same list in
     /// `csa-acp::AcpConnection::STRIPPED_ENV_VARS`.
-    /// Env vars stripped from child processes to prevent recursive-invocation guards.
     const STRIPPED_ENV_VARS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"];
+
+    /// Strip process-inherited gemini auth/routing env vars so that CSA's
+    /// extra_env controls auth mode exclusively (OAuth-first, API key fallback
+    /// only after quota exhaustion).  Without this, a process-level
+    /// `GEMINI_API_KEY` bypasses the entire OAuth→model-switch→API-key
+    /// degradation chain.
+    fn strip_gemini_inherited_env(cmd: &mut Command) {
+        for var in csa_core::gemini::INHERITED_ENV_STRIP {
+            cmd.env_remove(var);
+        }
+    }
 
     /// Build base command with session environment variables.
     fn build_base_command(&self, session: &MetaSessionState) -> Command {
