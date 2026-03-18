@@ -562,11 +562,6 @@ git fetch origin
 git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
-
-# Clean up feature branch locally (remote already deleted by --delete-branch)
-if [ -n "${WORKFLOW_BRANCH}" ] && [ "${WORKFLOW_BRANCH}" != "main" ]; then
-  git branch -d "${WORKFLOW_BRANCH}" 2>/dev/null || true
-fi
 ```
 
 ## ELSE
@@ -1181,11 +1176,6 @@ git fetch origin
 git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
-
-# Clean up feature branch locally (remote already deleted by --delete-branch)
-if [ -n "${WORKFLOW_BRANCH}" ] && [ "${WORKFLOW_BRANCH}" != "main" ]; then
-  git branch -d "${WORKFLOW_BRANCH}" 2>/dev/null || true
-fi
 ```
 
 ## ELSE
@@ -1220,11 +1210,6 @@ git fetch origin
 git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
-
-# Clean up feature branch locally (remote already deleted by --delete-branch)
-if [ -n "${WORKFLOW_BRANCH}" ] && [ "${WORKFLOW_BRANCH}" != "main" ]; then
-  git branch -d "${WORKFLOW_BRANCH}" 2>/dev/null || true
-fi
 ```
 
 ## ENDIF

@@ -245,6 +245,77 @@ async fn run() -> Result<()> {
         }
     }
 
+    // Auto weave upgrade (if configured via [execution] auto_weave_upgrade = true).
+    {
+        let auto_upgrade = {
+            let mut enabled = false;
+            if let Ok(cwd) = std::env::current_dir() {
+                if let Ok(Some(cfg)) = csa_config::ProjectConfig::load(&cwd) {
+                    enabled = cfg.execution.auto_weave_upgrade;
+                }
+            }
+            if !enabled {
+                if let Ok(global) = csa_config::GlobalConfig::load() {
+                    enabled = global.execution.auto_weave_upgrade;
+                }
+            }
+            enabled
+        };
+
+        if auto_upgrade {
+            use std::time::Duration;
+
+            let mut success = false;
+            let mut delay = Duration::from_secs(1);
+
+            for attempt in 0..3 {
+                let result = tokio::process::Command::new("weave")
+                    .arg("upgrade")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await;
+
+                match result {
+                    Ok(status) if status.success() => {
+                        success = true;
+                        break;
+                    }
+                    Ok(status) => {
+                        if attempt < 2 {
+                            tracing::debug!(
+                                "weave upgrade failed (exit {}), retrying in {:?}...",
+                                status.code().unwrap_or(-1),
+                                delay
+                            );
+                            tokio::time::sleep(delay).await;
+                            delay *= 2;
+                        }
+                    }
+                    Err(e) => {
+                        if attempt < 2 {
+                            tracing::debug!(
+                                "weave upgrade failed ({}), retrying in {:?}...",
+                                e,
+                                delay
+                            );
+                            tokio::time::sleep(delay).await;
+                            delay *= 2;
+                        }
+                    }
+                }
+            }
+
+            if !success {
+                eprintln!(
+                    "Error: auto weave upgrade failed after 3 attempts. \
+                     Disable with [execution] auto_weave_upgrade = false"
+                );
+                std::process::exit(1);
+            }
+        }
+    }
+
     let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
     if !legacy_xdg_paths.is_empty() {
         for path in &legacy_xdg_paths {
