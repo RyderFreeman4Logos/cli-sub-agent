@@ -171,3 +171,38 @@ fn test_debate_no_tiers_allows_direct_tool() {
         result.unwrap_err()
     );
 }
+
+#[test]
+fn test_debate_tier_alias_resolves() {
+    let global = GlobalConfig::default();
+    let mut cfg = debate_config_with_tier(
+        "quality",
+        vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
+        &["gemini-cli"],
+    );
+    cfg.tier_mapping
+        .insert("security_audit".to_string(), "quality".to_string());
+
+    let result = resolve_debate_tool(
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("security_audit"), // tier_mapping alias
+        false,
+    );
+    assert!(
+        result.is_ok(),
+        "tier alias should resolve: {}",
+        result.unwrap_err()
+    );
+    let (tool, mode, model_spec) = result.unwrap();
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(mode, DebateMode::Heterogeneous);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/gemini-3.1-pro-preview/xhigh")
+    );
+}

@@ -560,3 +560,77 @@ fn resolve_tool_and_model_tier_with_tool_blocked_without_force() {
     let (tool, _, _) = result.unwrap();
     assert_eq!(tool, ToolName::GeminiCli, "tier should win over --tool");
 }
+
+// --- tier_mapping alias tests ---
+
+#[test]
+fn resolve_tool_and_model_tier_alias_resolves_correctly() {
+    let mut cfg = config_with_tier(
+        "tier1",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    cfg.tier_mapping
+        .insert("default".to_string(), "tier1".to_string());
+
+    let result = super::resolve_tool_and_model(
+        None,
+        None,
+        None,
+        Some(&cfg),
+        std::path::Path::new("/tmp"),
+        false,
+        false,
+        false,
+        Some("default"), // tier_mapping alias for tier1
+        false,
+        false, // tool_is_auto_resolved
+    );
+    assert!(
+        result.is_ok(),
+        "alias should resolve: {}",
+        result.unwrap_err()
+    );
+    let (tool, model_spec, _) = result.unwrap();
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
+    );
+}
+
+#[test]
+fn resolve_tool_and_model_invalid_tier_selector_includes_aliases_in_error() {
+    let mut cfg = config_with_tier(
+        "tier1",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    cfg.tier_mapping
+        .insert("alias1".to_string(), "tier1".to_string());
+
+    let result = super::resolve_tool_and_model(
+        None,
+        None,
+        None,
+        Some(&cfg),
+        std::path::Path::new("/tmp"),
+        false,
+        false,
+        false,
+        Some("invalid"),
+        false,
+        false, // tool_is_auto_resolved
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("Tier selector 'invalid' not found"),
+        "msg: {msg}"
+    );
+    assert!(msg.contains("Available tiers:"), "msg: {msg}");
+    assert!(
+        msg.contains("Available tier aliases:"),
+        "msg should show aliases: {msg}"
+    );
+}

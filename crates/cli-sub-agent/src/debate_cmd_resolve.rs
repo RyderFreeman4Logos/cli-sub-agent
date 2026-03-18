@@ -30,16 +30,13 @@ pub(crate) fn resolve_debate_tool(
     // Enforce tier routing: block direct --tool when tiers are configured,
     // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
     if tiers_configured && !bypass_tier && cli_tier.is_none() && arg_tool.is_some() {
-        let available: Vec<&str> = project_config
-            .unwrap()
-            .tiers
-            .keys()
-            .map(|k| k.as_str())
-            .collect();
+        let cfg = project_config.unwrap();
+        let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+        let alias_hint = cfg.format_tier_aliases();
         anyhow::bail!(
             "Direct --tool is restricted when tiers are configured. \
              Use --tier <name> or add --force-ignore-tier-setting to override. \
-             Available tiers: [{}]",
+             Available tiers: [{}]{alias_hint}",
             available.join(", ")
         );
     }
@@ -55,13 +52,37 @@ pub(crate) fn resolve_debate_tool(
     // CLI --tier overrides config tier when provided.
     // Tier-based resolution: CLI tier > project tier > global tier > tool-based fallback.
     // Tier takes priority over tool when both are set.
-    let tier_name = cli_tier
-        .or_else(|| {
-            project_config
-                .and_then(|cfg| cfg.debate.as_ref())
-                .and_then(|d| d.tier.as_deref())
-        })
-        .or(global_config.debate.tier.as_deref());
+    // CLI --tier is canonicalized via resolve_tier_selector (accepts tier_mapping aliases).
+    let tier_name: Option<String> = if let Some(cli) = cli_tier {
+        if let Some(cfg) = project_config {
+            if let Some(canonical) = cfg.resolve_tier_selector(cli) {
+                Some(canonical)
+            } else if bypass_tier {
+                // bypass mode: tolerate unknown selector (pass through as-is)
+                Some(cli.to_string())
+            } else {
+                let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+                let alias_hint = cfg.format_tier_aliases();
+                anyhow::bail!(
+                    "Tier selector '{}' not found.\n\
+                     Available tiers: [{}]{alias_hint}",
+                    cli,
+                    available.join(", ")
+                );
+            }
+        } else {
+            Some(cli.to_string())
+        }
+    } else {
+        // Config-sourced tier names are used as-is (validated at config load time).
+        // NOTE: config fields [debate].tier do not support tier_mapping aliases yet —
+        // only CLI --tier does. This is intentional (see debate findings in TODO).
+        project_config
+            .and_then(|cfg| cfg.debate.as_ref())
+            .and_then(|d| d.tier.as_deref())
+            .or(global_config.debate.tier.as_deref())
+            .map(|s| s.to_string())
+    };
 
     // Compute effective whitelist from tool selection (project > global)
     let effective_whitelist = project_config
@@ -70,7 +91,7 @@ pub(crate) fn resolve_debate_tool(
         .unwrap_or(&global_config.debate.tool);
     let whitelist = effective_whitelist.whitelist();
 
-    if let Some(tier) = tier_name {
+    if let Some(ref tier) = tier_name {
         if let Some(cfg) = project_config {
             if let Some(resolution) =
                 crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist)
@@ -85,14 +106,14 @@ pub(crate) fn resolve_debate_tool(
         // Tier set but no available tool found — fall through to tool-based resolution.
         if whitelist.is_some() {
             warn!(
-                tier = tier,
+                tier = %tier,
                 "Tier '{}' has no tools matching [debate].tool whitelist — \
                  falling through to whitelist-based auto-selection (tier constraint bypassed)",
                 tier
             );
         } else {
             debug!(
-                tier = tier,
+                tier = %tier,
                 "Tier set but no available tool found, falling through to tool-based resolution"
             );
         }

@@ -54,40 +54,49 @@ pub(crate) fn resolve_tool_and_model(
             }
             tier_list.push_str(name);
         }
+        let alias_hint = cfg.format_tier_aliases();
         anyhow::bail!(
             "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured.\n\
              Use --tier <name> or add --force-ignore-tier-setting to override.\n\
-             Available tiers: [{tier_list}]\n\
+             Available tiers: [{tier_list}]{alias_hint}\n\
              Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );
     }
 
-    // Validate tier name exists in config when provided (unless force-ignore)
-    if let Some(tier_name) = tier {
-        if !bypass_tier {
-            if let Some(cfg) = config {
-                if !cfg.tiers.contains_key(tier_name) {
-                    let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
-                    anyhow::bail!(
-                        "Tier '{}' not found in project config. Available tiers: [{}]",
-                        tier_name,
-                        available.join(", ")
-                    );
-                }
+    // Validate and canonicalize tier selector (accepts direct tier names and tier_mapping aliases).
+    // Even in bypass_tier mode, resolve aliases so resolve_tool_from_tier gets a canonical name.
+    let canonical_tier: Option<String> = if let Some(tier_name) = tier {
+        if let Some(cfg) = config {
+            if let Some(canonical) = cfg.resolve_tier_selector(tier_name) {
+                Some(canonical)
+            } else if bypass_tier {
+                // bypass mode: tolerate unknown selector (pass through as-is)
+                Some(tier_name.to_string())
             } else {
+                let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+                let alias_hint = cfg.format_tier_aliases();
                 anyhow::bail!(
-                    "Tier '{}' specified but no project config found. \
-                     Run 'csa init --full' to create a config with tier definitions.",
-                    tier_name
+                    "Tier selector '{}' not found.\n\
+                     Available tiers: [{}]{alias_hint}",
+                    tier_name,
+                    available.join(", ")
                 );
             }
+        } else {
+            anyhow::bail!(
+                "Tier '{}' specified but no project config found. \
+                 Run 'csa init --full' to create a config with tier definitions.",
+                tier_name
+            );
         }
-    }
+    } else {
+        None
+    };
 
     // Case 0: --tier provided → resolve tool/model from tier definition
-    if let Some(tier_name) = tier {
+    if let Some(ref canonical_name) = canonical_tier {
         if let Some(cfg) = config {
-            if let Some(resolution) = resolve_tool_from_tier(tier_name, cfg, None, None) {
+            if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, None) {
                 // Flow resolved tool through existing enforcement checks
                 cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
                 if !force {
@@ -106,7 +115,7 @@ pub(crate) fn resolve_tool_and_model(
             anyhow::bail!(
                 "No available tool found in tier '{}'. Check that at least one tool \
                  in the tier is enabled and installed.",
-                tier_name
+                canonical_name
             );
         }
     }
