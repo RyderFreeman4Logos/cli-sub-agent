@@ -163,6 +163,7 @@ pub(crate) async fn handle_debate(
         &project_root,
         args.force_override_user_config,
         args.tier.as_deref(),
+        args.force_ignore_tier_setting,
     )?;
     if debate_mode == DebateMode::SameModelAdversarial {
         warn!(
@@ -192,6 +193,7 @@ pub(crate) async fn handle_debate(
     );
 
     // 6. Build executor and validate tool
+    let enforce_tier = tier_model_spec.is_some();
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),
@@ -201,7 +203,7 @@ pub(crate) async fn handle_debate(
             project: config.as_ref(),
             global: Some(&global_config),
         },
-        false, // skip tier whitelist for debate tool selection
+        enforce_tier,
         args.force_override_user_config,
         false, // debate must not inherit `csa run` per-tool defaults
     )
@@ -399,6 +401,7 @@ fn render_debate_cli_output(
 const STILL_WORKING_BACKOFF: Duration = Duration::from_secs(5);
 
 /// Returns (tool, debate_mode, optional_model_spec). When tier resolves, model_spec is set.
+#[allow(clippy::too_many_arguments)]
 fn resolve_debate_tool(
     arg_tool: Option<ToolName>,
     project_config: Option<&ProjectConfig>,
@@ -407,8 +410,29 @@ fn resolve_debate_tool(
     project_root: &Path,
     force_override_user_config: bool,
     cli_tier: Option<&str>,
+    force_ignore_tier_setting: bool,
 ) -> Result<(ToolName, DebateMode, Option<String>)> {
-    // CLI --tool override always wins (explicit tool = heterogeneous intent)
+    let tiers_configured = project_config.is_some_and(|c| !c.tiers.is_empty());
+    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+
+    // Enforce tier routing: block direct --tool when tiers are configured,
+    // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
+    if tiers_configured && !bypass_tier && cli_tier.is_none() && arg_tool.is_some() {
+        let available: Vec<&str> = project_config
+            .unwrap()
+            .tiers
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        anyhow::bail!(
+            "Direct --tool is restricted when tiers are configured. \
+             Use --tier <name> or add --force-ignore-tier-setting to override. \
+             Available tiers: [{}]",
+            available.join(", ")
+        );
+    }
+
+    // CLI --tool override wins (when not blocked by tier enforcement above)
     if let Some(tool) = arg_tool {
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;

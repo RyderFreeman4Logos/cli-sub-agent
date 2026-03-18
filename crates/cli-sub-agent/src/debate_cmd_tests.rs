@@ -62,7 +62,8 @@ fn resolve_debate_tool_prefers_cli_override() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -80,7 +81,8 @@ fn resolve_debate_tool_auto_maps_heterogeneous() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -98,7 +100,8 @@ fn resolve_debate_tool_auto_maps_reverse() {
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::ClaudeCode));
@@ -118,7 +121,8 @@ fn resolve_debate_tool_same_model_fallback_when_no_parent() {
         None,
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     // Falls back to first known tool (same-model adversarial)
@@ -142,7 +146,8 @@ fn resolve_debate_tool_same_model_fallback_disabled_errors_without_parent() {
         None,
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap_err();
     assert!(
@@ -163,7 +168,8 @@ fn resolve_debate_tool_same_model_fallback_uses_parent_tool() {
         Some("opencode"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -182,7 +188,8 @@ fn resolve_debate_tool_same_model_fallback_disabled_errors_on_unknown_parent() {
         Some("opencode"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap_err();
     assert!(
@@ -207,7 +214,8 @@ fn resolve_debate_tool_prefers_project_override() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -230,7 +238,8 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Codex));
@@ -255,7 +264,8 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -280,7 +290,8 @@ fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
         false,
-        None, // cli_tier
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool, ToolName::Opencode));
@@ -721,6 +732,9 @@ fn render_debate_cli_output_respects_json_format() {
     assert_eq!(parsed["meta_session_id"], "01META");
     assert_eq!(parsed["transcript"], "Transcript body");
 }
+
+#[path = "debate_cmd_tier_tests.rs"]
+mod tier_tests;
 
 #[path = "debate_cmd_tests_tail.rs"]
 mod tests_tail;

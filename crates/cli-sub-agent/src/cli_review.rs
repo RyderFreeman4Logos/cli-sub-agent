@@ -137,6 +137,10 @@ pub struct ReviewArgs {
     /// Tier name for tool/model routing (must exist in [tiers] config)
     #[arg(long)]
     pub tier: Option<String>,
+
+    /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+    #[arg(long, alias = "force-tier")]
+    pub force_ignore_tier_setting: bool,
 }
 
 impl ReviewArgs {
@@ -279,4 +283,8 @@ pub struct DebateArgs {
     /// Tier name for tool/model routing (must exist in [tiers] config)
     #[arg(long)]
     pub tier: Option<String>,
+
+    /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+    #[arg(long, alias = "force-tier")]
+    pub force_ignore_tier_setting: bool,
 }

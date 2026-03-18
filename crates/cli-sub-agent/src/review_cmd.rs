@@ -215,6 +215,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         &project_root,
         args.force_override_user_config,
         args.tier.as_deref(),
+        args.force_ignore_tier_setting,
     )?;
 
     // Resolve model: CLI --model > project config review.model > global config review.model.
@@ -591,6 +592,7 @@ async fn execute_review(
     idle_timeout_seconds: u64,
     force_override_user_config: bool,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
+    let enforce_tier = tier_model_spec.is_some();
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),
@@ -600,7 +602,7 @@ async fn execute_review(
             project: project_config,
             global: Some(global_config),
         },
-        false, // skip tier whitelist for review tool selection
+        enforce_tier,
         force_override_user_config,
         false, // review must not inherit `csa run` per-tool defaults
     )
