@@ -1,4 +1,5 @@
 use super::*;
+use crate::global::ToolSelection;
 use tempfile::tempdir;
 
 #[test]
@@ -82,7 +83,7 @@ fn test_save_and_load_roundtrip_with_review_override() {
         acp: Default::default(),
         tools: HashMap::new(),
         review: Some(crate::global::ReviewConfig {
-            tool: "codex".to_string(),
+            tool: ToolSelection::Single("codex".to_string()),
             ..Default::default()
         }),
         debate: None,
@@ -105,7 +106,10 @@ fn test_save_and_load_roundtrip_with_review_override() {
     let loaded = ProjectConfig::load_with_paths(None, &project_path).unwrap();
     let loaded = loaded.unwrap();
 
-    assert_eq!(loaded.review.unwrap().tool, "codex");
+    assert_eq!(
+        loaded.review.unwrap().tool,
+        ToolSelection::Single("codex".to_string())
+    );
 }
 
 #[test]

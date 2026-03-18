@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use std::path::Path;
 
 use crate::config::ProjectConfig;
+use crate::global::ToolSelection;
 
 /// Validate a project configuration file.
 /// Returns Ok(()) if valid, or Err with descriptive messages.
@@ -167,18 +168,40 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
     Ok(())
 }
 
+/// Validate a `ToolSelection` value for review/debate config.
+fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
+    let single_supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
+    let whitelist_supported = ["gemini-cli", "opencode", "codex", "claude-code"];
+    match tool {
+        ToolSelection::Single(s) => {
+            if !single_supported.contains(&s.as_str()) {
+                bail!(
+                    "Invalid [{section}].tool value '{s}'. \
+                     Supported values: auto, gemini-cli, opencode, codex, claude-code."
+                );
+            }
+        }
+        ToolSelection::Whitelist(tools) => {
+            for t in tools {
+                if !whitelist_supported.contains(&t.as_str()) {
+                    bail!(
+                        "Invalid tool '{t}' in [{section}].tool array. \
+                         Supported values: gemini-cli, opencode, codex, claude-code. \
+                         ('auto' is not valid inside a whitelist array)"
+                    );
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_review(config: &ProjectConfig) -> Result<()> {
     let Some(review) = &config.review else {
         return Ok(());
     };
 
-    let supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
-    if !supported.contains(&review.tool.as_str()) {
-        bail!(
-            "Invalid [review].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
-            review.tool
-        );
-    }
+    validate_tool_selection(&review.tool, "review")?;
     if let Some(tier_name) = &review.tier {
         if !config.tiers.contains_key(tier_name) {
             bail!(
@@ -196,13 +219,7 @@ fn validate_debate(config: &ProjectConfig) -> Result<()> {
         return Ok(());
     };
 
-    let supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
-    if !supported.contains(&debate.tool.as_str()) {
-        bail!(
-            "Invalid [debate].tool value '{}'. Supported values: auto, gemini-cli, opencode, codex, claude-code.",
-            debate.tool
-        );
-    }
+    validate_tool_selection(&debate.tool, "debate")?;
     if let Some(tier_name) = &debate.tier {
         if !config.tiers.contains_key(tier_name) {
             bail!(

@@ -586,8 +586,8 @@ gate_timeout_secs = 120
     );
     // tool should still be inherited from global (since project didn't set it)
     assert_eq!(
-        config.review.as_ref().map(|r| r.tool.as_str()),
-        Some("codex"),
+        config.review.as_ref().map(|r| r.tool.to_string()),
+        Some("codex".to_string()),
     );
 }
 

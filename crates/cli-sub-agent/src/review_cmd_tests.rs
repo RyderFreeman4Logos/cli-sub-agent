@@ -209,7 +209,7 @@ fn resolve_review_tool_errors_without_parent_tool_context() {
 #[test]
 fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
     let mut global = GlobalConfig::default();
-    global.review.tool = "invalid-tool".to_string();
+    global.review.tool = csa_config::ToolSelection::Single("invalid-tool".to_string());
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
     let err = resolve_review_tool(
         None,
@@ -233,7 +233,7 @@ fn resolve_review_tool_prefers_project_override() {
     let global = GlobalConfig::default();
     let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
-        tool: "opencode".to_string(),
+        tool: csa_config::ToolSelection::Single("opencode".to_string()),
         ..Default::default()
     });
     cfg.debate = None;
@@ -257,7 +257,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
     let global = GlobalConfig::default();
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
-        tool: "auto".to_string(),
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
         ..Default::default()
     });
     cfg.debate = None;
@@ -283,7 +283,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
 
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
-        tool: "auto".to_string(),
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
         ..Default::default()
     });
     cfg.debate = None;
@@ -309,7 +309,7 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.review = Some(csa_config::global::ReviewConfig {
-        tool: "auto".to_string(),
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
         ..Default::default()
     });
     cfg.debate = None;

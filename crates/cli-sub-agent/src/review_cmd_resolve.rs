@@ -126,23 +126,40 @@ pub(crate) fn resolve_review_tool(
         })
         .or(global_config.review.tier.as_deref());
 
+    // Compute effective whitelist from tool selection (project > global)
+    let effective_whitelist = project_config
+        .and_then(|cfg| cfg.review.as_ref())
+        .map(|r| &r.tool)
+        .unwrap_or(&global_config.review.tool);
+    let whitelist = effective_whitelist.whitelist();
+
     if let Some(tier) = tier_name {
         if let Some(cfg) = project_config {
             if let Some(resolution) =
-                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool)
+                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist)
             {
                 return Ok((resolution.tool, Some(resolution.model_spec)));
             }
         }
-        // Tier set but no available tool found — fall through to tool-based resolution
-        debug!(
-            tier = tier,
-            "Tier set but no available tool found, falling through to tool-based resolution"
-        );
+        // Tier set but no available tool found — fall through to tool-based resolution.
+        // When a whitelist is active, this likely means tier and whitelist have no intersection.
+        if whitelist.is_some() {
+            warn!(
+                tier = tier,
+                "Tier '{}' has no tools matching [review].tool whitelist — \
+                 falling through to whitelist-based auto-selection (tier constraint bypassed)",
+                tier
+            );
+        } else {
+            debug!(
+                tier = tier,
+                "Tier set but no available tool found, falling through to tool-based resolution"
+            );
+        }
     }
 
     if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
-        return resolve_review_tool_from_value(
+        return resolve_review_tool_from_selection(
             &project_review.tool,
             parent_tool,
             project_config,
@@ -158,30 +175,15 @@ pub(crate) fn resolve_review_tool(
         });
     }
 
-    // When global [review].tool is "auto", always try heterogeneous auto-selection first.
-    if global_config.review.tool == "auto" {
-        if let Some(tool) = select_auto_review_tool(parent_tool, project_config, global_config) {
-            return Ok((tool, None));
-        }
-    }
-
-    match global_config.resolve_review_tool(parent_tool) {
-        Ok(tool_name) => {
-            if let Some(cfg) = project_config {
-                if !cfg.is_tool_enabled(&tool_name) {
-                    return Err(review_auto_resolution_error(parent_tool, project_root));
-                }
-            }
-            crate::run_helpers::parse_tool_name(&tool_name)
-                .map(|t| (t, None))
-                .map_err(|_| {
-                    anyhow::anyhow!(
-                    "Invalid [review].tool value '{tool_name}'. Supported values: gemini-cli, opencode, codex, claude-code."
-                )
-                })
-        }
-        Err(_) => Err(review_auto_resolution_error(parent_tool, project_root)),
-    }
+    // Global config tool selection
+    resolve_review_tool_from_selection(
+        &global_config.review.tool,
+        parent_tool,
+        project_config,
+        global_config,
+        project_root,
+    )
+    .map(|t| (t, None))
 }
 
 /// Resolve review thinking: CLI > config review.thinking.
@@ -194,20 +196,42 @@ pub(crate) fn resolve_review_thinking(
         .or_else(|| config_thinking.map(str::to_string))
 }
 
-fn resolve_review_tool_from_value(
-    tool_value: &str,
+fn resolve_review_tool_from_selection(
+    selection: &csa_config::ToolSelection,
     parent_tool: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     project_root: &Path,
 ) -> Result<ToolName> {
-    if tool_value == "auto" {
-        if let Some(tool) = select_auto_review_tool(parent_tool, project_config, global_config) {
-            return Ok(tool);
+    // Single direct tool (not "auto")
+    if let Some(tool_name) = selection.as_single() {
+        let tool = crate::run_helpers::parse_tool_name(tool_name).map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid [review].tool value '{tool_name}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
+            )
+        })?;
+        // Verify the tool is enabled in the project config
+        if let Some(cfg) = project_config {
+            if !cfg.is_tool_enabled(tool_name) {
+                anyhow::bail!(
+                    "[review].tool = '{tool_name}' is disabled in project config. \
+                     Enable it in [tools.{tool_name}] or change [review].tool."
+                );
+            }
         }
+        return Ok(tool);
+    }
 
-        // Try old heterogeneous_counterpart first for backward compatibility,
-        // but only if the counterpart tool is enabled.
+    // Auto or whitelist — try heterogeneous auto-selection with optional filter
+    let whitelist = selection.whitelist();
+    if let Some(tool) =
+        select_auto_review_tool(parent_tool, project_config, global_config, whitelist)
+    {
+        return Ok(tool);
+    }
+
+    // Legacy counterpart fallback (only for true auto, not whitelist)
+    if whitelist.is_none() {
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
             let counterpart_enabled =
                 project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
@@ -219,22 +243,16 @@ fn resolve_review_tool_from_value(
                 });
             }
         }
-
-        // Both methods failed
-        return Err(review_auto_resolution_error(parent_tool, project_root));
     }
 
-    crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
-        anyhow::anyhow!(
-            "Invalid project [review].tool value '{tool_value}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
-        )
-    })
+    Err(review_auto_resolution_error(parent_tool, project_root))
 }
 
 fn select_auto_review_tool(
     parent_tool: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    whitelist: Option<&[String]>,
 ) -> Option<ToolName> {
     let parent_str = parent_tool?;
     let parent_tool_name = crate::run_helpers::parse_tool_name(parent_str).ok()?;
@@ -242,15 +260,18 @@ fn select_auto_review_tool(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();
         csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
     } else {
-        csa_config::global::sort_tools_by_effective_priority(
-            csa_config::global::all_known_tools(),
-            project_config,
-            global_config,
-        )
+        let all = csa_config::global::all_known_tools();
+        let tools: Vec<_> = all
+            .iter()
+            .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
+            .copied()
+            .collect();
+        csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
     };
 
     select_heterogeneous_tool(&parent_tool_name, &enabled_tools)
