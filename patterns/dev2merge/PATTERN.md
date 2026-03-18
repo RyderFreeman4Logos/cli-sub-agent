@@ -143,7 +143,7 @@ FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-gemini-cli}}"
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
-  MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
+  MKTD_TOOL_ARGS=(--force-ignore-tier-setting --tool "${MKTD_TOOL_EFFECTIVE}")
 else
   MKTD_TOOL_ARGS=()
 fi

@@ -59,7 +59,8 @@ csa debate --sa-mode true "Should we use gRPC or REST for our new microservice A
 csa debate --sa-mode true --session <SESSION_ID> "I disagree because gRPC adds complexity for our small team"
 
 # Override tool selection (bypass auto routing — only when necessary)
-csa debate --sa-mode true --tool codex "How should we handle distributed transactions?"
+# Note: when tiers are configured, add --force-ignore-tier-setting before --tool
+csa debate --sa-mode true --force-ignore-tier-setting --tool codex "How should we handle distributed transactions?"
 
 # Override model within selected tool (use models from `csa tiers list`)
 csa debate --sa-mode true --model <MODEL> "What caching strategy should we use?"

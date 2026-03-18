@@ -6,7 +6,7 @@
 ## Step 5: Fix Mode (when mode=review-and-fix)
 
 ```bash
-csa run --tool {review_tool} \
+csa run --force-ignore-tier-setting --tool {review_tool} \
   --session {csa_session_id} \
   "Based on the review findings, fix all P0 and P1 issues:
 

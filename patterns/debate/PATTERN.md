@@ -45,7 +45,8 @@ csa --format json tiers list
 ## Step 4: Resolve Debate Tool
 
 CSA auto-selects heterogeneous tool: claude-code caller → codex reviewer,
-codex caller → claude-code reviewer. Override with explicit --tool if needed.
+codex caller → claude-code reviewer. Override with explicit --tool if needed
+(requires --force-ignore-tier-setting when tiers are configured).
 
 ## Step 5: Select Starting Tier
 
