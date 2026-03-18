@@ -122,6 +122,9 @@ pub(crate) fn resolve_review_tool(
         if let Some(cfg) = project_config {
             if let Some(canonical) = cfg.resolve_tier_selector(cli) {
                 Some(canonical)
+            } else if bypass_tier {
+                // bypass mode: tolerate unknown selector (pass through as-is)
+                Some(cli.to_string())
             } else {
                 let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
                 let alias_hint = cfg.format_tier_aliases();
