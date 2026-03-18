@@ -134,7 +134,7 @@ pub struct ReviewArgs {
     #[arg(long, value_name = "PATH")]
     pub spec: Option<String>,
 
-    /// Tier name for tool/model routing (must exist in [tiers] config)
+    /// Tier name or tier_mapping alias for tool/model routing
     #[arg(long)]
     pub tier: Option<String>,
 
@@ -280,7 +280,7 @@ pub struct DebateArgs {
     #[arg(long)]
     pub cd: Option<String>,
 
-    /// Tier name for tool/model routing (must exist in [tiers] config)
+    /// Tier name or tier_mapping alias for tool/model routing
     #[arg(long)]
     pub tier: Option<String>,
 

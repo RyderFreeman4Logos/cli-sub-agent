@@ -618,6 +618,32 @@ impl ProjectConfig {
         project_root.join(".csa").join("config.toml")
     }
 
+    /// Resolve a tier selector (direct name or `tier_mapping` alias) to canonical tier name.
+    /// Direct tier names take priority. No tier3 fallback.
+    pub fn resolve_tier_selector(&self, selector: &str) -> Option<String> {
+        if self.tiers.contains_key(selector) {
+            return Some(selector.to_string());
+        }
+        self.tier_mapping
+            .get(selector)
+            .filter(|t| self.tiers.contains_key(t.as_str()))
+            .cloned()
+    }
+
+    /// Format tier aliases for error messages (empty string if no mappings).
+    pub fn format_tier_aliases(&self) -> String {
+        if self.tier_mapping.is_empty() {
+            return String::new();
+        }
+        let mut aliases: Vec<String> = self
+            .tier_mapping
+            .iter()
+            .map(|(k, v)| format!("{k} \u{2192} {v}"))
+            .collect();
+        aliases.sort();
+        format!("\nAvailable tier aliases: [{}]", aliases.join(", "))
+    }
+
     /// Resolve tier-based tool selection for a given task type.
     ///
     /// Returns (tool_name, model_spec_string) for the first enabled tool in the tier.

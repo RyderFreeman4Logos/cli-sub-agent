@@ -200,7 +200,7 @@ pub enum Commands {
         #[arg(long, value_name = "PATH")]
         spec: Option<String>,
 
-        /// Tier name for tool/model routing (must exist in [tiers] config)
+        /// Tier name or tier_mapping alias for tool/model routing
         #[arg(long)]
         tier: Option<String>,
 
