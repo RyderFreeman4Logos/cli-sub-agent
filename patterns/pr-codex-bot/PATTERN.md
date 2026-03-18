@@ -555,7 +555,7 @@ git push origin "${WORKFLOW_BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
   "**Merge rationale**: Cloud bot (@codex) is disabled or unavailable. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${PR_NUM}" --repo "${REPO}" --merge --delete-branch
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1155,7 +1155,7 @@ gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "
 Tool: bash
 OnFail: abort
 
-Squash-merge and update local main.
+Merge and update local main.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -1171,7 +1171,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
 fi
 
 git push origin "${WORKFLOW_BRANCH}"
-gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --merge --delete-branch
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1210,7 +1210,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
 fi
 
 git push origin "${WORKFLOW_BRANCH}"
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${PR_NUM}" --repo "${REPO}" --merge --delete-branch
 
 # Post-merge: sync local main with remote
 git fetch origin
