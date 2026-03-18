@@ -11,13 +11,38 @@ with persistent sessions, recursive agent spawning, and resource-aware schedulin
 
 ## Supported Tools
 
-| Tool | Command | Compress | Yolo |
-|------|---------|----------|------|
-| opencode | `csa run --tool opencode` | `/compact` | auto |
-| codex | `csa run --tool codex` | `/compact` | auto |
-| claude-code | `csa run --tool claude-code` | `/compact` | auto |
+| Tool | Compress | Yolo |
+|------|----------|------|
+| opencode | `/compact` | auto |
+| codex | `/compact` | auto |
+| claude-code | `/compact` | auto |
 
 All tools run in yolo mode by default (auto-approve all actions).
+
+## Invocation Checklist (MANDATORY)
+
+Before constructing ANY `csa run`, `csa review`, or `csa debate` command, verify:
+
+1. **`--sa-mode true|false`** — REQUIRED at root depth. Omitting causes a runtime error.
+2. **`--tier <name>`** — REQUIRED when project has `[tiers]` configured. Direct `--tool`/`--model`/`--thinking` is **blocked** when tiers exist.
+3. **NEVER use `--tool` directly** when tiers are configured — use `--tier` instead. To bypass: `--force-ignore-tier-setting` (alias: `--force-tier`).
+
+**Priority chain**: `--tier` > config tier > `--tool` (with force) > config tool > auto-select.
+
+### Quick Reference
+
+```bash
+# When tiers ARE configured (most CSA projects):
+csa run --sa-mode true --tier tier-1 "Implement feature X"
+csa review --sa-mode true --tier tier-4-critical --range main...HEAD
+csa debate --sa-mode true --tier tier-4-critical "REST vs gRPC?"
+
+# Bypass tier to force a specific tool (requires --force-ignore-tier-setting):
+csa run --sa-mode true --force-ignore-tier-setting --tool codex "Quick fix"
+
+# When tiers are NOT configured (legacy / simple projects):
+csa run --sa-mode true --tool codex "Implement feature X"
+```
 
 ## Core Concepts
 
@@ -67,14 +92,14 @@ csa init --non-interactive
 # Analysis (read-only)
 csa run --sa-mode false "Analyze the authentication flow"
 
-# Implementation (write, use opencode/codex/claude-code)
-csa run --sa-mode true --tool opencode "Fix the login bug"
+# Implementation — tier-based (preferred when tiers configured)
+csa run --sa-mode true --tier tier-1 "Fix the login bug"
+
+# Implementation — direct tool (only when NO tiers configured)
+csa run --sa-mode true --tool codex "Fix the login bug"
 
 # Resume existing session via fork
-csa run --sa-mode true --tool opencode --fork-from 01JK... "Continue the refactor"
-
-# Override model
-csa run --sa-mode true --tool opencode --model "provider/model-name" "Implement feature X"
+csa run --sa-mode true --tier tier-1 --fork-from 01JK... "Continue the refactor"
 
 # Ephemeral session (no project context, auto-cleanup)
 csa run --sa-mode false --ephemeral "What is the CAP theorem?"
@@ -100,7 +125,7 @@ csa config validate   # Validate config file
 ### Spawning Sub-Agents
 ```bash
 # Sub-agent inherits depth tracking via CSA_DEPTH env var
-csa run --tool opencode --parent $CSA_SESSION_ID \
+csa run --tier tier-1 --parent $CSA_SESSION_ID \
   "Research PostgreSQL extensions"
 ```
 
@@ -138,8 +163,8 @@ csa run --session research-2 "Research B" &
 wait
 
 # Step 2: Serial implementation (write)
-csa run --tool opencode --session impl-1 "Implement A based on research"
-csa run --tool opencode --session impl-2 "Implement B based on research"
+csa run --sa-mode true --tier tier-1 --session impl-1 "Implement A based on research"
+csa run --sa-mode true --tier tier-1 --session impl-2 "Implement B based on research"
 ```
 
 ## Error Handling
