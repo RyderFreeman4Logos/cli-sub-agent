@@ -520,6 +520,15 @@ fn resolve_debate_tool_from_selection(
                 "Invalid [debate].tool value '{tool_name}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
             )
         })?;
+        // Verify the tool is enabled in the project config
+        if let Some(cfg) = project_config {
+            if !cfg.is_tool_enabled(tool_name) {
+                anyhow::bail!(
+                    "[debate].tool = '{tool_name}' is disabled in project config. \
+                     Enable it in [tools.{tool_name}] or change [debate].tool."
+                );
+            }
+        }
         return Ok((tool, DebateMode::Heterogeneous));
     }
 
@@ -547,7 +556,15 @@ fn resolve_debate_tool_from_selection(
         }
     }
 
-    // All heterogeneous methods failed — try same-model fallback
+    // All heterogeneous methods failed — try same-model fallback (whitelist-aware)
+    if let Some(wl) = whitelist {
+        // Whitelist is explicitly set but no tools available — error, don't bypass
+        anyhow::bail!(
+            "No tools from [debate].tool whitelist [{}] are available. \
+             Check tool enablement and binary availability.",
+            wl.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+        );
+    }
     resolve_same_model_fallback(parent_tool, project_config, global_config, project_root)
 }
 

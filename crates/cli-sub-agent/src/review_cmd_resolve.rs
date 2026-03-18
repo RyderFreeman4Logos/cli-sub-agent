@@ -195,11 +195,21 @@ fn resolve_review_tool_from_selection(
 ) -> Result<ToolName> {
     // Single direct tool (not "auto")
     if let Some(tool_name) = selection.as_single() {
-        return crate::run_helpers::parse_tool_name(tool_name).map_err(|_| {
+        let tool = crate::run_helpers::parse_tool_name(tool_name).map_err(|_| {
             anyhow::anyhow!(
                 "Invalid [review].tool value '{tool_name}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
             )
-        });
+        })?;
+        // Verify the tool is enabled in the project config
+        if let Some(cfg) = project_config {
+            if !cfg.is_tool_enabled(tool_name) {
+                anyhow::bail!(
+                    "[review].tool = '{tool_name}' is disabled in project config. \
+                     Enable it in [tools.{tool_name}] or change [review].tool."
+                );
+            }
+        }
+        return Ok(tool);
     }
 
     // Auto or whitelist — try heterogeneous auto-selection with optional filter

@@ -170,10 +170,11 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
 
 /// Validate a `ToolSelection` value for review/debate config.
 fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
-    let supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
+    let single_supported = ["auto", "gemini-cli", "opencode", "codex", "claude-code"];
+    let whitelist_supported = ["gemini-cli", "opencode", "codex", "claude-code"];
     match tool {
         ToolSelection::Single(s) => {
-            if !supported.contains(&s.as_str()) {
+            if !single_supported.contains(&s.as_str()) {
                 bail!(
                     "Invalid [{section}].tool value '{s}'. \
                      Supported values: auto, gemini-cli, opencode, codex, claude-code."
@@ -182,10 +183,11 @@ fn validate_tool_selection(tool: &ToolSelection, section: &str) -> Result<()> {
         }
         ToolSelection::Whitelist(tools) => {
             for t in tools {
-                if !supported.contains(&t.as_str()) {
+                if !whitelist_supported.contains(&t.as_str()) {
                     bail!(
                         "Invalid tool '{t}' in [{section}].tool array. \
-                         Supported values: gemini-cli, opencode, codex, claude-code."
+                         Supported values: gemini-cli, opencode, codex, claude-code. \
+                         ('auto' is not valid inside a whitelist array)"
                     );
                 }
             }
