@@ -248,16 +248,22 @@ async fn run() -> Result<()> {
     // Auto weave upgrade (if configured via [execution] auto_weave_upgrade = true).
     // ProjectConfig::load already deep-merges global config, so only fall back to
     // raw GlobalConfig when no merged config exists at all.
+    // Guard: only run when weave.lock exists (skip non-weave directories).
     {
-        let auto_upgrade = std::env::current_dir()
-            .ok()
-            .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
-            .map(|cfg| cfg.execution.auto_weave_upgrade)
-            .unwrap_or_else(|| {
-                csa_config::GlobalConfig::load()
-                    .map(|g| g.execution.auto_weave_upgrade)
-                    .unwrap_or(false)
-            });
+        let has_weave_lock = std::env::current_dir()
+            .map(|cwd| cwd.join("weave.lock").exists())
+            .unwrap_or(false);
+
+        let auto_upgrade = has_weave_lock
+            && std::env::current_dir()
+                .ok()
+                .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
+                .map(|cfg| cfg.execution.auto_weave_upgrade)
+                .unwrap_or_else(|| {
+                    csa_config::GlobalConfig::load()
+                        .map(|g| g.execution.auto_weave_upgrade)
+                        .unwrap_or(false)
+                });
 
         if auto_upgrade {
             use std::time::Duration;
