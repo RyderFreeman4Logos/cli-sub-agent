@@ -149,6 +149,17 @@ pub(crate) async fn handle_debate(
     // 3. Read question (from arg or stdin), optionally prepend file content
     let mut question = read_prompt(args.question)?;
     if let Some(file_path) = &args.file {
+        const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
+        let metadata = std::fs::metadata(file_path)
+            .with_context(|| format!("Failed to stat --file: {file_path}"))?;
+        if metadata.len() > MAX_FILE_SIZE {
+            anyhow::bail!(
+                "--file '{}' is too large ({} bytes, max {} bytes)",
+                file_path,
+                metadata.len(),
+                MAX_FILE_SIZE
+            );
+        }
         let file_content = std::fs::read_to_string(file_path)
             .with_context(|| format!("Failed to read --file: {file_path}"))?;
         question = format!(

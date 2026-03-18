@@ -49,6 +49,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         false, // needs_edit
         None,  // tier
         false, // force_ignore_tier_setting
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -100,6 +101,7 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         false, // needs_edit
         None,  // tier
         false, // force_ignore_tier_setting
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_ok());
     let (tool, _, _) = result.unwrap();
@@ -151,6 +153,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         false, // needs_edit
         None,  // tier
         false, // force_ignore_tier_setting
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -316,6 +319,7 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
         false, // needs_edit
         None,  // tier
         false, // force_ignore_tier_setting
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -348,6 +352,7 @@ fn resolve_tool_and_model_blocks_direct_model_spec_when_tiers_configured() {
         false,
         None,
         false,
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -376,6 +381,7 @@ fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
         false,
         None,  // no --tier
         false, // no --force-ignore-tier-setting
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_err());
     let msg = result.unwrap_err().to_string();
@@ -403,7 +409,8 @@ fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {
         false, // force_override_user_config
         false,
         None,
-        true, // force_ignore_tier_setting
+        true,  // force_ignore_tier_setting
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_ok(), "should bypass: {}", result.unwrap_err());
     let (tool, _, _) = result.unwrap();
@@ -429,6 +436,7 @@ fn resolve_tool_and_model_force_override_user_config_allows_direct_tool() {
         false,
         None,
         false, // force_ignore_tier_setting is false, but override_user_config covers it
+        false, // tool_is_auto_resolved
     );
     assert!(result.is_ok(), "should bypass: {}", result.unwrap_err());
     let (tool, _, _) = result.unwrap();
@@ -472,6 +480,7 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
         false,
         None,
         false,
+        false, // tool_is_auto_resolved
     );
     // Should succeed — no tiers means no enforcement
     assert!(
@@ -500,6 +509,7 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
         false,
         Some("quality"), // --tier quality
         false,
+        false, // tool_is_auto_resolved
     );
     assert!(
         result.is_ok(),
@@ -538,6 +548,7 @@ fn resolve_tool_and_model_tier_with_tool_blocked_without_force() {
         false,
         Some("quality"),
         false,
+        false, // tool_is_auto_resolved
     );
     // --tier is present, so enforcement skips (tier.is_none() == false).
     // The --tier branch resolves tool from tier, ignoring the --tool arg.
