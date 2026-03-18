@@ -23,8 +23,8 @@ All tools run in yolo mode by default (auto-approve all actions).
 
 Before constructing ANY `csa run`, `csa review`, or `csa debate` command, verify:
 
-1. **`--sa-mode true|false`** — REQUIRED at root depth. Omitting causes a runtime error.
-2. **`--tier <name>`** — REQUIRED when project has `[tiers]` configured. Direct `--tool`/`--model`/`--thinking` is **blocked** when tiers exist.
+1. **`--sa-mode true|false`** — REQUIRED at root depth (CSA_DEPTH=0). Sub-agent calls (depth > 0) inherit automatically.
+2. **`--tier <name>`** — REQUIRED for `csa run` when project has `[tiers]` configured. Direct `--tool` is **blocked** by the CLI. For `csa review`/`csa debate`, `--tier` selects model; `--model`/`--thinking` overrides are still allowed.
 3. **NEVER use `--tool` directly** when tiers are configured — use `--tier` instead. To bypass: `--force-ignore-tier-setting` (alias: `--force-tier`).
 
 **Priority chain**: `--tier` > config tier > `--tool` (with force) > config tool > auto-select.
@@ -33,9 +33,10 @@ Before constructing ANY `csa run`, `csa review`, or `csa debate` command, verify
 
 ```bash
 # When tiers ARE configured (most CSA projects):
-csa run --sa-mode true --tier tier-1 "Implement feature X"
-csa review --sa-mode true --tier tier-4-critical --range main...HEAD
-csa debate --sa-mode true --tier tier-4-critical "REST vs gRPC?"
+# Use tier names from your .csa/config.toml [tiers] section
+csa run --sa-mode true --tier <tier-name> "Implement feature X"
+csa review --sa-mode true --tier <tier-name> --range main...HEAD
+csa debate --sa-mode true --tier <tier-name> "REST vs gRPC?"
 
 # Bypass tier to force a specific tool (requires --force-ignore-tier-setting):
 csa run --sa-mode true --force-ignore-tier-setting --tool codex "Quick fix"
@@ -93,13 +94,13 @@ csa init --non-interactive
 csa run --sa-mode false "Analyze the authentication flow"
 
 # Implementation — tier-based (preferred when tiers configured)
-csa run --sa-mode true --tier tier-1 "Fix the login bug"
+csa run --sa-mode true --tier <tier-name> "Fix the login bug"
 
 # Implementation — direct tool (only when NO tiers configured)
 csa run --sa-mode true --tool codex "Fix the login bug"
 
 # Resume existing session via fork
-csa run --sa-mode true --tier tier-1 --fork-from 01JK... "Continue the refactor"
+csa run --sa-mode true --tier <tier-name> --fork-from 01JK... "Continue the refactor"
 
 # Ephemeral session (no project context, auto-cleanup)
 csa run --sa-mode false --ephemeral "What is the CAP theorem?"
@@ -125,7 +126,7 @@ csa config validate   # Validate config file
 ### Spawning Sub-Agents
 ```bash
 # Sub-agent inherits depth tracking via CSA_DEPTH env var
-csa run --tier tier-1 --parent $CSA_SESSION_ID \
+csa run --tier <tier-name> --parent $CSA_SESSION_ID \
   "Research PostgreSQL extensions"
 ```
 
@@ -135,6 +136,7 @@ Max recursion depth is configurable (default: 5).
 
 Multiple analysis tasks can run in parallel safely:
 ```bash
+# Sub-agent calls (depth > 0) — --sa-mode inherited from parent
 csa run --session research-db "Query database docs" &
 csa run --session research-ui "Query frontend docs" &
 wait
@@ -157,14 +159,14 @@ Potential issues:
 
 **Recommended pattern**:
 ```bash
-# Step 1: Parallel research (read-only)
+# Step 1: Parallel research (read-only, sub-agent depth — --sa-mode inherited)
 csa run --session research-1 "Research A" &
 csa run --session research-2 "Research B" &
 wait
 
 # Step 2: Serial implementation (write)
-csa run --sa-mode true --tier tier-1 --session impl-1 "Implement A based on research"
-csa run --sa-mode true --tier tier-1 --session impl-2 "Implement B based on research"
+csa run --sa-mode true --tier <tier-name> --session impl-1 "Implement A based on research"
+csa run --sa-mode true --tier <tier-name> --session impl-2 "Implement B based on research"
 ```
 
 ## Error Handling
