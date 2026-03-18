@@ -555,7 +555,7 @@ git push origin "${WORKFLOW_BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
   "**Merge rationale**: Cloud bot (@codex) is disabled or unavailable. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${PR_NUM}" --repo "${REPO}" --merge --delete-branch
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -819,7 +819,7 @@ choice BEFORE the round cap check, so the chosen action always takes effect:
 - **C**: Set `ROUND_LIMIT_ACTION=abort` → leaves `ROUND_LIMIT_REACHED=true`, prints `ROUND_LIMIT_ABORT`, exits 1.
 
 **CRITICAL**: The `merge` and `continue` branches MUST clear `ROUND_LIMIT_REACHED=false`
-before proceeding. Steps 10.5, 11, and 12 are gated by `!(${ROUND_LIMIT_REACHED})`,
+before proceeding. Steps 11 and 12 are gated by `!(${ROUND_LIMIT_REACHED})`,
 so a stale `true` value blocks all downstream merge/rebase paths even after the user
 explicitly chose to proceed. The `abort` branch intentionally leaves the flag set,
 as it halts the workflow.
@@ -917,11 +917,14 @@ Loop back to Step 5 (delegated wait gate).
 
 ## Step 10a: Bot Review Clean
 
-No issues found by bot. Proceed to Step 10.5 (rebase) then merge.
+No issues found by bot. Proceed to merge.
 
-## Step 10.5: Rebase for Clean History
+## Step 10.5: Rebase for Clean History (DISABLED)
 
 > **Layer**: 0 (Orchestrator) -- git history cleanup before merge.
+> **Status**: Disabled. With `--merge` (not `--squash`), rebase destroys the
+> per-commit audit trail instead of cleaning it up. Set `REBASE_ENABLED=true`
+> to re-enable for squash-merge workflows.
 
 Tool: bash
 
@@ -1155,7 +1158,7 @@ gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "
 Tool: bash
 OnFail: abort
 
-Squash-merge and update local main.
+Merge and update local main.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -1171,7 +1174,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
 fi
 
 git push origin "${WORKFLOW_BRANCH}"
-gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --merge --delete-branch
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1210,7 +1213,7 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
 fi
 
 git push origin "${WORKFLOW_BRANCH}"
-gh pr merge "${PR_NUM}" --repo "${REPO}" --squash --delete-branch
+gh pr merge "${PR_NUM}" --repo "${REPO}" --merge --delete-branch
 
 # Post-merge: sync local main with remote
 git fetch origin

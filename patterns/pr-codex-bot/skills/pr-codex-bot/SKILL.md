@@ -28,7 +28,7 @@ triggers:
 
 ## Purpose
 
-Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). When the round limit is reached, the workflow pauses and presents options: merge now, continue, or abort. Before merge, accumulated fix commits are rebased into logical groups (Step 10.5).
+Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). When the round limit is reached, the workflow pauses and presents options: merge now, continue, or abort. Merges with `--merge` to preserve per-commit audit trail.
 
 **MANDATORY AUDIT TRAIL**: When an agent determines a PR-page review finding
 (for example, a cloud bot finding) is NOT a real issue or is acceptable in
@@ -180,8 +180,8 @@ breaks prompt-guard propagation.
 8. **Fix non-stale real issues**: For surviving Category C comments, fix, commit, push.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
-10.5. **Rebase for clean history**: If branch has > 3 commits, create backup branch, soft reset to `$(git merge-base main HEAD)` (not local main tip, which may have advanced), create logical commits by selectively staging, force push with lease, then trigger one final `@codex review`. **MUST block**: delegate post-rebase wait/fix/review handling to one CSA-managed gate step and proceed only when it returns pass. The delegated gate is hard-time-bounded and must return an explicit pass marker; non-zero/timeout/invalid-marker is hard fail. If issues remain after bounded retries, abort. If bot times out, delegated gate must execute fallback `csa review --range main...HEAD` plus bounded fix cycle. FORBIDDEN: proceeding to merge while post-rebase review has unresolved issues. Skip rebase entirely if <= 3 commits or already logically grouped.
-11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Then `gh pr merge --squash --delete-branch`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`. Delete feature branch locally (`git branch -d`).
+10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Set `REBASE_ENABLED=true` to re-enable for squash-merge workflows.
+11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Then `gh pr merge --merge --delete-branch`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`. Delete feature branch locally (`git branch -d`).
 
 ## Example Usage
 
@@ -214,7 +214,7 @@ breaks prompt-guard propagation.
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
 10a. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
-10b. **Rebase for clean history** (Step 10.5): If branch had > 3 accumulated commits, commits were rebased into logical groups, force-pushed, and delegated post-rebase CSA gate passed before merge (including timeout fallback handling). Backup branch created at `backup-<pr>-pre-rebase`.
+10b. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.
-12. PR merged via squash-merge with branch cleanup.
+12. PR merged via merge commit (full history preserved) with branch cleanup.
 13. Local main updated: `git fetch origin && git checkout main && git merge origin/main --ff-only`. Feature branch deleted locally and remotely.
