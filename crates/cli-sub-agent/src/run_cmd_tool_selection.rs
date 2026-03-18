@@ -137,6 +137,12 @@ pub(crate) fn resolve_tool_by_strategy(
     tier: Option<&str>,
     force_ignore_tier_setting: bool,
 ) -> Result<StrategyResolution> {
+    // Auto strategies (AnyAvailable, HeterogeneousPreferred, HeterogeneousStrict) are NOT
+    // user-explicit tool selections, so they should bypass tier enforcement. Only the Explicit
+    // strategy (from `--tool <specific-name>`) should be subject to tier blocking.
+    let auto_bypass_tier = !matches!(strategy, ToolSelectionStrategy::Explicit(_));
+    let effective_force_ignore_tier = force_ignore_tier_setting || auto_bypass_tier;
+
     match strategy {
         ToolSelectionStrategy::Explicit(t) => {
             let (tool, ms, m) = resolve_tool_and_model(
@@ -169,7 +175,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 force_override_user_config,
                 needs_edit,
                 tier,
-                force_ignore_tier_setting,
+                effective_force_ignore_tier,
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -188,7 +194,7 @@ pub(crate) fn resolve_tool_by_strategy(
             force_override_user_config,
             needs_edit,
             tier,
-            force_ignore_tier_setting,
+            effective_force_ignore_tier,
         ),
         ToolSelectionStrategy::HeterogeneousStrict => {
             let res = resolve_heterogeneous_strict(
@@ -201,7 +207,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 force_override_user_config,
                 needs_edit,
                 tier,
-                force_ignore_tier_setting,
+                effective_force_ignore_tier,
             )?;
             Ok(StrategyResolution {
                 tool: res.0,

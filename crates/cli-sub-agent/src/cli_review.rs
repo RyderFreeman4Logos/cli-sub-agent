@@ -287,4 +287,8 @@ pub struct DebateArgs {
     /// Override tier enforcement (bypass tier whitelist even when --tier is set)
     #[arg(long, alias = "force-tier")]
     pub force_ignore_tier_setting: bool,
+
+    /// Attach a file as context for the debate (content prepended to prompt)
+    #[arg(long)]
+    pub file: Option<String>,
 }

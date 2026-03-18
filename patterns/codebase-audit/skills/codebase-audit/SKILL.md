@@ -37,7 +37,6 @@ Uses the `csa audit` CLI for manifest tracking, ensuring audit progress is persi
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - The project must have source files trackable by `csa audit`
 - Audit scope should be defined (full codebase or specific directory)
 

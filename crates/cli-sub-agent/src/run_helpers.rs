@@ -41,12 +41,19 @@ pub(crate) fn resolve_tool_and_model(
         && tier.is_none()
         && (tool.is_some() || model_spec.is_some() || model.is_some())
     {
-        let available: Vec<&str> = config.unwrap().tiers.keys().map(|k| k.as_str()).collect();
+        let cfg = config.unwrap();
+        let mut tier_list = String::new();
+        for name in cfg.tiers.keys() {
+            if !tier_list.is_empty() {
+                tier_list.push_str(", ");
+            }
+            tier_list.push_str(name);
+        }
         anyhow::bail!(
-            "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured. \
-             Use --tier <name> or add --force-ignore-tier-setting to override. \
-             Available tiers: [{}]",
-            available.join(", ")
+            "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured.\n\
+             Use --tier <name> or add --force-ignore-tier-setting to override.\n\
+             Available tiers: [{tier_list}]\n\
+             Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );
     }
 

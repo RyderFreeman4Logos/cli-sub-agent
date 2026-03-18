@@ -36,7 +36,6 @@ mktsk stops at **verified local execution**. It does **not** push branches, crea
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - A TODO plan must exist (from `/mktd` output or provided by user)
 - Must be on a feature branch
 

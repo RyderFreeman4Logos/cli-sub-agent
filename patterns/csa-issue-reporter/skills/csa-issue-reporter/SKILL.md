@@ -33,7 +33,6 @@ Automatically file a structured GitHub issue on the cli-sub-agent repository whe
 
 ### Prerequisites
 
-- `gh` CLI MUST be authenticated: `gh auth status`
 - Error context must be available (error_summary, csa_command, error_output)
 
 ### Quick Start

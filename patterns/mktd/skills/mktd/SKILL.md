@@ -36,7 +36,6 @@ Generate a structured TODO plan for a feature through five phases: parallel CSA 
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - Must be in a git repository with a feature branch checked out
 
 ### Quick Start

@@ -33,8 +33,6 @@ Perform AI-powered code review on GitHub PRs with automatic scale adaptation. Sm
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
-- `gh` CLI MUST be authenticated: `gh auth status`
 - PR number must be known or discoverable
 
 ### Quick Start
