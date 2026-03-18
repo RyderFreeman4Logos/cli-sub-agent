@@ -141,11 +141,21 @@ pub(crate) fn resolve_review_tool(
                 return Ok((resolution.tool, Some(resolution.model_spec)));
             }
         }
-        // Tier set but no available tool found — fall through to tool-based resolution
-        debug!(
-            tier = tier,
-            "Tier set but no available tool found, falling through to tool-based resolution"
-        );
+        // Tier set but no available tool found — fall through to tool-based resolution.
+        // When a whitelist is active, this likely means tier and whitelist have no intersection.
+        if whitelist.is_some() {
+            warn!(
+                tier = tier,
+                "Tier '{}' has no tools matching [review].tool whitelist — \
+                 falling through to whitelist-based auto-selection (tier constraint bypassed)",
+                tier
+            );
+        } else {
+            debug!(
+                tier = tier,
+                "Tier set but no available tool found, falling through to tool-based resolution"
+            );
+        }
     }
 
     if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {

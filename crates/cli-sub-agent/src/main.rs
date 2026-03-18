@@ -9,6 +9,7 @@ mod cli;
 mod config_cmds;
 mod debate_cmd;
 mod debate_cmd_output;
+mod debate_cmd_resolve;
 mod debate_errors;
 mod doctor;
 mod edit_restriction_guard;

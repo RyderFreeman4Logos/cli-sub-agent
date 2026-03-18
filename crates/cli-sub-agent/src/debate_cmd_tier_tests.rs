@@ -1,5 +1,7 @@
 use super::*;
-use csa_config::ToolConfig;
+use crate::debate_cmd_resolve::resolve_debate_tool;
+use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
+use csa_core::types::ToolName;
 use std::collections::HashMap;
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
