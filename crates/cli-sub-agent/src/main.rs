@@ -246,21 +246,18 @@ async fn run() -> Result<()> {
     }
 
     // Auto weave upgrade (if configured via [execution] auto_weave_upgrade = true).
+    // ProjectConfig::load already deep-merges global config, so only fall back to
+    // raw GlobalConfig when no merged config exists at all.
     {
-        let auto_upgrade = {
-            let mut enabled = false;
-            if let Ok(cwd) = std::env::current_dir() {
-                if let Ok(Some(cfg)) = csa_config::ProjectConfig::load(&cwd) {
-                    enabled = cfg.execution.auto_weave_upgrade;
-                }
-            }
-            if !enabled {
-                if let Ok(global) = csa_config::GlobalConfig::load() {
-                    enabled = global.execution.auto_weave_upgrade;
-                }
-            }
-            enabled
-        };
+        let auto_upgrade = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
+            .map(|cfg| cfg.execution.auto_weave_upgrade)
+            .unwrap_or_else(|| {
+                csa_config::GlobalConfig::load()
+                    .map(|g| g.execution.auto_weave_upgrade)
+                    .unwrap_or(false)
+            });
 
         if auto_upgrade {
             use std::time::Duration;
@@ -307,11 +304,10 @@ async fn run() -> Result<()> {
             }
 
             if !success {
-                eprintln!(
-                    "Error: auto weave upgrade failed after 3 attempts. \
+                anyhow::bail!(
+                    "auto weave upgrade failed after 3 attempts. \
                      Disable with [execution] auto_weave_upgrade = false"
                 );
-                std::process::exit(1);
             }
         }
     }
