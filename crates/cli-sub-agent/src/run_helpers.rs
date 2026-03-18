@@ -31,9 +31,28 @@ pub(crate) fn resolve_tool_and_model(
     tier: Option<&str>,
     force_ignore_tier_setting: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
+    let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
+    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+
+    // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
+    // unless --force-ignore-tier-setting (or --force) is active.
+    if tiers_configured
+        && !bypass_tier
+        && tier.is_none()
+        && (tool.is_some() || model_spec.is_some())
+    {
+        let available: Vec<&str> = config.unwrap().tiers.keys().map(|k| k.as_str()).collect();
+        anyhow::bail!(
+            "Direct --tool/--model/--thinking is restricted when tiers are configured. \
+             Use --tier <name> or add --force-ignore-tier-setting to override. \
+             Available tiers: [{}]",
+            available.join(", ")
+        );
+    }
+
     // Validate tier name exists in config when provided (unless force-ignore)
     if let Some(tier_name) = tier {
-        if !force_ignore_tier_setting {
+        if !bypass_tier {
             if let Some(cfg) = config {
                 if !cfg.tiers.contains_key(tier_name) {
                     let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
@@ -53,6 +72,28 @@ pub(crate) fn resolve_tool_and_model(
         }
     }
 
+    // Case 0: --tier provided → resolve tool/model from tier definition
+    if let Some(tier_name) = tier {
+        if let Some(cfg) = config {
+            if let Some(resolution) = resolve_tool_from_tier(tier_name, cfg, None) {
+                // Flow resolved tool through existing enforcement checks
+                cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
+                if !force {
+                    cfg.enforce_tier_whitelist(
+                        resolution.tool.as_str(),
+                        Some(&resolution.model_spec),
+                    )?;
+                }
+                return Ok((resolution.tool, Some(resolution.model_spec), None));
+            }
+            anyhow::bail!(
+                "No available tool found in tier '{}'. Check that at least one tool \
+                 in the tier is enabled and installed.",
+                tier_name
+            );
+        }
+    }
+
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
@@ -62,7 +103,7 @@ pub(crate) fn resolve_tool_and_model(
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
         }
         // Enforce tier whitelist: model-spec must appear in tiers
-        if !force {
+        if !force && !bypass_tier {
             if let Some(cfg) = config {
                 cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
             }
@@ -82,7 +123,7 @@ pub(crate) fn resolve_tool_and_model(
                 .unwrap_or_else(|| m.to_string())
         });
         // Enforce tier whitelist: tool must be in tiers; model name must match if provided
-        if !force {
+        if !force && !bypass_tier {
             if let Some(cfg) = config {
                 cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
                 cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
