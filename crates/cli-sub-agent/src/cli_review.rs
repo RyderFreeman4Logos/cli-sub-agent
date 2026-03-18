@@ -133,6 +133,14 @@ pub struct ReviewArgs {
     /// Path to agent-spec file (.spec or .toml) for contract-based verification
     #[arg(long, value_name = "PATH")]
     pub spec: Option<String>,
+
+    /// Tier name for tool/model routing (must exist in [tiers] config)
+    #[arg(long)]
+    pub tier: Option<String>,
+
+    /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+    #[arg(long, alias = "force-tier")]
+    pub force_ignore_tier_setting: bool,
 }
 
 impl ReviewArgs {
@@ -271,4 +279,12 @@ pub struct DebateArgs {
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,
+
+    /// Tier name for tool/model routing (must exist in [tiers] config)
+    #[arg(long)]
+    pub tier: Option<String>,
+
+    /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+    #[arg(long, alias = "force-tier")]
+    pub force_ignore_tier_setting: bool,
 }

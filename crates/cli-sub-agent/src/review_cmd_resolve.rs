@@ -76,6 +76,7 @@ pub(crate) fn resolve_review_stream_mode(
 }
 
 /// Returns (tool, optional_model_spec). When tier resolves, model_spec is set.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_review_tool(
     arg_tool: Option<ToolName>,
     project_config: Option<&ProjectConfig>,
@@ -83,8 +84,30 @@ pub(crate) fn resolve_review_tool(
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
+    cli_tier: Option<&str>,
+    force_ignore_tier_setting: bool,
 ) -> Result<(ToolName, Option<String>)> {
-    // CLI --tool override always wins
+    let tiers_configured = project_config.is_some_and(|c| !c.tiers.is_empty());
+    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+
+    // Enforce tier routing: block direct --tool when tiers are configured,
+    // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
+    if tiers_configured && !bypass_tier && cli_tier.is_none() && arg_tool.is_some() {
+        let available: Vec<&str> = project_config
+            .unwrap()
+            .tiers
+            .keys()
+            .map(|k| k.as_str())
+            .collect();
+        anyhow::bail!(
+            "Direct --tool is restricted when tiers are configured. \
+             Use --tier <name> or add --force-ignore-tier-setting to override. \
+             Available tiers: [{}]",
+            available.join(", ")
+        );
+    }
+
+    // CLI --tool override wins (when not blocked by tier enforcement above)
     if let Some(tool) = arg_tool {
         if let Some(cfg) = project_config {
             cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
@@ -92,11 +115,15 @@ pub(crate) fn resolve_review_tool(
         return Ok((tool, None));
     }
 
-    // Tier-based resolution: project tier > global tier > tool-based fallback.
+    // CLI --tier overrides config tier when provided.
+    // Tier-based resolution: CLI tier > project tier > global tier > tool-based fallback.
     // Tier takes priority over tool when both are set.
-    let tier_name = project_config
-        .and_then(|cfg| cfg.review.as_ref())
-        .and_then(|r| r.tier.as_deref())
+    let tier_name = cli_tier
+        .or_else(|| {
+            project_config
+                .and_then(|cfg| cfg.review.as_ref())
+                .and_then(|r| r.tier.as_deref())
+        })
         .or(global_config.review.tier.as_deref());
 
     if let Some(tier) = tier_name {

@@ -171,6 +171,14 @@ fn get_tools() -> Vec<McpToolDef> {
                     "ephemeral": {
                         "type": "boolean",
                         "description": "Run without persistent session (optional)"
+                    },
+                    "tier": {
+                        "type": "string",
+                        "description": "Tier name to use for tool/model resolution (optional)"
+                    },
+                    "force_ignore_tier_setting": {
+                        "type": "boolean",
+                        "description": "Bypass tier enforcement to allow direct --tool/--model (optional)"
                     }
                 },
                 "required": ["prompt"]
@@ -440,6 +448,11 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
         .get("ephemeral")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
+    let tier_arg = args.get("tier").and_then(|v| v.as_str());
+    let force_ignore_tier = args
+        .get("force_ignore_tier_setting")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     // Parse tool if provided
     let tool = if let Some(tool_str) = tool_str {
@@ -486,9 +499,11 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None,
             config.as_ref(),
             &project_root,
-            false, // MCP server does not support --force
-            false, // MCP server does not support --force-override-user-config
-            false, // MCP tool dispatch always uses explicit tool
+            false,             // MCP server does not support --force
+            false,             // MCP server does not support --force-override-user-config
+            false,             // MCP tool dispatch always uses explicit tool
+            tier_arg,          // --tier from MCP arguments
+            force_ignore_tier, // --force-ignore-tier-setting from MCP arguments
         )?;
 
     // Build executor

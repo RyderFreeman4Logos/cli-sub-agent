@@ -199,6 +199,14 @@ pub enum Commands {
         /// Path to agent-spec file (.spec or .toml) for contract-based verification
         #[arg(long, value_name = "PATH")]
         spec: Option<String>,
+
+        /// Tier name for tool/model routing (must exist in [tiers] config)
+        #[arg(long)]
+        tier: Option<String>,
+
+        /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+        #[arg(long, alias = "force-tier")]
+        force_ignore_tier_setting: bool,
     },
 
     /// Manage sessions

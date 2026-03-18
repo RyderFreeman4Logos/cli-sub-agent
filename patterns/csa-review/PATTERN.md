@@ -109,7 +109,7 @@ are immediately visible. Also saves tokens by avoiding redundant file reads.
 When no implementation session is available, use standard review:
 
 ```bash
-csa run --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
+csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
 ```
 
 ## Step 6: Present Results
@@ -129,7 +129,7 @@ Generate fix-summary.md and post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
 ```bash
-csa run --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}"
+csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}"
 ```
 
 ## ENDIF

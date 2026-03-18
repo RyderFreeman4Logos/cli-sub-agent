@@ -55,6 +55,8 @@ pub(crate) async fn handle_run(
     current_depth: u32,
     output_format: OutputFormat,
     stream_mode: csa_process::StreamMode,
+    tier: Option<String>,
+    force_ignore_tier_setting: bool,
 ) -> Result<i32> {
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
     let effective_repo =
@@ -183,6 +185,8 @@ pub(crate) async fn handle_run(
         force,
         force_override_user_config,
         needs_edit,
+        tier.as_deref(),
+        force_ignore_tier_setting,
     )?;
     let heterogeneous_runtime_fallback_candidates = strategy_result.runtime_fallback_candidates;
     let resolved_model_spec = strategy_result.model_spec;

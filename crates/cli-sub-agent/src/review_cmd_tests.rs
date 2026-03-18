@@ -139,6 +139,8 @@ fn resolve_review_tool_prefers_cli_override() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::Codex));
@@ -157,6 +159,8 @@ fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::GeminiCli));
@@ -174,6 +178,8 @@ fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::GeminiCli));
@@ -190,6 +196,8 @@ fn resolve_review_tool_errors_without_parent_tool_context() {
         None,
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap_err();
     assert!(
@@ -210,6 +218,8 @@ fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap_err();
     assert!(
@@ -235,6 +245,8 @@ fn resolve_review_tool_prefers_project_override() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::Opencode));
@@ -257,6 +269,8 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
         Some("claude-code"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::Codex));
@@ -281,6 +295,8 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::Opencode));
@@ -305,6 +321,8 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
         Some("codex"),
         std::path::Path::new("/tmp/test-project"),
         false,
+        None,  // cli_tier
+        false, // force_ignore_tier_setting
     )
     .unwrap();
     assert!(matches!(tool.0, ToolName::Opencode));
@@ -340,6 +358,8 @@ fn derive_scope_uncommitted() {
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
+        tier: None,
+        force_ignore_tier_setting: false,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -372,6 +392,8 @@ fn derive_scope_commit() {
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
+        tier: None,
+        force_ignore_tier_setting: false,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -404,6 +426,8 @@ fn derive_scope_range() {
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
+        tier: None,
+        force_ignore_tier_setting: false,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -436,6 +460,8 @@ fn derive_scope_files() {
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
+        tier: None,
+        force_ignore_tier_setting: false,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -468,6 +494,8 @@ fn derive_scope_default_branch() {
         allow_fallback: false,
         force_override_user_config: false,
         spec: None,
+        tier: None,
+        force_ignore_tier_setting: false,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }
@@ -736,6 +764,9 @@ fn sanitize_review_output_falls_back_when_sections_missing() {
     let sanitized = sanitize_review_output(raw);
     assert_eq!(sanitized, raw);
 }
+
+#[path = "review_cmd_tier_tests.rs"]
+mod tier_tests;
 
 #[path = "review_cmd_tests_tail.rs"]
 mod tail_tests;
