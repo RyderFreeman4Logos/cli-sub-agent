@@ -504,6 +504,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             false,             // MCP tool dispatch always uses explicit tool
             tier_arg,          // --tier from MCP arguments
             force_ignore_tier, // --force-ignore-tier-setting from MCP arguments
+            false,             // user-explicit tool from MCP args
         )?;
 
     // Build executor

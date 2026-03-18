@@ -43,7 +43,6 @@ does not perform audits.
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - A `codebase-audit` must have been completed (at least some modules with status `generated`)
 - `csa audit status --filter generated` must return non-empty results
 

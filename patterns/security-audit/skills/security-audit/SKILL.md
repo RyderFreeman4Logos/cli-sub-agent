@@ -33,7 +33,6 @@ Run a three-phase adversarial security audit on staged/changed files before comm
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - Changes must be staged or committed (the audit targets `git diff --cached` or `git diff HEAD`)
 
 ### Quick Start

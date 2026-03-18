@@ -150,6 +150,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
+                false, // user-explicit tool
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -170,6 +171,7 @@ pub(crate) fn resolve_tool_by_strategy(
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
+                true, // auto-resolved tool
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -267,6 +269,7 @@ fn resolve_heterogeneous_preferred(
                     needs_edit,
                     tier,
                     force_ignore_tier_setting,
+                    true, // auto-resolved tool
                 )?;
                 Ok(StrategyResolution {
                     tool: t,
@@ -292,6 +295,7 @@ fn resolve_heterogeneous_preferred(
                     needs_edit,
                     tier,
                     force_ignore_tier_setting,
+                    true, // auto-resolved tool
                 )?;
                 Ok(StrategyResolution {
                     tool: t,
@@ -316,6 +320,7 @@ fn resolve_heterogeneous_preferred(
             needs_edit,
             tier,
             force_ignore_tier_setting,
+            true, // auto-resolved tool
         )?;
         Ok(StrategyResolution {
             tool: t,
@@ -358,6 +363,7 @@ fn resolve_heterogeneous_strict(
                 needs_edit,
                 tier,
                 force_ignore_tier_setting,
+                true, // auto-resolved tool
             ),
             None => {
                 anyhow::bail!(
@@ -384,6 +390,7 @@ fn resolve_heterogeneous_strict(
             needs_edit,
             tier,
             force_ignore_tier_setting,
+            true, // auto-resolved tool
         )
     }
 }

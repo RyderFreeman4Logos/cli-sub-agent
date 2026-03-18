@@ -33,7 +33,6 @@ Ensure every commit is reviewed by an independent model before creation. Uses au
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - Changes must be staged: `git diff --staged` shows content
 
 ### Quick Start

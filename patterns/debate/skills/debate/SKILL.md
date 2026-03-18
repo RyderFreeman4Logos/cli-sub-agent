@@ -112,9 +112,8 @@ Skip debate for: trivial changes, typo fixes, single-line edits, test additions.
 
 ## Prerequisites (MANDATORY — verify before ANY debate action)
 
-1. `csa` binary MUST be in PATH. Verify: `which csa`
-2. For orchestrated debates: project MUST have tiers configured. Verify: `csa --format json tiers list`
-3. For default workflow: only `csa debate` needs to work (tiers not required)
+1. For orchestrated debates: project MUST have tiers configured. Verify: `csa --format json tiers list`
+2. For default workflow: only `csa debate` needs to work (tiers not required)
 
 If ANY prerequisite fails:
 - **STOP IMMEDIATELY**

@@ -18,6 +18,8 @@ use csa_session::TokenUsage;
 ///
 /// When tool is None, uses tier-based round-robin selection.
 /// `needs_edit`: when true, filters out tools with `allow_edit_existing_files = false`.
+/// `tool_is_auto_resolved`: when true, the `tool` param was auto-selected (not user CLI),
+///   so it should not trigger tier enforcement blocking.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_tool_and_model(
     tool: Option<ToolName>,
@@ -30,23 +32,33 @@ pub(crate) fn resolve_tool_and_model(
     needs_edit: bool,
     tier: Option<&str>,
     force_ignore_tier_setting: bool,
+    tool_is_auto_resolved: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     let tiers_configured = config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
 
     // Enforce tier routing: block direct --tool/--model/--thinking when tiers are configured,
     // unless --force-ignore-tier-setting (or --force) is active.
+    // Auto-resolved tools (from HeterogeneousPreferred etc.) don't count as user-explicit.
+    let tool_triggers_enforcement = tool.is_some() && !tool_is_auto_resolved;
     if tiers_configured
         && !bypass_tier
         && tier.is_none()
-        && (tool.is_some() || model_spec.is_some() || model.is_some())
+        && (tool_triggers_enforcement || model_spec.is_some() || model.is_some())
     {
-        let available: Vec<&str> = config.unwrap().tiers.keys().map(|k| k.as_str()).collect();
+        let cfg = config.unwrap();
+        let mut tier_list = String::new();
+        for name in cfg.tiers.keys() {
+            if !tier_list.is_empty() {
+                tier_list.push_str(", ");
+            }
+            tier_list.push_str(name);
+        }
         anyhow::bail!(
-            "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured. \
-             Use --tier <name> or add --force-ignore-tier-setting to override. \
-             Available tiers: [{}]",
-            available.join(", ")
+            "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured.\n\
+             Use --tier <name> or add --force-ignore-tier-setting to override.\n\
+             Available tiers: [{tier_list}]\n\
+             Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );
     }
 

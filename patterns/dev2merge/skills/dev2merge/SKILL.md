@@ -46,9 +46,6 @@ ABSOLUTE PROHIBITION: You MUST NOT use `--no-verify` or `-n` with any `git commi
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
-- `gh` CLI MUST be authenticated: `gh auth status`
-- `just` MUST be in PATH: `which just`
 - Must be on a feature branch (not `main` or `dev`)
 
 ### Quick Start

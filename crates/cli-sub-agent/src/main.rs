@@ -66,8 +66,8 @@ use csa_core::types::OutputFormat;
 
 mod migrate_cmd;
 
-const SA_MODE_REQUIRED_ERROR_PREFIX: &str =
-    "--sa-mode true|false is required for root callers on execution commands";
+const SA_MODE_REQUIRED_ERROR_PREFIX: &str = "--sa-mode true|false is required for root callers on execution commands.\n\
+     Hint: add --sa-mode false for interactive use, or --sa-mode true for autonomous workflows";
 const CSA_INTERNAL_INVOCATION_ENV: &str = "CSA_INTERNAL_INVOCATION";
 
 fn command_name_for_sa_mode(command: &Commands) -> Option<&'static str> {

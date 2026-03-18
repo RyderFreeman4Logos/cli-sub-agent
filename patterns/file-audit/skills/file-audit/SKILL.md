@@ -33,7 +33,6 @@ Audit each source file in a given scope against the applicable AGENTS.md rules c
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - At least one AGENTS.md file must exist in the project
 - Target scope (directory or file pattern) must be specified
 

@@ -112,8 +112,6 @@ Layer 0 (Orchestrator)
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
-- `gh` CLI MUST be authenticated: `gh auth status`
 - All changes must be committed on a feature branch
 - Feature branch must be ahead of main
 - **FORBIDDEN**: Pushing the feature branch to remote BEFORE invoking this skill.

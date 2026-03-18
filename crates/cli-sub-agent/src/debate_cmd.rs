@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::path::Path;
 use std::time::Duration;
 use tokio::time::Instant;
@@ -146,8 +146,26 @@ pub(crate) async fn handle_debate(
         }
     }
 
-    // 3. Read question (from arg or stdin)
-    let question = read_prompt(args.question)?;
+    // 3. Read question (from arg or stdin), optionally prepend file content
+    let mut question = read_prompt(args.question)?;
+    if let Some(file_path) = &args.file {
+        const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
+        let metadata = std::fs::metadata(file_path)
+            .with_context(|| format!("Failed to stat --file: {file_path}"))?;
+        if metadata.len() > MAX_FILE_SIZE {
+            anyhow::bail!(
+                "--file '{}' is too large ({} bytes, max {} bytes)",
+                file_path,
+                metadata.len(),
+                MAX_FILE_SIZE
+            );
+        }
+        let file_content = std::fs::read_to_string(file_path)
+            .with_context(|| format!("Failed to read --file: {file_path}"))?;
+        question = format!(
+            "<attached-file path=\"{file_path}\">\n{file_content}\n</attached-file>\n\n{question}"
+        );
+    }
 
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
     let prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);

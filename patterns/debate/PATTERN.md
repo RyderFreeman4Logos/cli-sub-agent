@@ -27,7 +27,7 @@ OnFail: abort
 Verify csa binary is available and tiers are configured.
 
 ```bash
-which csa && csa --format json tiers list
+csa --format json tiers list
 ```
 
 ## Step 3: Discover Available Models
