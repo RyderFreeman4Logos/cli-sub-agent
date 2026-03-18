@@ -71,6 +71,9 @@ pub(crate) fn resolve_debate_tool(
             Some(cli.to_string())
         }
     } else {
+        // Config-sourced tier names are used as-is (validated at config load time).
+        // NOTE: config fields [debate].tier do not support tier_mapping aliases yet —
+        // only CLI --tier does. This is intentional (see debate findings in TODO).
         project_config
             .and_then(|cfg| cfg.debate.as_ref())
             .and_then(|d| d.tier.as_deref())

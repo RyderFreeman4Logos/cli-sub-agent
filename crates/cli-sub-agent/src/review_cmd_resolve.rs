@@ -136,7 +136,9 @@ pub(crate) fn resolve_review_tool(
             Some(cli.to_string())
         }
     } else {
-        // Config-sourced tier (already validated)
+        // Config-sourced tier names are used as-is (validated at config load time).
+        // NOTE: config fields [review].tier do not support tier_mapping aliases yet —
+        // only CLI --tier does. This is intentional (see debate findings in TODO).
         project_config
             .and_then(|cfg| cfg.review.as_ref())
             .and_then(|r| r.tier.as_deref())

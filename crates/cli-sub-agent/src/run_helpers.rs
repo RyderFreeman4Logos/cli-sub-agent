@@ -63,13 +63,15 @@ pub(crate) fn resolve_tool_and_model(
         );
     }
 
-    // Validate and canonicalize tier selector (accepts direct tier names and tier_mapping aliases)
+    // Validate and canonicalize tier selector (accepts direct tier names and tier_mapping aliases).
+    // Even in bypass_tier mode, resolve aliases so resolve_tool_from_tier gets a canonical name.
     let canonical_tier: Option<String> = if let Some(tier_name) = tier {
-        if bypass_tier {
-            Some(tier_name.to_string())
-        } else if let Some(cfg) = config {
+        if let Some(cfg) = config {
             if let Some(canonical) = cfg.resolve_tier_selector(tier_name) {
                 Some(canonical)
+            } else if bypass_tier {
+                // bypass mode: tolerate unknown selector (pass through as-is)
+                Some(tier_name.to_string())
             } else {
                 let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
                 let alias_hint = cfg.format_tier_aliases();
