@@ -83,6 +83,7 @@ pub(crate) fn resolve_review_tool(
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
+    cli_tier: Option<&str>,
 ) -> Result<(ToolName, Option<String>)> {
     // CLI --tool override always wins
     if let Some(tool) = arg_tool {
@@ -92,11 +93,15 @@ pub(crate) fn resolve_review_tool(
         return Ok((tool, None));
     }
 
-    // Tier-based resolution: project tier > global tier > tool-based fallback.
+    // CLI --tier overrides config tier when provided.
+    // Tier-based resolution: CLI tier > project tier > global tier > tool-based fallback.
     // Tier takes priority over tool when both are set.
-    let tier_name = project_config
-        .and_then(|cfg| cfg.review.as_ref())
-        .and_then(|r| r.tier.as_deref())
+    let tier_name = cli_tier
+        .or_else(|| {
+            project_config
+                .and_then(|cfg| cfg.review.as_ref())
+                .and_then(|r| r.tier.as_deref())
+        })
         .or(global_config.review.tier.as_deref());
 
     if let Some(tier) = tier_name {

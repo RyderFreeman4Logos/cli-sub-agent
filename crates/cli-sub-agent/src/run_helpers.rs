@@ -28,7 +28,31 @@ pub(crate) fn resolve_tool_and_model(
     force: bool,
     force_override_user_config: bool,
     needs_edit: bool,
+    tier: Option<&str>,
+    force_ignore_tier_setting: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
+    // Validate tier name exists in config when provided (unless force-ignore)
+    if let Some(tier_name) = tier {
+        if !force_ignore_tier_setting {
+            if let Some(cfg) = config {
+                if !cfg.tiers.contains_key(tier_name) {
+                    let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+                    anyhow::bail!(
+                        "Tier '{}' not found in project config. Available tiers: [{}]",
+                        tier_name,
+                        available.join(", ")
+                    );
+                }
+            } else {
+                anyhow::bail!(
+                    "Tier '{}' specified but no project config found. \
+                     Run 'csa init --full' to create a config with tier definitions.",
+                    tier_name
+                );
+            }
+        }
+    }
+
     // Case 1: model_spec provided → parse it to get tool
     if let Some(spec) = model_spec {
         let parsed = ModelSpec::parse(spec)?;
@@ -517,3 +541,7 @@ pub(crate) fn infer_task_edit_requirement(prompt: &str) -> Option<bool> {
 #[cfg(test)]
 #[path = "run_helpers_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "run_helpers_tier_tests.rs"]
+mod tier_tests;

@@ -134,6 +134,8 @@ pub(crate) fn resolve_tool_by_strategy(
     force: bool,
     force_override_user_config: bool,
     needs_edit: bool,
+    tier: Option<&str>,
+    force_ignore_tier_setting: bool,
 ) -> Result<StrategyResolution> {
     match strategy {
         ToolSelectionStrategy::Explicit(t) => {
@@ -146,6 +148,8 @@ pub(crate) fn resolve_tool_by_strategy(
                 force,
                 force_override_user_config,
                 needs_edit,
+                tier,
+                force_ignore_tier_setting,
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -164,6 +168,8 @@ pub(crate) fn resolve_tool_by_strategy(
                 force,
                 force_override_user_config,
                 needs_edit,
+                tier,
+                force_ignore_tier_setting,
             )?;
             Ok(StrategyResolution {
                 tool,
@@ -181,6 +187,8 @@ pub(crate) fn resolve_tool_by_strategy(
             force,
             force_override_user_config,
             needs_edit,
+            tier,
+            force_ignore_tier_setting,
         ),
         ToolSelectionStrategy::HeterogeneousStrict => {
             let res = resolve_heterogeneous_strict(
@@ -192,6 +200,8 @@ pub(crate) fn resolve_tool_by_strategy(
                 force,
                 force_override_user_config,
                 needs_edit,
+                tier,
+                force_ignore_tier_setting,
             )?;
             Ok(StrategyResolution {
                 tool: res.0,
@@ -231,6 +241,8 @@ fn resolve_heterogeneous_preferred(
     force: bool,
     force_override_user_config: bool,
     needs_edit: bool,
+    tier: Option<&str>,
+    force_ignore_tier_setting: bool,
 ) -> Result<StrategyResolution> {
     let detected_parent_tool = detect_parent_tool();
     let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
@@ -253,6 +265,8 @@ fn resolve_heterogeneous_preferred(
                     force,
                     force_override_user_config,
                     needs_edit,
+                    tier,
+                    force_ignore_tier_setting,
                 )?;
                 Ok(StrategyResolution {
                     tool: t,
@@ -276,6 +290,8 @@ fn resolve_heterogeneous_preferred(
                     force,
                     force_override_user_config,
                     needs_edit,
+                    tier,
+                    force_ignore_tier_setting,
                 )?;
                 Ok(StrategyResolution {
                     tool: t,
@@ -298,6 +314,8 @@ fn resolve_heterogeneous_preferred(
             force,
             force_override_user_config,
             needs_edit,
+            tier,
+            force_ignore_tier_setting,
         )?;
         Ok(StrategyResolution {
             tool: t,
@@ -318,6 +336,8 @@ fn resolve_heterogeneous_strict(
     force: bool,
     force_override_user_config: bool,
     needs_edit: bool,
+    tier: Option<&str>,
+    force_ignore_tier_setting: bool,
 ) -> Result<(ToolName, Option<String>, Option<String>)> {
     let detected_parent_tool = detect_parent_tool();
     let parent_tool_name = resolve_tool(detected_parent_tool, global_config);
@@ -336,6 +356,8 @@ fn resolve_heterogeneous_strict(
                 force,
                 force_override_user_config,
                 needs_edit,
+                tier,
+                force_ignore_tier_setting,
             ),
             None => {
                 anyhow::bail!(
@@ -360,6 +382,8 @@ fn resolve_heterogeneous_strict(
             force,
             force_override_user_config,
             needs_edit,
+            tier,
+            force_ignore_tier_setting,
         )
     }
 }

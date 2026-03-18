@@ -214,6 +214,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         parent_tool.as_deref(),
         &project_root,
         args.force_override_user_config,
+        args.tier.as_deref(),
     )?;
 
     // Resolve model: CLI --model > project config review.model > global config review.model.

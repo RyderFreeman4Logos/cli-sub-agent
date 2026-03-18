@@ -489,6 +489,8 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             false, // MCP server does not support --force
             false, // MCP server does not support --force-override-user-config
             false, // MCP tool dispatch always uses explicit tool
+            None,  // MCP server does not support --tier
+            false, // MCP server does not support --force-ignore-tier-setting
         )?;
 
     // Build executor

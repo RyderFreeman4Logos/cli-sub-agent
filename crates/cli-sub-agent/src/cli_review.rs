@@ -133,6 +133,10 @@ pub struct ReviewArgs {
     /// Path to agent-spec file (.spec or .toml) for contract-based verification
     #[arg(long, value_name = "PATH")]
     pub spec: Option<String>,
+
+    /// Tier name for tool/model routing (must exist in [tiers] config)
+    #[arg(long)]
+    pub tier: Option<String>,
 }
 
 impl ReviewArgs {
@@ -271,4 +275,8 @@ pub struct DebateArgs {
     /// Working directory
     #[arg(long)]
     pub cd: Option<String>,
+
+    /// Tier name for tool/model routing (must exist in [tiers] config)
+    #[arg(long)]
+    pub tier: Option<String>,
 }

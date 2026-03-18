@@ -162,6 +162,7 @@ pub(crate) async fn handle_debate(
         parent_tool.as_deref(),
         &project_root,
         args.force_override_user_config,
+        args.tier.as_deref(),
     )?;
     if debate_mode == DebateMode::SameModelAdversarial {
         warn!(
@@ -405,6 +406,7 @@ fn resolve_debate_tool(
     parent_tool: Option<&str>,
     project_root: &Path,
     force_override_user_config: bool,
+    cli_tier: Option<&str>,
 ) -> Result<(ToolName, DebateMode, Option<String>)> {
     // CLI --tool override always wins (explicit tool = heterogeneous intent)
     if let Some(tool) = arg_tool {
@@ -414,11 +416,15 @@ fn resolve_debate_tool(
         return Ok((tool, DebateMode::Heterogeneous, None));
     }
 
-    // Tier-based resolution: project tier > global tier > tool-based fallback.
+    // CLI --tier overrides config tier when provided.
+    // Tier-based resolution: CLI tier > project tier > global tier > tool-based fallback.
     // Tier takes priority over tool when both are set.
-    let tier_name = project_config
-        .and_then(|cfg| cfg.debate.as_ref())
-        .and_then(|d| d.tier.as_deref())
+    let tier_name = cli_tier
+        .or_else(|| {
+            project_config
+                .and_then(|cfg| cfg.debate.as_ref())
+                .and_then(|d| d.tier.as_deref())
+        })
         .or(global_config.debate.tier.as_deref());
 
     if let Some(tier) = tier_name {

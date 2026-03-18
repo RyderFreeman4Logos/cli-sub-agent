@@ -44,6 +44,8 @@ pub(crate) async fn handle_claude_sub_agent(
             false, // claude-sub-agent does not support --force
             false, // claude-sub-agent does not support --force-override-user-config
             false, // sub-agent dispatch always uses explicit tool
+            None,  // claude-sub-agent does not support --tier
+            false, // claude-sub-agent does not support --force-ignore-tier-setting
         )?;
 
     // 8. Build executor and validate tool

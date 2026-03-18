@@ -374,6 +374,8 @@ async fn run() -> Result<()> {
             stream_stdout,
             no_stream_stdout,
             spec: _spec,
+            tier,
+            force_ignore_tier_setting,
         } => {
             // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
             // default: stream for Text output in all contexts.
@@ -414,6 +416,8 @@ async fn run() -> Result<()> {
                 current_depth,
                 output_format,
                 stream_mode,
+                tier,
+                force_ignore_tier_setting,
             )
             .await?;
             std::process::exit(exit_code);
