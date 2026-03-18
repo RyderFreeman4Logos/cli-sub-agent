@@ -451,10 +451,17 @@ fn resolve_debate_tool(
         })
         .or(global_config.debate.tier.as_deref());
 
+    // Compute effective whitelist from tool selection (project > global)
+    let effective_whitelist = project_config
+        .and_then(|cfg| cfg.debate.as_ref())
+        .map(|d| &d.tool)
+        .unwrap_or(&global_config.debate.tool);
+    let whitelist = effective_whitelist.whitelist();
+
     if let Some(tier) = tier_name {
         if let Some(cfg) = project_config {
             if let Some(resolution) =
-                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool)
+                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist)
             {
                 return Ok((
                     resolution.tool,
@@ -472,7 +479,7 @@ fn resolve_debate_tool(
 
     // Project-level [debate] config override
     if let Some(project_debate) = project_config.and_then(|cfg| cfg.debate.as_ref()) {
-        return resolve_debate_tool_from_value(
+        return resolve_debate_tool_from_selection(
             &project_debate.tool,
             parent_tool,
             project_config,
@@ -488,55 +495,44 @@ fn resolve_debate_tool(
         });
     }
 
-    // When global [debate].tool is "auto", always try heterogeneous auto-selection first.
-    if global_config.debate.tool == "auto" {
-        if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config) {
-            return Ok((tool, DebateMode::Heterogeneous, None));
-        }
-    }
-
     // Global config [debate] section
-    match global_config.resolve_debate_tool(parent_tool) {
-        Ok(tool_name) => {
-            if let Some(cfg) = project_config {
-                if !cfg.is_tool_enabled(&tool_name) {
-                    return resolve_same_model_fallback(
-                        parent_tool,
-                        project_config,
-                        global_config,
-                        project_root,
-                    )
-                    .map(|(t, m)| (t, m, None));
-                }
-            }
-            let tool = crate::run_helpers::parse_tool_name(&tool_name).map_err(|_| {
-                anyhow::anyhow!(
-                    "Invalid [debate].tool value '{tool_name}'. Supported values: gemini-cli, opencode, codex, claude-code."
-                )
-            })?;
-            Ok((tool, DebateMode::Heterogeneous, None))
-        }
-        Err(_) => {
-            resolve_same_model_fallback(parent_tool, project_config, global_config, project_root)
-                .map(|(t, m)| (t, m, None))
-        }
-    }
+    resolve_debate_tool_from_selection(
+        &global_config.debate.tool,
+        parent_tool,
+        project_config,
+        global_config,
+        project_root,
+    )
+    .map(|(t, m)| (t, m, None))
 }
 
-fn resolve_debate_tool_from_value(
-    tool_value: &str,
+fn resolve_debate_tool_from_selection(
+    selection: &csa_config::ToolSelection,
     parent_tool: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     project_root: &Path,
 ) -> Result<(ToolName, DebateMode)> {
-    if tool_value == "auto" {
-        if let Some(tool) = select_auto_debate_tool(parent_tool, project_config, global_config) {
-            return Ok((tool, DebateMode::Heterogeneous));
-        }
+    // Single direct tool (not "auto")
+    if let Some(tool_name) = selection.as_single() {
+        let tool = crate::run_helpers::parse_tool_name(tool_name).map_err(|_| {
+            anyhow::anyhow!(
+                "Invalid [debate].tool value '{tool_name}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
+            )
+        })?;
+        return Ok((tool, DebateMode::Heterogeneous));
+    }
 
-        // Try old heterogeneous_counterpart first for backward compatibility,
-        // but only if the counterpart tool is enabled.
+    // Auto or whitelist — try heterogeneous auto-selection with optional filter
+    let whitelist = selection.whitelist();
+    if let Some(tool) =
+        select_auto_debate_tool(parent_tool, project_config, global_config, whitelist)
+    {
+        return Ok((tool, DebateMode::Heterogeneous));
+    }
+
+    // Legacy counterpart fallback (only for true auto, not whitelist)
+    if whitelist.is_none() {
         if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
             let counterpart_enabled =
                 project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
@@ -549,28 +545,17 @@ fn resolve_debate_tool_from_value(
                 return Ok((tool, DebateMode::Heterogeneous));
             }
         }
-
-        // All heterogeneous methods failed — try same-model fallback
-        return resolve_same_model_fallback(
-            parent_tool,
-            project_config,
-            global_config,
-            project_root,
-        );
     }
 
-    let tool = crate::run_helpers::parse_tool_name(tool_value).map_err(|_| {
-        anyhow::anyhow!(
-            "Invalid project [debate].tool value '{tool_value}'. Supported values: auto, gemini-cli, opencode, codex, claude-code."
-        )
-    })?;
-    Ok((tool, DebateMode::Heterogeneous))
+    // All heterogeneous methods failed — try same-model fallback
+    resolve_same_model_fallback(parent_tool, project_config, global_config, project_root)
 }
 
 fn select_auto_debate_tool(
     parent_tool: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
+    whitelist: Option<&[String]>,
 ) -> Option<ToolName> {
     let parent_str = parent_tool?;
     let parent_tool_name = crate::run_helpers::parse_tool_name(parent_str).ok()?;
@@ -578,15 +563,18 @@ fn select_auto_debate_tool(
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
+            .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
             .copied()
             .collect();
         csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
     } else {
-        csa_config::global::sort_tools_by_effective_priority(
-            csa_config::global::all_known_tools(),
-            project_config,
-            global_config,
-        )
+        let all = csa_config::global::all_known_tools();
+        let tools: Vec<_> = all
+            .iter()
+            .filter(|t| whitelist.is_none_or(|wl| wl.iter().any(|w| w == t.as_str())))
+            .copied()
+            .collect();
+        csa_config::global::sort_tools_by_effective_priority(&tools, project_config, global_config)
     };
 
     select_heterogeneous_tool(&parent_tool_name, &enabled_tools)

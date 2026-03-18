@@ -4,6 +4,7 @@ use crate::config::{
     ToolConfig,
 };
 use crate::global::ReviewConfig;
+use crate::global::ToolSelection;
 use chrono::Utc;
 use std::collections::HashMap;
 use tempfile::tempdir;
@@ -193,7 +194,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         acp: Default::default(),
         tools: HashMap::new(),
         review: Some(ReviewConfig {
-            tool: "invalid-tool".to_string(),
+            tool: ToolSelection::Single("invalid-tool".to_string()),
             ..Default::default()
         }),
         debate: None,
@@ -461,7 +462,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         tools: HashMap::new(),
         review: None,
         debate: Some(ReviewConfig {
-            tool: "invalid-tool".to_string(),
+            tool: ToolSelection::Single("invalid-tool".to_string()),
             ..Default::default()
         }),
         tiers: HashMap::new(),

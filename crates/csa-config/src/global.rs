@@ -17,6 +17,8 @@ use crate::mcp::McpServerConfig;
 use crate::memory::MemoryConfig;
 use crate::paths;
 
+pub use crate::tool_selection::ToolSelection;
+
 /// Default maximum concurrent instances per tool.
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
 pub use crate::global_env::ExecutionEnvOptions;
@@ -104,14 +106,13 @@ const fn default_gate_level() -> u8 {
 /// Configuration for the code review workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReviewConfig {
-    /// Review tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
+    /// Review tool selection.
     ///
-    /// In `auto` mode, CSA prefers a heterogeneous tool (different model family)
-    /// from the detected parent tool, ordered by effective tool priority and
-    /// filtered by enabled/eligible tools. Legacy counterpart mapping
-    /// (`claude-code` <-> `codex`) is retained as a compatibility fallback.
-    #[serde(default = "default_review_tool")]
-    pub tool: String,
+    /// Accepts a single tool name (`"codex"`), `"auto"` for heterogeneous
+    /// auto-selection, or an array of tool names (`["codex", "gemini-cli"]`)
+    /// as a whitelist for auto-selection. An empty array is equivalent to `"auto"`.
+    #[serde(default)]
+    pub tool: ToolSelection,
     /// Review enforcement level for quality gates.
     #[serde(default)]
     pub gate_mode: GateMode,
@@ -148,10 +149,6 @@ pub struct ReviewConfig {
     pub gate_timeout_secs: u64,
 }
 
-fn default_review_tool() -> String {
-    "auto".to_string()
-}
-
 const fn default_gate_timeout_secs() -> u64 {
     300
 }
@@ -163,7 +160,7 @@ fn is_default_gate_timeout(val: &u64) -> bool {
 impl Default for ReviewConfig {
     fn default() -> Self {
         Self {
-            tool: default_review_tool(),
+            tool: ToolSelection::default(),
             gate_mode: GateMode::default(),
             tier: None,
             model: None,
@@ -178,7 +175,7 @@ impl Default for ReviewConfig {
 impl ReviewConfig {
     /// Returns true when all fields match defaults (per rust/016 serde-default rule).
     pub fn is_default(&self) -> bool {
-        self.tool == default_review_tool()
+        self.tool.is_auto()
             && self.gate_mode == GateMode::Monitor
             && self.tier.is_none()
             && self.model.is_none()
@@ -215,14 +212,13 @@ impl ReviewConfig {
 /// Configuration for the debate workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DebateConfig {
-    /// Debate tool selection: "auto", "codex", "claude-code", "opencode", "gemini-cli".
+    /// Debate tool selection.
     ///
-    /// In `auto` mode, CSA prefers a heterogeneous tool (different model family)
-    /// from the detected parent tool, ordered by effective tool priority and
-    /// filtered by enabled/eligible tools. Legacy counterpart mapping
-    /// (`claude-code` <-> `codex`) is retained as a compatibility fallback.
-    #[serde(default = "default_debate_tool")]
-    pub tool: String,
+    /// Accepts a single tool name (`"codex"`), `"auto"` for heterogeneous
+    /// auto-selection, or an array of tool names (`["codex", "gemini-cli"]`)
+    /// as a whitelist for auto-selection. An empty array is equivalent to `"auto"`.
+    #[serde(default)]
+    pub tool: ToolSelection,
     /// Default absolute wall-clock timeout (seconds) for `csa debate`.
     ///
     /// `csa debate --timeout <N>` overrides this per invocation.
@@ -256,10 +252,6 @@ pub struct DebateConfig {
     pub tier: Option<String>,
 }
 
-fn default_debate_tool() -> String {
-    "auto".to_string()
-}
-
 fn default_debate_timeout_seconds() -> u64 {
     1800
 }
@@ -271,7 +263,7 @@ fn default_true_debate() -> bool {
 impl Default for DebateConfig {
     fn default() -> Self {
         Self {
-            tool: default_debate_tool(),
+            tool: ToolSelection::default(),
             timeout_seconds: default_debate_timeout_seconds(),
             model: None,
             thinking: None,
@@ -284,7 +276,7 @@ impl Default for DebateConfig {
 impl DebateConfig {
     /// Returns true when all fields match defaults (per rust/016 serde-default rule).
     pub fn is_default(&self) -> bool {
-        self.tool == default_debate_tool()
+        self.tool.is_auto()
             && self.timeout_seconds == default_debate_timeout_seconds()
             && self.model.is_none()
             && self.thinking.is_none()
@@ -724,9 +716,10 @@ cloud_review_exhausted = "ask-user"
     /// - Parent is `codex` → `claude-code`
     /// - Otherwise → error with guidance to configure manually
     pub fn resolve_review_tool(&self, parent_tool: Option<&str>) -> Result<String> {
-        if self.review.tool != "auto" {
-            return Ok(self.review.tool.clone());
+        if let Some(single) = self.review.tool.as_single() {
+            return Ok(single.to_string());
         }
+        // auto or whitelist — both use auto resolution
         resolve_auto_tool("review", parent_tool)
     }
 
@@ -737,9 +730,10 @@ cloud_review_exhausted = "ask-user"
     /// - Parent is `codex` → `claude-code`
     /// - Otherwise → error with guidance to configure manually
     pub fn resolve_debate_tool(&self, parent_tool: Option<&str>) -> Result<String> {
-        if self.debate.tool != "auto" {
-            return Ok(self.debate.tool.clone());
+        if let Some(single) = self.debate.tool.as_single() {
+            return Ok(single.to_string());
         }
+        // auto or whitelist — both use auto resolution
         resolve_auto_tool("debate", parent_tool)
     }
 

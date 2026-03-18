@@ -75,7 +75,7 @@ pub(crate) fn resolve_tool_and_model(
     // Case 0: --tier provided → resolve tool/model from tier definition
     if let Some(tier_name) = tier {
         if let Some(cfg) = config {
-            if let Some(resolution) = resolve_tool_from_tier(tier_name, cfg, None) {
+            if let Some(resolution) = resolve_tool_from_tier(tier_name, cfg, None, None) {
                 // Flow resolved tool through existing enforcement checks
                 cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
                 if !force {
@@ -438,6 +438,7 @@ pub(crate) fn resolve_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
     parent_tool: Option<&str>,
+    whitelist: Option<&[String]>,
 ) -> Option<TierToolResolution> {
     let tier = config.tiers.get(tier_name)?;
 
@@ -445,7 +446,7 @@ pub(crate) fn resolve_tool_from_tier(
         .and_then(|p| parse_tool_name(p).ok())
         .map(|t| t.model_family());
 
-    // Collect available (enabled + binary present) models from the tier
+    // Collect available (enabled + binary present + whitelisted) models from the tier
     let available: Vec<(ToolName, &str)> = tier
         .models
         .iter()
@@ -458,6 +459,12 @@ pub(crate) fn resolve_tool_from_tier(
             let tool = parse_tool_name(tool_str).ok()?;
             if !config.is_tool_enabled(tool_str) || !is_tool_binary_available(tool_str) {
                 return None;
+            }
+            // Apply whitelist filter if provided
+            if let Some(wl) = whitelist {
+                if !wl.iter().any(|w| w == tool_str) {
+                    return None;
+                }
             }
             Some((tool, spec.as_str()))
         })

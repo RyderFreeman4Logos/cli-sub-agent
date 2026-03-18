@@ -203,7 +203,7 @@ fn resolve_debate_tool_prefers_project_override() {
     let global = GlobalConfig::default();
     let mut cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
     cfg.debate = Some(ReviewConfig {
-        tool: "opencode".to_string(),
+        tool: csa_config::ToolSelection::Single("opencode".to_string()),
         ..Default::default()
     });
 
@@ -227,7 +227,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
     let global = GlobalConfig::default();
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code"]);
     cfg.debate = Some(ReviewConfig {
-        tool: "auto".to_string(),
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
         ..Default::default()
     });
 
@@ -253,7 +253,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
 
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.debate = Some(ReviewConfig {
-        tool: "auto".to_string(),
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
         ..Default::default()
     });
 
@@ -279,7 +279,7 @@ fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 
     let mut cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
     cfg.debate = Some(ReviewConfig {
-        tool: "auto".to_string(),
+        tool: csa_config::ToolSelection::Single("auto".to_string()),
         ..Default::default()
     });
 

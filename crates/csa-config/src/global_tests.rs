@@ -187,7 +187,7 @@ fn test_default_template_is_valid_comment_only() {
 #[test]
 fn test_review_config_default() {
     let config = GlobalConfig::default();
-    assert_eq!(config.review.tool, "auto");
+    assert!(config.review.tool.is_auto());
     assert_eq!(config.review.gate_mode, GateMode::Monitor);
 }
 
@@ -199,7 +199,7 @@ fn test_gate_mode_default_is_monitor() {
 #[test]
 fn test_debate_config_default() {
     let config = GlobalConfig::default();
-    assert_eq!(config.debate.tool, "auto");
+    assert!(config.debate.tool.is_auto());
     assert_eq!(config.debate.timeout_seconds, 1800);
     assert_eq!(config.debate.thinking, None);
     assert!(config.debate.same_model_fallback);
@@ -237,7 +237,7 @@ fn test_resolve_review_tool_auto_no_parent() {
 #[test]
 fn test_resolve_review_tool_explicit() {
     let mut config = GlobalConfig::default();
-    config.review.tool = "opencode".to_string();
+    config.review.tool = ToolSelection::Single("opencode".to_string());
     let tool = config.resolve_review_tool(Some("anything")).unwrap();
     assert_eq!(tool, "opencode");
 }
@@ -249,7 +249,10 @@ fn test_parse_review_config() {
 tool = "codex"
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.review.tool, "codex");
+    assert_eq!(
+        config.review.tool,
+        ToolSelection::Single("codex".to_string())
+    );
     assert_eq!(config.review.gate_mode, GateMode::Monitor);
 }
 
@@ -279,7 +282,7 @@ gate_mode = "full"
 fn test_gate_mode_serde_roundtrip_all_variants() {
     for gate_mode in [GateMode::Monitor, GateMode::CriticalOnly, GateMode::Full] {
         let review = ReviewConfig {
-            tool: "codex".to_string(),
+            tool: ToolSelection::Single("codex".to_string()),
             gate_mode: gate_mode.clone(),
             tier: None,
             model: None,
@@ -411,7 +414,10 @@ timeout_seconds = 2400
 thinking = "high"
 "#;
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
-    assert_eq!(config.debate.tool, "codex");
+    assert_eq!(
+        config.debate.tool,
+        ToolSelection::Single("codex".to_string())
+    );
     assert_eq!(config.debate.timeout_seconds, 2400);
     assert_eq!(config.debate.thinking.as_deref(), Some("high"));
     // same_model_fallback defaults to true when not specified

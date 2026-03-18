@@ -209,7 +209,7 @@ fn test_max_concurrent_tool_with_none_uses_default() {
 #[test]
 fn test_resolve_debate_tool_explicit_override() {
     let mut config = GlobalConfig::default();
-    config.debate.tool = "opencode".to_string();
+    config.debate.tool = ToolSelection::Single("opencode".to_string());
     // When explicitly set, should return the explicit value regardless of parent
     let tool = config.resolve_debate_tool(Some("anything")).unwrap();
     assert_eq!(tool, "opencode");
@@ -220,7 +220,7 @@ fn test_resolve_debate_tool_explicit_override() {
 #[test]
 fn test_resolve_review_tool_explicit_ignores_parent() {
     let mut config = GlobalConfig::default();
-    config.review.tool = "gemini-cli".to_string();
+    config.review.tool = ToolSelection::Single("gemini-cli".to_string());
     let tool = config.resolve_review_tool(None).unwrap();
     assert_eq!(tool, "gemini-cli");
 }
@@ -253,8 +253,14 @@ diff_command = "delta"
     assert_eq!(config.defaults.max_concurrent, 2);
     assert_eq!(config.max_concurrent("codex"), 4);
     assert_eq!(config.max_concurrent("gemini-cli"), 2); // falls to default
-    assert_eq!(config.review.tool, "codex");
-    assert_eq!(config.debate.tool, "claude-code");
+    assert_eq!(
+        config.review.tool,
+        ToolSelection::Single("codex".to_string())
+    );
+    assert_eq!(
+        config.debate.tool,
+        ToolSelection::Single("claude-code".to_string())
+    );
     assert_eq!(config.debate.timeout_seconds, 1800);
     assert_eq!(config.debate.thinking, None);
     assert_eq!(config.fallback.cloud_review_exhausted, "auto-local");
@@ -268,8 +274,8 @@ fn test_parse_empty_toml() {
     assert_eq!(config.defaults.max_concurrent, 3);
     assert!(config.defaults.tool.is_none());
     assert!(config.tools.is_empty());
-    assert_eq!(config.review.tool, "auto");
-    assert_eq!(config.debate.tool, "auto");
+    assert!(config.review.tool.is_auto());
+    assert!(config.debate.tool.is_auto());
     assert_eq!(config.debate.timeout_seconds, 1800);
     assert_eq!(config.debate.thinking, None);
     assert_eq!(config.fallback.cloud_review_exhausted, "ask-user");
@@ -369,7 +375,10 @@ tool = "codex"
     let config: GlobalConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(config.defaults.max_concurrent, 5);
     assert_eq!(config.execution.min_timeout_seconds, 3600);
-    assert_eq!(config.review.tool, "codex");
+    assert_eq!(
+        config.review.tool,
+        ToolSelection::Single("codex".to_string())
+    );
 }
 
 #[test]

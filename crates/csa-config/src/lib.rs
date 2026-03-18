@@ -16,6 +16,7 @@ pub mod memory;
 pub mod migrate;
 pub mod paths;
 pub mod project_profile;
+pub mod tool_selection;
 pub mod validate;
 pub mod weave_lock;
 
@@ -29,6 +30,7 @@ pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
 pub use global::{
     ExecutionEnvOptions, GateMode, GateStep, GlobalConfig, GlobalMcpConfig, ReviewConfig,
+    ToolSelection,
 };
 pub use init::{detect_installed_tools, init_project};
 pub use mcp::{McpFilter, McpRegistry, McpServerConfig, McpTransport};
