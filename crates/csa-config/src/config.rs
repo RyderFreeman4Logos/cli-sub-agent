@@ -229,6 +229,11 @@ pub struct ExecutionConfig {
         skip_serializing_if = "is_default_min_timeout"
     )]
     pub min_timeout_seconds: u64,
+    /// When enabled, automatically run `weave upgrade` before CSA command execution.
+    /// Silent output, exponential backoff retry on failure (2 retries), error exit
+    /// if all retries fail. Default: false (opt-in).
+    #[serde(default)]
+    pub auto_weave_upgrade: bool,
 }
 
 const fn default_min_timeout_seconds() -> u64 {
@@ -243,6 +248,7 @@ impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             min_timeout_seconds: default_min_timeout_seconds(),
+            auto_weave_upgrade: false,
         }
     }
 }
@@ -250,7 +256,7 @@ impl Default for ExecutionConfig {
 impl ExecutionConfig {
     /// Returns true when all fields are at their defaults (per rust/016 serde-default rule).
     pub fn is_default(&self) -> bool {
-        self.min_timeout_seconds == default_min_timeout_seconds()
+        self.min_timeout_seconds == default_min_timeout_seconds() && !self.auto_weave_upgrade
     }
 
     /// The compile-time default minimum timeout in seconds.

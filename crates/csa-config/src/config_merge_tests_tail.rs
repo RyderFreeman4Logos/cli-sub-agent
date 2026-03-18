@@ -166,6 +166,7 @@ fn test_execution_config_is_default() {
 fn test_execution_config_is_not_default_with_custom_value() {
     let exec = crate::config::ExecutionConfig {
         min_timeout_seconds: 2400,
+        auto_weave_upgrade: false,
     };
     assert!(!exec.is_default());
 }

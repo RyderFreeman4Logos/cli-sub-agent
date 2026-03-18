@@ -695,6 +695,7 @@ cloud_review_exhausted = "ask-user"
 # Execution tuning. Project-level [execution] overrides these values.
 # [execution]
 # min_timeout_seconds = 1800  # Floor for --timeout flag (seconds)
+# auto_weave_upgrade = false  # Run `weave upgrade` before each CSA command
 # ACP transport tuning. Project-level [acp] overrides these values.
 # [acp]
 # init_timeout_seconds = 120  # Timeout for ACP session creation (seconds)

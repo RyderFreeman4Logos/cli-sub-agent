@@ -181,7 +181,7 @@ breaks prompt-guard propagation.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
 10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Set `REBASE_ENABLED=true` to re-enable for squash-merge workflows.
-11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Then `gh pr merge --merge --delete-branch`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`. Delete feature branch locally (`git branch -d`).
+11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Then `gh pr merge --merge --delete-branch`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 
 ## Example Usage
 
@@ -217,4 +217,4 @@ breaks prompt-guard propagation.
 10b. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.
 12. PR merged via merge commit (full history preserved) with branch cleanup.
-13. Local main updated: `git fetch origin && git checkout main && git merge origin/main --ff-only`. Feature branch deleted locally and remotely.
+13. Local main updated: `git fetch origin && git checkout main && git merge origin/main --ff-only`. Remote feature branch deleted by `--delete-branch` (local branch preserved for audit).

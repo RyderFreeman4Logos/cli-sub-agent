@@ -377,7 +377,4 @@ if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
   exit 1
 fi
 echo "Local main synced to ${LOCAL_SHA}."
-if [ -n "${FEATURE_BRANCH}" ] && [ "${FEATURE_BRANCH}" != "main" ] && [ "${FEATURE_BRANCH}" != "dev" ]; then
-  git branch -d "${FEATURE_BRANCH}" 2>/dev/null || echo "INFO: Local branch ${FEATURE_BRANCH} already deleted."
-fi
 ```

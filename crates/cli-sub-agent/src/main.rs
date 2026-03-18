@@ -245,6 +245,79 @@ async fn run() -> Result<()> {
         }
     }
 
+    // Auto weave upgrade (if configured via [execution] auto_weave_upgrade = true).
+    // ProjectConfig::load already deep-merges global config, so only fall back to
+    // raw GlobalConfig when no merged config exists at all.
+    // Guard: only run when weave.lock exists (skip non-weave directories).
+    {
+        let has_weave_lock = std::env::current_dir()
+            .map(|cwd| cwd.join("weave.lock").exists())
+            .unwrap_or(false);
+
+        let auto_upgrade = has_weave_lock
+            && std::env::current_dir()
+                .ok()
+                .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
+                .map(|cfg| cfg.execution.auto_weave_upgrade)
+                .unwrap_or_else(|| {
+                    csa_config::GlobalConfig::load()
+                        .map(|g| g.execution.auto_weave_upgrade)
+                        .unwrap_or(false)
+                });
+
+        if auto_upgrade {
+            use std::time::Duration;
+
+            let mut success = false;
+            let mut delay = Duration::from_secs(1);
+
+            for attempt in 0..3 {
+                let result = tokio::process::Command::new("weave")
+                    .arg("upgrade")
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .await;
+
+                match result {
+                    Ok(status) if status.success() => {
+                        success = true;
+                        break;
+                    }
+                    Ok(status) => {
+                        if attempt < 2 {
+                            tracing::debug!(
+                                "weave upgrade failed (exit {}), retrying in {:?}...",
+                                status.code().unwrap_or(-1),
+                                delay
+                            );
+                            tokio::time::sleep(delay).await;
+                            delay *= 2;
+                        }
+                    }
+                    Err(e) => {
+                        if attempt < 2 {
+                            tracing::debug!(
+                                "weave upgrade failed ({}), retrying in {:?}...",
+                                e,
+                                delay
+                            );
+                            tokio::time::sleep(delay).await;
+                            delay *= 2;
+                        }
+                    }
+                }
+            }
+
+            if !success {
+                anyhow::bail!(
+                    "auto weave upgrade failed after 3 attempts. \
+                     Disable with [execution] auto_weave_upgrade = false"
+                );
+            }
+        }
+    }
+
     let legacy_xdg_paths = csa_config::paths::legacy_paths_requiring_migration();
     if !legacy_xdg_paths.is_empty() {
         for path in &legacy_xdg_paths {
