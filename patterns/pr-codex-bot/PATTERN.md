@@ -819,7 +819,7 @@ choice BEFORE the round cap check, so the chosen action always takes effect:
 - **C**: Set `ROUND_LIMIT_ACTION=abort` → leaves `ROUND_LIMIT_REACHED=true`, prints `ROUND_LIMIT_ABORT`, exits 1.
 
 **CRITICAL**: The `merge` and `continue` branches MUST clear `ROUND_LIMIT_REACHED=false`
-before proceeding. Steps 10.5, 11, and 12 are gated by `!(${ROUND_LIMIT_REACHED})`,
+before proceeding. Steps 11 and 12 are gated by `!(${ROUND_LIMIT_REACHED})`,
 so a stale `true` value blocks all downstream merge/rebase paths even after the user
 explicitly chose to proceed. The `abort` branch intentionally leaves the flag set,
 as it halts the workflow.
@@ -917,11 +917,14 @@ Loop back to Step 5 (delegated wait gate).
 
 ## Step 10a: Bot Review Clean
 
-No issues found by bot. Proceed to Step 10.5 (rebase) then merge.
+No issues found by bot. Proceed to merge.
 
-## Step 10.5: Rebase for Clean History
+## Step 10.5: Rebase for Clean History (DISABLED)
 
 > **Layer**: 0 (Orchestrator) -- git history cleanup before merge.
+> **Status**: Disabled. With `--merge` (not `--squash`), rebase destroys the
+> per-commit audit trail instead of cleaning it up. Set `REBASE_ENABLED=true`
+> to re-enable for squash-merge workflows.
 
 Tool: bash
 

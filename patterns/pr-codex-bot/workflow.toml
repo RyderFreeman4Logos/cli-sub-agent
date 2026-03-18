@@ -60,6 +60,9 @@ name = "PR_NUM"
 name = "PR_TITLE"
 
 [[workflow.variables]]
+name = "REBASE_ENABLED"
+
+[[workflow.variables]]
 name = "REBASE_REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
@@ -924,7 +927,7 @@ condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 [[workflow.steps]]
 id = 13
 title = "Step 10a: Bot Review Clean"
-prompt = "No issues found by bot. Proceed to Step 10.5 (rebase) then merge."
+prompt = "No issues found by bot. Proceed to merge."
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
 
@@ -1135,7 +1138,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```"""
 on_fail = "abort"
-condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED}))"
+condition = "(!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})) && (!(${ROUND_LIMIT_REACHED})) && (${REBASE_ENABLED})"
 
 [[workflow.steps]]
 id = 14
