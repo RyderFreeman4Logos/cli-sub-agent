@@ -357,6 +357,34 @@ fn resolve_tool_and_model_blocks_direct_model_spec_when_tiers_configured() {
     );
 }
 
+/// When tiers are configured, direct --model alone (no --tool, no --model-spec) is blocked.
+#[test]
+fn resolve_tool_and_model_blocks_direct_model_alone_when_tiers_configured() {
+    let cfg = config_with_tier(
+        "default",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli"],
+    );
+    let result = super::resolve_tool_and_model(
+        None,                 // no --tool
+        None,                 // no --model-spec
+        Some("custom-model"), // --model provided
+        Some(&cfg),
+        std::path::Path::new("/tmp"),
+        false,
+        false,
+        false,
+        None,  // no --tier
+        false, // no --force-ignore-tier-setting
+    );
+    assert!(result.is_err());
+    let msg = result.unwrap_err().to_string();
+    assert!(
+        msg.contains("restricted when tiers are configured"),
+        "unexpected error: {msg}"
+    );
+}
+
 /// --force-ignore-tier-setting bypasses the enforcement.
 #[test]
 fn resolve_tool_and_model_force_ignore_tier_allows_direct_tool() {

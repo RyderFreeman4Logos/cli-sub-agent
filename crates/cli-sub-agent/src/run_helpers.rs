@@ -39,11 +39,11 @@ pub(crate) fn resolve_tool_and_model(
     if tiers_configured
         && !bypass_tier
         && tier.is_none()
-        && (tool.is_some() || model_spec.is_some())
+        && (tool.is_some() || model_spec.is_some() || model.is_some())
     {
         let available: Vec<&str> = config.unwrap().tiers.keys().map(|k| k.as_str()).collect();
         anyhow::bail!(
-            "Direct --tool/--model/--thinking is restricted when tiers are configured. \
+            "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured. \
              Use --tier <name> or add --force-ignore-tier-setting to override. \
              Available tiers: [{}]",
             available.join(", ")
@@ -84,7 +84,12 @@ pub(crate) fn resolve_tool_and_model(
                         Some(&resolution.model_spec),
                     )?;
                 }
-                return Ok((resolution.tool, Some(resolution.model_spec), None));
+                let resolved_model = model.map(|m| {
+                    config
+                        .map(|cfg| cfg.resolve_alias(m))
+                        .unwrap_or_else(|| m.to_string())
+                });
+                return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
             }
             anyhow::bail!(
                 "No available tool found in tier '{}'. Check that at least one tool \
@@ -150,19 +155,24 @@ pub(crate) fn resolve_tool_and_model(
     }
 
     if let Some(cfg) = config {
+        let resolved_model = model.map(|m| {
+            config
+                .map(|c| c.resolve_alias(m))
+                .unwrap_or_else(|| m.to_string())
+        });
         // Try round-robin rotation first (needs project root to persist state)
         if let Ok(Some((tool_name_str, tier_model_spec))) =
             csa_scheduler::resolve_tier_tool_rotated(cfg, "default", project_root, needs_edit)
         {
             let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), None));
+            return Ok((tool_name, Some(tier_model_spec), resolved_model));
         }
         // Fallback: original non-rotating selection (also respects edit restrictions)
         if let Some((tool_name_str, tier_model_spec)) =
             cfg.resolve_tier_tool_filtered("default", needs_edit)
         {
             let tool_name = parse_tool_name(&tool_name_str)?;
-            return Ok((tool_name, Some(tier_model_spec), None));
+            return Ok((tool_name, Some(tier_model_spec), resolved_model));
         }
     }
 
