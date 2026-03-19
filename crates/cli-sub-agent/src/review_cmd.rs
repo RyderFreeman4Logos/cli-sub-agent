@@ -243,6 +243,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
+    let initial_response_timeout_seconds =
+        crate::pipeline::resolve_initial_response_timeout_seconds(
+            config.as_ref(),
+            args.initial_response_timeout,
+        );
 
     if args.reviewers == 1 {
         // Single-reviewer path (with optional --fix loop).
@@ -263,6 +268,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_routing.clone(),
             stream_mode,
             idle_timeout_seconds,
+            initial_response_timeout_seconds,
             args.force_override_user_config,
         );
 
@@ -326,6 +332,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 review_routing.clone(),
                 stream_mode,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
                 args.force_override_user_config,
             );
 
@@ -475,6 +482,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_routing,
                 stream_mode,
                 idle_timeout_seconds,
+                initial_response_timeout_seconds,
                 reviewer_force_override,
             )
             .await?;
@@ -590,6 +598,7 @@ async fn execute_review(
     review_routing: ReviewRoutingMetadata,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
+    initial_response_timeout_seconds: Option<u64>,
     force_override_user_config: bool,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let enforce_tier = tier_model_spec.is_some();
@@ -656,6 +665,7 @@ async fn execute_review(
         None,
         stream_mode,
         idle_timeout_seconds,
+        initial_response_timeout_seconds,
         None,
         None,
         Some(global_config),

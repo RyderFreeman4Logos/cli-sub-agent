@@ -625,6 +625,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         None,
         None,
         None,
+        None,
     )
     .await
     .unwrap();
@@ -686,6 +687,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         None,
         csa_process::StreamMode::BufferOnly,
         DEFAULT_IDLE_TIMEOUT_SECONDS,
+        None,
         None,
         None,
         None,

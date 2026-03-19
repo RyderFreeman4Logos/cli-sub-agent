@@ -18,6 +18,10 @@ pub struct ExecuteOptions {
     /// `Some(sources)` → inject `settingSources` into session meta.
     /// `None` → no override (load everything).
     pub setting_sources: Option<Vec<String>>,
+    /// Shorter timeout (seconds) for first response from the backend tool.
+    /// When set, uses this shorter timeout until the first output is received,
+    /// then falls back to `idle_timeout_seconds`.
+    pub initial_response_timeout_seconds: Option<u64>,
     /// Optional resource sandbox config (cgroup/rlimit limits).
     /// When `Some`, the spawned tool process will be wrapped in resource isolation.
     pub sandbox: Option<SandboxContext>,
@@ -52,6 +56,7 @@ impl ExecuteOptions {
             output_spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
             output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
             setting_sources: None,
+            initial_response_timeout_seconds: None,
             sandbox: None,
         }
     }
@@ -89,6 +94,13 @@ impl ExecuteOptions {
     /// Set sandbox context for resource isolation.
     pub fn with_sandbox(mut self, sandbox: SandboxContext) -> Self {
         self.sandbox = Some(sandbox);
+        self
+    }
+
+    /// Set initial-response timeout (seconds) — a shorter timeout used until
+    /// the first output is received.
+    pub fn with_initial_response_timeout_seconds(mut self, seconds: Option<u64>) -> Self {
+        self.initial_response_timeout_seconds = seconds;
         self
     }
 

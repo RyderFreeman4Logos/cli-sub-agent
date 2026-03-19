@@ -271,9 +271,16 @@ impl AcpConnection {
         session_id: &str,
         text: &str,
         idle_timeout: Duration,
+        initial_response_timeout: Option<Duration>,
     ) -> AcpResult<PromptResult> {
-        self.prompt_with_io(session_id, text, idle_timeout, PromptIoOptions::default())
-            .await
+        self.prompt_with_io(
+            session_id,
+            text,
+            idle_timeout,
+            initial_response_timeout,
+            PromptIoOptions::default(),
+        )
+        .await
     }
 
     pub async fn prompt_with_io(
@@ -281,6 +288,7 @@ impl AcpConnection {
         session_id: &str,
         text: &str,
         idle_timeout: Duration,
+        initial_response_timeout: Option<Duration>,
         io: PromptIoOptions<'_>,
     ) -> AcpResult<PromptResult> {
         self.ensure_process_running()?;
@@ -327,14 +335,19 @@ impl AcpConnection {
                                 &mut output_spool,
                                 &mut metadata,
                             );
+                            let effective_timeout = if processed_event_count == 0 {
+                                initial_response_timeout.unwrap_or(idle_timeout)
+                            } else {
+                                idle_timeout
+                            };
                             maybe_emit_heartbeat(
                                 heartbeat_interval,
                                 execution_start,
                                 *self.last_activity.borrow(),
                                 &mut last_heartbeat,
-                                idle_timeout,
+                                effective_timeout,
                             );
-                            if self.last_activity.borrow().elapsed() >= idle_timeout {
+                            if self.last_activity.borrow().elapsed() >= effective_timeout {
                                 break PromptOutcome::IdleTimeout;
                             }
                         }
@@ -382,10 +395,16 @@ impl AcpConnection {
             PromptOutcome::Completed(Err(err)) => Err(AcpError::PromptFailed(err.to_string())),
             PromptOutcome::IdleTimeout => {
                 let _ = self.kill().await;
+                let exit_reason =
+                    if processed_event_count == 0 && initial_response_timeout.is_some() {
+                        "initial_response_timeout"
+                    } else {
+                        "idle_timeout"
+                    };
                 Ok(PromptResult {
                     output,
                     events,
-                    exit_reason: Some("idle_timeout".to_string()),
+                    exit_reason: Some(exit_reason.to_string()),
                     timed_out: true,
                     metadata,
                 })

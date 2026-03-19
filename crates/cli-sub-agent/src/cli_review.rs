@@ -114,6 +114,12 @@ pub struct ReviewArgs {
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub idle_timeout: Option<u64>,
 
+    /// Shorter timeout for first response from backend tool.
+    /// Overrides config `resources.initial_response_timeout_seconds`.
+    /// Set to 0 to disable.
+    #[arg(long, value_parser = clap::value_parser!(u64))]
+    pub initial_response_timeout: Option<u64>,
+
     /// Force stdout streaming to stderr even in non-TTY contexts
     #[arg(long, conflicts_with = "no_stream_stdout")]
     pub stream_stdout: bool,
@@ -267,6 +273,12 @@ pub struct DebateArgs {
     /// Kill sub-agent when no output appears for N seconds (overrides config default)
     #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
     pub idle_timeout: Option<u64>,
+
+    /// Shorter timeout for first response from backend tool.
+    /// Overrides config `resources.initial_response_timeout_seconds`.
+    /// Set to 0 to disable.
+    #[arg(long, value_parser = clap::value_parser!(u64))]
+    pub initial_response_timeout: Option<u64>,
 
     /// Force stdout streaming to stderr even in non-TTY contexts
     #[arg(long, conflicts_with = "no_stream_stdout")]

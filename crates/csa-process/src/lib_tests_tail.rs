@@ -261,6 +261,7 @@ async fn test_idle_timeout_with_alive_process_does_not_kill() {
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         Some(&tmp.path().join("output.log")),
         SpawnOptions::default(),
+        None,
     )
     .await
     .expect("wait");
@@ -299,6 +300,7 @@ async fn test_idle_timeout_with_live_pid_but_no_progress_kills_after_dead_timeou
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         Some(&output_path), // enables liveness mode
         SpawnOptions::default(),
+        None,
     )
     .await
     .expect("wait");
@@ -331,6 +333,7 @@ async fn test_idle_timeout_with_dead_process_kills_after_dead_timeout() {
         Duration::from_secs(DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
         None, // no session_dir → immediate kill after idle
         SpawnOptions::default(),
+        None,
     )
     .await
     .expect("wait");

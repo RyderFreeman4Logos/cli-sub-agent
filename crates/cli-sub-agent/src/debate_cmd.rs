@@ -235,6 +235,11 @@ pub(crate) async fn handle_debate(
     let extra_env = extra_env_owned.as_ref();
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
+    let initial_response_timeout_seconds =
+        crate::pipeline::resolve_initial_response_timeout_seconds(
+            config.as_ref(),
+            args.initial_response_timeout,
+        );
 
     // Resolve stream mode from CLI flags (default: BufferOnly for debate)
     let stream_mode = resolve_debate_stream_mode(args.stream_stdout, args.no_stream_stdout);
@@ -273,6 +278,7 @@ pub(crate) async fn handle_debate(
             None, // debate does not override context loading options
             stream_mode,
             idle_timeout_seconds,
+            initial_response_timeout_seconds,
             None,
             None,
             Some(&global_config),

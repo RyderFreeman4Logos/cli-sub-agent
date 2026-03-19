@@ -172,6 +172,12 @@ pub enum Commands {
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         idle_timeout: Option<u64>,
 
+        /// Shorter timeout for first response from backend tool.
+        /// Overrides config `resources.initial_response_timeout_seconds`.
+        /// Set to 0 to disable.
+        #[arg(long, value_parser = clap::value_parser!(u64))]
+        initial_response_timeout: Option<u64>,
+
         /// Absolute wall-clock timeout in seconds (kills execution after N seconds)
         #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
         timeout: Option<u64>,

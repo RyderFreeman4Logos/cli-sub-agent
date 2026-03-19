@@ -1,3 +1,16 @@
+// NOTE: The ACP connection layer supports a dual-timeout model:
+//
+// - `initial_response_timeout`: A shorter timeout applied until the first
+//   output event is received from the backend tool.  This catches "backend
+//   never started" failures quickly.
+// - `idle_timeout`: The standard timeout used after at least one event has
+//   been received.
+//
+// Full integration tests for this dual-timeout behavior require a running
+// ACP subprocess and are therefore out of scope for unit tests here.
+// The resolver logic is tested in `pipeline_tests_tail.rs` and the config
+// defaults are tested in `config_tests_tail.rs`.
+
 use super::*;
 use std::sync::{LazyLock, Mutex};
 

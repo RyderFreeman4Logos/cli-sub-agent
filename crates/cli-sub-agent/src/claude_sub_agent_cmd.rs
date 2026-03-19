@@ -75,6 +75,8 @@ pub(crate) async fn handle_claude_sub_agent(
     );
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
+    let initial_response_timeout_seconds =
+        crate::pipeline::resolve_initial_response_timeout_seconds(config.as_ref(), None);
 
     // 11. Session description (no longer derived from --skill)
     let description: Option<String> = None;
@@ -95,6 +97,7 @@ pub(crate) async fn handle_claude_sub_agent(
         None, // claude-sub-agent does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
+        initial_response_timeout_seconds,
         None, // claude-sub-agent does not set wall-clock timeout
         None, // claude-sub-agent does not use memory injection
         Some(&global_config),

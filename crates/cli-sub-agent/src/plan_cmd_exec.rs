@@ -179,6 +179,8 @@ pub(super) async fn execute_csa_step(
         csa_config::ExecutionEnvOptions::default(),
     );
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
+    let initial_response_timeout_seconds =
+        crate::pipeline::resolve_initial_response_timeout_seconds(config, None);
 
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
     let slots_dir = csa_config::GlobalConfig::slots_dir()?;
@@ -226,6 +228,7 @@ pub(super) async fn execute_csa_step(
             None,
             csa_process::StreamMode::TeeToStderr,
             idle_timeout_seconds,
+            initial_response_timeout_seconds,
             None,
             None,
             None,
