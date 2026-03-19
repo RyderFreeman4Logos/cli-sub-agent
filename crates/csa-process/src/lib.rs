@@ -328,7 +328,11 @@ pub async fn wait_and_capture_with_idle_timeout(
                             stderr_done = true;
                         }
                         Ok(n) => {
-                            received_first_output = true;
+                            // NOTE: Do NOT set received_first_output here.
+                            // Only stdout counts as "first output" — stderr
+                            // often contains diagnostic banners (e.g. systemd-run's
+                            // "Running scope as unit...") that should not reset
+                            // the initial_response_timeout.
                             last_activity = Instant::now();
                             last_heartbeat = last_activity;
                             liveness_dead_since = None;
@@ -376,30 +380,43 @@ pub async fn wait_and_capture_with_idle_timeout(
                         &mut last_heartbeat,
                         effective_idle,
                     );
-                    if should_terminate_for_idle(
-                        &mut last_activity,
-                        effective_idle,
-                        liveness_dead_timeout,
-                        session_dir,
-                        &mut liveness_dead_since,
-                        &mut next_liveness_poll_at,
-                    ) {
+                    // Skip liveness polling for initial-response timeout:
+                    // kill immediately once elapsed time exceeds the threshold.
+                    let should_kill = if !received_first_output && initial_response_timeout.is_some() {
+                        last_activity.elapsed() >= effective_idle
+                    } else {
+                        should_terminate_for_idle(
+                            &mut last_activity,
+                            effective_idle,
+                            liveness_dead_timeout,
+                            session_dir,
+                            &mut liveness_dead_since,
+                            &mut next_liveness_poll_at,
+                        )
+                    };
+                    if should_kill {
                         idle_timed_out = true;
                         let timeout_kind = if !received_first_output && initial_response_timeout.is_some() {
                             "initial_response_timeout"
                         } else {
                             "idle timeout"
                         };
-                        timeout_note = format!(
-                            "{timeout_kind}: no stdout/stderr output for {}s; liveness false for {}s; process killed",
-                            effective_idle.as_secs(),
-                            liveness_dead_timeout.as_secs()
-                        );
+                        timeout_note = if !received_first_output && initial_response_timeout.is_some() {
+                            format!(
+                                "{timeout_kind}: no stdout output for {}s; process killed immediately (no liveness polling)",
+                                effective_idle.as_secs(),
+                            )
+                        } else {
+                            format!(
+                                "{timeout_kind}: no stdout/stderr output for {}s; liveness false for {}s; process killed",
+                                effective_idle.as_secs(),
+                                liveness_dead_timeout.as_secs(),
+                            )
+                        };
                         warn!(
                             timeout_secs = effective_idle.as_secs(),
-                            liveness_dead_timeout_secs = liveness_dead_timeout.as_secs(),
                             timeout_kind,
-                            "Killing child due to {timeout_kind} after liveness polling"
+                            "Killing child due to {timeout_kind}"
                         );
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
@@ -466,30 +483,43 @@ pub async fn wait_and_capture_with_idle_timeout(
                         &mut last_heartbeat,
                         effective_idle,
                     );
-                    if should_terminate_for_idle(
-                        &mut last_activity,
-                        effective_idle,
-                        liveness_dead_timeout,
-                        session_dir,
-                        &mut liveness_dead_since,
-                        &mut next_liveness_poll_at,
-                    ) {
+                    // Skip liveness polling for initial-response timeout:
+                    // kill immediately once elapsed time exceeds the threshold.
+                    let should_kill = if !received_first_output && initial_response_timeout.is_some() {
+                        last_activity.elapsed() >= effective_idle
+                    } else {
+                        should_terminate_for_idle(
+                            &mut last_activity,
+                            effective_idle,
+                            liveness_dead_timeout,
+                            session_dir,
+                            &mut liveness_dead_since,
+                            &mut next_liveness_poll_at,
+                        )
+                    };
+                    if should_kill {
                         idle_timed_out = true;
                         let timeout_kind = if !received_first_output && initial_response_timeout.is_some() {
                             "initial_response_timeout"
                         } else {
                             "idle timeout"
                         };
-                        timeout_note = format!(
-                            "{timeout_kind}: no stdout/stderr output for {}s; liveness false for {}s; process killed",
-                            effective_idle.as_secs(),
-                            liveness_dead_timeout.as_secs()
-                        );
+                        timeout_note = if !received_first_output && initial_response_timeout.is_some() {
+                            format!(
+                                "{timeout_kind}: no stdout output for {}s; process killed immediately (no liveness polling)",
+                                effective_idle.as_secs(),
+                            )
+                        } else {
+                            format!(
+                                "{timeout_kind}: no stdout/stderr output for {}s; liveness false for {}s; process killed",
+                                effective_idle.as_secs(),
+                                liveness_dead_timeout.as_secs(),
+                            )
+                        };
                         warn!(
                             timeout_secs = effective_idle.as_secs(),
-                            liveness_dead_timeout_secs = liveness_dead_timeout.as_secs(),
                             timeout_kind,
-                            "Killing child due to {timeout_kind} after liveness polling"
+                            "Killing child due to {timeout_kind}"
                         );
                         terminate_child_process_group(&mut child, termination_grace_period).await;
                         break;
