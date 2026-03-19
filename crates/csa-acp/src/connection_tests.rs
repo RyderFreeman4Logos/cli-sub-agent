@@ -140,7 +140,15 @@ fn test_collect_agent_output_includes_thoughts() {
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     let output = collect_agent_output(&metadata);
     assert_eq!(output, "HelloThinking... world");
 }
@@ -165,7 +173,15 @@ fn stream_new_agent_messages_includes_thoughts_in_spool() {
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     flush_spool(&mut spool);
     assert_eq!(
         std::fs::read_to_string(&spool_path).expect("read spool"),
@@ -194,7 +210,15 @@ fn stream_new_agent_messages_writes_spool_incrementally() {
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     flush_spool(&mut spool);
     assert_eq!(
         std::fs::read_to_string(&spool_path).expect("read spool"),
@@ -206,7 +230,15 @@ fn stream_new_agent_messages_writes_spool_incrementally() {
     events
         .borrow_mut()
         .push(SessionEvent::AgentMessage(" world".to_string()));
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     flush_spool(&mut spool);
     assert_eq!(
         std::fs::read_to_string(&spool_path).expect("read spool"),
@@ -230,7 +262,15 @@ fn stream_new_agent_messages_skips_non_message_events() {
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     assert_eq!(index, 2);
     assert_eq!(events.borrow().len(), 2);
     assert_eq!(metadata.total_events_count, 2);
@@ -258,7 +298,15 @@ fn collect_agent_output_excludes_diagnostic_events() {
     let mut spool: Option<SpoolRotator> = None;
     let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     let output = collect_agent_output(&metadata);
     assert_eq!(
         output, "Hellohmm world",
@@ -297,7 +345,15 @@ fn stream_new_agent_messages_writes_all_event_types_to_spool() {
     let mut index = 0;
     let mut metadata = StreamingMetadata::default();
 
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     flush_spool(&mut spool);
     let spool_content = std::fs::read_to_string(&spool_path).expect("read spool");
     assert!(
@@ -348,12 +404,28 @@ fn stream_preserves_events_for_downstream_consumers() {
             .borrow_mut()
             .push(SessionEvent::AgentMessage(format!("msg-{i}\n")));
         if i % 100 == 99 {
-            stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+            stream_new_agent_messages(
+                &events,
+                &mut index,
+                false,
+                &mut spool,
+                &mut metadata,
+                &mut String::new(),
+                &mut String::new(),
+            );
             // Index advances to match the number of events seen so far.
             assert_eq!(index, i + 1, "processed_index must track event count");
         }
     }
-    stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
     let retained = events.borrow().events();
     assert_eq!(retained.len(), MAX_RETAINED_EVENTS);
     match retained.first() {
@@ -392,7 +464,15 @@ fn spool_writes_all_data_without_truncation() {
         events
             .borrow_mut()
             .push(SessionEvent::AgentMessage(chunk.clone()));
-        stream_new_agent_messages(&events, &mut index, false, &mut spool, &mut metadata);
+        stream_new_agent_messages(
+            &events,
+            &mut index,
+            false,
+            &mut spool,
+            &mut metadata,
+            &mut String::new(),
+            &mut String::new(),
+        );
     }
     flush_spool(&mut spool);
 

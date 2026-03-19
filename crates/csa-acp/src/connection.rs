@@ -303,6 +303,8 @@ impl AcpConnection {
         let mut output_spool =
             open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
         let mut metadata = StreamingMetadata::default();
+        let mut stdout_line_buf = String::new();
+        let mut thought_line_buf = String::new();
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
 
@@ -324,6 +326,8 @@ impl AcpConnection {
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
                                 &mut metadata,
+                                &mut stdout_line_buf,
+                                &mut thought_line_buf,
                             );
                             break PromptOutcome::Completed(response);
                         }
@@ -334,6 +338,8 @@ impl AcpConnection {
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
                                 &mut metadata,
+                                &mut stdout_line_buf,
+                                &mut thought_line_buf,
                             );
                             let effective_timeout = if processed_event_count == 0 {
                                 initial_response_timeout.unwrap_or(idle_timeout)
@@ -362,7 +368,14 @@ impl AcpConnection {
             io.stream_stdout_to_stderr,
             &mut output_spool,
             &mut metadata,
+            &mut stdout_line_buf,
+            &mut thought_line_buf,
         );
+        // Flush any remaining partial lines at end of stream.
+        if io.stream_stdout_to_stderr {
+            flush_remaining_buf(&mut stdout_line_buf, "[stdout] ");
+            flush_remaining_buf(&mut thought_line_buf, "[thought] ");
+        }
         // Finalize spool: flush + run sanitization (rotate cleanup if keep_rotated=false).
         if let Some(writer) = output_spool.take() {
             match writer.finalize() {
@@ -550,12 +563,32 @@ fn maybe_emit_heartbeat(
     *last_heartbeat = now;
 }
 
+/// Flush complete lines (terminated by `\n`) from `buf`, each prefixed with
+/// `prefix`.  Incomplete trailing content stays in `buf` for the next call.
+fn flush_complete_lines(buf: &mut String, prefix: &str) {
+    while let Some(pos) = buf.find('\n') {
+        let line: String = buf.drain(..=pos).collect();
+        eprint!("{prefix}{line}");
+    }
+}
+
+/// Flush any remaining content from `buf` (for end-of-stream or stream-type
+/// switch).  Appends a newline so the log entry is properly terminated.
+fn flush_remaining_buf(buf: &mut String, prefix: &str) {
+    if !buf.is_empty() {
+        let remainder = std::mem::take(buf);
+        eprintln!("{prefix}{remainder}");
+    }
+}
+
 fn stream_new_agent_messages(
     events: &SharedEvents,
     processed_event_count: &mut usize,
     stream_stdout_to_stderr: bool,
     output_spool: &mut Option<SpoolRotator>,
     metadata: &mut StreamingMetadata,
+    stdout_line_buf: &mut String,
+    thought_line_buf: &mut String,
 ) {
     // Iterate new retained events by total event count.  Older events may be
     // dropped from the front once retention reaches `MAX_RETAINED_EVENTS`, so
@@ -583,14 +616,20 @@ fn stream_new_agent_messages(
         match event {
             SessionEvent::AgentMessage(chunk) => {
                 if stream_stdout_to_stderr {
-                    eprint!("[stdout] {chunk}");
+                    // Flush thought buffer on stream-type switch.
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
+                    stdout_line_buf.push_str(chunk);
+                    flush_complete_lines(stdout_line_buf, "[stdout] ");
                 }
                 spool_chunk(output_spool, chunk.as_bytes(), metadata);
                 metadata.append_text(chunk);
             }
             SessionEvent::AgentThought(chunk) => {
                 if stream_stdout_to_stderr {
-                    eprint!("[thought] {chunk}");
+                    // Flush stdout buffer on stream-type switch.
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    thought_line_buf.push_str(chunk);
+                    flush_complete_lines(thought_line_buf, "[thought] ");
                 }
                 spool_chunk(output_spool, chunk.as_bytes(), metadata);
                 metadata.append_text(chunk);
@@ -599,6 +638,8 @@ fn stream_new_agent_messages(
                 metadata.has_plan_updates = true;
                 let msg = format!("[plan] {plan}\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
@@ -607,6 +648,8 @@ fn stream_new_agent_messages(
                 metadata.has_tool_calls = true;
                 let msg = format!("[tool:started] {title} ({kind})\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
@@ -614,6 +657,8 @@ fn stream_new_agent_messages(
             SessionEvent::ToolCallCompleted { status, .. } => {
                 let msg = format!("[tool:completed] {status}\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
@@ -621,6 +666,8 @@ fn stream_new_agent_messages(
             SessionEvent::Other(payload) => {
                 let msg = format!("[other] {payload}\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
