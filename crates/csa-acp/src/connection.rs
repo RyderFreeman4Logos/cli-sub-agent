@@ -303,6 +303,8 @@ impl AcpConnection {
         let mut output_spool =
             open_output_spool_file(io.output_spool, io.spool_max_bytes, io.keep_rotated_spool);
         let mut metadata = StreamingMetadata::default();
+        let mut stdout_line_buf = String::new();
+        let mut thought_line_buf = String::new();
 
         let request = PromptRequest::new(SessionId::new(session_id.to_string()), vec![text.into()]);
 
@@ -324,6 +326,8 @@ impl AcpConnection {
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
                                 &mut metadata,
+                                &mut stdout_line_buf,
+                                &mut thought_line_buf,
                             );
                             break PromptOutcome::Completed(response);
                         }
@@ -334,6 +338,8 @@ impl AcpConnection {
                                 io.stream_stdout_to_stderr,
                                 &mut output_spool,
                                 &mut metadata,
+                                &mut stdout_line_buf,
+                                &mut thought_line_buf,
                             );
                             let effective_timeout = if processed_event_count == 0 {
                                 initial_response_timeout.unwrap_or(idle_timeout)
@@ -362,6 +368,8 @@ impl AcpConnection {
             io.stream_stdout_to_stderr,
             &mut output_spool,
             &mut metadata,
+            &mut stdout_line_buf,
+            &mut thought_line_buf,
         );
         // Finalize spool: flush + run sanitization (rotate cleanup if keep_rotated=false).
         if let Some(writer) = output_spool.take() {
@@ -550,12 +558,44 @@ fn maybe_emit_heartbeat(
     *last_heartbeat = now;
 }
 
+/// Maximum bytes a line buffer may hold before being force-flushed.
+/// Prevents unbounded memory growth on long non-newline output (base64,
+/// minified JSON, etc.).
+pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
+
+/// Flush complete lines (terminated by `\n`) from `buf`, each prefixed with
+/// `prefix`.  Incomplete trailing content stays in `buf` for the next call,
+/// unless the buffer exceeds [`LINE_BUF_CAP`], in which case the entire
+/// remainder is force-flushed.
+fn flush_complete_lines(buf: &mut String, prefix: &str) {
+    while let Some(pos) = buf.find('\n') {
+        let line: String = buf.drain(..=pos).collect();
+        eprint!("{prefix}{line}");
+    }
+    // Prevent unbounded growth on long lines without newlines.
+    if buf.len() > LINE_BUF_CAP {
+        let remainder = std::mem::take(buf);
+        eprintln!("{prefix}{remainder}");
+    }
+}
+
+/// Flush any remaining content from `buf` (for end-of-stream or stream-type
+/// switch).  Appends a newline so the log entry is properly terminated.
+fn flush_remaining_buf(buf: &mut String, prefix: &str) {
+    if !buf.is_empty() {
+        let remainder = std::mem::take(buf);
+        eprintln!("{prefix}{remainder}");
+    }
+}
+
 fn stream_new_agent_messages(
     events: &SharedEvents,
     processed_event_count: &mut usize,
     stream_stdout_to_stderr: bool,
     output_spool: &mut Option<SpoolRotator>,
     metadata: &mut StreamingMetadata,
+    stdout_line_buf: &mut String,
+    thought_line_buf: &mut String,
 ) {
     // Iterate new retained events by total event count.  Older events may be
     // dropped from the front once retention reaches `MAX_RETAINED_EVENTS`, so
@@ -576,6 +616,10 @@ fn stream_new_agent_messages(
             processed = *processed_event_count,
             "ACP event ring buffer overrun: {skipped} events were evicted before being streamed to spool/stderr"
         );
+        // Clear partial line buffers so we don't splice stale content with
+        // the first retained chunk after the gap (PR #440 P3).
+        stdout_line_buf.clear();
+        thought_line_buf.clear();
     }
     let skip = stream_start.saturating_sub(retained_start);
 
@@ -583,14 +627,20 @@ fn stream_new_agent_messages(
         match event {
             SessionEvent::AgentMessage(chunk) => {
                 if stream_stdout_to_stderr {
-                    eprint!("[stdout] {chunk}");
+                    // Flush thought buffer on stream-type switch.
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
+                    stdout_line_buf.push_str(chunk);
+                    flush_complete_lines(stdout_line_buf, "[stdout] ");
                 }
                 spool_chunk(output_spool, chunk.as_bytes(), metadata);
                 metadata.append_text(chunk);
             }
             SessionEvent::AgentThought(chunk) => {
                 if stream_stdout_to_stderr {
-                    eprint!("[thought] {chunk}");
+                    // Flush stdout buffer on stream-type switch.
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    thought_line_buf.push_str(chunk);
+                    flush_complete_lines(thought_line_buf, "[thought] ");
                 }
                 spool_chunk(output_spool, chunk.as_bytes(), metadata);
                 metadata.append_text(chunk);
@@ -599,6 +649,8 @@ fn stream_new_agent_messages(
                 metadata.has_plan_updates = true;
                 let msg = format!("[plan] {plan}\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
@@ -607,6 +659,8 @@ fn stream_new_agent_messages(
                 metadata.has_tool_calls = true;
                 let msg = format!("[tool:started] {title} ({kind})\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
@@ -614,6 +668,8 @@ fn stream_new_agent_messages(
             SessionEvent::ToolCallCompleted { status, .. } => {
                 let msg = format!("[tool:completed] {status}\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
@@ -621,11 +677,22 @@ fn stream_new_agent_messages(
             SessionEvent::Other(payload) => {
                 let msg = format!("[other] {payload}\n");
                 if stream_stdout_to_stderr {
+                    flush_remaining_buf(stdout_line_buf, "[stdout] ");
+                    flush_remaining_buf(thought_line_buf, "[thought] ");
                     eprint!("{msg}");
                 }
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
         }
+    }
+
+    // Debounce: flush any accumulated partial line at the end of each poll
+    // cycle to maintain progressive output visibility.  This ensures one
+    // coalesced [stdout] tag per ~200ms poll instead of per-token, while
+    // still showing progress for newline-free output (PR #440 P2).
+    if stream_stdout_to_stderr {
+        flush_remaining_buf(stdout_line_buf, "[stdout] ");
+        flush_remaining_buf(thought_line_buf, "[thought] ");
     }
 
     *processed_event_count = events_ref.total_events_count();
