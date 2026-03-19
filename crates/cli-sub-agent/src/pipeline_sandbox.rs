@@ -31,6 +31,7 @@ pub(crate) fn resolve_sandbox_options(
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     liveness_dead_seconds: u64,
+    initial_response_timeout_seconds: Option<u64>,
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -46,7 +47,8 @@ pub(crate) fn resolve_sandbox_options(
         .with_liveness_dead_seconds(liveness_dead_seconds)
         .with_stdin_write_timeout_seconds(stdin_write_timeout_seconds)
         .with_acp_init_timeout_seconds(acp_init_timeout_seconds)
-        .with_termination_grace_period_seconds(termination_grace_period_seconds);
+        .with_termination_grace_period_seconds(termination_grace_period_seconds)
+        .with_initial_response_timeout_seconds(initial_response_timeout_seconds);
 
     let Some(cfg) = config else {
         // No project config — apply profile-based defaults for heavyweight tools.

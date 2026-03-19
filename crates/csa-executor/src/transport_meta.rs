@@ -156,6 +156,7 @@ pub(super) async fn run_acp_sandboxed(
     meta: Option<serde_json::Map<String, serde_json::Value>>,
     prompt: &str,
     idle_timeout: std::time::Duration,
+    initial_response_timeout: Option<std::time::Duration>,
     init_timeout: std::time::Duration,
     termination_grace_period: std::time::Duration,
     sandbox_config: &SandboxConfig,
@@ -219,6 +220,7 @@ pub(super) async fn run_acp_sandboxed(
             &acp_session_id,
             prompt,
             idle_timeout,
+            initial_response_timeout,
             csa_acp::connection::PromptIoOptions {
                 stream_stdout_to_stderr,
                 output_spool,
@@ -235,9 +237,19 @@ pub(super) async fn run_acp_sandboxed(
         if !stderr.is_empty() && !stderr.ends_with('\n') {
             stderr.push('\n');
         }
-        stderr.push_str(&format!(
-            "idle timeout: no ACP events/stderr for {}s; process killed",
+        let is_initial = result.exit_reason.as_deref() == Some("initial_response_timeout");
+        let timeout_secs = if is_initial {
+            initial_response_timeout.unwrap_or(idle_timeout).as_secs()
+        } else {
             idle_timeout.as_secs()
+        };
+        let label = if is_initial {
+            "initial response timeout"
+        } else {
+            "idle timeout"
+        };
+        stderr.push_str(&format!(
+            "{label}: no ACP events/stderr for {timeout_secs}s; process killed",
         ));
         stderr.push('\n');
     }

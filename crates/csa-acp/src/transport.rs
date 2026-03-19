@@ -54,6 +54,10 @@ impl Default for AcpOutputIoOptions<'_> {
 #[derive(Debug, Clone, Copy)]
 pub struct AcpRunOptions<'a> {
     pub idle_timeout: Duration,
+    /// Shorter timeout for the period before the first response is received.
+    /// When `Some`, the backend must produce at least one ACP notification
+    /// within this window or the session is killed.
+    pub initial_response_timeout: Option<Duration>,
     pub init_timeout: Duration,
     pub termination_grace_period: Duration,
     pub io: AcpOutputIoOptions<'a>,
@@ -63,6 +67,7 @@ impl Default for AcpRunOptions<'_> {
     fn default() -> Self {
         Self {
             idle_timeout: Duration::from_secs(300),
+            initial_response_timeout: None,
             init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
             io: AcpOutputIoOptions::default(),
@@ -178,7 +183,7 @@ impl AcpSession {
 
     pub async fn prompt(&self, prompt: &str) -> AcpResult<PromptResult> {
         self.connection
-            .prompt(&self.session_id, prompt, Duration::from_secs(300))
+            .prompt(&self.session_id, prompt, Duration::from_secs(300), None)
             .await
     }
 
@@ -186,9 +191,15 @@ impl AcpSession {
         &self,
         prompt: &str,
         idle_timeout: Duration,
+        initial_response_timeout: Option<Duration>,
     ) -> AcpResult<PromptResult> {
         self.connection
-            .prompt(&self.session_id, prompt, idle_timeout)
+            .prompt(
+                &self.session_id,
+                prompt,
+                idle_timeout,
+                initial_response_timeout,
+            )
             .await
     }
 
@@ -196,10 +207,17 @@ impl AcpSession {
         &self,
         prompt: &str,
         idle_timeout: Duration,
+        initial_response_timeout: Option<Duration>,
         io: PromptIoOptions<'_>,
     ) -> AcpResult<PromptResult> {
         self.connection
-            .prompt_with_io(&self.session_id, prompt, idle_timeout, io)
+            .prompt_with_io(
+                &self.session_id,
+                prompt,
+                idle_timeout,
+                initial_response_timeout,
+                io,
+            )
             .await
     }
 }
@@ -222,6 +240,7 @@ pub async fn run_prompt(
         prompt,
         AcpRunOptions {
             idle_timeout,
+            initial_response_timeout: None,
             init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
             io: AcpOutputIoOptions::default(),
@@ -254,6 +273,7 @@ pub async fn run_prompt_with_io(
         .prompt_with_idle_timeout_and_io(
             prompt,
             options.idle_timeout,
+            options.initial_response_timeout,
             PromptIoOptions {
                 stream_stdout_to_stderr: options.io.stream_stdout_to_stderr,
                 output_spool: options.io.output_spool,
@@ -273,9 +293,22 @@ pub async fn run_prompt_with_io(
         if !stderr.is_empty() && !stderr.ends_with('\n') {
             stderr.push('\n');
         }
-        stderr.push_str(&format!(
-            "idle timeout: no ACP events/stderr for {}s; process killed",
+        let is_initial = result.exit_reason.as_deref() == Some("initial_response_timeout");
+        let timeout_secs = if is_initial {
+            options
+                .initial_response_timeout
+                .unwrap_or(options.idle_timeout)
+                .as_secs()
+        } else {
             options.idle_timeout.as_secs()
+        };
+        let label = if is_initial {
+            "initial response timeout"
+        } else {
+            "idle timeout"
+        };
+        stderr.push_str(&format!(
+            "{label}: no ACP events/stderr for {timeout_secs}s; process killed",
         ));
         stderr.push('\n');
     }

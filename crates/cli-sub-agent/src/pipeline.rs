@@ -57,6 +57,20 @@ pub(crate) fn resolve_idle_timeout_seconds(
         .unwrap_or(DEFAULT_IDLE_TIMEOUT_SECONDS)
 }
 
+/// Resolve the initial-response timeout (seconds).
+///
+/// Priority: CLI override > project config > default (120s).
+/// Returns `None` when explicitly disabled (set to 0 in config or CLI).
+pub(crate) fn resolve_initial_response_timeout_seconds(
+    config: Option<&ProjectConfig>,
+    cli_override: Option<u64>,
+) -> Option<u64> {
+    let raw = cli_override
+        .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
+    // 0 means explicitly disabled.
+    raw.filter(|&v| v > 0)
+}
+
 pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {
     config
         .and_then(|cfg| cfg.resources.liveness_dead_seconds)

@@ -178,3 +178,53 @@ fn test_session_config_is_default_reflects_spool_overrides() {
     };
     assert!(!cfg.is_default());
 }
+
+// ---------------------------------------------------------------------------
+// ResourcesConfig: initial_response_timeout_seconds
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_resources_config_default_has_initial_response_timeout_120() {
+    let cfg = ResourcesConfig::default();
+    assert_eq!(cfg.initial_response_timeout_seconds, Some(120));
+}
+
+#[test]
+fn test_resources_config_is_default_with_default_initial_response_timeout() {
+    let cfg = ResourcesConfig::default();
+    assert!(cfg.is_default());
+}
+
+#[test]
+fn test_resources_config_is_default_false_with_custom_initial_response_timeout() {
+    let mut cfg = ResourcesConfig::default();
+    cfg.initial_response_timeout_seconds = Some(60);
+    assert!(!cfg.is_default());
+}
+
+#[test]
+fn test_resources_config_deser_initial_response_timeout_custom() {
+    let toml_str = r#"
+initial_response_timeout_seconds = 60
+"#;
+    let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.initial_response_timeout_seconds, Some(60));
+}
+
+#[test]
+fn test_resources_config_deser_initial_response_timeout_zero_disabled() {
+    let toml_str = r#"
+initial_response_timeout_seconds = 0
+"#;
+    let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.initial_response_timeout_seconds, Some(0));
+}
+
+#[test]
+fn test_resources_config_deser_initial_response_timeout_omitted_defaults_to_120() {
+    let toml_str = r#"
+idle_timeout_seconds = 300
+"#;
+    let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(cfg.initial_response_timeout_seconds, Some(120));
+}

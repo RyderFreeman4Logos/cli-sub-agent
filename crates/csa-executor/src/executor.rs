@@ -327,6 +327,7 @@ impl Executor {
         let transport_options = TransportOptions {
             stream_mode: options.stream_mode,
             idle_timeout_seconds: options.idle_timeout_seconds,
+            initial_response_timeout_seconds: options.initial_response_timeout_seconds,
             liveness_dead_seconds: options.liveness_dead_seconds,
             stdin_write_timeout_seconds: options.stdin_write_timeout_seconds,
             acp_init_timeout_seconds: options.acp_init_timeout_seconds,

@@ -48,6 +48,7 @@ pub(crate) async fn handle_run(
     no_failover: bool,
     wait: bool,
     idle_timeout: Option<u64>,
+    initial_response_timeout: Option<u64>,
     timeout: Option<u64>,
     no_idle_timeout: bool,
     no_memory: bool,
@@ -198,6 +199,15 @@ pub(crate) async fn handle_run(
     } else {
         pipeline::resolve_idle_timeout_seconds(config.as_ref(), idle_timeout)
     };
+    let initial_response_timeout_seconds = if no_idle_timeout {
+        // --no-idle-timeout disables both idle and initial-response timeouts.
+        None
+    } else {
+        pipeline::resolve_initial_response_timeout_seconds(
+            config.as_ref(),
+            initial_response_timeout,
+        )
+    };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
     let needs_edit = crate::run_helpers::infer_task_edit_requirement(&prompt_text).unwrap_or(false);
@@ -342,6 +352,7 @@ pub(crate) async fn handle_run(
         no_failover,
         wait,
         idle_timeout_seconds,
+        initial_response_timeout_seconds,
         run_timeout_seconds,
         run_started_at,
         is_fork,

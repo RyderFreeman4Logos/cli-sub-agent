@@ -38,6 +38,7 @@ pub struct SandboxTransportConfig {
 pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub initial_response_timeout_seconds: Option<u64>,
     pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,
@@ -209,6 +210,7 @@ impl LegacyTransport {
             std::time::Duration::from_secs(csa_process::DEFAULT_TERMINATION_GRACE_PERIOD_SECS),
             None,
             spawn_options,
+            None,
         )
         .await?;
         Ok(TransportResult {
@@ -281,6 +283,9 @@ impl LegacyTransport {
             std::time::Duration::from_secs(options.termination_grace_period_seconds),
             options.output_spool,
             spawn_options,
+            options
+                .initial_response_timeout_seconds
+                .map(std::time::Duration::from_secs),
         )
         .await?;
 
@@ -457,6 +462,7 @@ impl Transport for AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
+        let initial_response_timeout_seconds = options.initial_response_timeout_seconds;
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
         let termination_grace_period_seconds = options.termination_grace_period_seconds;
         let session_meta = Self::build_session_meta(
@@ -488,6 +494,8 @@ impl Transport for AcpTransport {
                         session_meta.clone(),
                         &prompt,
                         std::time::Duration::from_secs(idle_timeout_seconds),
+                        initial_response_timeout_seconds
+                            .map(std::time::Duration::from_secs),
                         std::time::Duration::from_secs(acp_init_timeout_seconds),
                         std::time::Duration::from_secs(termination_grace_period_seconds),
                         cfg,
@@ -519,6 +527,8 @@ impl Transport for AcpTransport {
                                     idle_timeout: std::time::Duration::from_secs(
                                         idle_timeout_seconds,
                                     ),
+                                    initial_response_timeout: initial_response_timeout_seconds
+                                        .map(std::time::Duration::from_secs),
                                     init_timeout: std::time::Duration::from_secs(
                                         acp_init_timeout_seconds,
                                     ),
@@ -552,6 +562,8 @@ impl Transport for AcpTransport {
                         &prompt,
                         csa_acp::transport::AcpRunOptions {
                             idle_timeout: std::time::Duration::from_secs(idle_timeout_seconds),
+                            initial_response_timeout: initial_response_timeout_seconds
+                                .map(std::time::Duration::from_secs),
                             init_timeout: std::time::Duration::from_secs(
                                 acp_init_timeout_seconds,
                             ),

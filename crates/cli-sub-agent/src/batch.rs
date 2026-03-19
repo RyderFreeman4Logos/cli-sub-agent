@@ -543,6 +543,8 @@ async fn execute_task(
     );
     let extra_env_ref = extra_env.as_ref();
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config, None);
+    let initial_response_timeout_seconds =
+        crate::pipeline::resolve_initial_response_timeout_seconds(config, None);
 
     // Acquire global slot to enforce concurrency limit (fail-fast)
     let max_concurrent = global_config.max_concurrent(executor.tool_name());
@@ -608,6 +610,7 @@ async fn execute_task(
         None, // batch does not override context loading options
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
+        initial_response_timeout_seconds,
         None, // batch does not set wall-clock timeout
         None, // batch does not use memory injection
         None, // batch does not inject MCP (callers don't have global_config)

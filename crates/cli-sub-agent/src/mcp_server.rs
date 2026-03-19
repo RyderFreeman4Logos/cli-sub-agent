@@ -556,6 +556,8 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     // Load global config for env injection and slot control
     let global_config = csa_config::GlobalConfig::load()?;
     let idle_timeout_seconds = crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), None);
+    let initial_response_timeout_seconds =
+        crate::pipeline::resolve_initial_response_timeout_seconds(config.as_ref(), None);
     let extra_env = global_config.build_execution_env(
         executor.tool_name(),
         csa_config::ExecutionEnvOptions::default(),
@@ -623,6 +625,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None, // MCP server does not override context loading options
             csa_process::StreamMode::BufferOnly,
             idle_timeout_seconds,
+            initial_response_timeout_seconds,
             None, // MCP server does not set wall-clock timeout
             None, // MCP server does not use memory injection
             Some(&global_config),
