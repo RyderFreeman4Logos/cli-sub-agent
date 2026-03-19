@@ -1,19 +1,22 @@
 ---
 name: codebase-audit
-description: Bottom-up per-module security audit of AI-generated codebases with structured reports
+description: Bottom-up per-crate deep code analysis with three-type Chinese documentation generation
 allowed-tools: Bash, Read, Grep, Glob, Write
 triggers:
   - "codebase-audit"
   - "/codebase-audit"
-  - "security audit codebase"
   - "audit codebase"
+  - "analyze codebase"
+  - "deep code analysis"
 ---
 
-# Codebase Audit: Bottom-Up Security Audit
+# Codebase Audit: Deep Code Analysis & Documentation
 
 ## Role Detection (READ THIS FIRST -- MANDATORY)
 
-**Check your initial prompt.** If it contains the literal string `"Use the codebase-audit skill"`, then:
+Role MUST be determined by explicit mode marker, not fragile natural-language substring matching.
+Treat the run as executor ONLY when initial prompt contains:
+`<skill-mode>executor</skill-mode>`.
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
@@ -27,79 +30,84 @@ triggers:
 
 ## Purpose
 
-Perform a systematic, bottom-up security audit of an entire codebase (or scoped subset). Modules are processed in topological order -- leaf dependencies first -- so that when a module is audited, all of its dependencies already have reports. This enables cross-module trust boundary analysis that single-file audits miss.
+Perform a systematic, bottom-up deep analysis of an entire codebase (or scoped subset),
+generating three types of Chinese documentation per crate:
 
-Each module receives a structured audit report covering: input validation, error handling, resource limits, secrets, memory safety, and concurrency correctness. A codebase-wide summary aggregates findings and generates a prioritized remediation plan for any critical issues.
+1. **README.md** — Module overview with architecture, public API, key types
+2. **review_report.md** — Code quality and security review report
+3. **blog.md** — Technical deep-dive blog for intermediate developers
 
-Uses the `csa audit` CLI for manifest tracking, ensuring audit progress is persistent and resumable.
+Plus a machine-readable **facts.toml** sidecar per crate containing exported APIs,
+key types, constraints, risks, and dependency summaries.
+
+Crates are processed in topological order (leaf dependencies first) so downstream
+analysis inherits upstream facts. Large crates are automatically sharded to stay
+within the 163,840 token context budget. A dual CSA Writer+Reviewer pipeline ensures
+factual accuracy.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
 ### Prerequisites
 
-- The project must have source files trackable by `csa audit`
-- Audit scope should be defined (full codebase or specific directory)
+- Must be in a Cargo workspace with multiple crates
+- `scripts/crate-topo.sh` must exist (generates topological crate order)
+- `jq` must be installed (for cargo metadata parsing)
 
 ### Quick Start
 
 ```bash
-csa run --sa-mode true --skill codebase-audit "Audit the entire codebase for security vulnerabilities"
+csa run --sa-mode true --skill codebase-audit "Analyze all crates in the workspace"
 ```
 
-Or with a specific scope:
+Or run the compiled workflow directly:
 
 ```bash
-csa run --sa-mode true --skill codebase-audit "Audit src/executor/ and src/config/ modules"
+csa plan run patterns/codebase-audit/workflow.toml
 ```
 
 ### SA Mode Propagation (MANDATORY)
 
-When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
-**ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
-`csa review`, `csa debate`, and any other execution commands. Omitting `--sa-mode`
-at root depth causes a hard error; passing `false` when the caller is in SA mode
-breaks prompt-guard propagation.
+When operating under SA mode, **ALL `csa` invocations MUST include `--sa-mode true`**.
 
 ### Step-by-Step
 
-1. **Initialize manifest**: Run `csa audit init` (first time) or `csa audit sync` (refresh with new files).
-2. **Get work queue**: `csa audit status --format json --order topo --filter pending` returns modules in dependency order (leaves first).
-3. **Prepare output**: Create `./drafts/security-audit/` directory mirroring source structure.
-4. **Per-module audit** (bottom-up):
-   - Load prior dependency audit reports as compressed context
-   - Read source file, perform structured security checklist
-   - Write audit report to `./drafts/security-audit/${path}.audit.md`
-   - Update manifest: `csa audit update <file> --status generated --auditor <model>`
-5. **Generate summary**: Aggregate all findings into `./drafts/security-audit/SUMMARY.md`.
-6. **Remediation plan** (if critical findings): Write `./drafts/security-audit/REMEDIATION.md` with prioritized fixes.
+1. **Extract topology**: `scripts/crate-topo.sh` produces comma-separated crate list in dependency order.
+2. **Prepare output**: Create `drafts/crates/{crate}/chapters/` directories and `progress.toml`.
+3. **Estimate budgets**: `tokuin estimate` per crate, mark large crates for sharding (>80K tokens).
+4. **Per-crate audit** (FOR loop, bottom-up):
+   - Skip completed crates (check progress.toml)
+   - Writer CSA (opus xhigh): generates README.md, review_report.md, blog.md, facts.toml
+   - Reviewer CSA (opus xhigh): fact-checks all outputs against source code, fixes errors
+   - Update progress.toml
+5. **Global summary**: Read all facts.toml → generate SUMMARY.md with architecture diagram.
+6. **Verify**: Check all crates completed, output statistics.
 
 ### Resumability
 
-This pattern is fully resumable. If interrupted:
-- `csa audit status --filter pending` shows remaining work
-- Already-audited modules are skipped (manifest tracks completion)
+Fully resumable. If interrupted:
+- `grep 'status = "pending"' drafts/crates/progress.toml` shows remaining work
 - Re-run the same command to continue from where it left off
 
 ## Example Usage
 
 | Command | Effect |
 |---------|--------|
-| `/codebase-audit` | Audit all pending modules in topological order |
-| `/codebase-audit src/executor/` | Audit only executor module and its dependencies |
-| `/codebase-audit --resume` | Continue a previously interrupted audit |
+| `/codebase-audit` | Analyze all crates in topological order |
+| `/codebase-audit crates/csa-core` | Analyze only csa-core (and auto-detect deps) |
 
 ## Integration
 
-- **Depends on**: `csa audit` CLI (init, status, update, sync subcommands)
-- **Related to**: `file-audit` (AGENTS.md compliance vs security focus), `security-audit` (per-commit vs codebase-wide)
-- **Output**: `./drafts/security-audit/` directory with per-module reports, summary, and remediation plan
+- **Depends on**: `scripts/crate-topo.sh`, `cargo metadata`, `jq`
+- **Related to**: `file-audit` (AGENTS.md compliance), `codebase-blog` (blog generation from audit)
+- **Output**: `drafts/crates/` directory with per-crate documentation + global SUMMARY.md
 
 ## Done Criteria
 
-1. `csa audit init` or `csa audit sync` completed successfully.
-2. All modules in scope processed in topological order (leaves first).
-3. Per-module audit report generated with structured checklist and verdict.
-4. Reports written to `./drafts/security-audit/` mirroring source structure.
-5. Manifest updated for each audited module (`csa audit status --filter pending` returns empty for scope).
-6. `SUMMARY.md` generated with aggregated findings and statistics.
-7. If any FAIL verdicts: `REMEDIATION.md` generated with prioritized fix plan.
+1. Crate topology extracted via `cargo metadata` (not file-level topo).
+2. All crates processed in topological order (leaves first).
+3. Per-crate: facts.toml + README.md + review_report.md + blog.md generated.
+4. Large crates (>80K tokens) sharded by module.
+5. Reviewer verified factual accuracy of all outputs.
+6. Reports in `drafts/crates/` mirroring crate structure.
+7. `progress.toml` shows all crates completed.
+8. `SUMMARY.md` generated with cross-crate analysis and Mermaid diagram.
