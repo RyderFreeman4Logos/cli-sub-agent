@@ -537,20 +537,20 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
     }
 
     // Check tool is enabled in config
-    if let Some(ref cfg) = config {
-        if !cfg.is_tool_enabled(executor.tool_name()) {
-            return Ok(serde_json::json!({
-                "content": [
-                    {
-                        "type": "text",
-                        "text": format!(
-                            "Error: Tool '{}' is disabled in project config",
-                            executor.tool_name()
-                        )
-                    }
-                ]
-            }));
-        }
+    if let Some(ref cfg) = config
+        && !cfg.is_tool_enabled(executor.tool_name())
+    {
+        return Ok(serde_json::json!({
+            "content": [
+                {
+                    "type": "text",
+                    "text": format!(
+                        "Error: Tool '{}' is disabled in project config",
+                        executor.tool_name()
+                    )
+                }
+            ]
+        }));
     }
 
     // Load global config for env injection and slot control

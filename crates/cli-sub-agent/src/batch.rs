@@ -513,16 +513,16 @@ async fn execute_task(
     }
 
     // Check resource availability
-    if let Some(guard) = resource_guard {
-        if let Err(e) = guard.check_availability(executor.tool_name()) {
-            error!("{} - Resource check failed: {}", task_label, e);
-            return TaskResult {
-                name: task.name.clone(),
-                exit_code: 1,
-                duration_secs: start.elapsed().as_secs_f64(),
-                error: Some(format!("Resource check failed: {e}")),
-            };
-        }
+    if let Some(guard) = resource_guard
+        && let Err(e) = guard.check_availability(executor.tool_name())
+    {
+        error!("{} - Resource check failed: {}", task_label, e);
+        return TaskResult {
+            name: task.name.clone(),
+            exit_code: 1,
+            duration_secs: start.elapsed().as_secs_f64(),
+            error: Some(format!("Resource check failed: {e}")),
+        };
     }
 
     // Load global config for env injection and slot control

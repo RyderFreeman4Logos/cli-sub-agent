@@ -135,19 +135,18 @@ fn resolve_effective_min_timeout() -> u64 {
     // Try to load project config (merged with user-level).
     // This is the same merged config that pipeline uses, so project overrides global
     // via the standard TOML deep-merge path.
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(Some(config)) = csa_config::ProjectConfig::load(&cwd) {
-            if !config.execution.is_default() {
-                return config.execution.min_timeout_seconds;
-            }
-        }
+    if let Ok(cwd) = std::env::current_dir()
+        && let Ok(Some(config)) = csa_config::ProjectConfig::load(&cwd)
+        && !config.execution.is_default()
+    {
+        return config.execution.min_timeout_seconds;
     }
 
     // Fall back to global config.
-    if let Ok(global) = csa_config::GlobalConfig::load() {
-        if !global.execution.is_default() {
-            return global.execution.min_timeout_seconds;
-        }
+    if let Ok(global) = csa_config::GlobalConfig::load()
+        && !global.execution.is_default()
+    {
+        return global.execution.min_timeout_seconds;
     }
 
     compile_default

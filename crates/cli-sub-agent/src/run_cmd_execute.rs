@@ -397,10 +397,12 @@ pub(crate) async fn handle_run(
         update_fork_genealogy(&project_root, sid, fork_res, &current_tool);
     }
 
-    if result.exit_code == 0 && fork_resolution.is_none() && !ephemeral {
-        if let Some(ref sid) = executed_session_id {
-            mark_seed_and_evict(&project_root, sid, &current_tool, config.as_ref());
-        }
+    if result.exit_code == 0
+        && fork_resolution.is_none()
+        && !ephemeral
+        && let Some(ref sid) = executed_session_id
+    {
+        mark_seed_and_evict(&project_root, sid, &current_tool, config.as_ref());
     }
 
     match output_format {

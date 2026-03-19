@@ -167,17 +167,17 @@ fn search_paths_with_store(
     // 3. Weave global store: <store_root>/<pkg>/<commit>/patterns/<name>/
     if let Some(store) = store_root {
         for root in &repo_roots {
-            if let Some(lockfile_path) = package::find_lockfile(root) {
-                if let Ok(lockfile) = package::load_lockfile(&lockfile_path) {
-                    for pkg in &lockfile.package {
-                        let commit_key = match pkg.source_kind {
-                            SourceKind::Local => "local",
-                            SourceKind::Git if pkg.commit.is_empty() => continue,
-                            SourceKind::Git => &pkg.commit,
-                        };
-                        if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
-                            search_roots.push(pkg_dir.join("patterns").join(name));
-                        }
+            if let Some(lockfile_path) = package::find_lockfile(root)
+                && let Ok(lockfile) = package::load_lockfile(&lockfile_path)
+            {
+                for pkg in &lockfile.package {
+                    let commit_key = match pkg.source_kind {
+                        SourceKind::Local => "local",
+                        SourceKind::Git if pkg.commit.is_empty() => continue,
+                        SourceKind::Git => &pkg.commit,
+                    };
+                    if let Ok(pkg_dir) = package::package_dir(store, &pkg.name, commit_key) {
+                        search_roots.push(pkg_dir.join("patterns").join(name));
                     }
                 }
             }

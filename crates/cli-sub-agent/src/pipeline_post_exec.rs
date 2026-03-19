@@ -136,8 +136,8 @@ pub(crate) async fn process_execution_result(
         .map(|cfg| &cfg.memory)
         .filter(|m| !m.is_default())
         .or_else(|| ctx.global_config.map(|cfg| &cfg.memory));
-    if let Some(memory_config) = memory_config {
-        if let Err(e) = memory_capture::capture_session_memory(
+    if let Some(memory_config) = memory_config
+        && let Err(e) = memory_capture::capture_session_memory(
             memory_config,
             &ctx.session_dir,
             ctx.memory_project_key.as_deref(),
@@ -145,9 +145,8 @@ pub(crate) async fn process_execution_result(
             Some(session.meta_session_id.as_str()),
         )
         .await
-        {
-            warn!("Memory capture failed: {}", e);
-        }
+    {
+        warn!("Memory capture failed: {}", e);
     }
 
     // SessionComplete hook: git-commits session artifacts
@@ -438,12 +437,11 @@ fn write_prompt_audit(session_dir: &Path, effective_prompt: &str) {
 
 fn persist_output_sections(session_dir: &Path) {
     let output_log_path = session_dir.join("output.log");
-    if output_log_path.exists() {
-        if let Err(e) =
+    if output_log_path.exists()
+        && let Err(e) =
             csa_session::persist_structured_output_from_file(session_dir, &output_log_path)
-        {
-            warn!("Failed to persist structured output: {}", e);
-        }
+    {
+        warn!("Failed to persist structured output: {}", e);
     }
 }
 

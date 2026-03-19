@@ -96,13 +96,13 @@ impl ProjectConfig {
         // If model_spec provided, verify tool/spec consistency and tier membership
         if let Some(spec) = model_spec {
             // Cross-field consistency: spec's tool component must match selected tool
-            if let Some(spec_tool) = spec.split('/').next() {
-                if spec_tool != tool {
-                    anyhow::bail!(
-                        "Model spec '{spec}' belongs to tool '{spec_tool}', not '{tool}'. \
+            if let Some(spec_tool) = spec.split('/').next()
+                && spec_tool != tool
+            {
+                anyhow::bail!(
+                    "Model spec '{spec}' belongs to tool '{spec_tool}', not '{tool}'. \
                          Use --tool {spec_tool} or select a spec for '{tool}'."
-                    );
-                }
+                );
             }
             if !self.is_model_spec_in_tiers(spec) {
                 let allowed = self.allowed_model_specs_for_tool(tool);

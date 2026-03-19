@@ -1,6 +1,6 @@
 use anyhow::Result;
 use csa_config::{McpServerConfig, McpTransport};
-use rmcp::model::CallToolRequestParam;
+use rmcp::model::CallToolRequestParams;
 use serde_json::json;
 use std::collections::HashMap;
 use std::fs;
@@ -89,17 +89,14 @@ done
     let response = registry
         .call_tool(
             "mock",
-            CallToolRequestParam {
-                name: "echo_tool".into(),
-                arguments: Some(
-                    json!({
-                        "value": "hello"
-                    })
-                    .as_object()
-                    .cloned()
-                    .unwrap_or_default(),
-                ),
-            },
+            CallToolRequestParams::new("echo_tool").with_arguments(
+                json!({
+                    "value": "hello"
+                })
+                .as_object()
+                .cloned()
+                .unwrap_or_default(),
+            ),
             ToolCallRoute::default(),
             CancellationToken::new(),
         )
@@ -202,10 +199,8 @@ done
         registry_first
             .call_tool(
                 "mock",
-                CallToolRequestParam {
-                    name: "echo_tool".into(),
-                    arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
-                },
+                CallToolRequestParams::new("echo_tool")
+                    .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
                 ToolCallRoute::default(),
                 CancellationToken::new(),
             )
@@ -221,10 +216,8 @@ done
         registry_second
             .call_tool(
                 "mock",
-                CallToolRequestParam {
-                    name: "echo_tool".into(),
-                    arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
-                },
+                CallToolRequestParams::new("echo_tool")
+                    .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
                 ToolCallRoute::default(),
                 cancellation_clone,
             )
@@ -354,10 +347,8 @@ done
     let result = registry
         .call_tool(
             "stateful",
-            CallToolRequestParam {
-                name: "echo_tool".into(),
-                arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
-            },
+            CallToolRequestParams::new("echo_tool")
+                .with_arguments(json!({}).as_object().cloned().unwrap_or_default()),
             ToolCallRoute::default(),
             CancellationToken::new(),
         )
@@ -410,10 +401,8 @@ done
         project_root: Some(PathBuf::from("/workspace/app")),
         toolchain_hash: Some(7),
     };
-    let request = CallToolRequestParam {
-        name: "echo_tool".into(),
-        arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
-    };
+    let request = CallToolRequestParams::new("echo_tool")
+        .with_arguments(json!({}).as_object().cloned().unwrap_or_default());
 
     let first = pool
         .call_tool(request.clone(), route.clone(), CancellationToken::new())
@@ -465,10 +454,8 @@ done
     pool.max_active_pools = 1;
     let pool = Arc::new(pool);
 
-    let request = CallToolRequestParam {
-        name: "echo_tool".into(),
-        arguments: Some(json!({}).as_object().cloned().unwrap_or_default()),
-    };
+    let request = CallToolRequestParams::new("echo_tool")
+        .with_arguments(json!({}).as_object().cloned().unwrap_or_default());
 
     let first_pool = pool.clone();
     let first_request = request.clone();

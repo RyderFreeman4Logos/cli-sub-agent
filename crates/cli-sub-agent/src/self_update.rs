@@ -56,13 +56,13 @@ fn fetch_latest_release() -> Result<ReleaseInfo> {
     let json = String::from_utf8_lossy(&output.stdout);
 
     // Check if the response is a 404 error
-    if let Ok(error_response) = serde_json::from_str::<GitHubError>(&json) {
-        if error_response.message == "Not Found" {
-            anyhow::bail!(
-                "No releases found for this project.\n\
+    if let Ok(error_response) = serde_json::from_str::<GitHubError>(&json)
+        && error_response.message == "Not Found"
+    {
+        anyhow::bail!(
+            "No releases found for this project.\n\
                  Please check https://github.com/RyderFreeman4Logos/cli-sub-agent/releases for updates."
-            );
-        }
+        );
     }
 
     serde_json::from_str(&json)

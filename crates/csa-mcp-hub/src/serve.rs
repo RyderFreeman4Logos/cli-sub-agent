@@ -7,7 +7,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use axum::extract::DefaultBodyLimit;
-use rmcp::transport::{SseServer, sse_server::SseServerConfig};
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpServerConfig, StreamableHttpService, session::never::NeverSessionManager,
+};
 use serde_json::{Value, json};
 use tokio::io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Semaphore;
@@ -22,8 +24,7 @@ use crate::skill_writer::{
 };
 use crate::socket;
 
-const SSE_PATH: &str = "/";
-const SSE_POST_PATH: &str = "/message";
+const MCP_PATH: &str = "/mcp";
 
 pub async fn handle_serve_command(
     background: bool,
@@ -153,11 +154,11 @@ pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<
         "mcp-hub listening on unix://{} and http://{}{}",
         cfg.socket_path.display(),
         http_endpoint.addr,
-        SSE_PATH
+        MCP_PATH
     );
     println!(
-        "claude mcp add --transport http csa-hub http://{}",
-        http_endpoint.addr
+        "claude mcp add --transport http csa-hub http://{}{}",
+        http_endpoint.addr, MCP_PATH
     );
 
     loop {
@@ -243,19 +244,24 @@ impl HttpEndpoint {
             .context("failed to resolve local mcp-hub HTTP address")?;
 
         let shutdown = CancellationToken::new();
-        let (sse_server, sse_router) = SseServer::new(SseServerConfig {
-            bind: local_addr,
-            sse_path: SSE_PATH.to_string(),
-            post_path: SSE_POST_PATH.to_string(),
-            ct: shutdown.clone(),
-            sse_keep_alive: None,
-        });
-        let _server_ct = sse_server.with_service_directly({
-            let hub_service = (*router).clone();
-            move || hub_service.clone()
-        });
+        let session_manager = Arc::new(NeverSessionManager::default());
+        let mcp_service = StreamableHttpService::new(
+            {
+                let hub_service = (*router).clone();
+                move || Ok(hub_service.clone())
+            },
+            session_manager,
+            StreamableHttpServerConfig {
+                cancellation_token: shutdown.clone(),
+                stateful_mode: false,
+                sse_keep_alive: None,
+                ..Default::default()
+            },
+        );
 
-        let app = sse_router.layer(DefaultBodyLimit::max(cfg.max_request_body_bytes));
+        let app = axum::Router::new()
+            .route(MCP_PATH, axum::routing::any_service(mcp_service))
+            .layer(DefaultBodyLimit::max(cfg.max_request_body_bytes));
         let server_shutdown = shutdown.clone();
         let server_task = tokio::spawn(async move {
             if let Err(error) = axum::serve(listener, app)

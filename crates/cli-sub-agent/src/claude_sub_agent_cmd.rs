@@ -179,20 +179,19 @@ fn resolve_auto_tool(
         .collect();
 
     // Try heterogeneous selection on actually-available tools
-    if let Some(parent) = parent_tool {
-        if let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent) {
-            if let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &available_tools) {
-                return Ok(tool);
-            }
-        }
+    if let Some(parent) = parent_tool
+        && let Ok(parent_tool_name) = crate::run_helpers::parse_tool_name(parent)
+        && let Some(tool) = select_heterogeneous_tool(&parent_tool_name, &available_tools)
+    {
+        return Ok(tool);
     }
 
     // Fallback: first available in preference order
     for preferred in &["codex", "claude-code", "opencode", "gemini-cli"] {
-        if let Ok(tool) = crate::run_helpers::parse_tool_name(preferred) {
-            if available_tools.contains(&tool) {
-                return Ok(tool);
-            }
+        if let Ok(tool) = crate::run_helpers::parse_tool_name(preferred)
+            && available_tools.contains(&tool)
+        {
+            return Ok(tool);
         }
     }
 

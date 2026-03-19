@@ -218,19 +218,19 @@ fn validate_timeout(
     timeout: Option<u64>,
     min_timeout: u64,
 ) -> std::result::Result<(), clap::Error> {
-    if let Some(t) = timeout {
-        if t < min_timeout {
-            let min_minutes = min_timeout / 60;
-            return Err(clap::Error::raw(
-                clap::error::ErrorKind::ValueValidation,
-                format!(
-                    "Absolute timeout (--timeout) must be at least {min_timeout} seconds ({min_minutes} minutes). \
+    if let Some(t) = timeout
+        && t < min_timeout
+    {
+        let min_minutes = min_timeout / 60;
+        return Err(clap::Error::raw(
+            clap::error::ErrorKind::ValueValidation,
+            format!(
+                "Absolute timeout (--timeout) must be at least {min_timeout} seconds ({min_minutes} minutes). \
                      Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
                      Record this in your CLAUDE.md or memory: CSA minimum timeout is {min_timeout} seconds. \
                      Configure via [execution] min_timeout_seconds in .csa/config.toml or global config."
-                ),
-            ));
-        }
+            ),
+        ));
     }
     Ok(())
 }

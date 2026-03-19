@@ -498,10 +498,10 @@ pub fn resolve_resume_session(
         Ok(resolution) => Ok(resolution),
         Err(read_error) => {
             let primary = get_session_root(project_path)?;
-            if primary != read_base {
-                if let Ok(resolution) = resolve_resume_session_in(&primary, session_ref, tool) {
-                    return Ok(resolution);
-                }
+            if primary != read_base
+                && let Ok(resolution) = resolve_resume_session_in(&primary, session_ref, tool)
+            {
+                return Ok(resolution);
             }
             let Some(legacy) = legacy_session_root(project_path) else {
                 return Err(read_error);
@@ -644,15 +644,16 @@ pub fn validate_tool_access(project_path: &Path, session_id: &str, tool: &str) -
 
 /// Internal implementation: validate tool access in explicit base directory
 pub(crate) fn validate_tool_access_in(base_dir: &Path, session_id: &str, tool: &str) -> Result<()> {
-    if let Some(metadata) = load_metadata_in(base_dir, session_id)? {
-        if metadata.tool_locked && metadata.tool != tool {
-            anyhow::bail!(
-                "Session '{}' is locked to tool '{}', cannot access with '{}'",
-                session_id,
-                metadata.tool,
-                tool
-            );
-        }
+    if let Some(metadata) = load_metadata_in(base_dir, session_id)?
+        && metadata.tool_locked
+        && metadata.tool != tool
+    {
+        anyhow::bail!(
+            "Session '{}' is locked to tool '{}', cannot access with '{}'",
+            session_id,
+            metadata.tool,
+            tool
+        );
     }
     Ok(())
 }

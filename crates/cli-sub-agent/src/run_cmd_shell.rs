@@ -170,10 +170,10 @@ fn segment_contains_forbidden_no_verify_commit(segment: &str) -> bool {
         return false;
     }
 
-    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens) {
-        if shell_script_contains_forbidden_no_verify_commit(shell_script_tokens) {
-            return true;
-        }
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
+        && shell_script_contains_forbidden_no_verify_commit(shell_script_tokens)
+    {
+        return true;
     }
 
     let Some((_, git_commit_subcommand_idx)) = locate_git_commit_command(&tokens) else {

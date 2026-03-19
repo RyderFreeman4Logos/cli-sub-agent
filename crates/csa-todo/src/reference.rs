@@ -236,11 +236,12 @@ impl TodoManager {
         for entry in &mut index.files {
             entry.path = refs_dir.join(&entry.name);
 
-            if with_tokens && entry.token_estimate.is_none() {
-                if let Ok(count) = token_estimate::estimate_tokens(&entry.path) {
-                    entry.token_estimate = Some(count);
-                    index_dirty = true;
-                }
+            if with_tokens
+                && entry.token_estimate.is_none()
+                && let Ok(count) = token_estimate::estimate_tokens(&entry.path)
+            {
+                entry.token_estimate = Some(count);
+                index_dirty = true;
             }
         }
 

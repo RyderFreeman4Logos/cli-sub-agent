@@ -66,16 +66,16 @@ pub(crate) fn handle_init(non_interactive: bool, full: bool, template: bool) -> 
     }
 
     // Generate global config if it doesn't exist
-    if let Ok(global_path) = GlobalConfig::config_path() {
-        if !global_path.exists() {
-            match GlobalConfig::save_default_template() {
-                Ok(path) => {
-                    eprintln!("Generated global config template at: {}", path.display());
-                    eprintln!("  Edit to configure API keys and concurrency limits.");
-                }
-                Err(e) => {
-                    warn!("Failed to generate global config: {}", e);
-                }
+    if let Ok(global_path) = GlobalConfig::config_path()
+        && !global_path.exists()
+    {
+        match GlobalConfig::save_default_template() {
+            Ok(path) => {
+                eprintln!("Generated global config template at: {}", path.display());
+                eprintln!("  Edit to configure API keys and concurrency limits.");
+            }
+            Err(e) => {
+                warn!("Failed to generate global config: {}", e);
             }
         }
     }
@@ -331,27 +331,27 @@ mod tests {
 
     #[test]
     fn resolve_key_scalar() {
-        let root: toml::Value = "[review]\ntool = \"auto\"\n".parse().unwrap();
+        let root: toml::Value = toml::from_str("[review]\ntool = \"auto\"\n").unwrap();
         let val = resolve_key(&root, "review.tool").unwrap();
         assert_eq!(val.as_str(), Some("auto"));
     }
 
     #[test]
     fn resolve_key_nested() {
-        let root: toml::Value = "[tools.codex]\nenabled = true\n".parse().unwrap();
+        let root: toml::Value = toml::from_str("[tools.codex]\nenabled = true\n").unwrap();
         let val = resolve_key(&root, "tools.codex.enabled").unwrap();
         assert_eq!(val.as_bool(), Some(true));
     }
 
     #[test]
     fn resolve_key_missing() {
-        let root: toml::Value = "[review]\ntool = \"auto\"\n".parse().unwrap();
+        let root: toml::Value = toml::from_str("[review]\ntool = \"auto\"\n").unwrap();
         assert!(resolve_key(&root, "nonexistent.key").is_none());
     }
 
     #[test]
     fn resolve_key_partial_path() {
-        let root: toml::Value = "[review]\ntool = \"auto\"\n".parse().unwrap();
+        let root: toml::Value = toml::from_str("[review]\ntool = \"auto\"\n").unwrap();
         // "review" is a table, not a leaf — resolve_key returns the table
         let val = resolve_key(&root, "review").unwrap();
         assert!(val.is_table());

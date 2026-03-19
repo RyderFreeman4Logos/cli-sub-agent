@@ -85,22 +85,22 @@ pub fn soft_fork_session(
     }
 
     // 2. Read output/index.toml for section list
-    if let Ok(Some(index)) = load_output_index(parent_session_dir) {
-        if !index.sections.is_empty() {
-            let section_ids: Vec<&str> = index.sections.iter().map(|s| s.id.as_str()).collect();
-            parts.push(format!(
-                "Structured output sections: {} (total ~{} tokens).",
-                section_ids.join(", "),
-                index.total_tokens
-            ));
-        }
+    if let Ok(Some(index)) = load_output_index(parent_session_dir)
+        && !index.sections.is_empty()
+    {
+        let section_ids: Vec<&str> = index.sections.iter().map(|s| s.id.as_str()).collect();
+        parts.push(format!(
+            "Structured output sections: {} (total ~{} tokens).",
+            section_ids.join(", "),
+            index.total_tokens
+        ));
     }
 
     // 3. Read summary section content if available
-    if let Ok(Some(summary_content)) = read_section(parent_session_dir, "summary") {
-        if !summary_content.is_empty() {
-            parts.push(format!("Summary from parent:\n{summary_content}"));
-        }
+    if let Ok(Some(summary_content)) = read_section(parent_session_dir, "summary")
+        && !summary_content.is_empty()
+    {
+        parts.push(format!("Summary from parent:\n{summary_content}"));
     }
 
     // Assemble and truncate

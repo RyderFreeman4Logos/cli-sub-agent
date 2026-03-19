@@ -181,13 +181,13 @@ fn find_skill_source(dir: &Path) -> Option<PathBuf> {
     }
 
     let skills_dir = dir.join("skills");
-    if skills_dir.is_dir() {
-        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
-            for entry in entries.flatten() {
-                let skill_md = entry.path().join("SKILL.md");
-                if skill_md.is_file() {
-                    return Some(skill_md);
-                }
+    if skills_dir.is_dir()
+        && let Ok(entries) = std::fs::read_dir(&skills_dir)
+    {
+        for entry in entries.flatten() {
+            let skill_md = entry.path().join("SKILL.md");
+            if skill_md.is_file() {
+                return Some(skill_md);
             }
         }
     }

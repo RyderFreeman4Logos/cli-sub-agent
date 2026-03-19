@@ -27,7 +27,7 @@ use std::fs::{self, File};
 #[cfg(unix)]
 use std::io::{self, Read, Write};
 #[cfg(unix)]
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
 #[cfg(unix)]
@@ -337,9 +337,9 @@ fn spawn_codex_fork_pty(
     .context("failed to allocate PTY")?;
 
     let slave_fd_raw = pty.slave.as_raw_fd();
-    let stdin_fd = dup(slave_fd_raw).context("failed to dup PTY slave for stdin")?;
-    let stdout_fd = dup(slave_fd_raw).context("failed to dup PTY slave for stdout")?;
-    let stderr_fd = dup(slave_fd_raw).context("failed to dup PTY slave for stderr")?;
+    let stdin_fd = dup(&pty.slave).context("failed to dup PTY slave for stdin")?;
+    let stdout_fd = dup(&pty.slave).context("failed to dup PTY slave for stdout")?;
+    let stderr_fd = dup(&pty.slave).context("failed to dup PTY slave for stderr")?;
 
     let mut cmd = StdCommand::new(codex_path);
     cmd.arg("fork")
@@ -347,9 +347,9 @@ fn spawn_codex_fork_pty(
         .arg(prompt_marker)
         .arg("--dangerously-bypass-approvals-and-sandbox")
         .arg("--no-alt-screen")
-        .stdin(Stdio::from(File::from(raw_fd_to_owned_fd(stdin_fd))))
-        .stdout(Stdio::from(File::from(raw_fd_to_owned_fd(stdout_fd))))
-        .stderr(Stdio::from(File::from(raw_fd_to_owned_fd(stderr_fd))));
+        .stdin(Stdio::from(File::from(stdin_fd)))
+        .stdout(Stdio::from(File::from(stdout_fd)))
+        .stderr(Stdio::from(File::from(stderr_fd)));
 
     // SAFETY: `pre_exec` runs in the child process before `exec`. We only call
     // async-signal-safe operations (`setsid`, `ioctl(TIOCSCTTY)`) and return an
@@ -492,13 +492,6 @@ async fn terminate_pty_child(child: &mut std::process::Child) {
 
     let _ = child.kill();
     let _ = child.wait();
-}
-
-#[cfg(unix)]
-fn raw_fd_to_owned_fd(raw_fd: i32) -> OwnedFd {
-    // SAFETY: `raw_fd` comes from successful `dup(2)` calls and is uniquely
-    // owned by this function, so converting to `OwnedFd` is valid.
-    unsafe { OwnedFd::from_raw_fd(raw_fd) }
 }
 
 #[cfg(unix)]

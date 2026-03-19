@@ -1,12 +1,12 @@
 /// Warn about deprecated config keys that serde silently ignores.
 pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
-    if let Some(resources) = raw.get("resources") {
-        if resources.get("min_free_swap_mb").is_some() {
-            eprintln!(
-                "warning: config '{source}': 'resources.min_free_swap_mb' is deprecated and ignored. \
+    if let Some(resources) = raw.get("resources")
+        && resources.get("min_free_swap_mb").is_some()
+    {
+        eprintln!(
+            "warning: config '{source}': 'resources.min_free_swap_mb' is deprecated and ignored. \
                  Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead."
-            );
-        }
+        );
     }
 }
 
@@ -76,10 +76,10 @@ pub(crate) fn enforce_global_tool_disables(global: &toml::Value, merged: &mut to
             continue;
         }
         // Force `enabled = false` in the merged config for this tool.
-        if let Some(merged_tool) = merged_tools.get_mut(tool_name) {
-            if let Some(table) = merged_tool.as_table_mut() {
-                table.insert("enabled".to_string(), toml::Value::Boolean(false));
-            }
+        if let Some(merged_tool) = merged_tools.get_mut(tool_name)
+            && let Some(table) = merged_tool.as_table_mut()
+        {
+            table.insert("enabled".to_string(), toml::Value::Boolean(false));
         }
     }
 }

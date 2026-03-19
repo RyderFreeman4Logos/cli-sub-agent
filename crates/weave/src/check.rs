@@ -185,17 +185,15 @@ pub fn check_symlinks(
 
                 if fix {
                     // Only remove the symlink itself, never follow it.
-                    if let Ok(m) = std::fs::symlink_metadata(&path) {
-                        if m.file_type().is_symlink() {
-                            // Try remove_file first (works for file symlinks
-                            // on all platforms).  Fall back to remove_dir for
-                            // Windows directory symlinks/junctions.
-                            match std::fs::remove_file(&path)
-                                .or_else(|_| std::fs::remove_dir(&path))
-                            {
-                                Ok(()) => fixed += 1,
-                                Err(_) => fix_failures += 1,
-                            }
+                    if let Ok(m) = std::fs::symlink_metadata(&path)
+                        && m.file_type().is_symlink()
+                    {
+                        // Try remove_file first (works for file symlinks
+                        // on all platforms).  Fall back to remove_dir for
+                        // Windows directory symlinks/junctions.
+                        match std::fs::remove_file(&path).or_else(|_| std::fs::remove_dir(&path)) {
+                            Ok(()) => fixed += 1,
+                            Err(_) => fix_failures += 1,
                         }
                     }
                 }

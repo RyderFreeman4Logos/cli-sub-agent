@@ -94,30 +94,27 @@ pub(crate) fn resolve_tool_and_model(
     };
 
     // Case 0: --tier provided → resolve tool/model from tier definition
-    if let Some(ref canonical_name) = canonical_tier {
-        if let Some(cfg) = config {
-            if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, None) {
-                // Flow resolved tool through existing enforcement checks
-                cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
-                if !force {
-                    cfg.enforce_tier_whitelist(
-                        resolution.tool.as_str(),
-                        Some(&resolution.model_spec),
-                    )?;
-                }
-                let resolved_model = model.map(|m| {
-                    config
-                        .map(|cfg| cfg.resolve_alias(m))
-                        .unwrap_or_else(|| m.to_string())
-                });
-                return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
+    if let Some(ref canonical_name) = canonical_tier
+        && let Some(cfg) = config
+    {
+        if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, None) {
+            // Flow resolved tool through existing enforcement checks
+            cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
+            if !force {
+                cfg.enforce_tier_whitelist(resolution.tool.as_str(), Some(&resolution.model_spec))?;
             }
-            anyhow::bail!(
-                "No available tool found in tier '{}'. Check that at least one tool \
-                 in the tier is enabled and installed.",
-                canonical_name
-            );
+            let resolved_model = model.map(|m| {
+                config
+                    .map(|cfg| cfg.resolve_alias(m))
+                    .unwrap_or_else(|| m.to_string())
+            });
+            return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
         }
+        anyhow::bail!(
+            "No available tool found in tier '{}'. Check that at least one tool \
+                 in the tier is enabled and installed.",
+            canonical_name
+        );
     }
 
     // Case 1: model_spec provided → parse it to get tool
@@ -129,10 +126,11 @@ pub(crate) fn resolve_tool_and_model(
             cfg.enforce_tool_enabled(tool_name.as_str(), force_override_user_config)?;
         }
         // Enforce tier whitelist: model-spec must appear in tiers
-        if !force && !bypass_tier {
-            if let Some(cfg) = config {
-                cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
-            }
+        if !force
+            && !bypass_tier
+            && let Some(cfg) = config
+        {
+            cfg.enforce_tier_whitelist(tool_name.as_str(), Some(spec))?;
         }
         return Ok((tool_name, Some(spec.to_string()), None));
     }
@@ -149,11 +147,12 @@ pub(crate) fn resolve_tool_and_model(
                 .unwrap_or_else(|| m.to_string())
         });
         // Enforce tier whitelist: tool must be in tiers; model name must match if provided
-        if !force && !bypass_tier {
-            if let Some(cfg) = config {
-                cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
-                cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
-            }
+        if !force
+            && !bypass_tier
+            && let Some(cfg) = config
+        {
+            cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
+            cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
         }
         return Ok((tool_name, None, resolved_model));
     }
@@ -199,14 +198,14 @@ pub(crate) fn resolve_tool_and_model(
 
     // Fallback: minimal-init configs with empty tiers — pick any auto-selectable installed tool.
     // Only activates when tiers are empty to avoid silently bypassing configured tier mappings.
-    if let Some(cfg) = config {
-        if cfg.tiers.is_empty() {
-            for tool in csa_config::global::all_known_tools() {
-                let name = tool.as_str();
-                if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
-                    let tool_name = parse_tool_name(name)?;
-                    return Ok((tool_name, None, None));
-                }
+    if let Some(cfg) = config
+        && cfg.tiers.is_empty()
+    {
+        for tool in csa_config::global::all_known_tools() {
+            let name = tool.as_str();
+            if cfg.is_tool_auto_selectable(name) && is_tool_binary_available(name) {
+                let tool_name = parse_tool_name(name)?;
+                return Ok((tool_name, None, None));
             }
         }
     }
@@ -300,10 +299,10 @@ pub(crate) fn truncate_prompt(s: &str, max_len: usize) -> String {
         let substring = &s[..byte_offset];
 
         // Try to break at last space if possible
-        if let Some(last_space) = substring.rfind(' ') {
-            if last_space > byte_offset / 2 {
-                return format!("{}...", &s[..last_space]);
-            }
+        if let Some(last_space) = substring.rfind(' ')
+            && last_space > byte_offset / 2
+        {
+            return format!("{}...", &s[..last_space]);
         }
 
         format!("{substring}...")
@@ -325,19 +324,19 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
         let line_lower = line.to_lowercase();
 
         // Parse input_tokens
-        if let Some(pos) = line_lower.find("input_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.input_tokens = Some(val);
-                found_any = true;
-            }
+        if let Some(pos) = line_lower.find("input_tokens")
+            && let Some(val) = extract_number(&line[pos..])
+        {
+            usage.input_tokens = Some(val);
+            found_any = true;
         }
 
         // Parse output_tokens
-        if let Some(pos) = line_lower.find("output_tokens") {
-            if let Some(val) = extract_number(&line[pos..]) {
-                usage.output_tokens = Some(val);
-                found_any = true;
-            }
+        if let Some(pos) = line_lower.find("output_tokens")
+            && let Some(val) = extract_number(&line[pos..])
+        {
+            usage.output_tokens = Some(val);
+            found_any = true;
         }
 
         // Parse total_tokens
@@ -352,29 +351,27 @@ pub(crate) fn parse_token_usage(output: &str) -> Option<TokenUsage> {
             // handled above).
             let prev = line_lower.as_bytes().get(pos.wrapping_sub(1)).copied();
             let is_standalone = pos == 0 || !matches!(prev, Some(b'a'..=b'z' | b'A'..=b'Z' | b'_'));
-            if is_standalone {
-                if let Some(val) = extract_number(&line[pos..]) {
-                    usage.total_tokens = Some(val);
-                    found_any = true;
-                }
+            if is_standalone && let Some(val) = extract_number(&line[pos..]) {
+                usage.total_tokens = Some(val);
+                found_any = true;
             }
         }
 
         // Parse cost (look for "$N.NN" pattern)
-        if line_lower.contains("cost") {
-            if let Some(val) = extract_cost(line) {
-                usage.estimated_cost_usd = Some(val);
-                found_any = true;
-            }
+        if line_lower.contains("cost")
+            && let Some(val) = extract_cost(line)
+        {
+            usage.estimated_cost_usd = Some(val);
+            found_any = true;
         }
     }
 
     // Calculate total_tokens if not found but input/output are available
-    if usage.total_tokens.is_none() {
-        if let (Some(input), Some(output)) = (usage.input_tokens, usage.output_tokens) {
-            usage.total_tokens = Some(input + output);
-            found_any = true;
-        }
+    if usage.total_tokens.is_none()
+        && let (Some(input), Some(output)) = (usage.input_tokens, usage.output_tokens)
+    {
+        usage.total_tokens = Some(input + output);
+        found_any = true;
     }
 
     if found_any { Some(usage) } else { None }
@@ -482,10 +479,10 @@ pub(crate) fn resolve_tool_from_tier(
                 return None;
             }
             // Apply whitelist filter if provided
-            if let Some(wl) = whitelist {
-                if !wl.iter().any(|w| w == tool_str) {
-                    return None;
-                }
+            if let Some(wl) = whitelist
+                && !wl.iter().any(|w| w == tool_str)
+            {
+                return None;
             }
             Some((tool, spec.as_str()))
         })
@@ -496,16 +493,15 @@ pub(crate) fn resolve_tool_from_tier(
     }
 
     // Prefer heterogeneous (different model family from parent)
-    if let Some(parent_fam) = parent_family {
-        if let Some((tool, spec)) = available
+    if let Some(parent_fam) = parent_family
+        && let Some((tool, spec)) = available
             .iter()
             .find(|(t, _)| t.model_family() != parent_fam)
-        {
-            return Some(TierToolResolution {
-                tool: *tool,
-                model_spec: spec.to_string(),
-            });
-        }
+    {
+        return Some(TierToolResolution {
+            tool: *tool,
+            model_spec: spec.to_string(),
+        });
     }
 
     // No heterogeneous option (or no parent) — use first available

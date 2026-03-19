@@ -39,32 +39,30 @@ pub(crate) fn handle_gc(
         let session_dir = get_session_dir(&project_root, &session.meta_session_id)?;
         let locks_dir = session_dir.join("locks");
 
-        if locks_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&locks_dir) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.extension().is_some_and(|ext| ext == "lock") {
-                        if let Ok(content) = fs::read_to_string(&path) {
-                            if let Some(pid) = extract_pid_from_lock(&content) {
-                                if !is_process_alive(pid) {
-                                    if dry_run {
-                                        eprintln!(
-                                            "[dry-run] Would remove stale lock for dead PID {}: {:?}",
-                                            pid,
-                                            path.file_name()
-                                        );
-                                        stale_locks_removed += 1;
-                                    } else if fs::remove_file(&path).is_ok() {
-                                        info!(
-                                            "Removed stale lock for dead PID {}: {:?}",
-                                            pid,
-                                            path.file_name()
-                                        );
-                                        stale_locks_removed += 1;
-                                    }
-                                }
-                            }
-                        }
+        if locks_dir.exists()
+            && let Ok(entries) = fs::read_dir(&locks_dir)
+        {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().is_some_and(|ext| ext == "lock")
+                    && let Ok(content) = fs::read_to_string(&path)
+                    && let Some(pid) = extract_pid_from_lock(&content)
+                    && !is_process_alive(pid)
+                {
+                    if dry_run {
+                        eprintln!(
+                            "[dry-run] Would remove stale lock for dead PID {}: {:?}",
+                            pid,
+                            path.file_name()
+                        );
+                        stale_locks_removed += 1;
+                    } else if fs::remove_file(&path).is_ok() {
+                        info!(
+                            "Removed stale lock for dead PID {}: {:?}",
+                            pid,
+                            path.file_name()
+                        );
+                        stale_locks_removed += 1;
                     }
                 }
             }
@@ -130,19 +128,19 @@ pub(crate) fn handle_gc(
             }
         }
 
-        if let Some(days) = max_age_days {
-            if age.num_days() > days as i64 {
-                if dry_run {
-                    eprintln!(
-                        "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
-                        session.meta_session_id,
-                        age.num_days()
-                    );
-                    expired_sessions_removed += 1;
-                } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
-                    info!("Removed expired session: {}", session.meta_session_id);
-                    expired_sessions_removed += 1;
-                }
+        if let Some(days) = max_age_days
+            && age.num_days() > days as i64
+        {
+            if dry_run {
+                eprintln!(
+                    "[dry-run] Would remove expired session: {} (last accessed {} days ago)",
+                    session.meta_session_id,
+                    age.num_days()
+                );
+                expired_sessions_removed += 1;
+            } else if delete_session(&project_root, &session.meta_session_id).is_ok() {
+                info!("Removed expired session: {}", session.meta_session_id);
+                expired_sessions_removed += 1;
             }
         }
     }
@@ -162,24 +160,24 @@ pub(crate) fn handle_gc(
 
     let sessions_dir = session_root.join("sessions");
 
-    if sessions_dir.exists() {
-        if let Ok(entries) = fs::read_dir(&sessions_dir) {
-            for entry in entries.flatten() {
-                if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
-                    let session_dir = entry.path();
-                    if dry_run {
-                        eprintln!(
-                            "[dry-run] Would remove orphan directory: {}",
-                            session_dir.display()
-                        );
-                        orphan_dirs_removed += 1;
-                    } else if fs::remove_dir_all(&session_dir).is_ok() {
-                        info!(
-                            "Removed orphan directory without state.toml: {}",
-                            session_dir.display()
-                        );
-                        orphan_dirs_removed += 1;
-                    }
+    if sessions_dir.exists()
+        && let Ok(entries) = fs::read_dir(&sessions_dir)
+    {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
+                let session_dir = entry.path();
+                if dry_run {
+                    eprintln!(
+                        "[dry-run] Would remove orphan directory: {}",
+                        session_dir.display()
+                    );
+                    orphan_dirs_removed += 1;
+                } else if fs::remove_dir_all(&session_dir).is_ok() {
+                    info!(
+                        "Removed orphan directory without state.toml: {}",
+                        session_dir.display()
+                    );
+                    orphan_dirs_removed += 1;
                 }
             }
         }
@@ -188,44 +186,41 @@ pub(crate) fn handle_gc(
     let transcript_stats = cleanup_project_transcripts(&session_root, gc_config, dry_run);
 
     let mut stale_slots_cleaned = 0;
-    if let Ok(slots_dir) = GlobalConfig::slots_dir() {
-        if slots_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&slots_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                        let tool_dir = entry.path();
-                        if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
-                            for slot_entry in slot_entries.flatten() {
-                                let path = slot_entry.path();
-                                if path.extension().is_some_and(|ext| ext == "lock") {
-                                    if let Ok(content) = fs::read_to_string(&path) {
-                                        if let Some(pid) = extract_pid_from_lock(&content) {
-                                            if !is_process_alive(pid) {
-                                                if dry_run {
-                                                    eprintln!(
-                                                        "[dry-run] Would clean stale slot: {:?} (dead PID {})",
-                                                        path.file_name(),
-                                                        pid
-                                                    );
-                                                    stale_slots_cleaned += 1;
-                                                } else if fs::remove_file(&path).is_ok() {
-                                                    info!(
-                                                        "Cleaned stale slot: {:?} (dead PID {})",
-                                                        path.file_name(),
-                                                        pid
-                                                    );
-                                                    stale_slots_cleaned += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+    if let Ok(slots_dir) = GlobalConfig::slots_dir()
+        && slots_dir.exists()
+        && let Ok(entries) = fs::read_dir(&slots_dir)
+    {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                let tool_dir = entry.path();
+                if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
+                    for slot_entry in slot_entries.flatten() {
+                        let path = slot_entry.path();
+                        if path.extension().is_some_and(|ext| ext == "lock")
+                            && let Ok(content) = fs::read_to_string(&path)
+                            && let Some(pid) = extract_pid_from_lock(&content)
+                            && !is_process_alive(pid)
+                        {
+                            if dry_run {
+                                eprintln!(
+                                    "[dry-run] Would clean stale slot: {:?} (dead PID {})",
+                                    path.file_name(),
+                                    pid
+                                );
+                                stale_slots_cleaned += 1;
+                            } else if fs::remove_file(&path).is_ok() {
+                                info!(
+                                    "Cleaned stale slot: {:?} (dead PID {})",
+                                    path.file_name(),
+                                    pid
+                                );
+                                stale_slots_cleaned += 1;
                             }
                         }
-                        if !dry_run {
-                            let _ = fs::remove_dir(&tool_dir); // only succeeds if empty
-                        }
                     }
+                }
+                if !dry_run {
+                    let _ = fs::remove_dir(&tool_dir); // only succeeds if empty
                 }
             }
         }
@@ -331,32 +326,26 @@ pub(crate) fn handle_gc_global(
             let session_dir = session_root.join("sessions").join(&session.meta_session_id);
             let locks_dir = session_dir.join("locks");
 
-            if locks_dir.exists() {
-                if let Ok(entries) = fs::read_dir(&locks_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-                        if path.extension().is_some_and(|ext| ext == "lock") {
-                            if let Ok(content) = fs::read_to_string(&path) {
-                                if let Some(pid) = extract_pid_from_lock(&content) {
-                                    if !is_process_alive(pid) {
-                                        if dry_run {
-                                            eprintln!(
-                                                "[dry-run] Would remove stale lock (PID {}): {}",
-                                                pid,
-                                                path.display()
-                                            );
-                                            total_stale_locks += 1;
-                                        } else if fs::remove_file(&path).is_ok() {
-                                            info!(
-                                                "Removed stale lock (PID {}): {}",
-                                                pid,
-                                                path.display()
-                                            );
-                                            total_stale_locks += 1;
-                                        }
-                                    }
-                                }
-                            }
+            if locks_dir.exists()
+                && let Ok(entries) = fs::read_dir(&locks_dir)
+            {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().is_some_and(|ext| ext == "lock")
+                        && let Ok(content) = fs::read_to_string(&path)
+                        && let Some(pid) = extract_pid_from_lock(&content)
+                        && !is_process_alive(pid)
+                    {
+                        if dry_run {
+                            eprintln!(
+                                "[dry-run] Would remove stale lock (PID {}): {}",
+                                pid,
+                                path.display()
+                            );
+                            total_stale_locks += 1;
+                        } else if fs::remove_file(&path).is_ok() {
+                            info!("Removed stale lock (PID {}): {}", pid, path.display());
+                            total_stale_locks += 1;
                         }
                     }
                 }
@@ -433,31 +422,31 @@ pub(crate) fn handle_gc_global(
                 }
             }
 
-            if let Some(days) = max_age_days {
-                if age.num_days() > days as i64 {
-                    if dry_run {
-                        eprintln!(
-                            "[dry-run] Would remove expired session: {} ({} days old, in {})",
-                            session.meta_session_id,
-                            age.num_days(),
-                            session_root.display()
-                        );
-                        total_expired_sessions += 1;
-                        project_removed += 1;
-                    } else if csa_session::delete_session_from_root(
-                        session_root,
-                        &session.meta_session_id,
-                    )
-                    .is_ok()
-                    {
-                        info!(
-                            "Removed expired session: {} (in {})",
-                            session.meta_session_id,
-                            session_root.display()
-                        );
-                        total_expired_sessions += 1;
-                        project_removed += 1;
-                    }
+            if let Some(days) = max_age_days
+                && age.num_days() > days as i64
+            {
+                if dry_run {
+                    eprintln!(
+                        "[dry-run] Would remove expired session: {} ({} days old, in {})",
+                        session.meta_session_id,
+                        age.num_days(),
+                        session_root.display()
+                    );
+                    total_expired_sessions += 1;
+                    project_removed += 1;
+                } else if csa_session::delete_session_from_root(
+                    session_root,
+                    &session.meta_session_id,
+                )
+                .is_ok()
+                {
+                    info!(
+                        "Removed expired session: {} (in {})",
+                        session.meta_session_id,
+                        session_root.display()
+                    );
+                    total_expired_sessions += 1;
+                    project_removed += 1;
                 }
             }
         }
@@ -467,23 +456,19 @@ pub(crate) fn handle_gc_global(
             && !fs::symlink_metadata(&sessions_dir)
                 .map(|m| m.file_type().is_symlink())
                 .unwrap_or(true);
-        if sessions_is_real_dir {
-            if let Ok(entries) = fs::read_dir(&sessions_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_type().is_ok_and(|ft| ft.is_dir())
-                        && is_orphan_session_dir(&entry)
-                    {
-                        let session_dir = entry.path();
-                        if dry_run {
-                            eprintln!(
-                                "[dry-run] Would remove orphan directory: {}",
-                                session_dir.display()
-                            );
-                            total_orphan_dirs += 1;
-                        } else if fs::remove_dir_all(&session_dir).is_ok() {
-                            info!("Removed orphan directory: {}", session_dir.display());
-                            total_orphan_dirs += 1;
-                        }
+        if sessions_is_real_dir && let Ok(entries) = fs::read_dir(&sessions_dir) {
+            for entry in entries.flatten() {
+                if entry.file_type().is_ok_and(|ft| ft.is_dir()) && is_orphan_session_dir(&entry) {
+                    let session_dir = entry.path();
+                    if dry_run {
+                        eprintln!(
+                            "[dry-run] Would remove orphan directory: {}",
+                            session_dir.display()
+                        );
+                        total_orphan_dirs += 1;
+                    } else if fs::remove_dir_all(&session_dir).is_ok() {
+                        info!("Removed orphan directory: {}", session_dir.display());
+                        total_orphan_dirs += 1;
                     }
                 }
             }
@@ -520,44 +505,41 @@ pub(crate) fn handle_gc_global(
     }
 
     let mut stale_slots_cleaned = 0u64;
-    if let Ok(slots_dir) = GlobalConfig::slots_dir() {
-        if slots_dir.exists() {
-            if let Ok(entries) = fs::read_dir(&slots_dir) {
-                for entry in entries.flatten() {
-                    if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
-                        let tool_dir = entry.path();
-                        if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
-                            for slot_entry in slot_entries.flatten() {
-                                let path = slot_entry.path();
-                                if path.extension().is_some_and(|ext| ext == "lock") {
-                                    if let Ok(content) = fs::read_to_string(&path) {
-                                        if let Some(pid) = extract_pid_from_lock(&content) {
-                                            if !is_process_alive(pid) {
-                                                if dry_run {
-                                                    eprintln!(
-                                                        "[dry-run] Would clean stale slot: {:?} (dead PID {})",
-                                                        path.file_name(),
-                                                        pid
-                                                    );
-                                                    stale_slots_cleaned += 1;
-                                                } else if fs::remove_file(&path).is_ok() {
-                                                    info!(
-                                                        "Cleaned stale slot: {:?} (dead PID {})",
-                                                        path.file_name(),
-                                                        pid
-                                                    );
-                                                    stale_slots_cleaned += 1;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
+    if let Ok(slots_dir) = GlobalConfig::slots_dir()
+        && slots_dir.exists()
+        && let Ok(entries) = fs::read_dir(&slots_dir)
+    {
+        for entry in entries.flatten() {
+            if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
+                let tool_dir = entry.path();
+                if let Ok(slot_entries) = fs::read_dir(&tool_dir) {
+                    for slot_entry in slot_entries.flatten() {
+                        let path = slot_entry.path();
+                        if path.extension().is_some_and(|ext| ext == "lock")
+                            && let Ok(content) = fs::read_to_string(&path)
+                            && let Some(pid) = extract_pid_from_lock(&content)
+                            && !is_process_alive(pid)
+                        {
+                            if dry_run {
+                                eprintln!(
+                                    "[dry-run] Would clean stale slot: {:?} (dead PID {})",
+                                    path.file_name(),
+                                    pid
+                                );
+                                stale_slots_cleaned += 1;
+                            } else if fs::remove_file(&path).is_ok() {
+                                info!(
+                                    "Cleaned stale slot: {:?} (dead PID {})",
+                                    path.file_name(),
+                                    pid
+                                );
+                                stale_slots_cleaned += 1;
                             }
                         }
-                        if !dry_run {
-                            let _ = fs::remove_dir(&tool_dir);
-                        }
                     }
+                }
+                if !dry_run {
+                    let _ = fs::remove_dir(&tool_dir);
                 }
             }
         }

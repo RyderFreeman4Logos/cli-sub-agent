@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/RyderFreeman4Logos/cli-sub-agent/ma
 
 ### Option 3: Build from source
 
-Requires Rust 1.85+ (`rustc --version`).
+Requires Rust 1.88+ (`rustc --version`).
 
 ```bash
 git clone https://github.com/RyderFreeman4Logos/cli-sub-agent.git

@@ -445,7 +445,7 @@ impl ProjectConfig {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read config: {}", path.display()))?;
         // Check for deprecated keys before deserializing (serde silently ignores them)
-        if let Ok(raw) = content.parse::<toml::Value>() {
+        if let Ok(raw) = toml::from_str::<toml::Value>(&content) {
             warn_deprecated_keys(&raw, &path.display().to_string());
         }
         let config: Self = toml::from_str(&content)
@@ -495,10 +495,9 @@ impl ProjectConfig {
             (Some(b), Some(o)) => Some(b.max(o)),
             (Some(v), None) | (None, Some(v)) => Some(v),
             (None, None) => None,
-        } {
-            if let toml::Value::Table(ref mut table) = merged {
-                table.insert("schema_version".to_string(), toml::Value::Integer(max_ver));
-            }
+        } && let toml::Value::Table(ref mut table) = merged
+        {
+            table.insert("schema_version".to_string(), toml::Value::Integer(max_ver));
         }
 
         // Global-disable-wins: re-apply `enabled = false` from the global (base)
