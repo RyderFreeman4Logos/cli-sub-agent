@@ -499,7 +499,7 @@ fn spool_writes_all_data_without_truncation() {
 // verify the buffering indirectly via the buffer state.
 
 #[test]
-fn line_buffer_accumulates_partial_lines() {
+fn line_buffer_coalesces_tokens_within_batch() {
     let events = shared_events(vec![
         SessionEvent::AgentMessage("Hello ".to_string()),
         SessionEvent::AgentMessage("world".to_string()),
@@ -519,8 +519,11 @@ fn line_buffer_accumulates_partial_lines() {
         &mut stdout_buf,
         &mut thought_buf,
     );
-    // No newline in tokens → content stays in buffer (not flushed per-token).
-    assert_eq!(stdout_buf, "Hello world");
+    // Debounce flush at end of batch empties the buffer (progressive output).
+    assert!(
+        stdout_buf.is_empty(),
+        "buffer must be flushed at end of poll cycle for progressive output"
+    );
     assert!(thought_buf.is_empty());
     // Tail text still accumulates regardless of stderr buffering.
     assert_eq!(metadata.tail_text, "Hello world");
@@ -547,8 +550,9 @@ fn line_buffer_flushes_on_newline() {
         &mut stdout_buf,
         &mut thought_buf,
     );
-    // "line one\n" was flushed, only "partial" remains.
-    assert_eq!(stdout_buf, "partial");
+    // "line one\n" was flushed mid-batch, "partial" was debounce-flushed at
+    // end of batch.  Both are now empty.
+    assert!(stdout_buf.is_empty());
 }
 
 #[test]

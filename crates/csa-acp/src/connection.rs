@@ -371,11 +371,6 @@ impl AcpConnection {
             &mut stdout_line_buf,
             &mut thought_line_buf,
         );
-        // Flush any remaining partial lines at end of stream.
-        if io.stream_stdout_to_stderr {
-            flush_remaining_buf(&mut stdout_line_buf, "[stdout] ");
-            flush_remaining_buf(&mut thought_line_buf, "[thought] ");
-        }
         // Finalize spool: flush + run sanitization (rotate cleanup if keep_rotated=false).
         if let Some(writer) = output_spool.take() {
             match writer.finalize() {
@@ -621,6 +616,10 @@ fn stream_new_agent_messages(
             processed = *processed_event_count,
             "ACP event ring buffer overrun: {skipped} events were evicted before being streamed to spool/stderr"
         );
+        // Clear partial line buffers so we don't splice stale content with
+        // the first retained chunk after the gap (PR #440 P3).
+        stdout_line_buf.clear();
+        thought_line_buf.clear();
     }
     let skip = stream_start.saturating_sub(retained_start);
 
@@ -685,6 +684,15 @@ fn stream_new_agent_messages(
                 spool_chunk(output_spool, msg.as_bytes(), metadata);
             }
         }
+    }
+
+    // Debounce: flush any accumulated partial line at the end of each poll
+    // cycle to maintain progressive output visibility.  This ensures one
+    // coalesced [stdout] tag per ~200ms poll instead of per-token, while
+    // still showing progress for newline-free output (PR #440 P2).
+    if stream_stdout_to_stderr {
+        flush_remaining_buf(stdout_line_buf, "[stdout] ");
+        flush_remaining_buf(thought_line_buf, "[thought] ");
     }
 
     *processed_event_count = events_ref.total_events_count();
