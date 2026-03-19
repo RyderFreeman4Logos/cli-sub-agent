@@ -417,11 +417,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-    let new_file_guard = if !can_write_new {
-        crate::edit_restriction_guard::maybe_capture_new_file_guard(project_root)?
-    } else {
-        None
-    };
+    // NOTE: new_file_guard is captured AFTER PreRun hooks (below) to avoid
+    // false positives from hook-created files. See the edit_guard capture here
+    // for tracked-file protection (hooks should not modify tracked files).
 
     let commit_guard_enabled = matches!(task_type, Some("run"));
     let require_commit_on_mutation =
@@ -533,6 +531,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         ("tool".to_string(), executor.tool_name().to_string()),
     ]);
     run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
+
+    // Capture new-file guard AFTER PreRun hooks so hook-created files are
+    // included in the baseline and not flagged as tool violations.
+    let new_file_guard = if !can_write_new {
+        crate::edit_restriction_guard::maybe_capture_new_file_guard(project_root)?
+    } else {
+        None
+    };
 
     // Run prompt guards: append reminders to effective_prompt (strongest influence at end).
     if !hooks_config.prompt_guard.is_empty() {
