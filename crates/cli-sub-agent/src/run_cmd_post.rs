@@ -113,10 +113,10 @@ pub(crate) fn update_fork_genealogy(
             }
             // For native fork: store the forked provider session ID in
             // ToolState so future `--session` resumes can use it.
-            if let Some(ref new_provider_id) = fork_res.provider_session_id {
-                if let Some(tool_state) = session.tools.get_mut(current_tool.as_str()) {
-                    tool_state.provider_session_id = Some(new_provider_id.clone());
-                }
+            if let Some(ref new_provider_id) = fork_res.provider_session_id
+                && let Some(tool_state) = session.tools.get_mut(current_tool.as_str())
+            {
+                tool_state.provider_session_id = Some(new_provider_id.clone());
             }
             if let Err(e) = csa_session::save_session(&session) {
                 warn!("Failed to update fork genealogy on session: {e}");

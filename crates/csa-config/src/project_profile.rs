@@ -94,10 +94,10 @@ pub fn detect_project_profile_with_override(
     project_root: &Path,
     config_override: Option<&str>,
 ) -> ProjectProfile {
-    if let Some(override_value) = config_override {
-        if let Ok(parsed) = ProjectProfile::from_str(override_value) {
-            return parsed;
-        }
+    if let Some(override_value) = config_override
+        && let Ok(parsed) = ProjectProfile::from_str(override_value)
+    {
+        return parsed;
     }
 
     detect_project_profile(project_root)

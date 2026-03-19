@@ -111,18 +111,17 @@ fn discover_crate_roots(rust_files: &[&String]) -> Vec<String> {
     let mut roots: HashSet<String> = HashSet::new();
     for file in rust_files {
         let path = Path::new(file.as_str());
-        if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-            if stem == "lib" || stem == "main" {
-                if let Some(parent) = path.parent() {
-                    let root = parent.to_string_lossy().replace('\\', "/");
-                    // Root-level lib.rs/main.rs has empty parent; normalize to ".".
-                    roots.insert(if root.is_empty() {
-                        ".".to_string()
-                    } else {
-                        root
-                    });
-                }
-            }
+        if let Some(stem) = path.file_stem().and_then(|s| s.to_str())
+            && (stem == "lib" || stem == "main")
+            && let Some(parent) = path.parent()
+        {
+            let root = parent.to_string_lossy().replace('\\', "/");
+            // Root-level lib.rs/main.rs has empty parent; normalize to ".".
+            roots.insert(if root.is_empty() {
+                ".".to_string()
+            } else {
+                root
+            });
         }
     }
     // Sort longest first so deeper crate roots match before shallower ones.
@@ -184,10 +183,10 @@ fn parse_use_crate_refs(content: &str) -> HashSet<String> {
                 if let Some(ident) = trimmed
                     .split(|c: char| !c.is_alphanumeric() && c != '_')
                     .next()
+                    && !ident.is_empty()
+                    && ident != "self"
                 {
-                    if !ident.is_empty() && ident != "self" {
-                        refs.insert(ident.to_string());
-                    }
+                    refs.insert(ident.to_string());
                 }
             }
         }

@@ -32,10 +32,11 @@ pub(crate) fn evaluate_condition(condition: &str, vars: &HashMap<String, String>
 
     // Handle parenthesized expression: (expr) — strip only when the outer
     // parens are the matching pair that wraps the entire expression.
-    if trimmed.starts_with('(') && trimmed.ends_with(')') {
-        if let Some(inner) = strip_balanced_parens(trimmed) {
-            return evaluate_condition(inner, vars);
-        }
+    if trimmed.starts_with('(')
+        && trimmed.ends_with(')')
+        && let Some(inner) = strip_balanced_parens(trimmed)
+    {
+        return evaluate_condition(inner, vars);
     }
 
     // Base case: ${VAR} — substitute and check truthiness.

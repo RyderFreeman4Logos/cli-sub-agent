@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use rmcp::model::{
-    CallToolRequestParam, CallToolResult, ListToolsResult, PaginatedRequestParam,
+    CallToolRequestParams, CallToolResult, ListToolsResult, PaginatedRequestParams,
     ServerCapabilities, ServerInfo,
 };
 use rmcp::service::RequestContext;
@@ -80,7 +80,7 @@ impl ProxyRouter {
 
     async fn call_tool_internal(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
     ) -> Result<CallToolResult, McpError> {
         let tool_name = request.name.as_ref();
         let mut server = self.lookup_tool_owner(tool_name).await;
@@ -129,7 +129,7 @@ impl ProxyRouter {
     }
 }
 
-fn call_route_from_request(request: &CallToolRequestParam) -> ToolCallRoute {
+fn call_route_from_request(request: &CallToolRequestParams) -> ToolCallRoute {
     let Some(arguments) = request.arguments.as_ref() else {
         return ToolCallRoute::default();
     };
@@ -166,7 +166,7 @@ fn get_u64_argument(arguments: &serde_json::Map<String, Value>, keys: &[&str]) -
 impl ServerHandler for ProxyRouter {
     async fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
         self.list_tools_internal().await
@@ -174,7 +174,7 @@ impl ServerHandler for ProxyRouter {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResult, McpError> {
         self.call_tool_internal(request).await
@@ -198,7 +198,7 @@ mod tests {
 
     use anyhow::Result;
     use csa_config::{McpServerConfig, McpTransport};
-    use rmcp::model::CallToolRequestParam;
+    use rmcp::model::CallToolRequestParams;
     use serde_json::json;
 
     use crate::proxy::ProxyRouter;
@@ -260,15 +260,14 @@ done
         assert_eq!(list_response.tools[0].name.as_ref(), "echo_tool");
 
         let call_response = router
-            .call_tool_internal(CallToolRequestParam {
-                name: "echo_tool".into(),
-                arguments: Some(
+            .call_tool_internal(
+                CallToolRequestParams::new("echo_tool").with_arguments(
                     json!({"value":"ping"})
                         .as_object()
                         .cloned()
                         .unwrap_or_default(),
                 ),
-            })
+            )
             .await?;
 
         assert_eq!(

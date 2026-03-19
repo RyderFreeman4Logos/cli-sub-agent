@@ -94,14 +94,14 @@ pub(crate) fn resolve_step_tool(
             "csa" => {
                 if let Some(cfg) = config {
                     // Respect step.tier when tool=csa (P2 fix: don't ignore tier)
-                    if let Some(ref tier_name) = step.tier {
-                        if let Some(tier) = cfg.tiers.get(tier_name) {
-                            for model_spec_str in &tier.models {
-                                let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
-                                if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
-                                    let tool = parse_tool_name(parts[0])?;
-                                    return Ok(StepTarget::csa(tool, Some(model_spec_str.clone())));
-                                }
+                    if let Some(ref tier_name) = step.tier
+                        && let Some(tier) = cfg.tiers.get(tier_name)
+                    {
+                        for model_spec_str in &tier.models {
+                            let parts: Vec<&str> = model_spec_str.splitn(4, '/').collect();
+                            if parts.len() == 4 && cfg.is_tool_enabled(parts[0]) {
+                                let tool = parse_tool_name(parts[0])?;
+                                return Ok(StepTarget::csa(tool, Some(model_spec_str.clone())));
                             }
                         }
                     }
@@ -148,12 +148,12 @@ pub(crate) fn resolve_step_tool(
     }
 
     // 3. Fallback: use default tool from config, or codex
-    if let Some(cfg) = config {
-        if let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default") {
-            let spec = ModelSpec::parse(&model_spec)?;
-            let tool = parse_tool_name(&spec.tool)?;
-            return Ok(StepTarget::csa(tool, Some(model_spec)));
-        }
+    if let Some(cfg) = config
+        && let Some((_tool_name, model_spec)) = cfg.resolve_tier_tool("default")
+    {
+        let spec = ModelSpec::parse(&model_spec)?;
+        let tool = parse_tool_name(&spec.tool)?;
+        return Ok(StepTarget::csa(tool, Some(model_spec)));
     }
 
     Ok(StepTarget::csa(ToolName::Codex, None))
@@ -427,16 +427,16 @@ pub(crate) async fn execute_step(
     };
 
     // Warn when a CSA step has an empty prompt (likely a missing weave include)
-    if let Some(prompt) = csa_prompt.as_deref() {
-        if prompt.trim().is_empty() {
-            warn!(
-                "{} - CSA step has empty prompt — tool will start with no context. \
+    if let Some(prompt) = csa_prompt.as_deref()
+        && prompt.trim().is_empty()
+    {
+        warn!(
+            "{} - CSA step has empty prompt — tool will start with no context. \
                  This usually means a weave include was not expanded. \
                  Add a descriptive prompt to step {} in the workflow file.",
-                label, step.id
-            );
-            eprintln!("{label} - WARNING: empty prompt for CSA step (tool will have no context)");
-        }
+            label, step.id
+        );
+        eprintln!("{label} - WARNING: empty prompt for CSA step (tool will have no context)");
     }
 
     // Determine retry count from on_fail

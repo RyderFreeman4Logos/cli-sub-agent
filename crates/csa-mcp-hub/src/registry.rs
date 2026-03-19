@@ -9,7 +9,7 @@ use csa_config::McpServerConfig;
 use csa_process::{SandboxHandle, SpawnOptions, spawn_tool_sandboxed};
 use csa_resource::{SandboxCapability, SandboxConfig, apply_rlimits, detect_sandbox_capability};
 use rmcp::RoleClient;
-use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{RunningService, ServiceExt};
 use std::collections::HashMap;
 use std::io;
@@ -128,7 +128,7 @@ impl McpRegistry {
     pub(crate) async fn call_tool(
         &self,
         server_name: &str,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         route: ToolCallRoute,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult> {
@@ -168,7 +168,7 @@ struct ServerQueueHandle {
 
 enum QueueCommandKind {
     ListTools,
-    CallTool(CallToolRequestParam),
+    CallTool(CallToolRequestParams),
     Shutdown,
 }
 
@@ -262,7 +262,7 @@ impl ServerQueueHandle {
 
     async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult> {
         match self
@@ -366,7 +366,7 @@ impl ManagedServer {
         Err(last_err.unwrap_or_else(|| anyhow!("MCP list_tools failed without explicit error")))
     }
 
-    async fn call_tool(&mut self, request: CallToolRequestParam) -> Result<CallToolResult> {
+    async fn call_tool(&mut self, request: CallToolRequestParams) -> Result<CallToolResult> {
         let mut last_err: Option<anyhow::Error> = None;
 
         for _ in 0..3 {

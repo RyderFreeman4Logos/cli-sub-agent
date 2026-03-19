@@ -225,10 +225,10 @@ fn cap_str<'a>(caps: &regex::Captures<'a>, group: usize) -> Option<&'a str> {
 fn classify_line(line: &str) -> LineKind<'_> {
     let trimmed = line.trim_end();
 
-    if let Some(caps) = IF_RE.captures(trimmed) {
-        if let Some(cond) = cap_str(&caps, 1) {
-            return LineKind::If(cond);
-        }
+    if let Some(caps) = IF_RE.captures(trimmed)
+        && let Some(cond) = cap_str(&caps, 1)
+    {
+        return LineKind::If(cond);
     }
     if ELSE_RE.is_match(trimmed) {
         return LineKind::Else;
@@ -236,26 +236,26 @@ fn classify_line(line: &str) -> LineKind<'_> {
     if ENDIF_RE.is_match(trimmed) {
         return LineKind::EndIf;
     }
-    if let Some(caps) = FOR_RE.captures(trimmed) {
-        if let (Some(var), Some(col)) = (cap_str(&caps, 1), cap_str(&caps, 2)) {
-            return LineKind::For {
-                var,
-                collection: col,
-            };
-        }
+    if let Some(caps) = FOR_RE.captures(trimmed)
+        && let (Some(var), Some(col)) = (cap_str(&caps, 1), cap_str(&caps, 2))
+    {
+        return LineKind::For {
+            var,
+            collection: col,
+        };
     }
     if ENDFOR_RE.is_match(trimmed) {
         return LineKind::EndFor;
     }
-    if let Some(caps) = INCLUDE_RE.captures(trimmed) {
-        if let Some(path) = cap_str(&caps, 1) {
-            return LineKind::Include(path);
-        }
+    if let Some(caps) = INCLUDE_RE.captures(trimmed)
+        && let Some(path) = cap_str(&caps, 1)
+    {
+        return LineKind::Include(path);
     }
-    if let Some(caps) = STEP_RE.captures(trimmed) {
-        if let Some(title) = cap_str(&caps, 1) {
-            return LineKind::Step(title);
-        }
+    if let Some(caps) = STEP_RE.captures(trimmed)
+        && let Some(title) = cap_str(&caps, 1)
+    {
+        return LineKind::Step(title);
     }
 
     LineKind::Text(line)

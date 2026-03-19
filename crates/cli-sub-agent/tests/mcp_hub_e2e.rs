@@ -148,87 +148,6 @@ fn reserve_local_port() -> Result<u16> {
     Ok(port)
 }
 
-fn start_sse_stream(base_url: &str) -> Result<(Child, std::sync::mpsc::Receiver<String>)> {
-    let mut child = Command::new("curl")
-        .args(["-sS", "-N", base_url])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .with_context(|| format!("spawn curl SSE stream: {base_url}"))?;
-
-    let stdout = child.stdout.take().context("capture curl SSE stdout")?;
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-        loop {
-            line.clear();
-            let Ok(bytes) = reader.read_line(&mut line) else {
-                break;
-            };
-            if bytes == 0 {
-                break;
-            }
-            let _ = tx.send(line.trim().to_string());
-        }
-    });
-
-    Ok((child, rx))
-}
-
-fn recv_line_until<F>(
-    rx: &std::sync::mpsc::Receiver<String>,
-    timeout: Duration,
-    predicate: F,
-) -> Result<String>
-where
-    F: Fn(&str) -> bool,
-{
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        match rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(line) if predicate(&line) => return Ok(line),
-            Ok(_) => continue,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(error) => bail!("failed to read SSE stream line: {error}"),
-        }
-    }
-    bail!("timed out waiting for expected SSE line")
-}
-
-fn http_post_json(url: &str, payload: &Value) -> Result<()> {
-    let payload_str = serde_json::to_string(payload)?;
-    let output = Command::new("curl")
-        .args([
-            "-sS",
-            "-o",
-            "/dev/null",
-            "-w",
-            "%{http_code}",
-            "-X",
-            "POST",
-            "-H",
-            "content-type: application/json",
-            "--data",
-            &payload_str,
-            url,
-        ])
-        .output()
-        .with_context(|| format!("POST {url}"))?;
-
-    if !output.status.success() {
-        bail!(
-            "curl POST failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-    let code = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if code != "202" {
-        bail!("expected HTTP 202 from SSE message endpoint, got {code}");
-    }
-    Ok(())
-}
-
 // macOS CI: hub spawns the mock MCP backend but sh/sed differences prevent
 // the backend from registering tools.  Hub itself is Linux-first (UDS + systemd),
 // so restrict the E2E test to Linux.  Unit tests still cover logic on all platforms.
@@ -355,9 +274,74 @@ fn hub_forwards_requests_and_proxy_latency_budget_is_within_environment_budget()
     test_result
 }
 
+/// Post a JSON-RPC request to the Streamable HTTP endpoint.
+/// Returns (response_json, session_id_if_present).
+/// Handles both plain JSON and SSE (`data:` prefixed) response formats.
+fn http_mcp_post(
+    url: &str,
+    payload: &Value,
+    session_id: Option<&str>,
+) -> Result<(Value, Option<String>)> {
+    let payload_str = serde_json::to_string(payload)?;
+    let header_file = tempfile::NamedTempFile::new().context("create header temp file")?;
+    let header_path = header_file.path().to_str().context("header file path")?;
+
+    let mut cmd = Command::new("curl");
+    cmd.args([
+        "-sS",
+        "-D",
+        header_path,
+        "-X",
+        "POST",
+        "-H",
+        "content-type: application/json",
+        "-H",
+        "accept: application/json, text/event-stream",
+    ]);
+    if let Some(sid) = session_id {
+        let hdr = format!("mcp-session-id: {sid}");
+        cmd.args(["-H", &hdr]);
+    }
+    cmd.args(["--data", &payload_str, url]);
+
+    let output = cmd.output().with_context(|| format!("POST {url}"))?;
+    if !output.status.success() {
+        bail!(
+            "curl POST failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    // Extract Mcp-Session-Id from dumped headers.
+    let headers = fs::read_to_string(header_file.path()).unwrap_or_default();
+    let sid = headers.lines().find_map(|line| {
+        let lower = line.to_lowercase();
+        if lower.starts_with("mcp-session-id:") {
+            Some(line.split_once(':')?.1.trim().to_string())
+        } else {
+            None
+        }
+    });
+
+    let body = String::from_utf8_lossy(&output.stdout);
+
+    // Try plain JSON first, then extract from SSE `data:` lines.
+    if let Ok(val) = serde_json::from_str::<Value>(body.trim()) {
+        return Ok((val, sid));
+    }
+    for line in body.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if let Ok(val) = serde_json::from_str::<Value>(data) {
+                return Ok((val, sid));
+            }
+        }
+    }
+    bail!("no JSON-RPC response found in body: {body}")
+}
+
 #[test]
 #[cfg_attr(not(target_os = "linux"), ignore)]
-fn hub_http_sse_transport_forwards_requests() -> Result<()> {
+fn hub_http_streamable_transport_forwards_requests() -> Result<()> {
     let temp = tempfile::tempdir()?;
     let home = temp.path().join("home");
     let config_home = home.join(".config");
@@ -396,67 +380,84 @@ fn hub_http_sse_transport_forwards_requests() -> Result<()> {
     let test_result = (|| -> Result<()> {
         wait_for_socket(&socket_path, Duration::from_secs(5))?;
 
-        let sse_url = format!("http://127.0.0.1:{http_port}/");
-        let base_url = format!("http://127.0.0.1:{http_port}");
-        let mut endpoint_line = None;
-        let mut sse_child = None;
-        let mut sse_rx = None;
-        for _ in 0..20 {
-            let (mut child, rx) = start_sse_stream(&sse_url)?;
-            match recv_line_until(&rx, Duration::from_secs(1), |line| {
-                line.starts_with("data: /message?sessionId=")
-            }) {
-                Ok(line) => {
-                    endpoint_line = Some(line);
-                    sse_rx = Some(rx);
-                    sse_child = Some(child);
+        let mcp_url = format!("http://127.0.0.1:{http_port}/mcp");
+
+        // Streamable HTTP requires MCP initialization handshake first.
+        // Streamable HTTP requires MCP initialization handshake first.
+        let mut last_err = String::new();
+        let mut initialized = false;
+        for attempt in 0..20 {
+            std::thread::sleep(Duration::from_millis(250));
+            match http_mcp_post(
+                &mcp_url,
+                &serde_json::json!({
+                    "jsonrpc":"2.0",
+                    "id":0,
+                    "method":"initialize",
+                    "params":{
+                        "protocolVersion":"2024-11-05",
+                        "capabilities":{},
+                        "clientInfo":{"name":"test","version":"0.1.0"}
+                    }
+                }),
+                None,
+            ) {
+                Ok((resp, _)) if resp["result"]["serverInfo"].is_object() => {
+                    initialized = true;
                     break;
                 }
-                Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    std::thread::sleep(Duration::from_millis(100));
+                Ok((resp, _)) => {
+                    last_err = format!("unexpected init response: {resp}");
                 }
+                Err(error) if attempt < 19 => {
+                    last_err = error.to_string();
+                    continue;
+                }
+                Err(error) => bail!("initialize failed: {error}"),
+            }
+            if attempt == 19 {
+                bail!("hub never initialized after 5s; last error: {last_err}");
             }
         }
-        let endpoint_line = endpoint_line.context("timed out waiting for SSE endpoint line")?;
-        let mut sse_child = sse_child.context("missing SSE process")?;
-        let rx = sse_rx.context("missing SSE output channel")?;
+        assert!(initialized, "MCP initialization failed: {last_err}");
 
-        let post_path = endpoint_line
-            .strip_prefix("data: ")
-            .context("missing SSE endpoint data prefix")?;
-        let post_url = format!("{base_url}{post_path}");
+        // Wait for backend MCP to register via Streamable HTTP POST.
+        let mut tools_response = Value::Null;
+        for attempt in 0..20 {
+            std::thread::sleep(Duration::from_millis(250));
+            match http_mcp_post(
+                &mcp_url,
+                &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+                None,
+            ) {
+                Ok((resp, _)) if resp["result"]["tools"][0]["name"] == "echo_tool" => {
+                    tools_response = resp;
+                    break;
+                }
+                Ok((resp, _)) => {
+                    tools_response = resp;
+                }
+                Err(_) if attempt < 19 => continue,
+                Err(error) => bail!("tools/list failed: {error}"),
+            }
+            if attempt == 19 {
+                bail!("hub never registered MCP backend after 5s; last response: {tools_response}");
+            }
+        }
+        assert_eq!(tools_response["result"]["tools"][0]["name"], "echo_tool");
 
-        http_post_json(
-            &post_url,
-            &serde_json::json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
-        )?;
-        let tools_line = recv_line_until(&rx, Duration::from_secs(5), |line| {
-            line.contains("\"echo_tool\"")
-        })?;
-        assert!(
-            tools_line.contains("\"echo_tool\""),
-            "unexpected tools/list SSE payload: {tools_line}"
-        );
-
-        http_post_json(
-            &post_url,
+        let (call_response, _) = http_mcp_post(
+            &mcp_url,
             &serde_json::json!({
                 "jsonrpc":"2.0",
                 "id":2,
                 "method":"tools/call",
                 "params":{"name":"echo_tool","arguments":{}}
             }),
+            None,
         )?;
-        let call_line = recv_line_until(&rx, Duration::from_secs(5), |line| line.contains("pong"))?;
-        assert!(
-            call_line.contains("pong"),
-            "unexpected tools/call SSE payload: {call_line}"
-        );
+        assert_eq!(call_response["result"]["content"][0]["text"], "pong");
 
-        let _ = sse_child.kill();
-        let _ = sse_child.wait();
         Ok(())
     })();
 

@@ -290,21 +290,21 @@ fn run_single_guard(
                 // Safety net: terminate guard if tempfile grows beyond disk limit.
                 // Prevents /tmp exhaustion from runaway output (e.g., `yes`).
                 // Content is separately capped at MAX_GUARD_OUTPUT_BYTES at read-time.
-                if let Ok(meta) = stdout_file.metadata() {
-                    if meta.len() > MAX_GUARD_DISK_BYTES {
-                        let _ = child.kill();
-                        kill_cached_descendants(
-                            #[cfg(target_os = "linux")]
-                            &cached_descendants,
-                            pgid,
-                        );
-                        let _ = child.wait();
-                        anyhow::bail!(
-                            "Guard '{}' exceeded disk limit ({}MB)",
-                            guard.name,
-                            MAX_GUARD_DISK_BYTES / (1024 * 1024),
-                        );
-                    }
+                if let Ok(meta) = stdout_file.metadata()
+                    && meta.len() > MAX_GUARD_DISK_BYTES
+                {
+                    let _ = child.kill();
+                    kill_cached_descendants(
+                        #[cfg(target_os = "linux")]
+                        &cached_descendants,
+                        pgid,
+                    );
+                    let _ = child.wait();
+                    anyhow::bail!(
+                        "Guard '{}' exceeded disk limit ({}MB)",
+                        guard.name,
+                        MAX_GUARD_DISK_BYTES / (1024 * 1024),
+                    );
                 }
 
                 std::thread::sleep(Duration::from_millis(50));

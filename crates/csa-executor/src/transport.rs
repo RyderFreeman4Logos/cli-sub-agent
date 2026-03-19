@@ -329,20 +329,20 @@ impl LegacyTransport {
                 continue;
             }
             // API key fallback: all model retries exhausted, still quota error.
-            if Self::is_gemini_rate_limited(&result.execution) {
-                if let Some(env_with_key) = Self::inject_api_key_fallback(extra_env) {
-                    tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
-                    return self
-                        .execute_in_single_attempt(
-                            &self.executor,
-                            prompt,
-                            work_dir,
-                            Some(&env_with_key),
-                            stream_mode,
-                            idle_timeout_seconds,
-                        )
-                        .await;
-                }
+            if Self::is_gemini_rate_limited(&result.execution)
+                && let Some(env_with_key) = Self::inject_api_key_fallback(extra_env)
+            {
+                tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
+                return self
+                    .execute_in_single_attempt(
+                        &self.executor,
+                        prompt,
+                        work_dir,
+                        Some(&env_with_key),
+                        stream_mode,
+                        idle_timeout_seconds,
+                    )
+                    .await;
             }
             return Ok(result);
         }
@@ -381,20 +381,20 @@ impl Transport for LegacyTransport {
                 continue;
             }
             // API key fallback: all model retries exhausted, still quota error.
-            if Self::is_gemini_rate_limited(&result.execution) {
-                if let Some(env_with_key) = Self::inject_api_key_fallback(extra_env) {
-                    tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
-                    return self
-                        .execute_single_attempt(
-                            &self.executor,
-                            prompt,
-                            tool_state,
-                            session,
-                            Some(&env_with_key),
-                            options,
-                        )
-                        .await;
-                }
+            if Self::is_gemini_rate_limited(&result.execution)
+                && let Some(env_with_key) = Self::inject_api_key_fallback(extra_env)
+            {
+                tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
+                return self
+                    .execute_single_attempt(
+                        &self.executor,
+                        prompt,
+                        tool_state,
+                        session,
+                        Some(&env_with_key),
+                        options,
+                    )
+                    .await;
             }
             return Ok(result);
         }

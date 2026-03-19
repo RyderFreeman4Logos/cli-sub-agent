@@ -158,12 +158,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     parent_session_source: ParentSessionSource,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
-    if let Some(ref session_id) = session_arg {
-        if let Ok(env_session) = std::env::var("CSA_SESSION_ID") {
-            if env_session == *session_id {
-                return Err(csa_core::error::AppError::ParentSessionViolation.into());
-            }
-        }
+    if let Some(ref session_id) = session_arg
+        && let Ok(env_session) = std::env::var("CSA_SESSION_ID")
+        && env_session == *session_id
+    {
+        return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
     let memory_project_key = resolve_memory_project_key(project_root);
 
@@ -203,21 +202,20 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         };
         // Initialize token budget from tier config (if configured).
         // TokenBudget is created when either token_budget or max_turns is set.
-        if let (Some(cfg), Some(tier)) = (config, tier_name) {
-            if let Some(tier_cfg) = cfg.tiers.get(tier) {
-                if tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some() {
-                    let allocated = tier_cfg.token_budget.unwrap_or(u64::MAX);
-                    let mut budget = csa_session::state::TokenBudget::new(allocated);
-                    budget.max_turns = tier_cfg.max_turns;
-                    new_session.token_budget = Some(budget);
-                    info!(
-                        session = %new_session.meta_session_id,
-                        allocated = ?tier_cfg.token_budget,
-                        max_turns = ?tier_cfg.max_turns,
-                        "Initialized token budget from tier config"
-                    );
-                }
-            }
+        if let (Some(cfg), Some(tier)) = (config, tier_name)
+            && let Some(tier_cfg) = cfg.tiers.get(tier)
+            && (tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some())
+        {
+            let allocated = tier_cfg.token_budget.unwrap_or(u64::MAX);
+            let mut budget = csa_session::state::TokenBudget::new(allocated);
+            budget.max_turns = tier_cfg.max_turns;
+            new_session.token_budget = Some(budget);
+            info!(
+                session = %new_session.meta_session_id,
+                allocated = ?tier_cfg.token_budget,
+                max_turns = ?tier_cfg.max_turns,
+                "Initialized token budget from tier config"
+            );
         }
         new_session
     };
@@ -302,19 +300,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     };
 
     // Check resource availability
-    if let Some(ref mut guard) = resource_guard {
-        if let Err(e) = guard.check_availability(executor.tool_name()) {
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &e,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(e);
+    if let Some(ref mut guard) = resource_guard
+        && let Err(e) = guard.check_availability(executor.tool_name())
+    {
+        write_pre_exec_error_result(
+            project_root,
+            &session.meta_session_id,
+            executor.tool_name(),
+            &e,
+        );
+        if let Some(ref mut cg) = cleanup_guard {
+            cg.defuse();
         }
+        return Err(e);
     }
 
     // Token budget is observability-only (never a kill gate).

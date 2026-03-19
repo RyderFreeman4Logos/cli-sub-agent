@@ -107,13 +107,13 @@ pub fn persist_structured_output_from_file(
                     open_start = Some((id.clone(), *line));
                 }
                 Marker::End { id, line } => {
-                    if let Some((ref open_id, start_line)) = open_start {
-                        if open_id == id {
-                            let content_start = start_line + 1;
-                            let content_end = line.saturating_sub(1);
-                            sections.push(build_section_no_content(id, content_start, content_end));
-                            open_start = None;
-                        }
+                    if let Some((ref open_id, start_line)) = open_start
+                        && open_id == id
+                    {
+                        let content_start = start_line + 1;
+                        let content_end = line.saturating_sub(1);
+                        sections.push(build_section_no_content(id, content_start, content_end));
+                        open_start = None;
                     }
                 }
             }

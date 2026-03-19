@@ -92,16 +92,15 @@ pub(crate) fn resolve_debate_tool(
     let whitelist = effective_whitelist.whitelist();
 
     if let Some(ref tier) = tier_name {
-        if let Some(cfg) = project_config {
-            if let Some(resolution) =
+        if let Some(cfg) = project_config
+            && let Some(resolution) =
                 crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist)
-            {
-                return Ok((
-                    resolution.tool,
-                    DebateMode::Heterogeneous,
-                    Some(resolution.model_spec),
-                ));
-            }
+        {
+            return Ok((
+                resolution.tool,
+                DebateMode::Heterogeneous,
+                Some(resolution.model_spec),
+            ));
         }
         // Tier set but no available tool found — fall through to tool-based resolution.
         if whitelist.is_some() {
@@ -163,13 +162,13 @@ fn resolve_debate_tool_from_selection(
             )
         })?;
         // Verify the tool is enabled in the project config
-        if let Some(cfg) = project_config {
-            if !cfg.is_tool_enabled(tool_name) {
-                anyhow::bail!(
-                    "[debate].tool = '{tool_name}' is disabled in project config. \
+        if let Some(cfg) = project_config
+            && !cfg.is_tool_enabled(tool_name)
+        {
+            anyhow::bail!(
+                "[debate].tool = '{tool_name}' is disabled in project config. \
                      Enable it in [tools.{tool_name}] or change [debate].tool."
-                );
-            }
+            );
         }
         return Ok((tool, DebateMode::Heterogeneous));
     }
@@ -183,18 +182,17 @@ fn resolve_debate_tool_from_selection(
     }
 
     // Legacy counterpart fallback (only for true auto, not whitelist)
-    if whitelist.is_none() {
-        if let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart) {
-            let counterpart_enabled =
-                project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
-            if counterpart_enabled {
-                let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
-                    anyhow::anyhow!(
-                        "BUG: auto debate tool resolution returned invalid tool '{resolved}'"
-                    )
-                })?;
-                return Ok((tool, DebateMode::Heterogeneous));
-            }
+    if whitelist.is_none()
+        && let Some(resolved) = parent_tool.and_then(heterogeneous_counterpart)
+    {
+        let counterpart_enabled = project_config.is_none_or(|cfg| cfg.is_tool_enabled(resolved));
+        if counterpart_enabled {
+            let tool = crate::run_helpers::parse_tool_name(resolved).map_err(|_| {
+                anyhow::anyhow!(
+                    "BUG: auto debate tool resolution returned invalid tool '{resolved}'"
+                )
+            })?;
+            return Ok((tool, DebateMode::Heterogeneous));
         }
     }
 
@@ -265,14 +263,14 @@ fn resolve_same_model_fallback(
 
     // Use the parent tool itself for same-model adversarial debate,
     // but only if the tool is enabled in project config.
-    if let Some(parent_str) = parent_tool {
-        if let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str) {
-            let enabled = project_config
-                .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
-                .unwrap_or(true);
-            if enabled {
-                return Ok((tool, DebateMode::SameModelAdversarial));
-            }
+    if let Some(parent_str) = parent_tool
+        && let Ok(tool) = crate::run_helpers::parse_tool_name(parent_str)
+    {
+        let enabled = project_config
+            .map(|cfg| cfg.is_tool_enabled(tool.as_str()))
+            .unwrap_or(true);
+        if enabled {
+            return Ok((tool, DebateMode::SameModelAdversarial));
         }
     }
 

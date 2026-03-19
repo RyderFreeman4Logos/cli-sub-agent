@@ -522,35 +522,34 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 }
                 if runtime_fallback_enabled
                     && runtime_fallback_attempts < max_runtime_fallback_attempts
-                {
-                    if let Some(next_tool) = take_next_runtime_fallback_tool(
+                    && let Some(next_tool) = take_next_runtime_fallback_tool(
                         &mut runtime_fallback_candidates,
                         current_tool,
                         &tried_tools,
-                    ) {
-                        runtime_fallback_attempts += 1;
-                        warn!(
-                            from = %tool_name_str,
-                            to = %next_tool.as_str(),
-                            attempt = runtime_fallback_attempts,
-                            max_attempts = max_runtime_fallback_attempts,
-                            error = %e,
-                            "HeterogeneousPreferred runtime fallback: retrying with next heterogeneous tool"
-                        );
-                        tried_tools.push(tool_name_str.to_string());
-                        current_tool = next_tool;
-                        current_model_spec = None;
-                        current_model = None;
-                        fork_resolution = None;
-                        if is_fork {
-                            effective_session_arg = None;
-                        }
-                        cleanup_pre_created_fork_session(
-                            &mut pre_created_fork_session_id,
-                            request.project_root,
-                        );
-                        continue;
+                    )
+                {
+                    runtime_fallback_attempts += 1;
+                    warn!(
+                        from = %tool_name_str,
+                        to = %next_tool.as_str(),
+                        attempt = runtime_fallback_attempts,
+                        max_attempts = max_runtime_fallback_attempts,
+                        error = %e,
+                        "HeterogeneousPreferred runtime fallback: retrying with next heterogeneous tool"
+                    );
+                    tried_tools.push(tool_name_str.to_string());
+                    current_tool = next_tool;
+                    current_model_spec = None;
+                    current_model = None;
+                    fork_resolution = None;
+                    if is_fork {
+                        effective_session_arg = None;
                     }
+                    cleanup_pre_created_fork_session(
+                        &mut pre_created_fork_session_id,
+                        request.project_root,
+                    );
+                    continue;
                 }
                 cleanup_pre_created_fork_session(
                     &mut pre_created_fork_session_id,
@@ -564,35 +563,34 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             && runtime_fallback_enabled
             && runtime_fallback_attempts < max_runtime_fallback_attempts
             && !is_post_run_commit_policy_block(&exec_result.summary)
-        {
-            if let Some(next_tool) = take_next_runtime_fallback_tool(
+            && let Some(next_tool) = take_next_runtime_fallback_tool(
                 &mut runtime_fallback_candidates,
                 current_tool,
                 &tried_tools,
-            ) {
-                runtime_fallback_attempts += 1;
-                warn!(
-                    from = %tool_name_str,
-                    to = %next_tool.as_str(),
-                    exit_code = exec_result.exit_code,
-                    attempt = runtime_fallback_attempts,
-                    max_attempts = max_runtime_fallback_attempts,
-                    "HeterogeneousPreferred runtime fallback: retrying with next heterogeneous tool"
-                );
-                tried_tools.push(tool_name_str.to_string());
-                current_tool = next_tool;
-                current_model_spec = None;
-                current_model = None;
-                fork_resolution = None;
-                if is_fork {
-                    effective_session_arg = None;
-                }
-                cleanup_pre_created_fork_session(
-                    &mut pre_created_fork_session_id,
-                    request.project_root,
-                );
-                continue;
+            )
+        {
+            runtime_fallback_attempts += 1;
+            warn!(
+                from = %tool_name_str,
+                to = %next_tool.as_str(),
+                exit_code = exec_result.exit_code,
+                attempt = runtime_fallback_attempts,
+                max_attempts = max_runtime_fallback_attempts,
+                "HeterogeneousPreferred runtime fallback: retrying with next heterogeneous tool"
+            );
+            tried_tools.push(tool_name_str.to_string());
+            current_tool = next_tool;
+            current_model_spec = None;
+            current_model = None;
+            fork_resolution = None;
+            if is_fork {
+                effective_session_arg = None;
             }
+            cleanup_pre_created_fork_session(
+                &mut pre_created_fork_session_id,
+                request.project_root,
+            );
+            continue;
         }
 
         if is_post_run_commit_policy_block(&exec_result.summary) {

@@ -5,7 +5,7 @@
 
 use anyhow::{Result, anyhow};
 use csa_config::McpServerConfig;
-use rmcp::model::{CallToolRequestParam, CallToolResult, Tool};
+use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -74,7 +74,7 @@ impl StatefulServerPool {
 
     pub(super) async fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         route: ToolCallRoute,
         cancellation: CancellationToken,
     ) -> Result<CallToolResult> {

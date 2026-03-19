@@ -51,16 +51,16 @@ pub(crate) fn detect_ancestor_tool() -> Option<String> {
 
         // Best-effort: if we can read the comm, check it; if not, skip this
         // ancestor and try the next one (don't abort the entire walk).
-        if let Some(comm) = read_comm(current_pid) {
-            if let Some(tool_name) = match_tool_by_comm(&comm) {
-                tracing::debug!(
-                    tool = tool_name,
-                    ancestor_pid = current_pid,
-                    depth,
-                    "Detected calling tool from process tree"
-                );
-                return Some(tool_name.to_string());
-            }
+        if let Some(comm) = read_comm(current_pid)
+            && let Some(tool_name) = match_tool_by_comm(&comm)
+        {
+            tracing::debug!(
+                tool = tool_name,
+                ancestor_pid = current_pid,
+                depth,
+                "Detected calling tool from process tree"
+            );
+            return Some(tool_name.to_string());
         }
 
         // If we can't read the parent PID, we truly can't continue.

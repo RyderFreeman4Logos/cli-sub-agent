@@ -414,10 +414,10 @@ impl Executor {
         if matches!(self, Self::GeminiCli { .. }) {
             append_gemini_include_directories_args(&mut cmd, &gemini_include_directories);
         }
-        if matches!(self, Self::Codex { .. }) {
-            if let Some(env) = extra_env {
-                cmd.args(codex_notify_suppression_args(env));
-            }
+        if matches!(self, Self::Codex { .. })
+            && let Some(env) = extra_env
+        {
+            cmd.args(codex_notify_suppression_args(env));
         }
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
         if matches!(prompt_transport, PromptTransport::Argv) {
@@ -541,23 +541,23 @@ impl Executor {
         }
 
         // Session resume
-        if let Some(state) = tool_state {
-            if let Some(ref session_id) = state.provider_session_id {
-                match self {
-                    Self::GeminiCli { .. } => {
-                        cmd.arg("-r").arg(session_id);
-                    }
-                    Self::Opencode { .. } => {
-                        cmd.arg("-s").arg(session_id);
-                    }
-                    Self::Codex { .. } => {
-                        cmd.arg("--session-id").arg(session_id);
-                    }
-                    Self::ClaudeCode { .. } => {
-                        cmd.arg("--resume").arg(session_id);
-                    }
-                    Self::OpenaiCompat { .. } => {} // HTTP-only
+        if let Some(state) = tool_state
+            && let Some(ref session_id) = state.provider_session_id
+        {
+            match self {
+                Self::GeminiCli { .. } => {
+                    cmd.arg("-r").arg(session_id);
                 }
+                Self::Opencode { .. } => {
+                    cmd.arg("-s").arg(session_id);
+                }
+                Self::Codex { .. } => {
+                    cmd.arg("--session-id").arg(session_id);
+                }
+                Self::ClaudeCode { .. } => {
+                    cmd.arg("--resume").arg(session_id);
+                }
+                Self::OpenaiCompat { .. } => {} // HTTP-only
             }
         }
 

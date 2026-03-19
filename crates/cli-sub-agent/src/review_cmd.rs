@@ -640,13 +640,13 @@ async fn execute_review(
     let extra_env = extra_env_owned.as_ref();
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
 
-    if session.is_none() {
-        if let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID") {
-            warn!(
-                inherited_session_id = %inherited_session_id,
-                "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
-            );
-        }
+    if session.is_none()
+        && let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID")
+    {
+        warn!(
+            inherited_session_id = %inherited_session_id,
+            "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
+        );
     }
 
     let execution = crate::pipeline::execute_with_session_and_meta_with_parent_source(

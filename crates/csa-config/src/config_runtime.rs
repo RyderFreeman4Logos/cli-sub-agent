@@ -78,13 +78,12 @@ impl ProjectConfig {
     /// memory_max_mb, or memory_swap_max_mb), returns `Custom`.
     /// Otherwise returns the default profile for the tool's runtime.
     pub fn tool_resource_profile(&self, tool: &str) -> ToolResourceProfile {
-        if let Some(tc) = self.tools.get(tool) {
-            if tc.enforcement_mode.is_some()
+        if let Some(tc) = self.tools.get(tool)
+            && (tc.enforcement_mode.is_some()
                 || tc.memory_max_mb.is_some()
-                || tc.memory_swap_max_mb.is_some()
-            {
-                return ToolResourceProfile::Custom;
-            }
+                || tc.memory_swap_max_mb.is_some())
+        {
+            return ToolResourceProfile::Custom;
         }
         default_profile(tool)
     }

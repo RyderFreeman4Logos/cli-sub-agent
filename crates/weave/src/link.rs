@@ -661,10 +661,10 @@ fn is_stale_link(
     }
 
     // Check 2: target resolves to a known skill source directory (renamed link).
-    if let Ok(canonical) = resolved.canonicalize() {
-        if skill_source_dirs.contains(&canonical) {
-            return false;
-        }
+    if let Ok(canonical) = resolved.canonicalize()
+        && skill_source_dirs.contains(&canonical)
+    {
+        return false;
     }
 
     true

@@ -75,29 +75,29 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
     if config.resources.termination_grace_period_seconds == 0 {
         bail!("resources.termination_grace_period_seconds must be > 0 (got 0)");
     }
-    if let Some(mem) = config.resources.memory_max_mb {
-        if mem < 256 {
-            bail!(
-                "resources.memory_max_mb must be >= 256 (got {mem}). \
+    if let Some(mem) = config.resources.memory_max_mb
+        && mem < 256
+    {
+        bail!(
+            "resources.memory_max_mb must be >= 256 (got {mem}). \
                  Tool processes need at least 256 MB to function."
-            );
-        }
+        );
     }
-    if let Some(heap) = config.resources.node_heap_limit_mb {
-        if heap < 512 {
-            bail!(
-                "resources.node_heap_limit_mb must be >= 512 (got {heap}). \
+    if let Some(heap) = config.resources.node_heap_limit_mb
+        && heap < 512
+    {
+        bail!(
+            "resources.node_heap_limit_mb must be >= 512 (got {heap}). \
                  Node-based tools need at least 512 MB heap to function."
-            );
-        }
+        );
     }
-    if let Some(pids) = config.resources.pids_max {
-        if pids < 10 {
-            bail!(
-                "resources.pids_max must be >= 10 (got {pids}). \
+    if let Some(pids) = config.resources.pids_max
+        && pids < 10
+    {
+        bail!(
+            "resources.pids_max must be >= 10 (got {pids}). \
                  Tool processes need at least 10 PIDs for process trees."
-            );
-        }
+        );
     }
     // Required enforcement mode demands an explicit memory limit.
     if matches!(
@@ -133,21 +133,21 @@ fn validate_tools(config: &ProjectConfig) -> Result<()> {
             bail!("Unknown tool '{tool_name}'. Known tools: {known_tools:?}");
         }
         // Validate per-tool sandbox memory overrides.
-        if let Some(mem) = tool_config.memory_max_mb {
-            if mem < 256 {
-                bail!(
-                    "tools.{tool_name}.memory_max_mb must be >= 256 (got {mem}). \
+        if let Some(mem) = tool_config.memory_max_mb
+            && mem < 256
+        {
+            bail!(
+                "tools.{tool_name}.memory_max_mb must be >= 256 (got {mem}). \
                      Tool processes need at least 256 MB to function."
-                );
-            }
+            );
         }
-        if let Some(heap) = tool_config.node_heap_limit_mb {
-            if heap < 512 {
-                bail!(
-                    "tools.{tool_name}.node_heap_limit_mb must be >= 512 (got {heap}). \
+        if let Some(heap) = tool_config.node_heap_limit_mb
+            && heap < 512
+        {
+            bail!(
+                "tools.{tool_name}.node_heap_limit_mb must be >= 512 (got {heap}). \
                      Node-based tools need at least 512 MB heap to function."
-                );
-            }
+            );
         }
         // Per-tool required enforcement demands a resolvable memory_max_mb.
         if matches!(
@@ -202,14 +202,14 @@ fn validate_review(config: &ProjectConfig) -> Result<()> {
     };
 
     validate_tool_selection(&review.tool, "review")?;
-    if let Some(tier_name) = &review.tier {
-        if !config.tiers.contains_key(tier_name) {
-            bail!(
-                "[review].tier references unknown tier '{}'. Available tiers: {:?}",
-                tier_name,
-                config.tiers.keys().collect::<Vec<_>>()
-            );
-        }
+    if let Some(tier_name) = &review.tier
+        && !config.tiers.contains_key(tier_name)
+    {
+        bail!(
+            "[review].tier references unknown tier '{}'. Available tiers: {:?}",
+            tier_name,
+            config.tiers.keys().collect::<Vec<_>>()
+        );
     }
     Ok(())
 }
@@ -220,14 +220,14 @@ fn validate_debate(config: &ProjectConfig) -> Result<()> {
     };
 
     validate_tool_selection(&debate.tool, "debate")?;
-    if let Some(tier_name) = &debate.tier {
-        if !config.tiers.contains_key(tier_name) {
-            bail!(
-                "[debate].tier references unknown tier '{}'. Available tiers: {:?}",
-                tier_name,
-                config.tiers.keys().collect::<Vec<_>>()
-            );
-        }
+    if let Some(tier_name) = &debate.tier
+        && !config.tiers.contains_key(tier_name)
+    {
+        bail!(
+            "[debate].tier references unknown tier '{}'. Available tiers: {:?}",
+            tier_name,
+            config.tiers.keys().collect::<Vec<_>>()
+        );
     }
     Ok(())
 }
@@ -249,15 +249,15 @@ fn validate_tiers(config: &ProjectConfig) -> Result<()> {
             validate_model_spec(tier_name, model_spec)?;
         }
         // Validate budget constraints
-        if let Some(budget) = tier_config.token_budget {
-            if budget == 0 {
-                bail!("Tier '{tier_name}': token_budget must be > 0 (got 0)");
-            }
+        if let Some(budget) = tier_config.token_budget
+            && budget == 0
+        {
+            bail!("Tier '{tier_name}': token_budget must be > 0 (got 0)");
         }
-        if let Some(turns) = tier_config.max_turns {
-            if turns == 0 {
-                bail!("Tier '{tier_name}': max_turns must be > 0 (got 0)");
-            }
+        if let Some(turns) = tier_config.max_turns
+            && turns == 0
+        {
+            bail!("Tier '{tier_name}': max_turns must be > 0 (got 0)");
         }
     }
 
