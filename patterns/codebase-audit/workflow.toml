@@ -154,6 +154,16 @@ If the crate needs sharding, partition source files into shard groups by
 top-level module directory.
 
 ```bash
+# Ensure crate has an entry in progress.toml (handles new crates added after init)
+if ! grep -q "^\[${crate}\]" drafts/crates/progress.toml 2>/dev/null; then
+  echo "" >> drafts/crates/progress.toml
+  echo "[${crate}]" >> drafts/crates/progress.toml
+  echo 'status = "pending"' >> drafts/crates/progress.toml
+  echo 'timestamp = ""' >> drafts/crates/progress.toml
+  echo 'session_id = ""' >> drafts/crates/progress.toml
+  echo 'shard_count = 1' >> drafts/crates/progress.toml
+fi
+
 # Check progress
 STATUS=$(grep -A4 "^\[${crate}\]" drafts/crates/progress.toml 2>/dev/null | \
   grep 'status' | head -1 | sed 's/.*= *"\(.*\)"/\1/')

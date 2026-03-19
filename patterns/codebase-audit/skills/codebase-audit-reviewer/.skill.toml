@@ -7,4 +7,4 @@ tier = "tier-4-critical"
 max_turns = 40
 tools = [{ tool = "claude-code", provider = "anthropic", model = "claude-opus-4-6", thinking_budget = "xhigh" }]
 skip_context = ["patterns/", "skills/"]
-extra_context = ["CLAUDE.md"]
+extra_context = []

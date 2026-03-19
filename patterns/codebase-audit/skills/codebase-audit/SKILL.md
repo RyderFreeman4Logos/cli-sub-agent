@@ -20,8 +20,10 @@ Treat the run as executor ONLY when initial prompt contains:
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
-2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`, and follow it step by step.
-3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the work DIRECTLY. Running any `csa` command causes infinite recursion.
+2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`. Execute `Tool: bash`
+   steps directly. Steps marked `Tool: csa` are dispatched by the orchestrator — skip them
+   and report that they require orchestrator dispatch.
+3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command.
 
 **Only if you are the main agent (Claude Code / human user)**:
 - You are the **orchestrator**. Follow the "Execution Protocol" steps below.
@@ -111,7 +113,6 @@ Fully resumable. If interrupted:
 | Command | Effect |
 |---------|--------|
 | `/codebase-audit` | Analyze all crates in topological order |
-| `/codebase-audit crates/csa-core` | Analyze only csa-core (and auto-detect deps) |
 
 ## Integration
 
