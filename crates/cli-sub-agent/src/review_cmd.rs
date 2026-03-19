@@ -610,9 +610,16 @@ async fn execute_review(
 
     let can_edit =
         project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let effective_prompt = if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        executor.apply_restrictions(&prompt, false)
+    let can_write_new =
+        project_config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
+    let effective_prompt = if !can_edit || !can_write_new {
+        info!(
+            tool = %executor.tool_name(),
+            can_edit,
+            can_write_new,
+            "Applying filesystem restrictions via prompt injection"
+        );
+        executor.apply_restrictions(&prompt, can_edit, can_write_new)
     } else {
         prompt
     };

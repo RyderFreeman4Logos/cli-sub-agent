@@ -196,6 +196,7 @@ pub fn init_project(
                 enabled: is_usable,
                 restrictions: Some(ToolRestrictions {
                     allow_edit_existing_files: false,
+                    allow_write_new_files: true,
                 }),
                 suppress_notify: true,
                 ..Default::default()

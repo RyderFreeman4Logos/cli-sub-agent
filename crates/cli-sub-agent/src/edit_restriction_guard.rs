@@ -73,6 +73,109 @@ pub(crate) fn maybe_capture_tracked_file_guard(
     Ok(Some(TrackedFileEditGuard::capture(project_root)?))
 }
 
+/// Guard that detects and removes new files created by a tool when
+/// `allow_write_new_files = false`.
+#[derive(Debug)]
+pub(crate) struct NewFileGuard {
+    project_root: PathBuf,
+    pre_untracked: BTreeSet<PathBuf>,
+}
+
+#[derive(Debug)]
+pub(crate) struct NewFileViolation {
+    pub(crate) new_paths: Vec<PathBuf>,
+    pub(crate) removed_paths: Vec<PathBuf>,
+}
+
+impl NewFileViolation {
+    pub(crate) fn summary(&self) -> String {
+        format!(
+            "Write restriction violated: blocked creation of {} new file(s)",
+            self.new_paths.len()
+        )
+    }
+
+    pub(crate) fn detail_message(&self) -> String {
+        let created = self
+            .new_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let removed = self
+            .removed_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "Write restriction violated (allow_write_new_files=false). \
+             New files created: [{created}]. Removed files: [{removed}]."
+        )
+    }
+}
+
+pub(crate) fn maybe_capture_new_file_guard(project_root: &Path) -> Result<Option<NewFileGuard>> {
+    if !is_git_repo(project_root)? {
+        return Ok(None);
+    }
+
+    Ok(Some(NewFileGuard::capture(project_root)?))
+}
+
+impl NewFileGuard {
+    fn capture(project_root: &Path) -> Result<Self> {
+        let pre_untracked = git_untracked_set(project_root)?;
+        Ok(Self {
+            project_root: project_root.to_path_buf(),
+            pre_untracked,
+        })
+    }
+
+    /// Detect new untracked files and remove them.
+    pub(crate) fn enforce_and_remove(self) -> Result<Option<NewFileViolation>> {
+        let post_untracked = git_untracked_set(&self.project_root)?;
+
+        let new_files: BTreeSet<PathBuf> = post_untracked
+            .difference(&self.pre_untracked)
+            .cloned()
+            .collect();
+
+        if new_files.is_empty() {
+            return Ok(None);
+        }
+
+        let mut removed_paths = Vec::new();
+        for path in &new_files {
+            let full_path = self.project_root.join(path);
+            if full_path.exists() {
+                if full_path.is_dir() {
+                    fs::remove_dir_all(&full_path).with_context(|| {
+                        format!("failed to remove new directory '{}'", full_path.display())
+                    })?;
+                } else {
+                    fs::remove_file(&full_path).with_context(|| {
+                        format!("failed to remove new file '{}'", full_path.display())
+                    })?;
+                }
+                removed_paths.push(path.clone());
+            }
+        }
+
+        Ok(Some(NewFileViolation {
+            new_paths: new_files.into_iter().collect(),
+            removed_paths,
+        }))
+    }
+}
+
+fn git_untracked_set(project_root: &Path) -> Result<BTreeSet<PathBuf>> {
+    git_name_only_set(
+        project_root,
+        &["ls-files", "--others", "--exclude-standard", "-z"],
+    )
+}
+
 impl TrackedFileEditGuard {
     fn capture(project_root: &Path) -> Result<Self> {
         let pre_staged_paths =

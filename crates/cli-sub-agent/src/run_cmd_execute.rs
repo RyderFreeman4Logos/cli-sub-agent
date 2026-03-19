@@ -141,6 +141,11 @@ pub(crate) async fn handle_run(
         return Ok(1);
     };
 
+    // Track whether user explicitly provided --tool on the CLI (before skill
+    // resolution may override it).  This drives tier enforcement: explicit
+    // --tool (including --tool auto) is blocked when tiers are configured.
+    let user_explicit_tool = tool.is_some();
+
     let skill_res = resolve_skill_and_prompt(
         skill.as_deref(),
         prompt,
@@ -160,6 +165,27 @@ pub(crate) async fn handle_run(
     if let Some(c) = config.as_ref() {
         merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
+
+    // Enforce tier routing: when tiers are configured, explicit --tool (any
+    // value, including "auto") is blocked unless --tier is also specified or
+    // --force-ignore-tier-setting is active.
+    let tiers_configured = config.as_ref().is_some_and(|c| !c.tiers.is_empty());
+    if user_explicit_tool
+        && tiers_configured
+        && tier.is_none()
+        && !force_ignore_tier_setting
+        && !force
+    {
+        let cfg = config.as_ref().unwrap();
+        let tier_list: Vec<&str> = cfg.tiers.keys().map(|s| s.as_str()).collect();
+        anyhow::bail!(
+            "Direct --tool is blocked when tiers are configured.\n\
+             Use --tier <name> to select a tier, or --force-ignore-tier-setting to bypass.\n\
+             Available tiers: {}",
+            tier_list.join(", ")
+        );
+    }
+
     let strategy = skill_res
         .tool
         .unwrap_or(ToolArg::Auto)

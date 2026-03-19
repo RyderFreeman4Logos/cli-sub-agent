@@ -328,6 +328,7 @@ fn test_can_tool_edit_existing_with_restrictions_false() {
             enabled: true,
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
+                allow_write_new_files: true,
             }),
             suppress_notify: true,
             ..Default::default()
