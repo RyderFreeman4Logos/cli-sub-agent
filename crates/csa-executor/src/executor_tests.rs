@@ -375,33 +375,65 @@ fn test_thinking_budget_custom_value() {
 }
 
 #[test]
-fn test_apply_restrictions_allow_edit() {
+fn test_apply_restrictions_allow_all() {
     let exec = Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,
     };
 
     let original_prompt = "Refactor the authentication module";
-    let result = exec.apply_restrictions(original_prompt, true);
+    let result = exec.apply_restrictions(original_prompt, true, true);
 
-    // When edit is allowed, prompt should be unchanged
+    // When both edit and write are allowed, prompt should be unchanged
     assert_eq!(result, original_prompt);
 }
 
 #[test]
-fn test_apply_restrictions_deny_edit() {
+fn test_apply_restrictions_deny_edit_allow_write() {
     let exec = Executor::GeminiCli {
         model_override: None,
         thinking_budget: None,
     };
 
     let original_prompt = "Analyze the authentication module";
-    let result = exec.apply_restrictions(original_prompt, false);
+    let result = exec.apply_restrictions(original_prompt, false, true);
 
-    // When edit is denied, prompt should contain restriction message
+    // When edit is denied but write is allowed, prompt should mention edit restriction
     assert!(result.contains("IMPORTANT RESTRICTION"));
     assert!(result.contains("MUST NOT edit or modify any existing files"));
     assert!(result.contains("may only create new files"));
+    assert!(result.contains(original_prompt));
+}
+
+#[test]
+fn test_apply_restrictions_full_read_only() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+
+    let original_prompt = "Analyze the authentication module";
+    let result = exec.apply_restrictions(original_prompt, false, false);
+
+    // Full read-only mode
+    assert!(result.contains("READ-ONLY mode"));
+    assert!(result.contains("MUST NOT edit existing files"));
+    assert!(result.contains("create new files"));
+    assert!(result.contains(original_prompt));
+}
+
+#[test]
+fn test_apply_restrictions_deny_write_allow_edit() {
+    let exec = Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    };
+
+    let original_prompt = "Fix the bug";
+    let result = exec.apply_restrictions(original_prompt, true, false);
+
+    // Can edit but not create new files
+    assert!(result.contains("MUST NOT create new files"));
     assert!(result.contains(original_prompt));
 }
 
@@ -429,13 +461,13 @@ fn test_apply_restrictions_preserves_all_tools() {
 
     let original_prompt = "Analyze code";
     for tool in tools {
-        // Test that restriction works for all tool types
-        let restricted = tool.apply_restrictions(original_prompt, false);
-        assert!(restricted.contains("IMPORTANT RESTRICTION"));
+        // Test that full read-only restriction works for all tool types
+        let restricted = tool.apply_restrictions(original_prompt, false, false);
+        assert!(restricted.contains("READ-ONLY mode"));
         assert!(restricted.contains(original_prompt));
 
-        // Test that allowing edit returns original prompt
-        let allowed = tool.apply_restrictions(original_prompt, true);
+        // Test that allowing everything returns original prompt
+        let allowed = tool.apply_restrictions(original_prompt, true, true);
         assert_eq!(allowed, original_prompt);
     }
 }

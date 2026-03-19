@@ -691,6 +691,7 @@ mod tests {
                 ToolConfig {
                     restrictions: Some(ToolRestrictions {
                         allow_edit_existing_files: false,
+                        allow_write_new_files: true,
                     }),
                     ..Default::default()
                 },

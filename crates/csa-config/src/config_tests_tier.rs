@@ -416,6 +416,7 @@ fn filtered_skips_restricted_tool_when_needs_edit() {
         ToolConfig {
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
+                allow_write_new_files: true,
             }),
             ..Default::default()
         },
@@ -482,6 +483,7 @@ fn filtered_returns_none_when_all_restricted_and_needs_edit() {
         ToolConfig {
             restrictions: Some(ToolRestrictions {
                 allow_edit_existing_files: false,
+                allow_write_new_files: true,
             }),
             ..Default::default()
         },

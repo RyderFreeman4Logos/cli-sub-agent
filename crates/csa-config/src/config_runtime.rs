@@ -265,6 +265,20 @@ impl ProjectConfig {
             .unwrap_or(true)
     }
 
+    /// Check if a tool is allowed to create new files.
+    pub fn can_tool_write_new(&self, tool: &str) -> bool {
+        self.tools
+            .get(tool)
+            .and_then(|t| t.restrictions.as_ref())
+            .map(|r| r.allow_write_new_files)
+            .unwrap_or(true)
+    }
+
+    /// Check if a tool is fully read-only (cannot edit existing or create new files).
+    pub fn is_tool_read_only(&self, tool: &str) -> bool {
+        !self.can_tool_edit_existing(tool) && !self.can_tool_write_new(tool)
+    }
+
     /// Resolve Codex PTY fork trust behavior from tool config.
     ///
     /// Returns false by default.

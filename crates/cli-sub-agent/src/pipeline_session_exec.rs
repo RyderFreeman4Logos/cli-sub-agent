@@ -345,6 +345,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     info!("Executing in session: {}", session.meta_session_id);
 
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
+    let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
 
@@ -402,15 +403,23 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     }
 
     // Apply restrictions after context and memory injection.
-    if !can_edit {
-        info!(tool = %executor.tool_name(), "Applying edit restriction: tool cannot modify existing files");
-        effective_prompt = executor.apply_restrictions(&effective_prompt, false);
+    if !can_edit || !can_write_new {
+        info!(
+            tool = %executor.tool_name(),
+            can_edit,
+            can_write_new,
+            "Applying filesystem restrictions via prompt injection"
+        );
+        effective_prompt = executor.apply_restrictions(&effective_prompt, can_edit, can_write_new);
     }
     let edit_guard = if !can_edit {
         crate::edit_restriction_guard::maybe_capture_tracked_file_guard(project_root)?
     } else {
         None
     };
+    // NOTE: new_file_guard is captured AFTER PreRun hooks (below) to avoid
+    // false positives from hook-created files. See the edit_guard capture here
+    // for tracked-file protection (hooks should not modify tracked files).
 
     let commit_guard_enabled = matches!(task_type, Some("run"));
     let require_commit_on_mutation =
@@ -522,6 +531,14 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         ("tool".to_string(), executor.tool_name().to_string()),
     ]);
     run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
+
+    // Capture new-file guard AFTER PreRun hooks so hook-created files are
+    // included in the baseline and not flagged as tool violations.
+    let new_file_guard = if !can_write_new {
+        crate::edit_restriction_guard::maybe_capture_new_file_guard(project_root)?
+    } else {
+        None
+    };
 
     // Run prompt guards: append reminders to effective_prompt (strongest influence at end).
     if !hooks_config.prompt_guard.is_empty() {
@@ -678,6 +695,30 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             result.stderr_output.push('\n');
         }
         result.summary = violation_summary;
+        result.exit_code = 1;
+    }
+    if let Some(guard) = new_file_guard
+        && let Some(violation) = guard.enforce_and_remove()?
+    {
+        let violation_summary = violation.summary();
+        let violation_details = violation.detail_message();
+        warn!(
+            tool = %executor.tool_name(),
+            new_files = violation.new_paths.len(),
+            removed = violation.removed_paths.len(),
+            "Detected and removed new files created under write restriction"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&violation_details);
+        if !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        // Only override summary/exit if edit guard didn't already fail.
+        if result.exit_code == 0 {
+            result.summary = violation_summary;
+        }
         result.exit_code = 1;
     }
     if commit_guard_enabled {
