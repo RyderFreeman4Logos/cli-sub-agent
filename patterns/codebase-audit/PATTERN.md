@@ -103,11 +103,10 @@ echo "CSA_VAR:SHARD_MAP=${SHARD_MAP}"
 
 ## FOR crate IN ${CRATE_LIST}
 
-MaxIterations: 20
-
 ## Step 4: Check Progress and Prepare Shard
 
 Tool: bash
+MaxIterations: 20
 
 Check if this crate is already completed in progress.toml. If so, skip.
 If the crate needs sharding, partition source files into shard groups by
@@ -134,11 +133,22 @@ CRATE_DIR=$(cargo metadata --no-deps --format-version 1 2>/dev/null | \
 
 # List source files
 SOURCE_FILES=$(find "${CRATE_DIR}/src" -name "*.rs" | sort)
+
+# Build dependency facts paths for context injection
+DEPS=$(cargo metadata --no-deps --format-version 1 2>/dev/null | \
+  jq -r --arg name "${crate}" '.packages[] | select(.name == $name) | .dependencies[] | select(.path != null) | .name')
+DEP_FACTS=""
+for dep in $DEPS; do
+  FACTS_PATH="drafts/crates/${dep}/facts.toml"
+  if [ -f "$FACTS_PATH" ]; then
+    DEP_FACTS="${DEP_FACTS}${FACTS_PATH} "
+  fi
+done
+
 echo "CSA_VAR:CRATE_NEEDS_AUDIT=true"
 echo "CSA_VAR:CRATE_DIR=${CRATE_DIR}"
-echo "CSA_VAR:CRATE_SOURCE_FILES=${SOURCE_FILES}"
-echo "CSA_VAR:CRATE_SHARD_COUNT=${SHARD_COUNT}"
-echo "Auditing ${crate}: ${SHARD_COUNT} shard(s), dir=${CRATE_DIR}"
+echo "CSA_VAR:DEPENDENCY_FACTS=${DEP_FACTS}"
+echo "Auditing ${crate}: ${SHARD_COUNT} shard(s), dir=${CRATE_DIR}, dep_facts=[${DEP_FACTS}]"
 ```
 
 ## IF ${CRATE_NEEDS_AUDIT}
@@ -220,6 +230,7 @@ For each file (README.md, review_report.md, blog.md, facts.toml, and any chapter
 ## Step 7: Update Progress
 
 Tool: bash
+MaxIterations: 20
 
 Update progress.toml for this crate after successful Writer + Reviewer pass.
 

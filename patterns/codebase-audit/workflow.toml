@@ -18,7 +18,13 @@ name = "CRATE_NEEDS_AUDIT"
 name = "DEPENDENCY_FACTS"
 
 [[workflow.variables]]
+name = "DEP_FACTS"
+
+[[workflow.variables]]
 name = "EST_TOKENS"
+
+[[workflow.variables]]
+name = "FACTS_PATH"
 
 [[workflow.variables]]
 name = "PENDING"
@@ -33,9 +39,6 @@ name = "SHARD_COUNT"
 name = "SHARD_MAP"
 
 [[workflow.variables]]
-name = "SOURCE_FILES"
-
-[[workflow.variables]]
 name = "TIMESTAMP"
 
 [[workflow.variables]]
@@ -46,6 +49,9 @@ name = "TOTAL_LINES"
 
 [[workflow.variables]]
 name = "crate"
+
+[[workflow.variables]]
+name = "dep"
 
 [[workflow.steps]]
 id = 1
@@ -168,18 +174,29 @@ CRATE_DIR=$(cargo metadata --no-deps --format-version 1 2>/dev/null | \
 
 # List source files
 SOURCE_FILES=$(find "${CRATE_DIR}/src" -name "*.rs" | sort)
+
+# Build dependency facts paths for context injection
+DEPS=$(cargo metadata --no-deps --format-version 1 2>/dev/null | \
+  jq -r --arg name "${crate}" '.packages[] | select(.name == $name) | .dependencies[] | select(.path != null) | .name')
+DEP_FACTS=""
+for dep in $DEPS; do
+  FACTS_PATH="drafts/crates/${dep}/facts.toml"
+  if [ -f "$FACTS_PATH" ]; then
+    DEP_FACTS="${DEP_FACTS}${FACTS_PATH} "
+  fi
+done
+
 echo "CSA_VAR:CRATE_NEEDS_AUDIT=true"
 echo "CSA_VAR:CRATE_DIR=${CRATE_DIR}"
-echo "CSA_VAR:CRATE_SOURCE_FILES=${SOURCE_FILES}"
-echo "CSA_VAR:CRATE_SHARD_COUNT=${SHARD_COUNT}"
-echo "Auditing ${crate}: ${SHARD_COUNT} shard(s), dir=${CRATE_DIR}"
+echo "CSA_VAR:DEPENDENCY_FACTS=${DEP_FACTS}"
+echo "Auditing ${crate}: ${SHARD_COUNT} shard(s), dir=${CRATE_DIR}, dep_facts=[${DEP_FACTS}]"
 ```'''
 on_fail = "abort"
 
 [workflow.steps.loop_var]
 variable = "crate"
 collection = "${CRATE_LIST}"
-max_iterations = 10
+max_iterations = 20
 
 [[workflow.steps]]
 id = 5
@@ -231,7 +248,7 @@ condition = "${CRATE_NEEDS_AUDIT}"
 [workflow.steps.loop_var]
 variable = "crate"
 collection = "${CRATE_LIST}"
-max_iterations = 10
+max_iterations = 20
 
 [[workflow.steps]]
 id = 6
@@ -269,7 +286,7 @@ condition = "${CRATE_NEEDS_AUDIT}"
 [workflow.steps.loop_var]
 variable = "crate"
 collection = "${CRATE_LIST}"
-max_iterations = 10
+max_iterations = 20
 
 [[workflow.steps]]
 id = 7
@@ -293,7 +310,7 @@ condition = "${CRATE_NEEDS_AUDIT}"
 [workflow.steps.loop_var]
 variable = "crate"
 collection = "${CRATE_LIST}"
-max_iterations = 10
+max_iterations = 20
 
 [[workflow.steps]]
 id = 8

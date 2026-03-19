@@ -59,11 +59,29 @@ factual accuracy.
 csa run --sa-mode true --skill codebase-audit "Analyze all crates in the workspace"
 ```
 
-Or run the compiled workflow directly:
+### Known Limitation: loop_var
+
+`csa plan run` currently skips `loop_var` steps (unsupported in the plan executor).
+The orchestrator (this skill's executor) MUST implement the FOR loop manually:
 
 ```bash
-csa plan run patterns/codebase-audit/workflow.toml
+# Step 1: Get crate list
+CRATE_LIST=$(bash scripts/crate-topo.sh)
+# Step 2-3: Prepare and estimate
+# Step 4-7: FOR each crate — orchestrator iterates manually
+IFS=',' read -ra CRATES <<< "$CRATE_LIST"
+for crate in "${CRATES[@]}"; do
+  # Run Writer CSA
+  csa run --sa-mode true --tier tier-4-critical --timeout 3600 \
+    "Analyze crate ${crate} at crates/${crate}/src/ ..."
+  # Run Reviewer CSA
+  csa run --sa-mode true --tier tier-4-critical --timeout 2400 \
+    "Review drafts/crates/${crate}/ against crates/${crate}/src/ ..."
+done
 ```
+
+The workflow.toml remains the authoritative step definition; the orchestrator
+translates loop steps into sequential CSA calls.
 
 ### SA Mode Propagation (MANDATORY)
 
