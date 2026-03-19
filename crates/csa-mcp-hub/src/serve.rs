@@ -157,8 +157,8 @@ pub(crate) async fn run_hub(cfg: HubConfig, systemd_activation: bool) -> Result<
         MCP_PATH
     );
     println!(
-        "claude mcp add --transport http csa-hub http://{}",
-        http_endpoint.addr
+        "claude mcp add --transport http csa-hub http://{}{}",
+        http_endpoint.addr, MCP_PATH
     );
 
     loop {

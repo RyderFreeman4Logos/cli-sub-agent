@@ -3,7 +3,7 @@
 > **Recursive Agent Container** -- Composable Unix processes for orchestrating LLM CLI tools
 
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
-[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange)](https://www.rust-lang.org/)
+[![Rust](https://img.shields.io/badge/rust-1.88%2B-orange)](https://www.rust-lang.org/)
 
 CSA is a **headless IDE runtime for AI agents**. It provides a unified CLI that
 orchestrates multiple AI coding tools (claude-code, codex, gemini-cli, opencode)
@@ -140,7 +140,7 @@ stay attached to the audited commit.
 ## Development
 
 ```bash
-# Requirements: Rust 1.85+, just
+# Requirements: Rust 1.88+, just
 just clippy       # Build + lint
 just test         # Run tests
 just fmt          # Format
