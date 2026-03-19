@@ -15,6 +15,7 @@ use super::*;
 use std::sync::{LazyLock, Mutex};
 
 use crate::client::{MAX_RETAINED_EVENTS, SessionEventStore};
+use crate::connection::LINE_BUF_CAP;
 
 fn flush_spool(spool: &mut Option<SpoolRotator>) {
     if let Some(w) = spool {
@@ -489,6 +490,123 @@ fn spool_writes_all_data_without_truncation() {
         metadata.spool_bytes_written,
         (chunk_size * num_chunks) as u64
     );
+}
+
+// --- Line-buffered stderr tests (stream_stdout_to_stderr = true) ---
+//
+// These test the deduplication logic added for issue #438.  Because stderr
+// output goes to the process stderr (not captured by the test harness), we
+// verify the buffering indirectly via the buffer state.
+
+#[test]
+fn line_buffer_accumulates_partial_lines() {
+    let events = shared_events(vec![
+        SessionEvent::AgentMessage("Hello ".to_string()),
+        SessionEvent::AgentMessage("world".to_string()),
+    ]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+    let mut stdout_buf = String::new();
+    let mut thought_buf = String::new();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        true, // stderr streaming enabled
+        &mut spool,
+        &mut metadata,
+        &mut stdout_buf,
+        &mut thought_buf,
+    );
+    // No newline in tokens → content stays in buffer (not flushed per-token).
+    assert_eq!(stdout_buf, "Hello world");
+    assert!(thought_buf.is_empty());
+    // Tail text still accumulates regardless of stderr buffering.
+    assert_eq!(metadata.tail_text, "Hello world");
+}
+
+#[test]
+fn line_buffer_flushes_on_newline() {
+    let events = shared_events(vec![
+        SessionEvent::AgentMessage("line one\n".to_string()),
+        SessionEvent::AgentMessage("partial".to_string()),
+    ]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+    let mut stdout_buf = String::new();
+    let mut thought_buf = String::new();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        true,
+        &mut spool,
+        &mut metadata,
+        &mut stdout_buf,
+        &mut thought_buf,
+    );
+    // "line one\n" was flushed, only "partial" remains.
+    assert_eq!(stdout_buf, "partial");
+}
+
+#[test]
+fn line_buffer_force_flushes_on_cap() {
+    // Build a single chunk that exceeds LINE_BUF_CAP without any newline.
+    let long_chunk = "x".repeat(LINE_BUF_CAP + 1);
+    let events = shared_events(vec![SessionEvent::AgentMessage(long_chunk)]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+    let mut stdout_buf = String::new();
+    let mut thought_buf = String::new();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        true,
+        &mut spool,
+        &mut metadata,
+        &mut stdout_buf,
+        &mut thought_buf,
+    );
+    // Buffer was force-flushed because it exceeded LINE_BUF_CAP.
+    assert!(
+        stdout_buf.is_empty(),
+        "buffer must be empty after force-flush (len was {})",
+        stdout_buf.len()
+    );
+}
+
+#[test]
+fn thought_buffer_flushes_on_stream_type_switch() {
+    let events = shared_events(vec![
+        SessionEvent::AgentThought("thinking".to_string()),
+        SessionEvent::AgentMessage("answer\n".to_string()),
+    ]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+    let mut stdout_buf = String::new();
+    let mut thought_buf = String::new();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        true,
+        &mut spool,
+        &mut metadata,
+        &mut stdout_buf,
+        &mut thought_buf,
+    );
+    // Thought buffer was flushed when AgentMessage arrived (stream-type switch).
+    assert!(
+        thought_buf.is_empty(),
+        "thought buffer must be flushed on type switch"
+    );
+    // stdout buffer also flushed because "answer\n" contains newline.
+    assert!(stdout_buf.is_empty());
 }
 
 #[test]

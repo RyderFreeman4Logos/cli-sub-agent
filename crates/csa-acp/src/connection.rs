@@ -563,12 +563,24 @@ fn maybe_emit_heartbeat(
     *last_heartbeat = now;
 }
 
+/// Maximum bytes a line buffer may hold before being force-flushed.
+/// Prevents unbounded memory growth on long non-newline output (base64,
+/// minified JSON, etc.).
+pub(crate) const LINE_BUF_CAP: usize = 64 * 1024;
+
 /// Flush complete lines (terminated by `\n`) from `buf`, each prefixed with
-/// `prefix`.  Incomplete trailing content stays in `buf` for the next call.
+/// `prefix`.  Incomplete trailing content stays in `buf` for the next call,
+/// unless the buffer exceeds [`LINE_BUF_CAP`], in which case the entire
+/// remainder is force-flushed.
 fn flush_complete_lines(buf: &mut String, prefix: &str) {
     while let Some(pos) = buf.find('\n') {
         let line: String = buf.drain(..=pos).collect();
         eprint!("{prefix}{line}");
+    }
+    // Prevent unbounded growth on long lines without newlines.
+    if buf.len() > LINE_BUF_CAP {
+        let remainder = std::mem::take(buf);
+        eprintln!("{prefix}{remainder}");
     }
 }
 
