@@ -11,7 +11,7 @@
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::time::Duration;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
@@ -349,6 +349,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
 
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
+    debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
 

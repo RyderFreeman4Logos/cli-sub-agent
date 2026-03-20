@@ -93,11 +93,20 @@ impl Default for ToolConfig {
 pub struct ToolRestrictions {
     /// When false, the tool may not modify existing tracked files.
     /// Enforced via prompt injection + git-based edit guard.
-    #[serde(default)]
+    #[serde(default = "super::config_tool::default_true")]
     pub allow_edit_existing_files: bool,
     /// When false, the tool may not create new files.
     /// Combined with `allow_edit_existing_files = false` for full read-only mode.
     /// Enforced via prompt injection + git-based new-file guard.
     #[serde(default = "super::config_tool::default_true")]
     pub allow_write_new_files: bool,
+}
+
+impl Default for ToolRestrictions {
+    fn default() -> Self {
+        Self {
+            allow_edit_existing_files: true,
+            allow_write_new_files: true,
+        }
+    }
 }

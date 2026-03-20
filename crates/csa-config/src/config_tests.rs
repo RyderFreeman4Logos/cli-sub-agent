@@ -423,6 +423,57 @@ fn test_can_tool_edit_existing_unconfigured_defaults_to_true() {
     assert!(config.can_tool_edit_existing("codex"));
 }
 
+/// Regression test: partial restrictions must not silently block unset fields.
+///
+/// When a user sets only `allow_write_new_files = false`, `allow_edit_existing_files`
+/// must still default to `true` — not `false`.  The original serde `#[default]` annotation
+/// deserialized the missing bool as `false`, causing surprise prompt injection that told
+/// the agent "You MUST NOT edit existing files", even though the user never intended that.
+///
+/// See: <https://github.com/RyderFreeman4Logos/cli-sub-agent/issues/441>
+#[test]
+fn test_partial_restrictions_toml_defaults_to_permissive() {
+    let toml_str = r#"
+enabled = true
+
+[restrictions]
+allow_write_new_files = false
+"#;
+    let tool_cfg: ToolConfig = toml::from_str(toml_str).unwrap();
+
+    let restrictions = tool_cfg.restrictions.expect("restrictions should be Some");
+    // The fix: unset allow_edit_existing_files defaults to true, not false.
+    assert!(
+        restrictions.allow_edit_existing_files,
+        "allow_edit_existing_files should default to true when not specified"
+    );
+    assert!(
+        !restrictions.allow_write_new_files,
+        "allow_write_new_files should be false as explicitly set"
+    );
+}
+
+/// Verify that empty restrictions block defaults both fields to true.
+#[test]
+fn test_empty_restrictions_block_defaults_both_true() {
+    let toml_str = r#"
+enabled = true
+
+[restrictions]
+"#;
+    let tool_cfg: ToolConfig = toml::from_str(toml_str).unwrap();
+
+    let restrictions = tool_cfg.restrictions.expect("restrictions should be Some");
+    assert!(
+        restrictions.allow_edit_existing_files,
+        "empty restrictions block should default allow_edit to true"
+    );
+    assert!(
+        restrictions.allow_write_new_files,
+        "empty restrictions block should default allow_write to true"
+    );
+}
+
 #[test]
 fn test_max_recursion_depth_override() {
     let dir = tempdir().unwrap();
