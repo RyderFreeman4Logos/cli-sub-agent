@@ -29,6 +29,7 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

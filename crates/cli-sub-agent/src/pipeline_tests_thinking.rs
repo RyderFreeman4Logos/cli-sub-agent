@@ -34,6 +34,7 @@ async fn thinking_lock_project_config_overrides_cli_thinking() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = build_and_validate_executor(
@@ -132,6 +133,7 @@ async fn thinking_lock_project_overrides_global() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let mut global_tools = HashMap::new();
@@ -226,6 +228,7 @@ async fn project_default_thinking_applies_when_cli_absent() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = build_and_validate_executor(
@@ -294,6 +297,7 @@ async fn project_default_model_is_checked_against_tiers_when_enabled() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = build_and_validate_executor(
@@ -360,6 +364,7 @@ async fn project_default_model_is_ignored_when_tool_defaults_disabled() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = build_and_validate_executor(

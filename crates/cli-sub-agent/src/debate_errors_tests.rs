@@ -42,6 +42,7 @@ fn classify_exit_137_with_sandbox_memory_as_transient() {
     state.sandbox_info = Some(SandboxInfo {
         mode: "rlimit".to_string(),
         memory_max_mb: Some(1024),
+        filesystem_mode: None,
     });
     let execution = ExecutionResult {
         output: String::new(),

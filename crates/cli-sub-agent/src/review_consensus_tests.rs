@@ -46,6 +46,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     }
 }
 

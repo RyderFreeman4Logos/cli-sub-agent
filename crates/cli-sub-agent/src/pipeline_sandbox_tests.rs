@@ -11,6 +11,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         120,
         600,
         Some(120),
+        false,
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -35,6 +36,7 @@ fn test_none_config_lightweight_skips_sandbox() {
         120,
         600,
         Some(120),
+        false,
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -63,6 +65,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         120,
         600,
         Some(120),
+        false,
     );
 
     let SandboxResolution::Ok(opts) = result else {

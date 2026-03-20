@@ -54,6 +54,7 @@ fn test_validate_config_succeeds_on_valid() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -88,6 +89,7 @@ fn test_validate_config_fails_on_empty_name() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -126,6 +128,7 @@ fn test_validate_config_fails_on_unknown_tool() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -165,6 +168,7 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -208,6 +212,7 @@ fn test_validate_config_fails_on_invalid_review_tool() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -261,6 +266,7 @@ fn test_validate_config_fails_on_invalid_model_spec() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -317,6 +323,7 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -382,6 +389,7 @@ fn test_validate_config_fails_on_empty_models() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -438,6 +446,7 @@ fn test_validate_config_accepts_custom_tier_names() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -475,6 +484,7 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -515,6 +525,7 @@ fn test_validate_max_recursion_depth_boundary_20() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -548,6 +559,7 @@ fn test_validate_max_recursion_depth_boundary_21() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

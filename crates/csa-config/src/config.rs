@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::acp::AcpConfig;
+use crate::config_filesystem_sandbox::FilesystemSandboxConfig;
 use crate::config_merge::{
     enforce_global_tool_disables, merge_toml_values, strip_review_project_only_from_global,
     warn_deprecated_keys,
@@ -349,9 +350,10 @@ pub struct ProjectConfig {
     /// Execution tuning knobs (timeout floors, etc.).
     #[serde(default, skip_serializing_if = "ExecutionConfig::is_default")]
     pub execution: ExecutionConfig,
-    /// VCS backend configuration.
     #[serde(default, skip_serializing_if = "VcsConfig::is_default")]
     pub vcs: VcsConfig,
+    #[serde(default, skip_serializing_if = "FilesystemSandboxConfig::is_default")]
+    pub filesystem_sandbox: FilesystemSandboxConfig,
 }
 
 fn default_schema_version() -> u32 {

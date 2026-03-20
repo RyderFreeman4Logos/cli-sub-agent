@@ -3,6 +3,7 @@
 use anyhow::Result;
 use csa_config::{ProjectConfig, paths};
 use csa_core::types::OutputFormat;
+use csa_resource::filesystem_sandbox::{FilesystemCapability, detect_filesystem_capability};
 use csa_resource::rlimit::current_rlimit_nproc;
 use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
 use std::env;
@@ -55,8 +56,12 @@ async fn run_doctor_text() -> Result<()> {
     print_resource_status();
     println!();
 
-    println!("=== Sandbox ===");
+    println!("=== Sandbox (Resource) ===");
     print_sandbox_status();
+    println!();
+
+    println!("=== Sandbox (Filesystem) ===");
+    print_filesystem_sandbox_status();
 
     Ok(())
 }
@@ -146,6 +151,10 @@ async fn run_doctor_json() -> Result<()> {
         }),
     };
 
+    // Filesystem sandbox detection
+    let fs_cap = detect_filesystem_capability();
+    let fs_sandbox_status = build_filesystem_sandbox_json(fs_cap);
+
     let result = serde_json::json!({
         "platform": {
             "os": os,
@@ -161,6 +170,7 @@ async fn run_doctor_json() -> Result<()> {
             "total_free_bytes": available_memory.saturating_add(free_swap),
         },
         "sandbox": sandbox_status,
+        "filesystem_sandbox": fs_sandbox_status,
     });
 
     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -368,6 +378,100 @@ fn print_sandbox_status() {
             println!("             Resource limits will not be enforced.");
         }
     }
+}
+
+/// Print filesystem sandbox capability status.
+fn print_filesystem_sandbox_status() {
+    let fs_cap = detect_filesystem_capability();
+    println!("Capability:  {fs_cap}");
+
+    match fs_cap {
+        FilesystemCapability::Bwrap => {
+            if let Some(ver) = bwrap_version() {
+                println!("bwrap:       {ver}");
+            }
+            println!("User NS:     available");
+        }
+        FilesystemCapability::Landlock => {
+            let abi = csa_resource::landlock::detect_abi();
+            println!("Landlock ABI: {abi:?}");
+        }
+        FilesystemCapability::None => {
+            println!("Warning:     No filesystem isolation available.");
+            // Print diagnostic details
+            if let Some(ver) = bwrap_version() {
+                println!("bwrap:       {ver} (installed but user namespaces blocked)");
+            } else {
+                println!("bwrap:       not installed");
+            }
+            if is_apparmor_userns_restricted() {
+                println!("AppArmor:    restricts unprivileged user namespaces");
+            }
+            if !has_usable_user_namespaces() {
+                println!("User NS:     unavailable");
+            }
+        }
+    }
+}
+
+/// Build JSON object for filesystem sandbox status.
+fn build_filesystem_sandbox_json(fs_cap: FilesystemCapability) -> serde_json::Value {
+    match fs_cap {
+        FilesystemCapability::Bwrap => {
+            serde_json::json!({
+                "capability": "Bwrap",
+                "bwrap_version": bwrap_version(),
+                "user_namespaces": true,
+                "apparmor_userns_restricted": is_apparmor_userns_restricted(),
+            })
+        }
+        FilesystemCapability::Landlock => {
+            let abi = csa_resource::landlock::detect_abi();
+            serde_json::json!({
+                "capability": "Landlock",
+                "landlock_abi": format!("{abi:?}"),
+                "user_namespaces": has_usable_user_namespaces(),
+                "apparmor_userns_restricted": is_apparmor_userns_restricted(),
+            })
+        }
+        FilesystemCapability::None => {
+            serde_json::json!({
+                "capability": "None",
+                "bwrap_installed": bwrap_version().is_some(),
+                "user_namespaces": has_usable_user_namespaces(),
+                "apparmor_userns_restricted": is_apparmor_userns_restricted(),
+            })
+        }
+    }
+}
+
+/// Get bwrap version string, if installed.
+fn bwrap_version() -> Option<String> {
+    let output = Command::new("bwrap").arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    stdout.lines().next().map(|s| s.trim().to_string())
+}
+
+/// Check whether AppArmor restricts unprivileged user namespaces.
+fn is_apparmor_userns_restricted() -> bool {
+    let path = std::path::Path::new("/proc/sys/kernel/apparmor_restrict_unprivileged_userns");
+    std::fs::read_to_string(path)
+        .map(|content| content.trim() == "1")
+        .unwrap_or(false)
+}
+
+/// Check whether unprivileged user namespaces work.
+fn has_usable_user_namespaces() -> bool {
+    Command::new("unshare")
+        .args(["-U", "true"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .is_ok_and(|s| s.success())
 }
 
 /// Format bytes as human-readable string (GB).

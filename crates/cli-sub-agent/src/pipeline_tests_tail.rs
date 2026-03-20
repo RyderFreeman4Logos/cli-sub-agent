@@ -22,6 +22,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result_true = build_and_validate_executor(

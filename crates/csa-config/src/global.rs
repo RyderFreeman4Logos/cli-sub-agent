@@ -58,6 +58,12 @@ pub struct GlobalConfig {
     /// ACP transport overrides; project-level `[acp]` takes precedence.
     #[serde(default, skip_serializing_if = "crate::AcpConfig::is_default")]
     pub acp: crate::AcpConfig,
+    /// Global filesystem sandbox defaults; project-level `[filesystem_sandbox]` overrides.
+    #[serde(
+        default,
+        skip_serializing_if = "crate::config_filesystem_sandbox::FilesystemSandboxConfig::is_default"
+    )]
+    pub filesystem_sandbox: crate::config_filesystem_sandbox::FilesystemSandboxConfig,
 }
 
 /// User preferences for tool selection and routing.

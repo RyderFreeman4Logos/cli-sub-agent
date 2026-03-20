@@ -146,6 +146,7 @@ fn project_config_with_preferences(prefs: Option<PreferencesConfig>) -> crate::P
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     }
 }
 

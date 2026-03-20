@@ -29,6 +29,7 @@ fn test_validate_liveness_dead_seconds_zero_rejected() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -71,6 +72,7 @@ fn test_validate_memory_max_mb_too_low() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -113,6 +115,7 @@ fn test_validate_memory_max_mb_at_minimum() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -149,6 +152,7 @@ fn test_validate_pids_max_too_low() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -191,6 +195,7 @@ fn test_validate_pids_max_at_minimum() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -227,6 +232,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -275,6 +281,7 @@ fn test_validate_per_tool_required_enforcement_without_memory_fails() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -327,6 +334,7 @@ fn test_validate_per_tool_required_enforcement_with_tool_memory_passes() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -373,6 +381,7 @@ fn test_validate_per_tool_required_enforcement_with_global_memory_passes() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();
@@ -419,6 +428,7 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
         hooks: Default::default(),
         execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
     };
 
     config.save(dir.path()).unwrap();

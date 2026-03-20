@@ -23,6 +23,7 @@ fn test_enforce_tool_enabled_enabled_tool_returns_ok() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert!(config.enforce_tool_enabled("codex", false).is_ok());
@@ -48,6 +49,7 @@ fn test_enforce_tool_enabled_unconfigured_tool_returns_ok() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert!(config.enforce_tool_enabled("codex", false).is_ok());
@@ -82,6 +84,7 @@ fn test_enforce_tool_enabled_force_override_bypasses_disabled() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert!(config.enforce_tool_enabled("codex", true).is_ok());

@@ -2,6 +2,7 @@
 
 pub mod acp;
 pub mod config;
+pub mod config_filesystem_sandbox;
 mod config_merge;
 pub mod config_resources;
 mod config_runtime;
@@ -25,6 +26,7 @@ pub use config::{
     EnforcementMode, ExecutionConfig, HooksSection, ProjectConfig, ProjectMeta, SessionConfig,
     TierConfig, TierStrategy, ToolConfig, ToolResourceProfile, ToolRestrictions,
 };
+pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
 pub use config_runtime::{DefaultSandboxOptions, default_sandbox_for_tool};
 pub use gc::GcConfig;
