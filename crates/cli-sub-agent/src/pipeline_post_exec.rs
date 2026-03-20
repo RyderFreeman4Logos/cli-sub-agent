@@ -18,6 +18,7 @@ use csa_session::{
 };
 
 use crate::memory_capture;
+use crate::pipeline_handoff::write_handoff_artifact;
 use crate::run_helpers::{is_compress_command, parse_token_usage};
 
 const FALLBACK_OUTPUT_TAIL_LINES: usize = 8;
@@ -39,6 +40,9 @@ pub(crate) struct PostExecContext<'a> {
     pub provider_session_id: Option<String>,
     pub events_count: u64,
     pub transcript_artifacts: Vec<SessionArtifact>,
+    /// File paths changed during tool execution (empty for PreRun or when
+    /// git workspace snapshots are unavailable).
+    pub changed_paths: Vec<String>,
 }
 
 /// Process the results of tool execution: update session, persist artifacts, fire hooks.
@@ -115,6 +119,24 @@ pub(crate) async fn process_execution_result(
     // Save session
     save_session(session)?;
 
+    // Write handoff.toml: structured context-transfer artifact for subsequent sessions.
+    write_handoff_artifact(
+        &ctx.session_dir,
+        session,
+        result,
+        ctx.executor.tool_name(),
+        ctx.execution_start_time,
+    );
+
+    // Derive changed crates from changed paths for hook variables.
+    let changed_crates =
+        crate::pipeline::changed_paths::derive_changed_crates(ctx.project_root, &ctx.changed_paths);
+    let changed_paths_json =
+        crate::pipeline::changed_paths::format_changed_paths_json(&ctx.changed_paths);
+    let changed_crates_str = crate::pipeline::changed_paths::format_changed_crates(&changed_crates);
+    let changed_crates_flags =
+        crate::pipeline::changed_paths::format_changed_crates_flags(&changed_crates);
+
     // Fire PostRun and SessionComplete hooks, capture memory
     let hook_vars = std::collections::HashMap::from([
         ("session_id".to_string(), session.meta_session_id.clone()),
@@ -125,10 +147,18 @@ pub(crate) async fn process_execution_result(
         ("sessions_root".to_string(), ctx.sessions_root.to_string()),
         ("tool".to_string(), ctx.executor.tool_name().to_string()),
         ("exit_code".to_string(), result.exit_code.to_string()),
+        ("CHANGED_PATHS".to_string(), changed_paths_json),
+        ("CHANGED_CRATES".to_string(), changed_crates_str),
+        ("CHANGED_CRATES_FLAGS".to_string(), changed_crates_flags),
     ]);
 
     // PostRun hook: fires after every tool execution
     crate::pipeline::run_pipeline_hook(HookEvent::PostRun, ctx.hooks_config, &hook_vars)?;
+
+    // PostEdit hook: fires when .rs files are among changed paths (observational clippy check)
+    if ctx.changed_paths.iter().any(|p| p.ends_with(".rs")) {
+        crate::pipeline::run_pipeline_hook(HookEvent::PostEdit, ctx.hooks_config, &hook_vars)?;
+    }
 
     // Memory capture
     let memory_config = ctx
@@ -583,6 +613,8 @@ mod tests {
             Some("post_exec_error")
         );
     }
+
+    // Handoff artifact tests are in pipeline_handoff.rs
 
     #[test]
     fn read_output_log_tail_reads_from_file_end_window() {

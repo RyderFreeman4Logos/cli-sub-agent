@@ -5,6 +5,7 @@
 /// All trigger points are wired:
 /// - `PreRun` — fired before tool spawn in `pipeline::execute_with_session_and_meta`
 /// - `PostRun` — fired after every tool execution in `pipeline::execute_with_session_and_meta`
+/// - `PostEdit` — fired after PostRun when `.rs` files are in changed_paths (observational clippy check)
 /// - `SessionComplete` — fired after session save in `pipeline::execute_with_session_and_meta`
 /// - `TodoCreate` — fired after plan creation + git commit in `todo_cmd::handle_create` (no builtin; git already committed)
 /// - `TodoSave` — fired after plan save + git commit in `todo_cmd::handle_save` (no builtin; git already committed)
@@ -25,6 +26,10 @@ pub enum HookEvent {
     /// After a tool execution finishes.
     /// Triggered in `pipeline::execute_with_session_and_meta` after session save.
     PostRun,
+    /// After PostRun when `.rs` files are among changed paths.
+    /// Observational: runs a quick clippy check on changed crates.
+    /// Triggered in `pipeline_post_exec::process_execution_result`.
+    PostEdit,
 }
 
 impl HookEvent {
@@ -43,6 +48,7 @@ impl HookEvent {
             HookEvent::TodoSave => "todo_save",
             HookEvent::PreRun => "pre_run",
             HookEvent::PostRun => "post_run",
+            HookEvent::PostEdit => "post_edit",
         }
     }
 
@@ -64,6 +70,17 @@ impl HookEvent {
         matches!(self, HookEvent::PreRun | HookEvent::SessionComplete)
     }
 
+    /// Returns the default timeout in seconds for this event.
+    ///
+    /// Most events use 30s. `PostEdit` uses 120s because `cargo clippy`
+    /// on a workspace can take longer than a simple git commit.
+    pub fn default_timeout_secs(&self) -> u64 {
+        match self {
+            HookEvent::PostEdit => 120,
+            _ => 30,
+        }
+    }
+
     /// Returns the built-in default command template for this event.
     ///
     /// Built-in commands use template variables wrapped in `{braces}` that are
@@ -79,6 +96,9 @@ impl HookEvent {
             HookEvent::SessionComplete => Some(
                 "cd {sessions_root} && git add {session_id}/ && git commit -m 'session {session_id} complete' -q --allow-empty",
             ),
+            HookEvent::PostEdit => {
+                Some("set -o pipefail; cargo clippy {!CHANGED_CRATES_FLAGS} --message-format=short 2>&1 | head -30")
+            }
             HookEvent::TodoCreate
             | HookEvent::TodoSave
             | HookEvent::PreRun
@@ -101,12 +121,15 @@ mod tests {
         assert_eq!(HookEvent::TodoSave.as_config_key(), "todo_save");
         assert_eq!(HookEvent::PreRun.as_config_key(), "pre_run");
         assert_eq!(HookEvent::PostRun.as_config_key(), "post_run");
+        assert_eq!(HookEvent::PostEdit.as_config_key(), "post_edit");
     }
 
     #[test]
     fn test_builtin_command() {
         // Events with built-in commands
         assert!(HookEvent::SessionComplete.builtin_command().is_some());
+
+        assert!(HookEvent::PostEdit.builtin_command().is_some());
 
         // Events without built-in commands (TodoCreate/TodoSave have no builtins
         // because git::save() already commits before hooks fire)
@@ -134,6 +157,7 @@ mod tests {
             HookEvent::TodoSave,
             HookEvent::PreRun,
             HookEvent::PostRun,
+            HookEvent::PostEdit,
         ];
 
         let mut seen_keys = std::collections::HashSet::new();
@@ -145,8 +169,8 @@ mod tests {
                 "Duplicate config key: {key} (from {event:?})"
             );
         }
-        // Ensure we covered all 5 variants
-        assert_eq!(seen_keys.len(), 5, "Expected 5 unique config keys");
+        // Ensure we covered all 6 variants
+        assert_eq!(seen_keys.len(), 6, "Expected 6 unique config keys");
     }
 
     #[test]
@@ -174,6 +198,11 @@ mod tests {
         assert!(!HookEvent::TodoSave.is_gatekeeping());
     }
 
+    #[test]
+    fn test_is_gatekeeping_post_edit_false() {
+        assert!(!HookEvent::PostEdit.is_gatekeeping());
+    }
+
     /// Verify config keys match the expected snake_case convention.
     #[test]
     fn test_config_keys_are_snake_case() {
@@ -183,6 +212,7 @@ mod tests {
             HookEvent::TodoSave,
             HookEvent::PreRun,
             HookEvent::PostRun,
+            HookEvent::PostEdit,
         ];
 
         for event in &all_events {
@@ -198,7 +228,7 @@ mod tests {
     /// at least one template variable placeholder.
     #[test]
     fn test_builtin_commands_contain_template_vars() {
-        let events_with_builtins = [HookEvent::SessionComplete];
+        let events_with_builtins = [HookEvent::SessionComplete, HookEvent::PostEdit];
 
         for event in &events_with_builtins {
             let cmd = event

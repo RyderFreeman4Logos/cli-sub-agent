@@ -386,18 +386,21 @@ fn pipeline_hook_open_policy_success_continues() {
     assert!(result.is_ok(), "open policy baseline success should pass");
 }
 
+/// Observational events (is_gatekeeping() == false) must log-and-swallow errors.
 #[test]
-fn pipeline_post_run_closed_policy_failure_without_waiver_returns_err() {
-    let config = make_hooks_config(HookEvent::PostRun, "exit 1", FailPolicy::Closed, Vec::new());
-    let vars = HashMap::new();
-    let result = run_pipeline_hook(HookEvent::PostRun, &config, &vars);
-    assert!(
-        result.is_err(),
-        "post-run closed policy without waiver must return an error"
-    );
-    let err_msg = result.unwrap_err().to_string();
-    assert!(err_msg.contains("PostRun"));
-    assert!(err_msg.contains("fail_policy=closed"));
+fn pipeline_observational_events_never_propagate_errors() {
+    for event in [
+        HookEvent::PostRun,
+        HookEvent::TodoCreate,
+        HookEvent::TodoSave,
+    ] {
+        let config = make_hooks_config(event, "exit 1", FailPolicy::Closed, Vec::new());
+        let result = run_pipeline_hook(event, &config, &HashMap::new());
+        assert!(
+            result.is_ok(),
+            "observational {event:?} must not propagate errors"
+        );
+    }
 }
 
 fn test_config_with_node_heap_limit(node_heap_limit_mb: Option<u64>) -> ProjectConfig {

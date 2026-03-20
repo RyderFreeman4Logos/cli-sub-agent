@@ -19,7 +19,8 @@ mod shell;
 
 pub(crate) use execute::handle_run;
 pub(crate) use git::{
-    capture_git_workspace_snapshot, evaluate_post_run_commit_guard, is_git_worktree,
+    GitWorkspaceSnapshot, capture_git_workspace_snapshot, evaluate_post_run_commit_guard,
+    is_git_worktree,
 };
 pub(crate) use policy::{
     apply_no_verify_commit_policy, apply_post_run_commit_policy, apply_unverifiable_commit_policy,
@@ -27,9 +28,7 @@ pub(crate) use policy::{
 };
 
 #[cfg(test)]
-pub(crate) use git::{
-    GitWorkspaceSnapshot, PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status,
-};
+pub(crate) use git::{PostRunCommitGuard, changed_paths_from_status, tracked_paths_from_status};
 #[cfg(test)]
 pub(crate) use policy::{
     events_contain_execute_tool_calls, extract_executed_shell_commands_from_events,

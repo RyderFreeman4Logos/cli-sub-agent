@@ -293,6 +293,13 @@ git_head_before = \"<optional commit sha>\"\n\
 git_head_after = \"<optional commit sha>\"\n\
 next_actions = [\"optional follow-up item\"]\n\
 error_context = \"optional failure context\"\n\
+\n\
+# OPTIONAL structured handoff fields — include when you have useful information,\n\
+# omit a field entirely if it would be empty.\n\
+tried_and_worked = [\"approach that succeeded\", \"another successful approach\"]\n\
+tried_and_failed = [\"approach that failed: reason why\"]\n\
+next_steps = [\"recommended follow-up action 1\", \"recommended follow-up action 2\"]\n\
+key_decisions = [\"design decision and its rationale\"]\n\
 <!-- CSA:SECTION:return-packet:END -->\n\
 </csa-fork-call-return>";
 

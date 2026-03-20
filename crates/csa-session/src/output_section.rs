@@ -15,6 +15,12 @@ pub const RETURN_PACKET_SECTION_ID: &str = "return-packet";
 /// Max allowed summary length for return packets.
 pub const RETURN_PACKET_MAX_SUMMARY_CHARS: usize = 8_000;
 
+/// Max allowed character length for a single handoff field item.
+pub const RETURN_PACKET_MAX_ITEM_CHARS: usize = 2_000;
+
+/// Max allowed number of items in a handoff field Vec.
+pub const RETURN_PACKET_MAX_ITEMS: usize = 20;
+
 /// A single section of structured session output.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OutputSection {
@@ -95,6 +101,22 @@ pub struct ReturnPacket {
     pub git_head_after: Option<String>,
     pub next_actions: Vec<String>,
     pub error_context: Option<String>,
+
+    /// Approaches that were tried and worked during the session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tried_and_worked: Vec<String>,
+
+    /// Approaches that were tried but failed, with reasons.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tried_and_failed: Vec<String>,
+
+    /// Recommended next steps for the following session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub next_steps: Vec<String>,
+
+    /// Key architectural or design decisions made during the session.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub key_decisions: Vec<String>,
 }
 
 impl Default for ReturnPacket {
@@ -109,6 +131,10 @@ impl Default for ReturnPacket {
             git_head_after: None,
             next_actions: Vec::new(),
             error_context: None,
+            tried_and_worked: Vec::new(),
+            tried_and_failed: Vec::new(),
+            next_steps: Vec::new(),
+            key_decisions: Vec::new(),
         }
     }
 }
@@ -134,6 +160,27 @@ impl ReturnPacket {
                     "return packet changed file path must be repo-relative without traversal: {}",
                     changed.path
                 ));
+            }
+        }
+
+        let handoff_fields: &[(&str, &[String])] = &[
+            ("tried_and_worked", &self.tried_and_worked),
+            ("tried_and_failed", &self.tried_and_failed),
+            ("next_steps", &self.next_steps),
+            ("key_decisions", &self.key_decisions),
+        ];
+        for (name, items) in handoff_fields {
+            if items.len() > RETURN_PACKET_MAX_ITEMS {
+                return Err(anyhow!(
+                    "return packet {name} exceeds {RETURN_PACKET_MAX_ITEMS} items"
+                ));
+            }
+            for (i, item) in items.iter().enumerate() {
+                if item.chars().count() > RETURN_PACKET_MAX_ITEM_CHARS {
+                    return Err(anyhow!(
+                        "return packet {name}[{i}] exceeds {RETURN_PACKET_MAX_ITEM_CHARS} chars"
+                    ));
+                }
             }
         }
 
@@ -293,6 +340,7 @@ mod tests {
             git_head_after: Some("def456".to_string()),
             next_actions: vec!["Run integration tests".to_string()],
             error_context: None,
+            ..ReturnPacket::default()
         };
         let toml_str = toml::to_string(&packet).expect("serialize");
         let restored: ReturnPacket = toml::from_str(&toml_str).expect("deserialize");
@@ -320,6 +368,7 @@ mod tests {
             git_head_after: None,
             next_actions: vec![],
             error_context: None,
+            ..ReturnPacket::default()
         };
         assert!(packet.validate().is_ok());
     }
@@ -346,5 +395,77 @@ mod tests {
         assert!(packet.summary.chars().count() <= 128);
         assert!(!packet.summary.contains("<prompt-guard>"));
         assert!(packet.summary.contains("&lt;prompt-guard&gt;"));
+    }
+
+    #[test]
+    fn test_return_packet_handoff_fields_roundtrip() {
+        let packet = ReturnPacket {
+            status: ReturnStatus::Success,
+            exit_code: 0,
+            summary: "Handoff test".to_string(),
+            artifacts: vec![],
+            changed_files: vec![],
+            git_head_before: None,
+            git_head_after: None,
+            next_actions: vec![],
+            error_context: None,
+            tried_and_worked: vec![
+                "Used Arc<Mutex<T>> for shared state".to_string(),
+                "Batch inserts via transaction".to_string(),
+            ],
+            tried_and_failed: vec!["Rc<RefCell<T>> failed: not Send across threads".to_string()],
+            next_steps: vec![
+                "Add integration tests for the new endpoint".to_string(),
+                "Benchmark concurrent access patterns".to_string(),
+            ],
+            key_decisions: vec![
+                "Chose tokio::sync::Mutex over std::sync::Mutex for async context".to_string(),
+            ],
+        };
+        let toml_str = toml::to_string(&packet).expect("serialize");
+        let restored: ReturnPacket = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(packet, restored);
+        assert!(packet.validate().is_ok());
+    }
+
+    #[test]
+    fn test_return_packet_backward_compat_without_handoff_fields() {
+        let toml_str = r#"
+status = "Success"
+exit_code = 0
+summary = "Legacy packet"
+artifacts = ["report.txt"]
+next_actions = []
+"#;
+        let packet: ReturnPacket = toml::from_str(toml_str).expect("deserialize");
+        assert_eq!(packet.status, ReturnStatus::Success);
+        assert_eq!(packet.summary, "Legacy packet");
+        assert!(packet.tried_and_worked.is_empty());
+        assert!(packet.tried_and_failed.is_empty());
+        assert!(packet.next_steps.is_empty());
+        assert!(packet.key_decisions.is_empty());
+        assert!(packet.validate().is_ok());
+    }
+
+    #[test]
+    fn test_return_packet_validate_rejects_oversized_handoff_item() {
+        let packet = ReturnPacket {
+            tried_and_worked: vec!["x".repeat(RETURN_PACKET_MAX_ITEM_CHARS + 1)],
+            ..ReturnPacket::default()
+        };
+        let err = packet.validate().unwrap_err();
+        assert!(err.to_string().contains("tried_and_worked[0]"));
+    }
+
+    #[test]
+    fn test_return_packet_validate_rejects_too_many_handoff_items() {
+        let packet = ReturnPacket {
+            next_steps: (0..RETURN_PACKET_MAX_ITEMS + 1)
+                .map(|i| format!("step {i}"))
+                .collect(),
+            ..ReturnPacket::default()
+        };
+        let err = packet.validate().unwrap_err();
+        assert!(err.to_string().contains("next_steps"));
     }
 }

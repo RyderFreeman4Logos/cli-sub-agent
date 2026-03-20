@@ -49,6 +49,7 @@ fn test_return_packet_happy_path_round_trip_via_structured_output_pipeline() {
         git_head_after: Some("def456".to_string()),
         next_actions: vec!["run tests".to_string(), "open PR".to_string()],
         error_context: None,
+        ..ReturnPacket::default()
     };
 
     let return_packet_toml =
@@ -231,4 +232,69 @@ fn test_return_packet_isolated_when_multiple_sections_exist() {
     let parsed =
         parse_return_packet(&return_payload).expect("parse isolated return packet section");
     assert_eq!(parsed, expected);
+}
+
+#[test]
+fn test_return_packet_handoff_fields_round_trip_via_structured_output_pipeline() {
+    let expected = ReturnPacket {
+        status: ReturnStatus::Success,
+        exit_code: 0,
+        summary: "Handoff context round-trip".to_string(),
+        artifacts: vec!["logs/run.log".to_string()],
+        changed_files: vec![ChangedFile {
+            path: "src/main.rs".to_string(),
+            action: FileAction::Modify,
+        }],
+        git_head_before: Some("aaa111".to_string()),
+        git_head_after: Some("bbb222".to_string()),
+        next_actions: vec!["run tests".to_string()],
+        error_context: None,
+        tried_and_worked: vec![
+            "Used Arc<Mutex<T>> for shared state".to_string(),
+            "Batch inserts via transaction".to_string(),
+        ],
+        tried_and_failed: vec!["Rc<RefCell<T>> failed: not Send across threads".to_string()],
+        next_steps: vec![
+            "Add integration tests for the new endpoint".to_string(),
+            "Benchmark concurrent access patterns".to_string(),
+        ],
+        key_decisions: vec![
+            "Chose tokio::sync::Mutex over std::sync::Mutex for async context".to_string(),
+        ],
+    };
+
+    let return_packet_toml =
+        toml::to_string(&expected).expect("serialize return packet with handoff fields");
+    let tempdir = write_sections_to_tempdir(&[(RETURN_PACKET_SECTION_ID, &return_packet_toml)]);
+
+    let payload = read_section(tempdir.path(), RETURN_PACKET_SECTION_ID)
+        .expect("read return packet section")
+        .expect("return packet section exists");
+    let actual = parse_return_packet(&payload).expect("parse return packet with handoff fields");
+
+    assert_eq!(actual, expected);
+    assert!(actual.validate().is_ok());
+}
+
+#[test]
+fn test_return_packet_without_handoff_fields_has_empty_vecs() {
+    let legacy_toml = r#"
+status = "Success"
+exit_code = 0
+summary = "Legacy packet without handoff"
+artifacts = ["report.txt"]
+next_actions = ["review"]
+"#;
+
+    let tempdir = write_sections_to_tempdir(&[(RETURN_PACKET_SECTION_ID, legacy_toml)]);
+    let payload = read_section(tempdir.path(), RETURN_PACKET_SECTION_ID)
+        .expect("read return packet section")
+        .expect("return packet section exists");
+    let packet = parse_return_packet(&payload).expect("parse legacy return packet");
+
+    assert_eq!(packet.status, ReturnStatus::Success);
+    assert!(packet.tried_and_worked.is_empty());
+    assert!(packet.tried_and_failed.is_empty());
+    assert!(packet.next_steps.is_empty());
+    assert!(packet.key_decisions.is_empty());
 }
