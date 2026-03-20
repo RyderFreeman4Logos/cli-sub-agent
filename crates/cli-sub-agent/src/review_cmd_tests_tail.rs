@@ -1,6 +1,21 @@
 use super::*;
 use csa_config::ProjectProfile;
 
+// --- --thinking silent acceptance tests ---
+
+#[test]
+fn thinking_flag_accepted_silently() {
+    let args = parse_review_args(&["csa", "review", "--thinking", "xhigh", "--diff"]);
+    assert_eq!(args.thinking.as_deref(), Some("xhigh"));
+    assert!(args.diff);
+}
+
+#[test]
+fn thinking_flag_optional() {
+    let args = parse_review_args(&["csa", "review", "--diff"]);
+    assert!(args.thinking.is_none());
+}
+
 // --- verify_review_skill_available tests ---
 
 #[test]

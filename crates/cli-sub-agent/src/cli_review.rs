@@ -50,6 +50,11 @@ pub struct ReviewArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Thinking budget (accepted for CLI compatibility but not used by review;
+    /// thinking level is controlled via tier configuration)
+    #[arg(long)]
+    pub thinking: Option<String>,
+
     /// Review uncommitted changes (git diff HEAD)
     #[arg(long)]
     pub diff: bool,

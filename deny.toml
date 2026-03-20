@@ -7,7 +7,14 @@ ignore = [
     # Transitive from agent-teams -> cc-sdk -> reqwest.
     # rustls-pemfile is archived; no non-breaking safe upgrade is available yet.
     "RUSTSEC-2025-0134",
-    # (removed: RUSTSEC-2024-0384 resolved by dependency upgrades)
+    # Transitive from agent-teams -> cc-sdk -> reqwest -> hyper-rustls -> rustls -> aws-lc-rs.
+    # X.509 Name Constraints Bypass — no direct upgrade path (deep transitive).
+    "RUSTSEC-2026-0044",
+    # Transitive from same chain. CRL Distribution Point Scope Check Logic Error.
+    "RUSTSEC-2026-0048",
+    # Transitive from cc-sdk -> reqwest -> rustls. CRL revocation check bug.
+    # Safe default (UnknownStatusPolicy::Deny) mitigates impact.
+    "RUSTSEC-2026-0049",
 ]
 
 [licenses]
