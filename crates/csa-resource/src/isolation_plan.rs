@@ -143,6 +143,11 @@ impl IsolationPlanBuilder {
     ///
     /// Always adds `project_root` and `session_dir`.  Tool-specific config
     /// directories are appended based on `tool_name`.
+    ///
+    /// When `project_root` is inside a git submodule (`.git` is a file, not a
+    /// directory), the superproject root is discovered by walking ancestors and
+    /// added as writable.  This ensures the sandbox allows writes to
+    /// `.git/modules/<submodule>/` which git requires for staging and commits.
     pub fn with_tool_defaults(
         mut self,
         tool_name: &str,
@@ -151,6 +156,15 @@ impl IsolationPlanBuilder {
     ) -> Self {
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
+
+        // Submodule detection: if .git is a file (not a directory), the project
+        // root is inside a git submodule.  Walk up to find the superproject root
+        // (the nearest ancestor with a .git *directory*) and make the entire
+        // superproject writable so the agent can access .git/modules/ and other
+        // submodules.
+        if let Some(superproject) = detect_superproject_root(project_root) {
+            self.writable_paths.push(superproject);
+        }
 
         if let Some(home) = home_dir() {
             match tool_name {
@@ -231,6 +245,33 @@ impl IsolationPlanBuilder {
 /// Portable home-directory lookup (avoids pulling in the `dirs` crate).
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// Detect whether `project_root` is inside a git submodule and return the
+/// superproject root if so.
+///
+/// A git submodule has a `.git` **file** (not directory) containing a
+/// `gitdir:` pointer.  We walk ancestors looking for the nearest directory
+/// that has a `.git` *directory* — that is the superproject root.
+///
+/// Returns `None` when `project_root` is not a submodule (`.git` is a
+/// directory or does not exist).
+fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
+    let dot_git = project_root.join(".git");
+
+    // Only trigger when .git is a file (submodule marker).
+    if !dot_git.is_file() {
+        return None;
+    }
+
+    // Walk ancestors (skip project_root itself) looking for a .git directory.
+    for ancestor in project_root.ancestors().skip(1) {
+        if ancestor.join(".git").is_dir() {
+            return Some(ancestor.to_path_buf());
+        }
+    }
+
+    None
 }
 
 // ===========================================================================
@@ -320,6 +361,88 @@ mod tests {
                 "claude-code defaults should include ~/.claude"
             );
         }
+    }
+
+    #[test]
+    fn test_submodule_detection_adds_superproject_root() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let superproject = tmp.path().join("monorepo");
+        let submodule = superproject.join("crates").join("sub-crate");
+
+        // Superproject has a .git directory
+        std::fs::create_dir_all(superproject.join(".git")).expect("create .git dir");
+        // Submodule has a .git file (not directory)
+        std::fs::create_dir_all(&submodule).expect("create submodule dir");
+        std::fs::write(
+            submodule.join(".git"),
+            "gitdir: ../../.git/modules/crates/sub-crate\n",
+        )
+        .expect("write .git file");
+
+        let session = tmp.path().join("session");
+        std::fs::create_dir_all(&session).expect("create session dir");
+
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults("claude-code", &submodule, &session)
+            .build()
+            .expect("should succeed");
+
+        assert!(
+            plan.writable_paths.contains(&superproject),
+            "superproject root should be in writable_paths, got: {:?}",
+            plan.writable_paths
+        );
+        assert!(
+            plan.writable_paths.contains(&submodule),
+            "submodule (project_root) should still be in writable_paths"
+        );
+    }
+
+    #[test]
+    fn test_non_submodule_does_not_add_superproject() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let project = tmp.path().join("project");
+
+        // Normal repo: .git is a directory
+        std::fs::create_dir_all(project.join(".git")).expect("create .git dir");
+
+        let session = tmp.path().join("session");
+        std::fs::create_dir_all(&session).expect("create session dir");
+
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults("claude-code", &project, &session)
+            .build()
+            .expect("should succeed");
+
+        // Only project + session + ~/.claude should be present (no superproject)
+        let non_tool_paths: Vec<_> = plan
+            .writable_paths
+            .iter()
+            .filter(|p| *p == &project || *p == &session)
+            .collect();
+        assert_eq!(
+            non_tool_paths.len(),
+            2,
+            "should only have project + session as base writable paths"
+        );
+    }
+
+    #[test]
+    fn test_submodule_no_superproject_found() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let orphan = tmp.path().join("orphan");
+
+        // .git is a file but no ancestor has a .git directory
+        std::fs::create_dir_all(&orphan).expect("create dir");
+        std::fs::write(orphan.join(".git"), "gitdir: ../somewhere\n").expect("write .git file");
+
+        let result = detect_superproject_root(&orphan);
+        assert!(
+            result.is_none(),
+            "should return None when no superproject found"
+        );
     }
 
     #[test]
