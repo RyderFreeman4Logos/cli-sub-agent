@@ -60,51 +60,85 @@ impl ProxyRouter {
     }
 
     async fn list_tools_internal(&self) -> Result<ListToolsResult, McpError> {
+        use rmcp::model::Tool;
+        use tokio::task::JoinSet;
+
+        // Sort server names alphabetically for deterministic duplicate resolution:
+        // if two servers expose the same tool name, the alphabetically-later server wins.
+        let mut server_names = self.registry.server_names();
+        server_names.sort();
+
+        // Query all backends concurrently.
+        let mut join_set: JoinSet<(String, Result<Vec<Tool>, String>)> = JoinSet::new();
+
+        for server in server_names.clone() {
+            let registry = Arc::clone(&self.registry);
+            let request_timeout = self.request_timeout;
+            join_set.spawn(async move {
+                let cancellation = CancellationToken::new();
+                match timeout(
+                    request_timeout,
+                    registry.list_tools(&server, cancellation.clone()),
+                )
+                .await
+                {
+                    Ok(Ok(server_tools)) => (server, Ok(server_tools)),
+                    Ok(Err(error)) => (server, Err(format!("{error}"))),
+                    Err(_) => {
+                        cancellation.cancel();
+                        (
+                            server,
+                            Err(format!("timed out after {}s", request_timeout.as_secs())),
+                        )
+                    }
+                }
+            });
+        }
+
+        // Collect all results keyed by server name.
+        let mut results_by_server: HashMap<String, Vec<Tool>> = HashMap::new();
+        while let Some(result) = join_set.join_next().await {
+            match result {
+                Ok((server, Ok(server_tools))) => {
+                    results_by_server.insert(server, server_tools);
+                }
+                Ok((server, Err(error))) => {
+                    tracing::warn!(server = %server, error = %error, "tools/list forwarding failed");
+                }
+                Err(join_error) => {
+                    tracing::warn!(error = %join_error, "tools/list task panicked");
+                }
+            }
+        }
+
+        // Aggregate in sorted server order for deterministic duplicate resolution.
         let mut tools = Vec::new();
         let mut cache = HashMap::new();
 
-        for server in self.registry.server_names() {
-            let cancellation = CancellationToken::new();
-            match timeout(
-                self.request_timeout,
-                self.registry.list_tools(&server, cancellation.clone()),
-            )
-            .await
-            {
-                Ok(Ok(server_tools)) => {
-                    for tool in server_tools {
-                        let name = tool.name.to_string();
-                        if let Some(existing) = cache.get(&name) {
-                            let existing: &ToolDescriptor = existing;
-                            tracing::warn!(
-                                tool = %name,
-                                previous_server = %existing.server_name,
-                                new_server = %server,
-                                "duplicate tool name: later registration overrides previous"
-                            );
-                        }
-                        cache.insert(
-                            name,
-                            ToolDescriptor {
-                                server_name: server.clone(),
-                                description: tool.description.as_ref().map(|d| d.to_string()),
-                                input_schema: Value::Object(tool.input_schema.as_ref().clone()),
-                            },
-                        );
-                        tools.push(tool);
-                    }
-                }
-                Ok(Err(error)) => {
-                    tracing::warn!(server = %server, error = %error, "tools/list forwarding failed");
-                }
-                Err(_) => {
-                    cancellation.cancel();
+        for server in &server_names {
+            let Some(server_tools) = results_by_server.remove(server) else {
+                continue;
+            };
+            for tool in server_tools {
+                let name = tool.name.to_string();
+                if let Some(existing) = cache.get(&name) {
+                    let existing: &ToolDescriptor = existing;
                     tracing::warn!(
-                        server = %server,
-                        timeout_secs = self.request_timeout.as_secs(),
-                        "tools/list forwarding timed out"
+                        tool = %name,
+                        previous_server = %existing.server_name,
+                        new_server = %server,
+                        "duplicate tool name: alphabetically-later server overrides previous"
                     );
                 }
+                cache.insert(
+                    name,
+                    ToolDescriptor {
+                        server_name: server.clone(),
+                        description: tool.description.as_ref().map(|d| d.to_string()),
+                        input_schema: Value::Object(tool.input_schema.as_ref().clone()),
+                    },
+                );
+                tools.push(tool);
             }
         }
 
