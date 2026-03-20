@@ -1,6 +1,6 @@
 ---
 name: debate
-description: Adversarial multi-tool AI debate for strategy formulation with tier-based model escalation
+description: "Use when: adversarial multi-tool debate for strategy, tier escalation"
 allowed-tools: Bash, Read, Grep, Glob
 triggers:
   - "debate"

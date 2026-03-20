@@ -43,6 +43,7 @@
 
 pub mod config;
 pub mod event;
+pub mod event_bus;
 pub mod guard;
 pub mod policy;
 pub mod runner;
@@ -51,6 +52,9 @@ pub mod waiver;
 // Re-export key types
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
 pub use event::HookEvent;
+#[cfg(feature = "async-hooks")]
+pub use event_bus::AsyncEventBus;
+pub use event_bus::{EventBus, SyncEventBus};
 pub use guard::{
     GuardContext, PromptGuardEntry, PromptGuardResult, builtin_prompt_guards, format_guard_output,
     run_prompt_guards,

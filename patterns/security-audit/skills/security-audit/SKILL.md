@@ -1,6 +1,6 @@
 ---
 name: security-audit
-description: Three-phase pre-commit security audit with test completeness, vulnerability scan, and code quality check
+description: "Use when: pre-commit security audit (tests, vulns, code quality)"
 allowed-tools: Bash, Read, Grep, Glob
 triggers:
   - "security-audit"

@@ -1,6 +1,6 @@
 ---
 name: ai-reviewed-commit
-description: Pre-commit code review loop with authorship-aware strategy, fix-and-retry, and AGENTS.md compliance
+description: "Use when: committing with pre-commit review, authorship-aware fix-retry"
 allowed-tools: Bash, Read, Grep, Glob, Edit
 triggers:
   - "ai-reviewed-commit"

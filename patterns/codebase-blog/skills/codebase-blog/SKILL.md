@@ -1,6 +1,6 @@
 ---
 name: codebase-blog
-description: Generate technical deep-dive blogs from audit results, bottom-up by module
+description: "Use when: generating technical blogs from codebase-audit results"
 allowed-tools: Bash, Read, Grep, Glob, Write
 triggers:
   - "codebase-blog"

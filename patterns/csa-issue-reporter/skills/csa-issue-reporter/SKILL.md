@@ -1,6 +1,6 @@
 ---
 name: csa-issue-reporter
-description: File structured GitHub issues on cli-sub-agent when CSA encounters operational errors
+description: "Use when: CSA hits operational error, filing structured GitHub issue"
 allowed-tools: Bash, Read, Grep, Glob
 triggers:
   - "csa-issue-reporter"

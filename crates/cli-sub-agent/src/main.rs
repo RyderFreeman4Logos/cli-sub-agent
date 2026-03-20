@@ -14,6 +14,7 @@ mod debate_errors;
 mod doctor;
 mod edit_restriction_guard;
 mod error_hints;
+mod eval_cmd;
 mod gc;
 mod mcp_hub;
 mod mcp_server;
@@ -545,6 +546,14 @@ async fn run() -> Result<()> {
         Commands::Debate(args) => {
             let exit_code = debate_cmd::handle_debate(args, current_depth, output_format).await?;
             std::process::exit(exit_code);
+        }
+        Commands::Eval {
+            passive: _,
+            project,
+            days,
+            json,
+        } => {
+            eval_cmd::handle_eval(project, days, json)?;
         }
         Commands::Doctor => {
             doctor::run_doctor(output_format).await?;

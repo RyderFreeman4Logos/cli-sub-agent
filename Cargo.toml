@@ -3,7 +3,7 @@ members = ["crates/*"]
 resolver = "2"
 
 [workspace.package]
-version = "0.1.149"
+version = "0.1.150"
 edition = "2024"
 rust-version = "1.88"
 license = "Apache-2.0"
@@ -11,6 +11,7 @@ license = "Apache-2.0"
 [workspace.dependencies]
 # Internal crates
 csa-core = { path = "crates/csa-core" }
+csa-eval = { path = "crates/csa-eval" }
 csa-memory = { path = "crates/csa-memory" }
 csa-session = { path = "crates/csa-session" }
 csa-lock = { path = "crates/csa-lock" }

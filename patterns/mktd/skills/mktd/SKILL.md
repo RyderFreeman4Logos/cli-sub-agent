@@ -1,6 +1,6 @@
 ---
 name: mktd
-description: Debate-enhanced TODO plan generation with CSA reconnaissance and adversarial review
+description: "Use when: creating TODO plan with debate-enhanced CSA reconnaissance"
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit
 triggers:
   - "mktd"

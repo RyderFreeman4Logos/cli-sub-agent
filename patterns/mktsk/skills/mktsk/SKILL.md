@@ -1,6 +1,6 @@
 ---
 name: mktsk
-description: Convert TODO plans into deterministic, resumable serial execution checklists across auto-compaction
+description: "Use when: converting TODO plan into deterministic execution checklist"
 allowed-tools: Bash, Read, Grep, Glob, Write, Edit, TaskCreate, TaskUpdate, TaskGet, TaskList
 triggers:
   - "mktsk"

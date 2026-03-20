@@ -1,6 +1,6 @@
 ---
 name: review-loop
-description: Bounded iterative review-fix loop that reruns `csa review --diff` until clean or max rounds
+description: "Use when: iterative review-fix loop until csa review --diff is clean"
 allowed-tools: Bash, Read, Grep, Edit, Write
 triggers:
   - "review-loop"

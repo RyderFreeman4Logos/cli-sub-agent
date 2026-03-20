@@ -1,6 +1,6 @@
 ---
 name: csa-review
-description: CSA-driven code review with independent model selection, session isolation, and structured outputs
+description: "Use when: running CSA-driven code review, independent model selection"
 allowed-tools: Bash, Read, Grep, Glob
 triggers:
   - "csa-review"

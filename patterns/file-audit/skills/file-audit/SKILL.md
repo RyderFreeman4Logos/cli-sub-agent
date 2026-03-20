@@ -1,6 +1,6 @@
 ---
 name: file-audit
-description: Per-file AGENTS.md compliance audit with Chinese reports and tech blog summary
+description: "Use when: per-file AGENTS.md compliance audit with Chinese reports"
 allowed-tools: Bash, Read, Grep, Glob, Write
 triggers:
   - "file-audit"
