@@ -24,6 +24,9 @@ pub(crate) mod gate;
 #[path = "pipeline_prompt_guard.rs"]
 pub(crate) mod prompt_guard;
 
+#[path = "pipeline_changed_paths.rs"]
+pub(crate) mod changed_paths;
+
 #[path = "pipeline_result_contract.rs"]
 mod result_contract;
 
@@ -351,9 +354,15 @@ pub(crate) fn run_pipeline_hook(
     hooks_config: &csa_hooks::HooksConfig,
     variables: &std::collections::HashMap<String, String>,
 ) -> Result<()> {
-    run_hooks_for_event(event, hooks_config, variables).map_err(|err| {
-        anyhow::anyhow!("{event:?} hook failed and fail_policy=closed blocked execution: {err}")
-    })
+    if let Err(err) = run_hooks_for_event(event, hooks_config, variables) {
+        if event.is_gatekeeping() {
+            return Err(anyhow::anyhow!(
+                "{event:?} hook failed and fail_policy=closed blocked execution: {err}"
+            ));
+        }
+        tracing::warn!("{event:?} hook failed (observational, continuing): {err}");
+    }
+    Ok(())
 }
 
 pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {

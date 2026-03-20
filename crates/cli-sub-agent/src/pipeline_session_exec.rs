@@ -426,8 +426,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let commit_guard_enabled = matches!(task_type, Some("run"));
     let require_commit_on_mutation =
         commit_guard_enabled && config.is_some_and(|cfg| cfg.session.require_commit_on_mutation);
-    let inside_git_worktree = commit_guard_enabled && crate::run_cmd::is_git_worktree(project_root);
-    let pre_run_workspace = if inside_git_worktree {
+    // Check git status for both commit_guard and hook changed_paths variable.
+    let is_git = crate::run_cmd::is_git_worktree(project_root);
+    let inside_git_worktree = commit_guard_enabled && is_git;
+    let pre_run_workspace = if is_git {
         crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
     } else {
         None
@@ -472,7 +474,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     });
 
-    // Inject CSA_SUPPRESS_NOTIFY to skip desktop notifications in non-interactive mode.
     let merged_env = crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
     let merged_env_ref = if merged_env.is_empty() {
         None
@@ -480,8 +481,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         Some(&merged_env)
     };
 
-    // Build runtime overrides from .csa/config.toml [hooks] section.
-    // These take PRIORITY over hooks.toml PreRun/PostRun entries.
+    // Project [hooks] overrides take priority over hooks.toml entries.
     let project_hook_overrides = config.filter(|c| !c.hooks.is_default()).map(|c| {
         let mut overrides = std::collections::HashMap::new();
         if let Some(ref cmd) = c.hooks.pre_run {
@@ -531,18 +531,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         ("session_dir".to_string(), session_dir.display().to_string()),
         ("sessions_root".to_string(), sessions_root.clone()),
         ("tool".to_string(), executor.tool_name().to_string()),
+        // Empty at PreRun; populated at PostRun after git diff.
+        ("CHANGED_PATHS".to_string(), "[]".to_string()),
+        ("CHANGED_CRATES".to_string(), String::new()),
     ]);
     run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
 
-    // Capture new-file guard AFTER PreRun hooks so hook-created files are
-    // included in the baseline and not flagged as tool violations.
+    // New-file guard captured AFTER PreRun hooks (baseline includes hook-created files).
     let new_file_guard = if !can_write_new {
         crate::edit_restriction_guard::maybe_capture_new_file_guard(project_root)?
     } else {
         None
     };
 
-    // Run prompt guards: append reminders to effective_prompt (strongest influence at end).
     if !hooks_config.prompt_guard.is_empty() {
         let guard_context = GuardContext {
             project_root: session.project_path.clone(),
@@ -612,10 +613,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
 
-    // Record sandbox telemetry in session state (first turn only).
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
-
-    // Memory balloon: pre-warm swap for heavyweight tools.
     crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
 
     let transport_result = crate::pipeline_execute::execute_transport_with_signal(
@@ -634,12 +632,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     .await
     .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;
 
-    // Tool execution completed — defuse cleanup guard (preserve artifacts on later errors).
     if let Some(ref mut guard) = cleanup_guard {
         guard.defuse();
     }
 
-    // Extract provider session ID from transport metadata or fallback output parsing.
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
     let events_count = transport_result
@@ -654,9 +650,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         &transport_result.metadata,
         &transport_result.events,
     );
-    // If the streaming metadata caught a --no-verify commit that was
-    // subsequently evicted from the bounded command ring buffer, re-inject
-    // it so that the post-run policy check can still block it.
+    // Re-inject --no-verify commit if evicted from ring buffer.
     if transport_result.metadata.has_no_verify_commit
         && !executed_shell_commands
             .iter()
@@ -680,12 +674,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         let violation_summary = violation.summary();
         let violation_details = violation.detail_message();
         let previous_summary = result.summary.clone();
-        warn!(
-            tool = %executor.tool_name(),
-            modified = violation.modified_paths.len(),
-            restored = violation.restored_paths.len(),
-            "Detected and reverted edits to existing tracked files under edit restriction"
-        );
+        warn!(tool = %executor.tool_name(), "Edit restriction: reverted {n} files", n = violation.modified_paths.len());
         if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
             result.stderr_output.push('\n');
         }
@@ -725,12 +714,19 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         result.exit_code = 1;
     }
+    // Post-run git snapshot for commit guard + changed_paths hook vars.
+    let post_run_workspace = if is_git {
+        crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
+    } else {
+        None
+    };
+
+    let changed_paths = crate::pipeline::changed_paths::compute_changed_paths(
+        pre_run_workspace.as_ref().map(|s| s.status.as_str()),
+        post_run_workspace.as_ref().map(|s| s.status.as_str()),
+    );
+
     if commit_guard_enabled {
-        let post_run_workspace = if inside_git_worktree {
-            crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
-        } else {
-            None
-        };
         let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
             pre_run_workspace.as_ref(),
             post_run_workspace.as_ref(),
@@ -775,6 +771,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         provider_session_id: provider_session_id.clone(),
         events_count,
         transcript_artifacts,
+        changed_paths,
     };
     if let Err(err) =
         crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &result).await
