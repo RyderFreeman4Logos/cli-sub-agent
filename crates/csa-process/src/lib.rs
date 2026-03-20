@@ -70,6 +70,8 @@ pub enum SandboxHandle {
     Cgroup(csa_resource::cgroup::CgroupScopeGuard),
     /// Bubblewrap filesystem sandbox is active.
     Bwrap,
+    /// Landlock LSM filesystem restrictions applied in child via `pre_exec`.
+    Landlock,
     /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
     Rlimit,
     /// No sandbox active.

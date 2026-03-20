@@ -38,7 +38,7 @@ pub async fn spawn_tool_with_options(
     stdin_data: Option<Vec<u8>>,
     spawn_options: SpawnOptions,
 ) -> Result<tokio::process::Child> {
-    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::Setsid, spawn_options).await
+    spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::Setsid, spawn_options, None).await
 }
 
 async fn spawn_tool_with_pre_exec(
@@ -46,6 +46,7 @@ async fn spawn_tool_with_pre_exec(
     stdin_data: Option<Vec<u8>>,
     pre_exec_policy: PreExecPolicy,
     spawn_options: SpawnOptions,
+    landlock_paths: Option<Vec<std::path::PathBuf>>,
 ) -> Result<tokio::process::Child> {
     cmd.stdout(std::process::Stdio::piped());
     cmd.stderr(std::process::Stdio::piped());
@@ -56,27 +57,44 @@ async fn spawn_tool_with_pre_exec(
     }
     cmd.kill_on_drop(true);
 
-    // Isolate child in its own process group and optionally apply rlimits.
+    // Isolate child in its own process group, optionally apply rlimits,
+    // and optionally apply Landlock filesystem restrictions.
     // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
+    //         Landlock syscalls (landlock_create_ruleset, landlock_add_rule,
+    //         landlock_restrict_self) are also safe in this context.
     #[cfg(unix)]
     unsafe {
         cmd.pre_exec(move || {
             libc::setsid();
+
+            // Resource isolation (rlimits / OOM score).
             match pre_exec_policy {
-                PreExecPolicy::Setsid => Ok(()),
+                PreExecPolicy::Setsid => {}
                 PreExecPolicy::Rlimits {
                     memory_max_mb,
                     pids_max,
-                } => csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
-                    .map_err(std::io::Error::other),
+                } => {
+                    csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
+                        .map_err(std::io::Error::other)?;
+                }
                 PreExecPolicy::OomAdj => {
-                    csa_resource::rlimit::apply_oom_score_adj().map_err(std::io::Error::other)
+                    csa_resource::rlimit::apply_oom_score_adj().map_err(std::io::Error::other)?;
                 }
             }
+
+            // Filesystem isolation via Landlock (when requested).
+            if let Some(ref paths) = landlock_paths {
+                csa_resource::apply_landlock_rules(paths).map_err(std::io::Error::other)?;
+            }
+
+            Ok(())
         });
     }
     #[cfg(not(unix))]
-    let _ = pre_exec_policy;
+    {
+        let _ = pre_exec_policy;
+        let _ = landlock_paths;
+    }
 
     let mut child = cmd.spawn().context("Failed to spawn command")?;
 
@@ -150,6 +168,11 @@ pub async fn spawn_tool_sandboxed(
     };
 
     // --- Filesystem axis: wrap the command if needed ---
+    //
+    // Landlock paths are captured here and applied in pre_exec later,
+    // since Landlock operates on the calling thread (not via a wrapper binary).
+    let mut landlock_paths: Option<Vec<std::path::PathBuf>> = None;
+
     let cmd = match plan.filesystem {
         FilesystemCapability::Bwrap => {
             let tool_binary = cmd.as_std().get_program().to_string_lossy().to_string();
@@ -180,15 +203,16 @@ pub async fn spawn_tool_sandboxed(
             }
         }
         FilesystemCapability::Landlock => {
-            // Phase C: Landlock rules will be applied in pre_exec.
-            // For now, proceed with the command as-is.
-            debug!("Landlock filesystem isolation requested; not yet implemented (Phase C)");
+            debug!("Landlock filesystem isolation will be applied in pre_exec");
+            landlock_paths = Some(plan.writable_paths.clone());
             cmd
         }
         FilesystemCapability::None => cmd,
     };
 
     let has_bwrap = plan.filesystem == FilesystemCapability::Bwrap;
+
+    let has_landlock = landlock_paths.is_some();
 
     // --- Resource axis: apply resource isolation ---
     match plan.resource {
@@ -200,7 +224,10 @@ pub async fn spawn_tool_sandboxed(
                 plan,
                 tool_name,
                 session_id,
-                has_bwrap,
+                FsSandboxParams {
+                    _has_bwrap: has_bwrap,
+                    landlock_paths,
+                },
             )
             .await
         }
@@ -213,33 +240,46 @@ pub async fn spawn_tool_sandboxed(
                     pids_max: None,
                 },
                 spawn_options,
+                landlock_paths,
             )
             .await?;
 
-            Ok((
-                child,
-                if has_bwrap {
-                    SandboxHandle::Bwrap
-                } else {
-                    SandboxHandle::Rlimit
-                },
-            ))
+            let handle = if has_bwrap {
+                SandboxHandle::Bwrap
+            } else if has_landlock {
+                SandboxHandle::Landlock
+            } else {
+                SandboxHandle::Rlimit
+            };
+            Ok((child, handle))
         }
         ResourceCapability::None => {
             debug!("no resource capability in isolation plan; applying OOM score adj as fallback");
-            let child =
-                spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::OomAdj, spawn_options)
-                    .await?;
-            Ok((
-                child,
-                if has_bwrap {
-                    SandboxHandle::Bwrap
-                } else {
-                    SandboxHandle::None
-                },
-            ))
+            let child = spawn_tool_with_pre_exec(
+                cmd,
+                stdin_data,
+                PreExecPolicy::OomAdj,
+                spawn_options,
+                landlock_paths,
+            )
+            .await?;
+
+            let handle = if has_bwrap {
+                SandboxHandle::Bwrap
+            } else if has_landlock {
+                SandboxHandle::Landlock
+            } else {
+                SandboxHandle::None
+            };
+            Ok((child, handle))
         }
     }
+}
+
+/// Filesystem isolation parameters for cgroup spawn.
+struct FsSandboxParams {
+    _has_bwrap: bool,
+    landlock_paths: Option<Vec<std::path::PathBuf>>,
 }
 
 /// Spawn inside a systemd cgroup scope.
@@ -250,7 +290,7 @@ async fn spawn_with_cgroup(
     _plan: &IsolationPlan,
     tool_name: &str,
     session_id: &str,
-    has_bwrap: bool,
+    fs_sandbox: FsSandboxParams,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
     // TODO(Phase C): Extract cgroup limits from IsolationPlan once the plan
     // carries resource-specific configuration (memory_max_mb, pids_max).
@@ -281,7 +321,20 @@ async fn spawn_with_cgroup(
         tokio_cmd.current_dir(dir);
     }
 
-    let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
+    // When Landlock is requested alongside cgroup, apply it via pre_exec
+    // on the systemd-run wrapper command (which eventually exec's the tool).
+    let child = if fs_sandbox.landlock_paths.is_some() {
+        spawn_tool_with_pre_exec(
+            tokio_cmd,
+            stdin_data,
+            PreExecPolicy::Setsid,
+            spawn_options,
+            fs_sandbox.landlock_paths,
+        )
+        .await?
+    } else {
+        spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?
+    };
     let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
 
     debug!(
@@ -290,11 +343,6 @@ async fn spawn_with_cgroup(
         "spawned tool inside cgroup scope"
     );
 
-    if has_bwrap {
-        // Both cgroup and bwrap are active. Cgroup guard still needs to
-        // live for cleanup, so we return it as the primary handle.
-        Ok((child, SandboxHandle::Cgroup(guard)))
-    } else {
-        Ok((child, SandboxHandle::Cgroup(guard)))
-    }
+    // Cgroup guard needs to live for cleanup regardless of filesystem isolation.
+    Ok((child, SandboxHandle::Cgroup(guard)))
 }

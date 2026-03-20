@@ -49,6 +49,7 @@ tracing-appender = "0.2"
 # System
 directories = "6.0"
 fd-lock = "4.0"
+landlock = "0.4"
 sysinfo = "0.38"
 which = "8.0"
 libc = "0.2"
