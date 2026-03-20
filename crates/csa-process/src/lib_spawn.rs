@@ -6,7 +6,7 @@ use tokio::process::Command;
 use tracing::{debug, warn};
 
 use csa_resource::cgroup::SandboxConfig;
-use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
+use csa_resource::sandbox::{ResourceCapability, detect_resource_capability};
 
 use super::{PreExecPolicy, SandboxHandle, SpawnOptions};
 
@@ -136,8 +136,8 @@ pub async fn spawn_tool_sandboxed(
         return Ok((child, SandboxHandle::None));
     };
 
-    match detect_sandbox_capability() {
-        SandboxCapability::CgroupV2 => {
+    match detect_resource_capability() {
+        ResourceCapability::CgroupV2 => {
             spawn_with_cgroup(
                 cmd,
                 stdin_data,
@@ -148,7 +148,7 @@ pub async fn spawn_tool_sandboxed(
             )
             .await
         }
-        SandboxCapability::Setrlimit => {
+        ResourceCapability::Setrlimit => {
             let memory_max_mb = config.memory_max_mb;
             let pids_max = config.pids_max.map(u64::from);
 
@@ -165,7 +165,7 @@ pub async fn spawn_tool_sandboxed(
 
             Ok((child, SandboxHandle::Rlimit))
         }
-        SandboxCapability::None => {
+        ResourceCapability::None => {
             debug!("no sandbox capability detected; applying OOM score adj as fallback");
             let child =
                 spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::OomAdj, spawn_options)

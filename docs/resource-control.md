@@ -29,7 +29,7 @@ CSA uses a defense-in-depth approach with three isolation mechanisms:
 CSA probes the host at startup and caches the result:
 
 ```rust
-pub enum SandboxCapability {
+pub enum ResourceCapability {
     CgroupV2,    // Best: cgroup v2 + systemd user scope
     Setrlimit,   // Fallback: POSIX setrlimit
     None,         // No isolation available

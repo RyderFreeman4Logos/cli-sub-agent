@@ -69,8 +69,8 @@ pub(crate) fn resolve_sandbox_options(
             pids_max: None,
         };
 
-        let capability = csa_resource::detect_sandbox_capability();
-        if matches!(capability, csa_resource::SandboxCapability::None) {
+        let capability = csa_resource::detect_resource_capability();
+        if matches!(capability, csa_resource::ResourceCapability::None) {
             warn!(
                 tool = tool_name,
                 "No sandbox capability available; skipping enforcement for profile defaults"
@@ -119,10 +119,10 @@ pub(crate) fn resolve_sandbox_options(
     };
 
     // Enforce capability requirements based on enforcement mode.
-    let capability = csa_resource::detect_sandbox_capability();
+    let capability = csa_resource::detect_resource_capability();
     match enforcement {
         csa_config::EnforcementMode::Required => {
-            if capability == csa_resource::SandboxCapability::None {
+            if capability == csa_resource::ResourceCapability::None {
                 return SandboxResolution::RequiredButUnavailable(
                     "Sandbox required but no capability detected (no cgroup v2 or setrlimit). \
                      Set enforcement_mode = \"off\" or \"best-effort\" to proceed without isolation."
@@ -131,7 +131,7 @@ pub(crate) fn resolve_sandbox_options(
             }
         }
         csa_config::EnforcementMode::BestEffort => {
-            if capability == csa_resource::SandboxCapability::None {
+            if capability == csa_resource::ResourceCapability::None {
                 warn!(
                     tool = %tool_name,
                     "Sandbox configured but no capability detected; proceeding without isolation"
@@ -210,11 +210,11 @@ pub(crate) fn record_sandbox_telemetry(
         return;
     }
 
-    let capability = csa_resource::detect_sandbox_capability();
+    let capability = csa_resource::detect_resource_capability();
     let mode = match capability {
-        csa_resource::SandboxCapability::CgroupV2 => "cgroup",
-        csa_resource::SandboxCapability::Setrlimit => "rlimit",
-        csa_resource::SandboxCapability::None => "none",
+        csa_resource::ResourceCapability::CgroupV2 => "cgroup",
+        csa_resource::ResourceCapability::Setrlimit => "rlimit",
+        csa_resource::ResourceCapability::None => "none",
     };
     let memory = execute_options
         .sandbox

@@ -18,7 +18,7 @@ use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, warn};
 
 pub use csa_resource::cgroup::SandboxConfig;
-use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability};
+use csa_resource::sandbox::{ResourceCapability, detect_resource_capability};
 
 use crate::{
     client::{AcpClient, SessionEventStore},
@@ -137,8 +137,8 @@ impl AcpConnection {
             return Ok((conn, AcpSandboxHandle::None));
         };
 
-        match detect_sandbox_capability() {
-            SandboxCapability::CgroupV2 => {
+        match detect_resource_capability() {
+            ResourceCapability::CgroupV2 => {
                 // Build systemd-run wrapper command, then append the ACP binary + args.
                 let scope_cmd = csa_resource::cgroup::create_scope_command(
                     sandbox.tool_name,
@@ -183,7 +183,7 @@ impl AcpConnection {
                 );
                 Ok((conn, AcpSandboxHandle::Cgroup(guard)))
             }
-            SandboxCapability::Setrlimit => {
+            ResourceCapability::Setrlimit => {
                 let mut cmd = Self::build_cmd_base(
                     request.command,
                     request.args,
@@ -210,7 +210,7 @@ impl AcpConnection {
 
                 Ok((conn, AcpSandboxHandle::Rlimit))
             }
-            SandboxCapability::None => {
+            ResourceCapability::None => {
                 debug!("no sandbox capability detected; spawning ACP without isolation");
                 let conn = Self::spawn_with_options(
                     request.command,

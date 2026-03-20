@@ -7,7 +7,7 @@ mod registry_pool;
 use anyhow::{Context, Result, anyhow};
 use csa_config::McpServerConfig;
 use csa_process::{SandboxHandle, SpawnOptions, spawn_tool_sandboxed};
-use csa_resource::{SandboxCapability, SandboxConfig, apply_rlimits, detect_sandbox_capability};
+use csa_resource::{ResourceCapability, SandboxConfig, apply_rlimits, detect_resource_capability};
 use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
 use rmcp::service::{RunningService, ServiceExt};
@@ -531,14 +531,14 @@ impl BackendTransport {
             pids_max: MCP_SANDBOX_PIDS_MAX,
         };
 
-        let capability = detect_sandbox_capability();
+        let capability = detect_resource_capability();
         let (mut child, sandbox) = match capability {
-            SandboxCapability::CgroupV2 => {
+            ResourceCapability::CgroupV2 => {
                 let child = spawn_with_rlimit_interactive(cmd, &sandbox_config)
                     .with_context(|| format!("failed to sandbox MCP server '{}'", config.name))?;
                 (child, None)
             }
-            SandboxCapability::Setrlimit | SandboxCapability::None => {
+            ResourceCapability::Setrlimit | ResourceCapability::None => {
                 let (child, sandbox) = spawn_tool_sandboxed(
                     cmd,
                     None,

@@ -560,8 +560,8 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
 #[tokio::test]
 async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override() {
     if !matches!(
-        csa_resource::sandbox::detect_sandbox_capability(),
-        csa_resource::sandbox::SandboxCapability::CgroupV2
+        csa_resource::sandbox::detect_resource_capability(),
+        csa_resource::sandbox::ResourceCapability::CgroupV2
     ) {
         // This test specifically targets the cgroup sandbox spawn failure ->
         // best-effort unsandboxed fallback branch.

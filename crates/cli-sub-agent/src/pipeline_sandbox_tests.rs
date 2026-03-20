@@ -76,8 +76,8 @@ fn test_none_config_heavyweight_gets_sandbox() {
         "Heavyweight tool should have setting_sources=Some(vec![])"
     );
 
-    let capability = csa_resource::detect_sandbox_capability();
-    if matches!(capability, csa_resource::SandboxCapability::None) {
+    let capability = csa_resource::detect_resource_capability();
+    if matches!(capability, csa_resource::ResourceCapability::None) {
         // On systems without sandbox capability, sandbox context is skipped
         assert!(
             opts.sandbox.is_none(),

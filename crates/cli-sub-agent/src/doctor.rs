@@ -4,7 +4,7 @@ use anyhow::Result;
 use csa_config::{ProjectConfig, paths};
 use csa_core::types::OutputFormat;
 use csa_resource::rlimit::current_rlimit_nproc;
-use csa_resource::sandbox::{SandboxCapability, detect_sandbox_capability, systemd_version};
+use csa_resource::sandbox::{ResourceCapability, detect_resource_capability, systemd_version};
 use std::env;
 use std::process::Command;
 use sysinfo::System;
@@ -129,19 +129,19 @@ async fn run_doctor_json() -> Result<()> {
     let free_swap = sys.free_swap();
 
     // Sandbox detection
-    let cap = detect_sandbox_capability();
+    let cap = detect_resource_capability();
     let sandbox_status = match cap {
-        SandboxCapability::CgroupV2 => serde_json::json!({
+        ResourceCapability::CgroupV2 => serde_json::json!({
             "capability": "CgroupV2",
             "systemd_version": systemd_version(),
             "user_scope": true,
         }),
-        SandboxCapability::Setrlimit => serde_json::json!({
+        ResourceCapability::Setrlimit => serde_json::json!({
             "capability": "Setrlimit",
             "enforces": "pids_only",
             "rlimit_nproc": current_rlimit_nproc(),
         }),
-        SandboxCapability::None => serde_json::json!({
+        ResourceCapability::None => serde_json::json!({
             "capability": "None",
         }),
     };
@@ -345,17 +345,17 @@ fn print_resource_status() {
 
 /// Print sandbox capability status.
 fn print_sandbox_status() {
-    let cap = detect_sandbox_capability();
+    let cap = detect_resource_capability();
     println!("Capability:  {cap}");
 
     match cap {
-        SandboxCapability::CgroupV2 => {
+        ResourceCapability::CgroupV2 => {
             if let Some(ver) = systemd_version() {
                 println!("Systemd:     {ver}");
             }
             println!("User scope:  supported");
         }
-        SandboxCapability::Setrlimit => {
+        ResourceCapability::Setrlimit => {
             println!("Enforces:    PID limit only (RLIMIT_NPROC)");
             match current_rlimit_nproc() {
                 Some(n) => println!("RLIMIT_NPROC: {n}"),
@@ -363,7 +363,7 @@ fn print_sandbox_status() {
             }
             println!("Memory:      via MemoryBalloon (not setrlimit)");
         }
-        SandboxCapability::None => {
+        ResourceCapability::None => {
             println!("Warning:     No sandbox isolation available.");
             println!("             Resource limits will not be enforced.");
         }
