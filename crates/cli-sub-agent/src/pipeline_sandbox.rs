@@ -89,6 +89,11 @@ pub(crate) fn resolve_sandbox_options(
         let plan = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
+            .with_resource_limits(
+                defaults.memory_max_mb,
+                defaults.memory_swap_max_mb,
+                None, // pids_max not available from profile defaults
+            )
             .with_tool_defaults(
                 tool_name,
                 // No project root available from profile defaults; use cwd.
@@ -134,20 +139,27 @@ pub(crate) fn resolve_sandbox_options(
 
     // Memory limit exists — detect capabilities and build IsolationPlan.
     let resource_cap = csa_resource::detect_resource_capability();
-    let fs_cap = if no_fs_sandbox {
-        csa_resource::FilesystemCapability::None
+
+    // Resolve filesystem enforcement independently from resource enforcement.
+    let fs_enforcement = if no_fs_sandbox {
+        ResourceEnforcementMode::Off
     } else {
-        // Resolve filesystem enforcement from [filesystem_sandbox] config.
         let fs_config = &cfg.filesystem_sandbox;
-        let fs_mode = fs_config
+        match fs_config
             .enforcement_mode
             .as_deref()
-            .unwrap_or("best-effort");
-        if fs_mode == "off" {
-            csa_resource::FilesystemCapability::None
-        } else {
-            csa_resource::detect_filesystem_capability()
+            .unwrap_or("best-effort")
+        {
+            "off" => ResourceEnforcementMode::Off,
+            "required" => ResourceEnforcementMode::Required,
+            _ => ResourceEnforcementMode::BestEffort,
         }
+    };
+
+    let fs_cap = if matches!(fs_enforcement, ResourceEnforcementMode::Off) {
+        csa_resource::FilesystemCapability::None
+    } else {
+        csa_resource::detect_filesystem_capability()
     };
 
     // Map config enforcement mode to resource enforcement mode.
@@ -183,9 +195,14 @@ pub(crate) fn resolve_sandbox_options(
     let session_dir = csa_session::manager::get_session_dir(&project_root, session_id)
         .unwrap_or_else(|_| std::env::temp_dir());
 
+    let memory_swap_max_mb = cfg.sandbox_memory_swap_max_mb(tool_name);
+    let pids_max = cfg.sandbox_pids_max();
+
     let mut builder = IsolationPlanBuilder::new(resource_enforcement)
+        .with_filesystem_enforcement(fs_enforcement)
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
+        .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
         .with_tool_defaults(tool_name, &project_root, &session_dir);
 
     // Apply extra writable paths from [filesystem_sandbox] config.
@@ -286,9 +303,10 @@ pub(crate) fn record_sandbox_telemetry(
         csa_resource::ResourceCapability::Setrlimit => "rlimit",
         csa_resource::ResourceCapability::None => "none",
     };
-    // IsolationPlan doesn't carry memory_max_mb directly (it's a cgroup
-    // detail). Report None for now; Phase C can add resource limits to the plan.
-    let memory: Option<u64> = None;
+    let memory: Option<u64> = execute_options
+        .sandbox
+        .as_ref()
+        .and_then(|ctx| ctx.isolation_plan.memory_max_mb);
 
     // Capture filesystem isolation mode from the isolation plan.
     let fs_mode = execute_options

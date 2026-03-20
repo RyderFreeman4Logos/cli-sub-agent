@@ -43,6 +43,12 @@ pub struct IsolationPlan {
     pub env_overrides: HashMap<String, String>,
     /// Human-readable reasons when capabilities were downgraded.
     pub degraded_reasons: Vec<String>,
+    /// Maximum physical memory in MB for cgroup `MemoryMax`.
+    pub memory_max_mb: Option<u64>,
+    /// Maximum swap in MB for cgroup `MemorySwapMax`.
+    pub memory_swap_max_mb: Option<u64>,
+    /// Maximum number of PIDs for cgroup `TasksMax` or `RLIMIT_NPROC`.
+    pub pids_max: Option<u32>,
 }
 
 // ---------------------------------------------------------------------------
@@ -57,14 +63,22 @@ pub struct IsolationPlan {
 ///   degradation reasons.
 /// - **`Required`** — returns an error when filesystem isolation is `None`.
 /// - **`Off`** — forces filesystem to `None`.
+///
+/// Resource and filesystem enforcement can be set independently via
+/// [`with_filesystem_enforcement`].  When filesystem enforcement is not
+/// explicitly set, it inherits the resource enforcement mode.
 #[derive(Debug)]
 pub struct IsolationPlanBuilder {
     enforcement_mode: EnforcementMode,
+    fs_enforcement_mode: Option<EnforcementMode>,
     resource: ResourceCapability,
     filesystem: FilesystemCapability,
     writable_paths: Vec<PathBuf>,
     env_overrides: HashMap<String, String>,
     degraded_reasons: Vec<String>,
+    memory_max_mb: Option<u64>,
+    memory_swap_max_mb: Option<u64>,
+    pids_max: Option<u32>,
 }
 
 impl IsolationPlanBuilder {
@@ -72,11 +86,15 @@ impl IsolationPlanBuilder {
     pub fn new(enforcement_mode: EnforcementMode) -> Self {
         Self {
             enforcement_mode,
+            fs_enforcement_mode: None,
             resource: ResourceCapability::None,
             filesystem: FilesystemCapability::None,
             writable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
         }
     }
 
@@ -95,6 +113,29 @@ impl IsolationPlanBuilder {
     /// Add a single writable path to the plan.
     pub fn with_writable_path(mut self, path: PathBuf) -> Self {
         self.writable_paths.push(path);
+        self
+    }
+
+    /// Set an independent enforcement mode for the filesystem axis.
+    ///
+    /// When set, the filesystem axis uses this mode instead of the
+    /// resource enforcement mode.  This allows e.g. resource `Off` +
+    /// filesystem `Required`.
+    pub fn with_filesystem_enforcement(mut self, mode: EnforcementMode) -> Self {
+        self.fs_enforcement_mode = Some(mode);
+        self
+    }
+
+    /// Set resource limits for cgroup and rlimit enforcement.
+    pub fn with_resource_limits(
+        mut self,
+        memory_max_mb: Option<u64>,
+        memory_swap_max_mb: Option<u64>,
+        pids_max: Option<u32>,
+    ) -> Self {
+        self.memory_max_mb = memory_max_mb;
+        self.memory_swap_max_mb = memory_swap_max_mb;
+        self.pids_max = pids_max;
         self
     }
 
@@ -135,10 +176,14 @@ impl IsolationPlanBuilder {
     ///
     /// # Errors
     ///
-    /// Returns an error when `enforcement_mode` is `Required` but the
+    /// Returns an error when filesystem enforcement is `Required` but the
     /// filesystem capability is `None`.
     pub fn build(mut self) -> anyhow::Result<IsolationPlan> {
-        match self.enforcement_mode {
+        // Filesystem enforcement: use dedicated override if set, otherwise
+        // inherit from the resource enforcement mode.
+        let fs_mode = self.fs_enforcement_mode.unwrap_or(self.enforcement_mode);
+
+        match fs_mode {
             EnforcementMode::Off => {
                 self.filesystem = FilesystemCapability::None;
             }
@@ -152,10 +197,21 @@ impl IsolationPlanBuilder {
                     self.degraded_reasons
                         .push("no filesystem isolation available; proceeding without".into());
                 }
+            }
+        }
+
+        // Resource enforcement: handled separately.
+        match self.enforcement_mode {
+            EnforcementMode::BestEffort => {
                 if self.resource == ResourceCapability::None {
                     self.degraded_reasons
                         .push("no resource isolation available; proceeding without".into());
                 }
+            }
+            EnforcementMode::Off | EnforcementMode::Required => {
+                // Required for resources is checked upstream in pipeline_sandbox.
+                // Off is a no-op for the resource axis (capabilities are kept as-is
+                // because cgroup limits don't need explicit disabling here).
             }
         }
 
@@ -165,6 +221,9 @@ impl IsolationPlanBuilder {
             writable_paths: self.writable_paths,
             env_overrides: self.env_overrides,
             degraded_reasons: self.degraded_reasons,
+            memory_max_mb: self.memory_max_mb,
+            memory_swap_max_mb: self.memory_swap_max_mb,
+            pids_max: self.pids_max,
         })
     }
 }

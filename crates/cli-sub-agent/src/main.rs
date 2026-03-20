@@ -378,7 +378,7 @@ async fn run() -> Result<()> {
             spec: _spec,
             tier,
             force_ignore_tier_setting,
-            no_fs_sandbox: _no_fs_sandbox,
+            no_fs_sandbox,
         } => {
             // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
             // default: stream for Text output in all contexts.
@@ -422,6 +422,7 @@ async fn run() -> Result<()> {
                 stream_mode,
                 tier,
                 force_ignore_tier_setting,
+                no_fs_sandbox,
             )
             .await?;
             std::process::exit(exit_code);

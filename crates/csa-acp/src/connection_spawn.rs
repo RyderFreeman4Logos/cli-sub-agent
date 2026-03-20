@@ -49,6 +49,8 @@ pub enum AcpSandboxHandle {
     Cgroup(csa_resource::cgroup::CgroupScopeGuard),
     /// Bubblewrap filesystem sandbox is active.
     Bwrap,
+    /// Landlock LSM filesystem sandbox is active.
+    Landlock,
     /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
     Rlimit,
     /// No sandbox active.
@@ -159,6 +161,10 @@ impl AcpConnection {
         let plan = sandbox.isolation_plan;
 
         // --- Filesystem axis: optionally wrap the command with bwrap ---
+        // Landlock paths are captured here and applied in pre_exec later,
+        // since Landlock operates on the calling thread (not via a wrapper binary).
+        let mut landlock_paths: Option<Vec<std::path::PathBuf>> = None;
+
         let (effective_command, effective_args, has_bwrap) = match plan.filesystem {
             FilesystemCapability::Bwrap => {
                 let tool_args: Vec<String> = request.args.to_vec();
@@ -180,7 +186,8 @@ impl AcpConnection {
                 }
             }
             FilesystemCapability::Landlock => {
-                debug!("Landlock filesystem isolation requested; not yet implemented (Phase C)");
+                debug!("Landlock filesystem isolation will be applied in pre_exec");
+                landlock_paths = Some(plan.writable_paths.clone());
                 (request.command.to_owned(), request.args.to_vec(), false)
             }
             FilesystemCapability::None => {
@@ -194,9 +201,9 @@ impl AcpConnection {
                 // Build systemd-run wrapper command, then append the
                 // (possibly bwrap-wrapped) ACP binary + args.
                 let cgroup_config = csa_resource::cgroup::SandboxConfig {
-                    memory_max_mb: 4096,
-                    memory_swap_max_mb: Some(0),
-                    pids_max: Some(512),
+                    memory_max_mb: plan.memory_max_mb.unwrap_or(4096),
+                    memory_swap_max_mb: plan.memory_swap_max_mb,
+                    pids_max: plan.pids_max.or(Some(512)),
                 };
                 let scope_cmd = csa_resource::cgroup::create_scope_command(
                     sandbox.tool_name,
@@ -212,12 +219,20 @@ impl AcpConnection {
                     .stderr(Stdio::piped());
 
                 // SAFETY: setsid() is async-signal-safe, runs before exec in child.
+                //         Landlock syscalls are also safe in this context.
                 #[cfg(unix)]
-                unsafe {
-                    cmd.pre_exec(|| {
-                        libc::setsid();
-                        Ok(())
-                    });
+                {
+                    let ll_paths = landlock_paths.take();
+                    unsafe {
+                        cmd.pre_exec(move || {
+                            libc::setsid();
+                            if let Some(ref paths) = ll_paths {
+                                csa_resource::apply_landlock_rules(paths)
+                                    .map_err(std::io::Error::other)?;
+                            }
+                            Ok(())
+                        });
+                    }
                 }
 
                 for var in Self::STRIPPED_ENV_VARS {
@@ -227,6 +242,7 @@ impl AcpConnection {
                     cmd.env(key, value);
                 }
 
+                let has_landlock = matches!(plan.filesystem, FilesystemCapability::Landlock);
                 let conn = Self::spawn_with_cmd(cmd, request.working_dir, request.options).await?;
                 let guard = csa_resource::cgroup::CgroupScopeGuard::new(
                     sandbox.tool_name,
@@ -234,6 +250,7 @@ impl AcpConnection {
                 );
                 debug!(
                     scope = %guard.scope_name(),
+                    has_landlock,
                     "ACP process spawned inside cgroup scope"
                 );
                 Ok((conn, AcpSandboxHandle::Cgroup(guard)))
@@ -246,16 +263,28 @@ impl AcpConnection {
                     request.env,
                 );
 
-                // Apply setsid + rlimits in a single pre_exec hook.
-                // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
+                // Apply setsid + rlimits + optional Landlock in a single pre_exec hook.
+                // SAFETY: setsid(), setrlimit, and Landlock syscalls are async-signal-safe.
                 #[cfg(unix)]
-                unsafe {
-                    cmd.pre_exec(move || {
-                        libc::setsid();
-                        csa_resource::rlimit::apply_rlimits(0, None).map_err(std::io::Error::other)
-                    });
+                {
+                    let rlimit_memory = plan.memory_max_mb.unwrap_or(0);
+                    let rlimit_pids = plan.pids_max.map(u64::from);
+                    let ll_paths = landlock_paths.take();
+                    unsafe {
+                        cmd.pre_exec(move || {
+                            libc::setsid();
+                            csa_resource::rlimit::apply_rlimits(rlimit_memory, rlimit_pids)
+                                .map_err(std::io::Error::other)?;
+                            if let Some(ref paths) = ll_paths {
+                                csa_resource::apply_landlock_rules(paths)
+                                    .map_err(std::io::Error::other)?;
+                            }
+                            Ok(())
+                        });
+                    }
                 }
 
+                let has_landlock = matches!(plan.filesystem, FilesystemCapability::Landlock);
                 let conn =
                     Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
 
@@ -263,13 +292,16 @@ impl AcpConnection {
                     conn,
                     if has_bwrap {
                         AcpSandboxHandle::Bwrap
+                    } else if has_landlock {
+                        AcpSandboxHandle::Landlock
                     } else {
                         AcpSandboxHandle::Rlimit
                     },
                 ))
             }
             ResourceCapability::None => {
-                if has_bwrap {
+                let has_landlock = landlock_paths.is_some();
+                if has_bwrap || has_landlock {
                     // Filesystem sandbox active but no resource isolation.
                     let mut cmd = Self::build_cmd_base(
                         &effective_command,
@@ -278,19 +310,33 @@ impl AcpConnection {
                         request.env,
                     );
 
-                    // SAFETY: setsid() is async-signal-safe, runs before exec.
+                    // SAFETY: setsid(), OOM adj, and Landlock syscalls are
+                    //         async-signal-safe and run before exec.
                     #[cfg(unix)]
-                    unsafe {
-                        cmd.pre_exec(|| {
-                            libc::setsid();
-                            csa_resource::rlimit::apply_oom_score_adj()
-                                .map_err(std::io::Error::other)
-                        });
+                    {
+                        let ll_paths = landlock_paths.take();
+                        unsafe {
+                            cmd.pre_exec(move || {
+                                libc::setsid();
+                                csa_resource::rlimit::apply_oom_score_adj()
+                                    .map_err(std::io::Error::other)?;
+                                if let Some(ref paths) = ll_paths {
+                                    csa_resource::apply_landlock_rules(paths)
+                                        .map_err(std::io::Error::other)?;
+                                }
+                                Ok(())
+                            });
+                        }
                     }
 
                     let conn =
                         Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
-                    Ok((conn, AcpSandboxHandle::Bwrap))
+                    let handle = if has_bwrap {
+                        AcpSandboxHandle::Bwrap
+                    } else {
+                        AcpSandboxHandle::Landlock
+                    };
+                    Ok((conn, handle))
                 } else {
                     debug!("no sandbox capability detected; spawning ACP without isolation");
                     let conn = Self::spawn_with_options(

@@ -236,8 +236,8 @@ pub async fn spawn_tool_sandboxed(
                 cmd,
                 stdin_data,
                 PreExecPolicy::Rlimits {
-                    memory_max_mb: 0,
-                    pids_max: None,
+                    memory_max_mb: plan.memory_max_mb.unwrap_or(0),
+                    pids_max: plan.pids_max.map(u64::from),
                 },
                 spawn_options,
                 landlock_paths,
@@ -287,18 +287,15 @@ async fn spawn_with_cgroup(
     original_cmd: Command,
     stdin_data: Option<Vec<u8>>,
     spawn_options: SpawnOptions,
-    _plan: &IsolationPlan,
+    plan: &IsolationPlan,
     tool_name: &str,
     session_id: &str,
     fs_sandbox: FsSandboxParams,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
-    // TODO(Phase C): Extract cgroup limits from IsolationPlan once the plan
-    // carries resource-specific configuration (memory_max_mb, pids_max).
-    // For now, use sensible defaults matching the previous SandboxConfig.
     let cgroup_config = csa_resource::cgroup::SandboxConfig {
-        memory_max_mb: 4096,
-        memory_swap_max_mb: Some(0),
-        pids_max: Some(512),
+        memory_max_mb: plan.memory_max_mb.unwrap_or(4096),
+        memory_swap_max_mb: plan.memory_swap_max_mb,
+        pids_max: plan.pids_max.or(Some(512)),
     };
 
     let scope_cmd =

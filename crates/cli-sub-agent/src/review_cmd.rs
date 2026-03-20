@@ -270,6 +270,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             idle_timeout_seconds,
             initial_response_timeout_seconds,
             args.force_override_user_config,
+            args.no_fs_sandbox,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -334,6 +335,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 idle_timeout_seconds,
                 initial_response_timeout_seconds,
                 args.force_override_user_config,
+                args.no_fs_sandbox,
             );
 
             let fix_result = if let Some(timeout_secs) = args.timeout {
@@ -457,6 +459,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let reviewer_routing = review_routing.clone();
 
         let reviewer_force_override = args.force_override_user_config;
+        let reviewer_no_fs_sandbox = args.no_fs_sandbox;
         // Only pass tier_model_spec to the reviewer whose tool matches the
         // tier-resolved primary tool.  For other reviewers (selected for
         // heterogeneity), the model_spec would override their tool via
@@ -484,6 +487,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 idle_timeout_seconds,
                 initial_response_timeout_seconds,
                 reviewer_force_override,
+                reviewer_no_fs_sandbox,
             )
             .await?;
             let result = &session_result.execution;
@@ -600,6 +604,7 @@ async fn execute_review(
     idle_timeout_seconds: u64,
     initial_response_timeout_seconds: Option<u64>,
     force_override_user_config: bool,
+    no_fs_sandbox: bool,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let enforce_tier = tier_model_spec.is_some();
     let executor = crate::pipeline::build_and_validate_executor(
@@ -670,6 +675,7 @@ async fn execute_review(
         None,
         Some(global_config),
         crate::pipeline::ParentSessionSource::ExplicitOnly,
+        no_fs_sandbox,
     )
     .await?;
 

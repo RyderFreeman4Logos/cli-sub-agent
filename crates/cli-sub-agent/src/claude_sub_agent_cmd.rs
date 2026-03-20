@@ -101,6 +101,7 @@ pub(crate) async fn handle_claude_sub_agent(
         None, // claude-sub-agent does not set wall-clock timeout
         None, // claude-sub-agent does not use memory injection
         Some(&global_config),
+        false, // no_fs_sandbox
     )
     .await?;
 

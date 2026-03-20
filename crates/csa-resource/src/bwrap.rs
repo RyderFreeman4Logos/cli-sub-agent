@@ -216,6 +216,9 @@ mod tests {
             writable_paths: vec![PathBuf::from("/project")],
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
         };
 
         let result = from_isolation_plan(&plan, "/usr/bin/tool", &["run".into()]);
@@ -235,6 +238,9 @@ mod tests {
             writable_paths: Vec::new(),
             env_overrides: HashMap::new(),
             degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
         };
 
         let result = from_isolation_plan(&plan, "/usr/bin/tool", &[]);
