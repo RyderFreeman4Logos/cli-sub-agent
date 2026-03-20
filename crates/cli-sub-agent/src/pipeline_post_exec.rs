@@ -152,6 +152,11 @@ pub(crate) async fn process_execution_result(
     // PostRun hook: fires after every tool execution
     crate::pipeline::run_pipeline_hook(HookEvent::PostRun, ctx.hooks_config, &hook_vars)?;
 
+    // PostEdit hook: fires when .rs files are among changed paths (observational clippy check)
+    if ctx.changed_paths.iter().any(|p| p.ends_with(".rs")) {
+        crate::pipeline::run_pipeline_hook(HookEvent::PostEdit, ctx.hooks_config, &hook_vars)?;
+    }
+
     // Memory capture
     let memory_config = ctx
         .config

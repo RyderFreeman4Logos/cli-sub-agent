@@ -6,6 +6,7 @@
 //! - `TodoSave`: After a TODO plan is saved/updated
 //! - `PreRun`: Before a tool execution starts
 //! - `PostRun`: After a tool execution finishes
+//! - `PostEdit`: After PostRun when `.rs` files changed (observational clippy check)
 //!
 //! ## Configuration Priority
 //!

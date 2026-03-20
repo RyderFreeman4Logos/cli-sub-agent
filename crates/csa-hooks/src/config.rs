@@ -111,7 +111,7 @@ impl HooksConfig {
             HookConfig {
                 enabled: true,
                 command: None, // Will be resolved from builtin_command()
-                timeout_secs: 30,
+                timeout_secs: event.default_timeout_secs(),
                 fail_policy: FailPolicy::default(),
                 waivers: Vec::new(),
             }
@@ -120,7 +120,7 @@ impl HooksConfig {
             HookConfig {
                 enabled: false,
                 command: None,
-                timeout_secs: 30,
+                timeout_secs: event.default_timeout_secs(),
                 fail_policy: FailPolicy::default(),
                 waivers: Vec::new(),
             }
