@@ -12,6 +12,9 @@ ignore = [
     "RUSTSEC-2026-0044",
     # Transitive from same chain. CRL Distribution Point Scope Check Logic Error.
     "RUSTSEC-2026-0048",
+    # Transitive from cc-sdk -> reqwest -> rustls. CRL revocation check bug.
+    # Safe default (UnknownStatusPolicy::Deny) mitigates impact.
+    "RUSTSEC-2026-0049",
 ]
 
 [licenses]

@@ -231,7 +231,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // Resolve thinking: CLI > config review.thinking > tier model_spec thinking.
     // Tier thinking is embedded in model_spec and applied via build_and_validate_executor.
     let review_thinking = resolve_review_thinking(
-        None, // review CLI has no --thinking flag yet
+        args.thinking.as_deref(),
         config
             .as_ref()
             .and_then(|c| c.review.as_ref())
