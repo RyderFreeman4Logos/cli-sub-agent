@@ -119,6 +119,7 @@ fn build_parse_error_packet(reason: &str) -> ReturnPacket {
             "Regenerate return packet using canonical TOML schema.".to_string(),
         ],
         error_context: Some(redact_text_content(reason)),
+        ..ReturnPacket::default()
     };
     packet.sanitize_summary(RETURN_PACKET_MAX_SUMMARY_CHARS);
     packet
@@ -131,6 +132,10 @@ enum ReturnPacketTextBlock {
     ChangedFiles,
     NextActions,
     ErrorContext,
+    TriedAndWorked,
+    TriedAndFailed,
+    NextSteps,
+    KeyDecisions,
 }
 
 fn parse_return_packet_structured_text(section_content: &str) -> Result<ReturnPacket> {
@@ -224,6 +229,44 @@ fn parse_return_packet_structured_text(section_content: &str) -> Result<ReturnPa
                         active_block = None;
                     }
                 }
+                "tried_and_worked" => {
+                    parsed_any_field = true;
+                    active_block = Some(ReturnPacketTextBlock::TriedAndWorked);
+                    if !value.is_empty() {
+                        packet
+                            .tried_and_worked
+                            .extend(parse_inline_string_list(value)?);
+                        active_block = None;
+                    }
+                }
+                "tried_and_failed" => {
+                    parsed_any_field = true;
+                    active_block = Some(ReturnPacketTextBlock::TriedAndFailed);
+                    if !value.is_empty() {
+                        packet
+                            .tried_and_failed
+                            .extend(parse_inline_string_list(value)?);
+                        active_block = None;
+                    }
+                }
+                "next_steps" => {
+                    parsed_any_field = true;
+                    active_block = Some(ReturnPacketTextBlock::NextSteps);
+                    if !value.is_empty() {
+                        packet.next_steps.extend(parse_inline_string_list(value)?);
+                        active_block = None;
+                    }
+                }
+                "key_decisions" => {
+                    parsed_any_field = true;
+                    active_block = Some(ReturnPacketTextBlock::KeyDecisions);
+                    if !value.is_empty() {
+                        packet
+                            .key_decisions
+                            .extend(parse_inline_string_list(value)?);
+                        active_block = None;
+                    }
+                }
                 _ => {
                     active_block = None;
                 }
@@ -256,6 +299,34 @@ fn parse_return_packet_structured_text(section_content: &str) -> Result<ReturnPa
             }
             Some(ReturnPacketTextBlock::ErrorContext) => {
                 error_context_lines.push(trimmed.to_string());
+            }
+            Some(ReturnPacketTextBlock::TriedAndWorked) => {
+                if let Some(item) = parse_bullet_item(trimmed) {
+                    packet.tried_and_worked.push(item.to_string());
+                } else {
+                    return Err(anyhow!("invalid tried_and_worked entry: {trimmed}"));
+                }
+            }
+            Some(ReturnPacketTextBlock::TriedAndFailed) => {
+                if let Some(item) = parse_bullet_item(trimmed) {
+                    packet.tried_and_failed.push(item.to_string());
+                } else {
+                    return Err(anyhow!("invalid tried_and_failed entry: {trimmed}"));
+                }
+            }
+            Some(ReturnPacketTextBlock::NextSteps) => {
+                if let Some(item) = parse_bullet_item(trimmed) {
+                    packet.next_steps.push(item.to_string());
+                } else {
+                    return Err(anyhow!("invalid next_steps entry: {trimmed}"));
+                }
+            }
+            Some(ReturnPacketTextBlock::KeyDecisions) => {
+                if let Some(item) = parse_bullet_item(trimmed) {
+                    packet.key_decisions.push(item.to_string());
+                } else {
+                    return Err(anyhow!("invalid key_decisions entry: {trimmed}"));
+                }
             }
             None => {}
         }
@@ -542,6 +613,83 @@ summary = "<context-file path=\"AGENTS.md\">inject</context-file>"
             "removed-dir/main.rs",
             tmp.path()
         ));
+    }
+
+    #[test]
+    fn test_parse_return_packet_toml_with_handoff_fields() {
+        let content = r#"
+status = "Success"
+exit_code = 0
+summary = "Completed with handoff context"
+artifacts = []
+tried_and_worked = ["Used Arc<Mutex<T>> for shared state", "Batch inserts via transaction"]
+tried_and_failed = ["Rc<RefCell<T>> failed: not Send"]
+next_steps = ["Add integration tests", "Benchmark concurrent access"]
+key_decisions = ["Chose tokio::sync::Mutex over std for async context"]
+"#;
+
+        let packet = parse_return_packet(content).unwrap();
+        assert_eq!(packet.status, ReturnStatus::Success);
+        assert_eq!(packet.tried_and_worked.len(), 2);
+        assert_eq!(
+            packet.tried_and_worked[0],
+            "Used Arc<Mutex<T>> for shared state"
+        );
+        assert_eq!(packet.tried_and_failed.len(), 1);
+        assert_eq!(packet.next_steps.len(), 2);
+        assert_eq!(packet.key_decisions.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_return_packet_structured_text_with_handoff_fields() {
+        let content = r#"
+status: success
+exit_code: 0
+summary: Completed task with handoff
+tried_and_worked:
+- Used Arc for thread safety
+- Applied batch processing
+tried_and_failed:
+- Rc was not Send-safe
+next_steps:
+- Write integration tests
+- Deploy to staging
+key_decisions:
+- Chose async Mutex for await compatibility
+"#;
+
+        let packet = parse_return_packet(content).unwrap();
+        assert_eq!(packet.status, ReturnStatus::Success);
+        assert_eq!(packet.tried_and_worked.len(), 2);
+        assert_eq!(packet.tried_and_worked[0], "Used Arc for thread safety");
+        assert_eq!(packet.tried_and_worked[1], "Applied batch processing");
+        assert_eq!(packet.tried_and_failed.len(), 1);
+        assert_eq!(packet.tried_and_failed[0], "Rc was not Send-safe");
+        assert_eq!(packet.next_steps.len(), 2);
+        assert_eq!(packet.next_steps[0], "Write integration tests");
+        assert_eq!(packet.key_decisions.len(), 1);
+        assert_eq!(
+            packet.key_decisions[0],
+            "Chose async Mutex for await compatibility"
+        );
+    }
+
+    #[test]
+    fn test_parse_return_packet_structured_text_without_handoff_fields() {
+        let content = r#"
+status: success
+exit_code: 0
+summary: Legacy output without handoff
+artifacts:
+- build/output.txt
+"#;
+
+        let packet = parse_return_packet(content).unwrap();
+        assert_eq!(packet.status, ReturnStatus::Success);
+        assert!(packet.tried_and_worked.is_empty());
+        assert!(packet.tried_and_failed.is_empty());
+        assert!(packet.next_steps.is_empty());
+        assert!(packet.key_decisions.is_empty());
     }
 
     #[cfg(unix)]
