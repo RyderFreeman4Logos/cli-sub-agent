@@ -1,6 +1,6 @@
 ---
 name: sa
-description: Three-layer manager-employee orchestration for delegated planning and implementation
+description: "Use when: three-layer manager-employee orchestration for delegation"
 allowed-tools: Bash, Read, Grep, Glob, Edit, Write
 triggers:
   - "sa"

@@ -1,6 +1,6 @@
 ---
 name: pr-codex-bot
-description: Iterative PR review loop with cloud codex bot, local pre-PR audit, false-positive arbitration, and merge
+description: "Use when: PR review loop with cloud bot, arbitration, and merge"
 allowed-tools: Bash, Read, Grep, Glob, Edit, Write
 triggers:
   - "pr-codex-bot"

@@ -1,6 +1,6 @@
 ---
 name: csa
-description: Unified CLI interface for executing coding tasks across multiple AI tools with persistent sessions, recursive agent spawning, and resource-aware scheduling
+description: "Use when: executing tasks via csa run/review/debate, session mgmt"
 allowed-tools: Bash, Read, Grep, Glob
 ---
 

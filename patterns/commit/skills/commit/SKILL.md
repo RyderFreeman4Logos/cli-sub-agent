@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Strict commit discipline with security audit, test verification, code review, and quality gates
+description: "Use when: committing code with security audit, tests, review gates"
 allowed-tools: Bash, Read, Grep, Glob, Edit
 triggers:
   - "commit"

@@ -1,6 +1,6 @@
 ---
 name: dev2merge
-description: "Deterministic development pipeline: branch → FAST_PATH → mktd → mktsk → review → push → PR transaction → local sync"
+description: "Use when: full dev cycle branch->plan->implement->review->PR->merge"
 allowed-tools: Bash, Read, Grep, Glob, Edit, Write
 triggers:
   - "dev2merge"

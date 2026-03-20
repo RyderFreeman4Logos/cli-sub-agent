@@ -1,6 +1,6 @@
 ---
 name: codebase-audit
-description: Bottom-up per-crate deep code analysis with three-type Chinese documentation generation
+description: "Use when: deep per-crate code audit, Chinese documentation generation"
 allowed-tools: Bash, Read, Grep, Glob, Write
 triggers:
   - "codebase-audit"

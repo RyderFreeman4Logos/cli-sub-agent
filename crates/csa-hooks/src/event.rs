@@ -46,6 +46,24 @@ impl HookEvent {
         }
     }
 
+    /// Returns whether this event is gatekeeping (controls pipeline flow).
+    ///
+    /// Gatekeeping events produce a `Result` that the pipeline inspects to
+    /// decide whether to continue or abort. Their hook outcome is part of
+    /// the control flow contract.
+    ///
+    /// Observational events are pure notifications — hook failures are logged
+    /// but never abort the pipeline. Callers may fire them asynchronously.
+    ///
+    /// Classification:
+    /// - **Gatekeeping**: `PreRun` (can block tool spawn), `SessionComplete`
+    ///   (can block session save acknowledgement).
+    /// - **Observational**: `PostRun`, `TodoCreate`, `TodoSave` — purely
+    ///   informational, no control flow impact.
+    pub fn is_gatekeeping(&self) -> bool {
+        matches!(self, HookEvent::PreRun | HookEvent::SessionComplete)
+    }
+
     /// Returns the built-in default command template for this event.
     ///
     /// Built-in commands use template variables wrapped in `{braces}` that are
@@ -129,6 +147,31 @@ mod tests {
         }
         // Ensure we covered all 5 variants
         assert_eq!(seen_keys.len(), 5, "Expected 5 unique config keys");
+    }
+
+    #[test]
+    fn test_is_gatekeeping_pre_run() {
+        assert!(HookEvent::PreRun.is_gatekeeping());
+    }
+
+    #[test]
+    fn test_is_gatekeeping_session_complete() {
+        assert!(HookEvent::SessionComplete.is_gatekeeping());
+    }
+
+    #[test]
+    fn test_is_gatekeeping_post_run_false() {
+        assert!(!HookEvent::PostRun.is_gatekeeping());
+    }
+
+    #[test]
+    fn test_is_gatekeeping_todo_create_false() {
+        assert!(!HookEvent::TodoCreate.is_gatekeeping());
+    }
+
+    #[test]
+    fn test_is_gatekeeping_todo_save_false() {
+        assert!(!HookEvent::TodoSave.is_gatekeeping());
     }
 
     /// Verify config keys match the expected snake_case convention.

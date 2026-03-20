@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: GitHub PR code review via gh CLI with scale-adaptive strategy and AGENTS.md compliance
+description: "Use when: reviewing GitHub PR via gh CLI, scale-adaptive strategy"
 allowed-tools: Bash, Read, Grep, Glob
 triggers:
   - "code-review"

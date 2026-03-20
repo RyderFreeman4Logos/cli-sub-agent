@@ -1,6 +1,6 @@
 ---
 name: dev-to-merge
-description: "Legacy alias for dev2merge. Redirects to the deterministic dev2merge pipeline."
+description: "Use when: legacy alias, redirects to dev2merge pipeline"
 allowed-tools: Bash, Read, Grep, Glob, Edit, Write
 triggers:
   - "dev-to-merge"

@@ -1,6 +1,6 @@
 ---
 name: pattern-creator
-description: "Guide for creating CSA patterns — composable, auditable workflow definitions with companion skill entry points. Use when users want to create a new pattern, convert an existing skill into a pattern, or understand pattern architecture (PATTERN.md, companion skill, .skill.toml, workflow.toml, weave linking, installation scope)."
+description: "Use when: creating CSA pattern (PATTERN.md + skill + workflow.toml)"
 ---
 
 # Pattern Creator
