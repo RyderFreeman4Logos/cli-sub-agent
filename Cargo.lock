@@ -523,6 +523,7 @@ dependencies = [
  "csa-acp",
  "csa-config",
  "csa-core",
+ "csa-eval",
  "csa-executor",
  "csa-hooks",
  "csa-lock",
@@ -748,6 +749,20 @@ dependencies = [
  "sha2",
  "thiserror 2.0.18",
  "toml 1.0.7+spec-1.1.0",
+ "ulid",
+]
+
+[[package]]
+name = "csa-eval"
+version = "0.1.150"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "toml 1.0.7+spec-1.1.0",
+ "tracing",
  "ulid",
 ]
 

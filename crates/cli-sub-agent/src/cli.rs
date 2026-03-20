@@ -360,6 +360,25 @@ pub enum Commands {
     #[command(name = "claude-sub-agent")]
     ClaudeSubAgent(ClaudeSubAgentArgs),
 
+    /// Evaluate session history (passive analysis)
+    Eval {
+        /// Run in passive mode (read-only analysis, no modifications)
+        #[arg(long)]
+        passive: bool,
+
+        /// Project storage key (defaults to current project)
+        #[arg(long)]
+        project: Option<String>,
+
+        /// Number of days to look back (default: 7)
+        #[arg(long, default_value = "7")]
+        days: u32,
+
+        /// Output as JSON
+        #[arg(long)]
+        json: bool,
+    },
+
     /// Token estimation for files
     Tokuin {
         #[command(subcommand)]

@@ -11,6 +11,7 @@ path = "src/main.rs"
 
 [dependencies]
 csa-core.workspace = true
+csa-eval.workspace = true
 csa-session.workspace = true
 csa-lock.workspace = true
 csa-acp = { path = "../csa-acp" }
