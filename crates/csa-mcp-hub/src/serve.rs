@@ -462,6 +462,92 @@ async fn handle_client_connection(
         return Ok(());
     }
 
+    if method == Some("hub/search-tools") {
+        let params = first_message.get("params").cloned().unwrap_or(json!({}));
+        let query = params
+            .get("query")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let limit = params
+            .get("limit")
+            .and_then(Value::as_u64)
+            .map(|n| n as usize)
+            .unwrap_or(20);
+        let results = router.tool_search(query, limit).await;
+        write_json_line(
+            &mut write_half,
+            &jsonrpc_result(request_id, json!({"tools": results})),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    if method == Some("hub/get-tool-schema") {
+        let params = first_message.get("params").cloned().unwrap_or(json!({}));
+        let tool_name = params
+            .get("tool_name")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+
+        if tool_name.is_empty() {
+            write_json_line(
+                &mut write_half,
+                &jsonrpc_error(
+                    request_id,
+                    -32602,
+                    "missing required parameter: tool_name".to_string(),
+                ),
+            )
+            .await?;
+            return Ok(());
+        }
+
+        match router.get_tool_descriptor(tool_name).await {
+            Some(descriptor) => {
+                let schema_str =
+                    serde_json::to_string(&descriptor.input_schema).unwrap_or_default();
+                const MAX_SCHEMA_BYTES: usize = 64 * 1024;
+                if schema_str.len() > MAX_SCHEMA_BYTES {
+                    write_json_line(
+                        &mut write_half,
+                        &jsonrpc_error(
+                            request_id,
+                            -32005,
+                            format!(
+                                "schema for '{}' exceeds 64KB size limit ({} bytes)",
+                                tool_name,
+                                schema_str.len()
+                            ),
+                        ),
+                    )
+                    .await?;
+                } else {
+                    write_json_line(
+                        &mut write_half,
+                        &jsonrpc_result(
+                            request_id,
+                            json!({
+                                "tool_name": tool_name,
+                                "server_name": descriptor.server_name,
+                                "description": descriptor.description,
+                                "input_schema": descriptor.input_schema,
+                            }),
+                        ),
+                    )
+                    .await?;
+                }
+            }
+            None => {
+                write_json_line(
+                    &mut write_half,
+                    &jsonrpc_error(request_id, -32601, format!("tool not found: {tool_name}")),
+                )
+                .await?;
+            }
+        }
+        return Ok(());
+    }
+
     let mut forwarding_reader = reader;
     let first_forward_line = first_line;
     let (prefill_read, mut prefill_write) = tokio::io::duplex(64 * 1024);
@@ -669,118 +755,5 @@ fn current_uid() -> u32 {
 }
 
 #[cfg(test)]
-mod tests {
-    use anyhow::Result;
-    use serde_json::json;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    use super::send_control_request;
-    use crate::proxy::ProxyRouter;
-    use crate::registry::McpRegistry;
-
-    #[tokio::test]
-    async fn send_control_request_round_trip() -> Result<()> {
-        let temp = tempfile::tempdir()?;
-        let socket_path = temp.path().join("control.sock");
-        let listener = tokio::net::UnixListener::bind(&socket_path)?;
-
-        let server = tokio::spawn(async move {
-            let (stream, _) = listener.accept().await.expect("accept control client");
-            let (read_half, mut write_half) = stream.into_split();
-            let mut reader = BufReader::new(read_half);
-            let mut line = String::new();
-            reader
-                .read_line(&mut line)
-                .await
-                .expect("read control request");
-            let request: serde_json::Value =
-                serde_json::from_str(line.trim()).expect("parse request");
-            assert_eq!(request["method"], "hub/status");
-            write_half
-                .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"running\":true}}\n")
-                .await
-                .expect("write control response");
-        });
-
-        let response = send_control_request(&socket_path, "hub/status").await?;
-        assert_eq!(
-            response,
-            json!({"jsonrpc":"2.0","id":1,"result":{"running":true}})
-        );
-
-        server.await?;
-        Ok(())
-    }
-
-    #[test]
-    fn token_bucket_refills_over_time() {
-        let mut limiter = super::TokenBucket::new(2);
-        assert!(limiter.try_consume());
-        assert!(limiter.try_consume());
-        assert!(!limiter.try_consume());
-        std::thread::sleep(Duration::from_millis(600));
-        assert!(limiter.try_consume());
-    }
-
-    #[tokio::test]
-    async fn large_first_frame_is_processed_without_deadlock() -> Result<()> {
-        let (client, server) = tokio::net::UnixStream::pair()?;
-        let router = Arc::new(ProxyRouter::new(
-            Arc::new(McpRegistry::new(Vec::new())),
-            Duration::from_secs(2),
-        ));
-        let (shutdown_tx, _shutdown_rx) = tokio::sync::watch::channel(false);
-        let policy = super::ConnectionPolicy {
-            max_requests_per_sec: 100,
-            max_request_body_bytes: 10 * 1024 * 1024,
-            request_timeout: Duration::from_secs(2),
-            current_uid: super::current_uid(),
-        };
-        let (skill_notify_tx, _skill_notify_rx) = tokio::sync::mpsc::channel(1);
-        let skill_notify_tx = super::SkillRefreshNotifier::new(skill_notify_tx);
-
-        let server_task = tokio::spawn(super::handle_client_connection(
-            server,
-            1,
-            router,
-            shutdown_tx,
-            policy,
-            skill_notify_tx,
-        ));
-
-        let (client_read, mut client_write) = client.into_split();
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "initialize",
-            "params": {
-                "protocolVersion": "2024-11-05",
-                "capabilities": {},
-                "clientInfo": {
-                    "name": "test-client",
-                    "version": "0.1.0"
-                },
-                "padding": "x".repeat(70 * 1024)
-            }
-        });
-        let mut payload = serde_json::to_string(&request)?;
-        payload.push('\n');
-
-        tokio::time::timeout(
-            Duration::from_secs(2),
-            client_write.write_all(payload.as_bytes()),
-        )
-        .await??;
-        tokio::time::timeout(Duration::from_secs(2), client_write.shutdown()).await??;
-
-        let mut reader = BufReader::new(client_read);
-        let mut response = String::new();
-        let _ =
-            tokio::time::timeout(Duration::from_secs(2), reader.read_line(&mut response)).await??;
-
-        tokio::time::timeout(Duration::from_secs(2), server_task).await???;
-        Ok(())
-    }
-}
+#[path = "serve_tests.rs"]
+mod tests;

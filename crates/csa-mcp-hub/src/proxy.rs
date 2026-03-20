@@ -9,6 +9,7 @@ use rmcp::model::{
 };
 use rmcp::service::RequestContext;
 use rmcp::{ErrorData as McpError, RoleServer, ServerHandler};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::sync::RwLock;
 use tokio::time::timeout;
@@ -16,10 +17,26 @@ use tokio_util::sync::CancellationToken;
 
 use crate::registry::{McpRegistry, ToolCallRoute};
 
+/// Cached metadata for a single MCP tool, stored alongside its routing info.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ToolDescriptor {
+    pub(crate) server_name: String,
+    pub(crate) description: Option<String>,
+    pub(crate) input_schema: Value,
+}
+
+/// Lightweight summary returned by [`ProxyRouter::tool_search`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct ToolSummary {
+    pub(crate) name: String,
+    pub(crate) description_oneliner: Option<String>,
+    pub(crate) server_name: String,
+}
+
 #[derive(Clone)]
 pub(crate) struct ProxyRouter {
     registry: Arc<McpRegistry>,
-    tool_routes: Arc<RwLock<HashMap<String, String>>>,
+    pub(crate) tool_cache: Arc<RwLock<HashMap<String, ToolDescriptor>>>,
     request_timeout: Duration,
 }
 
@@ -27,14 +44,14 @@ impl ProxyRouter {
     pub(crate) fn new(registry: Arc<McpRegistry>, request_timeout: Duration) -> Self {
         Self {
             registry,
-            tool_routes: Arc::new(RwLock::new(HashMap::new())),
+            tool_cache: Arc::new(RwLock::new(HashMap::new())),
             request_timeout,
         }
     }
 
     pub(crate) async fn status_payload(&self) -> Value {
         let servers = self.registry.server_names();
-        let tools_cached = self.tool_routes.read().await.len();
+        let tools_cached = self.tool_cache.read().await.len();
         json!({
             "running": true,
             "servers": servers,
@@ -44,7 +61,7 @@ impl ProxyRouter {
 
     async fn list_tools_internal(&self) -> Result<ListToolsResult, McpError> {
         let mut tools = Vec::new();
-        let mut routes = HashMap::new();
+        let mut cache = HashMap::new();
 
         for server in self.registry.server_names() {
             let cancellation = CancellationToken::new();
@@ -56,7 +73,24 @@ impl ProxyRouter {
             {
                 Ok(Ok(server_tools)) => {
                     for tool in server_tools {
-                        routes.insert(tool.name.to_string(), server.clone());
+                        let name = tool.name.to_string();
+                        if let Some(existing) = cache.get(&name) {
+                            let existing: &ToolDescriptor = existing;
+                            tracing::warn!(
+                                tool = %name,
+                                previous_server = %existing.server_name,
+                                new_server = %server,
+                                "duplicate tool name: later registration overrides previous"
+                            );
+                        }
+                        cache.insert(
+                            name,
+                            ToolDescriptor {
+                                server_name: server.clone(),
+                                description: tool.description.as_ref().map(|d| d.to_string()),
+                                input_schema: Value::Object(tool.input_schema.as_ref().clone()),
+                            },
+                        );
                         tools.push(tool);
                     }
                 }
@@ -74,7 +108,7 @@ impl ProxyRouter {
             }
         }
 
-        *self.tool_routes.write().await = routes;
+        *self.tool_cache.write().await = cache;
         Ok(ListToolsResult::with_all_items(tools))
     }
 
@@ -125,7 +159,54 @@ impl ProxyRouter {
     }
 
     async fn lookup_tool_owner(&self, tool_name: &str) -> Option<String> {
-        self.tool_routes.read().await.get(tool_name).cloned()
+        self.tool_cache
+            .read()
+            .await
+            .get(tool_name)
+            .map(|desc| desc.server_name.clone())
+    }
+
+    /// Look up the full cached descriptor for a tool by name.
+    pub(crate) async fn get_tool_descriptor(&self, tool_name: &str) -> Option<ToolDescriptor> {
+        self.tool_cache.read().await.get(tool_name).cloned()
+    }
+
+    /// Case-insensitive substring search over cached tools.
+    ///
+    /// `query` is truncated to 256 chars, `limit` is capped at 50.
+    /// Only searches already-cached data — never triggers server connections.
+    pub(crate) async fn tool_search(&self, query: &str, limit: usize) -> Vec<ToolSummary> {
+        const MAX_QUERY_LEN: usize = 256;
+        const MAX_LIMIT: usize = 50;
+
+        let limit = limit.min(MAX_LIMIT);
+        let query_truncated: String = query.chars().take(MAX_QUERY_LEN).collect();
+        let query_lower = query_truncated.to_lowercase();
+
+        let cache = self.tool_cache.read().await;
+        let mut results = Vec::new();
+
+        for (name, descriptor) in cache.iter() {
+            if results.len() >= limit {
+                break;
+            }
+            let name_lower = name.to_lowercase();
+            let desc_lower = descriptor
+                .description
+                .as_ref()
+                .map(|d| d.to_lowercase())
+                .unwrap_or_default();
+
+            if name_lower.contains(&query_lower) || desc_lower.contains(&query_lower) {
+                results.push(ToolSummary {
+                    name: name.clone(),
+                    description_oneliner: descriptor.description.clone(),
+                    server_name: descriptor.server_name.clone(),
+                });
+            }
+        }
+
+        results
     }
 }
 
@@ -239,6 +320,42 @@ done
         Ok(path)
     }
 
+    /// Write a mock MCP server that registers two tools, one with a duplicate name.
+    fn write_duplicate_tool_script(dir: &std::path::Path) -> Result<std::path::PathBuf> {
+        let path = dir.join("mock-dup.sh");
+        fs::write(
+            &path,
+            r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s\n' "$line" | sed -n 's/.*"id"[ ]*:[ ]*\([^,}]*\).*/\1/p')
+  case "$line" in
+    *\"initialize\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"serverInfo":{"name":"mock-dup","version":"0.1.0"}}}\n' "$id"
+      ;;
+    *\"notifications/initialized\"*)
+      ;;
+    *\"tools/list\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"tools":[{"name":"echo_tool","description":"duplicate echo","inputSchema":{"type":"object","properties":{"x":{"type":"string"}}}}]}}\n' "$id"
+      ;;
+    *\"tools/call\"*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"content":[{"type":"text","text":"dup-pong"}]}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+        )?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&path)?.permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&path, perms)?;
+        }
+
+        Ok(path)
+    }
+
     #[tokio::test]
     async fn tools_list_and_call_are_forwarded() -> Result<()> {
         let temp = tempfile::tempdir()?;
@@ -274,6 +391,209 @@ done
             call_response.content[0].as_text().map(|t| t.text.as_str()),
             Some("pong")
         );
+
+        registry.shutdown_all().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tool_descriptor_cache_populated_after_list() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let script = write_script(temp.path())?;
+
+        let registry = Arc::new(McpRegistry::new(vec![McpServerConfig {
+            name: "mock".to_string(),
+            transport: McpTransport::Stdio {
+                command: "sh".to_string(),
+                args: vec![script.to_string_lossy().into_owned()],
+                env: HashMap::new(),
+            },
+            stateful: false,
+            memory_max_mb: None,
+        }]));
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
+
+        // Cache should be empty before list
+        assert!(router.get_tool_descriptor("echo_tool").await.is_none());
+
+        router.list_tools_internal().await?;
+
+        // Cache should be populated after list
+        let descriptor = router
+            .get_tool_descriptor("echo_tool")
+            .await
+            .expect("echo_tool should be cached");
+        assert_eq!(descriptor.server_name, "mock");
+        assert_eq!(descriptor.description.as_deref(), Some("echo"));
+        assert_eq!(
+            descriptor.input_schema,
+            json!({"type": "object", "properties": {}})
+        );
+
+        registry.shutdown_all().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tool_descriptor_duplicate_name_last_wins() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let script1 = write_script(temp.path())?;
+        let script2 = write_duplicate_tool_script(temp.path())?;
+
+        let registry = Arc::new(McpRegistry::new(vec![
+            McpServerConfig {
+                name: "mock-first".to_string(),
+                transport: McpTransport::Stdio {
+                    command: "sh".to_string(),
+                    args: vec![script1.to_string_lossy().into_owned()],
+                    env: HashMap::new(),
+                },
+                stateful: false,
+                memory_max_mb: None,
+            },
+            McpServerConfig {
+                name: "mock-second".to_string(),
+                transport: McpTransport::Stdio {
+                    command: "sh".to_string(),
+                    args: vec![script2.to_string_lossy().into_owned()],
+                    env: HashMap::new(),
+                },
+                stateful: false,
+                memory_max_mb: None,
+            },
+        ]));
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
+
+        router.list_tools_internal().await?;
+
+        let descriptor = router
+            .get_tool_descriptor("echo_tool")
+            .await
+            .expect("echo_tool should be cached");
+        // The second server should win (last registration overrides)
+        assert_eq!(descriptor.server_name, "mock-second");
+        assert_eq!(descriptor.description.as_deref(), Some("duplicate echo"));
+
+        registry.shutdown_all().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tool_descriptor_resolve_returns_server_name() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let script = write_script(temp.path())?;
+
+        let registry = Arc::new(McpRegistry::new(vec![McpServerConfig {
+            name: "mock".to_string(),
+            transport: McpTransport::Stdio {
+                command: "sh".to_string(),
+                args: vec![script.to_string_lossy().into_owned()],
+                env: HashMap::new(),
+            },
+            stateful: false,
+            memory_max_mb: None,
+        }]));
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
+
+        router.list_tools_internal().await?;
+
+        // resolve_tool (via lookup_tool_owner) should still return server_name
+        let owner = router.lookup_tool_owner("echo_tool").await;
+        assert_eq!(owner.as_deref(), Some("mock"));
+
+        // Unknown tool should return None
+        let unknown = router.lookup_tool_owner("nonexistent").await;
+        assert!(unknown.is_none());
+
+        registry.shutdown_all().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tool_search_empty_cache_returns_empty() {
+        let registry = Arc::new(McpRegistry::new(Vec::new()));
+        let router = ProxyRouter::new(registry, Duration::from_secs(5));
+
+        let results = router.tool_search("anything", 10).await;
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn tool_search_matches_name_case_insensitive() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let script = write_script(temp.path())?;
+
+        let registry = Arc::new(McpRegistry::new(vec![McpServerConfig {
+            name: "mock".to_string(),
+            transport: McpTransport::Stdio {
+                command: "sh".to_string(),
+                args: vec![script.to_string_lossy().into_owned()],
+                env: HashMap::new(),
+            },
+            stateful: false,
+            memory_max_mb: None,
+        }]));
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
+        router.list_tools_internal().await?;
+
+        // Case-insensitive match on name
+        let results = router.tool_search("ECHO", 10).await;
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "echo_tool");
+        assert_eq!(results[0].server_name, "mock");
+
+        registry.shutdown_all().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tool_search_no_match_returns_empty() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let script = write_script(temp.path())?;
+
+        let registry = Arc::new(McpRegistry::new(vec![McpServerConfig {
+            name: "mock".to_string(),
+            transport: McpTransport::Stdio {
+                command: "sh".to_string(),
+                args: vec![script.to_string_lossy().into_owned()],
+                env: HashMap::new(),
+            },
+            stateful: false,
+            memory_max_mb: None,
+        }]));
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
+        router.list_tools_internal().await?;
+
+        let results = router.tool_search("nonexistent_xyz", 10).await;
+        assert!(results.is_empty());
+
+        registry.shutdown_all().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tool_search_query_truncated_at_256() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let script = write_script(temp.path())?;
+
+        let registry = Arc::new(McpRegistry::new(vec![McpServerConfig {
+            name: "mock".to_string(),
+            transport: McpTransport::Stdio {
+                command: "sh".to_string(),
+                args: vec![script.to_string_lossy().into_owned()],
+                env: HashMap::new(),
+            },
+            stateful: false,
+            memory_max_mb: None,
+        }]));
+        let router = ProxyRouter::new(registry.clone(), Duration::from_secs(5));
+        router.list_tools_internal().await?;
+
+        // A very long query should not panic and should be silently truncated
+        let long_query = "x".repeat(1000);
+        let results = router.tool_search(&long_query, 10).await;
+        // "x" repeated doesn't match "echo_tool" so empty
+        assert!(results.is_empty());
 
         registry.shutdown_all().await?;
         Ok(())
