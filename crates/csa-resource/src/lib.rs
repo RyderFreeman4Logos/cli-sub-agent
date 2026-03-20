@@ -1,5 +1,6 @@
 //! Resource-aware scheduling with simple threshold checks.
 
+pub mod bwrap;
 pub mod cgroup;
 pub mod filesystem_sandbox;
 pub mod guard;
@@ -8,6 +9,7 @@ pub mod memory_balloon;
 pub mod rlimit;
 pub mod sandbox;
 
+pub use bwrap::{BwrapCommandBuilder, from_isolation_plan};
 pub use cgroup::{
     CgroupScopeGuard, OrphanScope, SandboxConfig, cleanup_orphan_scopes, create_scope_command,
 };

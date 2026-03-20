@@ -68,6 +68,8 @@ pub enum StreamMode {
 pub enum SandboxHandle {
     /// cgroup scope guard -- dropped to stop the scope.
     Cgroup(csa_resource::cgroup::CgroupScopeGuard),
+    /// Bubblewrap filesystem sandbox is active.
+    Bwrap,
     /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
     Rlimit,
     /// No sandbox active.

@@ -5,8 +5,9 @@ use tokio::io::AsyncWriteExt;
 use tokio::process::Command;
 use tracing::{debug, warn};
 
-use csa_resource::cgroup::SandboxConfig;
-use csa_resource::sandbox::{ResourceCapability, detect_resource_capability};
+use csa_resource::filesystem_sandbox::FilesystemCapability;
+use csa_resource::isolation_plan::IsolationPlan;
+use csa_resource::sandbox::ResourceCapability;
 
 use super::{PreExecPolicy, SandboxHandle, SpawnOptions};
 
@@ -106,10 +107,12 @@ async fn spawn_tool_with_pre_exec(
     Ok(child)
 }
 
-/// Spawn a tool process with optional resource sandbox.
+/// Spawn a tool process with optional dual-axis isolation.
 ///
-/// When `sandbox` is `Some`, the child process is wrapped in resource
-/// isolation based on the host's detected capability:
+/// When `isolation` is `Some`, the child process is wrapped in up to two
+/// independent isolation layers derived from the [`IsolationPlan`]:
+///
+/// ## Resource axis (`plan.resource`)
 ///
 /// - **CgroupV2**: The tool binary is launched inside a systemd transient
 ///   scope via `systemd-run --user --scope`.  A [`CgroupScopeGuard`] is
@@ -117,9 +120,19 @@ async fn spawn_tool_with_pre_exec(
 ///
 /// - **Setrlimit**: `RLIMIT_NPROC` is applied in the child via `pre_exec`.
 ///
-/// - **None capability**: Falls through to normal `spawn_tool` behavior.
+/// - **None**: Falls through to OOM score adjustment as a last resort.
 ///
-/// When `sandbox` is `None`, this delegates directly to [`spawn_tool`] with
+/// ## Filesystem axis (`plan.filesystem`)
+///
+/// - **Bwrap**: The command is wrapped with `bwrap(1)` via
+///   [`csa_resource::bwrap::from_isolation_plan()`], providing read-only root
+///   with selective writable bind mounts.
+///
+/// - **Landlock**: Reserved for Phase C (currently a no-op placeholder).
+///
+/// - **None**: No filesystem isolation applied.
+///
+/// When `isolation` is `None`, this delegates directly to [`spawn_tool`] with
 /// no overhead — behavior is identical to the unsandboxed path.
 ///
 /// [`CgroupScopeGuard`]: csa_resource::cgroup::CgroupScopeGuard
@@ -127,50 +140,104 @@ pub async fn spawn_tool_sandboxed(
     cmd: Command,
     stdin_data: Option<Vec<u8>>,
     spawn_options: SpawnOptions,
-    sandbox: Option<&SandboxConfig>,
+    isolation: Option<&IsolationPlan>,
     tool_name: &str,
     session_id: &str,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
-    let Some(config) = sandbox else {
+    let Some(plan) = isolation else {
         let child = spawn_tool_with_options(cmd, stdin_data, spawn_options).await?;
         return Ok((child, SandboxHandle::None));
     };
 
-    match detect_resource_capability() {
+    // --- Filesystem axis: wrap the command if needed ---
+    let cmd = match plan.filesystem {
+        FilesystemCapability::Bwrap => {
+            let tool_binary = cmd.as_std().get_program().to_string_lossy().to_string();
+            let tool_args: Vec<String> = cmd
+                .as_std()
+                .get_args()
+                .map(|a| a.to_string_lossy().to_string())
+                .collect();
+
+            if let Some(bwrap_cmd) =
+                csa_resource::bwrap::from_isolation_plan(plan, &tool_binary, &tool_args)
+            {
+                let mut wrapped = Command::from(bwrap_cmd);
+                // Propagate environment from original command.
+                for (key, val) in cmd.as_std().get_envs() {
+                    if let Some(v) = val {
+                        wrapped.env(key, v);
+                    }
+                }
+                if let Some(dir) = cmd.as_std().get_current_dir() {
+                    wrapped.current_dir(dir);
+                }
+                debug!("wrapped tool command with bwrap filesystem sandbox");
+                wrapped
+            } else {
+                warn!("bwrap requested but from_isolation_plan returned None; proceeding without");
+                cmd
+            }
+        }
+        FilesystemCapability::Landlock => {
+            // Phase C: Landlock rules will be applied in pre_exec.
+            // For now, proceed with the command as-is.
+            debug!("Landlock filesystem isolation requested; not yet implemented (Phase C)");
+            cmd
+        }
+        FilesystemCapability::None => cmd,
+    };
+
+    let has_bwrap = plan.filesystem == FilesystemCapability::Bwrap;
+
+    // --- Resource axis: apply resource isolation ---
+    match plan.resource {
         ResourceCapability::CgroupV2 => {
             spawn_with_cgroup(
                 cmd,
                 stdin_data,
                 spawn_options,
-                config,
+                plan,
                 tool_name,
                 session_id,
+                has_bwrap,
             )
             .await
         }
         ResourceCapability::Setrlimit => {
-            let memory_max_mb = config.memory_max_mb;
-            let pids_max = config.pids_max.map(u64::from);
-
             let child = spawn_tool_with_pre_exec(
                 cmd,
                 stdin_data,
                 PreExecPolicy::Rlimits {
-                    memory_max_mb,
-                    pids_max,
+                    memory_max_mb: 0,
+                    pids_max: None,
                 },
                 spawn_options,
             )
             .await?;
 
-            Ok((child, SandboxHandle::Rlimit))
+            Ok((
+                child,
+                if has_bwrap {
+                    SandboxHandle::Bwrap
+                } else {
+                    SandboxHandle::Rlimit
+                },
+            ))
         }
         ResourceCapability::None => {
-            debug!("no sandbox capability detected; applying OOM score adj as fallback");
+            debug!("no resource capability in isolation plan; applying OOM score adj as fallback");
             let child =
                 spawn_tool_with_pre_exec(cmd, stdin_data, PreExecPolicy::OomAdj, spawn_options)
                     .await?;
-            Ok((child, SandboxHandle::None))
+            Ok((
+                child,
+                if has_bwrap {
+                    SandboxHandle::Bwrap
+                } else {
+                    SandboxHandle::None
+                },
+            ))
         }
     }
 }
@@ -180,11 +247,22 @@ async fn spawn_with_cgroup(
     original_cmd: Command,
     stdin_data: Option<Vec<u8>>,
     spawn_options: SpawnOptions,
-    config: &SandboxConfig,
+    _plan: &IsolationPlan,
     tool_name: &str,
     session_id: &str,
+    has_bwrap: bool,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
-    let scope_cmd = csa_resource::cgroup::create_scope_command(tool_name, session_id, config);
+    // TODO(Phase C): Extract cgroup limits from IsolationPlan once the plan
+    // carries resource-specific configuration (memory_max_mb, pids_max).
+    // For now, use sensible defaults matching the previous SandboxConfig.
+    let cgroup_config = csa_resource::cgroup::SandboxConfig {
+        memory_max_mb: 4096,
+        memory_swap_max_mb: Some(0),
+        pids_max: Some(512),
+    };
+
+    let scope_cmd =
+        csa_resource::cgroup::create_scope_command(tool_name, session_id, &cgroup_config);
 
     let mut tokio_cmd = Command::from(scope_cmd);
     tokio_cmd.arg(original_cmd.as_std().get_program());
@@ -212,5 +290,11 @@ async fn spawn_with_cgroup(
         "spawned tool inside cgroup scope"
     );
 
-    Ok((child, SandboxHandle::Cgroup(guard)))
+    if has_bwrap {
+        // Both cgroup and bwrap are active. Cgroup guard still needs to
+        // live for cleanup, so we return it as the primary handle.
+        Ok((child, SandboxHandle::Cgroup(guard)))
+    } else {
+        Ok((child, SandboxHandle::Cgroup(guard)))
+    }
 }

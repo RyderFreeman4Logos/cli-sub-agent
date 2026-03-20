@@ -29,12 +29,14 @@ pub struct ExecuteOptions {
 
 /// Sandbox configuration resolved from project/tool config.
 ///
-/// Carries the resource limits together with identifiers needed to name
-/// the cgroup scope (tool name + session ID).
+/// Carries the fully resolved [`IsolationPlan`] together with identifiers
+/// needed to name the cgroup scope (tool name + session ID).
+///
+/// [`IsolationPlan`]: csa_resource::isolation_plan::IsolationPlan
 #[derive(Debug, Clone)]
 pub struct SandboxContext {
-    /// Resource limits to apply.
-    pub config: csa_resource::cgroup::SandboxConfig,
+    /// Fully resolved dual-axis isolation plan (resource + filesystem).
+    pub isolation_plan: csa_resource::isolation_plan::IsolationPlan,
     /// Tool name for scope naming (e.g. "claude-code").
     pub tool_name: String,
     /// Session ID for scope naming.

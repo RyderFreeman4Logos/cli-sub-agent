@@ -7,6 +7,7 @@ mod registry_pool;
 use anyhow::{Context, Result, anyhow};
 use csa_config::McpServerConfig;
 use csa_process::{SandboxHandle, SpawnOptions, spawn_tool_sandboxed};
+use csa_resource::isolation_plan::{EnforcementMode, IsolationPlanBuilder};
 use csa_resource::{ResourceCapability, SandboxConfig, apply_rlimits, detect_resource_capability};
 use rmcp::RoleClient;
 use rmcp::model::{CallToolRequestParams, CallToolResult, Tool};
@@ -539,6 +540,18 @@ impl BackendTransport {
                 (child, None)
             }
             ResourceCapability::Setrlimit | ResourceCapability::None => {
+                // Build a minimal IsolationPlan for MCP server resource isolation.
+                // MCP servers do not need filesystem sandboxing (they are trusted
+                // helper processes), so only the resource axis is populated.
+                let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+                    .with_resource_capability(capability)
+                    .build()
+                    .with_context(|| {
+                        format!(
+                            "failed to build isolation plan for MCP server '{}'",
+                            config.name
+                        )
+                    })?;
                 let (child, sandbox) = spawn_tool_sandboxed(
                     cmd,
                     None,
@@ -550,7 +563,7 @@ impl BackendTransport {
                         spool_max_bytes: csa_process::DEFAULT_SPOOL_MAX_BYTES,
                         keep_rotated_spool: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
                     },
-                    Some(&sandbox_config),
+                    Some(&plan),
                     &config.name,
                     MCP_SANDBOX_SESSION_ID,
                 )

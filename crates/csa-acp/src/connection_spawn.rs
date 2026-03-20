@@ -17,8 +17,9 @@ use tokio::{io::AsyncReadExt, process::Command, task::LocalSet};
 use tokio_util::compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt};
 use tracing::{debug, warn};
 
-pub use csa_resource::cgroup::SandboxConfig;
-use csa_resource::sandbox::{ResourceCapability, detect_resource_capability};
+use csa_resource::filesystem_sandbox::FilesystemCapability;
+use csa_resource::isolation_plan::IsolationPlan;
+use csa_resource::sandbox::ResourceCapability;
 
 use crate::{
     client::{AcpClient, SessionEventStore},
@@ -40,10 +41,14 @@ use super::AcpConnection;
 /// - **`Rlimit`**: `RLIMIT_NPROC` was applied in the child's `pre_exec`.
 ///   This is a marker variant indicating rlimit-based PID isolation is active.
 ///
+/// - **`Bwrap`**: Bubblewrap filesystem sandbox is active.
+///
 /// - **`None`**: No sandbox active.
 pub enum AcpSandboxHandle {
     /// cgroup scope guard -- dropped to stop the scope.
     Cgroup(csa_resource::cgroup::CgroupScopeGuard),
+    /// Bubblewrap filesystem sandbox is active.
+    Bwrap,
     /// `RLIMIT_NPROC` was applied in child via `pre_exec`.
     Rlimit,
     /// No sandbox active.
@@ -76,9 +81,9 @@ pub struct AcpSpawnRequest<'a> {
     pub options: AcpConnectionOptions,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct AcpSandboxRequest<'a> {
-    pub config: &'a SandboxConfig,
+    pub isolation_plan: &'a IsolationPlan,
     pub tool_name: &'a str,
     pub session_id: &'a str,
 }
@@ -113,13 +118,27 @@ impl AcpConnection {
         Self::spawn_with_cmd(cmd, working_dir, options).await
     }
 
-    /// Spawn an ACP process with optional resource sandbox.
+    /// Spawn an ACP process with optional dual-axis isolation.
     ///
-    /// When `sandbox` is `Some`, the process is wrapped in resource isolation
-    /// based on the host's detected capability (cgroup v2 or setrlimit).
+    /// When `sandbox` is `Some`, the process is wrapped in up to two
+    /// independent isolation layers derived from the [`IsolationPlan`]:
+    ///
+    /// ## Resource axis (`plan.resource`)
+    ///
+    /// - **CgroupV2**: Launched inside a systemd transient scope.
+    /// - **Setrlimit**: `RLIMIT_NPROC` applied via `pre_exec`.
+    /// - **None**: OOM score adjustment as last resort.
+    ///
+    /// ## Filesystem axis (`plan.filesystem`)
+    ///
+    /// - **Bwrap**: The ACP binary is wrapped with `bwrap(1)` via
+    ///   [`csa_resource::bwrap::from_isolation_plan()`].
+    /// - **Landlock**: Reserved for Phase C (no-op).
+    /// - **None**: No filesystem isolation.
+    ///
     /// When `sandbox` is `None`, behavior is identical to [`Self::spawn`].
     ///
-    /// Returns the connection and a [`AcpSandboxHandle`] that must be kept
+    /// Returns the connection and an [`AcpSandboxHandle`] that must be kept
     /// alive for the duration of the child process.
     pub async fn spawn_sandboxed(
         request: AcpSpawnRequest<'_>,
@@ -137,17 +156,56 @@ impl AcpConnection {
             return Ok((conn, AcpSandboxHandle::None));
         };
 
-        match detect_resource_capability() {
+        let plan = sandbox.isolation_plan;
+
+        // --- Filesystem axis: optionally wrap the command with bwrap ---
+        let (effective_command, effective_args, has_bwrap) = match plan.filesystem {
+            FilesystemCapability::Bwrap => {
+                let tool_args: Vec<String> = request.args.to_vec();
+                if let Some(bwrap_cmd) =
+                    csa_resource::bwrap::from_isolation_plan(plan, request.command, &tool_args)
+                {
+                    let program = bwrap_cmd.get_program().to_string_lossy().to_string();
+                    let args: Vec<String> = bwrap_cmd
+                        .get_args()
+                        .map(|a| a.to_string_lossy().to_string())
+                        .collect();
+                    debug!("wrapped ACP command with bwrap filesystem sandbox");
+                    (program, args, true)
+                } else {
+                    warn!(
+                        "bwrap requested but from_isolation_plan returned None; proceeding without"
+                    );
+                    (request.command.to_owned(), request.args.to_vec(), false)
+                }
+            }
+            FilesystemCapability::Landlock => {
+                debug!("Landlock filesystem isolation requested; not yet implemented (Phase C)");
+                (request.command.to_owned(), request.args.to_vec(), false)
+            }
+            FilesystemCapability::None => {
+                (request.command.to_owned(), request.args.to_vec(), false)
+            }
+        };
+
+        // --- Resource axis: apply resource isolation ---
+        match plan.resource {
             ResourceCapability::CgroupV2 => {
-                // Build systemd-run wrapper command, then append the ACP binary + args.
+                // Build systemd-run wrapper command, then append the
+                // (possibly bwrap-wrapped) ACP binary + args.
+                let cgroup_config = csa_resource::cgroup::SandboxConfig {
+                    memory_max_mb: 4096,
+                    memory_swap_max_mb: Some(0),
+                    pids_max: Some(512),
+                };
                 let scope_cmd = csa_resource::cgroup::create_scope_command(
                     sandbox.tool_name,
                     sandbox.session_id,
-                    sandbox.config,
+                    &cgroup_config,
                 );
                 let mut cmd = Command::from(scope_cmd);
-                cmd.arg(request.command);
-                cmd.args(request.args);
+                cmd.arg(&effective_command);
+                cmd.args(&effective_args);
                 cmd.current_dir(request.working_dir)
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
@@ -162,12 +220,9 @@ impl AcpConnection {
                     });
                 }
 
-                // Strip inherited env vars that interfere with child ACP
-                // adapters (same vars stripped by build_cmd_base for other paths).
                 for var in Self::STRIPPED_ENV_VARS {
                     cmd.env_remove(var);
                 }
-
                 for (key, value) in request.env {
                     cmd.env(key, value);
                 }
@@ -185,14 +240,11 @@ impl AcpConnection {
             }
             ResourceCapability::Setrlimit => {
                 let mut cmd = Self::build_cmd_base(
-                    request.command,
-                    request.args,
+                    &effective_command,
+                    &effective_args,
                     request.working_dir,
                     request.env,
                 );
-
-                let memory_max_mb = sandbox.config.memory_max_mb;
-                let pids_max = sandbox.config.pids_max.map(u64::from);
 
                 // Apply setsid + rlimits in a single pre_exec hook.
                 // SAFETY: setsid() and setrlimit are async-signal-safe and run before exec.
@@ -200,27 +252,57 @@ impl AcpConnection {
                 unsafe {
                     cmd.pre_exec(move || {
                         libc::setsid();
-                        csa_resource::rlimit::apply_rlimits(memory_max_mb, pids_max)
-                            .map_err(std::io::Error::other)
+                        csa_resource::rlimit::apply_rlimits(0, None).map_err(std::io::Error::other)
                     });
                 }
 
                 let conn =
                     Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
 
-                Ok((conn, AcpSandboxHandle::Rlimit))
+                Ok((
+                    conn,
+                    if has_bwrap {
+                        AcpSandboxHandle::Bwrap
+                    } else {
+                        AcpSandboxHandle::Rlimit
+                    },
+                ))
             }
             ResourceCapability::None => {
-                debug!("no sandbox capability detected; spawning ACP without isolation");
-                let conn = Self::spawn_with_options(
-                    request.command,
-                    request.args,
-                    request.working_dir,
-                    request.env,
-                    request.options,
-                )
-                .await?;
-                Ok((conn, AcpSandboxHandle::None))
+                if has_bwrap {
+                    // Filesystem sandbox active but no resource isolation.
+                    let mut cmd = Self::build_cmd_base(
+                        &effective_command,
+                        &effective_args,
+                        request.working_dir,
+                        request.env,
+                    );
+
+                    // SAFETY: setsid() is async-signal-safe, runs before exec.
+                    #[cfg(unix)]
+                    unsafe {
+                        cmd.pre_exec(|| {
+                            libc::setsid();
+                            csa_resource::rlimit::apply_oom_score_adj()
+                                .map_err(std::io::Error::other)
+                        });
+                    }
+
+                    let conn =
+                        Self::spawn_with_cmd_raw(cmd, request.working_dir, request.options).await?;
+                    Ok((conn, AcpSandboxHandle::Bwrap))
+                } else {
+                    debug!("no sandbox capability detected; spawning ACP without isolation");
+                    let conn = Self::spawn_with_options(
+                        request.command,
+                        request.args,
+                        request.working_dir,
+                        request.env,
+                        request.options,
+                    )
+                    .await?;
+                    Ok((conn, AcpSandboxHandle::None))
+                }
             }
         }
     }

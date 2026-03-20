@@ -587,7 +587,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         liveness_dead_seconds,
         initial_response_timeout_seconds,
     ) {
-        crate::pipeline_sandbox::SandboxResolution::Ok(opts) => opts,
+        crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
             let err = anyhow::anyhow!(msg);
             write_pre_exec_error_result(

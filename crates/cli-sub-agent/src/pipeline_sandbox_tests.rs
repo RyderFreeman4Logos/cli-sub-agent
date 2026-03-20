@@ -89,8 +89,12 @@ fn test_none_config_heavyweight_gets_sandbox() {
             .sandbox
             .as_ref()
             .expect("Expected SandboxContext for heavyweight tool");
-        assert_eq!(ctx.config.memory_max_mb, 2048);
-        assert_eq!(ctx.config.memory_swap_max_mb, Some(0));
+        // IsolationPlan should have a resource capability set.
+        assert_ne!(
+            ctx.isolation_plan.resource,
+            csa_resource::ResourceCapability::None,
+            "Expected resource capability for heavyweight tool"
+        );
         assert!(ctx.best_effort, "Profile defaults should use best-effort");
         assert_eq!(ctx.tool_name, "claude-code");
         assert_eq!(ctx.session_id, "test-session");

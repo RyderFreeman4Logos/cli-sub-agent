@@ -15,7 +15,7 @@ use csa_process::{
     ExecutionResult, SpawnOptions, StreamMode, spawn_tool_sandboxed, spawn_tool_with_options,
     wait_and_capture_with_idle_timeout,
 };
-use csa_resource::cgroup::SandboxConfig;
+use csa_resource::isolation_plan::IsolationPlan;
 use csa_session::state::{MetaSessionState, ToolState};
 
 #[path = "transport_meta.rs"]
@@ -28,7 +28,7 @@ pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
 
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
-    pub config: SandboxConfig,
+    pub isolation_plan: IsolationPlan,
     pub tool_name: String,
     pub best_effort: bool,
     pub session_id: String,
@@ -232,7 +232,7 @@ impl LegacyTransport {
     ) -> Result<TransportResult> {
         let (cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
 
-        let sandbox_cfg = options.sandbox.map(|s| &s.config);
+        let isolation_plan = options.sandbox.map(|s| &s.isolation_plan);
         let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let (tool_name, session_id) = options
             .sandbox
@@ -251,7 +251,7 @@ impl LegacyTransport {
             cmd,
             stdin_data.clone(),
             spawn_options,
-            sandbox_cfg,
+            isolation_plan,
             tool_name,
             session_id,
         )
@@ -457,7 +457,7 @@ impl Transport for AcpTransport {
             tracing::debug!(session_id, "resuming ACP session from tool state");
         }
 
-        let sandbox_config = options.sandbox.map(|s| s.config.clone());
+        let sandbox_plan = options.sandbox.map(|s| s.isolation_plan.clone());
         let sandbox_tool_name = options.sandbox.map(|s| s.tool_name.clone());
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
@@ -481,7 +481,7 @@ impl Transport for AcpTransport {
                     .build()
                     .map_err(|e| anyhow!("failed to build ACP runtime: {e}"))?;
 
-                if let Some(ref cfg) = sandbox_config {
+                if let Some(ref plan) = sandbox_plan {
                     let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
                     let sess_id = sandbox_session_id.as_deref().unwrap_or("");
                     match rt.block_on(run_acp_sandboxed(
@@ -498,7 +498,7 @@ impl Transport for AcpTransport {
                             .map(std::time::Duration::from_secs),
                         std::time::Duration::from_secs(acp_init_timeout_seconds),
                         std::time::Duration::from_secs(termination_grace_period_seconds),
-                        cfg,
+                        plan,
                         tool_name,
                         sess_id,
                         stream_stdout_to_stderr,

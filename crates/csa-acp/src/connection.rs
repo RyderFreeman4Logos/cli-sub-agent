@@ -16,7 +16,7 @@ use tokio::{process::Child, task::LocalSet};
 #[path = "connection_spawn.rs"]
 mod connection_spawn;
 pub use connection_spawn::{
-    AcpConnectionOptions, AcpSandboxHandle, AcpSandboxRequest, AcpSpawnRequest, SandboxConfig,
+    AcpConnectionOptions, AcpSandboxHandle, AcpSandboxRequest, AcpSpawnRequest,
 };
 
 #[path = "connection_fork.rs"]

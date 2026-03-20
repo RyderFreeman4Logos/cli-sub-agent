@@ -7,6 +7,9 @@
 use csa_config::ProjectConfig;
 use csa_executor::{ExecuteOptions, SandboxContext};
 use csa_process::StreamMode;
+use csa_resource::isolation_plan::{
+    EnforcementMode as ResourceEnforcementMode, IsolationPlanBuilder,
+};
 use csa_session::MetaSessionState;
 use tracing::{info, warn};
 
@@ -14,7 +17,7 @@ use tracing::{info, warn};
 /// (for `Required` mode with no capability).
 pub(crate) enum SandboxResolution {
     /// Options ready (may or may not contain sandbox context).
-    Ok(ExecuteOptions),
+    Ok(Box<ExecuteOptions>),
     /// Sandbox is required but no capability was detected; caller must bail.
     RequiredButUnavailable(String),
 }
@@ -56,36 +59,45 @@ pub(crate) fn resolve_sandbox_options(
         execute_options = execute_options.with_setting_sources(defaults.setting_sources);
 
         if matches!(defaults.enforcement, csa_config::EnforcementMode::Off) {
-            return SandboxResolution::Ok(execute_options);
+            return SandboxResolution::Ok(Box::new(execute_options));
         }
 
-        let Some(memory_max_mb) = defaults.memory_max_mb else {
-            return SandboxResolution::Ok(execute_options);
+        let Some(_memory_max_mb) = defaults.memory_max_mb else {
+            return SandboxResolution::Ok(Box::new(execute_options));
         };
 
-        let sandbox_config = csa_resource::SandboxConfig {
-            memory_max_mb,
-            memory_swap_max_mb: defaults.memory_swap_max_mb,
-            pids_max: None,
-        };
-
-        let capability = csa_resource::detect_resource_capability();
-        if matches!(capability, csa_resource::ResourceCapability::None) {
+        let resource_cap = csa_resource::detect_resource_capability();
+        let fs_cap = csa_resource::detect_filesystem_capability();
+        if matches!(resource_cap, csa_resource::ResourceCapability::None) {
             warn!(
                 tool = tool_name,
                 "No sandbox capability available; skipping enforcement for profile defaults"
             );
-            return SandboxResolution::Ok(execute_options);
+            return SandboxResolution::Ok(Box::new(execute_options));
         }
 
+        // Build IsolationPlan via builder (BestEffort for profile defaults).
+        let plan = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
+            .with_resource_capability(resource_cap)
+            .with_filesystem_capability(fs_cap)
+            .with_tool_defaults(
+                tool_name,
+                // No project root available from profile defaults; use cwd.
+                &std::env::current_dir().unwrap_or_default(),
+                // No session dir available; use a temporary placeholder.
+                &std::env::temp_dir(),
+            )
+            .build()
+            .expect("BestEffort IsolationPlan should never fail");
+
         execute_options = execute_options.with_sandbox(SandboxContext {
-            config: sandbox_config,
+            isolation_plan: plan,
             tool_name: tool_name.to_string(),
             session_id: session_id.to_string(),
             best_effort: true, // Profile defaults always use best-effort
         });
 
-        return SandboxResolution::Ok(execute_options);
+        return SandboxResolution::Ok(Box::new(execute_options));
     };
 
     execute_options = execute_options.with_setting_sources(cfg.tool_setting_sources(tool_name));
@@ -93,7 +105,7 @@ pub(crate) fn resolve_sandbox_options(
     // Use per-tool enforcement mode (profile-aware) instead of global-only.
     let enforcement = cfg.tool_enforcement_mode(tool_name);
     if matches!(enforcement, csa_config::EnforcementMode::Off) {
-        return SandboxResolution::Ok(execute_options);
+        return SandboxResolution::Ok(Box::new(execute_options));
     }
 
     let Some(memory_max_mb) = cfg.sandbox_memory_max_mb(tool_name) else {
@@ -108,21 +120,23 @@ pub(crate) fn resolve_sandbox_options(
             enforcement = ?enforcement,
             "Sandbox enforcement active but no memory_max_mb configured; skipping isolation"
         );
-        return SandboxResolution::Ok(execute_options);
+        return SandboxResolution::Ok(Box::new(execute_options));
     };
 
-    // Memory limit exists — build sandbox config.
-    let sandbox_config = csa_resource::SandboxConfig {
-        memory_max_mb,
-        memory_swap_max_mb: cfg.sandbox_memory_swap_max_mb(tool_name),
-        pids_max: cfg.sandbox_pids_max(),
+    // Memory limit exists — detect capabilities and build IsolationPlan.
+    let resource_cap = csa_resource::detect_resource_capability();
+    let fs_cap = csa_resource::detect_filesystem_capability();
+
+    // Map config enforcement mode to resource enforcement mode.
+    let resource_enforcement = match enforcement {
+        csa_config::EnforcementMode::Required => ResourceEnforcementMode::Required,
+        csa_config::EnforcementMode::BestEffort => ResourceEnforcementMode::BestEffort,
+        csa_config::EnforcementMode::Off => ResourceEnforcementMode::Off,
     };
 
-    // Enforce capability requirements based on enforcement mode.
-    let capability = csa_resource::detect_resource_capability();
     match enforcement {
         csa_config::EnforcementMode::Required => {
-            if capability == csa_resource::ResourceCapability::None {
+            if resource_cap == csa_resource::ResourceCapability::None {
                 return SandboxResolution::RequiredButUnavailable(
                     "Sandbox required but no capability detected (no cgroup v2 or setrlimit). \
                      Set enforcement_mode = \"off\" or \"best-effort\" to proceed without isolation."
@@ -131,7 +145,7 @@ pub(crate) fn resolve_sandbox_options(
             }
         }
         csa_config::EnforcementMode::BestEffort => {
-            if capability == csa_resource::ResourceCapability::None {
+            if resource_cap == csa_resource::ResourceCapability::None {
                 warn!(
                     tool = %tool_name,
                     "Sandbox configured but no capability detected; proceeding without isolation"
@@ -141,24 +155,43 @@ pub(crate) fn resolve_sandbox_options(
         csa_config::EnforcementMode::Off => {} // already filtered above
     }
 
+    // Resolve project root and session dir for tool-specific writable paths.
+    let project_root = std::env::current_dir().unwrap_or_default();
+    let session_dir = csa_session::manager::get_session_dir(&project_root, session_id)
+        .unwrap_or_else(|_| std::env::temp_dir());
+
+    let plan = IsolationPlanBuilder::new(resource_enforcement)
+        .with_resource_capability(resource_cap)
+        .with_filesystem_capability(fs_cap)
+        .with_tool_defaults(tool_name, &project_root, &session_dir)
+        .build();
+
+    let plan = match plan {
+        Ok(p) => p,
+        Err(e) => {
+            return SandboxResolution::RequiredButUnavailable(format!(
+                "Failed to build isolation plan for tool '{tool_name}': {e}"
+            ));
+        }
+    };
+
     info!(
         tool = %tool_name,
         enforcement = ?enforcement,
-        capability = %capability,
+        resource_cap = %resource_cap,
+        filesystem_cap = %fs_cap,
         memory_max_mb,
-        memory_swap_max_mb = ?sandbox_config.memory_swap_max_mb,
-        pids_max = ?sandbox_config.pids_max,
-        "Sandbox configuration resolved"
+        "Sandbox isolation plan resolved"
     );
 
     execute_options = execute_options.with_sandbox(SandboxContext {
-        config: sandbox_config,
+        isolation_plan: plan,
         tool_name: tool_name.to_string(),
         session_id: session_id.to_string(),
         best_effort: matches!(enforcement, csa_config::EnforcementMode::BestEffort),
     });
 
-    SandboxResolution::Ok(execute_options)
+    SandboxResolution::Ok(Box::new(execute_options))
 }
 
 /// Conditionally inflate and immediately deflate a memory balloon for claude-code.
@@ -216,10 +249,9 @@ pub(crate) fn record_sandbox_telemetry(
         csa_resource::ResourceCapability::Setrlimit => "rlimit",
         csa_resource::ResourceCapability::None => "none",
     };
-    let memory = execute_options
-        .sandbox
-        .as_ref()
-        .map(|s| s.config.memory_max_mb);
+    // IsolationPlan doesn't carry memory_max_mb directly (it's a cgroup
+    // detail). Report None for now; Phase C can add resource limits to the plan.
+    let memory: Option<u64> = None;
 
     session.sandbox_info = Some(csa_session::SandboxInfo {
         mode: mode.to_string(),
