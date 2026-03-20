@@ -36,6 +36,7 @@ fn test_resolve_initial_response_timeout_cli_override_over_config() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
     // CLI=60 overrides config=120.
     assert_eq!(
@@ -76,6 +77,7 @@ fn test_resolve_initial_response_timeout_config_zero_disables() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
     // Config=0 → disabled.
     assert_eq!(
@@ -113,6 +115,7 @@ fn test_resolve_initial_response_timeout_uses_config_value() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
     // Config=90, no CLI → Some(90).
     assert_eq!(

@@ -79,6 +79,7 @@ fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     }
 }
 
@@ -361,6 +362,7 @@ fn derive_scope_uncommitted() {
         spec: None,
         tier: None,
         force_ignore_tier_setting: false,
+        no_fs_sandbox: false,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -396,6 +398,7 @@ fn derive_scope_commit() {
         spec: None,
         tier: None,
         force_ignore_tier_setting: false,
+        no_fs_sandbox: false,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -431,6 +434,7 @@ fn derive_scope_range() {
         spec: None,
         tier: None,
         force_ignore_tier_setting: false,
+        no_fs_sandbox: false,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -466,6 +470,7 @@ fn derive_scope_files() {
         spec: None,
         tier: None,
         force_ignore_tier_setting: false,
+        no_fs_sandbox: false,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -501,6 +506,7 @@ fn derive_scope_default_branch() {
         spec: None,
         tier: None,
         force_ignore_tier_setting: false,
+        no_fs_sandbox: false,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }

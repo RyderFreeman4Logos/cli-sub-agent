@@ -22,6 +22,7 @@ async fn build_and_validate_executor_no_tiers_both_flags_equivalent() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result_true = build_and_validate_executor(
@@ -626,6 +627,7 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         None,
         None,
         None,
+        false, // no_fs_sandbox
     )
     .await
     .unwrap();
@@ -692,6 +694,7 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         None,
         None,
         ParentSessionSource::ExplicitOnly,
+        false, // no_fs_sandbox
     )
     .await
     .unwrap();

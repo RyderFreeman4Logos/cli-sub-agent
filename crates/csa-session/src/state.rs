@@ -125,6 +125,9 @@ pub struct SandboxInfo {
     /// Memory limit applied (MB), if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_max_mb: Option<u64>,
+    /// Filesystem isolation mode used: "bwrap", "landlock", or "none".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_mode: Option<String>,
 }
 
 /// Genealogy tracking for session parent-child relationships

@@ -232,6 +232,7 @@ pub(super) async fn execute_csa_step(
             None,
             None,
             None,
+            false, // no_fs_sandbox
         )
     };
     let result = match execute_once(session_arg.clone()).await {

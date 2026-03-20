@@ -71,6 +71,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) resolved_tier_name: Option<&'a str>,
     pub(crate) context_load_options: Option<&'a csa_executor::ContextLoadOptions>,
     pub(crate) memory_injection: pipeline::MemoryInjectionOptions,
+    pub(crate) no_fs_sandbox: bool,
 }
 
 pub(crate) enum RunLoopCompletion {
@@ -381,6 +382,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     fork_resolution.as_ref(),
                     &mut executed_session_id,
                     &mut pre_created_fork_session_id,
+                    request.no_fs_sandbox,
                 )
                 .await
             }
@@ -416,6 +418,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 fork_resolution.as_ref(),
                 &mut executed_session_id,
                 &mut pre_created_fork_session_id,
+                request.no_fs_sandbox,
             )
             .await
         }?;

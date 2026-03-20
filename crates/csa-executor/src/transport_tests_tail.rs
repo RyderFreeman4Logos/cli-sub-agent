@@ -560,8 +560,8 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
 #[tokio::test]
 async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_override() {
     if !matches!(
-        csa_resource::sandbox::detect_sandbox_capability(),
-        csa_resource::sandbox::SandboxCapability::CgroupV2
+        csa_resource::sandbox::detect_resource_capability(),
+        csa_resource::sandbox::ResourceCapability::CgroupV2
     ) {
         // This test specifically targets the cgroup sandbox spawn failure ->
         // best-effort unsandboxed fallback branch.
@@ -582,10 +582,15 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
     });
     let session = build_test_meta_session(temp.path().to_str().expect("utf8 temp path"));
     let sandbox = SandboxTransportConfig {
-        config: SandboxConfig {
-            memory_max_mb: 64,
-            memory_swap_max_mb: Some(0),
-            pids_max: Some(64),
+        isolation_plan: csa_resource::isolation_plan::IsolationPlan {
+            resource: csa_resource::sandbox::ResourceCapability::None,
+            filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::None,
+            writable_paths: Vec::new(),
+            env_overrides: std::collections::HashMap::new(),
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
         },
         tool_name: "gemini-cli".to_string(),
         best_effort: true,

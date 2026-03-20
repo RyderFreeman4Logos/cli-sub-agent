@@ -147,6 +147,10 @@ pub struct ReviewArgs {
     /// Override tier enforcement (bypass tier whitelist even when --tier is set)
     #[arg(long, alias = "force-tier")]
     pub force_ignore_tier_setting: bool,
+
+    /// Disable filesystem sandbox isolation (bwrap/landlock)
+    #[arg(long)]
+    pub no_fs_sandbox: bool,
 }
 
 impl ReviewArgs {
@@ -303,4 +307,8 @@ pub struct DebateArgs {
     /// Attach a file as context for the debate (content prepended to prompt)
     #[arg(long)]
     pub file: Option<String>,
+
+    /// Disable filesystem sandbox isolation (bwrap/landlock)
+    #[arg(long)]
+    pub no_fs_sandbox: bool,
 }

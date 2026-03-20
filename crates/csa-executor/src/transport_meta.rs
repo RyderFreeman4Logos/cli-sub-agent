@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use csa_acp::SessionConfig;
-use csa_resource::cgroup::SandboxConfig;
+use csa_resource::isolation_plan::IsolationPlan;
 use csa_session::state::MetaSessionState;
 
 use super::AcpTransport;
@@ -159,7 +159,7 @@ pub(super) async fn run_acp_sandboxed(
     initial_response_timeout: Option<std::time::Duration>,
     init_timeout: std::time::Duration,
     termination_grace_period: std::time::Duration,
-    sandbox_config: &SandboxConfig,
+    isolation_plan: &IsolationPlan,
     tool_name: &str,
     session_id: &str,
     stream_stdout_to_stderr: bool,
@@ -182,7 +182,7 @@ pub(super) async fn run_acp_sandboxed(
             },
         },
         Some(AcpSandboxRequest {
-            config: sandbox_config,
+            isolation_plan,
             tool_name,
             session_id,
         }),

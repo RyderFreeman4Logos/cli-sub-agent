@@ -213,6 +213,10 @@ pub enum Commands {
         /// Override tier enforcement (bypass tier whitelist even when --tier is set)
         #[arg(long, alias = "force-tier")]
         force_ignore_tier_setting: bool,
+
+        /// Disable filesystem sandbox isolation (bwrap/landlock)
+        #[arg(long)]
+        no_fs_sandbox: bool,
     },
 
     /// Manage sessions

@@ -31,6 +31,7 @@ fn empty_config() -> ProjectConfig {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     }
 }
 

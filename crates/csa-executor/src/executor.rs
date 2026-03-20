@@ -319,7 +319,7 @@ impl Executor {
         session_config: Option<SessionConfig>,
     ) -> Result<TransportResult> {
         let sandbox_transport = options.sandbox.as_ref().map(|ctx| SandboxTransportConfig {
-            config: ctx.config.clone(),
+            isolation_plan: ctx.isolation_plan.clone(),
             tool_name: ctx.tool_name.clone(),
             session_id: ctx.session_id.clone(),
             best_effort: ctx.best_effort,

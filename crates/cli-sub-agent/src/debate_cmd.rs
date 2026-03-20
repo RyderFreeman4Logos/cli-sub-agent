@@ -282,6 +282,7 @@ pub(crate) async fn handle_debate(
             None,
             None,
             Some(&global_config),
+            args.no_fs_sandbox,
         );
 
         let execute_result = if let Some(timeout_secs) = timeout_seconds {

@@ -95,6 +95,7 @@ pub(super) async fn run_persistent_with_timeout(
     fork_resolution: Option<&ForkResolution>,
     executed_session_id: &mut Option<String>,
     pre_created_fork_session_id: &mut Option<String>,
+    no_fs_sandbox: bool,
 ) -> Result<AttemptExecution> {
     match tokio::time::timeout(
         timeout_duration,
@@ -121,6 +122,7 @@ pub(super) async fn run_persistent_with_timeout(
             fork_resolution,
             executed_session_id,
             pre_created_fork_session_id,
+            no_fs_sandbox,
         ),
     )
     .await
@@ -153,6 +155,7 @@ pub(super) async fn run_persistent_without_timeout(
     fork_resolution: Option<&ForkResolution>,
     executed_session_id: &mut Option<String>,
     pre_created_fork_session_id: &mut Option<String>,
+    no_fs_sandbox: bool,
 ) -> Result<AttemptExecution> {
     execute_persistent(
         executor,
@@ -177,6 +180,7 @@ pub(super) async fn run_persistent_without_timeout(
         fork_resolution,
         executed_session_id,
         pre_created_fork_session_id,
+        no_fs_sandbox,
     )
     .await
 }
@@ -205,6 +209,7 @@ async fn execute_persistent(
     fork_resolution: Option<&ForkResolution>,
     executed_session_id: &mut Option<String>,
     pre_created_fork_session_id: &mut Option<String>,
+    no_fs_sandbox: bool,
 ) -> Result<AttemptExecution> {
     let effective_description = if let Some(fork_res) = fork_resolution {
         description.clone().or_else(|| {
@@ -245,6 +250,7 @@ async fn execute_persistent(
         remaining_run_timeout,
         Some(memory_injection),
         Some(global_config),
+        no_fs_sandbox,
     )
     .await
     {

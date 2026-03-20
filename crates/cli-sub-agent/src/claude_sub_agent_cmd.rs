@@ -101,6 +101,7 @@ pub(crate) async fn handle_claude_sub_agent(
         None, // claude-sub-agent does not set wall-clock timeout
         None, // claude-sub-agent does not use memory injection
         Some(&global_config),
+        false, // no_fs_sandbox
     )
     .await?;
 
@@ -297,6 +298,7 @@ mod tests {
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         }
     }
 
@@ -395,6 +397,7 @@ mod tests {
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         };
 
         let tools = get_auto_selectable_tools(Some(&cfg), std::path::Path::new("/tmp"));

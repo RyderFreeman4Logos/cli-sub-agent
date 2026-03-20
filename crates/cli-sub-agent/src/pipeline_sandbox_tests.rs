@@ -11,6 +11,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         120,
         600,
         Some(120),
+        false,
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -35,6 +36,7 @@ fn test_none_config_lightweight_skips_sandbox() {
         120,
         600,
         Some(120),
+        false,
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -63,6 +65,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         120,
         600,
         Some(120),
+        false,
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -76,8 +79,8 @@ fn test_none_config_heavyweight_gets_sandbox() {
         "Heavyweight tool should have setting_sources=Some(vec![])"
     );
 
-    let capability = csa_resource::detect_sandbox_capability();
-    if matches!(capability, csa_resource::SandboxCapability::None) {
+    let capability = csa_resource::detect_resource_capability();
+    if matches!(capability, csa_resource::ResourceCapability::None) {
         // On systems without sandbox capability, sandbox context is skipped
         assert!(
             opts.sandbox.is_none(),
@@ -89,8 +92,12 @@ fn test_none_config_heavyweight_gets_sandbox() {
             .sandbox
             .as_ref()
             .expect("Expected SandboxContext for heavyweight tool");
-        assert_eq!(ctx.config.memory_max_mb, 2048);
-        assert_eq!(ctx.config.memory_swap_max_mb, Some(0));
+        // IsolationPlan should have a resource capability set.
+        assert_ne!(
+            ctx.isolation_plan.resource,
+            csa_resource::ResourceCapability::None,
+            "Expected resource capability for heavyweight tool"
+        );
         assert!(ctx.best_effort, "Profile defaults should use best-effort");
         assert_eq!(ctx.tool_name, "claude-code");
         assert_eq!(ctx.session_id, "test-session");

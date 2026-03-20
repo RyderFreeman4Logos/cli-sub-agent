@@ -611,9 +611,10 @@ async fn execute_task(
         csa_process::StreamMode::BufferOnly,
         idle_timeout_seconds,
         initial_response_timeout_seconds,
-        None, // batch does not set wall-clock timeout
-        None, // batch does not use memory injection
-        None, // batch does not inject MCP (callers don't have global_config)
+        None,  // batch does not set wall-clock timeout
+        None,  // batch does not use memory injection
+        None,  // batch does not inject MCP (callers don't have global_config)
+        false, // no_fs_sandbox
     )
     .await;
 

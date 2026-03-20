@@ -12,6 +12,7 @@ toml.workspace = true
 serde.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+landlock.workspace = true
 libc.workspace = true
 tracing.workspace = true
 

@@ -136,6 +136,7 @@ fn build_executor_uses_project_tool_defaults_when_cli_missing() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), true).unwrap();
@@ -173,6 +174,7 @@ fn build_executor_ignores_project_tool_defaults_when_disabled() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let exec = build_executor(&ToolName::Codex, None, None, None, Some(&config), false).unwrap();
@@ -216,6 +218,7 @@ fn build_executor_cli_overrides_project_tool_defaults() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let exec = build_executor(
@@ -458,6 +461,7 @@ fn build_executor_model_spec_overrides_both() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     // Explicit model+thinking override model_spec's embedded values (CLI/config > tier spec).

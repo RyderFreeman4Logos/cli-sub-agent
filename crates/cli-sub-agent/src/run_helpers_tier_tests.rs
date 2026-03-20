@@ -36,6 +36,7 @@ fn resolve_tool_and_model_disabled_tool_explicit_errors() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = super::resolve_tool_and_model(
@@ -88,6 +89,7 @@ fn resolve_tool_and_model_disabled_tool_with_override_succeeds() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = super::resolve_tool_and_model(
@@ -140,6 +142,7 @@ fn resolve_tool_and_model_disabled_tool_model_spec_errors() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = super::resolve_tool_and_model(
@@ -208,6 +211,7 @@ fn config_with_tier(tier_name: &str, models: Vec<&str>, enabled_tools: &[&str]) 
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     }
 }
 
@@ -468,6 +472,7 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
     let result = super::resolve_tool_and_model(
         Some(ToolName::Codex),

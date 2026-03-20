@@ -7,6 +7,9 @@
 use csa_config::ProjectConfig;
 use csa_executor::{ExecuteOptions, SandboxContext};
 use csa_process::StreamMode;
+use csa_resource::isolation_plan::{
+    EnforcementMode as ResourceEnforcementMode, IsolationPlanBuilder,
+};
 use csa_session::MetaSessionState;
 use tracing::{info, warn};
 
@@ -14,7 +17,7 @@ use tracing::{info, warn};
 /// (for `Required` mode with no capability).
 pub(crate) enum SandboxResolution {
     /// Options ready (may or may not contain sandbox context).
-    Ok(ExecuteOptions),
+    Ok(Box<ExecuteOptions>),
     /// Sandbox is required but no capability was detected; caller must bail.
     RequiredButUnavailable(String),
 }
@@ -24,6 +27,10 @@ pub(crate) enum SandboxResolution {
 /// Returns `SandboxResolution::Ok` with the options (possibly enriched with
 /// `SandboxContext`) or `SandboxResolution::RequiredButUnavailable` when
 /// enforcement is `Required` but the host lacks both cgroup v2 and setrlimit.
+///
+/// When `no_fs_sandbox` is `true`, filesystem isolation is forcibly disabled
+/// regardless of config (equivalent to `enforcement_mode = "off"` for FS only).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_sandbox_options(
     config: Option<&ProjectConfig>,
     tool_name: &str,
@@ -32,6 +39,7 @@ pub(crate) fn resolve_sandbox_options(
     idle_timeout_seconds: u64,
     liveness_dead_seconds: u64,
     initial_response_timeout_seconds: Option<u64>,
+    no_fs_sandbox: bool,
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -56,36 +64,54 @@ pub(crate) fn resolve_sandbox_options(
         execute_options = execute_options.with_setting_sources(defaults.setting_sources);
 
         if matches!(defaults.enforcement, csa_config::EnforcementMode::Off) {
-            return SandboxResolution::Ok(execute_options);
+            return SandboxResolution::Ok(Box::new(execute_options));
         }
 
-        let Some(memory_max_mb) = defaults.memory_max_mb else {
-            return SandboxResolution::Ok(execute_options);
+        let Some(_memory_max_mb) = defaults.memory_max_mb else {
+            return SandboxResolution::Ok(Box::new(execute_options));
         };
 
-        let sandbox_config = csa_resource::SandboxConfig {
-            memory_max_mb,
-            memory_swap_max_mb: defaults.memory_swap_max_mb,
-            pids_max: None,
+        let resource_cap = csa_resource::detect_resource_capability();
+        let fs_cap = if no_fs_sandbox {
+            csa_resource::FilesystemCapability::None
+        } else {
+            csa_resource::detect_filesystem_capability()
         };
-
-        let capability = csa_resource::detect_sandbox_capability();
-        if matches!(capability, csa_resource::SandboxCapability::None) {
+        if matches!(resource_cap, csa_resource::ResourceCapability::None) {
             warn!(
                 tool = tool_name,
                 "No sandbox capability available; skipping enforcement for profile defaults"
             );
-            return SandboxResolution::Ok(execute_options);
+            return SandboxResolution::Ok(Box::new(execute_options));
         }
 
+        // Build IsolationPlan via builder (BestEffort for profile defaults).
+        let plan = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
+            .with_resource_capability(resource_cap)
+            .with_filesystem_capability(fs_cap)
+            .with_resource_limits(
+                defaults.memory_max_mb,
+                defaults.memory_swap_max_mb,
+                None, // pids_max not available from profile defaults
+            )
+            .with_tool_defaults(
+                tool_name,
+                // No project root available from profile defaults; use cwd.
+                &std::env::current_dir().unwrap_or_default(),
+                // No session dir available; use a temporary placeholder.
+                &std::env::temp_dir(),
+            )
+            .build()
+            .expect("BestEffort IsolationPlan should never fail");
+
         execute_options = execute_options.with_sandbox(SandboxContext {
-            config: sandbox_config,
+            isolation_plan: plan,
             tool_name: tool_name.to_string(),
             session_id: session_id.to_string(),
             best_effort: true, // Profile defaults always use best-effort
         });
 
-        return SandboxResolution::Ok(execute_options);
+        return SandboxResolution::Ok(Box::new(execute_options));
     };
 
     execute_options = execute_options.with_setting_sources(cfg.tool_setting_sources(tool_name));
@@ -93,7 +119,7 @@ pub(crate) fn resolve_sandbox_options(
     // Use per-tool enforcement mode (profile-aware) instead of global-only.
     let enforcement = cfg.tool_enforcement_mode(tool_name);
     if matches!(enforcement, csa_config::EnforcementMode::Off) {
-        return SandboxResolution::Ok(execute_options);
+        return SandboxResolution::Ok(Box::new(execute_options));
     }
 
     let Some(memory_max_mb) = cfg.sandbox_memory_max_mb(tool_name) else {
@@ -108,21 +134,44 @@ pub(crate) fn resolve_sandbox_options(
             enforcement = ?enforcement,
             "Sandbox enforcement active but no memory_max_mb configured; skipping isolation"
         );
-        return SandboxResolution::Ok(execute_options);
+        return SandboxResolution::Ok(Box::new(execute_options));
     };
 
-    // Memory limit exists — build sandbox config.
-    let sandbox_config = csa_resource::SandboxConfig {
-        memory_max_mb,
-        memory_swap_max_mb: cfg.sandbox_memory_swap_max_mb(tool_name),
-        pids_max: cfg.sandbox_pids_max(),
+    // Memory limit exists — detect capabilities and build IsolationPlan.
+    let resource_cap = csa_resource::detect_resource_capability();
+
+    // Resolve filesystem enforcement independently from resource enforcement.
+    let fs_enforcement = if no_fs_sandbox {
+        ResourceEnforcementMode::Off
+    } else {
+        let fs_config = &cfg.filesystem_sandbox;
+        match fs_config
+            .enforcement_mode
+            .as_deref()
+            .unwrap_or("best-effort")
+        {
+            "off" => ResourceEnforcementMode::Off,
+            "required" => ResourceEnforcementMode::Required,
+            _ => ResourceEnforcementMode::BestEffort,
+        }
     };
 
-    // Enforce capability requirements based on enforcement mode.
-    let capability = csa_resource::detect_sandbox_capability();
+    let fs_cap = if matches!(fs_enforcement, ResourceEnforcementMode::Off) {
+        csa_resource::FilesystemCapability::None
+    } else {
+        csa_resource::detect_filesystem_capability()
+    };
+
+    // Map config enforcement mode to resource enforcement mode.
+    let resource_enforcement = match enforcement {
+        csa_config::EnforcementMode::Required => ResourceEnforcementMode::Required,
+        csa_config::EnforcementMode::BestEffort => ResourceEnforcementMode::BestEffort,
+        csa_config::EnforcementMode::Off => ResourceEnforcementMode::Off,
+    };
+
     match enforcement {
         csa_config::EnforcementMode::Required => {
-            if capability == csa_resource::SandboxCapability::None {
+            if resource_cap == csa_resource::ResourceCapability::None {
                 return SandboxResolution::RequiredButUnavailable(
                     "Sandbox required but no capability detected (no cgroup v2 or setrlimit). \
                      Set enforcement_mode = \"off\" or \"best-effort\" to proceed without isolation."
@@ -131,7 +180,7 @@ pub(crate) fn resolve_sandbox_options(
             }
         }
         csa_config::EnforcementMode::BestEffort => {
-            if capability == csa_resource::SandboxCapability::None {
+            if resource_cap == csa_resource::ResourceCapability::None {
                 warn!(
                     tool = %tool_name,
                     "Sandbox configured but no capability detected; proceeding without isolation"
@@ -141,24 +190,62 @@ pub(crate) fn resolve_sandbox_options(
         csa_config::EnforcementMode::Off => {} // already filtered above
     }
 
+    // Resolve project root and session dir for tool-specific writable paths.
+    let project_root = std::env::current_dir().unwrap_or_default();
+    let session_dir = csa_session::manager::get_session_dir(&project_root, session_id)
+        .unwrap_or_else(|_| std::env::temp_dir());
+
+    let memory_swap_max_mb = cfg.sandbox_memory_swap_max_mb(tool_name);
+    let pids_max = cfg.sandbox_pids_max();
+
+    let mut builder = IsolationPlanBuilder::new(resource_enforcement)
+        .with_filesystem_enforcement(fs_enforcement)
+        .with_resource_capability(resource_cap)
+        .with_filesystem_capability(fs_cap)
+        .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
+        .with_tool_defaults(tool_name, &project_root, &session_dir);
+
+    // Apply extra writable paths from [filesystem_sandbox] config.
+    if !no_fs_sandbox {
+        let fs_config = &cfg.filesystem_sandbox;
+        for path in &fs_config.extra_writable {
+            builder = builder.with_writable_path(path.clone());
+        }
+        if let Some(tool_paths) = fs_config.tool_writable_overrides.get(tool_name) {
+            for path in tool_paths {
+                builder = builder.with_writable_path(path.clone());
+            }
+        }
+    }
+
+    let plan = builder.build();
+
+    let plan = match plan {
+        Ok(p) => p,
+        Err(e) => {
+            return SandboxResolution::RequiredButUnavailable(format!(
+                "Failed to build isolation plan for tool '{tool_name}': {e}"
+            ));
+        }
+    };
+
     info!(
         tool = %tool_name,
         enforcement = ?enforcement,
-        capability = %capability,
+        resource_cap = %resource_cap,
+        filesystem_cap = %fs_cap,
         memory_max_mb,
-        memory_swap_max_mb = ?sandbox_config.memory_swap_max_mb,
-        pids_max = ?sandbox_config.pids_max,
-        "Sandbox configuration resolved"
+        "Sandbox isolation plan resolved"
     );
 
     execute_options = execute_options.with_sandbox(SandboxContext {
-        config: sandbox_config,
+        isolation_plan: plan,
         tool_name: tool_name.to_string(),
         session_id: session_id.to_string(),
         best_effort: matches!(enforcement, csa_config::EnforcementMode::BestEffort),
     });
 
-    SandboxResolution::Ok(execute_options)
+    SandboxResolution::Ok(Box::new(execute_options))
 }
 
 /// Conditionally inflate and immediately deflate a memory balloon for claude-code.
@@ -210,26 +297,38 @@ pub(crate) fn record_sandbox_telemetry(
         return;
     }
 
-    let capability = csa_resource::detect_sandbox_capability();
+    let capability = csa_resource::detect_resource_capability();
     let mode = match capability {
-        csa_resource::SandboxCapability::CgroupV2 => "cgroup",
-        csa_resource::SandboxCapability::Setrlimit => "rlimit",
-        csa_resource::SandboxCapability::None => "none",
+        csa_resource::ResourceCapability::CgroupV2 => "cgroup",
+        csa_resource::ResourceCapability::Setrlimit => "rlimit",
+        csa_resource::ResourceCapability::None => "none",
     };
-    let memory = execute_options
+    let memory: Option<u64> = execute_options
         .sandbox
         .as_ref()
-        .map(|s| s.config.memory_max_mb);
+        .and_then(|ctx| ctx.isolation_plan.memory_max_mb);
+
+    // Capture filesystem isolation mode from the isolation plan.
+    let fs_mode = execute_options
+        .sandbox
+        .as_ref()
+        .map(|ctx| match ctx.isolation_plan.filesystem {
+            csa_resource::FilesystemCapability::Bwrap => "bwrap".to_string(),
+            csa_resource::FilesystemCapability::Landlock => "landlock".to_string(),
+            csa_resource::FilesystemCapability::None => "none".to_string(),
+        });
 
     session.sandbox_info = Some(csa_session::SandboxInfo {
         mode: mode.to_string(),
         memory_max_mb: memory,
+        filesystem_mode: fs_mode.clone(),
     });
 
     info!(
         session = %session.meta_session_id,
         sandbox_mode = mode,
         memory_max_mb = ?memory,
+        filesystem_mode = ?fs_mode,
         "Sandbox telemetry recorded in session state"
     );
 }

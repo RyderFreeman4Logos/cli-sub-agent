@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 /// Resource-isolation mechanism available on this host.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SandboxCapability {
+pub enum ResourceCapability {
     /// cgroup v2 with systemd user-scope support (best isolation).
     CgroupV2,
     /// POSIX `setrlimit` — PID limit only (`RLIMIT_NPROC`).
@@ -20,7 +20,7 @@ pub enum SandboxCapability {
     None,
 }
 
-impl std::fmt::Display for SandboxCapability {
+impl std::fmt::Display for ResourceCapability {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::CgroupV2 => write!(f, "CgroupV2"),
@@ -31,24 +31,24 @@ impl std::fmt::Display for SandboxCapability {
 }
 
 /// Process-wide cached probe result.
-static CAPABILITY: OnceLock<SandboxCapability> = OnceLock::new();
+static CAPABILITY: OnceLock<ResourceCapability> = OnceLock::new();
 
 /// Return the detected sandbox capability, probing only once per process.
-pub fn detect_sandbox_capability() -> SandboxCapability {
+pub fn detect_resource_capability() -> ResourceCapability {
     *CAPABILITY.get_or_init(probe_capability)
 }
 
 /// Perform the actual detection (called at most once).
-fn probe_capability() -> SandboxCapability {
+fn probe_capability() -> ResourceCapability {
     if has_cgroup_v2() && has_systemd_user_scope() {
-        return SandboxCapability::CgroupV2;
+        return ResourceCapability::CgroupV2;
     }
 
     if has_setrlimit() {
-        return SandboxCapability::Setrlimit;
+        return ResourceCapability::Setrlimit;
     }
 
-    SandboxCapability::None
+    ResourceCapability::None
 }
 
 /// Check whether cgroup v2 unified hierarchy is mounted.
@@ -100,16 +100,16 @@ mod tests {
 
     #[test]
     fn test_detect_returns_consistent_result() {
-        let first = detect_sandbox_capability();
-        let second = detect_sandbox_capability();
+        let first = detect_resource_capability();
+        let second = detect_resource_capability();
         assert_eq!(first, second, "cached result must be stable");
     }
 
     #[test]
     fn test_display_variants() {
-        assert_eq!(SandboxCapability::CgroupV2.to_string(), "CgroupV2");
-        assert_eq!(SandboxCapability::Setrlimit.to_string(), "Setrlimit");
-        assert_eq!(SandboxCapability::None.to_string(), "None");
+        assert_eq!(ResourceCapability::CgroupV2.to_string(), "CgroupV2");
+        assert_eq!(ResourceCapability::Setrlimit.to_string(), "Setrlimit");
+        assert_eq!(ResourceCapability::None.to_string(), "None");
     }
 
     #[test]

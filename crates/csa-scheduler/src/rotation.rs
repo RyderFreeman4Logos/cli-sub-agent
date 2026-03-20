@@ -309,6 +309,7 @@ mod tests {
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         }
     }
 
@@ -668,6 +669,7 @@ mod tests {
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         };
         assert_eq!(resolve_tier_name(&config, "anything"), None);
     }
@@ -735,6 +737,7 @@ mod tests {
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         }
     }
 

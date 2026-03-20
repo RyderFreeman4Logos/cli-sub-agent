@@ -245,6 +245,7 @@ pub fn init_project(
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         }
     } else {
         ProjectConfig {
@@ -273,6 +274,7 @@ pub fn init_project(
             hooks: Default::default(),
             execution: Default::default(),
             vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
         }
     };
 

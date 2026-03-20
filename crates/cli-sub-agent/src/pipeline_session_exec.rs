@@ -1,12 +1,5 @@
 //! Session-bound execution pipeline: resolve-or-create session, run tool,
 //! post-process results.
-//!
-//! Three entry points with increasing control surface:
-//! - [`execute_with_session`] — simplest, returns only the execution result.
-//! - [`execute_with_session_and_meta`] — also returns meta session ID and
-//!   provider session ID.
-//! - [`execute_with_session_and_meta_with_parent_source`] — additionally
-//!   controls how the parent session ID is resolved.
 
 use anyhow::{Context, Result};
 use std::path::Path;
@@ -58,6 +51,7 @@ pub(crate) async fn execute_with_session(
     wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
+    no_fs_sandbox: bool,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -79,6 +73,7 @@ pub(crate) async fn execute_with_session(
         wall_timeout,
         memory_injection,
         global_config,
+        no_fs_sandbox,
     )
     .await?;
 
@@ -107,6 +102,7 @@ pub(crate) async fn execute_with_session_and_meta(
     wall_timeout: Option<Duration>,
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
+    no_fs_sandbox: bool,
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
         executor,
@@ -129,6 +125,7 @@ pub(crate) async fn execute_with_session_and_meta(
         memory_injection,
         global_config,
         ParentSessionSource::ExplicitOrEnv,
+        no_fs_sandbox,
     )
     .await
 }
@@ -156,6 +153,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
     parent_session_source: ParentSessionSource,
+    no_fs_sandbox: bool,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg
@@ -586,8 +584,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         idle_timeout_seconds,
         liveness_dead_seconds,
         initial_response_timeout_seconds,
+        no_fs_sandbox,
     ) {
-        crate::pipeline_sandbox::SandboxResolution::Ok(opts) => opts,
+        crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
             let err = anyhow::anyhow!(msg);
             write_pre_exec_error_result(

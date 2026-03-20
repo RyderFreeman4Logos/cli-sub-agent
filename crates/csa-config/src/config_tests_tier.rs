@@ -47,6 +47,7 @@ fn test_resolve_tier_default_selection() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = config.resolve_tier_tool("default");
@@ -96,6 +97,7 @@ fn test_resolve_tier_fallback_to_tier3() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     // Should fallback to tier3
@@ -161,6 +163,7 @@ fn test_resolve_tier_skips_disabled_tools() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     // Should skip disabled gemini-cli and select codex
@@ -204,6 +207,7 @@ fn test_resolve_alias() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     // Resolve alias
@@ -261,6 +265,7 @@ fn enabled_tier_models_returns_all_when_no_tools_disabled() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let models = config.enabled_tier_models("tier-1");
@@ -315,6 +320,7 @@ fn enabled_tier_models_excludes_disabled_tool() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let models = config.enabled_tier_models("tier-3");
@@ -344,6 +350,7 @@ fn enabled_tier_models_returns_empty_for_unknown_tier() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert!(config.enabled_tier_models("nonexistent").is_empty());
@@ -401,6 +408,7 @@ fn enabled_tier_models_returns_empty_when_all_tools_disabled() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert!(config.enabled_tier_models("tier-1").is_empty());
@@ -460,6 +468,7 @@ fn filtered_skips_restricted_tool_when_needs_edit() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     // needs_edit=true → should skip gemini-cli, select codex
@@ -523,6 +532,7 @@ fn filtered_returns_none_when_all_restricted_and_needs_edit() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     let result = config.resolve_tier_tool_filtered("default", true);
@@ -563,6 +573,7 @@ fn test_resolve_tier_selector_direct_tier() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert_eq!(
@@ -606,6 +617,7 @@ fn test_resolve_tier_selector_alias() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert_eq!(
@@ -661,6 +673,7 @@ fn test_resolve_tier_selector_direct_wins_on_collision() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     // Direct tier name wins over mapping alias
@@ -690,6 +703,7 @@ fn test_resolve_tier_selector_nonexistent() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert_eq!(config.resolve_tier_selector("unknown"), None);
@@ -718,6 +732,7 @@ fn test_resolve_tier_selector_alias_to_nonexistent_tier() {
         hooks: Default::default(),
         execution: Default::default(),
         vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
     };
 
     assert_eq!(config.resolve_tier_selector("broken"), None);
