@@ -19,6 +19,10 @@ fn shell_escape(s: &str) -> String {
 /// Substitute template variables in a command string using single-pass parsing.
 ///
 /// Variables are specified as `{key}` and replaced with shell-escaped values.
+/// Raw (unescaped) substitution uses `{!key}` — the `!` prefix bypasses
+/// shell escaping. This is safe only for internally-generated content
+/// (e.g., pre-formatted cargo flags from validated crate names).
+///
 /// Unrecognized placeholders are left as-is. Already-substituted content is never
 /// re-scanned, preventing double-substitution attacks.
 fn substitute_variables(template: &str, variables: &HashMap<String, String>) -> String {
@@ -37,8 +41,18 @@ fn substitute_variables(template: &str, variables: &HashMap<String, String>) -> 
                 key.push(inner_ch);
             }
             if found_close {
-                if let Some(value) = variables.get(&key) {
-                    result.push_str(&shell_escape(value));
+                // {!key} = raw (unescaped), {key} = shell-escaped
+                let (raw, lookup_key) = if let Some(stripped) = key.strip_prefix('!') {
+                    (true, stripped)
+                } else {
+                    (false, key.as_str())
+                };
+                if let Some(value) = variables.get(lookup_key) {
+                    if raw {
+                        result.push_str(value);
+                    } else {
+                        result.push_str(&shell_escape(value));
+                    }
                 } else {
                     // Keep unresolved placeholders as-is
                     result.push('{');
@@ -552,5 +566,41 @@ mod tests {
         let result = substitute_variables("echo {}", &vars);
         // {} has an empty key, which matches the empty-string key
         assert_eq!(result, "echo 'empty_key_value'");
+    }
+
+    #[test]
+    fn test_substitute_raw_variable() {
+        let mut vars = HashMap::new();
+        vars.insert(
+            "CRATES_FLAGS".to_string(),
+            "-p 'csa-hooks' -p 'csa-session'".to_string(),
+        );
+        let template = "cargo clippy {!CRATES_FLAGS} --message-format=short";
+        let result = substitute_variables(template, &vars);
+        assert_eq!(
+            result,
+            "cargo clippy -p 'csa-hooks' -p 'csa-session' --message-format=short"
+        );
+    }
+
+    #[test]
+    fn test_substitute_raw_unresolved_kept_as_is() {
+        let vars = HashMap::new();
+        let template = "echo {!unknown}";
+        let result = substitute_variables(template, &vars);
+        assert_eq!(result, "echo {!unknown}");
+    }
+
+    #[test]
+    fn test_substitute_escaped_vs_raw_same_key() {
+        let mut vars = HashMap::new();
+        vars.insert("FLAGS".to_string(), "-p crate1".to_string());
+        // Escaped: value wrapped in quotes
+        assert_eq!(
+            substitute_variables("cmd {FLAGS}", &vars),
+            "cmd '-p crate1'"
+        );
+        // Raw: value injected directly
+        assert_eq!(substitute_variables("cmd {!FLAGS}", &vars), "cmd -p crate1");
     }
 }

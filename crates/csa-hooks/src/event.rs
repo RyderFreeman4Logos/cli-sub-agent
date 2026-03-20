@@ -96,9 +96,9 @@ impl HookEvent {
             HookEvent::SessionComplete => Some(
                 "cd {sessions_root} && git add {session_id}/ && git commit -m 'session {session_id} complete' -q --allow-empty",
             ),
-            HookEvent::PostEdit => Some(
-                "cargo clippy --package {CHANGED_CRATES} --message-format=short 2>&1 | head -30",
-            ),
+            HookEvent::PostEdit => {
+                Some("cargo clippy {!CHANGED_CRATES_FLAGS} --message-format=short 2>&1 | head -30")
+            }
             HookEvent::TodoCreate
             | HookEvent::TodoSave
             | HookEvent::PreRun

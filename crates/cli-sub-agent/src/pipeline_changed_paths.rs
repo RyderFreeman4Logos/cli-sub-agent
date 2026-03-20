@@ -6,20 +6,42 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// Fingerprint data extracted from a `GitWorkspaceSnapshot` for change detection.
+///
+/// When status text is identical between pre/post snapshots, fingerprint
+/// comparison catches content-level mutations that don't alter porcelain output
+/// (e.g., a file modified before `csa run` and modified again during it).
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SnapshotFingerprints {
+    pub(crate) tracked_worktree: Option<u64>,
+    pub(crate) tracked_index: Option<u64>,
+    pub(crate) untracked: Option<u64>,
+}
+
 /// Compute changed file paths by diffing pre-run and post-run git status.
+///
+/// When fingerprints are provided and status text is identical but fingerprints
+/// differ, all paths from the post-status are reported (since fingerprints are
+/// aggregate hashes and cannot pinpoint individual files).
 ///
 /// Returns an empty vec when either snapshot is unavailable (e.g., not inside
 /// a git worktree, or for events that fire before tool execution).
 pub(crate) fn compute_changed_paths(
     pre_status: Option<&str>,
     post_status: Option<&str>,
+    pre_fingerprints: Option<&SnapshotFingerprints>,
+    post_fingerprints: Option<&SnapshotFingerprints>,
 ) -> Vec<String> {
     let (Some(pre), Some(post)) = (pre_status, post_status) else {
         return Vec::new();
     };
 
-    // If status is identical, nothing changed.
+    // If status is identical, check fingerprints for content-level changes.
     if pre == post {
+        if fingerprints_differ(pre_fingerprints, post_fingerprints) {
+            // Fingerprints are aggregate — report all paths from post-status.
+            return paths_from_porcelain_status(post).into_iter().collect();
+        }
         return Vec::new();
     }
 
@@ -62,6 +84,19 @@ pub(crate) fn compute_changed_paths(
     }
 
     changed.into_iter().collect()
+}
+
+/// Returns true when fingerprints are available and at least one differs.
+fn fingerprints_differ(
+    pre: Option<&SnapshotFingerprints>,
+    post: Option<&SnapshotFingerprints>,
+) -> bool {
+    let (Some(pre), Some(post)) = (pre, post) else {
+        return false;
+    };
+    pre.tracked_worktree != post.tracked_worktree
+        || pre.tracked_index != post.tracked_index
+        || pre.untracked != post.untracked
 }
 
 /// Derive workspace crate names from a list of changed file paths.
@@ -156,6 +191,19 @@ pub(crate) fn format_changed_paths_json(paths: &[String]) -> String {
 /// Format changed crates as a space-separated string for `{CHANGED_CRATES}`.
 pub(crate) fn format_changed_crates(crates: &[String]) -> String {
     crates.join(" ")
+}
+
+/// Format changed crates as pre-escaped `-p <crate>` flags for cargo commands.
+///
+/// Produces `-p crate1 -p crate2` which can be injected raw into shell commands
+/// via `{!CHANGED_CRATES_FLAGS}` (raw substitution). Each crate name is
+/// individually shell-escaped to prevent injection.
+pub(crate) fn format_changed_crates_flags(crates: &[String]) -> String {
+    crates
+        .iter()
+        .map(|c| format!("-p '{}'", c.replace('\'', "'\\''")))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // -- Internal helpers --
@@ -359,22 +407,22 @@ members = ["crates/*"]
 
     #[test]
     fn compute_changed_paths_no_snapshots() {
-        assert!(compute_changed_paths(None, None).is_empty());
-        assert!(compute_changed_paths(Some(""), None).is_empty());
-        assert!(compute_changed_paths(None, Some("")).is_empty());
+        assert!(compute_changed_paths(None, None, None, None).is_empty());
+        assert!(compute_changed_paths(Some(""), None, None, None).is_empty());
+        assert!(compute_changed_paths(None, Some(""), None, None).is_empty());
     }
 
     #[test]
     fn compute_changed_paths_identical_status() {
         let status = " M src/lib.rs";
-        assert!(compute_changed_paths(Some(status), Some(status)).is_empty());
+        assert!(compute_changed_paths(Some(status), Some(status), None, None).is_empty());
     }
 
     #[test]
     fn compute_changed_paths_new_file_in_post() {
         let pre = " M src/lib.rs";
         let post = " M src/lib.rs\n?? src/new.rs";
-        let paths = compute_changed_paths(Some(pre), Some(post));
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
         assert!(paths.contains(&"src/new.rs".to_string()));
     }
 
@@ -382,7 +430,7 @@ members = ["crates/*"]
     fn compute_changed_paths_file_deleted_in_post() {
         let pre = " M src/old.rs\n M src/lib.rs";
         let post = " M src/lib.rs";
-        let paths = compute_changed_paths(Some(pre), Some(post));
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
         assert!(paths.contains(&"src/old.rs".to_string()));
     }
 
@@ -390,8 +438,44 @@ members = ["crates/*"]
     fn compute_changed_paths_nul_separated() {
         let pre = " M src/lib.rs\0";
         let post = " M src/lib.rs\0?? src/new.rs\0";
-        let paths = compute_changed_paths(Some(pre), Some(post));
+        let paths = compute_changed_paths(Some(pre), Some(post), None, None);
         assert!(paths.contains(&"src/new.rs".to_string()));
+    }
+
+    #[test]
+    fn compute_changed_paths_identical_status_different_fingerprints() {
+        let status = " M src/lib.rs";
+        let pre_fp = SnapshotFingerprints {
+            tracked_worktree: Some(111),
+            tracked_index: Some(222),
+            untracked: Some(333),
+        };
+        let post_fp = SnapshotFingerprints {
+            tracked_worktree: Some(999),
+            tracked_index: Some(222),
+            untracked: Some(333),
+        };
+        let paths =
+            compute_changed_paths(Some(status), Some(status), Some(&pre_fp), Some(&post_fp));
+        assert!(
+            paths.contains(&"src/lib.rs".to_string()),
+            "should detect change via fingerprint even when status text is identical"
+        );
+    }
+
+    #[test]
+    fn compute_changed_paths_identical_status_identical_fingerprints() {
+        let status = " M src/lib.rs";
+        let fp = SnapshotFingerprints {
+            tracked_worktree: Some(111),
+            tracked_index: Some(222),
+            untracked: Some(333),
+        };
+        let paths = compute_changed_paths(Some(status), Some(status), Some(&fp), Some(&fp));
+        assert!(
+            paths.is_empty(),
+            "no changes when both status and fingerprints are identical"
+        );
     }
 
     // -- format tests --
@@ -418,5 +502,27 @@ members = ["crates/*"]
     #[test]
     fn format_changed_crates_empty() {
         assert_eq!(format_changed_crates(&[]), "");
+    }
+
+    // -- format_changed_crates_flags tests --
+
+    #[test]
+    fn format_changed_crates_flags_single() {
+        let crates = vec!["csa-hooks".to_string()];
+        assert_eq!(format_changed_crates_flags(&crates), "-p 'csa-hooks'");
+    }
+
+    #[test]
+    fn format_changed_crates_flags_multi() {
+        let crates = vec!["csa-hooks".to_string(), "csa-session".to_string()];
+        assert_eq!(
+            format_changed_crates_flags(&crates),
+            "-p 'csa-hooks' -p 'csa-session'"
+        );
+    }
+
+    #[test]
+    fn format_changed_crates_flags_empty() {
+        assert_eq!(format_changed_crates_flags(&[]), "");
     }
 }

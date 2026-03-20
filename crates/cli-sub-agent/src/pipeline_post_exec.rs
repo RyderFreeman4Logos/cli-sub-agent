@@ -134,6 +134,8 @@ pub(crate) async fn process_execution_result(
     let changed_paths_json =
         crate::pipeline::changed_paths::format_changed_paths_json(&ctx.changed_paths);
     let changed_crates_str = crate::pipeline::changed_paths::format_changed_crates(&changed_crates);
+    let changed_crates_flags =
+        crate::pipeline::changed_paths::format_changed_crates_flags(&changed_crates);
 
     // Fire PostRun and SessionComplete hooks, capture memory
     let hook_vars = std::collections::HashMap::from([
@@ -147,6 +149,7 @@ pub(crate) async fn process_execution_result(
         ("exit_code".to_string(), result.exit_code.to_string()),
         ("CHANGED_PATHS".to_string(), changed_paths_json),
         ("CHANGED_CRATES".to_string(), changed_crates_str),
+        ("CHANGED_CRATES_FLAGS".to_string(), changed_crates_flags),
     ]);
 
     // PostRun hook: fires after every tool execution

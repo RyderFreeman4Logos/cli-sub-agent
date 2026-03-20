@@ -163,8 +163,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
     let memory_project_key = resolve_memory_project_key(project_root);
-
-    // Resolve or create session
     let mut resolved_provider_session_id: Option<String> = None;
     let mut session = if let Some(ref session_id) = session_arg {
         let resolution =
@@ -193,13 +191,10 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             parent_id.as_deref(),
             Some(tool.as_str()),
         )?;
-        // Populate task context on newly created sessions
         new_session.task_context = csa_session::TaskContext {
             task_type: task_type.map(|s| s.to_string()),
             tier_name: tier_name.map(|s| s.to_string()),
         };
-        // Initialize token budget from tier config (if configured).
-        // TokenBudget is created when either token_budget or max_turns is set.
         if let (Some(cfg), Some(tier)) = (config, tier_name)
             && let Some(tier_cfg) = cfg.tiers.get(tier)
             && (tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some())
@@ -218,7 +213,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         new_session
     };
 
-    // Resuming an Available session re-activates it for execution.
     if session_arg.is_some() && session.phase == csa_session::SessionPhase::Available {
         match session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
             Ok(()) => {
@@ -534,6 +528,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         // Empty at PreRun; populated at PostRun after git diff.
         ("CHANGED_PATHS".to_string(), "[]".to_string()),
         ("CHANGED_CRATES".to_string(), String::new()),
+        ("CHANGED_CRATES_FLAGS".to_string(), String::new()),
     ]);
     run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
 
@@ -721,9 +716,20 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         None
     };
 
+    let snapshot_to_fingerprints = |snap: &crate::run_cmd::GitWorkspaceSnapshot| {
+        crate::pipeline::changed_paths::SnapshotFingerprints {
+            tracked_worktree: snap.tracked_worktree_fingerprint,
+            tracked_index: snap.tracked_index_fingerprint,
+            untracked: snap.untracked_fingerprint,
+        }
+    };
+    let pre_fingerprints = pre_run_workspace.as_ref().map(&snapshot_to_fingerprints);
+    let post_fingerprints = post_run_workspace.as_ref().map(&snapshot_to_fingerprints);
     let changed_paths = crate::pipeline::changed_paths::compute_changed_paths(
         pre_run_workspace.as_ref().map(|s| s.status.as_str()),
         post_run_workspace.as_ref().map(|s| s.status.as_str()),
+        pre_fingerprints.as_ref(),
+        post_fingerprints.as_ref(),
     );
 
     if commit_guard_enabled {
