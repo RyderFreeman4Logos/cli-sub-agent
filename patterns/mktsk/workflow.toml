@@ -91,3 +91,81 @@ just test
 git status --short
 ```"""
 on_fail = "abort"
+
+[[workflow.steps]]
+id = 6
+title = "Publish Transaction"
+tool = "bash"
+prompt = '''
+Push, create/reuse PR, and run pr-codex-bot atomically.
+Skipped when parent workflow handles publish (CSA_SKIP_PUBLISH=true).
+
+```bash
+set -euo pipefail
+if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
+  echo "Parent workflow handles publish; skipping."
+  exit 0
+fi
+
+# Version bump check
+if command -v just >/dev/null 2>&1; then
+  if ! just check-version-bumped 2>/dev/null; then
+    just bump-patch
+    cargo run -p weave -- lock 2>/dev/null || true
+    git add Cargo.toml Cargo.lock weave.lock 2>/dev/null || git add Cargo.toml weave.lock
+    VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
+    git commit -m "chore(release): bump workspace version to ${VERSION}"
+  fi
+fi
+
+# Pre-PR cumulative review
+csa review --sa-mode true --range main...HEAD || true
+
+# Push
+BRANCH="$(git branch --show-current)"
+git push -u origin "${BRANCH}" --force-with-lease
+
+# Create or reuse PR
+COMMIT_SUBJECT="$(git log -1 --format=%s)"
+set +e
+CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "Auto-created by mktsk pipeline." 2>&1)"
+CREATE_RC=$?
+set -e
+if [ "${CREATE_RC}" -ne 0 ]; then
+  if ! printf '%s\n' "${CREATE_OUTPUT}" | grep -Eiq 'already exists|a pull request already exists'; then
+    echo "ERROR: gh pr create failed: ${CREATE_OUTPUT}" >&2
+    exit 1
+  fi
+  echo "INFO: PR already exists for ${BRANCH}; continuing."
+fi
+
+# Run pr-codex-bot (idempotency markers prevent duplicate runs)
+if [ -x scripts/hooks/post-pr-create.sh ]; then
+  scripts/hooks/post-pr-create.sh --base main
+elif [ -f patterns/pr-codex-bot/workflow.toml ]; then
+  csa plan run patterns/pr-codex-bot/workflow.toml
+else
+  echo "WARN: pr-codex-bot workflow not found; PR created but review/merge skipped." >&2
+fi
+```'''
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 7
+title = "Post-Merge Local Sync"
+tool = "bash"
+prompt = """
+Sync local main with remote after PR merge.
+Skipped when parent workflow handles publish.
+
+```bash
+set -euo pipefail
+if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
+  exit 0
+fi
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+git log --oneline -1
+```"""
+on_fail = "abort"

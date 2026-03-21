@@ -62,7 +62,9 @@ breaks prompt-guard propagation.
 6. **Pre-commit review**: Invoke the `ai-reviewed-commit` pattern via CSA -- authorship-aware review (debate for self-authored, `csa review --diff --allow-fallback` for others). Fix-and-retry up to 3 rounds.
 7. **Generate commit message**: Delegate to CSA at `tier-1-quick` (tool and thinking budget come from config). If a review session already ran in this workflow, prefer resuming it with `--session <review-session-id>` (reuses cached context, near-zero new tokens). When resuming, keep the same tool (sessions are tool-locked).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
-9. **Auto PR** (if milestone): Push branch, create PR targeting main, invoke `/pr-codex-bot`.
+9. **Auto PR** (standalone by default): Push branch, create PR targeting main, invoke `/pr-codex-bot`.
+   Runs automatically when commit is standalone. Skipped when parent workflow
+   (mktsk/dev2merge) sets `CSA_SKIP_PUBLISH=true` to handle publish itself.
    - **NOTE**: `/pr-codex-bot` internally runs a **separate cumulative review** (`csa review --range main...HEAD`) covering ALL commits on the branch before push. This is distinct from Step 6's per-commit review (`csa review --diff`). Do NOT skip pr-codex-bot's internal review even if Step 6 passed.
 
 ## Two-Layer Review Architecture
@@ -98,4 +100,4 @@ Both layers are mandatory. The per-commit review catches issues in each individu
 6. Pre-commit review completed with zero unresolved P0/P1 issues.
 7. Commit created with Conventional Commits format.
 8. `git status` shows clean working tree.
-9. If milestone: PR created and `/pr-codex-bot` invoked.
+9. PR created and `/pr-codex-bot` invoked (skipped when `CSA_SKIP_PUBLISH=true`).

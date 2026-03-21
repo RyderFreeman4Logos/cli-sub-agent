@@ -90,3 +90,30 @@ git status --short
 ```
 
 Ensure no unchecked executable checklist items remain in the TODO file.
+
+## Step 6: Publish Transaction
+
+When mktsk is the top-level workflow (not called from dev2merge or another
+parent), complete the full pipeline:
+
+1. Ensure version bumped (`just bump-patch` if needed).
+2. Run cumulative review (`csa review --range main...HEAD`).
+3. Push to remote (`--force-with-lease`).
+4. Create or reuse PR (`gh pr create`).
+5. Run pr-codex-bot workflow for review + merge.
+
+**Skipped when**: `CSA_SKIP_PUBLISH=true` is set by the parent workflow.
+dev2merge sets this before calling mktsk, since it handles publish in its
+own Steps 10-13.
+
+## Step 7: Post-Merge Local Sync
+
+After PR merge, sync local main:
+
+```bash
+git fetch origin
+git checkout main
+git merge origin/main --ff-only
+```
+
+Skipped when `CSA_SKIP_PUBLISH=true`.

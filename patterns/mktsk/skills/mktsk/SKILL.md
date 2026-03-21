@@ -30,7 +30,7 @@ triggers:
 
 Execute TODO plans (from `mktd` or user-provided) as deterministic, resumable serial checklists. Enforces strict serial execution: implement, verify, review, persist progress, then next task. Every checklist item carries an executor tag and a mechanically verifiable `DONE WHEN` condition.
 
-mktsk stops at **verified local execution**. It does **not** push branches, create or reuse PRs, invoke `pr-codex-bot`, or merge. Those publication/integration steps are owned by the caller workflow (for example `dev2merge`, `/sa`, or another outer wrapper that continues after mktsk finishes).
+When used standalone, mktsk completes the full pipeline: push, PR creation, pr-codex-bot review, and merge. When called from a parent workflow (dev2merge sets `CSA_SKIP_PUBLISH=true`), publish steps are skipped — the parent handles them.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -73,6 +73,9 @@ breaks prompt-guard propagation.
    - On interruption, resume from unchecked TODO items and checkpoint state.
 4. **Compact if needed**: If context > 80%, compact while preserving remaining items and review findings.
 5. **Verify completion**: Run `just fmt`, `just clippy`, `just test`, and `git status --short`.
+6. **Publish transaction** (standalone only): Version bump, cumulative review, push, PR creation, pr-codex-bot.
+   Skipped when `CSA_SKIP_PUBLISH=true` (set by dev2merge).
+7. **Post-merge local sync** (standalone only): `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 
 ## Example Usage
 
@@ -88,8 +91,8 @@ breaks prompt-guard propagation.
 - **Uses**: `csa-review` (per-task review), `security-audit` (via commit skill)
 - **References**: Use `csa todo ref list` to discover plan references (RECON findings,
   debate evidence, threat model) and `csa todo ref show <name>` for selective loading
-- **Boundary**: mktsk owns task execution, local verification, and progress persistence only. Push/PR/merge are caller-owned.
-- **Part of**: Planning/execution segment of a larger pipeline: `mktd` (plan) -> `mktsk` (execute + verify locally). Any later publication flow, including `pr-codex-bot`, happens only if the caller invokes it.
+- **Boundary**: Standalone mktsk completes the full pipeline (push/PR/pr-codex-bot/merge). When called from dev2merge (`CSA_SKIP_PUBLISH=true`), publish steps are skipped.
+- **Part of**: `mktd` (plan) -> `mktsk` (execute + verify + publish). In dev2merge, publish is handled by dev2merge Steps 10-13 instead.
 
 ## Done Criteria
 
@@ -100,3 +103,4 @@ breaks prompt-guard propagation.
 5. `just fmt`, `just clippy`, and `just test` exit 0 after final task.
 6. `git status` shows clean working tree.
 7. All TaskCreate entries show status `completed` in TaskList.
+8. Branch pushed, PR created, pr-codex-bot completed (or skipped when `CSA_SKIP_PUBLISH=true`).
