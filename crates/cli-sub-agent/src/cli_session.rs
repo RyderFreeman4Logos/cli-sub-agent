@@ -176,7 +176,6 @@ pub enum SessionCommands {
     /// Retrieve a compressed tool output from a session
     ToolOutput {
         /// Session ID or prefix
-        #[arg(short, long)]
         session: String,
 
         /// Tool output index to retrieve (omit with --list to show manifest)
