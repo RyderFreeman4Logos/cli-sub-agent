@@ -107,6 +107,15 @@ if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
   exit 0
 fi
 
+# Branch safety check — refuse to push protected branches
+BRANCH="$(git branch --show-current)"
+DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
+if [ -z "$DEFAULT_BRANCH" ]; then DEFAULT_BRANCH="main"; fi
+if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
+  echo "ERROR: Cannot publish from protected branch $BRANCH. Must be on a feature branch." >&2
+  exit 1
+fi
+
 # Version bump check
 if command -v just >/dev/null 2>&1; then
   if ! just check-version-bumped 2>/dev/null; then
