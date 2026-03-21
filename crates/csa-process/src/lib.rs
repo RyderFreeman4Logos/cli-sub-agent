@@ -14,11 +14,12 @@ mod output_helpers;
 #[path = "lib_subprocess_helpers.rs"]
 mod subprocess_helpers;
 mod tool_liveness;
+pub use output_helpers::{
+    CompressDecision, DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator,
+    sanitize_spool_plan, should_compress_output,
+};
 #[cfg(test)]
 use output_helpers::{DEFAULT_HEARTBEAT_SECS, HEARTBEAT_INTERVAL_ENV};
-pub use output_helpers::{
-    DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator, sanitize_spool_plan,
-};
 use output_helpers::{
     accumulate_and_flush_lines, accumulate_and_flush_stderr,
     append_actionable_detail_for_opaque_payload, drain_if_over_high_water, extract_summary,

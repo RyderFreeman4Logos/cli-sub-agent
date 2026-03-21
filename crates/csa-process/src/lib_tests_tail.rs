@@ -495,3 +495,56 @@ fn test_spool_rotator_rotates_and_writes_truncation_sentinel() {
         "new output should continue in fresh output.log"
     );
 }
+
+// --- should_compress_output tests ---
+
+#[test]
+fn test_compress_small_output_passes_through() {
+    let small = "a".repeat(100);
+    assert!(matches!(
+        should_compress_output(&small, 8192),
+        CompressDecision::PassThrough
+    ));
+}
+
+#[test]
+fn test_compress_large_output_triggers_compression() {
+    let large = "x".repeat(10_000);
+    match should_compress_output(&large, 8192) {
+        CompressDecision::Compress {
+            original_bytes,
+            replacement,
+        } => {
+            assert_eq!(original_bytes, 10_000);
+            assert!(replacement.contains("10000 bytes"));
+        }
+        CompressDecision::PassThrough => panic!("expected Compress"),
+    }
+}
+
+#[test]
+fn test_compress_preserves_csa_section_markers() {
+    let content = format!("{}<!-- CSA:SECTION:summary -->{}", "x".repeat(5000), "x".repeat(5000));
+    assert!(matches!(
+        should_compress_output(&content, 8192),
+        CompressDecision::PassThrough
+    ));
+}
+
+#[test]
+fn test_compress_preserves_return_packet() {
+    let content = format!("{}ReturnPacket{}", "x".repeat(5000), "x".repeat(5000));
+    assert!(matches!(
+        should_compress_output(&content, 8192),
+        CompressDecision::PassThrough
+    ));
+}
+
+#[test]
+fn test_compress_at_exact_threshold_passes_through() {
+    let exact = "y".repeat(8192);
+    assert!(matches!(
+        should_compress_output(&exact, 8192),
+        CompressDecision::PassThrough
+    ));
+}
