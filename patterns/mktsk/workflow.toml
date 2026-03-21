@@ -118,8 +118,11 @@ if command -v just >/dev/null 2>&1; then
   fi
 fi
 
-# Pre-PR cumulative review
-csa review --sa-mode true --range main...HEAD || true
+# Pre-PR cumulative review (hard gate — must pass before push)
+if ! csa review --sa-mode true --range main...HEAD; then
+  echo "ERROR: Cumulative review failed. Fix issues before publishing." >&2
+  exit 1
+fi
 
 # Push
 BRANCH="$(git branch --show-current)"

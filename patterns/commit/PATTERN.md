@@ -24,7 +24,7 @@ Initialize and declare workflow variables.
 - `${COMMIT_SUBJECT}`: Generated or provided commit subject
 - `${COMMIT_BODY}`: Generated or provided commit body
 - `${COMMIT_MESSAGE_FILE}`: Path to temporary commit message file
-- `${IS_MILESTONE}`: Set to `"true"` to trigger push and PR
+- `${SKIP_PUBLISH}`: Set to `"true"` to skip auto-PR (parent workflow handles publish)
 - `${ENABLE_REVIEW_LOOP}`: Set to `"true"` to run iterative review loop
 - `${AUDIT_FAIL}`: Set by `security-audit` if blocking issues found
 - `${AUDIT_PASS_DEFERRED}`: Set by `security-audit` if non-blocking issues found
@@ -318,7 +318,7 @@ trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
 git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
 ```
 
-## IF ${IS_MILESTONE}
+## IF NOT ${SKIP_PUBLISH} (Auto-Publish — standalone by default)
 
 ## Step 18: Cumulative Branch Review
 
@@ -340,6 +340,8 @@ OnFail: abort
 
 Push, create or reuse the PR, then synchronously run the post-create helper.
 This makes PR creation + pr-codex-bot a single shell-enforced transaction.
+Runs by default when standalone. Skipped when parent workflow sets
+`CSA_SKIP_PUBLISH=true`.
 
 ```bash
 set -euo pipefail
@@ -347,6 +349,9 @@ if [ -z "${COMMIT_SUBJECT:-}" ]; then
   echo "ERROR: PR title is empty." >&2
   exit 1
 fi
+
+# Resolve branch name (BRANCH may be unset in standalone /commit)
+BRANCH="${BRANCH:-$(git branch --show-current)}"
 
 git push -u origin "${BRANCH}"
 set +e

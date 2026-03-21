@@ -435,6 +435,13 @@ if [ -z "${COMMIT_SUBJECT:-}" ]; then
   exit 1
 fi
 
+# Resolve branch name (BRANCH may be unset in standalone /commit)
+BRANCH="${BRANCH:-$(git branch --show-current)}"
+if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
+  echo "ERROR: Cannot determine current branch for push." >&2
+  exit 1
+fi
+
 git push -u origin "${BRANCH}"
 set +e
 CREATE_OUTPUT="$(gh pr create --base main --title "${COMMIT_SUBJECT}" --body "${PR_BODY}" 2>&1)"

@@ -82,7 +82,6 @@ Both layers are mandatory. The per-commit review catches issues in each individu
 |---------|--------|
 | `/commit` | Commit current staged changes with full audit pipeline |
 | `/commit scope=executor` | Commit with explicit scope for commit message |
-| `/commit milestone=true` | Commit and automatically create PR + trigger codex-bot |
 
 ## Integration
 
