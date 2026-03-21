@@ -524,7 +524,11 @@ fn test_compress_large_output_triggers_compression() {
 
 #[test]
 fn test_compress_preserves_csa_section_markers() {
-    let content = format!("{}<!-- CSA:SECTION:summary -->{}", "x".repeat(5000), "x".repeat(5000));
+    let content = format!(
+        "{}<!-- CSA:SECTION:summary -->{}",
+        "x".repeat(5000),
+        "x".repeat(5000)
+    );
     assert!(matches!(
         should_compress_output(&content, 8192),
         CompressDecision::PassThrough

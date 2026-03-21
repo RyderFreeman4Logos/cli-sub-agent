@@ -596,8 +596,7 @@ pub(crate) fn handle_session_tool_output(
     let session_id = csa_session::resolve_session_prefix(&session_root, &session)?;
     let session_dir = csa_session::get_session_dir(&project_root, &session_id)?;
 
-    let store =
-        ToolOutputStore::new(&session_dir).context("failed to open tool output store")?;
+    let store = ToolOutputStore::new(&session_dir).context("failed to open tool output store")?;
 
     if list || index.is_none() {
         let manifest = store.read_manifest()?;
