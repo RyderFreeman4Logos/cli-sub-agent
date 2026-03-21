@@ -172,4 +172,23 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// Retrieve a compressed tool output from a session
+    ToolOutput {
+        /// Session ID or prefix
+        #[arg(short, long)]
+        session: String,
+
+        /// Tool output index to retrieve (omit with --list to show manifest)
+        #[arg(conflicts_with = "list")]
+        index: Option<u32>,
+
+        /// List all compressed tool outputs (show manifest)
+        #[arg(long)]
+        list: bool,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }

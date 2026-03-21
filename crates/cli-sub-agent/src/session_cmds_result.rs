@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -580,6 +580,47 @@ pub(crate) fn format_number(n: usize) -> String {
         .map(|chunk| chunk.iter().collect::<String>())
         .collect();
     chunks.join(",").chars().rev().collect()
+}
+
+/// Handle `csa session tool-output <session> [index] [--list]`.
+pub(crate) fn handle_session_tool_output(
+    session: String,
+    index: Option<u32>,
+    list: bool,
+    cd: Option<String>,
+) -> Result<()> {
+    use csa_session::tool_output_store::ToolOutputStore;
+
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let session_root = csa_session::get_session_root(&project_root)?;
+    let session_id = csa_session::resolve_session_prefix(&session_root, &session)?;
+    let session_dir = csa_session::get_session_dir(&project_root, &session_id)?;
+
+    let store =
+        ToolOutputStore::new(&session_dir).context("failed to open tool output store")?;
+
+    if list || index.is_none() {
+        let manifest = store.read_manifest()?;
+        if manifest.entries.is_empty() {
+            println!("No compressed tool outputs for session {session_id}.");
+            return Ok(());
+        }
+        println!("Compressed tool outputs for session {session_id}:");
+        for entry in &manifest.entries {
+            println!(
+                "  [{:>3}] {} bytes -> {}",
+                entry.index, entry.original_bytes, entry.path
+            );
+        }
+        return Ok(());
+    }
+
+    let idx = index.expect("index required when not listing");
+    let content = store.load(idx)?;
+    let stdout = std::io::stdout();
+    let mut handle = stdout.lock();
+    std::io::Write::write_all(&mut handle, &content)?;
+    Ok(())
 }
 
 #[cfg(test)]

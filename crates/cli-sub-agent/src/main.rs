@@ -497,6 +497,14 @@ async fn run() -> Result<()> {
             SessionCommands::Measure { session, json, cd } => {
                 session_cmds::handle_session_measure(session, json, cd)?;
             }
+            SessionCommands::ToolOutput {
+                session,
+                index,
+                list,
+                cd,
+            } => {
+                session_cmds::handle_session_tool_output(session, index, list, cd)?;
+            }
         },
         Commands::Audit { command } => {
             audit_cmds::handle_audit(command)?;
