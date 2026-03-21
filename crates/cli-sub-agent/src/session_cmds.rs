@@ -17,6 +17,7 @@ use csa_session::{
 // callers can continue using `session_cmds::*`.
 pub(crate) use crate::session_cmds_result::{
     StructuredOutputOpts, handle_session_artifacts, handle_session_measure, handle_session_result,
+    handle_session_tool_output,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {

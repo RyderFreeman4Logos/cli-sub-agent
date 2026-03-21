@@ -281,9 +281,11 @@ fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Va
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => anyhow::bail!("{e}"),
     };
-    let root: toml::Value = content
-        .parse()
-        .map_err(|e| anyhow::anyhow!("TOML parse error: {e}"))?;
+    // Use `toml::from_str` instead of `str::parse()` — the `FromStr for
+    // toml::Value` impl in toml 1.0 has a parser bug that rejects valid
+    // TOML files, while the serde `Deserialize` path works correctly.
+    let root: toml::Value =
+        toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML parse error: {e}"))?;
     Ok(resolve_key(&root, key))
 }
 

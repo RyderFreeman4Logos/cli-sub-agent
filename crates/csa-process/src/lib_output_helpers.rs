@@ -583,3 +583,50 @@ fn is_structural_failure_noise_line(line: &str) -> bool {
                 )
         })
 }
+
+/// Result of attempting to compress tool output.
+pub enum CompressDecision {
+    /// Output is small enough or contains protected markers; pass through unchanged.
+    PassThrough,
+    /// Output exceeds threshold and should be compressed.
+    ///
+    /// Contains the original bytes and a replacement summary line.
+    Compress {
+        original_bytes: usize,
+        replacement: String,
+    },
+}
+
+/// Markers that must never be compressed.
+///
+/// Includes fork-call protocol, structured output, review verdicts, and
+/// workflow variable declarations — compressing these would break downstream
+/// consumers (verdict parsing, `${STEP_N_OUTPUT}` injection, etc.).
+const PROTECTED_MARKERS: &[&str] = &[
+    "CSA:SECTION",
+    "ReturnPacket",
+    "<!-- CSA:SECTION:",
+    "final_decision:",
+    "CSA_VAR:",
+];
+
+/// Decide whether a tool output should be compressed.
+///
+/// Returns `PassThrough` when the output is below `threshold_bytes` or
+/// contains protected markers (CSA:SECTION, ReturnPacket).
+pub fn should_compress_output(output: &str, threshold_bytes: u64) -> CompressDecision {
+    let byte_len = output.len();
+    if (byte_len as u64) <= threshold_bytes {
+        return CompressDecision::PassThrough;
+    }
+    // Never compress outputs containing protocol markers.
+    for marker in PROTECTED_MARKERS {
+        if output.contains(marker) {
+            return CompressDecision::PassThrough;
+        }
+    }
+    CompressDecision::Compress {
+        original_bytes: byte_len,
+        replacement: format!("[Tool output compressed: {byte_len} bytes]"),
+    }
+}

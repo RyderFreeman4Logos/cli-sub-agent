@@ -15,6 +15,7 @@ pub mod result;
 pub mod review_artifact;
 pub mod soft_fork;
 pub mod state;
+pub mod tool_output_store;
 pub mod validate;
 pub mod vcs_backends;
 
