@@ -761,7 +761,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         );
     }
 
-    // Delegate post-execution processing (state updates, persistence, hooks, memory).
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
         executor,
         prompt,
@@ -780,7 +779,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         changed_paths,
     };
     if let Err(err) =
-        crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &result).await
+        crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &mut result)
+            .await
     {
         crate::pipeline_post_exec::ensure_terminal_result_on_post_exec_error(
             project_root,

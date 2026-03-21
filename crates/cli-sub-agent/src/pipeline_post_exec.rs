@@ -51,7 +51,7 @@ pub(crate) struct PostExecContext<'a> {
 pub(crate) async fn process_execution_result(
     ctx: PostExecContext<'_>,
     session: &mut MetaSessionState,
-    result: &csa_process::ExecutionResult,
+    result: &mut csa_process::ExecutionResult,
 ) -> anyhow::Result<()> {
     let token_usage = parse_token_usage(&result.output);
 
@@ -184,6 +184,45 @@ pub(crate) async fn process_execution_result(
         warn!("SessionComplete hook failed: {}", e);
     }
 
+    // Tool output compression: runs last so parse_token_usage and hooks see
+    // the full output while the caller receives the compact placeholder.
+    maybe_compress_tool_output(ctx.config, ctx.project_root, session, result)?;
+
+    Ok(())
+}
+
+/// If tool output compression is enabled, persist the original output to
+/// `{session_dir}/tool_outputs/` and replace `result.output` with a compact
+/// placeholder.
+fn maybe_compress_tool_output(
+    config: Option<&ProjectConfig>,
+    project_root: &Path,
+    session: &MetaSessionState,
+    result: &mut csa_process::ExecutionResult,
+) -> anyhow::Result<()> {
+    let Some(cfg) = config else { return Ok(()) };
+    if !cfg.session.tool_output_compression {
+        return Ok(());
+    }
+    let threshold = cfg.session.tool_output_threshold_bytes;
+    if let csa_process::CompressDecision::Compress {
+        original_bytes,
+        replacement,
+    } = csa_process::should_compress_output(&result.output, threshold)
+    {
+        let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
+        let store = csa_session::tool_output_store::ToolOutputStore::new(&session_dir)?;
+        let index = session.turn_count.saturating_sub(1);
+        store.store(index, result.output.as_bytes())?;
+        store.append_manifest(index, original_bytes as u64)?;
+        info!(
+            session = %session.meta_session_id,
+            original_bytes,
+            index,
+            "Compressed tool output stored"
+        );
+        result.output = replacement;
+    }
     Ok(())
 }
 
