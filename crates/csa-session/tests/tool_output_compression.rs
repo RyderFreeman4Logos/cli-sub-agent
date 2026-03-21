@@ -62,18 +62,23 @@ fn manifest_persists_across_store_instances() {
         store.append_manifest(0, 11).unwrap();
     }
 
-    // Second instance: add more and verify all entries visible.
+    // Second instance (write): add more.
     {
         let store = ToolOutputStore::new(session_dir.path()).unwrap();
         store.store(1, b"second batch").unwrap();
         store.append_manifest(1, 12).unwrap();
+    }
+
+    // Third instance (read-only): verify all entries visible without creating dirs.
+    {
+        let store = ToolOutputStore::open_readonly(session_dir.path());
 
         let manifest = store.read_manifest().unwrap();
         assert_eq!(manifest.entries.len(), 2);
         assert_eq!(manifest.entries[0].index, 0);
         assert_eq!(manifest.entries[1].index, 1);
 
-        // Content from first instance is still accessible.
+        // Content from both instances is still accessible.
         assert_eq!(store.load(0).unwrap(), b"first batch");
         assert_eq!(store.load(1).unwrap(), b"second batch");
     }

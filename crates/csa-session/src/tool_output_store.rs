@@ -35,13 +35,25 @@ pub struct ToolOutputStore {
 impl ToolOutputStore {
     /// Create a new store rooted at `{session_dir}/tool_outputs/`.
     ///
-    /// Creates the directory if it does not exist.
+    /// Creates the directory if it does not exist.  Use this for write
+    /// operations (`store`, `append_manifest`).
     pub fn new(session_dir: &Path) -> Result<Self> {
         let base_dir = session_dir.join("tool_outputs");
         fs::create_dir_all(&base_dir).with_context(|| {
             format!("failed to create tool_outputs dir: {}", base_dir.display())
         })?;
         Ok(Self { base_dir })
+    }
+
+    /// Open an existing store for read-only operations (`load`, `read_manifest`).
+    ///
+    /// Does **not** create the `tool_outputs/` directory — returns `Ok` even
+    /// when the directory is absent so that callers like `--list` can report
+    /// an empty manifest without side-effects.
+    pub fn open_readonly(session_dir: &Path) -> Self {
+        Self {
+            base_dir: session_dir.join("tool_outputs"),
+        }
     }
 
     /// Store raw tool output content, returning the file path.
@@ -179,5 +191,33 @@ mod tests {
             store.manifest_path(),
             tmp.path().join("tool_outputs").join("manifest.toml")
         );
+    }
+
+    #[test]
+    fn test_open_readonly_does_not_create_dir() {
+        let tmp = TempDir::new().unwrap();
+        let store = ToolOutputStore::open_readonly(tmp.path());
+
+        // Directory must NOT be created by open_readonly.
+        assert!(!tmp.path().join("tool_outputs").exists());
+
+        // read_manifest returns empty manifest when dir is absent.
+        let manifest = store.read_manifest().unwrap();
+        assert!(manifest.entries.is_empty());
+    }
+
+    #[test]
+    fn test_open_readonly_reads_existing_data() {
+        let tmp = TempDir::new().unwrap();
+
+        // Write via new().
+        let writer = ToolOutputStore::new(tmp.path()).unwrap();
+        writer.store(0, b"payload").unwrap();
+        writer.append_manifest(0, 7).unwrap();
+
+        // Read via open_readonly().
+        let reader = ToolOutputStore::open_readonly(tmp.path());
+        assert_eq!(reader.load(0).unwrap(), b"payload");
+        assert_eq!(reader.read_manifest().unwrap().entries.len(), 1);
     }
 }
