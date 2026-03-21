@@ -240,8 +240,16 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 12
-title = "Auto PR Transaction"
-prompt = ""
+title = "Set SKIP_PUBLISH for included commit"
+tool = "bash"
+prompt = """
+Prevent the included commit workflow from auto-publishing.
+sa owns the publish lifecycle — commit should only commit, not push/PR.
+
+```bash
+export CSA_SKIP_PUBLISH=true
+echo "CSA_VAR:SKIP_PUBLISH=true"
+```"""
 on_fail = "abort"
 condition = "${REVIEW_IS_CLEAN}"
 

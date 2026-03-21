@@ -69,6 +69,9 @@ name = "PR_BODY"
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
+name = "SKIP_PUBLISH"
+
+[[workflow.variables]]
 name = "SCOPE"
 
 [[workflow.variables]]
@@ -99,7 +102,16 @@ Initialize and declare workflow variables.
 
 ```bash
 # Force weave to pick up these variables
-: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}"
+: "${FILES}" "${SCOPE}" "${BRANCH}" "${COMMIT_SUBJECT}" "${COMMIT_BODY}" "${COMMIT_MESSAGE_FILE}" "${IS_MILESTONE}" "${ENABLE_REVIEW_LOOP}" "${AUDIT_FAIL}" "${AUDIT_PASS_DEFERRED}" "${REVIEW_HAS_ISSUES}" "${PR_BODY}" "${SKIP_PUBLISH}"
+
+# Bridge CSA_SKIP_PUBLISH env var to workflow variable.
+# When parent workflow (mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true, auto-PR is skipped.
+# When standalone, CSA_SKIP_PUBLISH is unset → auto-PR runs after commit.
+if [ "${CSA_SKIP_PUBLISH:-}" = "true" ]; then
+  echo "CSA_VAR:SKIP_PUBLISH=true"
+else
+  echo "CSA_VAR:SKIP_PUBLISH=${SKIP_PUBLISH:-false}"
+fi
 echo "Variables initialized."
 ```"""
 on_fail = "abort"
@@ -403,7 +415,7 @@ csa review --range main...HEAD
 ```"""
 tier = "tier-2-standard"
 on_fail = "abort"
-condition = "${IS_MILESTONE}"
+condition = "!(${SKIP_PUBLISH})"
 
 [[workflow.steps]]
 id = 22
@@ -413,10 +425,20 @@ prompt = '''
 Push, create or reuse the PR, then synchronously run the post-create helper.
 This makes PR creation + pr-codex-bot a single shell-enforced transaction.
 
+Runs by default when commit is standalone. Skipped when parent workflow
+(mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true to handle publish itself.
+
 ```bash
 set -euo pipefail
 if [ -z "${COMMIT_SUBJECT:-}" ]; then
   echo "ERROR: PR title is empty." >&2
+  exit 1
+fi
+
+# Resolve branch name (BRANCH may be unset in standalone /commit)
+BRANCH="${BRANCH:-$(git branch --show-current)}"
+if [ -z "${BRANCH}" ] || [ "${BRANCH}" = "HEAD" ]; then
+  echo "ERROR: Cannot determine current branch for push." >&2
   exit 1
 fi
 
@@ -435,7 +457,7 @@ fi
 scripts/hooks/post-pr-create.sh --base main
 ```'''
 on_fail = "abort"
-condition = "${IS_MILESTONE}"
+condition = "!(${SKIP_PUBLISH})"
 
 [[workflow.steps]]
 id = 23
