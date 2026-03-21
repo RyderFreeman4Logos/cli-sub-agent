@@ -920,6 +920,107 @@ on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES})"
 
 [[workflow.steps]]
+id = 21
+title = "Post-Fix Re-Review Gate"
+tool = "bash"
+prompt = """
+HARD GATE: After fixing bot findings, re-trigger @codex review on current
+HEAD and verify zero actionable findings before any merge path can execute.
+This prevents the linear workflow from falling through to merge without
+re-verification — the \"Loop back to Step 5\" comment above is NOT
+enforceable by the workflow engine.
+
+Delegates the full re-trigger + wait + verify cycle to a single CSA step
+with hard timeout, so the gate is self-contained and cannot be skipped.
+
+If the re-review finds new issues, the workflow aborts — the user must
+re-run pr-codex-bot to start a new fix cycle.
+
+```bash
+set -euo pipefail
+TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
+CURRENT_SHA="$(git rev-parse HEAD)"
+RETRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# --- Re-trigger bot review ---
+RETRIGGER_BODY="@codex review
+
+<!-- csa-retrigger:${CURRENT_SHA}:${RETRIGGER_TS} -->"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${RETRIGGER_BODY}"
+echo "Re-triggered @codex review for HEAD ${CURRENT_SHA} at ${RETRIGGER_TS}"
+
+# --- Delegate wait to CSA (max 10 min) ---
+BOT_CLEAN=false
+WAIT_RESULT_FILE="$(mktemp)"
+TIMEOUT_CMD=""
+if [ -n "${TIMEOUT_BIN}" ]; then
+  TIMEOUT_CMD="${TIMEOUT_BIN} -k 5s 650s"
+fi
+set +e
+${TIMEOUT_CMD} csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 \
+  "Bounded post-fix re-review gate. Do NOT invoke pr-codex-bot skill or any full PR workflow. \
+  Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after \
+  ${RETRIGGER_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. \
+  Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." \
+  | tee "${WAIT_RESULT_FILE}"
+WAIT_RC=${PIPESTATUS[0]}
+set -e
+WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
+rm -f "${WAIT_RESULT_FILE}"
+
+if [ "${WAIT_RC}" -eq 124 ]; then
+  echo "WARN: Post-fix bot wait timed out. Falling back to local review gate."
+  if ! csa review --sa-mode true --range main...HEAD; then
+    echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+    exit 1
+  fi
+  BOT_CLEAN=true
+else
+  WAIT_MARKER="$(
+    printf '%s\n' "${WAIT_RESULT}" \
+      | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
+      | tail -n 1 \
+      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+      || true
+  )"
+  if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
+    BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+    sleep "${BOT_SETTLE_SECS}"
+    ACTIONABLE_COUNT="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+        --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${RETRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        2>/dev/null || echo "0"
+    )"
+    if [ "${ACTIONABLE_COUNT:-0}" -gt 0 ]; then
+      echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
+      echo "Re-run pr-codex-bot to start a new fix cycle."
+      exit 1
+    fi
+    BOT_CLEAN=true
+  else
+    echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
+    if ! csa review --sa-mode true --range main...HEAD; then
+      echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+      exit 1
+    fi
+    BOT_CLEAN=true
+  fi
+fi
+
+if [ "${BOT_CLEAN}" != "true" ]; then
+  echo "ERROR: Post-fix re-review gate failed unexpectedly." >&2
+  exit 1
+fi
+
+# Clear BOT_HAS_ISSUES so merge steps can proceed
+BOT_HAS_ISSUES=false
+echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
+echo "Post-fix re-review gate PASSED. Merge is now allowed."
+```"""
+on_fail = "abort"
+condition = "(!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}) && (!(${ROUND_LIMIT_REACHED}))"
+
+[[workflow.steps]]
 id = 13
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to merge."
