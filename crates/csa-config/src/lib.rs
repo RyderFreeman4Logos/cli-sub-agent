@@ -6,6 +6,7 @@ pub mod config_filesystem_sandbox;
 mod config_merge;
 pub mod config_resources;
 mod config_runtime;
+pub(crate) mod config_session;
 mod config_tiers;
 pub mod config_tool;
 pub mod gc;
