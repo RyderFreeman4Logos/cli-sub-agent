@@ -207,7 +207,7 @@ fn maybe_compress_tool_output(
     let threshold = cfg.session.tool_output_threshold_bytes;
     if let csa_process::CompressDecision::Compress {
         original_bytes,
-        replacement,
+        replacement: _,
     } = csa_process::should_compress_output(&result.output, threshold)
     {
         let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
@@ -221,7 +221,11 @@ fn maybe_compress_tool_output(
             index,
             "Compressed tool output stored"
         );
-        result.output = replacement;
+        // Override generic placeholder with session-specific one for recoverability.
+        result.output = format!(
+            "[Tool output compressed: {original_bytes} bytes → csa session tool-output {} {index}]",
+            session.meta_session_id
+        );
     }
     Ok(())
 }

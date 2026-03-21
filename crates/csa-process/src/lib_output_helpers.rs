@@ -597,8 +597,18 @@ pub enum CompressDecision {
     },
 }
 
-/// Markers that must never be compressed (fork-call protocol and structured output).
-const PROTECTED_MARKERS: &[&str] = &["CSA:SECTION", "ReturnPacket", "<!-- CSA:SECTION:"];
+/// Markers that must never be compressed.
+///
+/// Includes fork-call protocol, structured output, review verdicts, and
+/// workflow variable declarations — compressing these would break downstream
+/// consumers (verdict parsing, `${STEP_N_OUTPUT}` injection, etc.).
+const PROTECTED_MARKERS: &[&str] = &[
+    "CSA:SECTION",
+    "ReturnPacket",
+    "<!-- CSA:SECTION:",
+    "final_decision:",
+    "CSA_VAR:",
+];
 
 /// Decide whether a tool output should be compressed.
 ///
