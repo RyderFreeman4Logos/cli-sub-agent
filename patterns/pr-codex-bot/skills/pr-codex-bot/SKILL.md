@@ -211,8 +211,9 @@ breaks prompt-guard propagation.
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
-10a. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
-10b. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
+10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD and must return zero actionable findings before merge. This gate is enforced by the workflow engine — it cannot be skipped. If new findings appear, workflow aborts (user must re-run pr-codex-bot).
+10b. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
+10c. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.
 12. PR merged via merge commit (full history preserved) with branch cleanup.
 13. Local main updated: `git fetch origin && git checkout main && git merge origin/main --ff-only`. Remote feature branch deleted by `--delete-branch` (local branch preserved for audit).

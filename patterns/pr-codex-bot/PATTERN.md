@@ -908,6 +908,23 @@ echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 
 Loop back to Step 5 (delegated wait gate).
 
+## Step 10b: Post-Fix Re-Review Gate (HARD GATE)
+
+After fixing bot findings, re-trigger @codex review on current HEAD and
+verify zero actionable findings before any merge path can execute.
+
+This is a **deterministic hard gate** — it prevents the linear workflow
+from falling through to merge without re-verification. The "Loop back
+to Step 5" above is guidance for LLM orchestrators but is NOT enforced
+by the workflow engine (`csa plan run` executes steps linearly).
+
+The gate:
+1. Re-triggers `@codex review` on current HEAD
+2. Delegates 10-minute wait to CSA
+3. If bot finds new P0/P1/P2 findings → **abort** (user must re-run pr-codex-bot)
+4. If bot timeout → falls back to local `csa review --range main...HEAD`
+5. If clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
+
 ## ELSE
 
 ## Step 10a: Bot Review Clean
