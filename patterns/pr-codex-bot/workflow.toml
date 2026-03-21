@@ -870,8 +870,10 @@ if [ -n "${ROUND_LIMIT_ACTION}" ]; then
     merge)
       echo "User chose: Merge now. Pushing local commits before merge."
       ROUND_LIMIT_REACHED=false
+      BOT_HAS_ISSUES=false
       git push origin "${WORKFLOW_BRANCH}"
       echo "CSA_VAR:ROUND_LIMIT_REACHED=$ROUND_LIMIT_REACHED"
+      echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
       echo "CSA_VAR:ROUND_LIMIT_ACTION="
       echo "ROUND_LIMIT_MERGE: Routing to merge step."
       exit 0
@@ -970,7 +972,7 @@ rm -f "${WAIT_RESULT_FILE}"
 
 if [ "${WAIT_RC}" -eq 124 ]; then
   echo "WARN: Post-fix bot wait timed out. Falling back to local review gate."
-  if ! csa review --sa-mode true --range main...HEAD; then
+  if ! csa review --sa-mode true --range main...HEAD --timeout 1200; then
     echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
     exit 1
   fi
@@ -986,12 +988,25 @@ else
   if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
     BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
     sleep "${BOT_SETTLE_SECS}"
+    set +e
     ACTIONABLE_COUNT="$(
       gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
         --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${RETRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
-        2>/dev/null || echo "0"
+        2>/dev/null
     )"
-    if [ "${ACTIONABLE_COUNT:-0}" -gt 0 ]; then
+    ACTIONABLE_RC=$?
+    set -e
+    if [ "${ACTIONABLE_RC}" -ne 0 ]; then
+      echo "ERROR: Failed to query post-fix bot comments (rc=${ACTIONABLE_RC})." >&2
+      exit 1
+    fi
+    case "${ACTIONABLE_COUNT:-}" in
+      ''|*[!0-9]*)
+        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
+        exit 1
+        ;;
+    esac
+    if [ "${ACTIONABLE_COUNT}" -gt 0 ]; then
       echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
       echo "Re-run pr-codex-bot to start a new fix cycle."
       exit 1
@@ -999,7 +1014,7 @@ else
     BOT_CLEAN=true
   else
     echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
-    if ! csa review --sa-mode true --range main...HEAD; then
+    if ! csa review --sa-mode true --range main...HEAD --timeout 1200; then
       echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
       exit 1
     fi
