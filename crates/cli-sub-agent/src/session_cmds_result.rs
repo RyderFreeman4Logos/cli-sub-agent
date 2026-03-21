@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -592,11 +592,11 @@ pub(crate) fn handle_session_tool_output(
     use csa_session::tool_output_store::ToolOutputStore;
 
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let session_root = csa_session::get_session_root(&project_root)?;
-    let session_id = csa_session::resolve_session_prefix(&session_root, &session)?;
+    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let session_id = resolved.session_id;
     let session_dir = csa_session::get_session_dir(&project_root, &session_id)?;
 
-    let store = ToolOutputStore::new(&session_dir).context("failed to open tool output store")?;
+    let store = ToolOutputStore::open_readonly(&session_dir);
 
     if list || index.is_none() {
         let manifest = store.read_manifest()?;
