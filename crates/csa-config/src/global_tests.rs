@@ -290,6 +290,7 @@ fn test_gate_mode_serde_roundtrip_all_variants() {
             gate_command: None,
             gate_commands: vec![],
             gate_timeout_secs: ReviewConfig::default_gate_timeout(),
+            readonly_sandbox: None,
         };
         let toml = toml::to_string(&review).unwrap();
         let parsed: ReviewConfig = toml::from_str(&toml).unwrap();
@@ -515,5 +516,59 @@ fn default_template_contains_acp_section() {
     assert!(
         template.contains("init_timeout_seconds"),
         "template should mention init_timeout_seconds"
+    );
+}
+
+// --- readonly_sandbox config tests ---
+
+#[test]
+fn test_parse_review_readonly_sandbox_true() {
+    let toml_str = r#"
+[review]
+readonly_sandbox = true
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.review.readonly_sandbox, Some(true));
+    assert!(!config.review.is_default());
+}
+
+#[test]
+fn test_parse_debate_readonly_sandbox_false() {
+    let toml_str = r#"
+[debate]
+readonly_sandbox = false
+"#;
+    let config: GlobalConfig = toml::from_str(toml_str).unwrap();
+    assert_eq!(config.debate.readonly_sandbox, Some(false));
+    assert!(!config.debate.is_default());
+}
+
+#[test]
+fn test_readonly_sandbox_default_is_none() {
+    let config = GlobalConfig::default();
+    assert_eq!(config.review.readonly_sandbox, None);
+    assert_eq!(config.debate.readonly_sandbox, None);
+}
+
+#[test]
+fn test_readonly_sandbox_omitted_from_toml_when_none() {
+    let config = ReviewConfig::default();
+    let toml_str = toml::to_string(&config).unwrap();
+    assert!(
+        !toml_str.contains("readonly_sandbox"),
+        "None readonly_sandbox should be omitted: {toml_str}"
+    );
+}
+
+#[test]
+fn test_readonly_sandbox_serialized_when_set() {
+    let config = ReviewConfig {
+        readonly_sandbox: Some(true),
+        ..Default::default()
+    };
+    let toml_str = toml::to_string(&config).unwrap();
+    assert!(
+        toml_str.contains("readonly_sandbox = true"),
+        "Set readonly_sandbox should appear in TOML: {toml_str}"
     );
 }

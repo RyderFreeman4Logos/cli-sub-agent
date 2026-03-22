@@ -630,6 +630,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             None, // MCP server does not use memory injection
             Some(&global_config),
             false, // no_fs_sandbox
+            false, // readonly_project_root
         )
         .await?
     };

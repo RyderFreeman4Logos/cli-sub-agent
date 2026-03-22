@@ -30,6 +30,10 @@ pub(crate) enum SandboxResolution {
 ///
 /// When `no_fs_sandbox` is `true`, filesystem isolation is forcibly disabled
 /// regardless of config (equivalent to `enforcement_mode = "off"` for FS only).
+///
+/// When `readonly_project_root` is `true`, the project root is mounted read-only
+/// via bwrap `--ro-bind` instead of `--bind`. Used by review/debate to prevent
+/// the tool from modifying project files.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_sandbox_options(
     config: Option<&ProjectConfig>,
@@ -40,6 +44,7 @@ pub(crate) fn resolve_sandbox_options(
     liveness_dead_seconds: u64,
     initial_response_timeout_seconds: Option<u64>,
     no_fs_sandbox: bool,
+    readonly_project_root: bool,
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -101,6 +106,7 @@ pub(crate) fn resolve_sandbox_options(
                 // No session dir available; use a temporary placeholder.
                 &std::env::temp_dir(),
             )
+            .with_readonly_project_root(readonly_project_root)
             .build()
             .expect("BestEffort IsolationPlan should never fail");
 
@@ -203,7 +209,8 @@ pub(crate) fn resolve_sandbox_options(
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
-        .with_tool_defaults(tool_name, &project_root, &session_dir);
+        .with_tool_defaults(tool_name, &project_root, &session_dir)
+        .with_readonly_project_root(readonly_project_root);
 
     // Apply extra writable paths from [filesystem_sandbox] config.
     if !no_fs_sandbox {

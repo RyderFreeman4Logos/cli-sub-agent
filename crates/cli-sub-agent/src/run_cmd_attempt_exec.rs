@@ -251,6 +251,7 @@ async fn execute_persistent(
         Some(memory_injection),
         Some(global_config),
         no_fs_sandbox,
+        false, // readonly_project_root: `csa run` allows writes
     )
     .await
     {

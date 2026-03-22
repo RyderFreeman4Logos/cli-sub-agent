@@ -12,6 +12,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         600,
         Some(120),
         false,
+        false, // readonly_project_root
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -37,6 +38,7 @@ fn test_none_config_lightweight_skips_sandbox() {
         600,
         Some(120),
         false,
+        false, // readonly_project_root
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -66,6 +68,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         600,
         Some(120),
         false,
+        false, // readonly_project_root
     );
 
     let SandboxResolution::Ok(opts) = result else {

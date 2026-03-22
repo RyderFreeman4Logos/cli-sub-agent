@@ -615,6 +615,7 @@ async fn execute_task(
         None,  // batch does not use memory injection
         None,  // batch does not inject MCP (callers don't have global_config)
         false, // no_fs_sandbox
+        false, // readonly_project_root
     )
     .await;
 
