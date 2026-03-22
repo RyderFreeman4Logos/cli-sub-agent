@@ -281,3 +281,121 @@ enforcement_mode = "best-effort"
         "Tool-level FS enforcement should override global 'off'"
     );
 }
+
+/// Verify that resolve_sandbox_options injects CSA state paths (project state
+/// root and global slots) into the isolation plan's writable_paths.
+#[test]
+fn test_csa_state_paths_in_writable_paths() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "claude-code",
+        "test-session",
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false, // no_fs_sandbox
+        false, // readonly_project_root
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+
+    let Some(ref sandbox) = opts.sandbox else {
+        // No sandbox capability on this host — skip assertions.
+        return;
+    };
+
+    let writable = &sandbox.isolation_plan.writable_paths;
+
+    // Project state root should be present (allows fork-call session creation).
+    let cwd = std::env::current_dir().unwrap_or_default();
+    if let Ok(project_state_root) = csa_session::manager::get_session_root(&cwd) {
+        assert!(
+            writable.contains(&project_state_root),
+            "writable_paths should include project state root: {project_state_root:?}\n  actual: {writable:?}"
+        );
+    }
+
+    // Global slots directory should be present (allows lock file creation).
+    if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
+        assert!(
+            writable.contains(&slots),
+            "writable_paths should include slots dir: {slots:?}\n  actual: {writable:?}"
+        );
+    }
+}
+
+/// Verify that CSA state paths are present even when per-tool REPLACE
+/// semantics restrict project-root writability.
+#[test]
+fn test_csa_state_paths_survive_replace_semantics() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+
+[tools.claude-code.filesystem_sandbox]
+writable_paths = ["/tmp/restricted-only"]
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "claude-code",
+        "test-session",
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+
+    let Some(ref sandbox) = opts.sandbox else {
+        return;
+    };
+
+    let writable = &sandbox.isolation_plan.writable_paths;
+
+    // Project root should NOT be writable (REPLACE semantics make it readonly).
+    assert!(
+        sandbox.isolation_plan.readonly_project_root,
+        "REPLACE semantics should set readonly_project_root"
+    );
+
+    // But CSA state paths should still be present.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    if let Ok(project_state_root) = csa_session::manager::get_session_root(&cwd) {
+        assert!(
+            writable.contains(&project_state_root),
+            "CSA state root must survive REPLACE semantics"
+        );
+    }
+    if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
+        assert!(
+            writable.contains(&slots),
+            "slots dir must survive REPLACE semantics"
+        );
+    }
+
+    // Per-tool restricted path should also be present.
+    assert!(
+        writable.contains(&PathBuf::from("/tmp/restricted-only")),
+        "per-tool writable path should be present"
+    );
+}
