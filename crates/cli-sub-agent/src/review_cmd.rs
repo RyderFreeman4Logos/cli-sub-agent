@@ -19,6 +19,7 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
 use csa_core::types::{OutputFormat, ToolName};
+use csa_session::state::{ReviewSessionMeta, write_review_meta};
 
 #[path = "review_cmd_output.rs"]
 mod output;
@@ -303,6 +304,24 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let verdict = parse_review_verdict(&result.execution.output, result.execution.exit_code);
         let decision = parse_review_decision(&result.execution.output, result.execution.exit_code);
         debug!(verdict, decision = %decision, "Review verdict (legacy + four-value)");
+
+        // Write structured review metadata to session directory.
+        persist_review_meta(
+            &project_root,
+            &ReviewSessionMeta {
+                session_id: result.meta_session_id.clone(),
+                head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
+                decision: decision.as_str().to_string(),
+                verdict: verdict.to_string(),
+                tool: tool.to_string(),
+                scope: scope.clone(),
+                exit_code: result.execution.exit_code,
+                fix_attempted: args.fix,
+                fix_rounds: 0,
+                timestamp: chrono::Utc::now(),
+            },
+        );
+
         if !args.fix || verdict == CLEAN {
             return Ok(result.execution.exit_code);
         }
@@ -419,11 +438,43 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
             if gate_passed {
                 info!(round, "Fix round succeeded — quality gate passed");
+                // Update meta: fix succeeded
+                persist_review_meta(
+                    &project_root,
+                    &ReviewSessionMeta {
+                        session_id: session_id.clone(),
+                        head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
+                        decision: "pass".to_string(),
+                        verdict: CLEAN.to_string(),
+                        tool: tool.to_string(),
+                        scope: scope.clone(),
+                        exit_code: 0,
+                        fix_attempted: true,
+                        fix_rounds: u32::from(round),
+                        timestamp: chrono::Utc::now(),
+                    },
+                );
                 return Ok(0);
             }
         }
 
         // All fix rounds exhausted; gate still fails.
+        // Update meta: fix exhausted
+        persist_review_meta(
+            &project_root,
+            &ReviewSessionMeta {
+                session_id: result.meta_session_id.clone(),
+                head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
+                decision: decision.as_str().to_string(),
+                verdict: verdict.to_string(),
+                tool: tool.to_string(),
+                scope: scope.clone(),
+                exit_code: 1,
+                fix_attempted: true,
+                fix_rounds: u32::from(max_rounds),
+                timestamp: chrono::Utc::now(),
+            },
+        );
         error!(
             max_rounds,
             "All fix rounds exhausted — quality gate still failing"
@@ -690,6 +741,24 @@ async fn execute_review(
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
 
     Ok(execution)
+}
+
+/// Persist a [`ReviewSessionMeta`] to `{session_dir}/review_meta.json`.
+///
+/// Best-effort: failures are logged as warnings but do not fail the review.
+fn persist_review_meta(project_root: &Path, meta: &ReviewSessionMeta) {
+    match csa_session::get_session_dir(project_root, &meta.session_id) {
+        Ok(session_dir) => {
+            if let Err(e) = write_review_meta(&session_dir, meta) {
+                warn!(session_id = %meta.session_id, error = %e, "Failed to write review_meta.json");
+            } else {
+                debug!(session_id = %meta.session_id, "Wrote review_meta.json");
+            }
+        }
+        Err(e) => {
+            warn!(session_id = %meta.session_id, error = %e, "Cannot resolve session dir for review meta");
+        }
+    }
 }
 
 #[cfg(test)]

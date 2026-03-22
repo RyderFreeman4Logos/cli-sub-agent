@@ -26,8 +26,8 @@ mod vcs_identity_tests;
 // Re-export key types
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use state::{
-    ContextStatus, Genealogy, MetaSessionState, PhaseEvent, SandboxInfo, SessionPhase, TaskContext,
-    TokenUsage, ToolState,
+    ContextStatus, Genealogy, MetaSessionState, PhaseEvent, ReviewSessionMeta, SandboxInfo,
+    SessionPhase, TaskContext, TokenUsage, ToolState, write_review_meta,
 };
 
 pub use metadata::SessionMetadata;

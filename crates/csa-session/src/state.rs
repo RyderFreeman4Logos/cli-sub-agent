@@ -117,6 +117,49 @@ pub struct MetaSessionState {
     pub fork_call_timestamps: Vec<Instant>,
 }
 
+/// Structured metadata about a review execution.
+///
+/// Written to `{session_dir}/review_meta.json` after `csa review` completes,
+/// enabling machine-readable access to review results for downstream consumers
+/// (e.g., pr-codex-bot, commit skill, orchestration scripts).
+///
+/// Updated after each fix round when `--fix` is enabled.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReviewSessionMeta {
+    /// CSA meta-session ID for this review.
+    pub session_id: String,
+    /// Git HEAD SHA at review time.
+    pub head_sha: String,
+    /// Four-value review decision: pass, fail, skip, uncertain.
+    pub decision: String,
+    /// Legacy verdict string (CLEAN, HAS_ISSUES, etc.) for backward compatibility.
+    pub verdict: String,
+    /// Tool used for this review (e.g., "claude-code", "codex").
+    pub tool: String,
+    /// Review scope (e.g., "uncommitted", "range:main...HEAD", "base:main").
+    pub scope: String,
+    /// Exit code of the review process.
+    pub exit_code: i32,
+    /// Whether `--fix` was enabled and a fix pass was attempted.
+    pub fix_attempted: bool,
+    /// Number of fix rounds completed (0 if no fix attempted).
+    pub fix_rounds: u32,
+    /// ISO 8601 timestamp of when this metadata was written.
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Write review session metadata to the session directory.
+///
+/// Creates or overwrites `{session_dir}/review_meta.json`.
+pub fn write_review_meta(
+    session_dir: &std::path::Path,
+    meta: &ReviewSessionMeta,
+) -> std::io::Result<()> {
+    let path = session_dir.join("review_meta.json");
+    let json = serde_json::to_string_pretty(meta).map_err(std::io::Error::other)?;
+    std::fs::write(path, json)
+}
+
 /// Lightweight telemetry about the resource sandbox applied to a session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SandboxInfo {
