@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use crate::config::{EnforcementMode, ProjectConfig, ToolResourceProfile};
 
 /// Known tool-to-profile mapping based on runtime characteristics.
@@ -278,6 +280,97 @@ impl ProjectConfig {
         !self.can_tool_edit_existing(tool) && !self.can_tool_write_new(tool)
     }
 
+    /// Returns the writable paths for a tool's filesystem sandbox.
+    ///
+    /// Priority chain (REPLACE semantics):
+    /// 1. Tool-level `writable_paths` from `[tools.<name>.filesystem_sandbox]` — if set, REPLACES project root
+    /// 2. Legacy `tool_writable_overrides` from `[filesystem_sandbox]` — if set, REPLACES project root
+    /// 3. Global `extra_writable` from `[filesystem_sandbox]` — always APPENDED
+    /// 4. Default: `None` — caller should use project root as writable
+    ///
+    /// When tool-level paths are set (layer 1 or 2), the project root is NOT
+    /// included as writable. Session dir and tool config dirs are always
+    /// preserved by the `IsolationPlanBuilder` separately.
+    pub fn sandbox_writable_paths(&self, tool: &str) -> Option<Vec<PathBuf>> {
+        // Layer 1: new-style per-tool filesystem_sandbox config
+        let tool_paths = self
+            .tools
+            .get(tool)
+            .and_then(|t| t.filesystem_sandbox.as_ref())
+            .and_then(|fs| fs.writable_paths.as_ref());
+
+        if let Some(paths) = tool_paths {
+            // REPLACE semantics: tool-level paths replace project root.
+            // Global extra_writable is still appended.
+            let mut result = paths.clone();
+            result.extend(self.filesystem_sandbox.extra_writable.iter().cloned());
+            return Some(result);
+        }
+
+        // Layer 2: legacy tool_writable_overrides
+        if let Some(paths) = self.filesystem_sandbox.tool_writable_overrides.get(tool) {
+            let mut result = paths.clone();
+            result.extend(self.filesystem_sandbox.extra_writable.iter().cloned());
+            return Some(result);
+        }
+
+        // Layer 3/4: no per-tool override — caller uses project root as writable.
+        // If global extra_writable is set, return it so caller can append.
+        None
+    }
+
+    /// Returns the filesystem sandbox enforcement mode for a tool.
+    ///
+    /// Priority chain:
+    /// 1. Tool-level `[tools.<name>.filesystem_sandbox].enforcement_mode`
+    /// 2. Global `[filesystem_sandbox].enforcement_mode`
+    /// 3. Default: `None` (caller decides)
+    ///
+    /// Safety net: if tool-level FS sandbox section exists with `writable_paths`
+    /// but enforcement_mode resolves to `"off"` or is absent, auto-promote to
+    /// `"best-effort"` with a warning — configuring paths without enforcement
+    /// is almost certainly a mistake.
+    pub fn tool_fs_enforcement_mode(&self, tool: &str) -> Option<String> {
+        let tool_fs = self
+            .tools
+            .get(tool)
+            .and_then(|t| t.filesystem_sandbox.as_ref());
+
+        // Layer 1: tool-level enforcement_mode
+        if let Some(mode) = tool_fs.and_then(|fs| fs.enforcement_mode.as_ref()) {
+            // Safety net: writable_paths configured but enforcement is "off"
+            if mode == "off" && tool_fs.is_some_and(|fs| fs.writable_paths.is_some()) {
+                tracing::warn!(
+                    tool,
+                    "Auto-promoting filesystem enforcement_mode 'off' → 'best-effort': \
+                     writable_paths are configured but enforcement is off, which would \
+                     make the paths meaningless. Set enforcement_mode = 'off' on the \
+                     global [filesystem_sandbox] to suppress this warning."
+                );
+                return Some("best-effort".to_string());
+            }
+            return Some(mode.clone());
+        }
+
+        // Safety net: tool has writable_paths but no enforcement_mode at all
+        if tool_fs.is_some_and(|fs| fs.writable_paths.is_some()) {
+            // Check global enforcement before auto-promoting
+            if let Some(ref global_mode) = self.filesystem_sandbox.enforcement_mode {
+                return Some(global_mode.clone());
+            }
+            tracing::warn!(
+                tool,
+                "Auto-promoting filesystem enforcement_mode to 'best-effort': \
+                 tool has writable_paths configured but no enforcement_mode set. \
+                 Set enforcement_mode explicitly to suppress this warning."
+            );
+            return Some("best-effort".to_string());
+        }
+
+        // Layer 2: global enforcement_mode
+        self.filesystem_sandbox.enforcement_mode.clone()
+    }
+
     /// Resolve Codex PTY fork trust behavior from tool config.
     ///
     /// Returns false by default.
@@ -323,3 +416,7 @@ pub fn default_sandbox_for_tool(tool: &str) -> DefaultSandboxOptions {
 #[cfg(test)]
 #[path = "config_runtime_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_runtime_fs_sandbox_tests.rs"]
+mod fs_sandbox_tests;

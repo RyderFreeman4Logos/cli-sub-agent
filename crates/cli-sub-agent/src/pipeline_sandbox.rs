@@ -30,6 +30,10 @@ pub(crate) enum SandboxResolution {
 ///
 /// When `no_fs_sandbox` is `true`, filesystem isolation is forcibly disabled
 /// regardless of config (equivalent to `enforcement_mode = "off"` for FS only).
+///
+/// When `readonly_project_root` is `true`, the project root is mounted read-only
+/// via bwrap `--ro-bind` instead of `--bind`. Used by review/debate to prevent
+/// the tool from modifying project files.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_sandbox_options(
     config: Option<&ProjectConfig>,
@@ -40,6 +44,7 @@ pub(crate) fn resolve_sandbox_options(
     liveness_dead_seconds: u64,
     initial_response_timeout_seconds: Option<u64>,
     no_fs_sandbox: bool,
+    readonly_project_root: bool,
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -101,6 +106,7 @@ pub(crate) fn resolve_sandbox_options(
                 // No session dir available; use a temporary placeholder.
                 &std::env::temp_dir(),
             )
+            .with_readonly_project_root(readonly_project_root)
             .build()
             .expect("BestEffort IsolationPlan should never fail");
 
@@ -141,15 +147,15 @@ pub(crate) fn resolve_sandbox_options(
     let resource_cap = csa_resource::detect_resource_capability();
 
     // Resolve filesystem enforcement independently from resource enforcement.
+    // tool_fs_enforcement_mode already handles the full priority chain:
+    //   tool-level > safety-net auto-promote > global [filesystem_sandbox].
     let fs_enforcement = if no_fs_sandbox {
         ResourceEnforcementMode::Off
     } else {
-        let fs_config = &cfg.filesystem_sandbox;
-        match fs_config
-            .enforcement_mode
-            .as_deref()
-            .unwrap_or("best-effort")
-        {
+        let effective_mode = cfg
+            .tool_fs_enforcement_mode(tool_name)
+            .unwrap_or_else(|| "best-effort".to_string());
+        match effective_mode.as_str() {
             "off" => ResourceEnforcementMode::Off,
             "required" => ResourceEnforcementMode::Required,
             _ => ResourceEnforcementMode::BestEffort,
@@ -198,21 +204,42 @@ pub(crate) fn resolve_sandbox_options(
     let memory_swap_max_mb = cfg.sandbox_memory_swap_max_mb(tool_name);
     let pids_max = cfg.sandbox_pids_max();
 
+    // Per-tool filesystem sandbox: check for REPLACE-semantics writable paths.
+    let per_tool_writable = if !no_fs_sandbox {
+        cfg.sandbox_writable_paths(tool_name)
+    } else {
+        None
+    };
+
+    // When per-tool writable paths are set, project root becomes read-only
+    // (the per-tool paths provide fine-grained write access instead).
+    let effective_readonly = readonly_project_root || per_tool_writable.is_some();
+
     let mut builder = IsolationPlanBuilder::new(resource_enforcement)
         .with_filesystem_enforcement(fs_enforcement)
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
-        .with_tool_defaults(tool_name, &project_root, &session_dir);
+        .with_tool_defaults(tool_name, &project_root, &session_dir)
+        .with_readonly_project_root(effective_readonly);
 
-    // Apply extra writable paths from [filesystem_sandbox] config.
     if !no_fs_sandbox {
-        let fs_config = &cfg.filesystem_sandbox;
-        for path in &fs_config.extra_writable {
-            builder = builder.with_writable_path(path.clone());
-        }
-        if let Some(tool_paths) = fs_config.tool_writable_overrides.get(tool_name) {
-            for path in tool_paths {
+        if let Some(ref paths) = per_tool_writable {
+            // Validate user-provided writable paths before applying.
+            if let Err(e) =
+                csa_resource::isolation_plan::validate_writable_paths(paths, &project_root)
+            {
+                return SandboxResolution::RequiredButUnavailable(format!(
+                    "Per-tool writable_paths validation failed for '{tool_name}': {e}"
+                ));
+            }
+            for path in paths {
+                builder = builder.with_writable_path(path.clone());
+            }
+        } else {
+            // No per-tool override — apply global extra_writable paths.
+            let fs_config = &cfg.filesystem_sandbox;
+            for path in &fs_config.extra_writable {
                 builder = builder.with_writable_path(path.clone());
             }
         }
@@ -318,10 +345,16 @@ pub(crate) fn record_sandbox_telemetry(
             csa_resource::FilesystemCapability::None => "none".to_string(),
         });
 
+    let readonly = execute_options
+        .sandbox
+        .as_ref()
+        .map(|ctx| ctx.isolation_plan.readonly_project_root);
+
     session.sandbox_info = Some(csa_session::SandboxInfo {
         mode: mode.to_string(),
         memory_max_mb: memory,
         filesystem_mode: fs_mode.clone(),
+        readonly_project_root: readonly,
     });
 
     info!(
@@ -330,6 +363,37 @@ pub(crate) fn record_sandbox_telemetry(
         memory_max_mb = ?memory,
         filesystem_mode = ?fs_mode,
         "Sandbox telemetry recorded in session state"
+    );
+}
+
+/// Best-effort diagnostic: if tool stderr contains EACCES / "Permission denied"
+/// and a filesystem sandbox was active, emit a `tracing::warn!` with hints.
+///
+/// This is intentionally lenient — false positives (non-sandbox permission errors)
+/// are acceptable because we only log, never alter the execution result.
+pub(crate) fn check_sandbox_permission_errors(
+    stderr: &str,
+    sandbox_info: Option<&csa_session::SandboxInfo>,
+) {
+    let Some(info) = sandbox_info else { return };
+    // Only relevant when filesystem isolation was actually active.
+    let fs_active = info.filesystem_mode.as_deref().is_some_and(|m| m != "none");
+    if !fs_active {
+        return;
+    }
+
+    let lower = stderr.to_ascii_lowercase();
+    if !lower.contains("permission denied") && !lower.contains("eacces") {
+        return;
+    }
+
+    let readonly = info.readonly_project_root.unwrap_or(false);
+    warn!(
+        filesystem_mode = info.filesystem_mode.as_deref().unwrap_or("unknown"),
+        readonly_project_root = readonly,
+        "Tool stderr contains 'Permission denied' — this may be caused by the \
+         filesystem sandbox. Check writable_paths in .csa/config.toml \
+         [tools.<name>.filesystem_sandbox] or pass --no-fs-sandbox to disable."
     );
 }
 

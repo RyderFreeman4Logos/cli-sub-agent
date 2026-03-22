@@ -128,6 +128,9 @@ pub struct SandboxInfo {
     /// Filesystem isolation mode used: "bwrap", "landlock", or "none".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub filesystem_mode: Option<String>,
+    /// Whether the project root was mounted read-only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly_project_root: Option<bool>,
 }
 
 /// Genealogy tracking for session parent-child relationships

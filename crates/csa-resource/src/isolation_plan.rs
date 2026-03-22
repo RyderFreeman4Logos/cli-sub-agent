@@ -49,6 +49,10 @@ pub struct IsolationPlan {
     pub memory_swap_max_mb: Option<u64>,
     /// Maximum number of PIDs for cgroup `TasksMax` or `RLIMIT_NPROC`.
     pub pids_max: Option<u32>,
+    /// When true, the project root is mounted read-only instead of read-write.
+    pub readonly_project_root: bool,
+    /// Project root path, used by bwrap to decide bind mount mode.
+    pub project_root: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +83,8 @@ pub struct IsolationPlanBuilder {
     memory_max_mb: Option<u64>,
     memory_swap_max_mb: Option<u64>,
     pids_max: Option<u32>,
+    readonly_project_root: bool,
+    project_root: Option<PathBuf>,
 }
 
 impl IsolationPlanBuilder {
@@ -95,6 +101,8 @@ impl IsolationPlanBuilder {
             memory_max_mb: None,
             memory_swap_max_mb: None,
             pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
         }
     }
 
@@ -139,6 +147,15 @@ impl IsolationPlanBuilder {
         self
     }
 
+    /// Mount the project root as read-only instead of read-write.
+    ///
+    /// When enabled, the bwrap builder uses `--ro-bind` for the project root.
+    /// Useful for tools that should only read project files, not modify them.
+    pub fn with_readonly_project_root(mut self, readonly: bool) -> Self {
+        self.readonly_project_root = readonly;
+        self
+    }
+
     /// Apply per-tool default paths and environment overrides.
     ///
     /// Always adds `project_root` and `session_dir`.  Tool-specific config
@@ -154,6 +171,7 @@ impl IsolationPlanBuilder {
         project_root: &Path,
         session_dir: &Path,
     ) -> Self {
+        self.project_root = Some(project_root.to_path_buf());
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
 
@@ -238,7 +256,46 @@ impl IsolationPlanBuilder {
             memory_max_mb: self.memory_max_mb,
             memory_swap_max_mb: self.memory_swap_max_mb,
             pids_max: self.pids_max,
+            readonly_project_root: self.readonly_project_root,
+            project_root: self.project_root,
         })
+    }
+}
+
+/// Validate that all writable paths are subpaths of allowed parents.
+///
+/// Allowed parents: `project_root`, the user home directory, and `/tmp`.
+/// Paths like `/`, `/etc`, `/usr`, `/var` are rejected.
+///
+/// # Errors
+///
+/// Returns an error listing any rejected paths that are not under an allowed
+/// parent directory.
+pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow::Result<()> {
+    let home = home_dir().unwrap_or_else(|| PathBuf::from("/nonexistent"));
+    let allowed_parents: &[&Path] = &[project_root, home.as_path(), Path::new("/tmp")];
+
+    let mut rejected = Vec::new();
+    for path in paths {
+        if path == Path::new("/") {
+            rejected.push(path.clone());
+            continue;
+        }
+        let is_allowed = allowed_parents
+            .iter()
+            .any(|parent| path.starts_with(parent));
+        if !is_allowed {
+            rejected.push(path.clone());
+        }
+    }
+
+    if rejected.is_empty() {
+        Ok(())
+    } else {
+        anyhow::bail!(
+            "writable_paths validation failed: rejected paths {rejected:?}. \
+             Allowed: subpaths of home dir, /tmp, or project root"
+        );
     }
 }
 
@@ -465,5 +522,123 @@ mod tests {
                 "codex defaults should include ~/.codex"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // validate_writable_paths tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_validate_rejects_root_path() {
+        let result = validate_writable_paths(&[PathBuf::from("/")], Path::new("/tmp/project"));
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("rejected paths"), "unexpected error: {msg}");
+    }
+
+    #[test]
+    fn test_validate_rejects_etc() {
+        let result =
+            validate_writable_paths(&[PathBuf::from("/etc/shadow")], Path::new("/tmp/project"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_rejects_usr() {
+        let result =
+            validate_writable_paths(&[PathBuf::from("/usr/local")], Path::new("/tmp/project"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validate_accepts_tmp_subpath() {
+        let result = validate_writable_paths(&[PathBuf::from("/tmp/foo")], Path::new("/project"));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_accepts_home_subpath() {
+        if let Some(home) = home_dir() {
+            let result =
+                validate_writable_paths(&[home.join("workspace")], Path::new("/tmp/project"));
+            assert!(result.is_ok());
+        }
+    }
+
+    #[test]
+    fn test_validate_accepts_project_root_subpath() {
+        let project = PathBuf::from("/opt/myproject");
+        let result = validate_writable_paths(&[PathBuf::from("/opt/myproject/src")], &project);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_validate_mixed_accepted_and_rejected() {
+        let result = validate_writable_paths(
+            &[PathBuf::from("/tmp/ok"), PathBuf::from("/var/bad")],
+            Path::new("/tmp/project"),
+        );
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("/var/bad"));
+    }
+
+    // ── Security audit scenarios ───────────────────────────────────────
+
+    #[test]
+    fn test_validate_rejects_relative_path_traversal() {
+        // Scenario 3: ../../../etc should be rejected even as relative path
+        let result =
+            validate_writable_paths(&[PathBuf::from("../../../etc")], Path::new("/tmp/project"));
+        assert!(
+            result.is_err(),
+            "relative path traversal to /etc must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_empty_writable_paths_is_ok() {
+        // Scenario 5: empty writable_paths = [] means only session_dir and
+        // tool config dir are writable (handled by IsolationPlanBuilder separately)
+        let result = validate_writable_paths(&[], Path::new("/tmp/project"));
+        assert!(
+            result.is_ok(),
+            "empty writable_paths should be valid (no user paths to validate)"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // readonly_project_root tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_readonly_project_root_default_false() {
+        let plan = IsolationPlanBuilder::new(EnforcementMode::Off)
+            .build()
+            .expect("should succeed");
+        assert!(!plan.readonly_project_root);
+    }
+
+    #[test]
+    fn test_readonly_project_root_propagates() {
+        let plan = IsolationPlanBuilder::new(EnforcementMode::Off)
+            .with_readonly_project_root(true)
+            .build()
+            .expect("should succeed");
+        assert!(plan.readonly_project_root);
+    }
+
+    #[test]
+    fn test_with_tool_defaults_stores_project_root() {
+        let project = PathBuf::from("/tmp/project");
+        let session = PathBuf::from("/tmp/session");
+
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults("claude-code", &project, &session)
+            .build()
+            .expect("should succeed");
+
+        assert_eq!(plan.project_root, Some(project));
     }
 }

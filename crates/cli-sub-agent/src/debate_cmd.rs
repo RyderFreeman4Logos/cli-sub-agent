@@ -258,6 +258,7 @@ pub(crate) async fn handle_debate(
     let mut retry_count = 0u8;
     let mut first_error_context: Option<String> = None;
     let mut resume_session = args.session.clone();
+    let readonly_project_root = global_config.debate.readonly_sandbox.unwrap_or(false);
 
     let execution = loop {
         ensure_debate_wall_clock_within_timeout(wall_clock_start, timeout_seconds)?;
@@ -283,6 +284,7 @@ pub(crate) async fn handle_debate(
             None,
             Some(&global_config),
             args.no_fs_sandbox,
+            readonly_project_root,
         );
 
         let execute_result = if let Some(timeout_secs) = timeout_seconds {

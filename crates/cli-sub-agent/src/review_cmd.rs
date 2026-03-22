@@ -249,6 +249,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             args.initial_response_timeout,
         );
 
+    // Resolve readonly_project_root from config (default: false).
+    let readonly_project_root = global_config.review.readonly_sandbox.unwrap_or(false);
+
     if args.reviewers == 1 {
         // Single-reviewer path (with optional --fix loop).
         let review_future = execute_review(
@@ -271,6 +274,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             initial_response_timeout_seconds,
             args.force_override_user_config,
             args.no_fs_sandbox,
+            readonly_project_root,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -336,6 +340,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 initial_response_timeout_seconds,
                 args.force_override_user_config,
                 args.no_fs_sandbox,
+                false, // fix pass must write — override readonly_project_root
             );
 
             let fix_result = if let Some(timeout_secs) = args.timeout {
@@ -488,6 +493,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 initial_response_timeout_seconds,
                 reviewer_force_override,
                 reviewer_no_fs_sandbox,
+                readonly_project_root,
             )
             .await?;
             let result = &session_result.execution;
@@ -605,6 +611,7 @@ async fn execute_review(
     initial_response_timeout_seconds: Option<u64>,
     force_override_user_config: bool,
     no_fs_sandbox: bool,
+    readonly_project_root: bool,
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let enforce_tier = tier_model_spec.is_some();
     let executor = crate::pipeline::build_and_validate_executor(
@@ -676,6 +683,7 @@ async fn execute_review(
         Some(global_config),
         crate::pipeline::ParentSessionSource::ExplicitOnly,
         no_fs_sandbox,
+        readonly_project_root,
     )
     .await?;
 

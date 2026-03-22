@@ -1,27 +1,18 @@
 //! Global configuration for CLI Sub-Agent (`~/.config/cli-sub-agent/config.toml`).
-//!
-//! Stores user-level settings that apply across all projects:
-//! - Per-tool concurrency limits (slot counts)
-//! - API keys and environment variables injected into child processes
-//!
-//! Completely separate from project config (`{project}/.csa/config.toml`).
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use csa_core::types::ToolName;
-
+pub use crate::global_env::ExecutionEnvOptions;
 use crate::mcp::McpServerConfig;
 use crate::memory::MemoryConfig;
 use crate::paths;
-
 pub use crate::tool_selection::ToolSelection;
+use csa_core::types::ToolName;
 
-/// Default maximum concurrent instances per tool.
 const DEFAULT_MAX_CONCURRENT: u32 = 3;
-pub use crate::global_env::ExecutionEnvOptions;
 
 /// Global configuration loaded from `~/.config/cli-sub-agent/config.toml`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -153,6 +144,11 @@ pub struct ReviewConfig {
         skip_serializing_if = "is_default_gate_timeout"
     )]
     pub gate_timeout_secs: u64,
+    /// When true, enforce filesystem-level read-only access to the project root
+    /// during review sessions. This prevents the review tool from writing files
+    /// even if instructed to. Default: false (allows resume-to-fix workflow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly_sandbox: Option<bool>,
 }
 
 const fn default_gate_timeout_secs() -> u64 {
@@ -174,6 +170,7 @@ impl Default for ReviewConfig {
             gate_command: None,
             gate_commands: Vec::new(),
             gate_timeout_secs: default_gate_timeout_secs(),
+            readonly_sandbox: None,
         }
     }
 }
@@ -189,6 +186,7 @@ impl ReviewConfig {
             && self.gate_command.is_none()
             && self.gate_commands.is_empty()
             && self.gate_timeout_secs == default_gate_timeout_secs()
+            && self.readonly_sandbox.is_none()
     }
 
     /// Returns the effective gate steps, preferring `gate_commands` over legacy
@@ -256,6 +254,11 @@ pub struct DebateConfig {
     /// over `tool` when both are set. The tier must exist in `[tiers]`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<String>,
+    /// When true, enforce filesystem-level read-only access to the project root
+    /// during debate sessions. This prevents the debate tool from writing files
+    /// even if instructed to. Default: false (allows resume-to-fix workflow).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub readonly_sandbox: Option<bool>,
 }
 
 fn default_debate_timeout_seconds() -> u64 {
@@ -275,6 +278,7 @@ impl Default for DebateConfig {
             thinking: None,
             same_model_fallback: true,
             tier: None,
+            readonly_sandbox: None,
         }
     }
 }
@@ -288,6 +292,7 @@ impl DebateConfig {
             && self.thinking.is_none()
             && self.same_model_fallback
             && self.tier.is_none()
+            && self.readonly_sandbox.is_none()
     }
 }
 

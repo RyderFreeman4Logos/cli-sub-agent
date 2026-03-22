@@ -80,7 +80,7 @@ fn is_default_strategy(s: &TierStrategy) -> bool {
 }
 
 /// Current schema version for config.toml
-pub const CURRENT_SCHEMA_VERSION: u32 = 1;
+pub const CURRENT_SCHEMA_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProjectConfig {
@@ -185,7 +185,7 @@ fn default_recursion_depth() -> u32 {
 }
 
 pub use super::config_session::{ExecutionConfig, HooksSection, SessionConfig, VcsConfig};
-pub use super::config_tool::{ToolConfig, ToolRestrictions};
+pub use super::config_tool::{ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions};
 
 impl ProjectConfig {
     /// Return a copy suitable for user-facing display/logging.

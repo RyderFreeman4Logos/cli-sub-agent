@@ -1,11 +1,20 @@
-//! Session-bound execution pipeline: resolve-or-create session, run tool,
-//! post-process results.
+//! Session-bound execution pipeline: resolve-or-create session, run tool, post-process results.
 
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+use super::prompt_guard::emit_prompt_guard_to_caller;
+use super::result_contract::{clear_expected_result_toml, enforce_result_toml_path_contract};
+use super::{
+    MemoryInjectionOptions, ParentSessionSource, SessionExecutionResult,
+    resolve_liveness_dead_seconds, resolve_mcp_servers, run_pipeline_hook,
+};
+use crate::memory_capture;
+use crate::pipeline_project_key::resolve_memory_project_key;
+use crate::run_helpers::truncate_prompt;
+use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::{OutputFormat, ToolName};
 use csa_executor::Executor;
@@ -17,18 +26,6 @@ use csa_lock::acquire_lock;
 use csa_process::ExecutionResult;
 use csa_resource::{ResourceGuard, ResourceLimits};
 use csa_session::{ToolState, create_session, get_session_dir};
-
-use crate::memory_capture;
-use crate::pipeline_project_key::resolve_memory_project_key;
-use crate::run_helpers::truncate_prompt;
-use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
-
-use super::prompt_guard::emit_prompt_guard_to_caller;
-use super::result_contract::{clear_expected_result_toml, enforce_result_toml_path_contract};
-use super::{
-    MemoryInjectionOptions, ParentSessionSource, SessionExecutionResult,
-    resolve_liveness_dead_seconds, resolve_mcp_servers, run_pipeline_hook,
-};
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
@@ -52,6 +49,7 @@ pub(crate) async fn execute_with_session(
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
     no_fs_sandbox: bool,
+    readonly_project_root: bool,
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -74,6 +72,7 @@ pub(crate) async fn execute_with_session(
         memory_injection,
         global_config,
         no_fs_sandbox,
+        readonly_project_root,
     )
     .await?;
 
@@ -103,6 +102,7 @@ pub(crate) async fn execute_with_session_and_meta(
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
     no_fs_sandbox: bool,
+    readonly_project_root: bool,
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
         executor,
@@ -126,6 +126,7 @@ pub(crate) async fn execute_with_session_and_meta(
         global_config,
         ParentSessionSource::ExplicitOrEnv,
         no_fs_sandbox,
+        readonly_project_root,
     )
     .await
 }
@@ -154,6 +155,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     global_config: Option<&GlobalConfig>,
     parent_session_source: ParentSessionSource,
     no_fs_sandbox: bool,
+    readonly_project_root: bool,
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg
@@ -214,25 +216,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     };
 
     if session_arg.is_some() && session.phase == csa_session::SessionPhase::Available {
-        match session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
-            Ok(()) => {
-                info!(
-                    session = %session.meta_session_id,
-                    "Session resumed and marked Active"
-                );
-            }
-            Err(e) => {
-                warn!(
-                    session = %session.meta_session_id,
-                    error = %e,
-                    "Skipping phase transition on resume"
-                );
-            }
+        if let Err(e) = session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
+            warn!(session = %session.meta_session_id, error = %e, "Skipping phase transition on resume");
+        } else {
+            info!(session = %session.meta_session_id, "Session resumed and marked Active");
         }
     }
-
     let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-
     // Arm cleanup guard for new sessions only (not resumed ones).
     // If any pre-execution step fails, the guard deletes the orphan directory.
     let mut cleanup_guard = if session_arg.is_none() {
@@ -581,6 +571,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         liveness_dead_seconds,
         initial_response_timeout_seconds,
         no_fs_sandbox,
+        readonly_project_root,
     ) {
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
@@ -656,6 +647,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let mut result = transport_result.execution;
+
+    // Best-effort EACCES diagnostic when filesystem sandbox is active.
+    crate::pipeline_sandbox::check_sandbox_permission_errors(
+        &result.stderr_output,
+        session.sandbox_info.as_ref(),
+    );
+
     enforce_result_toml_path_contract(
         prompt,
         &effective_prompt,

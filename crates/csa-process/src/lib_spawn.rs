@@ -204,7 +204,18 @@ pub async fn spawn_tool_sandboxed(
         }
         FilesystemCapability::Landlock => {
             debug!("Landlock filesystem isolation will be applied in pre_exec");
-            landlock_paths = Some(plan.writable_paths.clone());
+            // Filter out project_root when readonly_project_root is set,
+            // mirroring the bwrap --ro-bind behavior.
+            let paths = if plan.readonly_project_root {
+                plan.writable_paths
+                    .iter()
+                    .filter(|p| plan.project_root.as_ref().is_none_or(|root| *p != root))
+                    .cloned()
+                    .collect()
+            } else {
+                plan.writable_paths.clone()
+            };
+            landlock_paths = Some(paths);
             cmd
         }
         FilesystemCapability::None => cmd,
