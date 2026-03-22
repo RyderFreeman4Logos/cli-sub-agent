@@ -591,6 +591,8 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
             memory_max_mb: None,
             memory_swap_max_mb: None,
             pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
         },
         tool_name: "gemini-cli".to_string(),
         best_effort: true,

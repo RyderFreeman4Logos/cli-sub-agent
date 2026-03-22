@@ -124,7 +124,14 @@ pub fn from_isolation_plan(
     let mut builder = BwrapCommandBuilder::new(tool_binary, tool_args);
 
     for path in &plan.writable_paths {
-        builder.with_writable_path(path);
+        // When readonly_project_root is set, mount the project root as
+        // read-only instead of read-write.
+        let is_project_root = plan.project_root.as_ref().is_some_and(|root| path == root);
+        if plan.readonly_project_root && is_project_root {
+            builder.with_ro_bind(path, path);
+        } else {
+            builder.with_writable_path(path);
+        }
     }
 
     for (key, value) in &plan.env_overrides {
@@ -219,6 +226,8 @@ mod tests {
             memory_max_mb: None,
             memory_swap_max_mb: None,
             pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
         };
 
         let result = from_isolation_plan(&plan, "/usr/bin/tool", &["run".into()]);
@@ -241,6 +250,8 @@ mod tests {
             memory_max_mb: None,
             memory_swap_max_mb: None,
             pids_max: None,
+            readonly_project_root: false,
+            project_root: None,
         };
 
         let result = from_isolation_plan(&plan, "/usr/bin/tool", &[]);
@@ -269,6 +280,55 @@ mod tests {
         assert!(
             found_sandbox_env,
             "CSA_FS_SANDBOXED=1 must be set via --setenv; args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_readonly_project_root() {
+        let plan = IsolationPlan {
+            resource: ResourceCapability::None,
+            filesystem: FilesystemCapability::Bwrap,
+            writable_paths: vec![PathBuf::from("/project"), PathBuf::from("/tmp/session")],
+            env_overrides: HashMap::new(),
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
+            readonly_project_root: true,
+            project_root: Some(PathBuf::from("/project")),
+        };
+
+        let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
+        let args = command_args(&cmd);
+
+        // /project should appear after --ro-bind (not --bind)
+        let ro_bind_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--ro-bind")
+            .map(|(i, _)| i)
+            .collect();
+        let project_after_ro = ro_bind_positions
+            .iter()
+            .any(|&pos| args.get(pos + 1).map(|s| s.as_str()) == Some("/project"));
+        assert!(
+            project_after_ro,
+            "/project should be --ro-bind when readonly_project_root is true; args: {args:?}"
+        );
+
+        // /tmp/session should still be --bind (writable)
+        let bind_positions: Vec<_> = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--bind")
+            .map(|(i, _)| i)
+            .collect();
+        let session_after_bind = bind_positions
+            .iter()
+            .any(|&pos| args.get(pos + 1).map(|s| s.as_str()) == Some("/tmp/session"));
+        assert!(
+            session_after_bind,
+            "/tmp/session should be --bind (writable); args: {args:?}"
         );
     }
 }
