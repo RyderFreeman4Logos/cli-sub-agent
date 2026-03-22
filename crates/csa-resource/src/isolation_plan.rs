@@ -583,6 +583,30 @@ mod tests {
         assert!(msg.contains("/var/bad"));
     }
 
+    // ── Security audit scenarios ───────────────────────────────────────
+
+    #[test]
+    fn test_validate_rejects_relative_path_traversal() {
+        // Scenario 3: ../../../etc should be rejected even as relative path
+        let result =
+            validate_writable_paths(&[PathBuf::from("../../../etc")], Path::new("/tmp/project"));
+        assert!(
+            result.is_err(),
+            "relative path traversal to /etc must be rejected"
+        );
+    }
+
+    #[test]
+    fn test_validate_empty_writable_paths_is_ok() {
+        // Scenario 5: empty writable_paths = [] means only session_dir and
+        // tool config dir are writable (handled by IsolationPlanBuilder separately)
+        let result = validate_writable_paths(&[], Path::new("/tmp/project"));
+        assert!(
+            result.is_ok(),
+            "empty writable_paths should be valid (no user paths to validate)"
+        );
+    }
+
     // -----------------------------------------------------------------------
     // readonly_project_root tests
     // -----------------------------------------------------------------------
