@@ -91,7 +91,8 @@ pub(crate) fn resolve_sandbox_options(
         }
 
         // Build IsolationPlan via builder (BestEffort for profile defaults).
-        let plan = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
+        let cwd = std::env::current_dir().unwrap_or_default();
+        let mut builder = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
             .with_resource_limits(
@@ -102,11 +103,23 @@ pub(crate) fn resolve_sandbox_options(
             .with_tool_defaults(
                 tool_name,
                 // No project root available from profile defaults; use cwd.
-                &std::env::current_dir().unwrap_or_default(),
+                &cwd,
                 // No session dir available; use a temporary placeholder.
                 &std::env::temp_dir(),
             )
-            .with_readonly_project_root(readonly_project_root)
+            .with_readonly_project_root(readonly_project_root);
+
+        // CSA runtime writable paths (best-effort for profile defaults).
+        if !no_fs_sandbox {
+            if let Ok(project_state_root) = csa_session::manager::get_session_root(&cwd) {
+                builder = builder.with_writable_path(project_state_root);
+            }
+            if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
+                builder = builder.with_writable_path(slots);
+            }
+        }
+
+        let plan = builder
             .build()
             .expect("BestEffort IsolationPlan should never fail");
 
@@ -222,6 +235,19 @@ pub(crate) fn resolve_sandbox_options(
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
         .with_tool_defaults(tool_name, &project_root, &session_dir)
         .with_readonly_project_root(effective_readonly);
+
+    // CSA runtime writable paths: project state root (for fork-call session
+    // creation) and global slots (for lock files).  These are always added
+    // regardless of per-tool REPLACE semantics because CSA needs them to
+    // function even when the tool's project-root access is restricted.
+    if !no_fs_sandbox {
+        if let Ok(project_state_root) = csa_session::manager::get_session_root(&project_root) {
+            builder = builder.with_writable_path(project_state_root);
+        }
+        if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
+            builder = builder.with_writable_path(slots);
+        }
+    }
 
     if !no_fs_sandbox {
         if let Some(ref paths) = per_tool_writable {

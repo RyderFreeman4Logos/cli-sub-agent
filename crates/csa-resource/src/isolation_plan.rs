@@ -193,6 +193,9 @@ impl IsolationPlanBuilder {
                     self.writable_paths.push(home.join(".codex"));
                 }
                 "gemini-cli" => {
+                    // OAuth tokens, session history, project settings
+                    self.writable_paths.push(home.join(".gemini"));
+                    // XDG config dir (settings.json, etc.)
                     self.writable_paths.push(home.join(".config/gemini-cli"));
                 }
                 "opencode" => {
@@ -520,6 +523,55 @@ mod tests {
             assert!(
                 plan.writable_paths.contains(&home.join(".codex")),
                 "codex defaults should include ~/.codex"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tool_defaults_gemini_cli() {
+        let project = PathBuf::from("/tmp/project");
+        let session = PathBuf::from("/tmp/session");
+
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults("gemini-cli", &project, &session)
+            .build()
+            .expect("should succeed");
+
+        assert!(plan.writable_paths.contains(&project));
+        assert!(plan.writable_paths.contains(&session));
+
+        if let Some(home) = home_dir() {
+            assert!(
+                plan.writable_paths.contains(&home.join(".gemini")),
+                "gemini-cli defaults should include ~/.gemini"
+            );
+            assert!(
+                plan.writable_paths
+                    .contains(&home.join(".config/gemini-cli")),
+                "gemini-cli defaults should include ~/.config/gemini-cli"
+            );
+        }
+    }
+
+    #[test]
+    fn test_tool_defaults_opencode() {
+        let project = PathBuf::from("/tmp/project");
+        let session = PathBuf::from("/tmp/session");
+
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_filesystem_capability(FilesystemCapability::Bwrap)
+            .with_tool_defaults("opencode", &project, &session)
+            .build()
+            .expect("should succeed");
+
+        assert!(plan.writable_paths.contains(&project));
+        assert!(plan.writable_paths.contains(&session));
+
+        if let Some(home) = home_dir() {
+            assert!(
+                plan.writable_paths.contains(&home.join(".config/opencode")),
+                "opencode defaults should include ~/.config/opencode"
             );
         }
     }
