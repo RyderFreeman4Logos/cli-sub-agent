@@ -762,3 +762,5 @@ fn tool_default_thinking_reads_tool_override() {
     assert_eq!(cfg.tool_default_thinking("codex"), Some("xhigh"));
     assert_eq!(cfg.tool_default_thinking("claude-code"), None);
 }
+
+// FS sandbox tests moved to config_runtime_fs_sandbox_tests.rs
