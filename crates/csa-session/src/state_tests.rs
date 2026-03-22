@@ -645,3 +645,95 @@ fn test_genealogy_skip_serializing_none_fork_fields() {
     );
     assert!(!serialized.contains("fork_provider_session_id"));
 }
+
+// ── ReviewSessionMeta tests ──────────────────────────────────────
+
+#[test]
+fn review_session_meta_serde_roundtrip() {
+    let meta = ReviewSessionMeta {
+        session_id: "01JABCDEF0123456789ABCDEFG".to_string(),
+        head_sha: "abc123def456".to_string(),
+        decision: "fail".to_string(),
+        verdict: "HAS_ISSUES".to_string(),
+        tool: "claude-code".to_string(),
+        scope: "range:main...HEAD".to_string(),
+        exit_code: 1,
+        fix_attempted: true,
+        fix_rounds: 2,
+        timestamp: chrono::Utc::now(),
+    };
+
+    let json = serde_json::to_string_pretty(&meta).expect("serialize");
+    let decoded: ReviewSessionMeta = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded, meta);
+}
+
+#[test]
+fn review_session_meta_write_and_read() {
+    let td = tempfile::tempdir().expect("tempdir");
+    let meta = ReviewSessionMeta {
+        session_id: "01JABCDEF0123456789ABCDEFG".to_string(),
+        head_sha: "deadbeef".to_string(),
+        decision: "pass".to_string(),
+        verdict: "CLEAN".to_string(),
+        tool: "codex".to_string(),
+        scope: "uncommitted".to_string(),
+        exit_code: 0,
+        fix_attempted: false,
+        fix_rounds: 0,
+        timestamp: chrono::Utc::now(),
+    };
+
+    write_review_meta(td.path(), &meta).expect("write");
+
+    let path = td.path().join("review_meta.json");
+    assert!(path.exists(), "review_meta.json should be created");
+
+    let content = std::fs::read_to_string(&path).expect("read");
+    let decoded: ReviewSessionMeta = serde_json::from_str(&content).expect("parse");
+    assert_eq!(decoded.session_id, meta.session_id);
+    assert_eq!(decoded.decision, "pass");
+    assert_eq!(decoded.fix_attempted, false);
+}
+
+#[test]
+fn review_session_meta_overwrite_on_fix_round() {
+    let td = tempfile::tempdir().expect("tempdir");
+
+    // Initial review: has issues
+    let meta1 = ReviewSessionMeta {
+        session_id: "SESSION1".to_string(),
+        head_sha: "aaa".to_string(),
+        decision: "fail".to_string(),
+        verdict: "HAS_ISSUES".to_string(),
+        tool: "claude-code".to_string(),
+        scope: "base:main".to_string(),
+        exit_code: 1,
+        fix_attempted: false,
+        fix_rounds: 0,
+        timestamp: chrono::Utc::now(),
+    };
+    write_review_meta(td.path(), &meta1).expect("write initial");
+
+    // After fix round 1: succeeded
+    let meta2 = ReviewSessionMeta {
+        session_id: "SESSION1".to_string(),
+        head_sha: "bbb".to_string(),
+        decision: "pass".to_string(),
+        verdict: "CLEAN".to_string(),
+        tool: "claude-code".to_string(),
+        scope: "base:main".to_string(),
+        exit_code: 0,
+        fix_attempted: true,
+        fix_rounds: 1,
+        timestamp: chrono::Utc::now(),
+    };
+    write_review_meta(td.path(), &meta2).expect("write after fix");
+
+    let content = std::fs::read_to_string(td.path().join("review_meta.json")).expect("read");
+    let decoded: ReviewSessionMeta = serde_json::from_str(&content).expect("parse");
+    assert_eq!(decoded.decision, "pass");
+    assert_eq!(decoded.fix_attempted, true);
+    assert_eq!(decoded.fix_rounds, 1);
+    assert_eq!(decoded.head_sha, "bbb");
+}

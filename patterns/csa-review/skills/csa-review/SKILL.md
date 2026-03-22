@@ -185,6 +185,56 @@ Adjudication-specific escalation rule:
 
 > **See**: [Disagreement Escalation](references/disagreement-escalation.md) for the full dispute resolution protocol.
 
+## Review-then-Fix via `--fix` (CLI)
+
+The `csa review` CLI has a built-in `--fix` flag that resumes the **same session**
+to fix issues found during review. This is the recommended way to implement
+the "reviewer fixes its own findings" pattern:
+
+```bash
+csa review --branch main --fix --max-rounds 3
+```
+
+**How it works:**
+1. Review runs normally, identifies issues and emits a verdict.
+2. If verdict is `HAS_ISSUES` and `--fix` is enabled, the reviewer session
+   resumes with a fix prompt (same session, same context).
+3. After each fix round, quality gates are re-evaluated.
+4. Repeats up to `--max-rounds` (default: 3) or until gates pass.
+
+**Key constraints:**
+- `--fix` is **not supported** with `--reviewers > 1` (multi-reviewer consensus).
+- The fix pass overrides `readonly_project_root` to `false` (the fix must write).
+- The reviewer session is reused, preserving full context from the review phase.
+
+### Review Session Metadata (`review_meta.json`)
+
+After every `csa review` run, structured metadata is written to
+`{session_dir}/review_meta.json` with the following fields:
+
+```json
+{
+  "session_id": "01KM...",
+  "head_sha": "abc123def456",
+  "decision": "pass",
+  "verdict": "CLEAN",
+  "tool": "claude-code",
+  "scope": "range:main...HEAD",
+  "exit_code": 0,
+  "fix_attempted": true,
+  "fix_rounds": 1,
+  "timestamp": "2026-03-22T05:30:00Z"
+}
+```
+
+This metadata enables downstream consumers (pr-codex-bot, commit skill,
+orchestration scripts) to programmatically query review results without
+parsing free-form text output. The `decision` field uses the four-value
+`ReviewDecision` enum: `pass`, `fail`, `skip`, `uncertain`.
+
+When `--fix` is enabled, the metadata is updated after each fix round with
+the latest verdict, exit code, and cumulative fix round count.
+
 ## References
 
 | File | Purpose |
