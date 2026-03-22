@@ -723,9 +723,13 @@ created_at = "2024-01-01T00:00:00Z"
 
     let config_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&config_dir).unwrap();
-    std::fs::write(config_dir.join("config.toml"), config_toml).unwrap();
+    let project_path = config_dir.join("config.toml");
+    std::fs::write(&project_path, config_toml).unwrap();
 
-    let loaded = ProjectConfig::load(dir.path()).unwrap().unwrap();
+    // Use load_with_paths to isolate from real global config
+    let loaded = ProjectConfig::load_with_paths(None, &project_path)
+        .unwrap()
+        .unwrap();
     assert_eq!(loaded.schema_version, CURRENT_SCHEMA_VERSION);
     assert!(loaded.check_schema_version().is_ok());
 }

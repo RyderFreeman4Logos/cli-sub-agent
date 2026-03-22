@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use super::config::EnforcementMode;
@@ -65,6 +67,10 @@ pub struct ToolConfig {
     /// API key for authentication. Used by openai-compat and gemini-cli (fallback).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api_key: Option<String>,
+    /// Per-tool filesystem sandbox overrides. When set, replaces global
+    /// filesystem sandbox settings for this specific tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub filesystem_sandbox: Option<ToolFilesystemSandboxConfig>,
 }
 
 impl Default for ToolConfig {
@@ -85,6 +91,7 @@ impl Default for ToolConfig {
             codex_auto_trust: false,
             base_url: None,
             api_key: None,
+            filesystem_sandbox: None,
         }
     }
 }
@@ -108,5 +115,102 @@ impl Default for ToolRestrictions {
             allow_edit_existing_files: true,
             allow_write_new_files: true,
         }
+    }
+}
+
+/// Per-tool filesystem sandbox configuration.
+/// When `writable_paths` is set, it REPLACES the default project root
+/// writable access (REPLACE semantics). Session dir and tool config dirs
+/// are always preserved regardless.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct ToolFilesystemSandboxConfig {
+    /// Writable paths for this tool. When set, REPLACES the default
+    /// project root writable access. Use `["/tmp"]` to restrict a tool
+    /// to only writing to /tmp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writable_paths: Option<Vec<PathBuf>>,
+
+    /// Per-tool enforcement mode override. When set, overrides the
+    /// global `[filesystem_sandbox].enforcement_mode` for this tool.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enforcement_mode: Option<String>,
+}
+
+impl ToolFilesystemSandboxConfig {
+    /// Check if config is at default values (all None).
+    /// Required by serde(default) rule — default values are
+    /// indistinguishable from "not set".
+    pub fn is_default(&self) -> bool {
+        self.writable_paths.is_none() && self.enforcement_mode.is_none()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    #[test]
+    fn test_tool_filesystem_sandbox_is_default() {
+        let cfg = ToolFilesystemSandboxConfig::default();
+        assert!(cfg.is_default());
+
+        let cfg = ToolFilesystemSandboxConfig {
+            writable_paths: Some(vec![PathBuf::from("/tmp")]),
+            enforcement_mode: None,
+        };
+        assert!(!cfg.is_default());
+
+        let cfg = ToolFilesystemSandboxConfig {
+            writable_paths: None,
+            enforcement_mode: Some("required".to_string()),
+        };
+        assert!(!cfg.is_default());
+    }
+
+    #[test]
+    fn test_deserialize_tool_filesystem_sandbox() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            tools: HashMap<String, ToolConfig>,
+        }
+
+        let toml_str = r#"
+[tools.gemini-cli]
+enabled = true
+
+[tools.gemini-cli.filesystem_sandbox]
+writable_paths = ["/tmp"]
+enforcement_mode = "required"
+"#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("should parse TOML");
+        let tool = wrapper.tools.get("gemini-cli").expect("gemini-cli missing");
+        let fs_sandbox = tool
+            .filesystem_sandbox
+            .as_ref()
+            .expect("filesystem_sandbox missing");
+
+        assert_eq!(fs_sandbox.writable_paths, Some(vec![PathBuf::from("/tmp")]));
+        assert_eq!(fs_sandbox.enforcement_mode, Some("required".to_string()));
+        assert!(!fs_sandbox.is_default());
+    }
+
+    #[test]
+    fn test_deserialize_tool_without_filesystem_sandbox() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            tools: HashMap<String, ToolConfig>,
+        }
+
+        let toml_str = r#"
+[tools.claude-code]
+enabled = true
+"#;
+        let wrapper: Wrapper = toml::from_str(toml_str).expect("should parse TOML");
+        let tool = wrapper
+            .tools
+            .get("claude-code")
+            .expect("claude-code missing");
+        assert!(tool.filesystem_sandbox.is_none());
     }
 }

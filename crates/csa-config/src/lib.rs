@@ -25,7 +25,8 @@ pub mod weave_lock;
 pub use acp::AcpConfig;
 pub use config::{
     EnforcementMode, ExecutionConfig, HooksSection, ProjectConfig, ProjectMeta, SessionConfig,
-    TierConfig, TierStrategy, ToolConfig, ToolResourceProfile, ToolRestrictions,
+    TierConfig, TierStrategy, ToolConfig, ToolFilesystemSandboxConfig, ToolResourceProfile,
+    ToolRestrictions,
 };
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;
