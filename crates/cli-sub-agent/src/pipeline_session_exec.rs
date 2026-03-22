@@ -647,6 +647,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let mut result = transport_result.execution;
+
+    // Best-effort EACCES diagnostic when filesystem sandbox is active.
+    crate::pipeline_sandbox::check_sandbox_permission_errors(
+        &result.stderr_output,
+        session.sandbox_info.as_ref(),
+    );
+
     enforce_result_toml_path_contract(
         prompt,
         &effective_prompt,

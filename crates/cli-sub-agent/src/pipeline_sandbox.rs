@@ -366,6 +366,37 @@ pub(crate) fn record_sandbox_telemetry(
     );
 }
 
+/// Best-effort diagnostic: if tool stderr contains EACCES / "Permission denied"
+/// and a filesystem sandbox was active, emit a `tracing::warn!` with hints.
+///
+/// This is intentionally lenient — false positives (non-sandbox permission errors)
+/// are acceptable because we only log, never alter the execution result.
+pub(crate) fn check_sandbox_permission_errors(
+    stderr: &str,
+    sandbox_info: Option<&csa_session::SandboxInfo>,
+) {
+    let Some(info) = sandbox_info else { return };
+    // Only relevant when filesystem isolation was actually active.
+    let fs_active = info.filesystem_mode.as_deref().is_some_and(|m| m != "none");
+    if !fs_active {
+        return;
+    }
+
+    let lower = stderr.to_ascii_lowercase();
+    if !lower.contains("permission denied") && !lower.contains("eacces") {
+        return;
+    }
+
+    let readonly = info.readonly_project_root.unwrap_or(false);
+    warn!(
+        filesystem_mode = info.filesystem_mode.as_deref().unwrap_or("unknown"),
+        readonly_project_root = readonly,
+        "Tool stderr contains 'Permission denied' — this may be caused by the \
+         filesystem sandbox. Check writable_paths in .csa/config.toml \
+         [tools.<name>.filesystem_sandbox] or pass --no-fs-sandbox to disable."
+    );
+}
+
 #[cfg(test)]
 #[path = "pipeline_sandbox_tests.rs"]
 mod tests;
