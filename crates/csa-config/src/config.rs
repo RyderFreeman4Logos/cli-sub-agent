@@ -414,6 +414,11 @@ impl ProjectConfig {
     /// Resolve a tier selector (direct name, `tier_mapping` alias, or unambiguous prefix)
     /// to canonical tier name. Priority: exact name > alias > unique prefix. No tier3 fallback.
     pub fn resolve_tier_selector(&self, selector: &str) -> Option<String> {
+        // Reject empty/whitespace-only selectors early — prevents prefix matching
+        // from silently resolving "" to the sole tier in single-tier configs.
+        if selector.trim().is_empty() {
+            return None;
+        }
         // 1. Exact tier name match
         if self.tiers.contains_key(selector) {
             return Some(selector.to_string());
@@ -441,6 +446,9 @@ impl ProjectConfig {
     /// Returns `Some(name)` when exactly one tier starts with the selector,
     /// or the selector is a substring of exactly one tier name.
     pub fn suggest_tier(&self, selector: &str) -> Option<String> {
+        if selector.trim().is_empty() {
+            return None;
+        }
         // Try prefix match first
         let prefix_matches: Vec<&String> = self
             .tiers
