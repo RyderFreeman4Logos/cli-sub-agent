@@ -128,9 +128,13 @@ pub(crate) fn resolve_review_tool(
             } else {
                 let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
                 let alias_hint = cfg.format_tier_aliases();
+                let suggest_hint = cfg
+                    .suggest_tier(cli)
+                    .map(|s| format!("\nDid you mean '{s}'?"))
+                    .unwrap_or_default();
                 anyhow::bail!(
                     "Tier selector '{}' not found.\n\
-                     Available tiers: [{}]{alias_hint}",
+                     Available tiers: [{}]{alias_hint}{suggest_hint}",
                     cli,
                     available.join(", ")
                 );

@@ -411,16 +411,55 @@ impl ProjectConfig {
         project_root.join(".csa").join("config.toml")
     }
 
-    /// Resolve a tier selector (direct name or `tier_mapping` alias) to canonical tier name.
-    /// Direct tier names take priority. No tier3 fallback.
+    /// Resolve a tier selector (direct name, `tier_mapping` alias, or unambiguous prefix)
+    /// to canonical tier name. Priority: exact name > alias > unique prefix. No tier3 fallback.
     pub fn resolve_tier_selector(&self, selector: &str) -> Option<String> {
+        // 1. Exact tier name match
         if self.tiers.contains_key(selector) {
             return Some(selector.to_string());
         }
-        self.tier_mapping
-            .get(selector)
-            .filter(|t| self.tiers.contains_key(t.as_str()))
-            .cloned()
+        // 2. Alias lookup via tier_mapping
+        if let Some(mapped) = self.tier_mapping.get(selector)
+            && self.tiers.contains_key(mapped.as_str())
+        {
+            return Some(mapped.clone());
+        }
+        // 3. Unambiguous prefix match: selector must match exactly one tier name
+        let prefix_matches: Vec<&String> = self
+            .tiers
+            .keys()
+            .filter(|name| name.starts_with(selector))
+            .collect();
+        if prefix_matches.len() == 1 {
+            return Some(prefix_matches[0].clone());
+        }
+        None
+    }
+
+    /// Suggest a tier name for a failed selector (for "Did you mean?" messages).
+    ///
+    /// Returns `Some(name)` when exactly one tier starts with the selector,
+    /// or the selector is a substring of exactly one tier name.
+    pub fn suggest_tier(&self, selector: &str) -> Option<String> {
+        // Try prefix match first
+        let prefix_matches: Vec<&String> = self
+            .tiers
+            .keys()
+            .filter(|name| name.starts_with(selector))
+            .collect();
+        if prefix_matches.len() == 1 {
+            return Some(prefix_matches[0].clone());
+        }
+        // Try substring match
+        let substr_matches: Vec<&String> = self
+            .tiers
+            .keys()
+            .filter(|name| name.contains(selector))
+            .collect();
+        if substr_matches.len() == 1 {
+            return Some(substr_matches[0].clone());
+        }
+        None
     }
 
     /// Format tier aliases for error messages (empty string if no mappings).
@@ -587,6 +626,9 @@ mod tests;
 #[cfg(test)]
 #[path = "config_tests_tail.rs"]
 mod tests_tail;
+#[cfg(test)]
+#[path = "config_tests_tier_selector.rs"]
+mod tier_selector_tests;
 #[cfg(test)]
 #[path = "config_tests_tier.rs"]
 mod tier_tests;
