@@ -475,3 +475,49 @@ fn test_suggest_tier_no_match() {
 
     assert_eq!(config.suggest_tier("anything"), None);
 }
+
+// ---------------------------------------------------------------------------
+// Empty selector regression tests (PR #460 review finding)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_resolve_tier_selector_empty_string_rejected() {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-1-quick".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    // Empty string must NOT resolve via prefix matching (regression: PR #460)
+    assert_eq!(config.resolve_tier_selector(""), None);
+    assert_eq!(config.resolve_tier_selector("  "), None);
+    assert_eq!(config.suggest_tier(""), None);
+    assert_eq!(config.suggest_tier("  "), None);
+}

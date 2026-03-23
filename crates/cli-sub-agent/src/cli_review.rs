@@ -145,7 +145,7 @@ pub struct ReviewArgs {
     #[arg(long, value_name = "PATH")]
     pub spec: Option<String>,
 
-    /// Tier name or tier_mapping alias for tool/model routing
+    /// Tier name, alias, or unambiguous prefix for tool/model routing
     #[arg(long)]
     pub tier: Option<String>,
 
@@ -301,7 +301,7 @@ pub struct DebateArgs {
     #[arg(long)]
     pub cd: Option<String>,
 
-    /// Tier name or tier_mapping alias for tool/model routing
+    /// Tier name, alias, or unambiguous prefix for tool/model routing
     #[arg(long)]
     pub tier: Option<String>,
 
