@@ -637,10 +637,11 @@ async fn run() -> Result<()> {
             TodoCommands::Create {
                 title,
                 branch,
+                no_branch,
                 language,
                 cd,
             } => {
-                todo_cmd::handle_create(title, branch, language, cd, output_format)?;
+                todo_cmd::handle_create(title, branch, no_branch, language, cd, output_format)?;
             }
             TodoCommands::Save {
                 timestamp,

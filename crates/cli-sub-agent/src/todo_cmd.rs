@@ -29,14 +29,19 @@ fn detect_current_branch(project_root: &Path) -> Option<String> {
 pub(crate) fn handle_create(
     title: String,
     branch: Option<String>,
+    no_branch: bool,
     language: Option<String>,
     cd: Option<String>,
     format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
 
-    // Default --branch to current git branch when not provided
-    let branch = branch.or_else(|| detect_current_branch(&project_root));
+    // Default --branch to current git branch when not provided (skip if --no-branch)
+    let branch = if no_branch {
+        None
+    } else {
+        branch.or_else(|| detect_current_branch(&project_root))
+    };
 
     let manager = TodoManager::new(&project_root)?;
 

@@ -143,16 +143,12 @@ fn flush_retries(buf: &mut String, count: u32, last_line: &str) {
 
 fn is_retry_noise(line: &str) -> bool {
     let l = line.to_ascii_lowercase();
-    // gemini-cli pattern: "Attempt N failed: ... Retrying after Xms..."
-    if l.contains("attempt") && l.contains("failed") && l.contains("retry") {
+    // gemini-cli specific: "Attempt N failed: You have exhausted your capacity ... Retrying after Xms..."
+    if l.contains("attempt") && l.contains("failed") && l.contains("retrying after") {
         return true;
     }
-    // quota pattern: "exhausted your capacity ... Retrying"
-    if l.contains("exhausted") && l.contains("retry") {
-        return true;
-    }
-    // generic rate-limit retry
-    if l.contains("rate limit") && l.contains("retry") {
+    // gemini-cli quota: "exhausted your capacity ... quota will reset"
+    if l.contains("exhausted your capacity") && l.contains("quota will reset") {
         return true;
     }
     false
