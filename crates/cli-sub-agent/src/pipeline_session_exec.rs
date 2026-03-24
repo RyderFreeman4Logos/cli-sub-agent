@@ -529,7 +529,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         None
     };
 
-    if !hooks_config.prompt_guard.is_empty() {
+    // Suppress prompt guards for review/debate (read-only sessions, #467).
+    if !is_review_or_debate && !hooks_config.prompt_guard.is_empty() {
         let guard_context = GuardContext {
             project_root: session.project_path.clone(),
             session_id: session.meta_session_id.clone(),
