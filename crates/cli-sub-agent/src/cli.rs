@@ -703,8 +703,13 @@ pub enum McpHubCommands {
 pub enum PlanCommands {
     /// Execute a weave workflow file
     Run {
-        /// Path to workflow TOML file
-        file: String,
+        /// Path to workflow TOML file (omit when using --pattern)
+        file: Option<String>,
+
+        /// Resolve a pattern by name and use its workflow.toml
+        #[arg(long, conflicts_with = "file")]
+        pattern: Option<String>,
+
         /// Autonomous mode flag (REQUIRED for root callers)
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
