@@ -146,8 +146,12 @@ pub(crate) async fn handle_debate(
         }
     }
 
-    // 3. Read question (from arg or stdin), optionally prepend file content
-    let mut question = read_prompt(args.question)?;
+    // 3. Read question (from positional arg, --topic, or stdin)
+    let effective_question = args.question.or(args.topic);
+    let mut question = read_prompt(effective_question)?;
+    if let Some(ctx) = &args.context {
+        question = format!("<debate-context>\n{ctx}\n</debate-context>\n\n{question}");
+    }
     if let Some(file_path) = &args.file {
         const MAX_FILE_SIZE: u64 = 5 * 1024 * 1024; // 5 MB
         let metadata = std::fs::metadata(file_path)

@@ -9,9 +9,13 @@ pub enum TodoCommands {
         /// Plan title
         title: String,
 
-        /// Associate with a git branch
-        #[arg(short, long)]
+        /// Associate with a git branch (default: current branch; use --no-branch for none)
+        #[arg(short, long, conflicts_with = "no_branch")]
         branch: Option<String>,
+
+        /// Do not associate with any git branch (overrides auto-detection)
+        #[arg(long)]
+        no_branch: bool,
 
         /// Language for TODO content (e.g., "Chinese (Simplified)", "English")
         #[arg(short, long)]

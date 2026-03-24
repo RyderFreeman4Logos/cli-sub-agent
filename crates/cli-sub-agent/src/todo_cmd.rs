@@ -5,16 +5,44 @@ use csa_core::types::OutputFormat;
 use csa_hooks::{HookEvent, global_hooks_path, load_hooks_config, run_hooks_for_event};
 use csa_todo::dag::DependencyGraph;
 use csa_todo::{CriterionKind, CriterionStatus, SpecDocument, TodoManager, TodoStatus};
+use std::path::Path;
 use tracing::warn;
+
+/// Auto-detect current git branch. Returns None on detached HEAD or error.
+fn detect_current_branch(project_root: &Path) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["branch", "--show-current"])
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if branch.is_empty() {
+        None
+    } else {
+        Some(branch)
+    }
+}
 
 pub(crate) fn handle_create(
     title: String,
     branch: Option<String>,
+    no_branch: bool,
     language: Option<String>,
     cd: Option<String>,
     format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+
+    // Default --branch to current git branch when not provided (skip if --no-branch)
+    let branch = if no_branch {
+        None
+    } else {
+        branch.or_else(|| detect_current_branch(&project_root))
+    };
+
     let manager = TodoManager::new(&project_root)?;
 
     // Ensure git repo is initialized for the todos directory
