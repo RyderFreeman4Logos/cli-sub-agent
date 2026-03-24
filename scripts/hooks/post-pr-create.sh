@@ -228,7 +228,7 @@ echo "Running pr-codex-bot transaction..."
 # while inner CSA sessions spawned by this workflow complete.
 export CSA_PR_BOT_GUARD=1
 
-if csa plan run patterns/pr-codex-bot/workflow.toml; then
+if csa plan run --sa-mode true patterns/pr-codex-bot/workflow.toml; then
   touch "${PR_BOT_DONE_MARKER}"
   rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
   PR_BOT_LOCK_HELD=0
