@@ -138,7 +138,7 @@ When `cloud_bot = false`:
 - If SHA matches, supplementary review is skipped; if SHA mismatches (or metadata
   is missing), run full `csa review --branch main`
 - The workflow proceeds directly to merge after local review passes
-- This avoids the 10-minute polling timeout and GitHub API dependency
+- This avoids the 15-minute wait (5-min quiet + 10-min polling) and GitHub API dependency
 
 ### Quick Start
 
@@ -166,7 +166,7 @@ breaks prompt-guard propagation.
     the bot-unavailable merge path (Step 6a).
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
    - Trigger a fresh `@codex review` for current HEAD.
-   - Delegate the 10-minute wait window to a CSA-managed step (no caller-side polling loop), enforced by command-level hard timeout (`timeout`/`gtimeout`) and explicit `--tool codex`.
+   - Wait 5 minutes quietly (bot responses rarely arrive faster), then delegate the remaining 10-minute polling window to a CSA-managed step (no caller-side polling loop), enforced by command-level hard timeout (`timeout`/`gtimeout`) and explicit `--tool codex`. Total wait: ~15 minutes.
    - Delegated wait failures map to `BOT_UNAVAILABLE=true` and enter local fallback review (instead of silent success).
    - If bot times out: fallback to `csa review --range main...HEAD`. If fallback review fails, run dedicated fallback fix cycle before merge; on success, clear `FALLBACK_REVIEW_HAS_ISSUES=false`.
 5. **Evaluate bot comments**: Classify each as:

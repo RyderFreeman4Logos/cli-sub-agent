@@ -271,8 +271,9 @@ Tool: bash
 OnFail: abort
 Condition: !(${BOT_UNAVAILABLE})
 
-Trigger a fresh `@codex review` for current HEAD, then delegate the waiting
-window (max 10 minutes) to CSA.
+Trigger a fresh `@codex review` for current HEAD, wait 5 minutes (bot
+responses rarely arrive faster), then delegate the remaining 10-minute
+polling window to CSA. Total wait: ~15 minutes.
 If bot times out, set BOT_UNAVAILABLE and fall through — local review
 (Step 2) already covers main...HEAD. If fallback review finds issues, set
 `FALLBACK_REVIEW_HAS_ISSUES=true` so Step 6-fix is required before merge.
@@ -343,13 +344,17 @@ TRIGGER_BODY="@codex review
 <!-- csa-trigger:${CURRENT_SHA}:${TRIGGER_TS} -->"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
 
-# --- Delegate wait to CSA-managed step (max 10 min) ---
+# --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
+echo "Waiting 5 minutes before polling (bot responses rarely arrive faster)..."
+sleep 300
+
+# --- Delegate remaining polling to CSA-managed step (max 10 min) ---
 BOT_UNAVAILABLE=true
 FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
 WAIT_RESULT_FILE="$(mktemp)"
 set +e
-run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
+run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
 WAIT_RC=${PIPESTATUS[0]}
 set -e
 WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
