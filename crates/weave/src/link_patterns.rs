@@ -3,14 +3,21 @@
 //! Discovers pattern directories (containing `workflow.toml`) in installed packages
 //! and creates symlinks in the consumer project's `patterns/` directory.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use tracing::warn;
 
-use super::{DiscoveredPattern, DiscoveredSkill, LinkOutcome, LinkReport, create_skill_link};
+use super::{
+    DiscoveredPattern, DiscoveredSkill, LinkOutcome, LinkReport, create_skill_link,
+    is_weave_managed_path,
+};
 use crate::package::{SourceKind, find_lockfile, global_store_root, load_lockfile, package_dir};
+use crate::path_utils::resolve_symlink_target;
 
 /// Discover all pattern directories (containing workflow.toml) across installed packages.
+///
+/// Includes the package name for conflict detection.
 pub fn discover_patterns(project_root: &Path) -> Result<Vec<DiscoveredPattern>> {
     let store_root = global_store_root()?;
     let lockfile = match find_lockfile(project_root) {
@@ -47,6 +54,7 @@ pub fn discover_patterns(project_root: &Path) -> Result<Vec<DiscoveredPattern>> 
             {
                 patterns.push(DiscoveredPattern {
                     name,
+                    package_name: pkg.name.clone(),
                     source_dir: dir,
                 });
             }
@@ -59,7 +67,8 @@ pub fn discover_patterns(project_root: &Path) -> Result<Vec<DiscoveredPattern>> 
 ///
 /// Each pattern gets a symlink: `patterns/<name>` -> `<global_store>/patterns/<name>`.
 /// Skips patterns whose target already exists locally as a real directory (not symlink).
-pub fn link_patterns(project_root: &Path) -> Result<LinkReport> {
+/// `force` allows overwriting non-weave-managed symlinks.
+pub fn link_patterns(project_root: &Path, force: bool) -> Result<LinkReport> {
     let patterns = discover_patterns(project_root)?;
     let store_root = global_store_root()?;
     let target_dir = project_root.join("patterns");
@@ -67,6 +76,21 @@ pub fn link_patterns(project_root: &Path) -> Result<LinkReport> {
 
     if patterns.is_empty() {
         return Ok(report);
+    }
+
+    // Conflict detection: warn if two packages provide the same pattern name.
+    let mut seen: std::collections::HashMap<&str, &str> = std::collections::HashMap::new();
+    for pat in &patterns {
+        if let Some(&existing_pkg) = seen.get(pat.name.as_str())
+            && existing_pkg != pat.package_name
+        {
+            warn!(
+                "pattern '{}' provided by both '{}' and '{}'; using first match",
+                pat.name, existing_pkg, pat.package_name
+            );
+            continue;
+        }
+        seen.insert(&pat.name, &pat.package_name);
     }
 
     for pat in &patterns {
@@ -87,7 +111,7 @@ pub fn link_patterns(project_root: &Path) -> Result<LinkReport> {
 
         let skill_proxy = DiscoveredSkill {
             name: pat.name.clone(),
-            package_name: String::new(),
+            package_name: pat.package_name.clone(),
             source_dir: pat.source_dir.clone(),
         };
 
@@ -102,7 +126,7 @@ pub fn link_patterns(project_root: &Path) -> Result<LinkReport> {
             &target_dir,
             &store_root,
             &skill_proxy,
-            false,
+            force,
         ) {
             Ok(o) => report.outcomes.push(o),
             Err(e) => report.errors.push(e),
@@ -110,4 +134,53 @@ pub fn link_patterns(project_root: &Path) -> Result<LinkReport> {
     }
 
     Ok(report)
+}
+
+/// Remove stale pattern symlinks that point into the weave store but whose
+/// pattern is no longer provided by any installed package.
+pub fn remove_stale_pattern_links(project_root: &Path) -> Result<Vec<PathBuf>> {
+    let store_root = global_store_root()?;
+    let current_patterns = discover_patterns(project_root)?;
+    let current_names: std::collections::HashSet<&str> =
+        current_patterns.iter().map(|p| p.name.as_str()).collect();
+
+    let patterns_dir = project_root.join("patterns");
+    if !patterns_dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let mut stale = Vec::new();
+    let entries = match std::fs::read_dir(&patterns_dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(Vec::new()),
+    };
+
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let meta = match std::fs::symlink_metadata(&path) {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
+        if !meta.is_symlink() {
+            continue;
+        }
+        let name = match path.file_name().map(|n| n.to_string_lossy().to_string()) {
+            Some(n) => n,
+            None => continue,
+        };
+        // Only remove if it points into the weave store AND is not in current patterns.
+        let target = match std::fs::read_link(&path) {
+            Ok(t) => t,
+            Err(_) => continue,
+        };
+        let resolved = resolve_symlink_target(&patterns_dir, &target);
+        if is_weave_managed_path(&resolved, &store_root)
+            && !current_names.contains(name.as_str())
+            && std::fs::remove_file(&path).is_ok()
+        {
+            stale.push(path);
+        }
+    }
+
+    Ok(stale)
 }

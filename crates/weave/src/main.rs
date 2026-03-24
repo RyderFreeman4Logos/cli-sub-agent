@@ -345,13 +345,16 @@ fn main() -> Result<()> {
                     );
                 }
 
-                let pat_report = link::link_patterns(&project_root)?;
+                let pat_report = link::link_patterns(&project_root, force_link)?;
                 let pat_created = pat_report.unique_created_count();
                 if pat_created > 0 {
                     eprintln!("linked {pat_created} pattern(s)");
                     for name in pat_report.unique_created_names() {
                         eprintln!("  + patterns/{name}");
                     }
+                }
+                for err in &pat_report.errors {
+                    eprintln!("warning (pattern): {err}");
                 }
             }
         }
@@ -456,13 +459,20 @@ fn main() -> Result<()> {
                     }
                 }
 
-                let pat_report = link::link_patterns(&project_root)?;
+                let stale_pats = link::remove_stale_pattern_links(&project_root)?;
+                if !stale_pats.is_empty() {
+                    eprintln!("removed {} stale pattern link(s)", stale_pats.len());
+                }
+                let pat_report = link::link_patterns(&project_root, false)?;
                 let pat_created = pat_report.unique_created_count();
                 if pat_created > 0 {
                     eprintln!("linked {pat_created} pattern(s)");
                     for name in pat_report.unique_created_names() {
                         eprintln!("  + patterns/{name}");
                     }
+                }
+                for err in &pat_report.errors {
+                    eprintln!("warning (pattern): {err}");
                 }
             }
         }
@@ -740,13 +750,20 @@ fn main() -> Result<()> {
                         removed.len()
                     );
 
-                    let pat_report = link::link_patterns(&project_root)?;
+                    let stale_pats = link::remove_stale_pattern_links(&project_root)?;
+                    if !stale_pats.is_empty() {
+                        eprintln!("removed {} stale pattern link(s)", stale_pats.len());
+                    }
+                    let pat_report = link::link_patterns(&project_root, force)?;
                     let pat_created = pat_report.unique_created_count();
                     if pat_created > 0 {
                         eprintln!("linked {pat_created} pattern(s)");
                         for name in pat_report.unique_created_names() {
                             eprintln!("  + patterns/{name}");
                         }
+                    }
+                    for err in &pat_report.errors {
+                        eprintln!("warning (pattern): {err}");
                     }
                 }
             }

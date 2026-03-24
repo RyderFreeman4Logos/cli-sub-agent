@@ -50,6 +50,8 @@ pub struct DiscoveredSkill {
 pub struct DiscoveredPattern {
     /// Pattern name (basename of the pattern directory).
     pub name: String,
+    /// Package that provides this pattern.
+    pub package_name: String,
     /// Absolute path to the pattern directory in the global store.
     pub source_dir: PathBuf,
 }
@@ -313,7 +315,7 @@ fn discover_skills_in_patterns(
 
 #[path = "link_patterns.rs"]
 mod link_patterns_impl;
-pub use link_patterns_impl::{discover_patterns, link_patterns};
+pub use link_patterns_impl::{discover_patterns, link_patterns, remove_stale_pattern_links};
 
 // ---------------------------------------------------------------------------
 // Pre-check (conflict detection)
@@ -696,7 +698,7 @@ fn paths_equivalent(a: &Path, b: &Path) -> bool {
 }
 
 /// Check if a path is inside the weave global store.
-fn is_weave_managed_path(path: &Path, store_root: &Path) -> bool {
+pub(crate) fn is_weave_managed_path(path: &Path, store_root: &Path) -> bool {
     match (path.canonicalize(), store_root.canonicalize()) {
         (Ok(cp), Ok(cs)) => cp.starts_with(&cs),
         _ => {
