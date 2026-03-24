@@ -414,7 +414,7 @@ fi
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "Bot timed out after delegated wait window. Falling back to local review."
-  if ! csa review --range main...HEAD --timeout 1200 2>/dev/null; then
+  if ! csa review --range main...HEAD --timeout 1800 2>/dev/null; then
     FALLBACK_REVIEW_HAS_ISSUES=true
   fi
 fi
@@ -939,6 +939,8 @@ enforceable by the workflow engine.
 
 Delegates the full re-trigger + wait + verify cycle to a single CSA step
 with hard timeout, so the gate is self-contained and cannot be skipped.
+Apply the same 15-minute wait policy as Step 5: a 5-minute quiet wait,
+then up to 10 minutes of polling.
 
 If the re-review finds new issues, the workflow aborts — the user must
 re-run pr-codex-bot to start a new fix cycle.
@@ -956,7 +958,11 @@ RETRIGGER_BODY="@codex review
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${RETRIGGER_BODY}"
 echo "Re-triggered @codex review for HEAD ${CURRENT_SHA} at ${RETRIGGER_TS}"
 
-# --- Delegate wait to CSA (max 10 min) ---
+# --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
+echo "Waiting 5 minutes before polling post-fix review (bot responses rarely arrive faster)..."
+sleep 300
+
+# --- Delegate remaining polling to CSA (max 10 min) ---
 BOT_CLEAN=false
 WAIT_RESULT_FILE="$(mktemp)"
 TIMEOUT_CMD=""
@@ -967,7 +973,7 @@ set +e
 ${TIMEOUT_CMD} csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 \
   "Bounded post-fix re-review gate. Do NOT invoke pr-codex-bot skill or any full PR workflow. \
   Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after \
-  ${RETRIGGER_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. \
+  ${RETRIGGER_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. \
   Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." \
   | tee "${WAIT_RESULT_FILE}"
 WAIT_RC=${PIPESTATUS[0]}
@@ -977,7 +983,7 @@ rm -f "${WAIT_RESULT_FILE}"
 
 if [ "${WAIT_RC}" -eq 124 ]; then
   echo "WARN: Post-fix bot wait timed out. Falling back to local review gate."
-  if ! csa review --sa-mode true --range main...HEAD --timeout 1200; then
+  if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
     echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
     exit 1
   fi
@@ -1019,7 +1025,7 @@ else
     BOT_CLEAN=true
   else
     echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
-    if ! csa review --sa-mode true --range main...HEAD --timeout 1200; then
+    if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
       echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
       exit 1
     fi
@@ -1171,7 +1177,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 7. Delegate post-rebase wait/fix/review loop to CSA.
   set +e
   GATE_RESULT_FILE="$(mktemp)"
-  run_with_hard_timeout 2400 csa run --force-ignore-tier-setting --tool codex --idle-timeout 2400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end: wait up to 10 minutes for @codex response to the latest trigger; if response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check (max 3 rounds); if bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
+  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool codex --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
   GATE_RC=${PIPESTATUS[0]}
   set -e
   GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"
@@ -1181,7 +1187,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     FALLBACK_REVIEW_HAS_ISSUES=true
     echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
     echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Post-rebase delegated gate exceeded hard timeout (2400s)." >&2
+    echo "ERROR: Post-rebase delegated gate exceeded hard timeout (5400s)." >&2
     exit 1
   fi
   if [ "${GATE_RC}" -ne 0 ]; then
