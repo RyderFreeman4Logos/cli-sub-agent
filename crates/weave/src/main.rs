@@ -321,7 +321,7 @@ fn main() -> Result<()> {
                 bail!("either <SOURCE> or --path <DIR> is required");
             }
 
-            // Auto-link companion skills.
+            // Auto-link companion skills and patterns.
             if scope != LinkScope::None {
                 let report = link::link_skills(&project_root, scope, force_link)?;
                 let created = report.unique_created_count();
@@ -343,6 +343,15 @@ fn main() -> Result<()> {
                         "{} link error(s) after install — companion skills were NOT linked",
                         report.errors.len()
                     );
+                }
+
+                let pat_report = link::link_patterns(&project_root)?;
+                let pat_created = pat_report.unique_created_count();
+                if pat_created > 0 {
+                    eprintln!("linked {pat_created} pattern(s)");
+                    for name in pat_report.unique_created_names() {
+                        eprintln!("  + patterns/{name}");
+                    }
                 }
             }
         }
@@ -444,6 +453,15 @@ fn main() -> Result<()> {
                 if report.has_errors() {
                     for err in &report.errors {
                         eprintln!("warning: {err}");
+                    }
+                }
+
+                let pat_report = link::link_patterns(&project_root)?;
+                let pat_created = pat_report.unique_created_count();
+                if pat_created > 0 {
+                    eprintln!("linked {pat_created} pattern(s)");
+                    for name in pat_report.unique_created_names() {
+                        eprintln!("  + patterns/{name}");
                     }
                 }
             }
@@ -721,6 +739,15 @@ fn main() -> Result<()> {
                         "link sync: {created} created, {skipped} up-to-date, {} stale removed",
                         removed.len()
                     );
+
+                    let pat_report = link::link_patterns(&project_root)?;
+                    let pat_created = pat_report.unique_created_count();
+                    if pat_created > 0 {
+                        eprintln!("linked {pat_created} pattern(s)");
+                        for name in pat_report.unique_created_names() {
+                            eprintln!("  + patterns/{name}");
+                        }
+                    }
                 }
             }
         }

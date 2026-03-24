@@ -62,6 +62,10 @@ async fn run_doctor_text() -> Result<()> {
 
     println!("=== Sandbox (Filesystem) ===");
     print_filesystem_sandbox_status();
+    println!();
+
+    println!("=== Git Hooks ===");
+    print_git_hook_status();
 
     Ok(())
 }
@@ -472,6 +476,20 @@ fn has_usable_user_namespaces() -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// Print git hook installation status.
+fn print_git_hook_status() {
+    let hooks = [("pre-push", "Blocks push without csa review session")];
+    for (hook_name, description) in hooks {
+        let hook_path = std::path::Path::new(".git/hooks").join(hook_name);
+        if hook_path.is_file() {
+            println!("{hook_name}:  installed ({description})");
+        } else {
+            println!("{hook_name}:  NOT INSTALLED — {description}");
+            println!("  Hint: ln -sf ../../scripts/hooks/{hook_name} .git/hooks/{hook_name}");
+        }
+    }
 }
 
 /// Format bytes as human-readable string (GB).

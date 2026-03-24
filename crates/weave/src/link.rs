@@ -45,6 +45,15 @@ pub struct DiscoveredSkill {
     pub source_dir: PathBuf,
 }
 
+/// A pattern directory discovered in a package (contains workflow.toml).
+#[derive(Debug, Clone)]
+pub struct DiscoveredPattern {
+    /// Pattern name (basename of the pattern directory).
+    pub name: String,
+    /// Absolute path to the pattern directory in the global store.
+    pub source_dir: PathBuf,
+}
+
 /// Outcome of a single link operation.
 #[derive(Debug)]
 pub enum LinkOutcome {
@@ -301,6 +310,10 @@ fn discover_skills_in_patterns(
 
     Ok(())
 }
+
+#[path = "link_patterns.rs"]
+mod link_patterns_impl;
+pub use link_patterns_impl::{discover_patterns, link_patterns};
 
 // ---------------------------------------------------------------------------
 // Pre-check (conflict detection)

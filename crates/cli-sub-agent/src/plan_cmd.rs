@@ -26,6 +26,7 @@ use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use weave::compiler::{ExecutionPlan, plan_from_toml};
 
+use crate::pattern_resolver;
 use crate::pipeline::determine_project_root;
 use crate::plan_display::{print_plan, print_summary};
 
@@ -297,9 +298,51 @@ fn detect_effective_repo(project_root: &Path) -> Option<String> {
     Some(trimmed.to_string())
 }
 
-/// Handle `csa plan run <file>`.
+/// Resolve a workflow TOML path from either a file path or a pattern name.
+fn resolve_workflow_path(
+    file: &Option<String>,
+    pattern: &Option<String>,
+    project_root: &Path,
+) -> Result<PathBuf> {
+    match (file, pattern) {
+        (Some(f), None) => {
+            let p = PathBuf::from(f);
+            let resolved = if p.is_absolute() {
+                p
+            } else {
+                project_root.join(&p)
+            };
+            if !resolved.exists() {
+                bail!("Workflow file not found: {}", resolved.display());
+            }
+            Ok(resolved)
+        }
+        (None, Some(name)) => {
+            let resolved = pattern_resolver::resolve_pattern(name, project_root)?;
+            let workflow = resolved.dir.join("workflow.toml");
+            if !workflow.exists() {
+                bail!(
+                    "Pattern '{}' resolved to {} but no workflow.toml found there",
+                    name,
+                    resolved.dir.display()
+                );
+            }
+            eprintln!(
+                "csa plan: resolved --pattern {} → {}",
+                name,
+                workflow.display()
+            );
+            Ok(workflow)
+        }
+        (Some(_), Some(_)) => bail!("Cannot specify both FILE and --pattern"),
+        (None, None) => bail!("Either FILE or --pattern is required"),
+    }
+}
+
+/// Handle `csa plan run <file>` or `csa plan run --pattern <name>`.
 pub(crate) async fn handle_plan_run(
-    file: String,
+    file: Option<String>,
+    pattern: Option<String>,
     vars: Vec<String>,
     tool_override: Option<ToolName>,
     dry_run: bool,
@@ -328,22 +371,15 @@ pub(crate) async fn handle_plan_run(
         bail!("Max recursion depth ({max_depth}) exceeded. Current: {current_depth}");
     }
 
-    // 4. Load and parse workflow TOML (resolve relative to project root)
-    let workflow_path = {
-        let p = PathBuf::from(&file);
-        if p.is_absolute() {
-            p
-        } else {
-            project_root.join(&p)
-        }
-    };
-    if !workflow_path.exists() {
-        bail!("Workflow file not found: {}", workflow_path.display());
-    }
+    // 4. Load and parse workflow TOML (resolve by file path or pattern name)
+    let workflow_path = resolve_workflow_path(&file, &pattern, &project_root)?;
+    let display_name = pattern
+        .as_deref()
+        .unwrap_or_else(|| file.as_deref().unwrap_or("(unknown)"));
     let content = std::fs::read_to_string(&workflow_path)
-        .with_context(|| format!("Failed to read workflow file: {file}"))?;
+        .with_context(|| format!("Failed to read workflow file: {display_name}"))?;
     let plan = plan_from_toml(&content)
-        .with_context(|| format!("Failed to parse workflow file: {file}"))?;
+        .with_context(|| format!("Failed to parse workflow file: {display_name}"))?;
 
     // 5. Parse --var KEY=VALUE into HashMap
     let cli_variables = parse_variables(&vars, &plan)?;
