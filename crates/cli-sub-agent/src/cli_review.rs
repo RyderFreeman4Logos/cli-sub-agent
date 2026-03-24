@@ -248,6 +248,10 @@ fn validate_timeout(
 pub struct DebateArgs {
     /// The question or problem to debate; reads from stdin if omitted
     pub question: Option<String>,
+
+    /// Named alias for the question (alternative to positional arg)
+    #[arg(long, alias = "question", conflicts_with = "question")]
+    pub topic: Option<String>,
     /// Autonomous mode flag (REQUIRED for root callers)
     #[arg(long, value_name = "BOOL")]
     pub sa_mode: Option<bool>,
@@ -308,6 +312,10 @@ pub struct DebateArgs {
     /// Override tier enforcement (bypass tier whitelist even when --tier is set)
     #[arg(long, alias = "force-tier")]
     pub force_ignore_tier_setting: bool,
+
+    /// Supplementary context for the debate (prepended to the question)
+    #[arg(long)]
+    pub context: Option<String>,
 
     /// Attach a file as context for the debate (content prepended to prompt)
     #[arg(long)]

@@ -339,9 +339,11 @@ impl Executor {
             sandbox: sandbox_transport.as_ref(),
         };
         let transport = self.transport(session_config);
-        transport
+        let mut result = transport
             .execute(prompt, tool_state, session, extra_env, transport_options)
-            .await
+            .await?;
+        result.execution.consolidate_stderr_retries();
+        Ok(result)
     }
 
     /// Execute in a specific directory (for ephemeral sessions).
@@ -377,7 +379,7 @@ impl Executor {
         idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         let legacy = LegacyTransport::new(self.clone());
-        legacy
+        let mut result = legacy
             .execute_in(
                 prompt,
                 work_dir,
@@ -385,7 +387,9 @@ impl Executor {
                 stream_mode,
                 idle_timeout_seconds,
             )
-            .await
+            .await?;
+        result.execution.consolidate_stderr_retries();
+        Ok(result)
     }
 
     /// Build command for execute_in() legacy path.
