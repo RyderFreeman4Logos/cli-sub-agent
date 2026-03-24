@@ -271,8 +271,9 @@ Tool: bash
 OnFail: abort
 Condition: !(${BOT_UNAVAILABLE})
 
-Trigger a fresh `@codex review` for current HEAD, then delegate the waiting
-window (max 10 minutes) to CSA.
+Trigger a fresh `@codex review` for current HEAD, wait 5 minutes (bot
+responses rarely arrive faster), then delegate the remaining 10-minute
+polling window to CSA. Total wait: ~15 minutes.
 If bot times out, set BOT_UNAVAILABLE and fall through — local review
 (Step 2) already covers main...HEAD. If fallback review finds issues, set
 `FALLBACK_REVIEW_HAS_ISSUES=true` so Step 6-fix is required before merge.
@@ -343,13 +344,17 @@ TRIGGER_BODY="@codex review
 <!-- csa-trigger:${CURRENT_SHA}:${TRIGGER_TS} -->"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
 
-# --- Delegate wait to CSA-managed step (max 10 min) ---
+# --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
+echo "Waiting 5 minutes before polling (bot responses rarely arrive faster)..."
+sleep 300
+
+# --- Delegate remaining polling to CSA-managed step (max 10 min) ---
 BOT_UNAVAILABLE=true
 FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
 WAIT_RESULT_FILE="$(mktemp)"
 set +e
-run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes. Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
+run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
 WAIT_RC=${PIPESTATUS[0]}
 set -e
 WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
@@ -403,10 +408,11 @@ fi
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "Bot timed out after delegated wait window. Falling back to local review."
-  if ! csa review --range main...HEAD --timeout 1200 2>/dev/null; then
+  if ! csa review --range main...HEAD --timeout 1800 2>/dev/null; then
     FALLBACK_REVIEW_HAS_ISSUES=true
   fi
 fi
+echo "CSA_VAR:BOT_REVIEW_WINDOW_START=$WAIT_BASE_TS"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
@@ -920,7 +926,7 @@ by the workflow engine (`csa plan run` executes steps linearly).
 
 The gate:
 1. Re-triggers `@codex review` on current HEAD
-2. Delegates 10-minute wait to CSA
+2. Waits 5 minutes quietly, then delegates the remaining 10-minute polling window to CSA
 3. If bot finds new P0/P1/P2 findings → **abort** (user must re-run pr-codex-bot)
 4. If bot timeout → falls back to local `csa review --range main...HEAD`
 5. If clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
@@ -949,9 +955,9 @@ wait/fix/review loop to a single CSA-managed step.
 
 **Post-rebase review gate** (BLOCKING):
 - CSA delegated step handles both paths:
-  - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds).
+  - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same 15-minute wait policy for each trigger (5-minute quiet wait + 10-minute polling).
   - Bot times out → CSA runs fallback `csa review --range main...HEAD` and bounded fix/review retries (max 3 rounds).
-- command-level hard timeout is enforced for the delegated gate (`timeout 2400s`).
+- command-level hard timeout is enforced for the delegated gate (`timeout 5400s`).
 - if `timeout/gtimeout` is unavailable, a built-in watchdog fallback still enforces the same timeout bound.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
@@ -1054,7 +1060,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 
   set +e
   GATE_RESULT_FILE="$(mktemp)"
-  run_with_hard_timeout 2400 csa run --force-ignore-tier-setting --tool codex --idle-timeout 2400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end: wait up to 10 minutes for @codex response to the latest trigger; if response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check (max 3 rounds); if bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
+  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool codex --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
   GATE_RC=${PIPESTATUS[0]}
   set -e
   GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"
@@ -1064,7 +1070,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     FALLBACK_REVIEW_HAS_ISSUES=true
     echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
     echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Post-rebase delegated gate exceeded hard timeout (2400s)." >&2
+    echo "ERROR: Post-rebase delegated gate exceeded hard timeout (5400s)." >&2
     exit 1
   fi
   if [ "${GATE_RC}" -ne 0 ]; then

@@ -143,6 +143,7 @@ resolve_marker_paths() {
   PR_BOT_MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
   PR_BOT_MARKER_BASE="${PR_BOT_MARKER_DIR}/${pr_number}-${head_sha}"
   PR_BOT_DONE_MARKER="${PR_BOT_MARKER_BASE}.done"
+  PR_BOT_AWAITING_USER_MARKER="${PR_BOT_MARKER_BASE}.awaiting-user"
   PR_BOT_LOCK_DIR="${PR_BOT_MARKER_BASE}.lock"
 }
 
@@ -151,6 +152,11 @@ begin_pr_bot_transaction() {
 
   if [ -f "${PR_BOT_DONE_MARKER}" ]; then
     echo "pr-codex-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
+    return 1
+  fi
+
+  if [ -f "${PR_BOT_AWAITING_USER_MARKER}" ]; then
+    echo "pr-codex-bot is awaiting manual follow-up for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping auto rerun."
     return 1
   fi
 
@@ -228,7 +234,24 @@ echo "Running pr-codex-bot transaction..."
 # while inner CSA sessions spawned by this workflow complete.
 export CSA_PR_BOT_GUARD=1
 
-if csa plan run patterns/pr-codex-bot/workflow.toml; then
+PLAN_RESULT_FILE="$(mktemp)"
+set +e
+csa plan run --sa-mode true patterns/pr-codex-bot/workflow.toml | tee "${PLAN_RESULT_FILE}"
+PLAN_RC=${PIPESTATUS[0]}
+set -e
+
+if grep -Eq '^[[:space:]]*ROUND_LIMIT_HALT:' "${PLAN_RESULT_FILE}"; then
+  rm -f "${PLAN_RESULT_FILE}"
+  touch "${PR_BOT_AWAITING_USER_MARKER}"
+  rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
+  PR_BOT_LOCK_HELD=0
+  echo "WARN: pr-codex-bot reached REVIEW_ROUND limit and is awaiting manual follow-up; done marker was not written." >&2
+  exit 0
+fi
+
+rm -f "${PLAN_RESULT_FILE}"
+
+if [ "${PLAN_RC}" -eq 0 ]; then
   touch "${PR_BOT_DONE_MARKER}"
   rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
   PR_BOT_LOCK_HELD=0
