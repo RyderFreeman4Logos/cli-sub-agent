@@ -120,6 +120,19 @@ pub(crate) fn resolve_sandbox_options(
             if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
                 builder = builder.with_writable_path(slots);
             }
+            // CLI --extra-writable (no-config path).
+            if !extra_writable.is_empty() {
+                if let Err(e) =
+                    csa_resource::isolation_plan::validate_writable_paths(extra_writable, &cwd)
+                {
+                    return SandboxResolution::RequiredButUnavailable(format!(
+                        "--extra-writable validation failed: {e}"
+                    ));
+                }
+                for path in extra_writable {
+                    builder = builder.with_writable_path(path.clone());
+                }
+            }
         }
 
         let plan = builder
