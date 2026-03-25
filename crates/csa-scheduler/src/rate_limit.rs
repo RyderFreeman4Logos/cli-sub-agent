@@ -50,7 +50,13 @@ fn patterns_for_tool(tool: &str) -> &'static [&'static str] {
     match tool {
         "gemini-cli" => GEMINI_RATE_LIMIT_PATTERNS,
         "opencode" => &["rate limit", "429", "too many requests"],
-        "codex" => &["rate_limit_exceeded", "429", "ratelimiterror"],
+        "codex" => &[
+            "rate_limit_exceeded",
+            "usage_limit_exceeded",
+            "usage limit",
+            "429",
+            "ratelimiterror",
+        ],
         "claude-code" => &["rate limit", "529", "429", "overloaded"],
         _ => &["429", "rate limit"],
     }
@@ -200,6 +206,32 @@ mod tests {
             result.is_none(),
             "Split pattern across stderr/stdout should not match"
         );
+    }
+
+    #[test]
+    fn test_codex_usage_limit_exceeded() {
+        let result = detect_rate_limit(
+            "codex",
+            r#"Internal error: {"codex_error_info": "usage_limit_exceeded", "message": "You've hit your usage limit."}"#,
+            "",
+            1,
+            None,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().matched_pattern, "usage_limit_exceeded");
+    }
+
+    #[test]
+    fn test_codex_usage_limit_plain_text() {
+        let result = detect_rate_limit(
+            "codex",
+            "Error: Usage limit exceeded for this account",
+            "",
+            1,
+            None,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().matched_pattern, "usage limit");
     }
 
     #[test]
