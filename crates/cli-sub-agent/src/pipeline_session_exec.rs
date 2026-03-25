@@ -337,12 +337,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
-    let mut effective_prompt = if let Some(guard) = super::prompt_guard::anti_recursion_guard() {
-        info!("Injecting anti-recursion guard (CSA_DEPTH > 0)");
-        format!("{guard}\n\n{raw_prompt}")
-    } else {
-        raw_prompt.clone()
-    };
+    let mut effective_prompt = raw_prompt.clone();
     // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
     let is_first_turn = session
         .tools

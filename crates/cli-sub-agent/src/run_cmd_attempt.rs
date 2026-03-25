@@ -318,7 +318,9 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
         {
             effective_prompt.push_str(instructions);
         }
-
+        if let Some(guard) = crate::pipeline::prompt_guard::anti_recursion_guard() {
+            effective_prompt = format!("{guard}\n\n{effective_prompt}");
+        }
         let remaining_run_timeout =
             resolve_remaining_run_timeout(request.run_timeout_seconds, request.run_started_at);
         if remaining_run_timeout.is_some_and(|remaining| remaining.is_zero()) {

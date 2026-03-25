@@ -27,7 +27,7 @@ pub(super) fn should_emit_prompt_guard_to_caller() -> bool {
 /// When `CSA_DEPTH > 0`, the tool is running inside a CSA session and MUST NOT
 /// attempt to delegate work back to `csa run`/`csa review`/`csa debate`.
 /// Returns `Some(guard)` when depth > 0, `None` at the top level.
-pub(super) fn anti_recursion_guard() -> Option<String> {
+pub(crate) fn anti_recursion_guard() -> Option<String> {
     let depth = current_depth();
     if depth == 0 {
         return None;

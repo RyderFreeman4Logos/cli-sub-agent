@@ -138,7 +138,7 @@ pub enum Commands {
         #[arg(long, hide = true)]
         parent: Option<String>,
 
-        /// Ephemeral session (no project files, no context injection, auto-cleanup)
+        /// Ephemeral session (no session persistence, auto-cleanup; tool runs in project dir)
         #[arg(long, conflicts_with = "session")]
         ephemeral: bool,
 
