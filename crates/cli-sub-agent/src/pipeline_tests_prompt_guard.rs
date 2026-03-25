@@ -74,3 +74,32 @@ fn prompt_guard_caller_injection_disabled_for_recursive_depth() {
     restore_env_var(PROMPT_GUARD_CALLER_INJECTION_ENV, original_guard);
     restore_env_var("CSA_DEPTH", original_depth);
 }
+
+#[test]
+fn anti_recursion_guard_none_at_depth_zero() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .expect("prompt guard env lock poisoned");
+    let original_depth = std::env::var("CSA_DEPTH").ok();
+    // SAFETY: test-scoped env mutation, restored immediately.
+    unsafe { std::env::remove_var("CSA_DEPTH") };
+    let guard = super::prompt_guard::anti_recursion_guard();
+    restore_env_var("CSA_DEPTH", original_depth);
+    assert!(guard.is_none(), "should be None at depth 0");
+}
+
+#[test]
+fn anti_recursion_guard_present_at_depth_one() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .expect("prompt guard env lock poisoned");
+    let original_depth = std::env::var("CSA_DEPTH").ok();
+    // SAFETY: test-scoped env mutation, restored immediately.
+    unsafe { std::env::set_var("CSA_DEPTH", "1") };
+    let guard = super::prompt_guard::anti_recursion_guard();
+    restore_env_var("CSA_DEPTH", original_depth);
+    let guard = guard.expect("should return Some at depth > 0");
+    assert!(guard.contains("csa-anti-recursion"));
+    assert!(guard.contains("depth=1"));
+    assert!(guard.contains("MUST NOT delegate"));
+}

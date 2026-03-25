@@ -24,18 +24,23 @@ pub(super) enum AttemptExecution {
 pub(super) async fn run_ephemeral_with_timeout(
     executor: &Executor,
     effective_prompt: &str,
+    project_root: &Path,
     extra_env: Option<&std::collections::HashMap<String, String>>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
     timeout_duration: std::time::Duration,
 ) -> Result<AttemptExecution> {
-    let temp_dir = TempDir::new()?;
-    info!("Ephemeral session in: {:?}", temp_dir.path());
+    let _temp_dir = TempDir::new()?;
+    info!(
+        "Ephemeral session (metadata: {:?}, cwd: {})",
+        _temp_dir.path(),
+        project_root.display()
+    );
     let execution = match tokio::time::timeout(
         timeout_duration,
         executor.execute_in(
             effective_prompt,
-            temp_dir.path(),
+            project_root,
             extra_env,
             stream_mode,
             idle_timeout_seconds,
@@ -52,17 +57,22 @@ pub(super) async fn run_ephemeral_with_timeout(
 pub(super) async fn run_ephemeral_without_timeout(
     executor: &Executor,
     effective_prompt: &str,
+    project_root: &Path,
     extra_env: Option<&std::collections::HashMap<String, String>>,
     stream_mode: csa_process::StreamMode,
     idle_timeout_seconds: u64,
 ) -> Result<AttemptExecution> {
-    let temp_dir = TempDir::new()?;
-    info!("Ephemeral session in: {:?}", temp_dir.path());
+    let _temp_dir = TempDir::new()?;
+    info!(
+        "Ephemeral session (metadata: {:?}, cwd: {})",
+        _temp_dir.path(),
+        project_root.display()
+    );
     Ok(AttemptExecution::Finished(
         executor
             .execute_in(
                 effective_prompt,
-                temp_dir.path(),
+                project_root,
                 extra_env,
                 stream_mode,
                 idle_timeout_seconds,

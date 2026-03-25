@@ -174,8 +174,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let review_mode = args.effective_review_mode();
     let security_mode = args.effective_security_mode();
     let auto_discover_context = review_scope_allows_auto_discovery(&args);
-    // --spec takes priority over --context for explicit spec-based review
-    let explicit_context = args.spec.as_deref().or(args.context.as_deref());
+    // --prompt-file provides a path (like --context), not inline content.
+    let prompt_file_path = args.prompt_file.as_ref().map(|p| p.display().to_string());
+    // --spec takes priority over --context / --prompt-file for explicit spec-based review
+    let explicit_context = args
+        .spec
+        .as_deref()
+        .or(args.context.as_deref())
+        .or(prompt_file_path.as_deref());
     let context = resolve_review_context(explicit_context, &project_root, auto_discover_context)?;
 
     debug!(

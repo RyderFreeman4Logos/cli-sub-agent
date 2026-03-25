@@ -31,6 +31,7 @@ pub(crate) async fn handle_run(
     tool: Option<csa_core::types::ToolArg>,
     skill: Option<String>,
     prompt: Option<String>,
+    prompt_file: Option<PathBuf>,
     session_arg: Option<String>,
     last: bool,
     fork_from: Option<String>,
@@ -149,6 +150,16 @@ pub(crate) async fn handle_run(
     // resolution may override it).  This drives tier enforcement: explicit
     // --tool (including --tool auto) is blocked when tiers are configured.
     let user_explicit_tool = tool.is_some();
+
+    // Resolve --prompt-file into the prompt if provided.
+    let prompt = if prompt_file.is_some() {
+        Some(crate::run_helpers::resolve_prompt_with_file(
+            prompt,
+            prompt_file.as_deref(),
+        )?)
+    } else {
+        prompt
+    };
 
     let skill_res = resolve_skill_and_prompt(
         skill.as_deref(),

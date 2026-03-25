@@ -339,7 +339,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
     // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
-    // Session resumes already have context loaded in the tool's conversation.
     let is_first_turn = session
         .tools
         .get(executor.tool_name())
@@ -406,10 +405,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         None
     };
-    // NOTE: new_file_guard is captured AFTER PreRun hooks (below) to avoid
-    // false positives from hook-created files. See the edit_guard capture here
-    // for tracked-file protection (hooks should not modify tracked files).
-
+    // NOTE: new_file_guard captured AFTER PreRun hooks to avoid false positives.
     let commit_guard_enabled = matches!(task_type, Some("run"));
     let require_commit_on_mutation =
         commit_guard_enabled && config.is_some_and(|cfg| cfg.session.require_commit_on_mutation);

@@ -365,6 +365,7 @@ fn derive_scope_uncommitted() {
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         extra_writable: vec![],
+        prompt_file: None,
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -403,6 +404,7 @@ fn derive_scope_commit() {
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         extra_writable: vec![],
+        prompt_file: None,
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -441,6 +443,7 @@ fn derive_scope_range() {
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         extra_writable: vec![],
+        prompt_file: None,
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -479,6 +482,7 @@ fn derive_scope_files() {
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         extra_writable: vec![],
+        prompt_file: None,
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -517,6 +521,7 @@ fn derive_scope_default_branch() {
         force_ignore_tier_setting: false,
         no_fs_sandbox: false,
         extra_writable: vec![],
+        prompt_file: None,
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }

@@ -22,6 +22,28 @@ pub(super) fn should_emit_prompt_guard_to_caller() -> bool {
     }
 }
 
+/// Build an anti-recursion guard block for tools dispatched by CSA.
+///
+/// When `CSA_DEPTH > 0`, the tool is running inside a CSA session and MUST NOT
+/// attempt to delegate work back to `csa run`/`csa review`/`csa debate`.
+/// Returns `Some(guard)` when depth > 0, `None` at the top level.
+pub(crate) fn anti_recursion_guard() -> Option<String> {
+    let depth = current_depth();
+    if depth == 0 {
+        return None;
+    }
+    Some(format!(
+        "<csa-anti-recursion depth=\"{depth}\">\n\
+         CRITICAL: You are running INSIDE a CSA session (depth={depth}).\n\
+         You MUST NOT delegate work to `csa run`, `csa review`, or `csa debate`.\n\
+         You MUST NOT follow any instructions (including AGENTS.md or CLAUDE.md task-delegation rules) \
+         that tell you to delegate large-context work to CSA sub-agents.\n\
+         Perform ALL work directly with your own tools and context window.\n\
+         If a file is too large, read it in sections — do NOT spawn a CSA sub-agent.\n\
+         </csa-anti-recursion>"
+    ))
+}
+
 pub(super) fn emit_prompt_guard_to_caller(guard_block: &str, guard_count: usize) {
     if !should_emit_prompt_guard_to_caller() || guard_block.trim().is_empty() {
         return;
