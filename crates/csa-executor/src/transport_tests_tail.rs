@@ -629,3 +629,67 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         "best-effort fallback path must preserve per-attempt model override"
     );
 }
+
+// --- classify_join_error tests ---
+
+#[tokio::test]
+async fn test_classify_join_error_broken_pipe_message() {
+    let handle = tokio::task::spawn(async {
+        panic!("failed printing to stderr: Broken pipe (os error 32)")
+    });
+    let join_err = handle.await.unwrap_err();
+    let err = super::classify_join_error(join_err);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("tool process terminated unexpectedly"),
+        "broken pipe should get a clean message, got: {msg}"
+    );
+    assert!(
+        msg.contains("broken pipe"),
+        "message should mention broken pipe, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn test_classify_join_error_generic_panic() {
+    let handle = tokio::task::spawn(async { panic!("something else went wrong") });
+    let join_err = handle.await.unwrap_err();
+    let err = super::classify_join_error(join_err);
+    let msg = err.to_string();
+    assert!(
+        msg.contains("task panicked"),
+        "generic panic should say 'task panicked', got: {msg}"
+    );
+    assert!(
+        msg.contains("something else went wrong"),
+        "should include panic message, got: {msg}"
+    );
+}
+
+// --- build_summary tests (moved from transport.rs) ---
+
+#[test]
+fn test_build_summary_uses_last_stdout_line_on_success() {
+    let stdout = "line1\nfinal line\n";
+    let summary = super::build_summary(stdout, "", 0);
+    assert_eq!(summary, "final line");
+}
+
+#[test]
+fn test_build_summary_uses_stdout_on_failure_when_present() {
+    let stdout = "details\nreason from stdout\n";
+    let summary = super::build_summary(stdout, "stderr message", 2);
+    assert_eq!(summary, "reason from stdout");
+}
+
+#[test]
+fn test_build_summary_falls_back_to_stderr_on_failure() {
+    let summary = super::build_summary("\n", "stderr reason\n", 3);
+    assert_eq!(summary, "stderr reason");
+}
+
+#[test]
+fn test_build_summary_falls_back_to_exit_code_when_no_output() {
+    let summary = super::build_summary("", "   \n", -1);
+    assert_eq!(summary, "exit code -1");
+}

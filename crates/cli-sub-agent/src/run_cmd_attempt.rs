@@ -20,7 +20,9 @@ use crate::pipeline;
 use crate::run_cmd_fork::{
     ForkResolution, cleanup_pre_created_fork_session, pre_create_native_fork_session, resolve_fork,
 };
-use crate::run_cmd_post::{RateLimitAction, evaluate_rate_limit_failover};
+use crate::run_cmd_post::{
+    RateLimitAction, evaluate_error_rate_limit_failover, evaluate_rate_limit_failover,
+};
 use crate::run_cmd_tool_selection::{
     resolve_slot_wait_timeout_seconds, take_next_runtime_fallback_tool,
 };
@@ -561,11 +563,51 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     );
                     continue;
                 }
-                cleanup_pre_created_fork_session(
-                    &mut pre_created_fork_session_id,
+                // ACP errors (e.g. codex "usage_limit_exceeded") bypass Ok-path
+                // rate-limit detection.  Check error text for quota signals.
+                match evaluate_error_rate_limit_failover(
+                    tool_name_str,
+                    &e.to_string(),
+                    attempts,
+                    max_failover_attempts,
+                    &mut tried_tools,
+                    executed_session_id.as_deref(),
+                    effective_session_arg.as_deref(),
+                    request.ephemeral,
+                    request.prompt_text,
                     request.project_root,
-                );
-                return Err(e);
+                    request.config,
+                    current_model_spec.as_deref(),
+                )? {
+                    RateLimitAction::Retry {
+                        new_tool,
+                        new_model_spec,
+                    } => {
+                        failover_context_addendum = build_failover_context_addendum(
+                            tool_name_str,
+                            executed_session_id.as_deref(),
+                        );
+                        current_tool = new_tool;
+                        current_model_spec = new_model_spec;
+                        current_model = None;
+                        fork_resolution = None;
+                        if is_fork {
+                            effective_session_arg = None;
+                        }
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            request.project_root,
+                        );
+                        continue;
+                    }
+                    _ => {
+                        cleanup_pre_created_fork_session(
+                            &mut pre_created_fork_session_id,
+                            request.project_root,
+                        );
+                        return Err(e);
+                    }
+                }
             }
         };
 
@@ -708,92 +750,5 @@ fn persist_fork_timeout_result_if_missing(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{build_failover_context_addendum, persist_fork_timeout_result_if_missing};
-    use csa_core::types::ToolName;
-    use csa_session::{create_session, load_result};
-
-    #[test]
-    fn persist_fork_timeout_result_if_missing_skips_non_fork_sessions() {
-        let td = tempfile::tempdir().expect("tempdir");
-        let session = create_session(td.path(), Some("regular"), None, Some("codex"))
-            .expect("create session");
-
-        persist_fork_timeout_result_if_missing(
-            td.path(),
-            false,
-            ToolName::Codex,
-            Some(&session.meta_session_id),
-            chrono::Utc::now(),
-            60,
-        );
-
-        assert!(
-            load_result(td.path(), &session.meta_session_id)
-                .expect("load result")
-                .is_none(),
-            "non-fork timeouts should not synthesize fork terminal results"
-        );
-    }
-
-    #[test]
-    fn persist_fork_timeout_result_if_missing_writes_fork_failure() {
-        let td = tempfile::tempdir().expect("tempdir");
-        let parent =
-            create_session(td.path(), Some("parent"), None, Some("codex")).expect("parent");
-        let child = create_session(
-            td.path(),
-            Some("fork child"),
-            Some(&parent.meta_session_id),
-            Some("codex"),
-        )
-        .expect("child");
-
-        persist_fork_timeout_result_if_missing(
-            td.path(),
-            true,
-            ToolName::Codex,
-            Some(&child.meta_session_id),
-            chrono::Utc::now(),
-            60,
-        );
-
-        let result = load_result(td.path(), &child.meta_session_id)
-            .expect("load result")
-            .expect("fork timeout result");
-        assert_eq!(result.status, "failure");
-        assert_eq!(result.exit_code, 1);
-        assert!(
-            result.summary.contains("wall-clock timeout"),
-            "fork timeout result should explain the synthetic failure"
-        );
-    }
-
-    #[test]
-    fn build_failover_context_addendum_includes_xurl_hint() {
-        let addendum = build_failover_context_addendum("gemini-cli", Some("01ABCDEF"));
-        assert!(addendum.is_some());
-        let text = addendum.unwrap();
-        assert!(text.contains("gemini-cli"), "should mention failed tool");
-        assert!(text.contains("01ABCDEF"), "should mention session id");
-        assert!(text.contains("csa xurl"), "should include xurl command");
-        assert!(text.contains("gemini"), "should use gemini provider name");
-    }
-
-    #[test]
-    fn build_failover_context_addendum_none_without_session() {
-        let addendum = build_failover_context_addendum("gemini-cli", None);
-        assert!(addendum.is_none());
-    }
-
-    #[test]
-    fn build_failover_context_addendum_maps_claude_provider() {
-        let addendum = build_failover_context_addendum("claude-code", Some("01XYZ"));
-        assert!(addendum.is_some());
-        let text = addendum.unwrap();
-        assert!(
-            text.contains("claude"),
-            "should map claude-code to claude provider"
-        );
-    }
-}
+#[path = "run_cmd_attempt_tests.rs"]
+mod tests;

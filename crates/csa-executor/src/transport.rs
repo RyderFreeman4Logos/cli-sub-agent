@@ -582,7 +582,7 @@ impl Transport for AcpTransport {
                 }
             })
             .await
-            .map_err(|e| anyhow!("ACP transport join error: {e}"))??;
+            .map_err(classify_join_error)??;
 
         let execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
@@ -602,6 +602,31 @@ impl Transport for AcpTransport {
     #[cfg(test)]
     fn as_any(&self) -> &dyn std::any::Any {
         self
+    }
+}
+
+/// Convert a `tokio::task::JoinError` into a descriptive `anyhow::Error`.
+///
+/// Broken-pipe panics (from `eprintln!` after the tool process closes stderr)
+/// are rewritten into a clean message that mentions the tool died, instead of
+/// surfacing the raw tokio panic trace.
+fn classify_join_error(e: tokio::task::JoinError) -> anyhow::Error {
+    if e.is_panic() {
+        let msg = match e.into_panic().downcast::<String>() {
+            Ok(s) => *s,
+            Err(any) => match any.downcast::<&str>() {
+                Ok(s) => s.to_string(),
+                Err(_) => "unknown panic".to_string(),
+            },
+        };
+        if msg.contains("Broken pipe") || msg.contains("os error 32") {
+            return anyhow!(
+                "ACP transport: tool process terminated unexpectedly (broken pipe on stderr)"
+            );
+        }
+        anyhow!("ACP transport: task panicked: {msg}")
+    } else {
+        anyhow!("ACP transport: task cancelled: {e}")
     }
 }
 
@@ -760,32 +785,6 @@ mod tests {
             AcpTransport::acp_command_for_tool("gemini-cli"),
             ("gemini-cli-acp".to_string(), vec![])
         );
-    }
-
-    #[test]
-    fn test_build_summary_uses_last_stdout_line_on_success() {
-        let stdout = "line1\nfinal line\n";
-        let summary = build_summary(stdout, "", 0);
-        assert_eq!(summary, "final line");
-    }
-
-    #[test]
-    fn test_build_summary_uses_stdout_on_failure_when_present() {
-        let stdout = "details\nreason from stdout\n";
-        let summary = build_summary(stdout, "stderr message", 2);
-        assert_eq!(summary, "reason from stdout");
-    }
-
-    #[test]
-    fn test_build_summary_falls_back_to_stderr_on_failure() {
-        let summary = build_summary("\n", "stderr reason\n", 3);
-        assert_eq!(summary, "stderr reason");
-    }
-
-    #[test]
-    fn test_build_summary_falls_back_to_exit_code_when_no_output() {
-        let summary = build_summary("", "   \n", -1);
-        assert_eq!(summary, "exit code -1");
     }
 
     include!("transport_tests_tail.rs");

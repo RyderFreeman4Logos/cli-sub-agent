@@ -255,6 +255,115 @@ pub(crate) fn evaluate_rate_limit_failover(
     }
 }
 
+/// Check an anyhow error message for rate-limit signals and attempt failover.
+///
+/// This handles the case where the execution returned `Err(e)` (e.g. ACP
+/// `PromptFailed` with `usage_limit_exceeded`) instead of a non-zero
+/// `ExecutionResult`. The error text is tested against the same rate-limit
+/// patterns used for normal exit-code-based detection.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_error_rate_limit_failover(
+    tool_name_str: &str,
+    error_message: &str,
+    attempts: usize,
+    max_failover_attempts: usize,
+    tried_tools: &mut Vec<String>,
+    executed_session_id: Option<&str>,
+    effective_session_arg: Option<&str>,
+    ephemeral: bool,
+    prompt_text: &str,
+    project_root: &Path,
+    config: Option<&ProjectConfig>,
+    current_model_spec: Option<&str>,
+) -> Result<RateLimitAction> {
+    // Reuse detect_rate_limit by treating the error message as stderr.
+    let rate_limit = match csa_scheduler::detect_rate_limit(
+        tool_name_str,
+        error_message,
+        "",
+        1, // synthetic non-zero exit code
+        current_model_spec,
+    ) {
+        Some(rl) => rl,
+        None => return Ok(RateLimitAction::NoRateLimit),
+    };
+
+    info!(
+        tool = %tool_name_str,
+        pattern = %rate_limit.matched_pattern,
+        attempt = attempts,
+        max = max_failover_attempts,
+        "Rate limit detected in transport error, attempting failover"
+    );
+
+    if attempts >= max_failover_attempts {
+        warn!(
+            "Max failover attempts ({}) reached for error-path rate limit",
+            max_failover_attempts
+        );
+        return Ok(RateLimitAction::ExhaustedFailovers);
+    }
+
+    tried_tools.push(tool_name_str.to_string());
+
+    let failover_session_ref = executed_session_id.or(effective_session_arg);
+    let session_state = if !ephemeral {
+        failover_session_ref.and_then(|sid| {
+            let sessions_dir = csa_session::get_session_root(project_root)
+                .ok()?
+                .join("sessions");
+            let resolved_id = csa_session::resolve_session_prefix(&sessions_dir, sid).ok()?;
+            csa_session::load_session(project_root, &resolved_id).ok()
+        })
+    } else {
+        None
+    };
+
+    let task_needs_edit = crate::run_helpers::infer_task_edit_requirement(prompt_text)
+        .or_else(|| config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str)));
+
+    let Some(cfg) = config else {
+        return Ok(RateLimitAction::ExhaustedFailovers);
+    };
+
+    let action = csa_scheduler::decide_failover(
+        tool_name_str,
+        "default",
+        task_needs_edit,
+        session_state.as_ref(),
+        tried_tools,
+        cfg,
+        &rate_limit.matched_pattern,
+    );
+
+    match action {
+        csa_scheduler::FailoverAction::RetryInSession {
+            new_tool,
+            new_model_spec,
+            session_id: _,
+        }
+        | csa_scheduler::FailoverAction::RetrySiblingSession {
+            new_tool,
+            new_model_spec,
+        } => {
+            info!(
+                from = %tool_name_str,
+                to = %new_tool,
+                "Failing over from transport error to alternative tool"
+            );
+            let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
+            Ok(RateLimitAction::Retry {
+                new_tool: tool,
+                new_model_spec: Some(new_model_spec),
+            })
+        }
+        csa_scheduler::FailoverAction::ReportError { reason, .. } => {
+            warn!(reason = %reason, "Error-path failover not possible");
+            Ok(RateLimitAction::ExhaustedFailovers)
+        }
+    }
+}
+
 /// Mark a successful non-fork session as a seed candidate and run LRU eviction
 /// to retire excess seed sessions.
 pub(crate) fn mark_seed_and_evict(
