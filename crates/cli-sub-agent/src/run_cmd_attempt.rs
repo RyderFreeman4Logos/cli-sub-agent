@@ -353,6 +353,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 run_ephemeral_with_timeout(
                     &executor,
                     &effective_prompt,
+                    request.project_root,
                     extra_env.as_ref(),
                     request.stream_mode,
                     request.idle_timeout_seconds,
@@ -392,6 +393,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             run_ephemeral_without_timeout(
                 &executor,
                 &effective_prompt,
+                request.project_root,
                 extra_env.as_ref(),
                 request.stream_mode,
                 request.idle_timeout_seconds,

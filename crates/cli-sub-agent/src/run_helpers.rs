@@ -1,6 +1,6 @@
 //! Helper functions for `csa run`: tool resolution, executor building, token parsing.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use std::io::Read;
 use std::path::Path;
 
@@ -409,6 +409,22 @@ fn extract_cost(text: &str) -> Option<f64> {
         .collect();
 
     num_str.parse().ok()
+}
+
+/// Resolve prompt from `--prompt-file`, positional arg, or stdin (in priority order).
+pub(crate) fn resolve_prompt_with_file(
+    prompt: Option<String>,
+    prompt_file: Option<&std::path::Path>,
+) -> Result<String> {
+    if let Some(path) = prompt_file {
+        let content = std::fs::read_to_string(path)
+            .with_context(|| format!("--prompt-file: failed to read '{}'", path.display()))?;
+        if content.trim().is_empty() {
+            anyhow::bail!("--prompt-file '{}' is empty", path.display());
+        }
+        return Ok(content);
+    }
+    read_prompt(prompt)
 }
 
 /// Read prompt from CLI argument or stdin.

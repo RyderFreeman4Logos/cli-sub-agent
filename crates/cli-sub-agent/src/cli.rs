@@ -95,6 +95,10 @@ pub enum Commands {
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
 
+        /// Read prompt from a file (bypasses shell quoting issues with complex prompts)
+        #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
+        prompt_file: Option<PathBuf>,
+
         /// Resume existing session (ULID or prefix match) [DEPRECATED: use --fork-from]
         #[arg(short, long, conflicts_with_all = ["last", "fork_from", "fork_last"])]
         session: Option<String>,

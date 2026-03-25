@@ -174,8 +174,21 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let review_mode = args.effective_review_mode();
     let security_mode = args.effective_security_mode();
     let auto_discover_context = review_scope_allows_auto_discovery(&args);
-    // --spec takes priority over --context for explicit spec-based review
-    let explicit_context = args.spec.as_deref().or(args.context.as_deref());
+    // --prompt-file is an alternative to --context (file-based supplementary context).
+    let prompt_file_context = if let Some(ref pf) = args.prompt_file {
+        Some(
+            std::fs::read_to_string(pf)
+                .with_context(|| format!("--prompt-file: failed to read '{}'", pf.display()))?,
+        )
+    } else {
+        None
+    };
+    // --spec takes priority over --context / --prompt-file for explicit spec-based review
+    let explicit_context = args
+        .spec
+        .as_deref()
+        .or(args.context.as_deref())
+        .or(prompt_file_context.as_deref());
     let context = resolve_review_context(explicit_context, &project_root, auto_discover_context)?;
 
     debug!(

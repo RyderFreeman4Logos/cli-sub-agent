@@ -9,7 +9,7 @@ use tracing::{debug, error, warn};
 use crate::cli::DebateArgs;
 use crate::debate_cmd_resolve::resolve_debate_tool;
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
-use crate::run_helpers::read_prompt;
+use crate::run_helpers::resolve_prompt_with_file;
 use csa_config::ExecutionEnvOptions;
 use csa_core::types::OutputFormat;
 
@@ -146,9 +146,9 @@ pub(crate) async fn handle_debate(
         }
     }
 
-    // 3. Read question (from positional arg, --topic, or stdin)
+    // 3. Read question (from --prompt-file, positional arg, --topic, or stdin)
     let effective_question = args.question.or(args.topic);
-    let mut question = read_prompt(effective_question)?;
+    let mut question = resolve_prompt_with_file(effective_question, args.prompt_file.as_deref())?;
     if let Some(ctx) = &args.context {
         question = format!("<debate-context>\n{ctx}\n</debate-context>\n\n{question}");
     }
