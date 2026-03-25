@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tokio::task::JoinSet;
@@ -276,6 +276,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             args.force_override_user_config,
             args.no_fs_sandbox,
             readonly_project_root,
+            &args.extra_writable,
         );
 
         let result = if let Some(timeout_secs) = args.timeout {
@@ -360,6 +361,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 args.force_override_user_config,
                 args.no_fs_sandbox,
                 false, // fix pass must write — override readonly_project_root
+                &args.extra_writable,
             );
 
             let fix_result = if let Some(timeout_secs) = args.timeout {
@@ -516,6 +518,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
         let reviewer_force_override = args.force_override_user_config;
         let reviewer_no_fs_sandbox = args.no_fs_sandbox;
+        let reviewer_extra_writable = args.extra_writable.clone();
         // Only pass tier_model_spec to the reviewer whose tool matches the
         // tier-resolved primary tool.  For other reviewers (selected for
         // heterogeneity), the model_spec would override their tool via
@@ -545,6 +548,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 reviewer_force_override,
                 reviewer_no_fs_sandbox,
                 readonly_project_root,
+                &reviewer_extra_writable,
             )
             .await?;
             let result = &session_result.execution;
@@ -663,6 +667,7 @@ async fn execute_review(
     force_override_user_config: bool,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<crate::pipeline::SessionExecutionResult> {
     let enforce_tier = tier_model_spec.is_some();
     let executor = crate::pipeline::build_and_validate_executor(
@@ -735,6 +740,7 @@ async fn execute_review(
         crate::pipeline::ParentSessionSource::ExplicitOnly,
         no_fs_sandbox,
         readonly_project_root,
+        extra_writable,
     )
     .await?;
 

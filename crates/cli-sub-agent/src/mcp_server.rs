@@ -631,6 +631,7 @@ async fn handle_run_tool(args: Value) -> Result<Value> {
             Some(&global_config),
             false, // no_fs_sandbox
             false, // readonly_project_root
+            &[],   // extra_writable
         )
         .await?
     };

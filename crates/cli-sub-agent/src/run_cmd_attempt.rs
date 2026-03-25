@@ -2,7 +2,7 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use anyhow::Result;
@@ -72,6 +72,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) context_load_options: Option<&'a csa_executor::ContextLoadOptions>,
     pub(crate) memory_injection: pipeline::MemoryInjectionOptions,
     pub(crate) no_fs_sandbox: bool,
+    pub(crate) extra_writable: Vec<PathBuf>,
 }
 
 pub(crate) enum RunLoopCompletion {
@@ -383,6 +384,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     &mut executed_session_id,
                     &mut pre_created_fork_session_id,
                     request.no_fs_sandbox,
+                    &request.extra_writable,
                 )
                 .await
             }
@@ -419,6 +421,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 &mut executed_session_id,
                 &mut pre_created_fork_session_id,
                 request.no_fs_sandbox,
+                &request.extra_writable,
             )
             .await
         }?;

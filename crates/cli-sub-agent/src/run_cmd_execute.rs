@@ -2,6 +2,7 @@
 //!
 //! Extracted from `run_cmd.rs` to keep module sizes manageable.
 
+use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -59,6 +60,7 @@ pub(crate) async fn handle_run(
     tier: Option<String>,
     force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
+    extra_writable: Vec<PathBuf>,
 ) -> Result<i32> {
     let project_root = pipeline::determine_project_root(cd.as_deref())?;
     let effective_repo =
@@ -366,6 +368,7 @@ pub(crate) async fn handle_run(
         context_load_options: context_load_options.as_ref(),
         memory_injection,
         no_fs_sandbox,
+        extra_writable,
     })
     .await?;
 

@@ -2,7 +2,7 @@
 //!
 //! Extracted from `run_cmd_attempt.rs` to keep module sizes manageable.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use tempfile::TempDir;
@@ -96,6 +96,7 @@ pub(super) async fn run_persistent_with_timeout(
     executed_session_id: &mut Option<String>,
     pre_created_fork_session_id: &mut Option<String>,
     no_fs_sandbox: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<AttemptExecution> {
     match tokio::time::timeout(
         timeout_duration,
@@ -123,6 +124,7 @@ pub(super) async fn run_persistent_with_timeout(
             executed_session_id,
             pre_created_fork_session_id,
             no_fs_sandbox,
+            extra_writable,
         ),
     )
     .await
@@ -156,6 +158,7 @@ pub(super) async fn run_persistent_without_timeout(
     executed_session_id: &mut Option<String>,
     pre_created_fork_session_id: &mut Option<String>,
     no_fs_sandbox: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<AttemptExecution> {
     execute_persistent(
         executor,
@@ -181,6 +184,7 @@ pub(super) async fn run_persistent_without_timeout(
         executed_session_id,
         pre_created_fork_session_id,
         no_fs_sandbox,
+        extra_writable,
     )
     .await
 }
@@ -210,6 +214,7 @@ async fn execute_persistent(
     executed_session_id: &mut Option<String>,
     pre_created_fork_session_id: &mut Option<String>,
     no_fs_sandbox: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<AttemptExecution> {
     let effective_description = if let Some(fork_res) = fork_resolution {
         description.clone().or_else(|| {
@@ -252,6 +257,7 @@ async fn execute_persistent(
         Some(global_config),
         no_fs_sandbox,
         false, // readonly_project_root: `csa run` allows writes
+        extra_writable,
     )
     .await
     {

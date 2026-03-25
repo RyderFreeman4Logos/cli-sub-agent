@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use csa_core::types::{OutputFormat, ToolArg, ToolName};
@@ -217,6 +219,10 @@ pub enum Commands {
         /// Disable filesystem sandbox isolation (bwrap/landlock)
         #[arg(long)]
         no_fs_sandbox: bool,
+
+        /// Append extra writable paths to the filesystem sandbox (comma-separated)
+        #[arg(long, value_delimiter = ',', value_name = "PATH")]
+        extra_writable: Vec<PathBuf>,
     },
 
     /// Manage sessions
