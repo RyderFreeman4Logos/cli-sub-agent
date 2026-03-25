@@ -4,6 +4,8 @@
 //! Handles enforcement mode checking, capability detection, config resolution,
 //! and first-turn telemetry recording.
 
+use std::path::PathBuf;
+
 use csa_config::ProjectConfig;
 use csa_executor::{ExecuteOptions, SandboxContext};
 use csa_process::StreamMode;
@@ -45,6 +47,7 @@ pub(crate) fn resolve_sandbox_options(
     initial_response_timeout_seconds: Option<u64>,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
+    extra_writable: &[PathBuf],
 ) -> SandboxResolution {
     let default_resources = csa_config::ResourcesConfig::default();
     let stdin_write_timeout_seconds = config
@@ -116,6 +119,19 @@ pub(crate) fn resolve_sandbox_options(
             }
             if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
                 builder = builder.with_writable_path(slots);
+            }
+            // CLI --extra-writable (no-config path).
+            if !extra_writable.is_empty() {
+                if let Err(e) =
+                    csa_resource::isolation_plan::validate_writable_paths(extra_writable, &cwd)
+                {
+                    return SandboxResolution::RequiredButUnavailable(format!(
+                        "--extra-writable validation failed: {e}"
+                    ));
+                }
+                for path in extra_writable {
+                    builder = builder.with_writable_path(path.clone());
+                }
             }
         }
 
@@ -268,6 +284,20 @@ pub(crate) fn resolve_sandbox_options(
             for path in &fs_config.extra_writable {
                 builder = builder.with_writable_path(path.clone());
             }
+        }
+    }
+
+    // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
+    if !no_fs_sandbox && !extra_writable.is_empty() {
+        if let Err(e) =
+            csa_resource::isolation_plan::validate_writable_paths(extra_writable, &project_root)
+        {
+            return SandboxResolution::RequiredButUnavailable(format!(
+                "--extra-writable validation failed: {e}"
+            ));
+        }
+        for path in extra_writable {
+            builder = builder.with_writable_path(path.clone());
         }
     }
 

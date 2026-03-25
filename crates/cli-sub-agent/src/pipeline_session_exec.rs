@@ -1,7 +1,7 @@
 //! Session-bound execution pipeline: resolve-or-create session, run tool, post-process results.
 
 use anyhow::{Context, Result};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
@@ -50,6 +50,7 @@ pub(crate) async fn execute_with_session(
     global_config: Option<&GlobalConfig>,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<ExecutionResult> {
     let execution = execute_with_session_and_meta(
         executor,
@@ -73,6 +74,7 @@ pub(crate) async fn execute_with_session(
         global_config,
         no_fs_sandbox,
         readonly_project_root,
+        extra_writable,
     )
     .await?;
 
@@ -103,6 +105,7 @@ pub(crate) async fn execute_with_session_and_meta(
     global_config: Option<&GlobalConfig>,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<SessionExecutionResult> {
     execute_with_session_and_meta_with_parent_source(
         executor,
@@ -127,6 +130,7 @@ pub(crate) async fn execute_with_session_and_meta(
         ParentSessionSource::ExplicitOrEnv,
         no_fs_sandbox,
         readonly_project_root,
+        extra_writable,
     )
     .await
 }
@@ -156,6 +160,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     parent_session_source: ParentSessionSource,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
+    extra_writable: &[PathBuf],
 ) -> Result<SessionExecutionResult> {
     // Check for parent session violation: a child process must not operate on its own session
     if let Some(ref session_id) = session_arg
@@ -328,13 +333,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     }
 
     info!("Executing in session: {}", session.meta_session_id);
-
     let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
     let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
     debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
     let raw_prompt = prompt.to_string();
     let mut effective_prompt = raw_prompt.clone();
-
     // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
     // Session resumes already have context loaded in the tool's conversation.
     let is_first_turn = session
@@ -437,10 +440,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         });
 
     let result_file_cleared = clear_expected_result_toml(&session_dir.join("result.toml"));
-
-    // Record execution start time before spawning.
     let execution_start_time = chrono::Utc::now();
-
     // Build session config with MCP servers (if global config provided).
     let session_config = global_config.map(|gc| {
         let mcp_servers = resolve_mcp_servers(project_root, gc);
@@ -464,7 +464,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     } else {
         Some(&merged_env)
     };
-
     // Project [hooks] overrides take priority over hooks.toml entries.
     let project_hook_overrides = config.filter(|c| !c.hooks.is_default()).map(|c| {
         let mut overrides = std::collections::HashMap::new();
@@ -573,6 +572,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         initial_response_timeout_seconds,
         no_fs_sandbox,
         readonly_project_root,
+        extra_writable,
     ) {
         crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
         crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {

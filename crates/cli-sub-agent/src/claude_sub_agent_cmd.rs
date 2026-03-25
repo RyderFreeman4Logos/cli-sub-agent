@@ -103,6 +103,7 @@ pub(crate) async fn handle_claude_sub_agent(
         Some(&global_config),
         false, // no_fs_sandbox
         false, // readonly_project_root
+        &[],   // extra_writable
     )
     .await?;
 

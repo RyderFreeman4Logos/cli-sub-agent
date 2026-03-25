@@ -20,6 +20,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         Some(120),
         false,
         false, // readonly_project_root
+        &[],   // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -46,6 +47,7 @@ fn test_none_config_lightweight_skips_sandbox() {
         Some(120),
         false,
         false, // readonly_project_root
+        &[],   // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -76,6 +78,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         Some(120),
         false,
         false, // readonly_project_root
+        &[],   // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -143,6 +146,7 @@ writable_paths = ["/tmp"]
         Some(120),
         false,
         false, // readonly_project_root (not set by caller)
+        &[],   // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -197,6 +201,7 @@ memory_max_mb = 2048
         Some(120),
         false,
         true, // readonly_project_root (set by review/debate caller)
+        &[],  // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -244,6 +249,7 @@ writable_paths = ["/"]
         Some(120),
         false,
         false,
+        &[], // extra_writable
     );
 
     assert!(
@@ -304,6 +310,7 @@ enforcement_mode = "best-effort"
         Some(120),
         false, // no_fs_sandbox
         false, // readonly_project_root
+        &[],   // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -360,6 +367,7 @@ writable_paths = ["/tmp/restricted-only"]
         Some(120),
         false,
         false,
+        &[], // extra_writable
     );
 
     let SandboxResolution::Ok(opts) = result else {
@@ -397,5 +405,84 @@ writable_paths = ["/tmp/restricted-only"]
     assert!(
         writable.contains(&PathBuf::from("/tmp/restricted-only")),
         "per-tool writable path should be present"
+    );
+}
+
+/// CLI --extra-writable paths are appended to writable_paths (APPEND semantics).
+#[test]
+fn test_extra_writable_appended_to_isolation_plan() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let extra = vec![PathBuf::from("/tmp/extra-dir")];
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "claude-code",
+        "test-session",
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &extra,
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+
+    let Some(ref sandbox) = opts.sandbox else {
+        return; // no sandbox capability on this host
+    };
+
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&PathBuf::from("/tmp/extra-dir")),
+        "extra_writable path should be in writable_paths, got: {:?}",
+        sandbox.isolation_plan.writable_paths
+    );
+    // Project root should NOT become read-only (APPEND, not REPLACE).
+    assert!(
+        !sandbox.isolation_plan.readonly_project_root,
+        "extra_writable uses APPEND semantics — project root stays writable"
+    );
+}
+
+/// CLI --extra-writable with invalid path (outside allowed parents) is rejected.
+#[test]
+fn test_extra_writable_rejects_dangerous_paths() {
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let extra = vec![PathBuf::from("/etc/shadow")];
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "claude-code",
+        "test-session",
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &extra,
+    );
+
+    assert!(
+        matches!(result, SandboxResolution::RequiredButUnavailable(ref msg) if msg.contains("extra-writable")),
+        "dangerous path in --extra-writable should be rejected"
     );
 }

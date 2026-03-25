@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use clap::{ArgGroup, ValueEnum};
 use csa_core::types::ToolName;
 
@@ -156,6 +158,10 @@ pub struct ReviewArgs {
     /// Disable filesystem sandbox isolation (bwrap/landlock)
     #[arg(long)]
     pub no_fs_sandbox: bool,
+
+    /// Append extra writable paths to the filesystem sandbox (comma-separated)
+    #[arg(long, value_delimiter = ',', value_name = "PATH")]
+    pub extra_writable: Vec<PathBuf>,
 }
 
 impl ReviewArgs {
@@ -324,4 +330,8 @@ pub struct DebateArgs {
     /// Disable filesystem sandbox isolation (bwrap/landlock)
     #[arg(long)]
     pub no_fs_sandbox: bool,
+
+    /// Append extra writable paths to the filesystem sandbox (comma-separated)
+    #[arg(long, value_delimiter = ',', value_name = "PATH")]
+    pub extra_writable: Vec<PathBuf>,
 }
