@@ -339,7 +339,9 @@ trap cleanup_lock EXIT
 if [ -f "${DONE_MARKER}" ]; then
   echo "pr-codex-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
-  echo "pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
+  echo "ERROR: pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
+  echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
+  exit 1
 else
   LOCK_HELD=1
   echo "Running pr-codex-bot for PR #${PR_NUMBER} (${PR_URL:-unknown})..."
