@@ -232,48 +232,22 @@ condition = "!(${FAST_PATH})"
 
 [[workflow.steps]]
 id = 8
-title = "Orchestrator Task Registration"
-tool = "bash"
-prompt = '''
-Print the TODO plan produced by mktd in structured format for the orchestrator
-to parse and register tasks via TaskCreate in SA mode.
+title = "Execute Plan with mktsk"
+prompt = """
+Invoke the mktsk skill directly (NOT via csa run). mktsk MUST run in the
+main agent context so it can use TaskCreate/TaskUpdate for progress tracking.
 
-```bash
-set -euo pipefail
-if [ ! -f "${MKTD_TODO_PATH}" ]; then
-  echo "ERROR: TODO plan not found at ${MKTD_TODO_PATH}" >&2
-  exit 1
-fi
-echo "=== TODO PLAN FOR TASK REGISTRATION ==="
-# Extract checklist items with executor tags and DONE WHEN clauses
-grep -E '^\s*- \[[ x]\]' "${MKTD_TODO_PATH}" | while IFS= read -r line; do
-  echo "TASK: ${line}"
-done
-echo ""
-echo "=== END TODO PLAN ==="
-echo "INFO: Orchestrator (SA mode) should register each TASK item via TaskCreate."
-echo "INFO: Include executor tag and DONE WHEN in each task description."
-```'''
+Read the mktsk PATTERN.md at patterns/mktsk/PATTERN.md and follow it step by step.
+Pass the TODO timestamp: ${MKTD_TODO_TIMESTAMP}
+Set env: CSA_SKIP_PUBLISH=true (dev2merge handles publish in later steps).
+
+mktsk reads the TODO plan, registers tasks via TaskCreate, and executes each
+item serially: implement → quality gates → review → commit → next."""
 on_fail = "abort"
 condition = "!(${FAST_PATH})"
 
 [[workflow.steps]]
 id = 9
-title = "Execute Plan with mktsk"
-tool = "bash"
-prompt = """
-Bridge planning to execution. mktsk processes TODO items serially.
-Each item goes through implement → commit (via INCLUDE commit).
-
-```bash
-set -euo pipefail
-CSA_SKIP_PUBLISH=true timeout 3600 csa run --sa-mode true --skill mktsk "${MKTD_TODO_TIMESTAMP}"
-```"""
-on_fail = "abort"
-condition = "!(${FAST_PATH})"
-
-[[workflow.steps]]
-id = 10
 title = "Ensure Version Bumped"
 tool = "bash"
 prompt = """
@@ -291,7 +265,7 @@ on_fail = "abort"
 condition = "!(${FAST_PATH})"
 
 [[workflow.steps]]
-id = 11
+id = 10
 title = "Pre-PR Cumulative Review Gate"
 tool = "bash"
 prompt = '''
@@ -322,7 +296,7 @@ on_fail = "abort"
 condition = "!(${FAST_PATH})"
 
 [[workflow.steps]]
-id = 12
+id = 11
 title = "Push Gate"
 tool = "bash"
 prompt = """
@@ -341,7 +315,7 @@ echo "CSA_VAR:PUSHED=true"
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 13
+id = 12
 title = "Create Pull Request Transaction"
 tool = "bash"
 prompt = '''
@@ -432,7 +406,7 @@ fi
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 13
 title = "Post-Merge Local Sync"
 tool = "bash"
 prompt = """

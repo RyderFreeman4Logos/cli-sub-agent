@@ -58,9 +58,10 @@ fn test_validate_config_succeeds_on_valid() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
-    assert!(result.is_ok());
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_ok(), "validate_config failed: {:?}", result.err());
 }
 
 #[test]
@@ -93,8 +94,9 @@ fn test_validate_config_fails_on_empty_name() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("cannot be empty"));
 }
@@ -132,8 +134,9 @@ fn test_validate_config_fails_on_unknown_tool() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("Unknown tool"));
 }
@@ -172,8 +175,9 @@ fn test_validate_config_fails_on_zero_idle_timeout() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -216,8 +220,9 @@ fn test_validate_config_fails_on_invalid_review_tool() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -270,8 +275,9 @@ fn test_validate_config_fails_on_invalid_model_spec() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -327,8 +333,9 @@ fn test_validate_config_fails_on_invalid_tier_mapping() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(err_msg.contains("tier_mapping") && err_msg.contains("unknown tier"));
@@ -393,8 +400,9 @@ fn test_validate_config_fails_on_empty_models() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -450,8 +458,9 @@ fn test_validate_config_accepts_custom_tier_names() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
 }
 
@@ -488,8 +497,9 @@ fn test_validate_config_fails_on_invalid_debate_tool() {
     };
 
     config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
 
-    let result = validate_config(dir.path());
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -529,7 +539,8 @@ fn test_validate_max_recursion_depth_boundary_20() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok(), "max_recursion_depth 20 should be valid");
 }
 
@@ -563,7 +574,8 @@ fn test_validate_max_recursion_depth_boundary_21() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("too high"));
 }

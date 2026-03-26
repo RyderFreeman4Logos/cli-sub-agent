@@ -34,7 +34,8 @@ fn test_validate_config_warns_but_passes_on_unknown_tool_priority() {
 
     config.save(dir.path()).unwrap();
     // Should pass validation (warn is non-fatal)
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(
         result.is_ok(),
         "unknown tool_priority entry should warn, not fail: {result:?}"

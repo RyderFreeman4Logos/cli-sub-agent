@@ -12,30 +12,22 @@ triggers:
 
 # mktsk: Make Task -- Plan-to-Execution Bridge
 
-## Role Detection (READ THIS FIRST -- MANDATORY)
+## MANDATORY: Main Agent Execution
 
-**Check your initial prompt.** If it contains the literal string `"Use the mktsk skill"`, then:
+**mktsk MUST be executed by the main agent (Claude Code).**
+Do NOT delegate to `csa plan run --pattern mktsk` or `csa run --skill mktsk`.
 
-**YOU ARE THE EXECUTOR.** Follow these rules:
-1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
-2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`, and follow it step by step.
-3. **ABSOLUTE PROHIBITION**: Do NOT run `csa run`, `csa review`, `csa debate`, or ANY `csa` command. You must perform the work DIRECTLY. Running any `csa` command causes infinite recursion.
+**Why**: mktsk requires Claude Code tools (TaskCreate, TaskUpdate, TaskGet, TaskList)
+for progress tracking across auto-compaction. CSA subprocesses cannot use these tools,
+making task persistence impossible.
 
-**Only if you are the main agent (Claude Code / human user)**:
-- You are the **orchestrator**. Follow the "Execution Protocol" below.
+## Execution Protocol
 
----
+Read the pattern at `../../PATTERN.md` (relative to this SKILL.md) and follow it
+step by step. You are executing directly — every step runs in your context.
 
-## Purpose
-
-Execute TODO plans (from `mktd` or user-provided) as deterministic, resumable serial checklists.
-The workflow.toml contains hard bash gates that enforce review and pr-codex-bot — these gates
-cannot be skipped by any LLM, unlike natural-language instructions.
-
-## SA Mode Propagation (MANDATORY)
-
-When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workflow),
-**ALL `csa` invocations MUST include `--sa-mode true`**.
+For `csa` commands within pattern steps (e.g., `csa review --diff`), add
+`--sa-mode true` when operating under SA mode.
 
 ## Example Usage
 
@@ -54,29 +46,6 @@ When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workfl
 
 ## Done Criteria
 
-1. `csa plan run --pattern mktsk` exits 0 (all workflow steps passed, including hard review gates).
-2. All TODO items marked complete.
+1. All TODO items executed and verified via `DONE WHEN` conditions.
+2. All tasks marked complete via TaskUpdate.
 3. Branch pushed, PR created, pr-codex-bot completed (or skipped when `CSA_SKIP_PUBLISH=true`).
-
----
-
-## Execution Protocol (ORCHESTRATOR ONLY)
-
-**CRITICAL: You MUST execute this as a deterministic workflow via `csa plan run`.
-Do NOT manually interpret or execute the individual workflow steps yourself.
-The workflow.toml contains hard bash review gates that enforce `csa review` and
-`pr-codex-bot` — manually executing steps WILL skip these gates.**
-
-```bash
-csa plan run --pattern mktsk --sa-mode true
-```
-
-If you need to pass variables (e.g., the TODO plan path):
-
-```bash
-csa plan run --pattern mktsk --sa-mode true --var TODO_PATH="<path>"
-```
-
-**DO NOT** read the step-by-step details below and execute them yourself.
-**DO NOT** skip `csa plan run` to "save time".
-**The workflow enforces review gates that you cannot replicate by manual execution.**

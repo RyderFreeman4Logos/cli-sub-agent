@@ -3,7 +3,7 @@ name = "dev2merge"
 description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), pre-PR review, push, PR, codex-bot merge"
 allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task, TaskCreate, TaskUpdate, TaskList, TaskGet"
 tier = "tier-3-complex"
-version = "0.3.0"
+version = "0.4.0"
 ---
 
 # Dev2Merge: Deterministic Development Pipeline
@@ -164,45 +164,20 @@ echo "CSA_VAR:MKTD_TODO_TIMESTAMP=${LATEST_TS}"
 echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 ```
 
-## Step 8: Orchestrator Task Registration
+## Step 8: Execute Plan with mktsk
 
-Tool: bash
 OnFail: abort
 
-Print the TODO plan produced by mktd in structured format for the orchestrator
-to parse and register tasks via TaskCreate in SA mode.
+Invoke the mktsk skill directly (NOT via `csa run`). mktsk MUST run in the
+main agent context so it can use TaskCreate/TaskUpdate for progress tracking.
 
-```bash
-set -euo pipefail
-if [ ! -f "${MKTD_TODO_PATH}" ]; then
-  echo "ERROR: TODO plan not found at ${MKTD_TODO_PATH}" >&2
-  exit 1
-fi
-echo "=== TODO PLAN FOR TASK REGISTRATION ==="
-# Extract checklist items with executor tags and DONE WHEN clauses
-grep -E '^\s*- \[[ x]\]' "${MKTD_TODO_PATH}" | while IFS= read -r line; do
-  echo "TASK: ${line}"
-done
-echo ""
-echo "=== END TODO PLAN ==="
-echo "INFO: Orchestrator (SA mode) should register each TASK item via TaskCreate."
-echo "INFO: Include executor tag and DONE WHEN in each task description."
-```
+Pass the TODO timestamp: `${MKTD_TODO_TIMESTAMP}`
+Set env: `CSA_SKIP_PUBLISH=true` (dev2merge handles publish in Steps 12-13).
 
-## Step 9: Execute Plan with mktsk
+mktsk reads the TODO plan, registers tasks via TaskCreate, and executes each
+item serially: implement → quality gates → review → commit → next.
 
-Tool: bash
-OnFail: abort
-
-Bridge planning to execution. mktsk processes TODO items serially.
-Each item goes through implement → commit (via INCLUDE commit).
-
-```bash
-set -euo pipefail
-timeout 3600 csa run --sa-mode true --skill mktsk "${MKTD_TODO_TIMESTAMP}"
-```
-
-## Step 10: Ensure Version Bumped
+## Step 9: Ensure Version Bumped
 
 Tool: bash
 OnFail: abort
@@ -218,7 +193,7 @@ if ! just check-version-bumped 2>/dev/null; then
 fi
 ```
 
-## Step 11: Pre-PR Cumulative Review Gate
+## Step 10: Pre-PR Cumulative Review Gate
 
 Tool: bash
 OnFail: abort
@@ -249,7 +224,7 @@ echo "CSA_VAR:REVIEW_COMPLETED=true"
 
 ## ENDIF
 
-## Step 12: Push Gate
+## Step 11: Push Gate
 
 Tool: bash
 OnFail: abort
@@ -267,7 +242,7 @@ git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 ```
 
-## Step 13: Create Pull Request Transaction
+## Step 12: Create Pull Request Transaction
 
 Tool: bash
 OnFail: abort
@@ -357,7 +332,7 @@ else
 fi
 ```
 
-## Step 14: Post-Merge Local Sync
+## Step 13: Post-Merge Local Sync
 
 Tool: bash
 OnFail: abort

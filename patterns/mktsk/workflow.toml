@@ -17,15 +17,16 @@ on_fail = "abort"
 
 [[workflow.steps]]
 id = 2
-title = "Build Resumable Execution Checklist"
+title = "Register Tasks"
 prompt = """
-Normalize parsed items into a serial checklist.
-Each item must include:
+Register each parsed TODO item via TaskCreate. Each task must include:
 - stable item id
 - source TODO line reference
 - executor tag
 - concrete action
 - mechanically verifiable DONE WHEN
+
+Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate.
 
 ## Parsed Items
 ${STEP_1_OUTPUT}"""
