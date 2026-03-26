@@ -186,6 +186,8 @@ max_recursion_depth = 5
 # cloud_bot = true       # Set to false to skip @codex cloud review
 #                        # and use local codex (csa review) instead.
 #                        # Useful for repos without cloud bot access.
+# merge_strategy = "merge"  # "merge" | "rebase" | "squash" (default: "merge")
+# delete_branch = false     # Delete remote branch after merge (default: false)
 
 # ─── Aliases ────────────────────────────────────────────────────
 # [aliases]

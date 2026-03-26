@@ -555,7 +555,13 @@ git push origin "${WORKFLOW_BRANCH}"
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
   "**Merge rationale**: Cloud bot (@codex) is disabled or unavailable. Local csa review --branch main passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
-gh pr merge "${PR_NUM}" --repo "${REPO}" --merge --delete-branch
+MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
+DELETE_BRANCH_FLAG=""
+if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
+  DELETE_BRANCH_FLAG="--delete-branch"
+fi
+# shellcheck disable=SC2086
+gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG}
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1298,7 +1304,13 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
 fi
 
 git push origin "${WORKFLOW_BRANCH}"
-gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --merge --delete-branch
+MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
+DELETE_BRANCH_FLAG=""
+if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
+  DELETE_BRANCH_FLAG="--delete-branch"
+fi
+# shellcheck disable=SC2086
+gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG}
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1329,7 +1341,13 @@ if [ "${REBASE_REVIEW_HAS_ISSUES}" = "true" ]; then
 fi
 
 git push origin "${WORKFLOW_BRANCH}"
-gh pr merge "${PR_NUM}" --repo "${REPO}" --merge --delete-branch
+MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
+DELETE_BRANCH_FLAG=""
+if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; then
+  DELETE_BRANCH_FLAG="--delete-branch"
+fi
+# shellcheck disable=SC2086
+gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG}
 
 # Post-merge: sync local main with remote
 git fetch origin
