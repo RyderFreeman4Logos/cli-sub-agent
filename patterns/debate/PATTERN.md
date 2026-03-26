@@ -19,36 +19,26 @@ If initial prompt contains "Use the debate skill" → participant mode.
 If invoked by user via /debate → orchestrator mode.
 Participants MUST NOT run any csa commands (infinite recursion).
 
-## Step 2: Verify Prerequisites
+## Step 2: Discover Available Models
 
 Tool: bash
 OnFail: abort
 
-Verify csa binary is available and tiers are configured.
+List configured tiers and parse JSON to get available models.
+At least one tier needs >= 2 models for debate. Record ordered
+tier list for escalation.
 
 ```bash
 csa --format json tiers list
 ```
 
-## Step 3: Discover Available Models
-
-Tool: bash
-OnFail: abort
-
-Parse tiers JSON to get available models. At least one tier needs
->= 2 models for debate. Record ordered tier list for escalation.
-
-```bash
-csa --format json tiers list
-```
-
-## Step 4: Resolve Debate Tool
+## Step 3: Resolve Debate Tool
 
 CSA auto-selects heterogeneous tool: claude-code caller → codex reviewer,
 codex caller → claude-code reviewer. Override with explicit --tool if needed
 (requires --force-ignore-tier-setting when tiers are configured).
 
-## Step 5: Select Starting Tier
+## Step 4: Select Starting Tier
 
 Use tier mapped to default in tier_mapping, or user-specified tier.
 Filter models to those matching the debate tool.
@@ -75,7 +65,7 @@ resulting in faster convergence and deeper arguments from round 1.
 
 > **Planned**: Native `csa debate --fork-from` support is tracked for a future release.
 
-## Step 6: Round 1 — Proposal
+## Step 5: Round 1 — Proposal
 
 Tool: csa
 Tier: ${CURRENT_TIER}
@@ -90,7 +80,7 @@ Proposer presents concrete, actionable strategy with:
 csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}"
 ```
 
-## Step 7: Round 1 — Critique
+## Step 6: Round 1 — Critique
 
 Tool: csa
 Tier: ${CURRENT_TIER}
@@ -105,7 +95,7 @@ Critic rigorously evaluates the proposal:
 csa run --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}"
 ```
 
-## Step 8: Round 1 — Response
+## Step 7: Round 1 — Response
 
 Tool: csa
 Tier: ${CURRENT_TIER}
@@ -119,7 +109,7 @@ Proposer responds to each criticism:
 csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}"
 ```
 
-## Step 9: Convergence Evaluation
+## Step 8: Convergence Evaluation
 
 Orchestrator evaluates after each critique-response pair:
 - Both sides agree on core strategy → end debate
@@ -129,7 +119,7 @@ Orchestrator evaluates after each critique-response pair:
 
 ## IF ${NEEDS_ESCALATION}
 
-## Step 10: Tier Escalation
+## Step 9: Tier Escalation
 
 Find next higher tier. Summarize debate so far as context.
 Restart debate loop with higher tier models.
@@ -141,7 +131,7 @@ csa run --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}"
 
 ## ENDIF
 
-## Step 11: Final Synthesis
+## Step 10: Final Synthesis
 
 Produce debate result document with:
 - Final Strategy
