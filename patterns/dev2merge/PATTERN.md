@@ -346,7 +346,7 @@ else
   LOCK_HELD=1
   echo "Running pr-codex-bot for PR #${PR_NUMBER} (${PR_URL:-unknown})..."
   export CSA_PR_BOT_GUARD=1
-  if csa plan run patterns/pr-codex-bot/workflow.toml; then
+  if csa plan run --sa-mode true patterns/pr-codex-bot/workflow.toml; then
     touch "${DONE_MARKER}"
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
@@ -368,6 +368,9 @@ then sync local main and clean up.
 ```bash
 set -euo pipefail
 # --- Hard gate: verify PR is merged ---
+# NOTE: PR_NUMBER comes from Step 12 (gh pr view/list). In fork workflows,
+# pr-codex-bot may resolve a different PR via owner-aware lookup. For single-repo
+# workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   PR_STATE="$(gh pr view "${PR_NUMBER}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")"
   if [ "${PR_STATE}" != "MERGED" ]; then
