@@ -66,7 +66,8 @@ codex = 800
     )
     .unwrap();
 
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(
         result.is_ok(),
         "Deprecated initial_estimates should not cause validation failure: {:?}",

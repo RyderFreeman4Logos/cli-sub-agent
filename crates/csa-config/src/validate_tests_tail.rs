@@ -52,7 +52,8 @@ fn test_validate_model_spec_two_parts() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -105,7 +106,8 @@ fn test_validate_model_spec_five_parts() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -148,7 +150,8 @@ fn test_validate_review_tool_auto_accepted() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok(), "'auto' should be a valid review tool");
 }
 
@@ -187,7 +190,8 @@ fn test_validate_all_known_review_tools_accepted() {
         };
 
         config.save(dir.path()).unwrap();
-        let result = validate_config(dir.path());
+        let config_path = dir.path().join(".csa").join("config.toml");
+        let result = validate_config_with_paths(None, &config_path);
         assert!(
             result.is_ok(),
             "Review tool '{tool_name}' should be accepted"
@@ -230,7 +234,8 @@ fn test_validate_all_known_debate_tools_accepted() {
         };
 
         config.save(dir.path()).unwrap();
-        let result = validate_config(dir.path());
+        let config_path = dir.path().join(".csa").join("config.toml");
+        let result = validate_config_with_paths(None, &config_path);
         assert!(
             result.is_ok(),
             "Debate tool '{tool_name}' should be accepted"
@@ -273,7 +278,8 @@ fn test_validate_all_four_known_tools_accepted() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
 }
 
@@ -307,7 +313,8 @@ fn test_validate_no_review_no_debate_is_ok() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok(), "No review/debate should be valid");
 }
 
@@ -341,7 +348,8 @@ fn test_validate_max_recursion_depth_zero() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     // 0 is <= 20, so should pass validation
     assert!(result.is_ok(), "max_recursion_depth 0 should be valid");
 }

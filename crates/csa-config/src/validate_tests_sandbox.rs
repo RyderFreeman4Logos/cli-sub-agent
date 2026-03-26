@@ -33,7 +33,8 @@ fn test_validate_liveness_dead_seconds_zero_rejected() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -76,7 +77,8 @@ fn test_validate_memory_max_mb_too_low() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -119,7 +121,8 @@ fn test_validate_memory_max_mb_at_minimum() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok(), "memory_max_mb 256 should be valid");
 }
 
@@ -156,7 +159,8 @@ fn test_validate_pids_max_too_low() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -199,7 +203,8 @@ fn test_validate_pids_max_at_minimum() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok(), "pids_max 10 should be valid");
 }
 
@@ -236,7 +241,8 @@ fn test_validate_node_heap_limit_mb_too_low_in_resources() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -432,7 +438,8 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result

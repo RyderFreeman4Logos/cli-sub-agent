@@ -68,7 +68,8 @@ fn test_validate_multiple_tiers_all_valid() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
 }
 
@@ -118,7 +119,8 @@ fn test_validate_tier_with_multiple_models_all_valid() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
 }
 
@@ -168,7 +170,8 @@ fn test_validate_tier_with_one_bad_model_in_list() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(
         result
@@ -221,7 +224,8 @@ fn test_validate_tier_token_budget_zero_rejected() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("token_budget must be > 0"));
 }
@@ -269,7 +273,8 @@ fn test_validate_tier_max_turns_zero_rejected() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     assert!(result.unwrap_err().to_string().contains("max_turns must be > 0"));
 }
@@ -317,7 +322,8 @@ fn test_validate_tier_with_valid_budget_and_turns() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
 }
 
@@ -364,7 +370,8 @@ fn test_validate_tier_model_spec_unknown_tool_rejected() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -416,7 +423,8 @@ fn test_validate_tier_model_spec_known_tool_accepted() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok());
 }
 
@@ -453,7 +461,8 @@ fn test_validate_review_tier_unknown_rejected() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -495,7 +504,8 @@ fn test_validate_debate_tier_unknown_rejected() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_err());
     let err_msg = result.unwrap_err().to_string();
     assert!(
@@ -550,6 +560,7 @@ fn test_validate_review_tier_valid_accepted() {
     };
 
     config.save(dir.path()).unwrap();
-    let result = validate_config(dir.path());
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
     assert!(result.is_ok(), "review.tier referencing existing tier should be valid");
 }

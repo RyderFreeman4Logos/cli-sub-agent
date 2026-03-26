@@ -22,7 +22,7 @@ Treat the run as executor ONLY when initial prompt contains:
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
 2. **Read the pattern** at `../../PATTERN.md` relative to this `SKILL.md`, and follow it step by step.
-3. **RECURSION GUARD**: Do NOT run `csa run --skill dev2merge` or `csa run --skill dev-to-merge` from inside this skill. Other `csa` commands required by the workflow (for example `csa run --skill mktd`, `csa run --skill mktsk`, `csa review`, `csa debate`) are allowed.
+3. **RECURSION GUARD**: Do NOT run `csa run --skill dev2merge` or `csa run --skill dev-to-merge` from inside this skill. Other `csa` commands required by the workflow (for example `csa run --skill mktd`, `csa review`, `csa debate`) are allowed. mktsk MUST be invoked directly (not via `csa run`) — see Step 8.
 
 **Only if you are the main agent (Claude Code / human user)**:
 - You are the **orchestrator**. Follow the "Execution Protocol" steps below.
@@ -35,7 +35,7 @@ Execute the complete development lifecycle as a **deterministic weave workflow**
 Every stage has hard gates (`on_fail = "abort"`) — no step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → L1/L2 Quality Gates →
-(FAST_PATH: commit → bump → review) or (Full: mktd → orchestrator TaskCreate → mktsk → bump → cumulative review) →
+(FAST_PATH: commit → bump → review) or (Full: mktd → mktsk [direct, TaskCreate] → bump → cumulative review) →
 Push Gate → PR Transaction (create/reuse PR + inline pr-codex-bot trigger) → Local Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
@@ -82,16 +82,15 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | 6 | Pre-PR Review | `csa review --range` | bash |
 | **ELSE (Full Pipeline)** | | | |
 | 7 | Plan with mktd | `csa plan run patterns/mktd/workflow.toml` | bash |
-| 8 | Orchestrator Task Registration | Orchestrator calls TaskCreate for each TODO item | orchestrator |
-| 9 | Execute with mktsk | `csa run --skill mktsk` | bash |
-| 10 | Version Bump | `just bump-patch` if needed | bash |
-| 11 | Cumulative Review | `csa review --range main...HEAD` | bash |
+| 8 | Execute with mktsk | Follow mktsk PATTERN.md directly (TaskCreate/TaskUpdate) | main agent |
+| 9 | Version Bump | `just bump-patch` if needed | bash |
+| 10 | Cumulative Review | `csa review --range main...HEAD` | bash |
 | **ENDIF** | | | |
-| 12 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
-| 13 | Create PR Transaction | `gh pr create` or reuse existing, then inline pr-codex-bot trigger | bash |
-| 14 | Post-Merge Sync | `git checkout main && git merge --ff-only` | bash |
+| 11 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
+| 12 | Create PR Transaction | `gh pr create` or reuse existing, then inline pr-codex-bot trigger | bash |
+| 13 | Post-Merge Sync | `git checkout main && git merge --ff-only` | bash |
 
-Step 12 is intentionally a single self-contained shell transaction. The pr-codex-bot
+Step 11 is intentionally a single self-contained shell transaction. The pr-codex-bot
 trigger logic is inlined directly in the workflow step (no external hook scripts required).
 Marker files provide idempotency — if the bot already ran for the same PR/HEAD, it skips.
 
@@ -131,7 +130,7 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 1. Feature branch validated (not main/dev).
 2. FAST_PATH detection completed (heuristic applied).
 3. `just fmt` and `just clippy` exit 0 (L1/L2 gates).
-4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks.
+4. If full pipeline: mktd plan saved with `DONE WHEN` clauses, mktsk executed all tasks via main agent.
 5. If FAST_PATH: simplified commit created with tests passing.
 6. Version bumped if needed.
 7. Pre-PR cumulative review passed (`REVIEW_COMPLETED=true`).
