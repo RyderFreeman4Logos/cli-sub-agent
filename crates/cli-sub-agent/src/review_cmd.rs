@@ -409,7 +409,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             };
 
             print!("{}", sanitize_review_output(&fix_result.execution.output));
-            if is_review_output_empty(&fix_result.execution.output) {
+            let fix_empty = is_review_output_empty(&fix_result.execution.output);
+            if fix_empty {
                 warn!(
                     round,
                     "Fix round produced no substantive output — treating as failed"
@@ -469,7 +470,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 pipeline_result.passed
             };
 
-            if gate_passed {
+            if gate_passed && !fix_empty {
                 info!(round, "Fix round succeeded — quality gate passed");
                 // Update meta: fix succeeded
                 persist_review_meta(
