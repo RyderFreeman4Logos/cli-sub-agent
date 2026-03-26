@@ -1,9 +1,12 @@
+mod cli;
+
 use std::io::Read;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::Parser;
 
+use cli::{Cli, Commands, LinkAction};
 use weave::batch;
 use weave::check;
 use weave::compiler::{compile, plan_to_toml};
@@ -11,194 +14,6 @@ use weave::link::{self, LinkScope};
 use weave::package;
 use weave::parser::parse_skill;
 use weave::visualize::{self, VisualizeResult, VisualizeTarget};
-
-/// Build version string combining Cargo.toml version and git describe.
-fn build_version() -> &'static str {
-    static VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
-    VERSION.get_or_init(|| {
-        let cargo_ver = env!("CARGO_PKG_VERSION");
-        let git_desc = env!("WEAVE_GIT_DESCRIBE");
-        if git_desc.is_empty() {
-            cargo_ver.to_string()
-        } else {
-            format!("{cargo_ver} ({git_desc})")
-        }
-    })
-}
-
-/// Weave — skill language compiler and package manager.
-#[derive(Parser)]
-#[command(name = "weave", version = build_version(), about)]
-struct Cli {
-    /// Output format.
-    #[arg(long, default_value = "text", global = true)]
-    format: Format,
-
-    /// Enable verbose output.
-    #[arg(short, long, global = true)]
-    verbose: bool,
-
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Clone, ValueEnum)]
-enum Format {
-    Text,
-    Json,
-}
-
-/// Where to create skill symlinks after install.
-#[derive(Clone, ValueEnum)]
-enum LinkScopeArg {
-    /// `.claude/skills/` etc. relative to project root.
-    Project,
-    /// `~/.claude/skills/` etc. relative to home directory.
-    User,
-    /// Do not create any symlinks.
-    None,
-}
-
-impl From<LinkScopeArg> for LinkScope {
-    fn from(arg: LinkScopeArg) -> Self {
-        match arg {
-            LinkScopeArg::Project => LinkScope::Project,
-            LinkScopeArg::User => LinkScope::User,
-            LinkScopeArg::None => LinkScope::None,
-        }
-    }
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Compile a weave skill file into an execution plan.
-    Compile {
-        /// Input Markdown file path.
-        input: PathBuf,
-
-        /// Output TOML file path (stdout if omitted).
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
-
-    /// Install a skill from a git repository or local path.
-    Install {
-        /// Git URL or user/repo shorthand (mutually exclusive with --path).
-        source: Option<String>,
-
-        /// Install from a local directory instead of git.
-        #[arg(long, value_name = "DIR", conflicts_with = "source")]
-        path: Option<PathBuf>,
-
-        /// Where to create skill symlinks: project (.claude/skills/), user
-        /// (~/.claude/skills/), or none (skip linking).
-        #[arg(long, default_value = "project")]
-        link_scope: LinkScopeArg,
-
-        /// Skip automatic skill symlink creation (alias for --link-scope none).
-        #[arg(long, conflicts_with = "link_scope")]
-        no_link: bool,
-
-        /// Overwrite existing non-weave symlinks when linking.
-        #[arg(long)]
-        force_link: bool,
-    },
-
-    /// Lock current skill dependencies.
-    Lock,
-
-    /// Update a locked dependency.
-    Update {
-        /// Dependency name to update (all if omitted).
-        name: Option<String>,
-
-        /// Force update even for version-pinned dependencies.
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Upgrade all installed packages to their latest versions.
-    ///
-    /// Checks each installed package for newer versions and upgrades them.
-    /// Reports what was upgraded and what was already at latest.
-    Upgrade {
-        /// Force upgrade even for version-pinned dependencies.
-        #[arg(long)]
-        force: bool,
-    },
-
-    /// Audit installed skills for issues.
-    Audit,
-
-    /// Check for broken symlinks in skill directories.
-    Check {
-        /// Directories to scan (default: .claude/skills, .codex/skills, .agents/skills, .gemini/skills).
-        #[arg(long = "dir", value_name = "DIR")]
-        dirs: Vec<PathBuf>,
-
-        /// Remove broken symlinks.
-        #[arg(long)]
-        fix: bool,
-    },
-
-    /// Remove Gemini skill symlinks whose names match `.agents/skills/` and whose targets are weave-managed or broken.
-    CleanGeminiSkills,
-
-    /// Reconcile skill symlinks: create missing, remove stale, fix broken.
-    Link {
-        #[command(subcommand)]
-        action: LinkAction,
-    },
-
-    /// Migrate from legacy .weave/lock.toml to weave.lock and global store.
-    Migrate,
-
-    /// Garbage-collect unreferenced checkouts from the global package store.
-    Gc {
-        /// Print what would be removed without actually deleting.
-        #[arg(long)]
-        dry_run: bool,
-    },
-
-    /// Batch-compile all workflow.toml files in a directory tree.
-    CompileAll {
-        /// Root directory to scan for workflow.toml files (default: patterns/).
-        #[arg(long, default_value = "patterns")]
-        dir: PathBuf,
-    },
-
-    /// Visualize a compiled workflow.toml as ASCII (default), Mermaid, or PNG.
-    Visualize {
-        /// Input workflow.toml file path.
-        plan: PathBuf,
-
-        /// Write PNG output to file.
-        #[arg(long, value_name = "FILE", conflicts_with = "mermaid")]
-        png: Option<PathBuf>,
-
-        /// Print Mermaid flowchart to stdout.
-        #[arg(long, conflicts_with = "png")]
-        mermaid: bool,
-    },
-}
-
-#[derive(Subcommand)]
-enum LinkAction {
-    /// Reconcile symlinks: create missing, remove stale, fix broken.
-    Sync {
-        /// Where to manage symlinks: project or user.
-        #[arg(long, default_value = "project")]
-        scope: LinkScopeArg,
-
-        /// Overwrite existing non-weave symlinks.
-        #[arg(long)]
-        force: bool,
-
-        /// Show what would be done without making changes.
-        #[arg(long)]
-        dry_run: bool,
-    },
-}
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -475,6 +290,35 @@ fn main() -> Result<()> {
                     eprintln!("warning (pattern): {err}");
                 }
             }
+
+            // Migrate .gemini/skills/ → .agents/skills/ on every upgrade.
+            let migrate_result = check::migrate_gemini_skills(&project_root)?;
+            if !migrate_result.missing_dir {
+                let moved = migrate_result.moved.len();
+                let removed = migrate_result.removed.len();
+                if moved > 0 || removed > 0 {
+                    eprintln!();
+                    eprintln!(
+                        "gemini→agents migration: {moved} moved, {removed} duplicate(s) removed"
+                    );
+                    for entry in &migrate_result.moved {
+                        eprintln!(
+                            "  → {} (from {})",
+                            entry.agents_path.display(),
+                            entry.gemini_path.display()
+                        );
+                    }
+                }
+                if !migrate_result.move_failures.is_empty() {
+                    for f in &migrate_result.move_failures {
+                        eprintln!(
+                            "warning: failed to migrate {}: {}",
+                            f.path.display(),
+                            f.error
+                        );
+                    }
+                }
+            }
         }
         Commands::Audit => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
@@ -604,7 +448,7 @@ fn main() -> Result<()> {
         }
         Commands::CleanGeminiSkills => {
             let project_root = std::env::current_dir().context("cannot determine CWD")?;
-            let result = check::clean_gemini_duplicate_symlinks(&project_root)?;
+            let result = check::migrate_gemini_skills(&project_root)?;
 
             if result.missing_dir {
                 eprintln!(
@@ -614,31 +458,34 @@ fn main() -> Result<()> {
                 return Ok(());
             }
 
-            if result.removed.is_empty() {
+            let moved = result.moved.len();
+            let removed = result.removed.len();
+
+            if moved == 0 && removed == 0 {
                 eprintln!(
-                    "no duplicate Gemini skill symlinks found in {}",
+                    "no weave-managed Gemini skill symlinks found in {}",
                     result.dir.display()
                 );
             } else {
+                for entry in &result.moved {
+                    eprintln!(
+                        "  moved {} -> {}",
+                        entry.gemini_path.display(),
+                        entry.agents_path.display()
+                    );
+                }
                 for entry in &result.removed {
                     eprintln!(
-                        "  removed {} -> {}",
+                        "  removed duplicate {} -> {}",
                         entry.path.display(),
                         entry.target.display()
                     );
                 }
                 eprintln!(
-                    "removed {} duplicate Gemini symlink(s)",
-                    result.removed.len()
+                    "migrated: {moved} moved to .agents/skills/, {removed} duplicate(s) removed"
                 );
             }
 
-            if result.skipped_non_duplicate > 0 {
-                eprintln!(
-                    "skipped {} non-duplicate Gemini symlink(s)",
-                    result.skipped_non_duplicate
-                );
-            }
             if result.skipped_non_weave_target > 0 {
                 eprintln!(
                     "skipped {} Gemini symlink(s) with non-weave targets",
@@ -649,14 +496,16 @@ fn main() -> Result<()> {
                 eprintln!("skipped {} non-symlink entries", result.skipped_non_symlink);
             }
 
-            if !result.remove_failures.is_empty() {
-                for failure in &result.remove_failures {
-                    eprintln!(
-                        "warning: failed to remove {}: {}",
-                        failure.path.display(),
-                        failure.error
-                    );
-                }
+            let has_failures =
+                !result.remove_failures.is_empty() || !result.move_failures.is_empty();
+            for failure in result.remove_failures.iter().chain(&result.move_failures) {
+                eprintln!(
+                    "warning: failed to migrate {}: {}",
+                    failure.path.display(),
+                    failure.error
+                );
+            }
+            if has_failures {
                 std::process::exit(1);
             }
         }

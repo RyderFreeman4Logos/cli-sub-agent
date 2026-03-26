@@ -254,3 +254,176 @@ fn clean_gemini_duplicate_symlinks_handles_missing_directory() {
     assert!(result.removed.is_empty());
     assert!(result.remove_failures.is_empty());
 }
+
+// ---------------------------------------------------------------------------
+// migrate_gemini_skills tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_gemini_skills_handles_missing_directory() {
+    let tmp = TempDir::new().unwrap();
+
+    let result = migrate_gemini_skills(tmp.path()).unwrap();
+
+    assert!(result.missing_dir);
+    assert!(result.removed.is_empty());
+    assert!(result.moved.is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_gemini_skills_moves_unique_skills_to_agents() {
+    let tmp = TempDir::new().unwrap();
+    let agents_dir = tmp.path().join(".agents").join("skills");
+    let gemini_dir = tmp.path().join(".gemini").join("skills");
+    std::fs::create_dir_all(&gemini_dir).unwrap();
+    // .agents/skills/ does NOT exist yet — migration should create it.
+
+    // Create a skill source in patterns/.
+    let source_skill = tmp
+        .path()
+        .join("patterns")
+        .join("commit")
+        .join("skills")
+        .join("commit");
+    std::fs::create_dir_all(&source_skill).unwrap();
+
+    // Symlink in .gemini/skills/ → patterns/commit/skills/commit.
+    let gemini_link = gemini_dir.join("commit");
+    let relative = pathdiff::diff_paths(&source_skill, &gemini_dir).unwrap();
+    make_symlink(&gemini_link, &relative);
+
+    let result = migrate_gemini_skills(tmp.path()).unwrap();
+
+    assert!(!result.missing_dir);
+    assert!(result.removed.is_empty(), "no duplicates to remove");
+    assert_eq!(result.moved.len(), 1);
+    assert_eq!(result.moved[0].gemini_path, gemini_link);
+    assert_eq!(result.moved[0].agents_path, agents_dir.join("commit"));
+
+    // Original removed, new one exists.
+    assert!(gemini_link.symlink_metadata().is_err());
+    assert!(
+        agents_dir
+            .join("commit")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
+    // New symlink resolves to the correct target.
+    let resolved = std::fs::canonicalize(agents_dir.join("commit")).unwrap();
+    let expected = std::fs::canonicalize(&source_skill).unwrap();
+    assert_eq!(resolved, expected);
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_gemini_skills_removes_duplicates_and_moves_unique() {
+    let tmp = TempDir::new().unwrap();
+    let agents_dir = tmp.path().join(".agents").join("skills");
+    let gemini_dir = tmp.path().join(".gemini").join("skills");
+    std::fs::create_dir_all(&agents_dir).unwrap();
+    std::fs::create_dir_all(&gemini_dir).unwrap();
+
+    // "commit" already in .agents/skills/ — duplicate.
+    let agents_commit = agents_dir.join("commit");
+    std::fs::create_dir_all(&agents_commit).unwrap();
+
+    let commit_source = tmp
+        .path()
+        .join("patterns")
+        .join("commit")
+        .join("skills")
+        .join("commit");
+    std::fs::create_dir_all(&commit_source).unwrap();
+    let gemini_commit = gemini_dir.join("commit");
+    let rel_commit = pathdiff::diff_paths(&agents_commit, &gemini_dir).unwrap();
+    make_symlink(&gemini_commit, &rel_commit);
+
+    // "review" NOT in .agents/skills/ — should be moved.
+    let review_source = tmp
+        .path()
+        .join("patterns")
+        .join("review")
+        .join("skills")
+        .join("review");
+    std::fs::create_dir_all(&review_source).unwrap();
+    let gemini_review = gemini_dir.join("review");
+    let rel_review = pathdiff::diff_paths(&review_source, &gemini_dir).unwrap();
+    make_symlink(&gemini_review, &rel_review);
+
+    // "external" points outside weave-managed paths — should be preserved.
+    let external_target = tmp.path().join("custom").join("external");
+    std::fs::create_dir_all(&external_target).unwrap();
+    let gemini_external = gemini_dir.join("external");
+    make_symlink(&gemini_external, &external_target);
+
+    let result = migrate_gemini_skills(tmp.path()).unwrap();
+
+    assert_eq!(result.removed.len(), 1, "one duplicate removed");
+    assert_eq!(result.removed[0].path, gemini_commit);
+    assert_eq!(result.moved.len(), 1, "one unique moved");
+    assert_eq!(result.moved[0].gemini_path, gemini_review);
+    assert_eq!(result.skipped_non_weave_target, 1, "external preserved");
+
+    // Verify filesystem state.
+    assert!(
+        gemini_commit.symlink_metadata().is_err(),
+        "duplicate removed"
+    );
+    assert!(
+        gemini_review.symlink_metadata().is_err(),
+        "moved original removed"
+    );
+    assert!(
+        agents_dir
+            .join("review")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "moved to agents"
+    );
+    assert!(
+        gemini_external
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "external preserved"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn migrate_gemini_skills_handles_broken_symlinks() {
+    let tmp = TempDir::new().unwrap();
+    let agents_dir = tmp.path().join(".agents").join("skills");
+    let gemini_dir = tmp.path().join(".gemini").join("skills");
+    std::fs::create_dir_all(&gemini_dir).unwrap();
+    // No .agents/skills/ yet.
+
+    // Broken symlink pointing into patterns/ (weave-managed path pattern).
+    let broken_link = gemini_dir.join("stale-skill");
+    let broken_target = PathBuf::from("../../patterns/stale/skills/stale-skill");
+    make_symlink(&broken_link, &broken_target);
+
+    let result = migrate_gemini_skills(tmp.path()).unwrap();
+
+    // Broken links with weave-managed targets should be moved (target re-created).
+    // The new symlink will also be broken, but that's correct — weave link sync
+    // will fix or remove it later.
+    assert_eq!(result.moved.len(), 1);
+    assert_eq!(result.moved[0].gemini_path, broken_link);
+    assert!(broken_link.symlink_metadata().is_err(), "original removed");
+    assert!(
+        agents_dir
+            .join("stale-skill")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "migrated (even if target is broken)"
+    );
+}
