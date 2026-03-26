@@ -110,16 +110,10 @@ Skip debate for: trivial changes, typo fixes, single-line edits, test additions.
 - `session` (optional): Resume existing debate session (ULID or prefix)
 - `model` (optional): Override model within selected tool
 
-## Prerequisites (MANDATORY — verify before ANY debate action)
+## Prerequisites
 
-1. For orchestrated debates: project MUST have tiers configured. Verify: `csa --format json tiers list`
+1. For orchestrated debates: project MUST have tiers configured (checked at runtime by Step 2)
 2. For default workflow: only `csa debate` needs to work (tiers not required)
-
-If ANY prerequisite fails:
-- **STOP IMMEDIATELY**
-- Report the specific failure to the user
-- Suggest remediation (e.g., "Run `csa init` to configure tiers")
-- **DO NOT attempt to execute tools directly**
 
 ## FORBIDDEN Actions
 
@@ -131,7 +125,6 @@ If ANY prerequisite fails:
 
 If CSA invocation fails (non-zero exit, timeout, parsing error):
 - Report the exact error to the user
-- Suggest `csa doctor` or manual investigation
 - **STOP the debate** — do NOT retry with direct tool calls
 
 ## Execution Protocol (Orchestrated Deep Debate)

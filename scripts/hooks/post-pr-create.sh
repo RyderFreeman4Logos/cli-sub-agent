@@ -49,11 +49,6 @@ if ! command -v gh >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v csa >/dev/null 2>&1; then
-  echo "ERROR: csa is required for post-pr-create transaction." >&2
-  exit 1
-fi
-
 CURRENT_BRANCH="$(git branch --show-current 2>/dev/null || true)"
 if [ -z "${CURRENT_BRANCH}" ] || [ "${CURRENT_BRANCH}" = "HEAD" ]; then
   echo "ERROR: Cannot determine current branch." >&2

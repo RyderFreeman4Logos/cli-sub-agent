@@ -45,7 +45,6 @@ triggers:
 
 ### Prerequisites
 
-- `csa` binary MUST be in PATH: `which csa`
 - <other prerequisites>
 
 ### Quick Start
