@@ -1,4 +1,18 @@
+use std::path::Path;
+
+use csa_core::types::ToolName;
+use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
+use tracing::{debug, warn};
+
+#[derive(Debug, Clone)]
+pub(super) struct ReviewerOutcome {
+    pub reviewer_index: usize,
+    pub tool: ToolName,
+    pub output: String,
+    pub exit_code: i32,
+    pub verdict: &'static str,
+}
 
 /// Prefer structured review sections (summary/details) when available to avoid
 /// leaking unrelated provider noise into caller-facing review output.
@@ -69,4 +83,83 @@ fn extract_section_content(output: &str, section: &OutputSection) -> String {
     let start = section.line_start - 1;
     let end_exclusive = section.line_end.min(lines.len());
     lines[start..end_exclusive].join("\n")
+}
+
+/// Persist a [`ReviewSessionMeta`] to `{session_dir}/review_meta.json`.
+///
+/// Best-effort: failures are logged as warnings but do not fail the review.
+pub(super) fn persist_review_meta(project_root: &Path, meta: &ReviewSessionMeta) {
+    match csa_session::get_session_dir(project_root, &meta.session_id) {
+        Ok(session_dir) => {
+            if let Err(e) = write_review_meta(&session_dir, meta) {
+                warn!(session_id = %meta.session_id, error = %e, "Failed to write review_meta.json");
+            } else {
+                debug!(session_id = %meta.session_id, "Wrote review_meta.json");
+            }
+        }
+        Err(e) => {
+            warn!(session_id = %meta.session_id, error = %e, "Cannot resolve session dir for review meta");
+        }
+    }
+}
+
+/// Detect whether `project_root` resides inside a git worktree submodule.
+///
+/// A worktree submodule's `.git` is a file (not directory) containing a
+/// `gitdir:` reference that traverses both `worktrees/` and `modules/`
+/// path segments — the hallmark of the nested worktree-submodule layout.
+pub(super) fn is_worktree_submodule(project_root: &Path) -> bool {
+    let git_marker = project_root.join(".git");
+    if !git_marker.is_file() {
+        return false;
+    }
+    let Ok(marker) = std::fs::read_to_string(&git_marker) else {
+        return false;
+    };
+    let Some(gitdir_raw) = marker.trim().strip_prefix("gitdir:") else {
+        return false;
+    };
+    let gitdir = gitdir_raw.trim();
+    gitdir.contains("/worktrees/") && gitdir.contains("/modules/")
+}
+
+/// Check whether review output contains substantive content beyond prompt guards.
+///
+/// Returns `true` when the raw output is empty or contains only CSA prompt
+/// injection markers / hook output and whitespace — indicating the review tool
+/// produced no actual findings.
+pub(super) fn is_review_output_empty(raw_output: &str) -> bool {
+    strip_prompt_guards(raw_output).trim().is_empty()
+}
+
+/// Remove non-review content: prompt injection blocks, hook markers, and section wrappers.
+fn strip_prompt_guards(text: &str) -> String {
+    let mut result = String::new();
+    let mut in_guard = false;
+    for line in text.lines() {
+        if line.contains("<csa-caller-prompt-injection") {
+            in_guard = true;
+            continue;
+        }
+        if line.contains("</csa-caller-prompt-injection>") {
+            in_guard = false;
+            continue;
+        }
+        if in_guard {
+            continue;
+        }
+        if line.trim_start().starts_with("[csa-hook]") {
+            continue;
+        }
+        if line.trim_start().starts_with("[csa-heartbeat]") {
+            continue;
+        }
+        // Strip CSA section markers (empty wrappers are not substantive content)
+        if line.trim_start().starts_with("<!-- CSA:SECTION:") {
+            continue;
+        }
+        result.push_str(line);
+        result.push('\n');
+    }
+    result
 }

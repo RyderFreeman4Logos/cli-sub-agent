@@ -1,5 +1,103 @@
 use super::*;
 use csa_config::ProjectProfile;
+use tempfile::tempdir;
+
+// --- is_worktree_submodule tests ---
+
+#[test]
+fn worktree_submodule_detected_when_gitdir_has_both_markers() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".git"),
+        "gitdir: ../../../../.git/worktrees/my-wt/modules/crates/my-sub\n",
+    )
+    .unwrap();
+    assert!(is_worktree_submodule(dir.path()));
+}
+
+#[test]
+fn worktree_submodule_not_detected_for_normal_repo() {
+    let dir = tempdir().unwrap();
+    std::fs::create_dir(dir.path().join(".git")).unwrap();
+    assert!(!is_worktree_submodule(dir.path()));
+}
+
+#[test]
+fn worktree_submodule_not_detected_for_plain_submodule() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".git"),
+        "gitdir: ../../.git/modules/crates/my-sub\n",
+    )
+    .unwrap();
+    assert!(!is_worktree_submodule(dir.path()));
+}
+
+#[test]
+fn worktree_submodule_not_detected_for_plain_worktree() {
+    let dir = tempdir().unwrap();
+    std::fs::write(
+        dir.path().join(".git"),
+        "gitdir: /repo/.git/worktrees/my-wt\n",
+    )
+    .unwrap();
+    assert!(!is_worktree_submodule(dir.path()));
+}
+
+// --- is_review_output_empty tests ---
+
+#[test]
+fn empty_string_is_empty_output() {
+    assert!(is_review_output_empty(""));
+}
+
+#[test]
+fn whitespace_only_is_empty_output() {
+    assert!(is_review_output_empty("  \n  \n  "));
+}
+
+#[test]
+fn prompt_guards_only_is_empty_output() {
+    let output = r#"[csa-hook] reverse prompt injection for caller (guards=2)
+<csa-caller-prompt-injection guards="2">
+<prompt-guard name="branch-context">
+BRANCH CONTEXT: The caller is on feature branch 'fix/test'.
+</prompt-guard>
+<prompt-guard name="commit-workflow">
+WORKFLOW: 2 unpushed commit(s) on 'fix/test'.
+</prompt-guard>
+</csa-caller-prompt-injection>
+"#;
+    assert!(is_review_output_empty(output));
+}
+
+#[test]
+fn substantive_output_is_not_empty() {
+    let output =
+        "## Review Findings\n\n1. Missing error handling in foo.rs:42\n\nVerdict: HAS_ISSUES";
+    assert!(!is_review_output_empty(output));
+}
+
+#[test]
+fn empty_section_wrappers_is_empty_output() {
+    let output = "<!-- CSA:SECTION:summary -->\n<!-- CSA:SECTION:summary:END -->\n\
+                  <!-- CSA:SECTION:details -->\n<!-- CSA:SECTION:details:END -->\n";
+    assert!(is_review_output_empty(output));
+}
+
+#[test]
+fn prompt_guards_plus_content_is_not_empty() {
+    let output = r#"[csa-hook] reverse prompt injection for caller (guards=1)
+<csa-caller-prompt-injection guards="1">
+<prompt-guard name="branch-context">
+BRANCH CONTEXT: feature branch
+</prompt-guard>
+</csa-caller-prompt-injection>
+## Review Findings
+No issues found. Verdict: CLEAN
+"#;
+    assert!(!is_review_output_empty(output));
+}
 
 // --- --thinking silent acceptance tests ---
 

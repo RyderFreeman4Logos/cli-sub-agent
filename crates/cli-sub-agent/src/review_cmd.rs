@@ -6,7 +6,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
-    CLEAN, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
+    CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
     consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_decision,
     parse_review_verdict, resolve_consensus,
 };
@@ -19,11 +19,14 @@ use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifa
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
 use csa_core::types::{OutputFormat, ToolName};
-use csa_session::state::{ReviewSessionMeta, write_review_meta};
+use csa_session::state::ReviewSessionMeta;
 
 #[path = "review_cmd_output.rs"]
 mod output;
-use output::sanitize_review_output;
+use output::{
+    ReviewerOutcome, is_review_output_empty, is_worktree_submodule, persist_review_meta,
+    sanitize_review_output,
+};
 
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
@@ -35,15 +38,6 @@ use resolve::{
     review_scope_allows_auto_discovery, verify_review_skill_available,
     write_multi_reviewer_consolidated_artifact,
 };
-
-#[derive(Debug, Clone)]
-struct ReviewerOutcome {
-    reviewer_index: usize,
-    tool: ToolName,
-    output: String,
-    exit_code: i32,
-    verdict: &'static str,
-}
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -58,6 +52,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     // 2b. Verify review skill is available (fail fast before any execution)
     verify_review_skill_available(&project_root, args.allow_fallback)?;
+    // Warn if running inside a worktree submodule (known limitation, see #487)
+    if is_worktree_submodule(&project_root) {
+        warn!(project_root = %project_root.display(),
+            "Review inside git worktree submodule — may produce empty/unreliable output (issue #487)");
+    }
 
     // 2c. Run pre-review quality gate pipeline (after skill check, before tool execution)
     let gate_summary = {
@@ -305,14 +304,34 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             review_future.await?
         };
 
-        print!("{}", sanitize_review_output(&result.execution.output));
+        let sanitized = sanitize_review_output(&result.execution.output);
+        let empty_output = is_review_output_empty(&result.execution.output);
+        if empty_output {
+            warn!(scope = %scope, tool = %tool, session_id = %result.meta_session_id,
+                "Review produced no substantive output — tool may have failed silently. \
+                 Check: csa session logs {}", result.meta_session_id);
+        }
+        print!("{}", sanitized);
 
-        // If --fix is not enabled or review found no issues, return immediately.
-        let verdict = parse_review_verdict(&result.execution.output, result.execution.exit_code);
-        let decision = parse_review_decision(&result.execution.output, result.execution.exit_code);
-        debug!(verdict, decision = %decision, "Review verdict (legacy + four-value)");
+        // Empty output forces non-clean verdict to prevent silent pass-through.
+        let verdict = if empty_output {
+            HAS_ISSUES
+        } else {
+            parse_review_verdict(&result.execution.output, result.execution.exit_code)
+        };
+        let decision = if empty_output {
+            csa_core::types::ReviewDecision::Uncertain
+        } else {
+            parse_review_decision(&result.execution.output, result.execution.exit_code)
+        };
+        debug!(verdict, decision = %decision, empty_output, "Review verdict (legacy + four-value)");
 
         // Write structured review metadata to session directory.
+        let effective_exit_code = if empty_output {
+            1
+        } else {
+            result.execution.exit_code
+        };
         persist_review_meta(
             &project_root,
             &ReviewSessionMeta {
@@ -322,7 +341,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 verdict: verdict.to_string(),
                 tool: tool.to_string(),
                 scope: scope.clone(),
-                exit_code: result.execution.exit_code,
+                exit_code: effective_exit_code,
                 fix_attempted: args.fix,
                 fix_rounds: 0,
                 timestamp: chrono::Utc::now(),
@@ -330,7 +349,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         );
 
         if !args.fix || verdict == CLEAN {
-            return Ok(result.execution.exit_code);
+            return Ok(effective_exit_code);
         }
 
         // --- Fix loop: resume the review session to apply fixes, then re-gate ---
@@ -390,6 +409,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             };
 
             print!("{}", sanitize_review_output(&fix_result.execution.output));
+            let fix_empty = is_review_output_empty(&fix_result.execution.output);
+            if fix_empty {
+                warn!(
+                    round,
+                    "Fix round produced no substantive output — treating as failed"
+                );
+            }
             session_id = fix_result.meta_session_id.clone();
 
             // Step 2: Run the quality gate after fix
@@ -444,7 +470,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 pipeline_result.passed
             };
 
-            if gate_passed {
+            if gate_passed && !fix_empty {
                 info!(round, "Fix round succeeded — quality gate passed");
                 // Update meta: fix succeeded
                 persist_review_meta(
@@ -558,12 +584,24 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             )
             .await?;
             let result = &session_result.execution;
+            let empty = is_review_output_empty(&result.output);
+            if empty {
+                tracing::warn!(
+                    reviewer = reviewer_index + 1,
+                    tool = %reviewer_tool,
+                    "Reviewer produced no substantive output — may have failed silently"
+                );
+            }
             Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
                 reviewer_index,
                 tool: reviewer_tool,
-                verdict: parse_review_verdict(&result.output, result.exit_code),
+                verdict: if empty {
+                    HAS_ISSUES
+                } else {
+                    parse_review_verdict(&result.output, result.exit_code)
+                },
                 output: sanitize_review_output(&result.output),
-                exit_code: result.exit_code,
+                exit_code: if empty { 1 } else { result.exit_code },
             })
         });
     }
@@ -753,24 +791,6 @@ async fn execute_review(
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
 
     Ok(execution)
-}
-
-/// Persist a [`ReviewSessionMeta`] to `{session_dir}/review_meta.json`.
-///
-/// Best-effort: failures are logged as warnings but do not fail the review.
-fn persist_review_meta(project_root: &Path, meta: &ReviewSessionMeta) {
-    match csa_session::get_session_dir(project_root, &meta.session_id) {
-        Ok(session_dir) => {
-            if let Err(e) = write_review_meta(&session_dir, meta) {
-                warn!(session_id = %meta.session_id, error = %e, "Failed to write review_meta.json");
-            } else {
-                debug!(session_id = %meta.session_id, "Wrote review_meta.json");
-            }
-        }
-        Err(e) => {
-            warn!(session_id = %meta.session_id, error = %e, "Cannot resolve session dir for review meta");
-        }
-    }
 }
 
 #[cfg(test)]
