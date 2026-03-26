@@ -13,8 +13,7 @@ hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
 mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push →
-PR Transaction (create/reuse PR + inline pr-codex-bot trigger) →
-Local Sync.
+PR Creation → pr-codex-bot Hard Gate → Post-Merge Sync.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
@@ -242,13 +241,14 @@ git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 ```
 
-## Step 12: Create Pull Request Transaction
+## Step 12: Create or Reuse Pull Request
 
 Tool: bash
 OnFail: abort
 
-Create or reuse PR, then trigger pr-codex-bot inline (self-contained, no external hook scripts).
-Uses marker files to skip duplicate runs for the same PR/HEAD combination.
+Create or reuse a PR for the current branch. Outputs PR_NUMBER and PR_URL
+as CSA_VARs for the next step. This step does NOT trigger pr-codex-bot —
+that is a separate hard gate in Step 13.
 
 ```bash
 set -euo pipefail
@@ -296,6 +296,29 @@ if [ -z "${PR_NUMBER}" ] || ! printf '%s' "${PR_NUMBER}" | grep -Eq '^[0-9]+$'; 
   echo "ERROR: Cannot resolve open PR number for ${BRANCH} after retries." >&2
   exit 1
 fi
+echo "PR #${PR_NUMBER} resolved: ${PR_URL}"
+echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
+echo "CSA_VAR:PR_URL=${PR_URL}"
+```
+
+## Step 13: pr-codex-bot Review & Merge Gate (HARD GATE)
+
+Tool: bash
+OnFail: abort
+
+**MANDATORY**: This step MUST NOT be skipped. It runs pr-codex-bot which performs
+cloud review (if enabled) and the actual merge. Without this step completing
+successfully, the PR remains unmerged and Step 14 will fail.
+
+Uses marker files for idempotency: skips if pr-codex-bot already completed for
+the same PR/HEAD combination.
+
+```bash
+set -euo pipefail
+if [ -z "${PR_NUMBER:-}" ]; then
+  echo "ERROR: PR_NUMBER not set — Step 12 must run first." >&2
+  exit 1
+fi
 HEAD_SHA="$(git rev-parse --verify HEAD)"
 
 # --- Lock + Idempotency: skip if pr-codex-bot already ran or is running ---
@@ -319,7 +342,7 @@ elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
 else
   LOCK_HELD=1
-  echo "Running pr-codex-bot for PR #${PR_NUMBER} (${PR_URL})..."
+  echo "Running pr-codex-bot for PR #${PR_NUMBER} (${PR_URL:-unknown})..."
   export CSA_PR_BOT_GUARD=1
   if csa plan run patterns/pr-codex-bot/workflow.toml; then
     touch "${DONE_MARKER}"
@@ -332,15 +355,26 @@ else
 fi
 ```
 
-## Step 13: Post-Merge Local Sync
+## Step 14: Post-Merge Local Sync
 
 Tool: bash
 OnFail: abort
 
-After the PR merge completes, sync local main and clean up feature branch.
+Verify the PR was actually merged (defense in depth against skipped Step 13),
+then sync local main and clean up.
 
 ```bash
 set -euo pipefail
+# --- Hard gate: verify PR is merged ---
+if [ -n "${PR_NUMBER:-}" ]; then
+  PR_STATE="$(gh pr view "${PR_NUMBER}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")"
+  if [ "${PR_STATE}" != "MERGED" ]; then
+    echo "ERROR: PR #${PR_NUMBER} state is '${PR_STATE}', expected 'MERGED'." >&2
+    echo "This usually means pr-codex-bot (Step 13) was skipped or failed." >&2
+    exit 1
+  fi
+  echo "PR #${PR_NUMBER} confirmed MERGED."
+fi
 FEATURE_BRANCH="$(git branch --show-current 2>/dev/null || true)"
 git fetch origin
 git checkout main
