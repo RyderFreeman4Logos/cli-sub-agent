@@ -1,8 +1,18 @@
 use std::path::Path;
 
+use csa_core::types::ToolName;
 use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
 use tracing::{debug, warn};
+
+#[derive(Debug, Clone)]
+pub(super) struct ReviewerOutcome {
+    pub reviewer_index: usize,
+    pub tool: ToolName,
+    pub output: String,
+    pub exit_code: i32,
+    pub verdict: &'static str,
+}
 
 /// Prefer structured review sections (summary/details) when available to avoid
 /// leaking unrelated provider noise into caller-facing review output.
@@ -122,7 +132,7 @@ pub(super) fn is_review_output_empty(raw_output: &str) -> bool {
     strip_prompt_guards(raw_output).trim().is_empty()
 }
 
-/// Remove `<csa-caller-prompt-injection>` blocks and `[csa-hook]` lines from text.
+/// Remove non-review content: prompt injection blocks, hook markers, and section wrappers.
 fn strip_prompt_guards(text: &str) -> String {
     let mut result = String::new();
     let mut in_guard = false;
@@ -139,6 +149,13 @@ fn strip_prompt_guards(text: &str) -> String {
             continue;
         }
         if line.trim_start().starts_with("[csa-hook]") {
+            continue;
+        }
+        if line.trim_start().starts_with("[csa-heartbeat]") {
+            continue;
+        }
+        // Strip CSA section markers (empty wrappers are not substantive content)
+        if line.trim_start().starts_with("<!-- CSA:SECTION:") {
             continue;
         }
         result.push_str(line);

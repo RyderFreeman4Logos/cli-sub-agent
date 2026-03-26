@@ -24,7 +24,8 @@ use csa_session::state::ReviewSessionMeta;
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{
-    is_review_output_empty, is_worktree_submodule, persist_review_meta, sanitize_review_output,
+    ReviewerOutcome, is_review_output_empty, is_worktree_submodule, persist_review_meta,
+    sanitize_review_output,
 };
 
 #[path = "review_cmd_resolve.rs"]
@@ -37,15 +38,6 @@ use resolve::{
     review_scope_allows_auto_discovery, verify_review_skill_available,
     write_multi_reviewer_consolidated_artifact,
 };
-
-#[derive(Debug, Clone)]
-struct ReviewerOutcome {
-    reviewer_index: usize,
-    tool: ToolName,
-    output: String,
-    exit_code: i32,
-    verdict: &'static str,
-}
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -417,6 +409,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             };
 
             print!("{}", sanitize_review_output(&fix_result.execution.output));
+            if is_review_output_empty(&fix_result.execution.output) {
+                warn!(
+                    round,
+                    "Fix round produced no substantive output — treating as failed"
+                );
+            }
             session_id = fix_result.meta_session_id.clone();
 
             // Step 2: Run the quality gate after fix

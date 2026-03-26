@@ -79,6 +79,13 @@ fn substantive_output_is_not_empty() {
 }
 
 #[test]
+fn empty_section_wrappers_is_empty_output() {
+    let output = "<!-- CSA:SECTION:summary -->\n<!-- CSA:SECTION:summary:END -->\n\
+                  <!-- CSA:SECTION:details -->\n<!-- CSA:SECTION:details:END -->\n";
+    assert!(is_review_output_empty(output));
+}
+
+#[test]
 fn prompt_guards_plus_content_is_not_empty() {
     let output = r#"[csa-hook] reverse prompt injection for caller (guards=1)
 <csa-caller-prompt-injection guards="1">
