@@ -5,7 +5,6 @@ use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::collections::HashMap;
 use std::sync::LazyLock;
-use tempfile::tempdir;
 
 static REVIEW_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
     LazyLock::new(|| tokio::sync::Mutex::new(()));
