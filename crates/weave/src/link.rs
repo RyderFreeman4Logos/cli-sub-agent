@@ -713,18 +713,18 @@ pub(crate) fn is_weave_managed_path(path: &Path, store_root: &Path) -> bool {
 
 /// Create a symlink (platform-specific).
 #[cfg(unix)]
-fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+pub(crate) fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
 
 #[cfg(windows)]
-fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
+pub(crate) fn create_symlink(target: &Path, link: &Path) -> std::io::Result<()> {
     // Companion skills are directories, so use symlink_dir.
     std::os::windows::fs::symlink_dir(target, link)
 }
 
 /// Remove a symlink (cross-platform).
-fn remove_symlink(path: &Path) -> std::io::Result<()> {
+pub(crate) fn remove_symlink(path: &Path) -> std::io::Result<()> {
     std::fs::remove_file(path).or_else(|_| std::fs::remove_dir(path))
 }
 
