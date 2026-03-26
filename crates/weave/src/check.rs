@@ -395,8 +395,10 @@ pub fn migrate_gemini_skills(project_root: &Path) -> Result<GeminiCleanupResult>
             }
         };
 
-        // Determine if the symlink is weave-managed (target in patterns/ or .agents/skills/)
-        // or broken (target doesn't exist — likely stale weave link).
+        // Determine if the symlink is weave-managed (target in patterns/ or .agents/skills/).
+        // For broken symlinks, use the resolved (but non-canonicalized) path to check
+        // against known weave directories — this avoids treating broken non-weave symlinks
+        // as weave-managed.
         let resolved_target = resolve_symlink_target(&path, &target);
         let canonical_target = match canonicalize_existing_target(&resolved_target) {
             Ok(target) => target,
@@ -408,14 +410,22 @@ pub fn migrate_gemini_skills(project_root: &Path) -> Result<GeminiCleanupResult>
                 continue;
             }
         };
-        let is_weave_managed = canonical_target.as_ref().is_none_or(|resolved| {
-            canonical_patterns_dir
-                .as_ref()
-                .is_some_and(|patterns| resolved.starts_with(patterns))
-                || canonical_agents_dir
+        let is_weave_managed = match &canonical_target {
+            Some(resolved) => {
+                canonical_patterns_dir
                     .as_ref()
-                    .is_some_and(|agents| resolved.starts_with(agents))
-        });
+                    .is_some_and(|patterns| resolved.starts_with(patterns))
+                    || canonical_agents_dir
+                        .as_ref()
+                        .is_some_and(|agents| resolved.starts_with(agents))
+            }
+            None => {
+                // Broken symlink — normalize the resolved path (which may contain ..)
+                // then check against weave directories.
+                let normalized = crate::path_utils::normalize_path(&resolved_target);
+                normalized.starts_with(&patterns_dir) || normalized.starts_with(&agents_dir)
+            }
+        };
 
         if !is_weave_managed {
             let non_weave_target = canonical_target.as_ref().unwrap_or(&resolved_target);
@@ -464,6 +474,13 @@ pub fn migrate_gemini_skills(project_root: &Path) -> Result<GeminiCleanupResult>
                             managed_skill.display(),
                             path.display()
                         );
+                        result.remove_failures.push(GeminiCleanupFailure {
+                            path: path.clone(),
+                            error: format!(
+                                "migrated to {} but old symlink remains: {err}",
+                                managed_skill.display()
+                            ),
+                        });
                     }
                     result.moved.push(GeminiMigrateEntry {
                         gemini_path: path,

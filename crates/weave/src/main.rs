@@ -309,14 +309,12 @@ fn main() -> Result<()> {
                         );
                     }
                 }
-                if !migrate_result.move_failures.is_empty() {
-                    for f in &migrate_result.move_failures {
-                        eprintln!(
-                            "warning: failed to migrate {}: {}",
-                            f.path.display(),
-                            f.error
-                        );
-                    }
+                for f in migrate_result
+                    .move_failures
+                    .iter()
+                    .chain(&migrate_result.remove_failures)
+                {
+                    eprintln!("warning: {}: {}", f.path.display(), f.error);
                 }
             }
         }

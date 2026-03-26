@@ -427,3 +427,31 @@ fn migrate_gemini_skills_handles_broken_symlinks() {
         "migrated (even if target is broken)"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn migrate_gemini_skills_preserves_broken_non_weave_symlinks() {
+    let tmp = TempDir::new().unwrap();
+    let gemini_dir = tmp.path().join(".gemini").join("skills");
+    std::fs::create_dir_all(&gemini_dir).unwrap();
+
+    // Broken symlink pointing OUTSIDE weave-managed paths.
+    let broken_link = gemini_dir.join("custom-broken");
+    let broken_target = PathBuf::from("../../custom/nonexistent-skill");
+    make_symlink(&broken_link, &broken_target);
+
+    let result = migrate_gemini_skills(tmp.path()).unwrap();
+
+    // Should be skipped — broken non-weave symlink is NOT weave-managed.
+    assert!(result.moved.is_empty(), "should not be moved");
+    assert!(result.removed.is_empty(), "should not be removed");
+    assert_eq!(result.skipped_non_weave_target, 1, "counted as non-weave");
+    assert!(
+        broken_link
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "broken non-weave symlink preserved"
+    );
+}
