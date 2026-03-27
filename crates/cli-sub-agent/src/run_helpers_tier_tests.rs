@@ -222,7 +222,7 @@ fn resolve_tool_from_tier_returns_none_for_missing_tier() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_from_tier("nonexistent-tier", &cfg, None, None);
+    let result = super::resolve_tool_from_tier("nonexistent-tier", &cfg, None, None, &[]);
     assert!(result.is_none());
 }
 
@@ -233,7 +233,7 @@ fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
         vec!["gemini-cli/google/default/xhigh"],
         &["gemini-cli"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None, &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::GeminiCli);
@@ -251,7 +251,7 @@ fn resolve_tool_from_tier_prefers_heterogeneous() {
         ],
         &["claude-code", "gemini-cli"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), None);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), None, &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::GeminiCli);
@@ -267,7 +267,7 @@ fn resolve_tool_from_tier_falls_back_to_same_family_when_no_heterogeneous() {
         vec!["claude-code/anthropic/default/xhigh"],
         &["claude-code"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), None);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, Some("claude-code"), None, &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::ClaudeCode);
@@ -284,7 +284,7 @@ fn resolve_tool_from_tier_skips_disabled_tools() {
         ],
         &["claude-code"],
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None, &[]);
     assert!(result.is_some());
     let res = result.unwrap();
     assert_eq!(res.tool, ToolName::ClaudeCode);
@@ -298,7 +298,7 @@ fn resolve_tool_from_tier_returns_none_when_all_disabled() {
         vec!["gemini-cli/google/default/xhigh"],
         &[], // no enabled tools
     );
-    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None);
+    let result = super::resolve_tool_from_tier("test-tier", &cfg, None, None, &[]);
     assert!(result.is_none());
 }
 

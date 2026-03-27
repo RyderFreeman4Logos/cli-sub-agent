@@ -274,6 +274,38 @@ mod tests {
     }
 
     #[test]
+    fn test_gemini_model_capacity_exhausted() {
+        let result = detect_rate_limit(
+            "gemini-cli",
+            "429 MODEL_CAPACITY_EXHAUSTED: No capacity available for model gemini-3-flash-preview",
+            "",
+            1,
+            Some("gemini-cli/google/gemini-3-flash-preview/xhigh"),
+        );
+        assert!(result.is_some());
+        // Should match "429" first (patterns are checked in order)
+        let detected = result.unwrap();
+        assert_eq!(detected.matched_pattern, "429");
+        assert_eq!(
+            detected.model_spec.as_deref(),
+            Some("gemini-cli/google/gemini-3-flash-preview/xhigh")
+        );
+    }
+
+    #[test]
+    fn test_gemini_capacity_exhausted_without_429_prefix() {
+        let result = detect_rate_limit(
+            "gemini-cli",
+            "Error: capacity_exhausted for model",
+            "",
+            1,
+            None,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().matched_pattern, "capacity_exhausted");
+    }
+
+    #[test]
     fn test_gemini_quota_exhausted_case_insensitive() {
         let result = detect_rate_limit("gemini-cli", "reason: 'QUOTA_EXHAUSTED'", "", 1, None);
         assert!(result.is_some());

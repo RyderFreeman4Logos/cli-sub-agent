@@ -101,7 +101,7 @@ pub(crate) fn resolve_tool_and_model(
     if let Some(ref canonical_name) = canonical_tier
         && let Some(cfg) = config
     {
-        if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, None) {
+        if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, None, &[]) {
             // Flow resolved tool through existing enforcement checks
             cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
             if !force {
@@ -471,12 +471,16 @@ pub(crate) struct TierToolResolution {
 /// a different `ModelFamily` than `parent_tool`. Falls back to any available tool
 /// in the tier when no heterogeneous option exists.
 ///
+/// `skip_specs` excludes model specs that have already been tried (e.g. due to
+/// 429 rate-limit failover within the same tier).
+///
 /// Returns `None` if no enabled, available tool is found in the tier.
 pub(crate) fn resolve_tool_from_tier(
     tier_name: &str,
     config: &ProjectConfig,
     parent_tool: Option<&str>,
     whitelist: Option<&[String]>,
+    skip_specs: &[String],
 ) -> Option<TierToolResolution> {
     let tier = config.tiers.get(tier_name)?;
 
@@ -489,6 +493,10 @@ pub(crate) fn resolve_tool_from_tier(
         .models
         .iter()
         .filter_map(|spec| {
+            // Skip specs that have already been tried in the failover chain
+            if skip_specs.iter().any(|s| s == spec) {
+                return None;
+            }
             let parts: Vec<&str> = spec.splitn(4, '/').collect();
             if parts.len() != 4 {
                 return None;

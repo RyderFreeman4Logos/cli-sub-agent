@@ -1,6 +1,8 @@
 //! Scheduler: tool selection (round-robin), session reuse, seed management, and 429 failover.
 
 pub mod failover;
+#[cfg(test)]
+mod failover_tests;
 pub mod rate_limit;
 pub mod rotation;
 pub mod seed_session;

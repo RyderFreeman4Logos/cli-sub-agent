@@ -29,29 +29,35 @@ pub enum FailoverAction {
 /// Decide what to do after a 429 rate-limit is detected.
 ///
 /// - `failed_tool`: the tool that was rate-limited.
-/// - `task_type`: used to find the correct tier.
+/// - `task_type`: used to find the correct tier (via `tier_mapping`).
+/// - `resolved_tier_name`: when the caller already knows the exact tier
+///   (e.g. from `--tier`), pass it here to bypass `tier_mapping` lookup.
 /// - `task_needs_edit`: whether the task requires file editing.
 ///   - `Some(true)`: task must be routed to tools that can edit existing files.
 ///   - `Some(false)`: task does not require edits.
 ///   - `None`: unknown; do not filter alternatives by edit capability.
 /// - `session`: the current session (if any).
 /// - `tried_tools`: tools already attempted in this failover chain.
+/// - `tried_specs`: model specs already attempted (enables intra-tier failover
+///   when the same tool has multiple models in the tier).
 /// - `config`: project configuration.
 /// - `original_error`: the error message from the rate-limited tool.
+#[allow(clippy::too_many_arguments)]
 pub fn decide_failover(
     failed_tool: &str,
     task_type: &str,
+    resolved_tier_name: Option<&str>,
     task_needs_edit: Option<bool>,
     session: Option<&MetaSessionState>,
     tried_tools: &[String],
+    tried_specs: &[String],
     config: &ProjectConfig,
     original_error: &str,
 ) -> FailoverAction {
-    // 1. Find the tier for this task_type
-    let tier_name = config
-        .tier_mapping
-        .get(task_type)
-        .cloned()
+    // 1. Find the tier — prefer explicit tier name, fall back to tier_mapping
+    let tier_name = resolved_tier_name
+        .map(String::from)
+        .or_else(|| config.tier_mapping.get(task_type).cloned())
         .unwrap_or_else(|| "tier3".to_string());
 
     let tier = match config.tiers.get(&tier_name) {
@@ -64,21 +70,27 @@ pub fn decide_failover(
         }
     };
 
-    // 2. Find eligible alternative tools (not tried, enabled, edit-compatible)
+    // 2. Find eligible alternative models (not tried, enabled, edit-compatible).
+    //    When tried_specs is non-empty, filter at spec granularity so that the
+    //    same tool with a different model can be selected (intra-tier failover).
+    //    When tried_specs is empty, fall back to tool-level filtering for
+    //    backward compatibility.
+    let use_spec_level = !tried_specs.is_empty();
     let alternatives: Vec<(String, String)> = tier
         .models
         .iter()
         .filter_map(|spec| {
             let tool = spec.split('/').next()?;
-            // Skip the failed tool and already-tried tools
-            if tool == failed_tool || tried_tools.iter().any(|t| t == tool) {
+            if use_spec_level {
+                if tried_specs.iter().any(|s| s == spec) {
+                    return None;
+                }
+            } else if tool == failed_tool || tried_tools.iter().any(|t| t == tool) {
                 return None;
             }
-            // Skip disabled
             if !config.is_tool_enabled(tool) {
                 return None;
             }
-            // Only enforce edit-capable tools when task requirement is known.
             if matches!(task_needs_edit, Some(true)) && !config.can_tool_edit_existing(tool) {
                 return None;
             }
@@ -87,8 +99,41 @@ pub fn decide_failover(
         .collect();
 
     if alternatives.is_empty() {
+        // Cross-tier fallback: try models from adjacent tiers when current tier
+        // is fully exhausted (issue #493). Sort tier names for deterministic order.
+        let mut sorted_tiers: Vec<_> = config.tiers.iter().collect();
+        sorted_tiers.sort_by_key(|(name, _)| (*name).clone());
+        for (other_tier_name, other_tier) in sorted_tiers {
+            if other_tier_name == &tier_name {
+                continue;
+            }
+            for spec in &other_tier.models {
+                let Some(tool) = spec.split('/').next() else {
+                    continue;
+                };
+                if tried_specs.iter().any(|s| s == spec) || tried_tools.iter().any(|t| t == tool) {
+                    continue;
+                }
+                if !config.is_tool_enabled(tool) {
+                    continue;
+                }
+                if matches!(task_needs_edit, Some(true)) && !config.can_tool_edit_existing(tool) {
+                    continue;
+                }
+                info!(
+                    from_tier = %tier_name,
+                    to_tier = %other_tier_name,
+                    new_tool = %tool,
+                    "Cross-tier failover: current tier exhausted, trying adjacent tier"
+                );
+                return FailoverAction::RetrySiblingSession {
+                    new_tool: tool.to_string(),
+                    new_model_spec: spec.clone(),
+                };
+            }
+        }
         return FailoverAction::ReportError {
-            reason: format!("All tools in tier '{tier_name}' exhausted"),
+            reason: format!("All tools in tier '{tier_name}' and adjacent tiers exhausted"),
             original_error: original_error.to_string(),
         };
     }
@@ -97,14 +142,10 @@ pub fn decide_failover(
 
     // 3. Check if we can reuse the current session
     if let Some(sess) = session {
-        // If session has valuable context (not compacted + has meaningful work),
-        // try to stay in the same session
         if has_valuable_context(sess) {
-            // Check if the new tool's slot is available in this session
             if !sess.tools.contains_key(&new_tool) {
                 info!(
-                    failed = %failed_tool,
-                    new = %new_tool,
+                    failed = %failed_tool, new = %new_tool,
                     session = %sess.meta_session_id,
                     "Failover: retry in same session (valuable context)"
                 );
@@ -114,14 +155,8 @@ pub fn decide_failover(
                     session_id: sess.meta_session_id.clone(),
                 };
             }
-
-            // Tool slot occupied — create sibling session instead of
-            // reporting an error. Transparent failover is more important
-            // than preserving a single session's context: the caller
-            // should never see a rate-limit error it cannot act on.
             info!(
-                failed = %failed_tool,
-                new = %new_tool,
+                failed = %failed_tool, new = %new_tool,
                 session = %sess.meta_session_id,
                 "Failover: valuable context but slot occupied, using sibling session"
             );
@@ -131,11 +166,9 @@ pub fn decide_failover(
             };
         }
 
-        // No valuable context → try same session first, fall back to sibling
         if !sess.tools.contains_key(&new_tool) {
             info!(
-                failed = %failed_tool,
-                new = %new_tool,
+                failed = %failed_tool, new = %new_tool,
                 session = %sess.meta_session_id,
                 "Failover: retry in same session"
             );
@@ -148,11 +181,7 @@ pub fn decide_failover(
     }
 
     // 4. Create sibling session
-    info!(
-        failed = %failed_tool,
-        new = %new_tool,
-        "Failover: retry in sibling session"
-    );
+    info!(failed = %failed_tool, new = %new_tool, "Failover: retry in sibling session");
     FailoverAction::RetrySiblingSession {
         new_tool,
         new_model_spec: new_spec,
@@ -160,16 +189,10 @@ pub fn decide_failover(
 }
 
 /// Check if a session has accumulated valuable context worth preserving.
-///
-/// A session is considered "valuable" if:
-/// - It is not compacted (active work in progress)
-/// - It has a summary containing keywords suggesting deep analysis
-fn has_valuable_context(session: &MetaSessionState) -> bool {
+pub(crate) fn has_valuable_context(session: &MetaSessionState) -> bool {
     if session.context_status.is_compacted {
         return false;
     }
-
-    // Check if any tool has done meaningful work
     let valuable_keywords = [
         "review",
         "analysis",
@@ -178,578 +201,10 @@ fn has_valuable_context(session: &MetaSessionState) -> bool {
         "bug",
         "debug",
     ];
-
     session.tools.values().any(|tool_state| {
         let summary_lower = tool_state.last_action_summary.to_lowercase();
         valuable_keywords
             .iter()
             .any(|kw| summary_lower.contains(kw))
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use chrono::Utc;
-    use csa_config::{ProjectMeta, TierConfig, TierStrategy, ToolConfig};
-    use std::collections::HashMap;
-
-    fn make_config(models: Vec<&str>, disabled: Vec<&str>) -> ProjectConfig {
-        let mut tools = HashMap::new();
-        for t in disabled {
-            tools.insert(
-                t.to_string(),
-                ToolConfig {
-                    enabled: false,
-                    restrictions: None,
-                    suppress_notify: true,
-                    ..Default::default()
-                },
-            );
-        }
-        let mut tiers = HashMap::new();
-        tiers.insert(
-            "tier3".to_string(),
-            TierConfig {
-                description: "test".to_string(),
-                models: models.iter().map(|s| s.to_string()).collect(),
-                strategy: TierStrategy::default(),
-
-                token_budget: None,
-                max_turns: None,
-            },
-        );
-        let mut tier_mapping = HashMap::new();
-        tier_mapping.insert("default".to_string(), "tier3".to_string());
-
-        ProjectConfig {
-            schema_version: 1,
-            project: ProjectMeta {
-                name: "test".to_string(),
-                created_at: Utc::now(),
-                max_recursion_depth: 5,
-            },
-            resources: Default::default(),
-            acp: Default::default(),
-            tools,
-            review: None,
-            debate: None,
-            tiers,
-            tier_mapping,
-            aliases: HashMap::new(),
-            tool_aliases: HashMap::new(),
-            preferences: None,
-            session: Default::default(),
-            memory: Default::default(),
-            hooks: Default::default(),
-            execution: Default::default(),
-            vcs: Default::default(),
-            filesystem_sandbox: Default::default(),
-        }
-    }
-
-    fn make_session(tools: Vec<(&str, &str)>, compacted: bool) -> MetaSessionState {
-        let mut tool_map = HashMap::new();
-        for (name, summary) in tools {
-            tool_map.insert(
-                name.to_string(),
-                csa_session::ToolState {
-                    provider_session_id: None,
-                    last_action_summary: summary.to_string(),
-                    last_exit_code: 0,
-                    updated_at: Utc::now(),
-                    token_usage: None,
-                },
-            );
-        }
-        MetaSessionState {
-            meta_session_id: "01ARZ3NDEKTSV4RRFFQ69G5FAV".to_string(),
-            description: None,
-            project_path: "/tmp".to_string(),
-            branch: None,
-            created_at: Utc::now(),
-            last_accessed: Utc::now(),
-            genealogy: Default::default(),
-            tools: tool_map,
-            context_status: csa_session::ContextStatus {
-                is_compacted: compacted,
-                last_compacted_at: None,
-            },
-            total_token_usage: None,
-            phase: Default::default(),
-            task_context: Default::default(),
-            turn_count: 0,
-            token_budget: None,
-            sandbox_info: None,
-
-            termination_reason: None,
-            is_seed_candidate: false,
-            git_head_at_creation: None,
-            last_return_packet: None,
-            change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
-        }
-    }
-
-    #[test]
-    fn test_failover_to_next_tool() {
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            None,
-            &[],
-            &config,
-            "429 Resource exhausted",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "codex");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_all_exhausted() {
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            None,
-            &["codex".to_string()],
-            &config,
-            "429",
-        );
-        match action {
-            FailoverAction::ReportError { reason, .. } => {
-                assert!(reason.contains("exhausted"));
-            }
-            other => panic!("Expected ReportError, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_retry_in_session() {
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let session = make_session(vec![("gemini-cli", "code review in progress")], false);
-
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            Some(&session),
-            &[],
-            &config,
-            "429",
-        );
-        match action {
-            FailoverAction::RetryInSession {
-                new_tool,
-                session_id,
-                ..
-            } => {
-                assert_eq!(new_tool, "codex");
-                assert_eq!(session_id, session.meta_session_id);
-            }
-            other => panic!("Expected RetryInSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_valuable_context_detection() {
-        let session_valuable =
-            make_session(vec![("gemini-cli", "Code review analysis complete")], false);
-        assert!(has_valuable_context(&session_valuable));
-
-        let session_compacted =
-            make_session(vec![("gemini-cli", "Code review analysis complete")], true);
-        assert!(!has_valuable_context(&session_compacted));
-
-        let session_trivial = make_session(vec![("gemini-cli", "Hello world test")], false);
-        assert!(!has_valuable_context(&session_trivial));
-    }
-
-    #[test]
-    fn test_failover_on_cooldown_error() {
-        let config = make_config(
-            vec![
-                "gemini-cli/g/m/0",
-                "codex/openai/o4-mini/0",
-                "claude-code/anthropic/sonnet/0",
-            ],
-            vec![],
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            None,
-            &[],
-            &config,
-            "429 Too Many Requests: cooldown for 60 seconds",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "codex");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_on_quota_error() {
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let action = decide_failover(
-            "codex",
-            "default",
-            Some(false),
-            None,
-            &[],
-            &config,
-            "Error: quota exceeded for model o4-mini",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "gemini-cli");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_normal_error_no_match() {
-        // A non-rate-limit error should still go through failover logic
-        // (the caller decides whether to invoke failover; this function just picks next tool)
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            None,
-            &[],
-            &config,
-            "Internal server error",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "codex");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_disabled_tool_skipped() {
-        let config = make_config(
-            vec![
-                "gemini-cli/g/m/0",
-                "codex/openai/o4-mini/0",
-                "claude-code/anthropic/sonnet/0",
-            ],
-            vec!["codex"],
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            None,
-            &[],
-            &config,
-            "429",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "claude-code");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_missing_tier_returns_error() {
-        let config = make_config(vec!["gemini-cli/g/m/0"], vec![]);
-        // Use a task_type that maps to a non-existent tier
-        let mut config_with_bad_mapping = config;
-        config_with_bad_mapping
-            .tier_mapping
-            .insert("special".to_string(), "tier99".to_string());
-        let action = decide_failover(
-            "gemini-cli",
-            "special",
-            Some(false),
-            None,
-            &[],
-            &config_with_bad_mapping,
-            "429",
-        );
-        match action {
-            FailoverAction::ReportError { reason, .. } => {
-                assert!(reason.contains("tier99"), "reason: {reason}");
-                assert!(reason.contains("not found"), "reason: {reason}");
-            }
-            other => panic!("Expected ReportError, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_valuable_session_tool_slot_occupied_uses_sibling() {
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        // Session has valuable context (review keyword) + codex slot already occupied
-        // → should create sibling session instead of reporting error (transparent failover)
-        let session = make_session(
-            vec![
-                ("gemini-cli", "deep security audit in progress"),
-                ("codex", "prior audit run"),
-            ],
-            false,
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            Some(&session),
-            &[],
-            &config,
-            "429",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "codex");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_no_session_no_valuable_context() {
-        // Session exists but has no valuable context (trivial summary, not compacted)
-        // and tool slot is occupied → falls through to sibling session
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let session = make_session(
-            vec![
-                ("gemini-cli", "simple hello world"),
-                ("codex", "simple run"),
-            ],
-            false,
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            Some(false),
-            Some(&session),
-            &[],
-            &config,
-            "429",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "codex");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_needs_edit_none_skips_filter() {
-        // When task_needs_edit is None, no edit capability filtering happens
-        let config = make_config(vec!["gemini-cli/g/m/0", "codex/openai/o4-mini/0"], vec![]);
-        let action = decide_failover(
-            "gemini-cli",
-            "default",
-            None, // unknown edit requirement
-            None,
-            &[],
-            &config,
-            "429",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "codex");
-            }
-            other => panic!("Expected RetrySiblingSession, got {other:?}"),
-        }
-    }
-
-    // --- Quota failover transparency tests ---
-
-    fn make_multi_tier_config(
-        tier1_models: Vec<&str>,
-        tier3_models: Vec<&str>,
-        disabled: Vec<&str>,
-    ) -> ProjectConfig {
-        let mut tools = HashMap::new();
-        for t in disabled {
-            tools.insert(
-                t.to_string(),
-                ToolConfig {
-                    enabled: false,
-                    restrictions: None,
-                    suppress_notify: true,
-                    ..Default::default()
-                },
-            );
-        }
-        let mut tiers = HashMap::new();
-        tiers.insert(
-            "tier1".to_string(),
-            TierConfig {
-                description: "frontier".to_string(),
-                models: tier1_models.iter().map(|s| s.to_string()).collect(),
-                strategy: TierStrategy::default(),
-
-                token_budget: None,
-                max_turns: None,
-            },
-        );
-        tiers.insert(
-            "tier3".to_string(),
-            TierConfig {
-                description: "fast".to_string(),
-                models: tier3_models.iter().map(|s| s.to_string()).collect(),
-                strategy: TierStrategy::default(),
-
-                token_budget: None,
-                max_turns: None,
-            },
-        );
-        let mut tier_mapping = HashMap::new();
-        tier_mapping.insert("default".to_string(), "tier3".to_string());
-        tier_mapping.insert("review".to_string(), "tier1".to_string());
-
-        ProjectConfig {
-            schema_version: 1,
-            project: ProjectMeta {
-                name: "test".to_string(),
-                created_at: Utc::now(),
-                max_recursion_depth: 5,
-            },
-            resources: Default::default(),
-            acp: Default::default(),
-            tools,
-            review: None,
-            debate: None,
-            tiers,
-            tier_mapping,
-            aliases: HashMap::new(),
-            tool_aliases: HashMap::new(),
-            preferences: None,
-            session: Default::default(),
-            memory: Default::default(),
-            hooks: Default::default(),
-            execution: Default::default(),
-            vcs: Default::default(),
-            filesystem_sandbox: Default::default(),
-        }
-    }
-
-    #[test]
-    fn test_gemini_pro_failover_to_claude_in_same_tier() {
-        // tier1: gemini-pro + claude-opus → gemini-pro fails → picks claude-opus
-        let config = make_multi_tier_config(
-            vec![
-                "gemini-cli/google/gemini-2.5-pro/high",
-                "claude-code/anthropic/claude-sonnet-4-20250514/high",
-            ],
-            vec!["gemini-cli/google/gemini-2.5-flash/0"],
-            vec![],
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "review", // maps to tier1
-            Some(false),
-            None,
-            &[],
-            &config,
-            "Resource exhausted",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession {
-                new_tool,
-                new_model_spec,
-            } => {
-                assert_eq!(new_tool, "claude-code");
-                assert!(new_model_spec.contains("claude"), "spec: {new_model_spec}");
-            }
-            other => panic!("Expected RetrySiblingSession to claude, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_gemini_flash_failover_to_claude_in_same_tier() {
-        // tier3: gemini-flash + claude-haiku → gemini-flash fails → picks claude-haiku
-        let config = make_multi_tier_config(
-            vec!["gemini-cli/google/gemini-2.5-pro/high"],
-            vec![
-                "gemini-cli/google/gemini-2.5-flash/0",
-                "claude-code/anthropic/claude-haiku-4-5-20251001/0",
-            ],
-            vec![],
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "default", // maps to tier3
-            Some(false),
-            None,
-            &[],
-            &config,
-            "quota exceeded",
-        );
-        match action {
-            FailoverAction::RetrySiblingSession {
-                new_tool,
-                new_model_spec,
-            } => {
-                assert_eq!(new_tool, "claude-code");
-                assert!(new_model_spec.contains("haiku"), "spec: {new_model_spec}");
-            }
-            other => panic!("Expected RetrySiblingSession to claude-haiku, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn test_failover_never_reports_error_when_alternatives_exist() {
-        // Even with valuable context + occupied slot, should retry via sibling
-        let config = make_multi_tier_config(
-            vec![
-                "gemini-cli/google/gemini-2.5-pro/high",
-                "claude-code/anthropic/claude-sonnet-4-20250514/high",
-            ],
-            vec![],
-            vec![],
-        );
-        let session = make_session(
-            vec![
-                ("gemini-cli", "deep code review analysis"),
-                ("claude-code", "prior run"),
-            ],
-            false,
-        );
-        let action = decide_failover(
-            "gemini-cli",
-            "review",
-            Some(false),
-            Some(&session),
-            &[],
-            &config,
-            "RESOURCE_EXHAUSTED",
-        );
-        // Should NOT be ReportError — should be RetrySiblingSession
-        match action {
-            FailoverAction::RetrySiblingSession { new_tool, .. } => {
-                assert_eq!(new_tool, "claude-code");
-            }
-            FailoverAction::RetryInSession { .. } => {
-                // Also acceptable if slot happens to be free
-            }
-            FailoverAction::ReportError { reason, .. } => {
-                panic!("Should not report error when alternatives exist: {reason}");
-            }
-        }
-    }
 }
