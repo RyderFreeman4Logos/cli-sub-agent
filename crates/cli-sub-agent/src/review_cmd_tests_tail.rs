@@ -99,6 +99,60 @@ No issues found. Verdict: CLEAN
     assert!(!is_review_output_empty(output));
 }
 
+// --- detect_tool_diagnostic tests ---
+
+#[test]
+fn test_detect_tool_diagnostic_empty_strings_returns_none() {
+    assert!(detect_tool_diagnostic("", "").is_none());
+}
+
+#[test]
+fn test_detect_tool_diagnostic_normal_output_returns_none() {
+    let stdout = "## Review Findings\n\nNo issues found.\n\nVerdict: CLEAN";
+    let stderr = "Loaded 3 MCP servers\n";
+    assert!(detect_tool_diagnostic(stdout, stderr).is_none());
+}
+
+#[test]
+fn test_detect_tool_diagnostic_mcp_issues_in_stdout_returns_diagnostic() {
+    let stdout = "Some output\nMCP issues detected\nMore output";
+    let result = detect_tool_diagnostic(stdout, "");
+    assert!(result.is_some());
+    let msg = result.unwrap();
+    assert!(msg.contains("MCP server connectivity"));
+    assert!(msg.contains("gemini /mcp list"));
+    assert!(msg.contains("--tool claude-code"));
+}
+
+#[test]
+fn test_detect_tool_diagnostic_mcp_issues_in_stderr_returns_diagnostic() {
+    let stderr = "Warning: MCP issues detected during startup";
+    let result = detect_tool_diagnostic("", stderr);
+    assert!(result.is_some());
+    assert!(result.unwrap().contains("MCP server connectivity"));
+}
+
+#[test]
+fn test_detect_tool_diagnostic_mcp_list_in_stderr_returns_diagnostic() {
+    let stderr = "Run /mcp list to check server status";
+    let result = detect_tool_diagnostic("", stderr);
+    assert!(result.is_some());
+    assert!(result.unwrap().contains("gemini /mcp list"));
+}
+
+#[test]
+fn test_detect_tool_diagnostic_unrelated_mcp_text_returns_none() {
+    let stdout = "MCP servers loaded successfully";
+    let stderr = "Connected to 2 MCP backends";
+    assert!(detect_tool_diagnostic(stdout, stderr).is_none());
+}
+
+#[test]
+fn test_is_review_output_empty_with_mcp_diagnostic_text_is_not_empty() {
+    let output = "MCP issues detected\nRun /mcp list to check";
+    assert!(!is_review_output_empty(output));
+}
+
 // --- --thinking silent acceptance tests ---
 
 #[test]

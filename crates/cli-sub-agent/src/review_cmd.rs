@@ -24,8 +24,8 @@ use csa_session::state::ReviewSessionMeta;
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{
-    ReviewerOutcome, is_review_output_empty, is_worktree_submodule, persist_review_meta,
-    sanitize_review_output,
+    ReviewerOutcome, detect_tool_diagnostic, is_review_output_empty, is_worktree_submodule,
+    persist_review_meta, print_reviewer_outcomes, sanitize_review_output,
 };
 
 #[path = "review_cmd_resolve.rs"]
@@ -306,10 +306,20 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
         let sanitized = sanitize_review_output(&result.execution.output);
         let empty_output = is_review_output_empty(&result.execution.output);
+        let tool_diagnostic =
+            detect_tool_diagnostic(&result.execution.output, &result.execution.stderr_output);
         if empty_output {
+            if let Some(ref diagnostic) = tool_diagnostic {
+                eprintln!("[csa-review] Tool failure detected: {diagnostic}");
+            }
             warn!(scope = %scope, tool = %tool, session_id = %result.meta_session_id,
+                diagnostic = tool_diagnostic.as_deref().unwrap_or("unknown"),
                 "Review produced no substantive output — tool may have failed silently. \
                  Check: csa session logs {}", result.meta_session_id);
+        } else if let Some(ref diagnostic) = tool_diagnostic {
+            eprintln!("[csa-review] Warning: {diagnostic}");
+            warn!(scope = %scope, tool = %tool,
+                "Tool diagnostic detected in review output (review may be degraded)");
         }
         print!("{}", sanitized);
 
@@ -585,11 +595,13 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .await?;
             let result = &session_result.execution;
             let empty = is_review_output_empty(&result.output);
+            let diagnostic = detect_tool_diagnostic(&result.output, &result.stderr_output);
             if empty {
                 tracing::warn!(
                     reviewer = reviewer_index + 1,
                     tool = %reviewer_tool,
-                    "Reviewer produced no substantive output — may have failed silently"
+                    diagnostic = diagnostic.as_deref().unwrap_or("unknown"),
+                    "Reviewer produced no substantive output — tool may have failed"
                 );
             }
             Ok::<ReviewerOutcome, anyhow::Error>(ReviewerOutcome {
@@ -602,6 +614,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 },
                 output: sanitize_review_output(&result.output),
                 exit_code: if empty { 1 } else { result.exit_code },
+                diagnostic,
             })
         });
     }
@@ -657,35 +670,20 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let final_verdict = consensus_verdict(&consensus_result);
     let agreement = agreement_level(&consensus_result);
 
-    for outcome in &outcomes {
-        println!(
-            "===== Reviewer {} ({}) | verdict={} | exit_code={} =====",
-            outcome.reviewer_index + 1,
-            outcome.tool,
-            outcome.verdict,
-            outcome.exit_code
-        );
-        print!("{}", outcome.output);
-        if !outcome.output.ends_with('\n') {
-            println!();
-        }
-    }
+    print_reviewer_outcomes(&outcomes);
 
-    println!("===== Consensus =====");
     println!(
-        "strategy: {}",
-        consensus_strategy_label(consensus_result.strategy_used)
+        "===== Consensus =====\nstrategy: {}\nconsensus_reached: {}\nagreement_level: {:.0}%\nfinal_decision: {final_verdict}\nindividual_verdicts:",
+        consensus_strategy_label(consensus_result.strategy_used),
+        consensus_result.consensus_reached,
+        agreement * 100.0,
     );
-    println!("consensus_reached: {}", consensus_result.consensus_reached);
-    println!("agreement_level: {:.0}%", agreement * 100.0);
-    println!("final_decision: {final_verdict}");
-    println!("individual_verdicts:");
-    for outcome in &outcomes {
+    for o in &outcomes {
         println!(
             "- reviewer {} ({}) => {}",
-            outcome.reviewer_index + 1,
-            outcome.tool,
-            outcome.verdict
+            o.reviewer_index + 1,
+            o.tool,
+            o.verdict
         );
     }
 
