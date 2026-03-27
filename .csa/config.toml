@@ -13,3 +13,9 @@
 # are safe.  The script also resolves project root internally as fallback.
 post_run = "scripts/hooks/post-pr-create-check.sh --base main --session-dir {session_dir}"
 timeout_secs = 120
+
+[review]
+# Quality gate command for csa review/debate pre-review checks.
+# With lefthook managing hooks (no core.hooksPath), pipeline_gate.rs cannot
+# auto-detect the pre-commit hook — an explicit gate_command is required.
+gate_command = "lefthook run pre-commit"

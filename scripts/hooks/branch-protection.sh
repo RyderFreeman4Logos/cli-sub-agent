@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
 # Branch protection: blocks commits on protected branches.
-# Install: git config core.hooksPath .githooks
-# Or copy to any project: .githooks/pre-commit + git config core.hooksPath .githooks
 set -euo pipefail
 
 branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
@@ -23,9 +21,3 @@ for pb in $PROTECTED; do
     exit 1
   fi
 done
-
-# Run just pre-commit if it exists
-if command -v just >/dev/null 2>&1 && [ -f justfile ]; then
-  echo "Running just pre-commit..."
-  just pre-commit
-fi
