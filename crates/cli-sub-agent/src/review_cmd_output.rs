@@ -12,6 +12,8 @@ pub(super) struct ReviewerOutcome {
     pub output: String,
     pub exit_code: i32,
     pub verdict: &'static str,
+    /// Tool-level diagnostic when the review failed due to tool issues (e.g. MCP).
+    pub diagnostic: Option<String>,
 }
 
 /// Prefer structured review sections (summary/details) when available to avoid
@@ -121,6 +123,45 @@ pub(super) fn is_worktree_submodule(project_root: &Path) -> bool {
     };
     let gitdir = gitdir_raw.trim();
     gitdir.contains("/worktrees/") && gitdir.contains("/modules/")
+}
+
+/// Detect known tool-level diagnostic messages that indicate the review tool
+/// failed to actually perform a review (e.g., gemini-cli MCP connectivity issues).
+///
+/// Checks both stdout and stderr for known failure patterns.
+/// Returns a human-readable diagnostic summary when a known pattern is found.
+pub(super) fn detect_tool_diagnostic(stdout: &str, stderr: &str) -> Option<String> {
+    let has_mcp_issue =
+        |text: &str| text.contains("MCP issues detected") || text.contains("Run /mcp list");
+
+    if has_mcp_issue(stdout) || has_mcp_issue(stderr) {
+        return Some(
+            "gemini-cli encountered MCP server connectivity issues. \
+             Run `gemini /mcp list` to diagnose. \
+             Consider using `--tool claude-code` as a fallback."
+                .to_string(),
+        );
+    }
+
+    None
+}
+
+/// Print per-reviewer output and diagnostics for multi-reviewer mode.
+pub(super) fn print_reviewer_outcomes(outcomes: &[ReviewerOutcome]) {
+    for o in outcomes {
+        let r = o.reviewer_index + 1;
+        println!(
+            "===== Reviewer {r} ({}) | verdict={} | exit_code={} =====",
+            o.tool, o.verdict, o.exit_code
+        );
+        if let Some(ref d) = o.diagnostic {
+            eprintln!("[csa-review] Reviewer {r} tool failure: {d}");
+        }
+        print!("{}", o.output);
+        if !o.output.ends_with('\n') {
+            println!();
+        }
+    }
 }
 
 /// Check whether review output contains substantive content beyond prompt guards.
