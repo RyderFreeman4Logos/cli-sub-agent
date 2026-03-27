@@ -29,7 +29,9 @@ already-fixed issues.
 FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration,
 running Step 2 in background, creating PR without Step 2 completion,
 debating stale comments without staleness check, trusting `reviewed=true`
-without SHA verification, auto-merging or auto-aborting at round limit.
+without SHA verification, auto-merging or auto-aborting at round limit,
+proceeding when bot responds with environment/configuration setup message
+instead of an actual code review (MUST stop and ask user to configure).
 
 ## Dispatcher Model Note
 
@@ -397,6 +399,24 @@ else
     if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
       echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
       BOT_HAS_ISSUES=true
+    else
+      # Bot replied but no P0/P1/P2 findings — verify it actually reviewed
+      # (detect environment/configuration messages that are NOT real reviews)
+      BOT_NEEDS_SETUP=false
+      set +e
+      SETUP_BODY="$(
+        gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
+          2>/dev/null
+      )"
+      set -e
+      if [ -n "${SETUP_BODY}" ] && echo "${SETUP_BODY}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+        echo "ERROR: Codex bot responded with a setup/configuration message instead of a code review." >&2
+        echo "Bot response (truncated): $(echo "${SETUP_BODY}" | head -c 500)" >&2
+        echo "" >&2
+        echo "ACTION REQUIRED: Configure the Codex bot environment, then re-run pr-codex-bot." >&2
+        BOT_NEEDS_SETUP=true
+      fi
     fi
   elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
     BOT_UNAVAILABLE=true
@@ -414,9 +434,29 @@ if [ "${BOT_UNAVAILABLE}" = "true" ]; then
 fi
 echo "CSA_VAR:BOT_REVIEW_WINDOW_START=$WAIT_BASE_TS"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
+echo "CSA_VAR:BOT_NEEDS_SETUP=${BOT_NEEDS_SETUP:-false}"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 ```
+
+## IF ${BOT_NEEDS_SETUP}
+
+## Step 5a: Abort — Bot Needs Environment Configuration
+
+Tool: none (orchestrator action)
+OnFail: abort
+
+The Codex bot responded but did not perform an actual code review — it sent a
+message indicating environment configuration is needed. The workflow MUST stop
+here and report to the user. FORBIDDEN: falling back to local review, skipping
+the bot review, or proceeding in any way.
+
+**Orchestrator action**: Report the bot's response to the user and STOP. The
+user must:
+1. Configure the Codex bot environment (follow the bot's instructions)
+2. Re-run `pr-codex-bot` after configuration is complete
+
+## ENDIF
 
 ## IF ${BOT_UNAVAILABLE}
 

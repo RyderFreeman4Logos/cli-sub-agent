@@ -39,7 +39,7 @@ Local pre-PR review findings must be fixed before PR creation; they do not use
 the PR-page audit trail because no PR page exists yet. FORBIDDEN: merging with
 dismissed PR-page findings without explanatory PR comments.
 
-FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration, auto-merging at round limit.
+FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration, auto-merging at round limit, proceeding when bot responds with environment/configuration setup message instead of an actual code review (MUST stop and ask user to configure).
 
 ## Dispatcher Model
 
@@ -205,7 +205,7 @@ breaks prompt-guard propagation.
 2. Any local review issues are fixed before PR creation.
 3. PR resolved for the workflow branch (existing PR reused or a new PR created via strict owner-aware match, with create-race recovery and Step 4 precondition verified: `REVIEW_COMPLETED=true`).
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
-5. **If cloud_bot enabled (default)**: cloud bot triggered, wait handled by delegated CSA gate with hard timeout and explicit marker checks, and timeout path handled.
+5. **If cloud_bot enabled (default)**: cloud bot triggered, wait handled by delegated CSA gate with hard timeout and explicit marker checks, and timeout path handled. If bot responds with environment/configuration setup message instead of actual review, workflow STOPS and reports to user (Step 5a).
 6. **If cloud_bot disabled**: supplementary check completed via one of:
    - fast-path: SHA match, review skipped, or
    - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch main` executed.
