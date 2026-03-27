@@ -163,7 +163,7 @@ pub(crate) fn resolve_review_tool(
     if let Some(ref tier) = tier_name {
         if let Some(cfg) = project_config
             && let Some(resolution) =
-                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist)
+                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
         {
             return Ok((resolution.tool, Some(resolution.model_spec)));
         }

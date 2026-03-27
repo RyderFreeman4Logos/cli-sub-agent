@@ -150,6 +150,10 @@ pub(crate) enum RateLimitAction {
 /// Check for 429 rate-limit signals and decide whether to failover.
 ///
 /// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
+///
+/// `resolved_tier_name` and `tried_specs` enable intra-tier failover: when the
+/// caller is running under a named tier, we pass spec-level exclusion so that
+/// a different model within the same tier can be selected.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evaluate_rate_limit_failover(
     tool_name_str: &str,
@@ -157,6 +161,8 @@ pub(crate) fn evaluate_rate_limit_failover(
     attempts: usize,
     max_failover_attempts: usize,
     tried_tools: &mut Vec<String>,
+    tried_specs: &mut Vec<String>,
+    resolved_tier_name: Option<&str>,
     executed_session_id: Option<&str>,
     effective_session_arg: Option<&str>,
     ephemeral: bool,
@@ -193,6 +199,9 @@ pub(crate) fn evaluate_rate_limit_failover(
     }
 
     tried_tools.push(tool_name_str.to_string());
+    if let Some(spec) = current_model_spec {
+        tried_specs.push(spec.to_string());
+    }
 
     // Prefer the actually-executed session (important for forks where
     // effective_session_arg starts as None) so decide_failover evaluates
@@ -220,9 +229,11 @@ pub(crate) fn evaluate_rate_limit_failover(
     let action = csa_scheduler::decide_failover(
         tool_name_str,
         "default",
+        resolved_tier_name,
         task_needs_edit,
         session_state.as_ref(),
         tried_tools,
+        tried_specs,
         cfg,
         &rate_limit.matched_pattern,
     );
@@ -237,10 +248,12 @@ pub(crate) fn evaluate_rate_limit_failover(
             new_tool,
             new_model_spec,
         } => {
-            info!(
-                from = %tool_name_str,
-                to = %new_tool,
-                "Failing over to alternative tool"
+            warn!(
+                from_tool = %tool_name_str,
+                from_spec = %current_model_spec.unwrap_or("none"),
+                to_tool = %new_tool,
+                to_spec = %new_model_spec,
+                "[csa-failover] intra-tier failover"
             );
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {
@@ -268,6 +281,8 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     attempts: usize,
     max_failover_attempts: usize,
     tried_tools: &mut Vec<String>,
+    tried_specs: &mut Vec<String>,
+    resolved_tier_name: Option<&str>,
     executed_session_id: Option<&str>,
     effective_session_arg: Option<&str>,
     ephemeral: bool,
@@ -305,6 +320,9 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     }
 
     tried_tools.push(tool_name_str.to_string());
+    if let Some(spec) = current_model_spec {
+        tried_specs.push(spec.to_string());
+    }
 
     let failover_session_ref = executed_session_id.or(effective_session_arg);
     let session_state = if !ephemeral {
@@ -329,9 +347,11 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     let action = csa_scheduler::decide_failover(
         tool_name_str,
         "default",
+        resolved_tier_name,
         task_needs_edit,
         session_state.as_ref(),
         tried_tools,
+        tried_specs,
         cfg,
         &rate_limit.matched_pattern,
     );
@@ -346,10 +366,12 @@ pub(crate) fn evaluate_error_rate_limit_failover(
             new_tool,
             new_model_spec,
         } => {
-            info!(
-                from = %tool_name_str,
-                to = %new_tool,
-                "Failing over from transport error to alternative tool"
+            warn!(
+                from_tool = %tool_name_str,
+                from_spec = %current_model_spec.unwrap_or("none"),
+                to_tool = %new_tool,
+                to_spec = %new_model_spec,
+                "[csa-failover] intra-tier failover (transport error)"
             );
             let tool = crate::run_helpers::parse_tool_name(&new_tool)?;
             Ok(RateLimitAction::Retry {

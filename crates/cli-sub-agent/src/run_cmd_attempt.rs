@@ -90,18 +90,19 @@ pub(crate) struct RunLoopOutcome {
 }
 
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
+    // Compute max failover attempts: count total models across ALL tiers to
+    // allow cross-tier failover when the primary tier is exhausted (#493).
     let max_failover_attempts = if request.no_failover {
         1
     } else {
         request
             .config
-            .and_then(|cfg| {
-                let tier_name = cfg
-                    .tier_mapping
-                    .get("default")
-                    .cloned()
-                    .unwrap_or_else(|| "tier3".to_string());
-                cfg.tiers.get(&tier_name).map(|t| t.models.len())
+            .map(|cfg| {
+                cfg.tiers
+                    .values()
+                    .map(|t| t.models.len())
+                    .sum::<usize>()
+                    .max(1)
             })
             .unwrap_or(1)
     };
@@ -111,6 +112,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut current_model_spec = request.initial_model_spec;
     let mut current_model = request.initial_model;
     let mut tried_tools: Vec<String> = Vec::new();
+    let mut tried_specs: Vec<String> = Vec::new();
     let mut attempts = 0;
     let runtime_fallback_enabled = matches!(
         request.strategy,
@@ -571,6 +573,8 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     attempts,
                     max_failover_attempts,
                     &mut tried_tools,
+                    &mut tried_specs,
+                    request.resolved_tier_name,
                     executed_session_id.as_deref(),
                     effective_session_arg.as_deref(),
                     request.ephemeral,
@@ -655,6 +659,8 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             attempts,
             max_failover_attempts,
             &mut tried_tools,
+            &mut tried_specs,
+            request.resolved_tier_name,
             executed_session_id.as_deref(),
             effective_session_arg.as_deref(),
             request.ephemeral,
