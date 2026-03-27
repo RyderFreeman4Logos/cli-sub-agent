@@ -150,22 +150,10 @@ Prevents commits on protected branches (main, dev, master). Works with all
 tools — Claude Code, Codex, Gemini, manual git:
 
 ```bash
-mkdir -p .githooks
-cat > .githooks/pre-commit << 'HOOK'
-#!/usr/bin/env bash
-set -euo pipefail
-branch=$(git symbolic-ref --short HEAD 2>/dev/null) || exit 0
-[ -z "$branch" ] && exit 0
-for pb in main dev master; do
-  if [ "$branch" = "$pb" ]; then
-    echo "BLOCKED: Cannot commit directly to '$branch'. Create a feature branch first."
-    exit 1
-  fi
-done
-HOOK
-chmod +x .githooks/pre-commit
-git config core.hooksPath .githooks
+lefthook install
 ```
+
+Hook scripts live in `scripts/hooks/` and are configured via `lefthook.yml`.
 
 CSA also ships **built-in prompt guards** (branch-protection, dirty-tree-reminder,
 commit-workflow) that automatically inject workflow reminders into every
