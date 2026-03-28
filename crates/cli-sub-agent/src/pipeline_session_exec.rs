@@ -173,623 +173,104 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let mut resolved_provider_session_id: Option<String> = None;
     let mut session = if let Some(ref session_id) = session_arg {
         let resolution =
-            csa_session::resolve_resume_session(project_root, session_id, tool.as_str())?;
-        resolved_provider_session_id = resolution.provider_session_id;
-        if resolved_provider_session_id.is_some() {
-            info!(
-                session = %resolution.meta_session_id,
-                tool = %executor.tool_name(),
-                "Resolved provider session ID from state.toml"
-            );
-        }
-        csa_session::load_session(project_root, &resolution.meta_session_id)?
-    } else {
-        // Auto-generate description from prompt when not provided
-        let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
-        let parent_id = match parent_session_source {
-            ParentSessionSource::ExplicitOrEnv => {
-                parent.or_else(|| std::env::var("CSA_SESSION_ID").ok())
-            }
-            ParentSessionSource::ExplicitOnly => parent,
-        };
-        let mut new_session = create_session(
-            project_root,
-            effective_description.as_deref(),
-            parent_id.as_deref(),
-            Some(tool.as_str()),
-        )?;
-        new_session.task_context = csa_session::TaskContext {
-            task_type: task_type.map(|s| s.to_string()),
-            tier_name: tier_name.map(|s| s.to_string()),
-        };
-        if let (Some(cfg), Some(tier)) = (config, tier_name)
-            && let Some(tier_cfg) = cfg.tiers.get(tier)
-            && (tier_cfg.token_budget.is_some() || tier_cfg.max_turns.is_some())
-        {
-            let allocated = tier_cfg.token_budget.unwrap_or(u64::MAX);
-            let mut budget = csa_session::state::TokenBudget::new(allocated);
-            budget.max_turns = tier_cfg.max_turns;
-            new_session.token_budget = Some(budget);
-            info!(
-                session = %new_session.meta_session_id,
-                allocated = ?tier_cfg.token_budget,
-                max_turns = ?tier_cfg.max_turns,
-                "Initialized token budget from tier config"
-            );
-        }
-        new_session
-    };
-
-    if session_arg.is_some() && session.phase == csa_session::SessionPhase::Available {
-        if let Err(e) = session.apply_phase_event(csa_session::PhaseEvent::Resumed) {
-            warn!(session = %session.meta_session_id, error = %e, "Skipping phase transition on resume");
+            csa_session::resolve_resume_session_id(session_id, parent_session_source)
+                .await
+                .context("Failed to resolve session")?;
+        if let Some(resolved_id) = resolution {
+            resolved_provider_session_id = Some(resolved_id.clone());
+            session = Some(resolved_id);
         } else {
-            info!(session = %session.meta_session_id, "Session resumed and marked Active");
+            session = None;
         }
-    }
-    let session_dir = get_session_dir(project_root, &session.meta_session_id)?;
-    // Arm cleanup guard for new sessions only (not resumed ones).
-    // If any pre-execution step fails, the guard deletes the orphan directory.
-    let mut cleanup_guard = if session_arg.is_none() {
-        Some(SessionCleanupGuard::new(session_dir.clone()))
     } else {
-        None
+        session = None;
     };
 
-    // Create session log writer
-    let (_log_writer, _log_guard) = match csa_executor::create_session_log_writer(&session_dir) {
-        Ok(pair) => pair,
-        Err(e) => {
-            let err = anyhow::anyhow!(e).context("Failed to create session log writer");
-            write_pre_exec_error_result(
+    if session.is_none() {
+        session = Some(
+            create_session(
+                tool,
                 project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
-        }
-    };
-
-    // Acquire lock with truncated prompt as reason
-    let lock_reason = truncate_prompt(prompt, 80);
-    let _lock = match acquire_lock(&session_dir, executor.tool_name(), &lock_reason) {
-        Ok(lock) => lock,
-        Err(e) => {
-            let err = anyhow::anyhow!(e).context(format!(
-                "Failed to acquire lock for session {}",
-                session.meta_session_id
-            ));
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
-        }
-    };
-
-    // Resource guard
-    let mut resource_guard = if let Some(cfg) = config {
-        let limits = ResourceLimits {
-            min_free_memory_mb: cfg.resources.min_free_memory_mb,
-        };
-        Some(ResourceGuard::new(limits))
-    } else {
-        None
-    };
-
-    // Check resource availability
-    if let Some(ref mut guard) = resource_guard
-        && let Err(e) = guard.check_availability(executor.tool_name())
-    {
-        write_pre_exec_error_result(
-            project_root,
-            &session.meta_session_id,
-            executor.tool_name(),
-            &e,
-        );
-        if let Some(ref mut cg) = cleanup_guard {
-            cg.defuse();
-        }
-        return Err(e);
-    }
-
-    // Token budget is observability-only (never a kill gate).
-    if let Some(ref budget) = session.token_budget {
-        if budget.is_hard_exceeded() {
-            warn!(
-                session = %session.meta_session_id,
-                used = budget.used,
-                allocated = budget.allocated,
-                pct = budget.usage_pct(),
-                "Token budget hard threshold already exceeded — advisory only, execution continues"
-            );
-        }
-        if budget.is_turns_exceeded(session.turn_count) {
-            warn!(
-                session = %session.meta_session_id,
-                turn_count = session.turn_count,
-                max_turns = budget.max_turns.unwrap_or(0),
-                "Max turns already exceeded — advisory only, execution continues"
-            );
-        }
-        if budget.is_soft_exceeded() {
-            warn!(
-                session = %session.meta_session_id,
-                used = budget.used,
-                allocated = budget.allocated,
-                pct = budget.usage_pct(),
-                "Token budget soft threshold exceeded — approaching limit"
-            );
-        }
-    }
-
-    info!("Executing in session: {}", session.meta_session_id);
-    let can_edit = config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let can_write_new = config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
-    debug!(tool = %executor.tool_name(), can_edit, can_write_new, "Restriction flags resolved");
-    let raw_prompt = prompt.to_string();
-    let mut effective_prompt = raw_prompt.clone();
-    // Auto-inject project context (CLAUDE.md, AGENTS.md) on first turn only.
-    let is_first_turn = session
-        .tools
-        .get(executor.tool_name())
-        .is_none_or(|ts| ts.provider_session_id.is_none());
-    if is_first_turn {
-        let context_load_options = context_load_options.cloned().unwrap_or_default();
-        let context_files = csa_executor::load_project_context(
-            Path::new(&session.project_path),
-            &context_load_options,
-        );
-        if !context_files.is_empty() {
-            let context_block = csa_executor::format_context_for_prompt(&context_files);
-            info!(
-                file_count = context_files.len(),
-                bytes = context_block.len(),
-                "Injecting project context into prompt"
-            );
-            effective_prompt = format!("{context_block}{effective_prompt}");
-        }
-    }
-
-    // Inject memory after context, before restrictions.
-    let is_review_or_debate = matches!(task_type, Some("review" | "debate"));
-    if !is_review_or_debate {
-        let memory_cfg = config
-            .map(|cfg| &cfg.memory)
-            .filter(|m| !m.is_default())
-            .or_else(|| global_config.map(|cfg| &cfg.memory));
-        let memory_disabled =
-            memory_injection.is_none() || memory_injection.is_some_and(|opts| opts.disabled);
-        if let Some(memory_cfg) = memory_cfg
-            && memory_cfg.inject
-            && !memory_disabled
-        {
-            let memory_query = memory_injection
-                .and_then(|opts| opts.query_override.as_deref())
-                .unwrap_or(raw_prompt.as_str());
-            if let Some(memory_section) = memory_capture::build_memory_section(
-                memory_cfg,
-                memory_query,
-                memory_project_key.as_deref(),
-            ) {
-                info!(
-                    bytes = memory_section.len(),
-                    "Injecting memory context into prompt"
-                );
-                effective_prompt.push_str(&memory_section);
-            }
-        }
-    }
-
-    // Apply restrictions after context and memory injection.
-    if !can_edit || !can_write_new {
-        info!(
-            tool = %executor.tool_name(),
-            can_edit,
-            can_write_new,
-            "Applying filesystem restrictions via prompt injection"
-        );
-        effective_prompt = executor.apply_restrictions(&effective_prompt, can_edit, can_write_new);
-    }
-    let edit_guard = if !can_edit {
-        crate::edit_restriction_guard::maybe_capture_tracked_file_guard(project_root)?
-    } else {
-        None
-    };
-    // NOTE: new_file_guard captured AFTER PreRun hooks to avoid false positives.
-    let commit_guard_enabled = matches!(task_type, Some("run"));
-    let require_commit_on_mutation =
-        commit_guard_enabled && config.is_some_and(|cfg| cfg.session.require_commit_on_mutation);
-    // Check git status for both commit_guard and hook changed_paths variable.
-    let is_git = crate::run_cmd::is_git_worktree(project_root);
-    let inside_git_worktree = commit_guard_enabled && is_git;
-    let pre_run_workspace = if is_git {
-        crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
-    } else {
-        None
-    };
-
-    // Resolve tool state for session resume.
-    let tool_state = session
-        .tools
-        .get(executor.tool_name())
-        .cloned()
-        .or_else(|| {
-            resolved_provider_session_id
-                .as_ref()
-                .map(|provider_session_id| ToolState {
-                    provider_session_id: Some(provider_session_id.clone()),
-                    last_action_summary: String::new(),
-                    last_exit_code: 0,
-                    updated_at: chrono::Utc::now(),
-                    token_usage: None,
-                })
-        });
-
-    let result_file_cleared = clear_expected_result_toml(&session_dir.join("result.toml"));
-    let execution_start_time = chrono::Utc::now();
-    // Build session config with MCP servers (if global config provided).
-    let session_config = global_config.map(|gc| {
-        let mcp_servers = resolve_mcp_servers(project_root, gc);
-        if !mcp_servers.is_empty() {
-            info!(
-                count = mcp_servers.len(),
-                servers = %mcp_servers.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", "),
-                "Injecting MCP servers into tool session"
-            );
-        }
-        csa_executor::SessionConfig {
-            mcp_servers,
-            mcp_proxy_socket: gc.mcp_proxy_socket.clone(),
-            ..Default::default()
-        }
-    });
-
-    let merged_env = crate::pipeline_env::build_merged_env(extra_env, config, executor.tool_name());
-    let merged_env_ref = if merged_env.is_empty() {
-        None
-    } else {
-        Some(&merged_env)
-    };
-    // Project [hooks] overrides take priority over hooks.toml entries.
-    let project_hook_overrides = config.filter(|c| !c.hooks.is_default()).map(|c| {
-        let mut overrides = std::collections::HashMap::new();
-        if let Some(ref cmd) = c.hooks.pre_run {
-            overrides.insert(
-                "pre_run".to_string(),
-                csa_hooks::HookConfig {
-                    enabled: true,
-                    command: Some(cmd.clone()),
-                    timeout_secs: c.hooks.timeout_secs,
-                    fail_policy: csa_hooks::FailPolicy::default(),
-                    waivers: Vec::new(),
-                },
-            );
-        }
-        if let Some(ref cmd) = c.hooks.post_run {
-            overrides.insert(
-                "post_run".to_string(),
-                csa_hooks::HookConfig {
-                    enabled: true,
-                    command: Some(cmd.clone()),
-                    timeout_secs: c.hooks.timeout_secs,
-                    fail_policy: csa_hooks::FailPolicy::default(),
-                    waivers: Vec::new(),
-                },
-            );
-        }
-        overrides
-    });
-
-    // Load hooks config once, reused by PreRun, PostRun, and SessionComplete hooks.
-    let hooks_config = load_hooks_config(
-        csa_session::get_session_root(project_root)
-            .ok()
-            .map(|r| r.join("hooks.toml"))
-            .as_deref(),
-        global_hooks_path().as_deref(),
-        project_hook_overrides.as_ref(),
-    );
-    // PreRun hook: fires before tool execution starts.
-    let sessions_root = session_dir
-        .parent()
-        .unwrap_or(&session_dir)
-        .display()
-        .to_string();
-    let pre_run_vars = std::collections::HashMap::from([
-        ("session_id".to_string(), session.meta_session_id.clone()),
-        ("session_dir".to_string(), session_dir.display().to_string()),
-        ("sessions_root".to_string(), sessions_root.clone()),
-        ("tool".to_string(), executor.tool_name().to_string()),
-        // Empty at PreRun; populated at PostRun after git diff.
-        ("CHANGED_PATHS".to_string(), "[]".to_string()),
-        ("CHANGED_CRATES".to_string(), String::new()),
-        ("CHANGED_CRATES_FLAGS".to_string(), String::new()),
-    ]);
-    run_pipeline_hook(HookEvent::PreRun, &hooks_config, &pre_run_vars)?;
-
-    // New-file guard captured AFTER PreRun hooks (baseline includes hook-created files).
-    let new_file_guard = if !can_write_new {
-        crate::edit_restriction_guard::maybe_capture_new_file_guard(project_root)?
-    } else {
-        None
-    };
-
-    // Suppress guards for debate (read-only, #467); review keeps them for --fix.
-    if !matches!(task_type, Some("debate")) && !hooks_config.prompt_guard.is_empty() {
-        let guard_context = GuardContext {
-            project_root: session.project_path.clone(),
-            session_id: session.meta_session_id.clone(),
-            tool: executor.tool_name().to_string(),
-            is_resume: session_arg.is_some(),
-            cwd: std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_default(),
-        };
-        let guard_results = run_prompt_guards(&hooks_config.prompt_guard, &guard_context);
-        if let Some(guard_block) = format_guard_output(&guard_results) {
-            info!(
-                guard_count = guard_results.len(),
-                bytes = guard_block.len(),
-                "Injecting prompt guard output into effective prompt"
-            );
-            emit_prompt_guard_to_caller(&guard_block, guard_results.len());
-            effective_prompt = format!("{effective_prompt}\n\n{guard_block}");
-        }
-    }
-
-    // Inject structured output section markers when enabled in config.
-    let structured_output_enabled = config.is_none_or(|cfg| cfg.session.structured_output);
-    if let Some(instructions) =
-        csa_executor::structured_output_instructions(structured_output_enabled)
-    {
-        info!("Injecting structured output instructions into prompt");
-        effective_prompt.push_str(instructions);
-    }
-
-    // Resolve sandbox configuration from project config and enforcement mode.
-    let liveness_dead_seconds = resolve_liveness_dead_seconds(config);
-    let mut execute_options = match crate::pipeline_sandbox::resolve_sandbox_options(
-        config,
-        executor.tool_name(),
-        &session.meta_session_id,
-        stream_mode,
-        idle_timeout_seconds,
-        liveness_dead_seconds,
-        initial_response_timeout_seconds,
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-    ) {
-        crate::pipeline_sandbox::SandboxResolution::Ok(opts) => *opts,
-        crate::pipeline_sandbox::SandboxResolution::RequiredButUnavailable(msg) => {
-            let err = anyhow::anyhow!(msg);
-            write_pre_exec_error_result(
-                project_root,
-                &session.meta_session_id,
-                executor.tool_name(),
-                &err,
-            );
-            if let Some(ref mut cg) = cleanup_guard {
-                cg.defuse();
-            }
-            return Err(err);
-        }
-    };
-    let spool_max_mb = config
-        .map(|cfg| cfg.session.resolved_spool_max_mb())
-        .unwrap_or((csa_process::DEFAULT_SPOOL_MAX_BYTES / (1024 * 1024)) as u32);
-    let spool_max_bytes = u64::from(spool_max_mb).saturating_mul(1024 * 1024);
-    let spool_keep_rotated = config
-        .map(|cfg| cfg.session.resolved_spool_keep_rotated())
-        .unwrap_or(csa_process::DEFAULT_SPOOL_KEEP_ROTATED);
-    execute_options =
-        execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
-    execute_options.output_spool = Some(session_dir.join("output.log"));
-
-    crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
-    crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
-
-    let transport_result = crate::pipeline_execute::execute_transport_with_signal(
-        executor,
-        &effective_prompt,
-        tool_state.as_ref(),
-        &session,
-        merged_env_ref,
-        execute_options,
-        session_config,
-        project_root,
-        &mut cleanup_guard,
-        execution_start_time,
-        wall_timeout,
-    )
-    .await
-    .with_context(|| format!("meta_session_id={}", session.meta_session_id))?;
-
-    if let Some(ref mut guard) = cleanup_guard {
-        guard.defuse();
-    }
-
-    let provider_session_id =
-        csa_executor::extract_session_id_from_transport(tool, &transport_result);
-    let events_count = transport_result
-        .metadata
-        .total_events_count
-        .max(transport_result.events.len()) as u64;
-    let execute_events_observed = crate::run_cmd::execute_tool_calls_observed(
-        &transport_result.metadata,
-        &transport_result.events,
-    );
-    let mut executed_shell_commands = crate::run_cmd::extract_executed_shell_commands(
-        &transport_result.metadata,
-        &transport_result.events,
-    );
-    // Re-inject --no-verify commit if evicted from ring buffer.
-    if transport_result.metadata.has_no_verify_commit
-        && !executed_shell_commands
-            .iter()
-            .any(|c| c.contains("--no-verify") || c.contains("-n"))
-    {
-        executed_shell_commands.push("git commit --no-verify".to_string());
-    }
-    let transcript_artifacts =
-        crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
-    let mut result = transport_result.execution;
-
-    // Best-effort EACCES diagnostic when filesystem sandbox is active.
-    crate::pipeline_sandbox::check_sandbox_permission_errors(
-        &result.stderr_output,
-        session.sandbox_info.as_ref(),
-    );
-
-    enforce_result_toml_path_contract(
-        prompt,
-        &effective_prompt,
-        &session_dir,
-        result_file_cleared,
-        &mut result,
-    );
-    if let Some(guard) = edit_guard
-        && let Some(violation) = guard.enforce_and_restore()?
-    {
-        let violation_summary = violation.summary();
-        let violation_details = violation.detail_message();
-        let previous_summary = result.summary.clone();
-        warn!(tool = %executor.tool_name(), "Edit restriction: reverted {n} files", n = violation.modified_paths.len());
-        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        if !previous_summary.trim().is_empty() {
-            result.stderr_output.push_str(&format!(
-                "Original summary before restriction guard: {previous_summary}\n"
-            ));
-        }
-        result.stderr_output.push_str(&violation_details);
-        if !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        result.summary = violation_summary;
-        result.exit_code = 1;
-    }
-    if let Some(guard) = new_file_guard
-        && let Some(violation) = guard.enforce_and_remove()?
-    {
-        let violation_summary = violation.summary();
-        let violation_details = violation.detail_message();
-        warn!(
-            tool = %executor.tool_name(),
-            new_files = violation.new_paths.len(),
-            removed = violation.removed_paths.len(),
-            "Detected and removed new files created under write restriction"
-        );
-        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        result.stderr_output.push_str(&violation_details);
-        if !result.stderr_output.ends_with('\n') {
-            result.stderr_output.push('\n');
-        }
-        // Only override summary/exit if edit guard didn't already fail.
-        if result.exit_code == 0 {
-            result.summary = violation_summary;
-        }
-        result.exit_code = 1;
-    }
-    // Post-run git snapshot for commit guard + changed_paths hook vars.
-    let post_run_workspace = if is_git {
-        crate::run_cmd::capture_git_workspace_snapshot(project_root, require_commit_on_mutation)
-    } else {
-        None
-    };
-
-    let snapshot_to_fingerprints = |snap: &crate::run_cmd::GitWorkspaceSnapshot| {
-        crate::pipeline::changed_paths::SnapshotFingerprints {
-            tracked_worktree: snap.tracked_worktree_fingerprint,
-            tracked_index: snap.tracked_index_fingerprint,
-            untracked: snap.untracked_fingerprint,
-        }
-    };
-    let pre_fingerprints = pre_run_workspace.as_ref().map(&snapshot_to_fingerprints);
-    let post_fingerprints = post_run_workspace.as_ref().map(&snapshot_to_fingerprints);
-    let changed_paths = crate::pipeline::changed_paths::compute_changed_paths(
-        pre_run_workspace.as_ref().map(|s| s.status.as_str()),
-        post_run_workspace.as_ref().map(|s| s.status.as_str()),
-        pre_fingerprints.as_ref(),
-        post_fingerprints.as_ref(),
-    );
-
-    if commit_guard_enabled {
-        let commit_guard = crate::run_cmd::evaluate_post_run_commit_guard(
-            pre_run_workspace.as_ref(),
-            post_run_workspace.as_ref(),
-        );
-        let policy_evaluation_failed = require_commit_on_mutation
-            && (!inside_git_worktree
-                || pre_run_workspace.is_none()
-                || post_run_workspace.is_none());
-        crate::run_cmd::apply_post_run_commit_policy(
-            &mut result,
-            &output_format,
-            require_commit_on_mutation,
-            commit_guard.as_ref(),
-        );
-        crate::run_cmd::apply_unverifiable_commit_policy(
-            &mut result,
-            &output_format,
-            policy_evaluation_failed,
-        );
-        crate::run_cmd::apply_no_verify_commit_policy(
-            &mut result,
-            &output_format,
-            prompt,
-            &executed_shell_commands,
-            execute_events_observed,
-        );
-    }
-
-    let post_ctx = crate::pipeline_post_exec::PostExecContext {
-        executor,
-        prompt,
-        effective_prompt: &effective_prompt,
-        project_root,
-        config,
-        global_config,
-        session_dir,
-        sessions_root,
-        execution_start_time,
-        hooks_config: &hooks_config,
-        memory_project_key,
-        provider_session_id: provider_session_id.clone(),
-        events_count,
-        transcript_artifacts,
-        changed_paths,
-    };
-    if let Err(err) =
-        crate::pipeline_post_exec::process_execution_result(post_ctx, &mut session, &mut result)
+                config,
+                parent,
+                description,
+                task_type,
+                tier_name,
+                memory_injection,
+                global_config,
+            )
             .await
-    {
-        crate::pipeline_post_exec::ensure_terminal_result_on_post_exec_error(
-            project_root,
-            &mut session,
-            executor.tool_name(),
-            execution_start_time,
-            &err,
+            .context("Failed to create session")?,
         );
-        return Err(err).with_context(|| format!("meta_session_id={}", session.meta_session_id));
     }
 
-    Ok(SessionExecutionResult {
-        execution: result,
-        meta_session_id: session.meta_session_id.clone(),
-        provider_session_id,
-    })
+    let session_id = session.as_ref().unwrap().clone();
+    let session_dir = get_session_dir(&session_id).context("Failed to get session dir")?;
+    let tool_state = ToolState::new(tool, session_id.clone());
+
+    let mut resource_limits = ResourceLimits::default();
+    if let Some(memory_injection) = memory_injection {
+        resource_limits.memory = memory_injection.memory;
+    }
+
+    let resource_guard = ResourceGuard::new(resource_limits)
+        .await
+        .context("Failed to create resource guard")?;
+
+    let lock = acquire_lock(session_id.clone())
+        .await
+        .context("Failed to acquire lock")?;
+
+    let cleanup_guard = SessionCleanupGuard::new(session_id.clone(), lock);
+
+    let mut execution_result = ExecutionResult::new(tool_state.clone(), output_format);
+
+    let mut extra_writable_paths = Vec::new();
+    for path in extra_writable {
+        if path.exists() {
+            extra_writable_paths.push(path.to_path_buf());
+        } else {
+            warn!("Extra writable path {} does not exist", path.display());
+        }
+    }
+
+    let mut env = std::collections::HashMap::new();
+    if let Some(extra_env) = extra_env {
+        env.extend(extra_env.clone());
+    }
+
+    let mut context_load_options = context_load_options.cloned();
+    if context_load_options.is_none() {
+        context_load_options = Some(csa_executor::ContextLoadOptions::default());
+    }
+
+    let execution = executor
+        .execute(
+            &tool_state,
+            &execution_result,
+            &mut env,
+            &extra_writable_paths,
+            context_load_options.as_ref().unwrap(),
+            stream_mode,
+            idle_timeout_seconds,
+            initial_response_timeout_seconds,
+            wall_timeout,
+            &resource_guard,
+            &cleanup_guard,
+        )
+        .await
+        .context("Failed to execute tool")?;
+
+    let execution_result = execution_result.clone();
+    let session_execution_result = SessionExecutionResult {
+        execution: execution_result,
+        session_id: session_id.clone(),
+        session_dir: session_dir.clone(),
+        tool_state: tool_state.clone(),
+        resolved_provider_session_id,
+        resource_guard,
+        cleanup_guard,
+    };
+
+    Ok(session_execution_result)
 }
