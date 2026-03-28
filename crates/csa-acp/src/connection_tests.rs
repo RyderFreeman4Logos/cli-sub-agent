@@ -150,8 +150,11 @@ fn test_collect_agent_output_includes_thoughts() {
         &mut String::new(),
         &mut String::new(),
     );
-    let output = collect_agent_output(&metadata);
-    assert_eq!(output, "HelloThinking... world");
+    // tail_text still captures both messages and thoughts for backward compat.
+    assert_eq!(metadata.tail_text, "HelloThinking... world");
+    // collect_agent_output now prefers message_text when available.
+    let output = collect_agent_output(&mut metadata);
+    assert_eq!(output, "Hello world");
 }
 
 #[test]
@@ -308,10 +311,16 @@ fn collect_agent_output_excludes_diagnostic_events() {
         &mut String::new(),
         &mut String::new(),
     );
-    let output = collect_agent_output(&metadata);
+    // tail_text still captures both messages and thoughts.
     assert_eq!(
-        output, "Hellohmm world",
-        "collect_agent_output must only include AgentMessage and AgentThought"
+        metadata.tail_text, "Hellohmm world",
+        "tail_text must include AgentMessage and AgentThought"
+    );
+    // collect_agent_output prefers message_text when messages exist.
+    let output = collect_agent_output(&mut metadata);
+    assert_eq!(
+        output, "Hello world",
+        "collect_agent_output must return message_text when messages exist"
     );
     assert!(metadata.has_tool_calls);
     assert!(metadata.has_plan_updates);
@@ -611,6 +620,103 @@ fn thought_buffer_flushes_on_stream_type_switch() {
     );
     // stdout buffer also flushed because "answer\n" contains newline.
     assert!(stdout_buf.is_empty());
+}
+
+#[test]
+fn test_collect_agent_output_thought_fallback() {
+    let events = shared_events(vec![SessionEvent::AgentThought(
+        "deep thinking about the problem".to_string(),
+    )]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
+    let output = collect_agent_output(&mut metadata);
+    assert!(
+        output.starts_with("[thought-fallback]\n"),
+        "thought-only output must have [thought-fallback] prefix on its own line, got: {output}"
+    );
+    assert!(
+        output.contains("deep thinking about the problem"),
+        "thought fallback must contain the thought text"
+    );
+    assert!(
+        metadata.has_thought_fallback,
+        "has_thought_fallback must be set"
+    );
+}
+
+#[test]
+fn test_collect_agent_output_message_preferred() {
+    let events = shared_events(vec![
+        SessionEvent::AgentThought("internal reasoning".to_string()),
+        SessionEvent::AgentMessage("visible answer".to_string()),
+    ]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
+    let output = collect_agent_output(&mut metadata);
+    assert_eq!(
+        output, "visible answer",
+        "when messages exist, output must be message_text (no prefix)"
+    );
+    assert!(
+        !metadata.has_thought_fallback,
+        "has_thought_fallback must NOT be set when messages exist"
+    );
+}
+
+#[test]
+fn test_collect_agent_output_empty_when_neither() {
+    let events = shared_events(vec![
+        SessionEvent::PlanUpdate("step 1".to_string()),
+        SessionEvent::ToolCallStarted {
+            id: "t1".to_string(),
+            title: "Read".to_string(),
+            kind: "tool_use".to_string(),
+        },
+    ]);
+    let mut index = 0;
+    let mut spool: Option<SpoolRotator> = None;
+    let mut metadata = StreamingMetadata::default();
+
+    stream_new_agent_messages(
+        &events,
+        &mut index,
+        false,
+        &mut spool,
+        &mut metadata,
+        &mut String::new(),
+        &mut String::new(),
+    );
+    let output = collect_agent_output(&mut metadata);
+    assert!(
+        output.is_empty(),
+        "output must be empty when no messages or thoughts, got: {output}"
+    );
+    assert!(
+        !metadata.has_thought_fallback,
+        "has_thought_fallback must NOT be set when nothing exists"
+    );
 }
 
 #[test]
