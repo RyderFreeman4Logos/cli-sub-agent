@@ -391,7 +391,7 @@ impl AcpConnection {
             metadata.sync_from_store(&events_ref);
         }
         let events = self.events.borrow_mut().take_events();
-        let output = collect_agent_output(&metadata);
+        let output = collect_agent_output(&mut metadata);
         match outcome {
             PromptOutcome::Completed(Ok(response)) => Ok(PromptResult {
                 output,
@@ -633,7 +633,7 @@ fn stream_new_agent_messages(
                     flush_complete_lines(stdout_line_buf, "[stdout] ");
                 }
                 spool_chunk(output_spool, chunk.as_bytes(), metadata);
-                metadata.append_text(chunk);
+                metadata.append_message_text(chunk);
             }
             SessionEvent::AgentThought(chunk) => {
                 if stream_stdout_to_stderr {
@@ -643,7 +643,7 @@ fn stream_new_agent_messages(
                     flush_complete_lines(thought_line_buf, "[thought] ");
                 }
                 spool_chunk(output_spool, chunk.as_bytes(), metadata);
-                metadata.append_text(chunk);
+                metadata.append_thought_text(chunk);
             }
             SessionEvent::PlanUpdate(plan) => {
                 metadata.has_plan_updates = true;
@@ -715,11 +715,28 @@ fn spool_chunk(spool: &mut Option<SpoolRotator>, bytes: &[u8], metadata: &mut St
 
 /// Collect agent output for the caller (stdout / summary extraction).
 ///
-/// Returns the tail text buffer from [`StreamingMetadata`], which contains
-/// only `AgentMessage` and `AgentThought` text, bounded to ~1 MiB.
-/// The full output is on disk in the output spool file.
-fn collect_agent_output(metadata: &StreamingMetadata) -> String {
-    metadata.tail_text.clone()
+/// Prefers `message_text` (actual agent output).  When no message text was
+/// produced but thought text exists, falls back to thought text with a
+/// `[thought-fallback]` prefix so callers know the output is derived from
+/// internal reasoning rather than visible agent messages.  This handles
+/// models (e.g. gemini) that produce thoughts but no visible message content.
+fn collect_agent_output(metadata: &mut StreamingMetadata) -> String {
+    let message = metadata.message_text.trim();
+    if !message.is_empty() {
+        return metadata.message_text.clone();
+    }
+    let thought = metadata.thought_text.trim();
+    if !thought.is_empty() {
+        metadata.has_thought_fallback = true;
+        tracing::warn!(
+            thought_bytes = metadata.thought_text.len(),
+            "agent produced no message output; falling back to thought text"
+        );
+        // Put the marker on its own line so CSA section markers
+        // (<!-- CSA:SECTION:... -->) in the thought text remain parseable.
+        return format!("[thought-fallback]\n{}", metadata.thought_text);
+    }
+    String::new()
 }
 
 fn stop_reason_to_string(reason: StopReason) -> String {

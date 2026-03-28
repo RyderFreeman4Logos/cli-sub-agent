@@ -69,21 +69,49 @@ impl BwrapCommandBuilder {
         // Read-only root filesystem
         cmd.args(["--ro-bind", "/", "/"]);
 
-        // Writable bind mounts
+        // Standard virtual filesystems MUST come before bind mounts so that
+        // writable paths under /tmp are not hidden by the fresh tmpfs overlay.
+        cmd.args(["--tmpfs", "/tmp"]);
+        cmd.args(["--dev", "/dev"]);
+        cmd.args(["--proc", "/proc"]);
+
+        // Writable bind mounts (after tmpfs so /tmp/* mounts are visible).
+        //
+        // Special handling for /tmp paths:
+        // - "/tmp" itself is SKIPPED: --tmpfs /tmp already provides a writable
+        //   /tmp.  Bind-mounting the host's /tmp would expose host temp files,
+        //   sockets and caches to the sandbox — a security/isolation regression.
+        // - Sub-paths (e.g. /tmp/foo) get --dir to create the mount-point
+        //   directory inside the fresh tmpfs (which starts empty), then --bind
+        //   to overlay the host directory.  This is correct for the common case
+        //   where writable paths are directories.  For nested paths (/tmp/a/b)
+        //   we also create intermediate parent directories.
+        let tmp_prefix = Path::new("/tmp");
         for path in &self.writable_paths {
             let s = path.to_string_lossy();
-            cmd.args(["--bind", &s, &s]);
+            if path == tmp_prefix {
+                // /tmp itself is already writable via --tmpfs; skip to avoid
+                // exposing host /tmp content inside the sandbox.
+                continue;
+            } else if path.starts_with(tmp_prefix) {
+                // Create intermediate parent directories if deeper than /tmp/.
+                if let Some(parent) = path.parent()
+                    && parent != tmp_prefix
+                {
+                    let p = parent.to_string_lossy();
+                    cmd.args(["--dir", &p]);
+                }
+                cmd.args(["--dir", &s]);
+                cmd.args(["--bind", &s, &s]);
+            } else {
+                cmd.args(["--bind", &s, &s]);
+            }
         }
 
         // Extra read-only bind mounts
         for (src, dest) in &self.ro_binds {
             cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
         }
-
-        // Standard virtual filesystems
-        cmd.args(["--tmpfs", "/tmp"]);
-        cmd.args(["--dev", "/dev"]);
-        cmd.args(["--proc", "/proc"]);
 
         // Namespace configuration
         cmd.arg("--share-net");
@@ -329,6 +357,157 @@ mod tests {
         assert!(
             session_after_bind,
             "/tmp/session should be --bind (writable); args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_extra_writable_under_tmp_ordering() {
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_writable_path(Path::new("/home/user/project"));
+        builder.with_writable_path(Path::new("/tmp/foo"));
+        let cmd = builder.build();
+        let args = command_args(&cmd);
+
+        // Locate key positions
+        let pos = |needle: &str| args.iter().position(|a| a == needle);
+
+        let tmpfs_pos = args
+            .iter()
+            .enumerate()
+            .find(|(_, a)| *a == "--tmpfs")
+            .map(|(i, _)| i)
+            .expect("--tmpfs must be present");
+        assert_eq!(
+            args[tmpfs_pos + 1],
+            "/tmp",
+            "--tmpfs must be followed by /tmp"
+        );
+
+        // --tmpfs /tmp must appear BEFORE --bind /tmp/foo /tmp/foo
+        let bind_tmp_foo_pos = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--bind")
+            .find(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/tmp/foo"))
+            .map(|(i, _)| i)
+            .expect("--bind /tmp/foo must be present");
+        assert!(
+            tmpfs_pos < bind_tmp_foo_pos,
+            "--tmpfs /tmp (pos {tmpfs_pos}) must come BEFORE --bind /tmp/foo (pos {bind_tmp_foo_pos}); args: {args:?}"
+        );
+
+        // --dir /tmp/foo must appear between --tmpfs and --bind for /tmp paths
+        let dir_tmp_foo_pos = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--dir")
+            .find(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/tmp/foo"))
+            .map(|(i, _)| i)
+            .expect("--dir /tmp/foo must be present for /tmp sub-paths");
+        assert!(
+            tmpfs_pos < dir_tmp_foo_pos && dir_tmp_foo_pos < bind_tmp_foo_pos,
+            "--dir /tmp/foo (pos {dir_tmp_foo_pos}) must be between --tmpfs (pos {tmpfs_pos}) and --bind (pos {bind_tmp_foo_pos}); args: {args:?}"
+        );
+
+        // Non-/tmp writable path should NOT have --dir
+        let dir_project = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--dir")
+            .any(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/home/user/project"));
+        assert!(
+            !dir_project,
+            "non-/tmp path /home/user/project should NOT have --dir; args: {args:?}"
+        );
+
+        // Non-/tmp writable path should still have --bind
+        let bind_project = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--bind")
+            .any(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/home/user/project"));
+        assert!(
+            bind_project,
+            "/home/user/project should have --bind; args: {args:?}"
+        );
+
+        // Verify --ro-bind / / is still first
+        assert_eq!(args[1], "--ro-bind");
+        assert_eq!(args[2], "/");
+        assert_eq!(args[3], "/");
+
+        // Verify overall order: --ro-bind < --tmpfs < --bind < --
+        let separator_pos = pos("--").expect("-- separator must be present");
+        assert!(
+            bind_tmp_foo_pos < separator_pos,
+            "--bind must come before -- separator"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_nested_tmp_path_creates_intermediate_dirs() {
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_writable_path(Path::new("/tmp/deep/nested/dir"));
+        let cmd = builder.build();
+        let args = command_args(&cmd);
+
+        // Must have --dir for intermediate parent
+        let has_parent_dir = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--dir")
+            .any(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/tmp/deep/nested"));
+        assert!(
+            has_parent_dir,
+            "nested /tmp path must have --dir for parent /tmp/deep/nested; args: {args:?}"
+        );
+
+        // Must have --dir for the path itself
+        let has_path_dir = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--dir")
+            .any(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/tmp/deep/nested/dir"));
+        assert!(
+            has_path_dir,
+            "nested /tmp path must have --dir for /tmp/deep/nested/dir; args: {args:?}"
+        );
+
+        // Must have --bind
+        let has_bind = args
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| *a == "--bind")
+            .any(|(i, _)| args.get(i + 1).map(|s| s.as_str()) == Some("/tmp/deep/nested/dir"));
+        assert!(
+            has_bind,
+            "/tmp/deep/nested/dir must have --bind; args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_bare_tmp_is_not_bind_mounted() {
+        // writable_paths = ["/tmp"] should NOT produce --bind /tmp /tmp,
+        // because --tmpfs /tmp already makes /tmp writable.  Bind-mounting
+        // host /tmp would leak host temp files into the sandbox.
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_writable_path(Path::new("/tmp"));
+        let cmd = builder.build();
+        let args = command_args(&cmd);
+
+        // --tmpfs /tmp must exist
+        assert!(
+            args.windows(2).any(|w| w[0] == "--tmpfs" && w[1] == "/tmp"),
+            "--tmpfs /tmp must be present; args: {args:?}"
+        );
+
+        // --bind /tmp /tmp must NOT exist
+        let has_bind_tmp = args
+            .windows(3)
+            .any(|w| w[0] == "--bind" && w[1] == "/tmp" && w[2] == "/tmp");
+        assert!(
+            !has_bind_tmp,
+            "bare /tmp must NOT be --bind mounted (would expose host /tmp); args: {args:?}"
         );
     }
 }

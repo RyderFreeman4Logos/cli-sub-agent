@@ -363,6 +363,7 @@ fn is_non_summary_line(line: &str) -> bool {
         || line.starts_with("- ")
         || line.starts_with("* ")
         || line.starts_with("<!-- CSA:SECTION:")
+        || line.starts_with("[thought-fallback]")
         || line.starts_with("CSA Meta Session ID:")
         || line.starts_with("Position:")
         || line.starts_with("Key Arguments:")

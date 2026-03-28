@@ -57,6 +57,12 @@ pub struct StreamingMetadata {
     pub extracted_commands: Vec<String>,
     /// Tail buffer of agent message/thought text (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
     pub tail_text: String,
+    /// Tail buffer of agent message text only (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
+    pub message_text: String,
+    /// Tail buffer of agent thought text only (bounded by [`TAIL_BUFFER_MAX_BYTES`]).
+    pub thought_text: String,
+    /// Whether the output used thought text as fallback (no message text was produced).
+    pub has_thought_fallback: bool,
     /// Total bytes written to the output spool file.
     pub(crate) spool_bytes_written: u64,
 }
@@ -71,23 +77,33 @@ impl StreamingMetadata {
         self.extracted_commands = store.extracted_commands();
     }
 
-    /// Append agent text to the tail buffer, trimming from the front if needed.
-    ///
-    /// Uses a high-water mark ([`TAIL_BUFFER_HIGH_WATER`]) so trimming occurs
-    /// once per MiB of new text rather than once per chunk, amortising the
-    /// O(N) cost of `String::drain` and avoiding O(N²) behaviour.
-    pub(crate) fn append_text(&mut self, text: &str) {
+    /// Append agent message text to both the message-specific and combined tail buffers.
+    pub(crate) fn append_message_text(&mut self, text: &str) {
         self.tail_text.push_str(text);
-        if self.tail_text.len() > TAIL_BUFFER_HIGH_WATER {
-            // Trim back to TAIL_BUFFER_MAX_BYTES.  Find a char boundary
-            // at or after the excess point to avoid splitting multi-byte chars.
-            let excess = self.tail_text.len() - TAIL_BUFFER_MAX_BYTES;
-            let mut trim_at = excess;
-            while trim_at < self.tail_text.len() && !self.tail_text.is_char_boundary(trim_at) {
-                trim_at += 1;
-            }
-            self.tail_text.drain(..trim_at);
+        trim_tail_buffer(&mut self.tail_text);
+        self.message_text.push_str(text);
+        trim_tail_buffer(&mut self.message_text);
+    }
+
+    /// Append agent thought text to both the thought-specific and combined tail buffers.
+    pub(crate) fn append_thought_text(&mut self, text: &str) {
+        self.tail_text.push_str(text);
+        trim_tail_buffer(&mut self.tail_text);
+        self.thought_text.push_str(text);
+        trim_tail_buffer(&mut self.thought_text);
+    }
+}
+
+/// Trim a tail buffer back to [`TAIL_BUFFER_MAX_BYTES`] when it exceeds
+/// [`TAIL_BUFFER_HIGH_WATER`], respecting UTF-8 char boundaries.
+fn trim_tail_buffer(buf: &mut String) {
+    if buf.len() > TAIL_BUFFER_HIGH_WATER {
+        let excess = buf.len() - TAIL_BUFFER_MAX_BYTES;
+        let mut trim_at = excess;
+        while trim_at < buf.len() && !buf.is_char_boundary(trim_at) {
+            trim_at += 1;
         }
+        buf.drain(..trim_at);
     }
 }
 
