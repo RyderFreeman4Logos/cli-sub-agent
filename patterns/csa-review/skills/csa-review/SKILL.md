@@ -227,7 +227,7 @@ After every `csa review` run, structured metadata is written to
 }
 ```
 
-This metadata enables downstream consumers (pr-codex-bot, commit skill,
+This metadata enables downstream consumers (pr-bot, commit skill,
 orchestration scripts) to programmatically query review results without
 parsing free-form text output. The `decision` field uses the four-value
 `ReviewDecision` enum: `pass`, `fail`, `skip`, `uncertain`.

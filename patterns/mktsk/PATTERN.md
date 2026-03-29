@@ -94,7 +94,7 @@ parent), complete the full pipeline:
 2. Run cumulative review (`csa review --range main...HEAD`).
 3. Push to remote (`--force-with-lease`).
 4. Create or reuse PR (`gh pr create`).
-5. Run pr-codex-bot workflow for review + merge.
+5. Run pr-bot workflow for review + merge.
 
 **Skipped when**: `CSA_SKIP_PUBLISH=true` is set by the parent workflow.
 dev2merge sets this before calling mktsk, since it handles publish in its

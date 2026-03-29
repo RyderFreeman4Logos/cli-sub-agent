@@ -41,11 +41,11 @@ For `csa` commands within pattern steps (e.g., `csa review --diff`), add
 
 - **Depends on**: `mktd` (provides TODO plan), `commit` (per-task commit workflow)
 - **Uses**: `csa-review` (per-task review), `security-audit` (via commit skill)
-- **Boundary**: Standalone mktsk completes the full pipeline (push/PR/pr-codex-bot/merge).
+- **Boundary**: Standalone mktsk completes the full pipeline (push/PR/pr-bot/merge).
   When called from dev2merge (`CSA_SKIP_PUBLISH=true`), publish steps are skipped.
 
 ## Done Criteria
 
 1. All TODO items executed and verified via `DONE WHEN` conditions.
 2. All tasks marked complete via TaskUpdate.
-3. Branch pushed, PR created, pr-codex-bot completed (or skipped when `CSA_SKIP_PUBLISH=true`).
+3. Branch pushed, PR created, pr-bot completed (or skipped when `CSA_SKIP_PUBLISH=true`).

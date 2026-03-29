@@ -13,7 +13,7 @@ hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
 mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push →
-PR Creation → pr-codex-bot Hard Gate → Post-Merge Sync.
+PR Creation → pr-bot Hard Gate → Post-Merge Sync.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
@@ -247,7 +247,7 @@ Tool: bash
 OnFail: abort
 
 Create or reuse a PR for the current branch. Outputs PR_NUMBER and PR_URL
-as CSA_VARs for the next step. This step does NOT trigger pr-codex-bot —
+as CSA_VARs for the next step. This step does NOT trigger pr-bot —
 that is a separate hard gate in Step 13.
 
 ```bash
@@ -301,16 +301,16 @@ echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
 echo "CSA_VAR:PR_URL=${PR_URL}"
 ```
 
-## Step 13: pr-codex-bot Review & Merge Gate (HARD GATE)
+## Step 13: pr-bot Review & Merge Gate (HARD GATE)
 
 Tool: bash
 OnFail: abort
 
-**MANDATORY**: This step MUST NOT be skipped. It runs pr-codex-bot which performs
+**MANDATORY**: This step MUST NOT be skipped. It runs pr-bot which performs
 cloud review (if enabled) and the actual merge. Without this step completing
 successfully, the PR remains unmerged and Step 14 will fail.
 
-Uses marker files for idempotency: skips if pr-codex-bot already completed for
+Uses marker files for idempotency: skips if pr-bot already completed for
 the same PR/HEAD combination.
 
 ```bash
@@ -321,7 +321,7 @@ if [ -z "${PR_NUMBER:-}" ]; then
 fi
 HEAD_SHA="$(git rev-parse --verify HEAD)"
 
-# --- Lock + Idempotency: skip if pr-codex-bot already ran or is running ---
+# --- Lock + Idempotency: skip if pr-bot already ran or is running ---
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
 mkdir -p "${MARKER_DIR}"
 MARKER_BASE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}"
@@ -337,21 +337,21 @@ cleanup_lock() {
 trap cleanup_lock EXIT
 
 if [ -f "${DONE_MARKER}" ]; then
-  echo "pr-codex-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
+  echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
-  echo "ERROR: pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
+  echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
   echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
   exit 1
 else
   LOCK_HELD=1
-  echo "Running pr-codex-bot for PR #${PR_NUMBER} (${PR_URL:-unknown})..."
+  echo "Running pr-bot for PR #${PR_NUMBER} (${PR_URL:-unknown})..."
   export CSA_PR_BOT_GUARD=1
-  if csa plan run --sa-mode true patterns/pr-codex-bot/workflow.toml; then
+  if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
     touch "${DONE_MARKER}"
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
   else
-    echo "ERROR: pr-codex-bot workflow failed for PR #${PR_NUMBER}." >&2
+    echo "ERROR: pr-bot workflow failed for PR #${PR_NUMBER}." >&2
     exit 1
   fi
 fi
@@ -369,13 +369,13 @@ then sync local main and clean up.
 set -euo pipefail
 # --- Hard gate: verify PR is merged ---
 # NOTE: PR_NUMBER comes from Step 12 (gh pr view/list). In fork workflows,
-# pr-codex-bot may resolve a different PR via owner-aware lookup. For single-repo
+# pr-bot may resolve a different PR via owner-aware lookup. For single-repo
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   PR_STATE="$(gh pr view "${PR_NUMBER}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")"
   if [ "${PR_STATE}" != "MERGED" ]; then
     echo "ERROR: PR #${PR_NUMBER} state is '${PR_STATE}', expected 'MERGED'." >&2
-    echo "This usually means pr-codex-bot (Step 13) was skipped or failed." >&2
+    echo "This usually means pr-bot (Step 13) was skipped or failed." >&2
     exit 1
   fi
   echo "PR #${PR_NUMBER} confirmed MERGED."

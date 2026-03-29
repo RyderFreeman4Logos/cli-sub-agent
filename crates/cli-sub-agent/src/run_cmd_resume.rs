@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use anyhow::Result;
 use csa_core::types::{OutputFormat, ToolName};
 
-pub(super) const DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS: u64 = 2400;
+pub(super) const DEFAULT_PR_BOT_TIMEOUT_SECS: u64 = 2400;
 const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
 
 pub(crate) fn resolve_run_timeout_seconds(
@@ -18,8 +18,8 @@ pub(crate) fn resolve_run_timeout_seconds(
     if cli_timeout.is_some() {
         return cli_timeout;
     }
-    if matches!(skill, Some("pr-codex-bot")) {
-        return Some(DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS);
+    if matches!(skill, Some("pr-bot" | "pr-codex-bot")) {
+        return Some(DEFAULT_PR_BOT_TIMEOUT_SECS);
     }
     None
 }

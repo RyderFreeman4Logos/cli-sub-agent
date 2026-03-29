@@ -6,5 +6,5 @@ version = "0.2.0"
 tier = "tier-4-critical"
 max_turns = 50
 tools = [{ tool = "claude-code", provider = "anthropic", model = "claude-opus-4-6", thinking_budget = "xhigh" }]
-skip_context = ["patterns/commit/", "patterns/pr-codex-bot/", "patterns/dev2merge/", "skills/sa/"]
+skip_context = ["patterns/commit/", "patterns/pr-bot/", "patterns/dev2merge/", "skills/sa/"]
 extra_context = []

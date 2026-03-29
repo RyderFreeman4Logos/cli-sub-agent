@@ -6,7 +6,7 @@ usage() {
 Usage: scripts/hooks/post-pr-create.sh [--base <branch>] [--pr-number <number>]
 
 Confirms that the current feature branch has an open PR, then runs the
-pr-codex-bot workflow as a synchronous post-create transaction.
+pr-bot workflow as a synchronous post-create transaction.
 EOF
 }
 
@@ -146,17 +146,17 @@ begin_pr_bot_transaction() {
   mkdir -p "${PR_BOT_MARKER_DIR}"
 
   if [ -f "${PR_BOT_DONE_MARKER}" ]; then
-    echo "pr-codex-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
+    echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
     return 1
   fi
 
   if [ -f "${PR_BOT_AWAITING_USER_MARKER}" ]; then
-    echo "pr-codex-bot is awaiting manual follow-up for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping auto rerun."
+    echo "pr-bot is awaiting manual follow-up for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping auto rerun."
     return 1
   fi
 
   if ! mkdir "${PR_BOT_LOCK_DIR}" 2>/dev/null; then
-    echo "pr-codex-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
+    echo "pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}; skipping."
     return 1
   fi
 
@@ -223,15 +223,15 @@ if ! begin_pr_bot_transaction; then
 fi
 
 echo "Confirmed PR #${PR_NUMBER} (${PR_URL}) for branch ${CURRENT_BRANCH}."
-echo "Running pr-codex-bot transaction..."
+echo "Running pr-bot transaction..."
 
-# Recursion guard: prevent PostRun hook from re-triggering pr-codex-bot
+# Recursion guard: prevent PostRun hook from re-triggering pr-bot
 # while inner CSA sessions spawned by this workflow complete.
 export CSA_PR_BOT_GUARD=1
 
 PLAN_RESULT_FILE="$(mktemp)"
 set +e
-csa plan run --sa-mode true patterns/pr-codex-bot/workflow.toml | tee "${PLAN_RESULT_FILE}"
+csa plan run --sa-mode true patterns/pr-bot/workflow.toml | tee "${PLAN_RESULT_FILE}"
 PLAN_RC=${PIPESTATUS[0]}
 set -e
 
@@ -240,7 +240,7 @@ if grep -Eq '^[[:space:]]*ROUND_LIMIT_HALT:' "${PLAN_RESULT_FILE}"; then
   touch "${PR_BOT_AWAITING_USER_MARKER}"
   rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
   PR_BOT_LOCK_HELD=0
-  echo "WARN: pr-codex-bot reached REVIEW_ROUND limit and is awaiting manual follow-up; done marker was not written." >&2
+  echo "WARN: pr-bot reached REVIEW_ROUND limit and is awaiting manual follow-up; done marker was not written." >&2
   exit 0
 fi
 
@@ -251,6 +251,6 @@ if [ "${PLAN_RC}" -eq 0 ]; then
   rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
   PR_BOT_LOCK_HELD=0
 else
-  echo "ERROR: pr-codex-bot workflow failed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}." >&2
+  echo "ERROR: pr-bot workflow failed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}." >&2
   exit 1
 fi

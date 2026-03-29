@@ -309,19 +309,19 @@ Every debate result MUST include:
 3. **Final verdict** with which side prevailed and rationale
 4. **Escalation history** if tier escalation occurred
 
-**Why**: Debate results are used as evidence in code review arbitration (pr-codex-bot),
+**Why**: Debate results are used as evidence in code review arbitration (pr-bot),
 security audits, and design decisions. Without model specs, future reviewers cannot
 assess the quality or independence of the arbitration.
 
 ## PR Integration (when used for code review arbitration)
 
-When the debate skill is invoked from `pr-codex-bot` Step 8 (false positive arbitration)
+When the debate skill is invoked from `pr-bot` Step 8 (false positive arbitration)
 or any code review context where results will be posted to a PR:
 
 ### MANDATORY: Post Results to PR
 
 The debate result MUST be posted as a PR comment for audit trail. The caller
-(typically pr-codex-bot) is responsible for posting, but the debate output MUST
+(typically pr-bot) is responsible for posting, but the debate output MUST
 include all information needed:
 
 1. **Participants section** with full model specs (both sides)

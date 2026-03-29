@@ -1,6 +1,6 @@
 ---
-name = "pr-codex-bot"
-description = "Iterative PR review loop with cloud codex bot: local review, push, bot trigger, false-positive arbitration, fix, merge"
+name = "pr-bot"
+description = "Iterative PR review loop with configurable cloud bot: local review, push, bot trigger, false-positive arbitration, fix, merge"
 allowed-tools = "Bash, Task, Read, Edit, Write, Grep, Glob"
 tier = "tier-3-complex"
 version = "0.1.0"
@@ -236,6 +236,14 @@ Check whether cloud bot review is enabled for this project.
 ```bash
 set -euo pipefail
 CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
+CLOUD_BOT_NAME=$(csa config get pr_review.cloud_bot_name --default gemini-code-assist)
+CLOUD_BOT_TRIGGER=$(csa config get pr_review.cloud_bot_trigger --default auto)
+CLOUD_BOT_LOGIN_RAW=$(csa config get pr_review.cloud_bot_login --default "")
+if [ -z "${CLOUD_BOT_LOGIN_RAW}" ]; then
+  CLOUD_BOT_LOGIN="${CLOUD_BOT_NAME}[bot]"
+else
+  CLOUD_BOT_LOGIN="${CLOUD_BOT_LOGIN_RAW}"
+fi
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
@@ -250,6 +258,9 @@ if [ "${CLOUD_BOT}" = "false" ]; then
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
 FALLBACK_REVIEW_HAS_ISSUES="${FALLBACK_REVIEW_HAS_ISSUES:-false}"
+echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
+echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
+echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```
@@ -266,19 +277,21 @@ If `CLOUD_BOT` is `false`:
 ## Step 5: Trigger Cloud Bot Review and Delegate Waiting
 
 > **Layer**: 0 + 1 (Orchestrator + CSA executor).
-> Layer 0 triggers `@codex review` and delegates the long wait to a single
+> Layer 0 triggers cloud bot review (via @mention or auto-review depending on
+> `cloud_bot_trigger` config) and delegates the long wait to a single
 > CSA-managed step. No explicit caller-side polling loop.
 
 Tool: bash
 OnFail: abort
 Condition: !(${BOT_UNAVAILABLE})
 
-Trigger a fresh `@codex review` for current HEAD, wait 5 minutes (bot
-responses rarely arrive faster), then delegate the remaining 10-minute
-polling window to CSA. Total wait: ~15 minutes.
-If bot times out, set BOT_UNAVAILABLE and fall through — local review
-(Step 2) already covers main...HEAD. If fallback review finds issues, set
-`FALLBACK_REVIEW_HAS_ISSUES=true` so Step 6-fix is required before merge.
+Trigger cloud bot review for current HEAD (trigger method depends on
+`cloud_bot_trigger` config: "comment" posts `@bot review`, "auto" skips
+trigger since bot auto-reviews). Wait 5 minutes, then delegate 10-minute
+polling to CSA. Total wait: ~15 minutes.
+If bot times out, **ABORT the workflow** — user must decide next action.
+Also detects non-target bot comments (e.g., codex auto-review when
+configured bot is gemini-code-assist) and includes them with a quota warning.
 
 ```bash
 set -euo pipefail
@@ -337,14 +350,20 @@ run_with_hard_timeout() {
   return "${rc}"
 }
 
-# --- Trigger fresh @codex review for current HEAD ---
+# --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
 TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 WAIT_BASE_TS="${TRIGGER_TS}"
-TRIGGER_BODY="@codex review
+if [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
+  TRIGGER_BODY="@${CLOUD_BOT_NAME} review
 
 <!-- csa-trigger:${CURRENT_SHA}:${TRIGGER_TS} -->"
-gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
+  echo "Triggered @${CLOUD_BOT_NAME} review via comment for HEAD ${CURRENT_SHA}."
+else
+  echo "Cloud bot trigger mode is '${CLOUD_BOT_TRIGGER}' (auto-review); skipping @mention trigger."
+  echo "Bot will auto-review the PR push. Proceeding to polling phase."
+fi
 
 # --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
 echo "Waiting 5 minutes before polling (bot responses rarely arrive faster)..."
@@ -356,7 +375,7 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
 WAIT_RESULT_FILE="$(mktemp)"
 set +e
-run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool codex --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @codex review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
+run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool auto --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
 WAIT_RC=${PIPESTATUS[0]}
 set -e
 WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
@@ -381,7 +400,7 @@ else
     set +e
     ACTIONABLE_COMMENT_COUNT="$(
       gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-        --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
         2>/dev/null
     )"
     ACTIONABLE_COMMENT_RC=$?
@@ -406,15 +425,15 @@ else
       set +e
       SETUP_BODY="$(
         gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
           2>/dev/null
       )"
       set -e
       if [ -n "${SETUP_BODY}" ] && echo "${SETUP_BODY}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
-        echo "ERROR: Codex bot responded with a setup/configuration message instead of a code review." >&2
+        echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
         echo "Bot response (truncated): $(echo "${SETUP_BODY}" | head -c 500)" >&2
         echo "" >&2
-        echo "ACTION REQUIRED: Configure the Codex bot environment, then re-run pr-codex-bot." >&2
+        echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
         BOT_NEEDS_SETUP=true
       fi
     fi
@@ -426,11 +445,34 @@ else
   fi
 fi
 
-if [ "${BOT_UNAVAILABLE}" = "true" ]; then
-  echo "Bot timed out after delegated wait window. Falling back to local review."
-  if ! csa review --range main...HEAD --timeout 1800 2>/dev/null; then
-    FALLBACK_REVIEW_HAS_ISSUES=true
+# --- Check for non-target bot comments (e.g., codex auto-review) ---
+if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_HAS_ISSUES}" = "false" ]; then
+  set +e
+  OTHER_BOT_COUNT="$(
+    gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+      --jq '[.[] | select(.user.type == "Bot") | select(.user.login != "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+      2>/dev/null || echo "0"
+  )"
+  set -e
+  if [ "${OTHER_BOT_COUNT:-0}" -gt 0 ]; then
+    echo "WARNING: Detected ${OTHER_BOT_COUNT} actionable comment(s) from non-target bot(s)." >&2
+    echo "WARNING: These may consume coding quota for the originating bot service." >&2
+    echo "Including non-target bot findings in review."
+    BOT_HAS_ISSUES=true
   fi
+fi
+
+if [ "${BOT_UNAVAILABLE}" = "true" ]; then
+  echo "" >&2
+  echo "ERROR: Cloud bot (${CLOUD_BOT_NAME}) did not respond within the polling window (~15 min)." >&2
+  echo "" >&2
+  echo "Options:" >&2
+  echo "  1. Wait and re-run: csa plan run patterns/pr-bot/workflow.toml" >&2
+  echo "  2. Disable cloud bot: csa config set pr_review.cloud_bot false && csa plan run patterns/pr-bot/workflow.toml" >&2
+  echo "  3. Investigate bot configuration" >&2
+  echo "" >&2
+  echo "ABORTING: Will not merge without cloud bot confirmation." >&2
+  exit 1
 fi
 echo "CSA_VAR:BOT_REVIEW_WINDOW_START=$WAIT_BASE_TS"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
@@ -446,15 +488,15 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 Tool: none (orchestrator action)
 OnFail: abort
 
-The Codex bot responded but did not perform an actual code review — it sent a
+The Cloud bot responded but did not perform an actual code review — it sent a
 message indicating environment configuration is needed. The workflow MUST stop
 here and report to the user. FORBIDDEN: falling back to local review, skipping
 the bot review, or proceeding in any way.
 
 **Orchestrator action**: Report the bot's response to the user and STOP. The
 user must:
-1. Configure the Codex bot environment (follow the bot's instructions)
-2. Re-run `pr-codex-bot` after configuration is complete
+1. Configure the cloud bot (follow the bot's instructions)
+2. Re-run `pr-bot` after configuration is complete
 
 ## ENDIF
 
@@ -537,7 +579,7 @@ run_with_hard_timeout() {
 }
 set +e
 FIX_RESULT_FILE="$(mktemp)"
-run_with_hard_timeout 1800 csa run --force-ignore-tier-setting --tool codex --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero." | tee "${FIX_RESULT_FILE}"
+run_with_hard_timeout 1800 csa run --force-ignore-tier-setting --tool auto --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero." | tee "${FIX_RESULT_FILE}"
 FIX_RC=${PIPESTATUS[0]}
 set -e
 FIX_RESULT="$(cat "${FIX_RESULT_FILE}")"
@@ -573,12 +615,13 @@ echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 
 Tool: bash
 
-Bot unavailable. Local fallback review passed (either initially in Step 5,
-or after fix cycle in Step 6-fix). Step 6-fix guarantees
-`FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
+Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
+(either initially in Step 4a, or after fix cycle in Step 6-fix). Step 6-fix
+guarantees `FALLBACK_REVIEW_HAS_ISSUES=false` before reaching this point.
+NOTE: This step only executes when cloud_bot=false (not on timeout — timeout aborts).
 
 **MANDATORY**: Before merging, leave a PR comment explaining the merge rationale
-(bot timeout + local review CLEAN). This provides audit trail for reviewers.
+(bot disabled + local review CLEAN). This provides audit trail for reviewers.
 
 ```bash
 # --- Hard gate: unconditional pre-merge check ---
@@ -599,7 +642,7 @@ git push origin "${WORKFLOW_BRANCH}"
 
 # Audit trail: explain why merging without bot review.
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body \
-  "**Merge rationale**: Cloud bot (@codex) is disabled or unavailable. Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
+  "**Merge rationale**: Cloud bot (${CLOUD_BOT_NAME}) is disabled (pr_review.cloud_bot=false). Local \`csa review --branch main\` passed CLEAN (or issues were fixed in fallback cycle). Proceeding to merge with local review as the review layer."
 
 MERGE_STRATEGY=$(csa config get pr_review.merge_strategy --default merge)
 DELETE_BRANCH_FLAG=""
@@ -645,7 +688,7 @@ fi
 
 COMMENT_RECORD="$(
   gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+    --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
 )"
 if [ -z "${COMMENT_RECORD}" ] || [ "${COMMENT_RECORD}" = "null" ]; then
   echo "ERROR: BOT_HAS_ISSUES=true but no actionable current bot comment was found."
@@ -962,7 +1005,7 @@ Loop back to Step 5 (delegated wait gate).
 
 ## Step 10b: Post-Fix Re-Review Gate (HARD GATE)
 
-After fixing bot findings, re-trigger @codex review on current HEAD and
+After fixing bot findings, re-trigger @${CLOUD_BOT_NAME} review on current HEAD and
 verify zero actionable findings before any merge path can execute.
 
 This is a **deterministic hard gate** — it prevents the linear workflow
@@ -971,9 +1014,9 @@ to Step 5" above is guidance for LLM orchestrators but is NOT enforced
 by the workflow engine (`csa plan run` executes steps linearly).
 
 The gate:
-1. Re-triggers `@codex review` on current HEAD
+1. Re-triggers `@${CLOUD_BOT_NAME} review` on current HEAD
 2. Waits 5 minutes quietly, then delegates the remaining 10-minute polling window to CSA
-3. If bot finds new P0/P1/P2 findings → **abort** (user must re-run pr-codex-bot)
+3. If bot finds new P0/P1/P2 findings → **abort** (user must re-run pr-bot)
 4. If bot timeout → falls back to local `csa review --range main...HEAD`
 5. If clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 
@@ -996,7 +1039,7 @@ Reorganize accumulated fix commits into logical groups (source, patterns, other)
 before merging. Skip if <= 3 commits.
 
 After rebase: backup branch, soft reset to merge-base, dynamic file grouping,
-force-push with lease, trigger final `@codex review`, then delegate the long
+force-push with lease, trigger final `@${CLOUD_BOT_NAME} review`, then delegate the long
 wait/fix/review loop to a single CSA-managed step.
 
 **Post-rebase review gate** (BLOCKING):
@@ -1099,14 +1142,14 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   git push --force-with-lease
   REBASE_CURRENT_SHA="$(git rev-parse HEAD)"
   REBASE_TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  REBASE_TRIGGER_BODY="@codex review
+  REBASE_TRIGGER_BODY="@${CLOUD_BOT_NAME} review
 
 <!-- csa-trigger:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
 
   set +e
   GATE_RESULT_FILE="$(mktemp)"
-  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool codex --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-codex-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
+  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool auto --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
   GATE_RC=${PIPESTATUS[0]}
   set -e
   GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"
@@ -1149,7 +1192,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   set +e
   LATE_ACTIONABLE_COUNT="$(
     gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-      --jq '[.[] | select(.user.login == "chatgpt-codex-connector[bot]") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+      --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${REBASE_TRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
       2>/dev/null
   )"
   LATE_ACTIONABLE_RC=$?

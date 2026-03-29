@@ -98,7 +98,7 @@ id = 6
 title = "Publish Transaction"
 tool = "bash"
 prompt = '''
-Push, create/reuse PR, and run pr-codex-bot atomically.
+Push, create/reuse PR, and run pr-bot atomically.
 Skipped when parent workflow handles publish (CSA_SKIP_PUBLISH=true).
 
 ```bash
@@ -152,13 +152,13 @@ if [ "${CREATE_RC}" -ne 0 ]; then
   echo "INFO: PR already exists for ${BRANCH}; continuing."
 fi
 
-# Run pr-codex-bot (idempotency markers prevent duplicate runs)
+# Run pr-bot (idempotency markers prevent duplicate runs)
 if [ -x scripts/hooks/post-pr-create.sh ]; then
   scripts/hooks/post-pr-create.sh --base main
-elif [ -f patterns/pr-codex-bot/workflow.toml ]; then
-  csa plan run patterns/pr-codex-bot/workflow.toml
+elif [ -f patterns/pr-bot/workflow.toml ]; then
+  csa plan run patterns/pr-bot/workflow.toml
 else
-  echo "WARN: pr-codex-bot workflow not found; PR created but review/merge skipped." >&2
+  echo "WARN: pr-bot workflow not found; PR created but review/merge skipped." >&2
 fi
 ```'''
 on_fail = "abort"

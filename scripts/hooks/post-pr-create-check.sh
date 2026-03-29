@@ -2,7 +2,7 @@
 set -euo pipefail
 #
 # PostRun hook: detect whether the current branch has an open PR that
-# hasn't been reviewed by pr-codex-bot yet.  Safety net for cases where
+# hasn't been reviewed by pr-bot yet.  Safety net for cases where
 # `gh pr create` was invoked outside a weave workflow step.
 #
 # Called automatically after every `csa run` session via the [hooks]
@@ -20,7 +20,7 @@ EOF
 
 # ── Recursion guard ──────────────────────────────────────────────────
 # Set by both this script and post-pr-create.sh before launching
-# pr-codex-bot.  Prevents re-entrant triggering from inner CSA sessions.
+# pr-bot.  Prevents re-entrant triggering from inner CSA sessions.
 if [ -n "${CSA_PR_BOT_GUARD:-}" ]; then
     exit 0
 fi
@@ -137,8 +137,8 @@ if [ -z "$PR_NUMBER" ] || ! printf '%s' "$PR_NUMBER" | grep -qE '^[0-9]+$'; then
     exit 0
 fi
 
-echo "[post-run hook] PR #${PR_NUMBER} detected without pr-codex-bot run." >&2
-echo "[post-run hook] Triggering pr-codex-bot in background..." >&2
+echo "[post-run hook] PR #${PR_NUMBER} detected without pr-bot run." >&2
+echo "[post-run hook] Triggering pr-bot in background..." >&2
 
 # Resolve script location relative to project root (not cwd) so the hook
 # works even when CSA is invoked from a different directory (csa run --cd).
@@ -166,7 +166,7 @@ fi
 BOT_PID=$!
 
 if ! kill -0 "$BOT_PID" 2>/dev/null; then
-    echo "[post-run hook] WARNING: Failed to launch pr-codex-bot (PID $BOT_PID)" >&2
+    echo "[post-run hook] WARNING: Failed to launch pr-bot (PID $BOT_PID)" >&2
 fi
 
 exit 0

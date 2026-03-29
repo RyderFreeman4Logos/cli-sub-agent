@@ -423,7 +423,7 @@ title = "Auto PR Transaction"
 tool = "bash"
 prompt = '''
 Push, create or reuse the PR, then synchronously run the post-create helper.
-This makes PR creation + pr-codex-bot a single shell-enforced transaction.
+This makes PR creation + pr-bot a single shell-enforced transaction.
 
 Runs by default when commit is standalone. Skipped when parent workflow
 (mktsk/dev2merge) sets CSA_SKIP_PUBLISH=true to handle publish itself.

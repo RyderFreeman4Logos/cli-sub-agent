@@ -6,5 +6,5 @@ version = "0.1.0"
 tier = "tier-1-quick"
 max_turns = 30
 tools = [{ tool = "codex", provider = "openai", model = "gpt-5.3-codex-spark", thinking_budget = "low" }]
-skip_context = ["patterns/", "skills/pr-codex-bot/", "skills/sa/"]
+skip_context = ["patterns/", "skills/pr-bot/", "skills/sa/"]
 extra_context = ["AGENTS.md", "CLAUDE.md"]

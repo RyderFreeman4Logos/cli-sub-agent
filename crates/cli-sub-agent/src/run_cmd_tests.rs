@@ -1,4 +1,4 @@
-use super::resume::DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS;
+use super::resume::DEFAULT_PR_BOT_TIMEOUT_SECS;
 use super::*;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
@@ -478,17 +478,25 @@ fn session_matches_interrupted_skill_requires_signal_and_skill_tag() {
 }
 
 #[test]
-fn resolve_run_timeout_seconds_defaults_for_pr_codex_bot_skill() {
+fn resolve_run_timeout_seconds_defaults_for_pr_bot_skill() {
+    assert_eq!(
+        resolve_run_timeout_seconds(None, Some("pr-bot")),
+        Some(DEFAULT_PR_BOT_TIMEOUT_SECS)
+    );
+}
+
+#[test]
+fn resolve_run_timeout_seconds_defaults_for_pr_codex_bot_alias() {
     assert_eq!(
         resolve_run_timeout_seconds(None, Some("pr-codex-bot")),
-        Some(DEFAULT_PR_CODEX_BOT_TIMEOUT_SECS)
+        Some(DEFAULT_PR_BOT_TIMEOUT_SECS)
     );
 }
 
 #[test]
 fn resolve_run_timeout_seconds_prefers_cli_override() {
     assert_eq!(
-        resolve_run_timeout_seconds(Some(900), Some("pr-codex-bot")),
+        resolve_run_timeout_seconds(Some(900), Some("pr-bot")),
         Some(900)
     );
 }

@@ -261,7 +261,7 @@ patterns to install. Use checkboxes or a numbered menu.
 | `commit` | Audited commits: format, lint, test, security scan, AI review, then commit |
 | `ai-reviewed-commit` | Review-fix-re-review loop until clean before committing |
 | `code-review` | Scale-adaptive GitHub PR review (small/medium/large) |
-| `pr-codex-bot` | Iterative PR review with Codex bot feedback and merge |
+| `pr-bot` | Iterative PR review with configurable cloud bot feedback and merge |
 
 **Install**:
 
@@ -269,7 +269,7 @@ patterns to install. Use checkboxes or a numbered menu.
 # Patterns are already in .weave/deps/ from Step 4.
 # Compile them for your project:
 mkdir -p .csa/plans
-for pattern in commit ai-reviewed-commit code-review pr-codex-bot; do
+for pattern in commit ai-reviewed-commit code-review pr-bot; do
   weave compile .weave/deps/cli-sub-agent/patterns/$pattern/PATTERN.md \
     --output .csa/plans/$pattern.toml
 done

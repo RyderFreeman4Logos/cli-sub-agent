@@ -1,20 +1,21 @@
 ---
-name: pr-codex-bot
+name: pr-bot
 description: "Use when: PR review loop with cloud bot, arbitration, and merge"
 allowed-tools: Bash, Read, Grep, Glob, Edit, Write
 triggers:
-  - "pr-codex-bot"
-  - "/pr-codex-bot"
-  - "codex bot review"
+  - "pr-bot"
+  - "/pr-bot"
+  - "cloud bot review"
   - "PR bot"
+  - "PR review bot"
   - "merge PR"
 ---
 
-# PR Codex Bot: Two-Layer PR Review and Merge
+# PR Bot: Two-Layer PR Review and Merge (Configurable Cloud Bot)
 
 ## Role Detection (READ THIS FIRST -- MANDATORY)
 
-**Check your initial prompt.** If it contains the literal string `"Use the pr-codex-bot skill"`, then:
+**Check your initial prompt.** If it contains the literal string `"Use the pr-bot skill"`, then:
 
 **YOU ARE THE EXECUTOR.** Follow these rules:
 1. **SKIP the "Execution Protocol" section below** -- it is for the orchestrator, not you.
@@ -28,7 +29,7 @@ triggers:
 
 ## Purpose
 
-Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus cloud codex bot review. Handles bot unavailability gracefully (local review is the foundation), performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). When the round limit is reached, the workflow pauses and presents options: merge now, continue, or abort. Merges with `--merge` to preserve per-commit audit trail.
+Orchestrate the full PR review-and-merge lifecycle with two-layer review: local pre-PR cumulative audit (covering main...HEAD) plus configurable cloud bot review (default: gemini-code-assist; configurable via `pr_review.cloud_bot_name`). When bot times out, the workflow **aborts** (no silent fallback merge). Performs false-positive arbitration via adversarial debate, and manages fix-push-retrigger loops with user-prompted round limits (MAX_REVIEW_ROUNDS, default 10). Non-target bot comments (e.g., codex auto-review) are also detected and processed with a quota warning. Merges with `--merge` to preserve per-commit audit trail.
 
 **MANDATORY AUDIT TRAIL**: When an agent determines a PR-page review finding
 (for example, a cloud bot finding) is NOT a real issue or is acceptable in
@@ -43,7 +44,7 @@ FORBIDDEN: self-dismissing bot comments, skipping debate for arbitration, auto-m
 
 ## Dispatcher Model
 
-pr-codex-bot follows a 3-layer dispatcher architecture. The main agent never
+pr-bot follows a 3-layer dispatcher architecture. The main agent never
 performs implementation work directly -- it orchestrates sub-agents that do the
 actual review, fixing, and merging.
 
@@ -121,31 +122,38 @@ Layer 0 (Orchestrator)
 
 ### Configuration
 
-The cloud bot trigger can be disabled per-project via `.csa/config.toml`:
+The cloud bot is configurable per-project/global via `.csa/config.toml`:
 
 ```toml
 [pr_review]
-cloud_bot = false          # skip @codex cloud review, use local codex instead
-merge_strategy = "merge"   # "merge" | "rebase" | "squash" (default: "merge")
-delete_branch = false      # delete remote branch after merge (default: false)
+cloud_bot = true                           # false to skip cloud review entirely
+cloud_bot_name = "gemini-code-assist"      # bot name (for @mention and display)
+cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
+cloud_bot_login = ""                       # bot GitHub login override (default: "${cloud_bot_name}[bot]")
+merge_strategy = "merge"                   # "merge" | "rebase" | "squash"
+delete_branch = false                      # delete remote branch after merge
 ```
 
-**Check at runtime**: `csa config get pr_review.cloud_bot --default true`
+**Check at runtime**: `csa config get pr_review.cloud_bot_name --default gemini-code-assist`
+
+**Trigger modes**:
+- `"auto"` (default): Bot auto-reviews on PR push. No @mention needed.
+- `"comment"`: Posts `@{cloud_bot_name} review` comment to trigger review.
+
+**Timeout behavior**: If bot does not respond within ~15 minutes, the workflow
+**aborts** and presents options to the user. It does NOT silently fall back to
+local review and merge.
 
 When `cloud_bot = false`:
 - Steps 4-9 (cloud bot trigger, delegated wait gate, classify, arbitrate, fix) are **skipped entirely**
-- A SHA-verified fast-path check is applied before supplementary local review:
-  compare current `git rev-parse HEAD` with HEAD SHA from latest `csa review`
-  session metadata
-- If SHA matches, supplementary review is skipped; if SHA mismatches (or metadata
-  is missing), run full `csa review --branch main`
+- A SHA-verified fast-path check is applied before supplementary local review
 - The workflow proceeds directly to merge after local review passes
-- This avoids the 15-minute wait (5-min quiet + 10-min polling) and GitHub API dependency
+- This avoids the 15-minute wait and GitHub API dependency
 
 ### Quick Start
 
 ```bash
-csa run --sa-mode true --skill pr-codex-bot "Review and merge the current PR"
+csa run --sa-mode true --skill pr-bot "Review and merge the current PR"
 ```
 
 ### SA Mode Propagation (MANDATORY)
@@ -167,10 +175,11 @@ breaks prompt-guard propagation.
     (HEAD drift fallback), run full `csa review --branch main`. Then route through
     the bot-unavailable merge path (Step 6a).
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
-   - Trigger a fresh `@codex review` for current HEAD.
-   - Wait 5 minutes quietly (bot responses rarely arrive faster), then delegate the remaining 10-minute polling window to a CSA-managed step (no caller-side polling loop), enforced by command-level hard timeout (`timeout`/`gtimeout`) and explicit `--tool codex`. Total wait: ~15 minutes.
-   - Delegated wait failures map to `BOT_UNAVAILABLE=true` and enter local fallback review (instead of silent success).
-   - If bot times out: fallback to `csa review --range main...HEAD`. If fallback review fails, run dedicated fallback fix cycle before merge; on success, clear `FALLBACK_REVIEW_HAS_ISSUES=false`.
+   - If `cloud_bot_trigger = "comment"`: post `@{cloud_bot_name} review` comment.
+   - If `cloud_bot_trigger = "auto"`: skip trigger (bot auto-reviews on push).
+   - Wait 5 minutes quietly, then delegate 10-minute polling to CSA. Total: ~15 min.
+   - If bot times out: **ABORT workflow** and present options to user. NO silent fallback.
+   - Non-target bot comments (e.g., codex auto-review) are also detected and included with a quota warning.
 5. **Evaluate bot comments**: Classify each as:
    - Category A (already fixed): react and acknowledge.
    - Category B (suspected false positive): queue for staleness filter, then arbitrate.
@@ -187,8 +196,8 @@ breaks prompt-guard propagation.
 
 | Command | Effect |
 |---------|--------|
-| `/pr-codex-bot` | Full review loop on current branch's PR |
-| `/pr-codex-bot pr=42` | Run review loop on existing PR #42 |
+| `/pr-bot` | Full review loop on current branch's PR |
+| `/pr-bot pr=42` | Run review loop on existing PR #42 |
 
 ## Integration
 
@@ -213,7 +222,7 @@ breaks prompt-guard propagation.
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
-10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD, uses the same 15-minute wait policy as the initial gate (5-minute quiet wait + 10-minute polling), and must return zero actionable findings before merge. This gate is enforced by the workflow engine — it cannot be skipped. If new findings appear, workflow aborts (user must re-run pr-codex-bot).
+10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD, uses the same 15-minute wait policy as the initial gate (5-minute quiet wait + 10-minute polling), and must return zero actionable findings before merge. This gate is enforced by the workflow engine — it cannot be skipped. If new findings appear, workflow aborts (user must re-run pr-bot).
 10b. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
 10c. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.
