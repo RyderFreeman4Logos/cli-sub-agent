@@ -614,6 +614,39 @@ fn main() -> Result<()> {
                         }
                     }
 
+                    // Scan for stale references to removed skills.
+                    let removed_names: Vec<String> = {
+                        let mut names = std::collections::HashSet::new();
+                        for p in &removed {
+                            if let Some(n) = p.file_name() {
+                                names.insert(n.to_string_lossy().to_string());
+                            }
+                        }
+                        names.into_iter().collect()
+                    };
+                    if !removed_names.is_empty() {
+                        let stale_refs = weave::stale_ref::scan_stale_skill_references(
+                            &project_root,
+                            &removed_names,
+                        );
+                        if !stale_refs.is_empty() {
+                            eprintln!();
+                            eprintln!("warning: found stale references to removed skill(s):");
+                            for r in &stale_refs {
+                                eprintln!(
+                                    "  {}:{}: Skill '{}' was removed but is still referenced",
+                                    r.file.display(),
+                                    r.line,
+                                    r.skill_name,
+                                );
+                            }
+                            eprintln!(
+                                "  -> {} stale reference(s) found. Update these files to use the new skill name.",
+                                stale_refs.len(),
+                            );
+                        }
+                    }
+
                     // Create/update links.
                     let report = link::link_skills(&project_root, scope, force)?;
 

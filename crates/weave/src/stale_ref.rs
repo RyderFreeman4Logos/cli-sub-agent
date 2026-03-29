@@ -70,8 +70,14 @@ fn scan_settings_json(
     }
 }
 
-/// Scan a markdown file for `/<name>` (slash-prefixed) and word-boundary
-/// references to removed skill names.
+/// Scan a markdown file for precise skill-reference patterns:
+/// - `/<name>` — slash-prefixed skill invocation
+/// - `` `<name>` `` — backtick-quoted code span
+/// - `Skill(<name>)` — Claude Code Skill() pattern in markdown
+///
+/// Bare word-boundary matches are intentionally excluded because skill
+/// names like `commit` or `csa` are also common English words, producing
+/// excessive false positives in documentation.
 fn scan_markdown(
     project_root: &Path,
     rel: &Path,
@@ -89,54 +95,14 @@ fn scan_markdown(
         let line_num = line_idx + 1;
 
         for name in removed_names {
+            // Pattern 1: /<name> (slash-prefixed skill invocation)
             let slash_pattern = format!("/{name}");
-
-            // Check for /<name> reference (slash-prefixed)
             if let Some(pos) = line.find(&slash_pattern) {
-                // Verify the slash is at a word boundary (start of line or preceded by
-                // whitespace/punctuation)
                 let before_ok = pos == 0 || {
                     let prev = line.as_bytes()[pos - 1];
                     prev.is_ascii_whitespace() || prev == b'(' || prev == b'`'
                 };
-                // After the pattern should be word boundary
                 let after_pos = pos + slash_pattern.len();
-                let after_ok = after_pos >= line.len() || {
-                    let next = line.as_bytes()[after_pos];
-                    next.is_ascii_whitespace()
-                        || next == b')'
-                        || next == b'`'
-                        || next == b','
-                        || next == b'.'
-                        || next == b':'
-                        || next == b';'
-                };
-
-                if before_ok && after_ok {
-                    out.push(StaleReference {
-                        file: rel.clone(),
-                        line: line_num,
-                        skill_name: name.clone(),
-                        context: line.trim().to_string(),
-                    });
-                    continue; // Don't double-count this line for the same name
-                }
-            }
-
-            // Check for word-boundary <name> reference.
-            // Treat alphanumeric, underscore, AND hyphen as word characters
-            // since skill names commonly use hyphens (e.g., "pr-codex-bot").
-            // Without this, "commit" would false-positive on "ai-reviewed-commit".
-            // Iterate all occurrences on the line so a rejected superset match
-            // (e.g., "ai-reviewed-commit") doesn't mask a later standalone match.
-            let mut search_start = 0;
-            while let Some(offset) = line[search_start..].find(name.as_str()) {
-                let pos = search_start + offset;
-                let before_ok = pos == 0 || {
-                    let prev = line.as_bytes()[pos - 1];
-                    !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'-'
-                };
-                let after_pos = pos + name.len();
                 let after_ok = after_pos >= line.len() || {
                     let next = line.as_bytes()[after_pos];
                     !next.is_ascii_alphanumeric() && next != b'_' && next != b'-'
@@ -149,9 +115,32 @@ fn scan_markdown(
                         skill_name: name.clone(),
                         context: line.trim().to_string(),
                     });
-                    break; // One match per name per line is enough
+                    continue;
                 }
-                search_start = pos + 1;
+            }
+
+            // Pattern 2: `<name>` (backtick-quoted code span)
+            let backtick_pattern = format!("`{name}`");
+            if line.contains(&backtick_pattern) {
+                out.push(StaleReference {
+                    file: rel.clone(),
+                    line: line_num,
+                    skill_name: name.clone(),
+                    context: line.trim().to_string(),
+                });
+                continue;
+            }
+
+            // Pattern 3: Skill(<name>) (Claude Code pattern in markdown)
+            let skill_pattern = format!("Skill({name})");
+            let skill_prefix = format!("Skill({name}:");
+            if line.contains(&skill_pattern) || line.contains(&skill_prefix) {
+                out.push(StaleReference {
+                    file: rel.clone(),
+                    line: line_num,
+                    skill_name: name.clone(),
+                    context: line.trim().to_string(),
+                });
             }
         }
     }

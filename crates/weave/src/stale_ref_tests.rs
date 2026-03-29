@@ -86,12 +86,12 @@ fn test_detects_reference_in_agents_md() {
     fs::create_dir_all(&rules_dir).unwrap();
     fs::write(
         rules_dir.join("AGENTS.md"),
-        "## Skills\n\n**old-skill** — does something useful\n",
+        "## Skills\n\nRun `/old-skill` to invoke.\n",
     )
     .unwrap();
 
     let result = scan_stale_skill_references(dir.path(), &["old-skill".to_string()]);
-    assert!(!result.is_empty(), "should detect old-skill in AGENTS.md");
+    assert!(!result.is_empty(), "should detect /old-skill in AGENTS.md");
     assert_eq!(result[0].skill_name, "old-skill");
     assert_eq!(result[0].line, 3);
 }
@@ -115,39 +115,52 @@ fn test_detects_reference_in_root_agents_md() {
 }
 
 #[test]
-fn test_no_false_positive_on_hyphenated_superset() {
-    // "commit" should NOT match inside "ai-reviewed-commit" because
-    // hyphen is treated as a word character in skill names.
+fn test_no_false_positive_on_bare_common_word() {
+    // Bare word "commit" should NOT match — only precise patterns like
+    // /commit, `commit`, or Skill(commit) should be flagged.
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("CLAUDE.md"),
-        "Use ai-reviewed-commit for the pipeline.\n",
+        "Run commit before pushing. Use ai-reviewed-commit too.\n",
     )
     .unwrap();
 
     let result = scan_stale_skill_references(dir.path(), &["commit".to_string()]);
     assert!(
         result.is_empty(),
-        "should NOT flag 'commit' inside 'ai-reviewed-commit'"
+        "bare word 'commit' should NOT be flagged in markdown"
     );
 }
 
 #[test]
-fn test_finds_standalone_after_superset_on_same_line() {
-    // If a line has "ai-reviewed-commit ... commit", the standalone "commit"
-    // at the end should still be detected even though the first occurrence
-    // is rejected by boundary check.
+fn test_detects_backtick_quoted_reference() {
     let dir = tempdir().unwrap();
     fs::write(
         dir.path().join("CLAUDE.md"),
-        "Replaced ai-reviewed-commit with commit skill.\n",
+        "Use `old-skill` for the pipeline.\n",
     )
     .unwrap();
 
-    let result = scan_stale_skill_references(dir.path(), &["commit".to_string()]);
+    let result = scan_stale_skill_references(dir.path(), &["old-skill".to_string()]);
     assert!(
         !result.is_empty(),
-        "should detect standalone 'commit' after hyphenated superset"
+        "should detect backtick-quoted `old-skill`"
+    );
+}
+
+#[test]
+fn test_detects_skill_pattern_in_markdown() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("CLAUDE.md"),
+        "Allowed: Skill(old-skill) and Skill(old-skill:sub).\n",
+    )
+    .unwrap();
+
+    let result = scan_stale_skill_references(dir.path(), &["old-skill".to_string()]);
+    assert!(
+        !result.is_empty(),
+        "should detect Skill(old-skill) in markdown"
     );
 }
 
