@@ -434,24 +434,26 @@ else
     sleep "${BOT_SETTLE_SECS}"
 
     # --- Positive signal check (#505): verify a review EVENT exists ---
-    # A review event with submitted_at > WAIT_BASE_TS is the positive
-    # confirmation that the bot actually re-reviewed current HEAD.
-    # Without this, "0 new comments" is ambiguous (could mean bot
-    # reviewed and found nothing, or bot hasn't reviewed yet).
+    # A review event with submitted_at > WAIT_BASE_TS AND commit_id matching
+    # CURRENT_SHA is the positive confirmation that the bot actually reviewed
+    # current HEAD. Without this, "0 new comments" is ambiguous (could mean
+    # bot reviewed and found nothing, or bot hasn't reviewed yet). The
+    # commit_id filter prevents a late review of a previous push from being
+    # mistaken for a review of the current HEAD.
     set +e
     REVIEW_EVENT_COUNT="$(
       gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'")] | length' \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
         2>/dev/null
     )"
     REVIEW_EVENT_RC=$?
     set -e
     if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
-      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); falling back to comment-based check." >&2
-      REVIEW_EVENT_COUNT="1"  # Assume review exists to preserve backward compat
+      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); treating as bot unavailable." >&2
+      BOT_UNAVAILABLE=true
     fi
-    if [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-      echo "WARN: Bot activity detected but no review event found after ${WAIT_BASE_TS}." >&2
+    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+      echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${WAIT_BASE_TS}." >&2
       echo "This likely means the bot posted a comment but did not submit a formal review." >&2
       # Check if it's a setup/configuration message
       set +e
