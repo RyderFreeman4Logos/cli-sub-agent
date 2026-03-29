@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
-# Pre-merge guard: verifies that pr-bot completed for a given PR.
+# Post-pr-bot verification: confirms pr-bot completed for a given PR.
 #
 # Usage: pre-merge-guard.sh <PR_NUMBER>
 #
 # Checks for a pr-bot completion marker in the standard marker directory.
 # Exit 0 if marker found (pr-bot ran successfully), exit 1 if missing.
 #
-# This script provides a deterministic, non-bypassable check that pr-bot
-# ran for the given PR. It is used by dev2merge Step 14 and can be called
-# independently by other workflows before any `gh pr merge` invocation.
+# NOTE: The .done marker is written by dev2merge Step 13 AFTER pr-bot
+# completes (including the merge itself). This script is therefore a
+# post-pr-bot verification — it confirms that the merge was performed
+# by the pr-bot workflow, not by a rogue LLM calling `gh pr merge`
+# directly. Used by dev2merge Step 14 (post-merge sync) and available
+# for other post-merge audit workflows.
 
 set -euo pipefail
 
