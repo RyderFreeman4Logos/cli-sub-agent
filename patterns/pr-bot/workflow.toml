@@ -460,9 +460,10 @@ else
     REVIEW_EVENT_COUNT="$(
       gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
         --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-        2>/dev/null
+        2>/dev/null \
+      | awk '{s+=$1} END {print s+0}'
     )"
-    REVIEW_EVENT_RC=$?
+    REVIEW_EVENT_RC=${PIPESTATUS[0]}
     set -e
     if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
       echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); treating as bot unavailable." >&2
@@ -1170,9 +1171,10 @@ else
     REVIEW_EVENT_COUNT="$(
       gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
         --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-        2>/dev/null
+        2>/dev/null \
+      | awk '{s+=$1} END {print s+0}'
     )"
-    REVIEW_EVENT_RC=$?
+    REVIEW_EVENT_RC=${PIPESTATUS[0]}
     set -e
     # --- Setup message check (runs before any fallback to catch config issues) ---
     _check_setup_message() {
