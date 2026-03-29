@@ -142,15 +142,15 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
-fn load_pr_codex_bot_step(step_id: usize) -> PlanStep {
-    let workflow_path = workspace_root().join("patterns/pr-codex-bot/workflow.toml");
+fn load_pr_bot_step(step_id: usize) -> PlanStep {
+    let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();
     let plan = plan_from_toml(&workflow).unwrap();
     let step = plan
         .steps
         .into_iter()
         .find(|step| step.id == step_id)
-        .unwrap_or_else(|| panic!("missing pr-codex-bot step {step_id}"));
+        .unwrap_or_else(|| panic!("missing pr-bot step {step_id}"));
     PlanStep {
         condition: None,
         loop_var: None,
@@ -159,8 +159,8 @@ fn load_pr_codex_bot_step(step_id: usize) -> PlanStep {
 }
 
 #[test]
-fn pr_codex_bot_workflow_is_v1_loop_free() {
-    let workflow_path = workspace_root().join("patterns/pr-codex-bot/workflow.toml");
+fn pr_bot_workflow_is_v1_loop_free() {
+    let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();
     let plan = plan_from_toml(&workflow).unwrap();
 
@@ -172,7 +172,7 @@ fn pr_codex_bot_workflow_is_v1_loop_free() {
 
     assert!(
         loop_steps.is_empty(),
-        "pr-codex-bot must remain v1-compatible; loop_var found on steps {loop_steps:?}"
+        "pr-bot must remain v1-compatible; loop_var found on steps {loop_steps:?}"
     );
 }
 
@@ -272,7 +272,7 @@ PR_COMMENT_END
 
 #[tokio::test]
 async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
-    let step = load_pr_codex_bot_step(19);
+    let step = load_pr_bot_step(19);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let vars = step_19_env(tmp.path(), &capture_path, dismissed_debate_output());
@@ -302,7 +302,7 @@ async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
 
 #[tokio::test]
 async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() {
-    let step = load_pr_codex_bot_step(19);
+    let step = load_pr_bot_step(19);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let vars = step_19_env(tmp.path(), &capture_path, confirmed_debate_output());
@@ -336,7 +336,7 @@ async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() 
 
 #[tokio::test]
 async fn execute_step_bash_fails_closed_on_malformed_dismissed_output() {
-    let step = load_pr_codex_bot_step(19);
+    let step = load_pr_bot_step(19);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let malformed_output = r#"VERDICT: DISMISSED
@@ -374,7 +374,7 @@ CSA session ID: 01TESTDEBATESESSIONID
 
 #[tokio::test]
 async fn execute_step_bash_fails_closed_on_duplicate_verdict_markers() {
-    let step = load_pr_codex_bot_step(19);
+    let step = load_pr_bot_step(19);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let duplicate_verdict_output = r#"VERDICT: DISMISSED

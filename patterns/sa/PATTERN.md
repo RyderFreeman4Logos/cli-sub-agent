@@ -192,7 +192,7 @@ number of tasks completed. If HAS_ISSUES, iterate.
 
 Evaluate whether to push and create PR (if milestone complete).
 The nested `commit` pattern now owns the full PR transaction:
-push → create/reuse PR → `scripts/hooks/post-pr-create.sh` → `pr-codex-bot`.
+push → create/reuse PR → `scripts/hooks/post-pr-create.sh` → `pr-bot`.
 Layer 1 executors MUST rely on that transaction instead of dispatching a
 separate follow-up skill step.
 

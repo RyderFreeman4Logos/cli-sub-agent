@@ -36,7 +36,7 @@ Every stage has hard gates (`on_fail = "abort"`) — no step can be skipped by t
 
 Pipeline: Branch Validation → FAST_PATH Detection → L1/L2 Quality Gates →
 (FAST_PATH: commit → bump → review) or (Full: mktd → mktsk [direct, TaskCreate] → bump → cumulative review) →
-Push Gate → PR Creation → pr-codex-bot Hard Gate → Post-Merge Sync.
+Push Gate → PR Creation → pr-bot Hard Gate → Post-Merge Sync.
 
 ## Execution Protocol (ORCHESTRATOR ONLY)
 
@@ -88,11 +88,11 @@ All steps use `on_fail = "abort"`. Variables propagate via `CSA_VAR:KEY=value`.
 | **ENDIF** | | | |
 | 11 | Push Gate | `REVIEW_COMPLETED=true` required | bash |
 | 12 | Create or Reuse PR | `gh pr create` or reuse existing, outputs `PR_NUMBER`/`PR_URL` | bash |
-| 13 | pr-codex-bot Hard Gate | **MANDATORY** — runs pr-codex-bot (review + merge) | bash |
+| 13 | pr-bot Hard Gate | **MANDATORY** — runs pr-bot (review + merge) | bash |
 | 14 | Post-Merge Sync | Verifies PR MERGED, then `git checkout main && git merge --ff-only` | bash |
 
 Steps 12-14 form the PR transaction. Step 12 creates the PR, Step 13 is a **hard gate**
-that runs pr-codex-bot (which performs cloud review and the actual merge). Step 14
+that runs pr-bot (which performs cloud review and the actual merge). Step 14
 verifies the PR reached MERGED state before syncing — this is defense in depth against
 a skipped Step 13. Marker files provide idempotency in Step 13.
 
@@ -123,7 +123,7 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 
 ## Integration
 
-- **Composes**: `mktd` (planning + debate), `mktsk` (serial task execution), `commit` (per-task), `pr-codex-bot` (review loop + merge)
+- **Composes**: `mktd` (planning + debate), `mktsk` (serial task execution), `commit` (per-task), `pr-bot` (review loop + merge)
 - **Enforced by**: weave workflow compiler (`on_fail = "abort"`), git pre-push hook
 - **Standalone**: Complete workflow — does not need other skills invoked separately
 
@@ -138,7 +138,7 @@ ln -sf ../../scripts/hooks/pre-push .git/hooks/pre-push
 7. Pre-PR cumulative review passed (`REVIEW_COMPLETED=true`).
 8. Push completed via `--force-with-lease` (pre-push hook verified review HEAD).
 9. PR created or reused on GitHub targeting main, `PR_NUMBER` and `PR_URL` resolved.
-10. pr-codex-bot hard gate completed: either triggered `pr-codex-bot` or detected an already-completed run for the same PR/HEAD.
+10. pr-bot hard gate completed: either triggered `pr-bot` or detected an already-completed run for the same PR/HEAD.
 11. PR state verified as MERGED (defense in depth against skipped Step 13).
 12. Local main synced: `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 13. Feature branch cleaned up.

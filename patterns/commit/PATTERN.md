@@ -339,7 +339,7 @@ Tool: bash
 OnFail: abort
 
 Push, create or reuse the PR, then synchronously run the post-create helper.
-This makes PR creation + pr-codex-bot a single shell-enforced transaction.
+This makes PR creation + pr-bot a single shell-enforced transaction.
 Runs by default when standalone. Skipped when parent workflow sets
 `CSA_SKIP_PUBLISH=true`.
 

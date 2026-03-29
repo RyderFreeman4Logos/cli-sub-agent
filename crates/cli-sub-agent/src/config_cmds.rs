@@ -183,11 +183,12 @@ max_recursion_depth = 5
 
 # ─── PR Review ──────────────────────────────────────────────────
 # [pr_review]
-# cloud_bot = true       # Set to false to skip @codex cloud review
-#                        # and use local codex (csa review) instead.
-#                        # Useful for repos without cloud bot access.
-# merge_strategy = "merge"  # "merge" | "rebase" | "squash" (default: "merge")
-# delete_branch = false     # Delete remote branch after merge (default: false)
+# cloud_bot = true                           # false to skip cloud bot review entirely
+# cloud_bot_name = "gemini-code-assist"      # Bot name (for @mention and display)
+# cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
+# cloud_bot_login = ""                       # Override bot GitHub login (default: "<name>[bot]")
+# merge_strategy = "merge"                   # "merge" | "rebase" | "squash" (default: "merge")
+# delete_branch = false                      # Delete remote branch after merge (default: false)
 
 # ─── Aliases ────────────────────────────────────────────────────
 # [aliases]

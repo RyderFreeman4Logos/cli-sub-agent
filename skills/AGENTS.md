@@ -39,6 +39,6 @@ installs the workflow entrypoints required by `csa review` and `csa debate`.
 | `file-audit` | Per-file AGENTS.md compliance audit with report generation workflow. |
 | `mktd` | Make TODO workflow: reconnaissance, drafting, debate, and approval. |
 | `mktsk` | Plan-to-execution workflow converting TODO plans into persistent serial tasks. |
-| `pr-codex-bot` | Iterative PR review loop with Codex bot feedback and false-positive arbitration. |
+| `pr-bot` | Iterative PR review loop with configurable cloud bot and false-positive arbitration. |
 | `sa` | Three-layer recursive sub-agent orchestration for dispatch, implementation, and fixes. |
 | `security-audit` | Pre-commit adversarial security and test-completeness audit workflow. |

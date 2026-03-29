@@ -121,7 +121,7 @@ pub struct MetaSessionState {
 ///
 /// Written to `{session_dir}/review_meta.json` after `csa review` completes,
 /// enabling machine-readable access to review results for downstream consumers
-/// (e.g., pr-codex-bot, commit skill, orchestration scripts).
+/// (e.g., pr-bot, commit skill, orchestration scripts).
 ///
 /// Updated after each fix round when `--fix` is enabled.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

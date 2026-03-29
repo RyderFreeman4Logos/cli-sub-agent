@@ -71,7 +71,7 @@ breaks prompt-guard propagation.
 ## Integration
 
 - **May use**: `csa-review` (for large PRs), `debate` (for self-authored code arbitration)
-- **Used by**: `pr-codex-bot` (as part of PR review loop)
+- **Used by**: `pr-bot` (as part of PR review loop)
 
 ## Done Criteria
 

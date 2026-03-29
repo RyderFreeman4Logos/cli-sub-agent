@@ -77,8 +77,8 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 5. Force push
   git push --force-with-lease
 
-  # 6. Trigger one final @codex review to verify rebased code
-  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+  # 6. Trigger one final @${CLOUD_BOT_NAME} review to verify rebased code
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@${CLOUD_BOT_NAME} review"
 
   # 7. Poll for bot response (reuse Step 5 polling logic)
   REBASE_BOT_OK=false
@@ -89,7 +89,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     sleep "${POLL_INTERVAL}"
     WAITED=$((WAITED + POLL_INTERVAL))
     BOT_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
+      --jq "[.[] | select(.user.type == \"Bot\" or .user.type == \"Bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
     if [ "${BOT_REPLY}" -gt 0 ] 2>/dev/null; then
       REBASE_BOT_OK=true
       break
@@ -109,7 +109,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     # keyword matching ("issue|error|fix|warning|problem") misclassifies clean
     # summaries like "No issues found" because they contain "issue".
     REBASE_BOT_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-      --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[012]\\*\\*\"))] | length" 2>/dev/null || echo "0")
+      --jq "[.[] | select(.user.type == \"Bot\" or .user.type == \"Bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[012]\\*\\*\"))] | length" 2>/dev/null || echo "0")
 
     if [ "${REBASE_BOT_ISSUES}" -gt 0 ] 2>/dev/null; then
       echo "BLOCKED: Post-rebase review found ${REBASE_BOT_ISSUES} actionable comment(s)."
@@ -132,7 +132,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 
         # 2. Push fixes and re-trigger bot review
         git push origin "${WORKFLOW_BRANCH}"
-        gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@codex review"
+        gh pr comment "${PR_NUM}" --repo "${REPO}" --body "@${CLOUD_BOT_NAME} review"
 
         # 3. Poll for new bot response
         REFIX_BOT_OK=false
@@ -141,7 +141,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
           sleep "${POLL_INTERVAL}"
           REFIX_WAITED=$((REFIX_WAITED + POLL_INTERVAL))
           REFIX_REPLY=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-            --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
+            --jq "[.[] | select(.user.type == \"Bot\" or .user.type == \"Bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\")] | length" 2>/dev/null || echo "0")
           if [ "${REFIX_REPLY}" -gt 0 ] 2>/dev/null; then
             REFIX_BOT_OK=true
             break
@@ -151,7 +151,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
         # 4. Evaluate result
         if [ "${REFIX_BOT_OK}" = "true" ]; then
           REFIX_ISSUES=$(gh api "repos/${REPO}/issues/${PR_NUM}/comments" \
-            --jq "[.[] | select(.user.type == \"Bot\" or .user.login == \"codex[bot]\" or .user.login == \"codex-bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[012]\\*\\*\"))] | length" 2>/dev/null || echo "0")
+            --jq "[.[] | select(.user.type == \"Bot\" or .user.type == \"Bot\") | select(.created_at > \"$(git log -1 --format=%cI HEAD)\") | select(.body | test(\"\\*\\*P[012]\\*\\*\"))] | length" 2>/dev/null || echo "0")
           if [ "${REFIX_ISSUES}" -eq 0 ] 2>/dev/null; then
             echo "Post-rebase review now passes after fix round ${REBASE_FIX_ROUND}."
             REBASE_REVIEW_HAS_ISSUES=false
