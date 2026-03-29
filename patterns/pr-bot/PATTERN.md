@@ -410,7 +410,7 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
 WAIT_RESULT_FILE="$(mktemp)"
 set +e
-run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool auto --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
+run_with_hard_timeout 650 csa run --sa-mode true --force-ignore-tier-setting --tool auto --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
 WAIT_RC=${PIPESTATUS[0]}
 set -e
 WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
@@ -449,31 +449,41 @@ else
     REVIEW_EVENT_RC=$?
     set -e
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
-    if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
-      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); treating as bot unavailable." >&2
-      BOT_UNAVAILABLE=true
-    fi
-    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-      echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${WAIT_BASE_TS}." >&2
-      echo "This likely means the bot posted a comment but did not submit a formal review." >&2
-      # Check if it's a setup/configuration message
+    # Helper: check for setup/configuration messages before marking unavailable
+    _check_setup_message_step5() {
       set +e
-      SETUP_BODY="$(
+      local setup_body
+      setup_body="$(
         gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
           --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
           2>/dev/null
       )"
       set -e
-      if [ -n "${SETUP_BODY}" ] && echo "${SETUP_BODY}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+      if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
         echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
-        echo "Bot response (truncated): $(echo "${SETUP_BODY}" | head -c 500)" >&2
+        echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
         echo "" >&2
         echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
         BOT_NEEDS_SETUP=true
-      else
+        return 0
+      fi
+      return 1
+    }
+
+    if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
+      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
+      _check_setup_message_step5 || {
+        echo "Treating as bot unavailable — API failure with no setup message." >&2
+        BOT_UNAVAILABLE=true
+      }
+    fi
+    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+      echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${WAIT_BASE_TS}." >&2
+      echo "This likely means the bot posted a comment but did not submit a formal review." >&2
+      _check_setup_message_step5 || {
         echo "Treating as bot unavailable — no positive review signal." >&2
         BOT_UNAVAILABLE=true
-      fi
+      }
     fi
 
     # --- Check inline comments for actionable findings (only if review confirmed) ---
@@ -643,7 +653,7 @@ run_with_hard_timeout() {
 }
 set +e
 FIX_RESULT_FILE="$(mktemp)"
-run_with_hard_timeout 1800 csa run --force-ignore-tier-setting --tool auto --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero." | tee "${FIX_RESULT_FILE}"
+run_with_hard_timeout 1800 csa run --sa-mode true --force-ignore-tier-setting --tool auto --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero." | tee "${FIX_RESULT_FILE}"
 FIX_RC=${PIPESTATUS[0]}
 set -e
 FIX_RESULT="$(cat "${FIX_RESULT_FILE}")"
@@ -1219,7 +1229,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 
   set +e
   GATE_RESULT_FILE="$(mktemp)"
-  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool auto --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
+  run_with_hard_timeout 5400 csa run --sa-mode true --force-ignore-tier-setting --tool auto --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
   GATE_RC=${PIPESTATUS[0]}
   set -e
   GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"
