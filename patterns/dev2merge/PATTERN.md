@@ -362,20 +362,32 @@ fi
 Tool: bash
 OnFail: abort
 
-Verify the PR was actually merged (defense in depth against skipped Step 13),
-then sync local main and clean up.
+Verify pr-bot completion marker exists (deterministic gate — cannot be bypassed
+by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
 ```bash
 set -euo pipefail
-# --- Hard gate: verify PR is merged ---
 # NOTE: PR_NUMBER comes from Step 12 (gh pr view/list). In fork workflows,
 # pr-bot may resolve a different PR via owner-aware lookup. For single-repo
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
+  # --- Deterministic gate: verify pr-bot completion marker ---
+  # Step 13 writes ${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}.done on success.
+  # Glob match by PR number covers HEAD changes from pr-bot fix cycles.
+  MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+  if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
+    echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
+    echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2
+    echo "Marker directory: ${MARKER_DIR}" >&2
+    exit 1
+  fi
+  echo "pr-bot completion marker verified for PR #${PR_NUMBER}."
+
+  # --- Verify PR is actually merged (defense in depth) ---
   PR_STATE="$(gh pr view "${PR_NUMBER}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")"
   if [ "${PR_STATE}" != "MERGED" ]; then
     echo "ERROR: PR #${PR_NUMBER} state is '${PR_STATE}', expected 'MERGED'." >&2
-    echo "This usually means pr-bot (Step 13) was skipped or failed." >&2
+    echo "pr-bot marker exists but PR not merged — possible partial failure." >&2
     exit 1
   fi
   echo "PR #${PR_NUMBER} confirmed MERGED."

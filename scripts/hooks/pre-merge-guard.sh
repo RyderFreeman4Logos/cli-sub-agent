@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# Pre-merge guard: verifies that pr-bot completed for a given PR.
+#
+# Usage: pre-merge-guard.sh <PR_NUMBER>
+#
+# Checks for a pr-bot completion marker in the standard marker directory.
+# Exit 0 if marker found (pr-bot ran successfully), exit 1 if missing.
+#
+# This script provides a deterministic, non-bypassable check that pr-bot
+# ran for the given PR. It is used by dev2merge Step 14 and can be called
+# independently by other workflows before any `gh pr merge` invocation.
+
+set -euo pipefail
+
+PR_NUMBER="${1:?Usage: pre-merge-guard.sh <PR_NUMBER>}"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+
+if [ ! -d "${MARKER_DIR}" ]; then
+  echo "ERROR: Marker directory does not exist: ${MARKER_DIR}" >&2
+  echo "pr-bot has never been run. Run pr-bot before merging." >&2
+  exit 1
+fi
+
+# Glob match by PR number — covers HEAD changes from pr-bot fix cycles.
+if ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
+  MARKER_FILE="$(ls -t "${MARKER_DIR}/${PR_NUMBER}"-*.done | head -1)"
+  echo "pre-merge-guard: pr-bot completion verified for PR #${PR_NUMBER}."
+  echo "  Marker: ${MARKER_FILE}"
+  exit 0
+else
+  echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
+  echo "  Expected: ${MARKER_DIR}/${PR_NUMBER}-<HEAD_SHA>.done" >&2
+  echo "Run pr-bot before merging." >&2
+  exit 1
+fi
