@@ -190,7 +190,7 @@ breaks prompt-guard propagation.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
 10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Set `REBASE_ENABLED=true` to re-enable for squash-merge workflows.
-11. **Merge**: Leave audit trail comment if bot was unavailable (explaining merge rationale: bot timeout + local review CLEAN). Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
+11. **Merge**: When `cloud_bot=false`, leave audit trail comment explaining merge rationale (bot disabled + local review CLEAN). When `cloud_bot=true`, bot must have confirmed no issues before reaching this step (timeout aborts the workflow, never falls through to merge). Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 
 ## Example Usage
 

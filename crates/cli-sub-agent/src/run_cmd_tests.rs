@@ -486,14 +486,6 @@ fn resolve_run_timeout_seconds_defaults_for_pr_bot_skill() {
 }
 
 #[test]
-fn resolve_run_timeout_seconds_defaults_for_pr_codex_bot_alias() {
-    assert_eq!(
-        resolve_run_timeout_seconds(None, Some("pr-codex-bot")),
-        Some(DEFAULT_PR_BOT_TIMEOUT_SECS)
-    );
-}
-
-#[test]
 fn resolve_run_timeout_seconds_prefers_cli_override() {
     assert_eq!(
         resolve_run_timeout_seconds(Some(900), Some("pr-bot")),

@@ -1284,18 +1284,22 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 5. Force push
   git push --force-with-lease
 
-  # 6. Trigger final @${CLOUD_BOT_NAME} review with trigger marker
+  # 6. Trigger final cloud bot review (conditional on trigger mode)
   REBASE_CURRENT_SHA="$(git rev-parse HEAD)"
   REBASE_TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  REBASE_TRIGGER_BODY="@${CLOUD_BOT_NAME} review
+  if [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
+    REBASE_TRIGGER_BODY="@${CLOUD_BOT_NAME} review
 
 <!-- csa-trigger:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
-  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
+    gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
+  else
+    echo "Cloud bot trigger mode is '${CLOUD_BOT_TRIGGER}' (auto-review). Force-push triggers re-review."
+  fi
 
   # 7. Delegate post-rebase wait/fix/review loop to CSA.
   set +e
   GATE_RESULT_FILE="$(mktemp)"
-  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool auto --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
+  run_with_hard_timeout 5400 csa run --force-ignore-tier-setting --tool auto --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each cloud bot trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, abort and report to user; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
   GATE_RC=${PIPESTATUS[0]}
   set -e
   GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"

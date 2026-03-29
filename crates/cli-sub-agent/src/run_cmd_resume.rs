@@ -18,7 +18,7 @@ pub(crate) fn resolve_run_timeout_seconds(
     if cli_timeout.is_some() {
         return cli_timeout;
     }
-    if matches!(skill, Some("pr-bot" | "pr-codex-bot")) {
+    if matches!(skill, Some("pr-bot")) {
         return Some(DEFAULT_PR_BOT_TIMEOUT_SECS);
     }
     None
