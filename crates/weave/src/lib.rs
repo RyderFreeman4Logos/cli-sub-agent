@@ -5,4 +5,5 @@ pub mod link;
 pub mod package;
 pub mod parser;
 pub(crate) mod path_utils;
+pub mod stale_ref;
 pub mod visualize;
