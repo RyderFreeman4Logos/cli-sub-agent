@@ -477,16 +477,9 @@ else
         BOT_UNAVAILABLE=true
       }
     fi
-    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-      echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${WAIT_BASE_TS}." >&2
-      echo "This likely means the bot posted a comment but did not submit a formal review." >&2
-      _check_setup_message_step5 || {
-        echo "Treating as bot unavailable — no positive review signal." >&2
-        BOT_UNAVAILABLE=true
-      }
-    fi
-
-    # --- Check inline comments for actionable findings (only if review confirmed) ---
+    # --- Check inline comments for actionable findings ---
+    # This runs regardless of REVIEW_EVENT_COUNT because some bots
+    # post inline comments without a formal review event.
     if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
       set +e
       ACTIONABLE_COMMENT_COUNT="$(
@@ -509,6 +502,14 @@ else
       if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
         echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
         BOT_HAS_ISSUES=true
+      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+        # No review event AND no inline comments — bot responded but
+        # didn't actually review. Check for setup message, then mark unavailable.
+        echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${WAIT_BASE_TS}." >&2
+        _check_setup_message_step5 || {
+          echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
+          BOT_UNAVAILABLE=true
+        }
       fi
     fi
   elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then

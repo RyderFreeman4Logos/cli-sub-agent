@@ -493,16 +493,9 @@ else
         BOT_UNAVAILABLE=true
       }
     fi
-    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-      echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${WAIT_BASE_TS}." >&2
-      echo "This likely means the bot posted a comment but did not submit a formal review." >&2
-      _check_setup_message_step5 || {
-        echo "Treating as bot unavailable — no positive review signal." >&2
-        BOT_UNAVAILABLE=true
-      }
-    fi
-
-    # --- Check inline comments for actionable findings (only if review confirmed) ---
+    # --- Check inline comments for actionable findings ---
+    # This runs regardless of REVIEW_EVENT_COUNT because some bots
+    # post inline comments without a formal review event.
     if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
       set +e
       ACTIONABLE_COMMENT_COUNT="$(
@@ -525,6 +518,14 @@ else
       if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
         echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
         BOT_HAS_ISSUES=true
+      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+        # No review event AND no inline comments — bot responded but
+        # didn't actually review. Check for setup message, then mark unavailable.
+        echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${WAIT_BASE_TS}." >&2
+        _check_setup_message_step5 || {
+          echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
+          BOT_UNAVAILABLE=true
+        }
       fi
     fi
   elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
@@ -1214,19 +1215,10 @@ else
       fi
       BOT_CLEAN=true
     fi
-    if [ "${BOT_CLEAN}" != "true" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-      echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${RETRIGGER_TS}." >&2
-      _check_setup_message
-      echo "No positive review signal — falling back to local review." >&2
-      if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
-        echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
-        exit 1
-      fi
-      BOT_CLEAN=true
-    fi
-
-    # --- Check inline comments for actionable findings (only if review confirmed) ---
-    if [ "${REVIEW_EVENT_COUNT:-0}" -gt 0 ]; then
+    # --- Check inline comments for actionable findings ---
+    # This runs regardless of REVIEW_EVENT_COUNT because some bots
+    # post inline comments without a formal review event.
+    if [ "${BOT_CLEAN}" != "true" ]; then
       set +e
       ACTIONABLE_COUNT="$(
         gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
@@ -1249,6 +1241,15 @@ else
         echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
         echo "Re-run pr-bot to start a new fix cycle."
         exit 1
+      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+        # No review event AND no inline comments — check setup, then local fallback
+        echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${RETRIGGER_TS}." >&2
+        _check_setup_message
+        echo "Falling back to local review." >&2
+        if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
+          echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+          exit 1
+        fi
       fi
     fi
     BOT_CLEAN=true
@@ -1395,17 +1396,14 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 5. Force push
   git push --force-with-lease
 
-  # 6. Trigger final cloud bot review (conditional on trigger mode)
+  # 6. Trigger final cloud bot review (ALWAYS explicit — force-push doesn't auto-review)
   REBASE_CURRENT_SHA="$(git rev-parse HEAD)"
   REBASE_TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
-    REBASE_TRIGGER_BODY="@${CLOUD_BOT_NAME} review
+  REBASE_TRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
 
-<!-- csa-trigger:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
-    gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
-  else
-    echo "Cloud bot trigger mode is '${CLOUD_BOT_TRIGGER}' (auto-review). Force-push triggers re-review."
-  fi
+<!-- csa-retrigger:post-rebase:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
+  echo "Triggered post-rebase review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${REBASE_CURRENT_SHA}."
 
   # 7. Delegate post-rebase wait/fix/review loop to CSA.
   set +e
