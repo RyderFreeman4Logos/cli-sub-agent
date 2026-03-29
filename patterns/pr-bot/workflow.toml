@@ -1208,16 +1208,13 @@ else
     if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
       echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
       _check_setup_message
-      echo "No positive review signal — falling back to local review." >&2
-      if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
-        echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
-        exit 1
-      fi
-      BOT_CLEAN=true
+      # Don't set BOT_CLEAN yet — still need to check inline comments
+      REVIEW_API_FAILED=true
     fi
     # --- Check inline comments for actionable findings ---
-    # This runs regardless of REVIEW_EVENT_COUNT because some bots
-    # post inline comments without a formal review event.
+    # This ALWAYS runs (regardless of review event count or API failure)
+    # because some bots post inline comments without formal review events,
+    # and API failure should not suppress inline comment detection.
     if [ "${BOT_CLEAN}" != "true" ]; then
       set +e
       ACTIONABLE_COUNT="$(
@@ -1241,9 +1238,10 @@ else
         echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
         echo "Re-run pr-bot to start a new fix cycle."
         exit 1
-      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-        # No review event AND no inline comments — check setup, then local fallback
-        echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${RETRIGGER_TS}." >&2
+      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ] || [ "${REVIEW_API_FAILED:-false}" = "true" ]; then
+        # No review event AND no inline comments (or reviews API failed) —
+        # check setup message, then fall back to local review
+        echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} after ${RETRIGGER_TS}." >&2
         _check_setup_message
         echo "Falling back to local review." >&2
         if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then

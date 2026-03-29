@@ -1223,10 +1223,12 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   git push --force-with-lease
   REBASE_CURRENT_SHA="$(git rev-parse HEAD)"
   REBASE_TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  REBASE_TRIGGER_BODY="@${CLOUD_BOT_NAME} review
+  # ALWAYS trigger explicitly — force-push doesn't auto-review (#506)
+  REBASE_TRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
 
-<!-- csa-trigger:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
+<!-- csa-retrigger:post-rebase:${REBASE_CURRENT_SHA}:${REBASE_TRIGGER_TS} -->"
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
+  echo "Triggered post-rebase review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${REBASE_CURRENT_SHA}."
 
   set +e
   GATE_RESULT_FILE="$(mktemp)"
