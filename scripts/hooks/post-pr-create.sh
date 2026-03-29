@@ -135,7 +135,9 @@ resolve_requested_pr() {
 resolve_marker_paths() {
   local pr_number="$1"
   local head_sha="$2"
-  PR_BOT_MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+  local repo_slug
+  repo_slug="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+  PR_BOT_MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${repo_slug}"
   PR_BOT_MARKER_BASE="${PR_BOT_MARKER_DIR}/${pr_number}-${head_sha}"
   PR_BOT_DONE_MARKER="${PR_BOT_MARKER_BASE}.done"
   PR_BOT_AWAITING_USER_MARKER="${PR_BOT_MARKER_BASE}.awaiting-user"

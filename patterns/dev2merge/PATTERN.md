@@ -350,6 +350,7 @@ else
   export CSA_PR_BOT_GUARD=1
   if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
     touch "${DONE_MARKER}"
+    echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
   else
@@ -374,18 +375,27 @@ set -euo pipefail
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   # --- Deterministic gate: verify pr-bot completion marker ---
-  # Step 13 writes ${MARKER_DIR}/${REPO_SLUG}/${PR_NUMBER}-${HEAD_SHA}.done on success.
-  # Glob match by PR number covers HEAD changes from pr-bot fix cycles.
-  # Repo slug prevents cross-repo PR# collisions in shared marker dir.
-  REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
-  MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
-  if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
-    echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
-    echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2
-    echo "Marker directory: ${MARKER_DIR}" >&2
-    exit 1
+  # Prefer exact marker path from Step 13 (CSA_VAR:PR_BOT_DONE_MARKER).
+  # Fall back to repo-scoped glob if variable is unset (backwards compat).
+  if [ -n "${PR_BOT_DONE_MARKER:-}" ]; then
+    if [ ! -f "${PR_BOT_DONE_MARKER}" ]; then
+      echo "ERROR: pr-bot marker not found: ${PR_BOT_DONE_MARKER}" >&2
+      echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2
+      exit 1
+    fi
+    echo "pr-bot completion marker verified (exact): ${PR_BOT_DONE_MARKER}"
+  else
+    # Fallback: glob match by repo slug + PR number.
+    REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+    MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+    if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
+      echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
+      echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Marker directory: ${MARKER_DIR}" >&2
+      exit 1
+    fi
+    echo "pr-bot completion marker verified (glob) for PR #${PR_NUMBER}."
   fi
-  echo "pr-bot completion marker verified for PR #${PR_NUMBER}."
 
   # --- Verify PR is actually merged (defense in depth) ---
   PR_STATE="$(gh pr view "${PR_NUMBER}" --json state -q '.state' 2>/dev/null || echo "UNKNOWN")"

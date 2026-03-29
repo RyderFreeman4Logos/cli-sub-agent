@@ -150,7 +150,8 @@ if [ ! -x "$SCRIPT" ]; then
 fi
 
 export CSA_PR_BOT_GUARD=1
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 # Detach into own session so CSA's process-group cleanup won't kill the
 # background workflow.  Use setsid where available (Linux); fall back to
