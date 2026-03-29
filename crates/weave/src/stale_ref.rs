@@ -51,13 +51,10 @@ fn scan_settings_json(
     for (line_idx, line) in content.lines().enumerate() {
         let line_num = line_idx + 1;
 
-        // Skip lines that look like Bash command history (contain "Bash(" prefix)
-        if line.contains("Bash(") {
-            continue;
-        }
-
         for name in removed_names {
-            // Match Skill(<name>) or Skill(<name>:anything)
+            // Match Skill(<name>) or Skill(<name>:anything).
+            // The Skill() prefix is specific enough to distinguish from Bash
+            // command history entries, so no line-level filtering is needed.
             let pattern_exact = format!("Skill({name})");
             let pattern_prefix = format!("Skill({name}:");
 
@@ -130,7 +127,11 @@ fn scan_markdown(
             // Treat alphanumeric, underscore, AND hyphen as word characters
             // since skill names commonly use hyphens (e.g., "pr-codex-bot").
             // Without this, "commit" would false-positive on "ai-reviewed-commit".
-            if let Some(pos) = line.find(name.as_str()) {
+            // Iterate all occurrences on the line so a rejected superset match
+            // (e.g., "ai-reviewed-commit") doesn't mask a later standalone match.
+            let mut search_start = 0;
+            while let Some(offset) = line[search_start..].find(name.as_str()) {
+                let pos = search_start + offset;
                 let before_ok = pos == 0 || {
                     let prev = line.as_bytes()[pos - 1];
                     !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'-'
@@ -148,7 +149,9 @@ fn scan_markdown(
                         skill_name: name.clone(),
                         context: line.trim().to_string(),
                     });
+                    break; // One match per name per line is enough
                 }
+                search_start = pos + 1;
             }
         }
     }

@@ -131,3 +131,42 @@ fn test_no_false_positive_on_hyphenated_superset() {
         "should NOT flag 'commit' inside 'ai-reviewed-commit'"
     );
 }
+
+#[test]
+fn test_finds_standalone_after_superset_on_same_line() {
+    // If a line has "ai-reviewed-commit ... commit", the standalone "commit"
+    // at the end should still be detected even though the first occurrence
+    // is rejected by boundary check.
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("CLAUDE.md"),
+        "Replaced ai-reviewed-commit with commit skill.\n",
+    )
+    .unwrap();
+
+    let result = scan_stale_skill_references(dir.path(), &["commit".to_string()]);
+    assert!(
+        !result.is_empty(),
+        "should detect standalone 'commit' after hyphenated superset"
+    );
+}
+
+#[test]
+fn test_settings_skill_not_masked_by_bash_on_same_line() {
+    // In minified JSON, Bash() and Skill() entries could be on the same line.
+    // The Skill() entry should still be detected.
+    let dir = tempdir().unwrap();
+    let claude_dir = dir.path().join(".claude");
+    fs::create_dir_all(&claude_dir).unwrap();
+    fs::write(
+        claude_dir.join("settings.local.json"),
+        r#"{"allow":["Bash(git commit)","Skill(old-skill)"]}"#,
+    )
+    .unwrap();
+
+    let result = scan_stale_skill_references(dir.path(), &["old-skill".to_string()]);
+    assert!(
+        !result.is_empty(),
+        "Skill() should be detected even when Bash() is on the same line"
+    );
+}
