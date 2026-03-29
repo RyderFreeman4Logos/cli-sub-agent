@@ -51,6 +51,9 @@ name = "MKTD_TODO_TIMESTAMP"
 name = "MKTD_TOOL_EFFECTIVE"
 
 [[workflow.variables]]
+name = "PR_BOT_DONE_MARKER"
+
+[[workflow.variables]]
 name = "PR_NUMBER"
 
 [[workflow.variables]]
