@@ -126,15 +126,20 @@ fn scan_markdown(
                 }
             }
 
-            // Check for word-boundary <name> reference
+            // Check for word-boundary <name> reference.
+            // Treat alphanumeric, underscore, AND hyphen as word characters
+            // since skill names commonly use hyphens (e.g., "pr-codex-bot").
+            // Without this, "commit" would false-positive on "ai-reviewed-commit".
             if let Some(pos) = line.find(name.as_str()) {
-                let before_ok = pos == 0
-                    || (!line.as_bytes()[pos - 1].is_ascii_alphanumeric()
-                        && line.as_bytes()[pos - 1] != b'_');
+                let before_ok = pos == 0 || {
+                    let prev = line.as_bytes()[pos - 1];
+                    !prev.is_ascii_alphanumeric() && prev != b'_' && prev != b'-'
+                };
                 let after_pos = pos + name.len();
-                let after_ok = after_pos >= line.len()
-                    || (!line.as_bytes()[after_pos].is_ascii_alphanumeric()
-                        && line.as_bytes()[after_pos] != b'_');
+                let after_ok = after_pos >= line.len() || {
+                    let next = line.as_bytes()[after_pos];
+                    !next.is_ascii_alphanumeric() && next != b'_' && next != b'-'
+                };
 
                 if before_ok && after_ok {
                     out.push(StaleReference {

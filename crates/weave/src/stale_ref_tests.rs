@@ -113,3 +113,21 @@ fn test_detects_reference_in_root_agents_md() {
     assert_eq!(result[0].file, PathBuf::from("AGENTS.md"));
     assert_eq!(result[0].line, 3);
 }
+
+#[test]
+fn test_no_false_positive_on_hyphenated_superset() {
+    // "commit" should NOT match inside "ai-reviewed-commit" because
+    // hyphen is treated as a word character in skill names.
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("CLAUDE.md"),
+        "Use ai-reviewed-commit for the pipeline.\n",
+    )
+    .unwrap();
+
+    let result = scan_stale_skill_references(dir.path(), &["commit".to_string()]);
+    assert!(
+        result.is_empty(),
+        "should NOT flag 'commit' inside 'ai-reviewed-commit'"
+    );
+}
