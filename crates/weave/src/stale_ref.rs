@@ -96,8 +96,13 @@ fn scan_markdown(
 
         for name in removed_names {
             // Pattern 1: /<name> (slash-prefixed skill invocation)
+            // Iterate all occurrences so a URL like .com/name doesn't mask
+            // a real /name invocation later on the same line.
             let slash_pattern = format!("/{name}");
-            if let Some(pos) = line.find(&slash_pattern) {
+            let mut slash_found = false;
+            let mut slash_start = 0;
+            while let Some(offset) = line[slash_start..].find(&slash_pattern) {
+                let pos = slash_start + offset;
                 let before_ok = pos == 0 || {
                     let prev = line.as_bytes()[pos - 1];
                     prev.is_ascii_whitespace() || prev == b'(' || prev == b'`'
@@ -115,8 +120,13 @@ fn scan_markdown(
                         skill_name: name.clone(),
                         context: line.trim().to_string(),
                     });
-                    continue;
+                    slash_found = true;
+                    break;
                 }
+                slash_start = pos + 1;
+            }
+            if slash_found {
+                continue;
             }
 
             // Pattern 2: `<name>` (backtick-quoted code span)
