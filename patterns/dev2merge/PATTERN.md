@@ -322,7 +322,9 @@ fi
 HEAD_SHA="$(git rev-parse --verify HEAD)"
 
 # --- Lock + Idempotency: skip if pr-bot already ran or is running ---
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+# Bind markers to repo identity to prevent cross-repo PR# collisions.
+REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 MARKER_BASE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}"
 DONE_MARKER="${MARKER_BASE}.done"
@@ -372,9 +374,11 @@ set -euo pipefail
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   # --- Deterministic gate: verify pr-bot completion marker ---
-  # Step 13 writes ${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}.done on success.
+  # Step 13 writes ${MARKER_DIR}/${REPO_SLUG}/${PR_NUMBER}-${HEAD_SHA}.done on success.
   # Glob match by PR number covers HEAD changes from pr-bot fix cycles.
-  MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+  # Repo slug prevents cross-repo PR# collisions in shared marker dir.
+  REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+  MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
   if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
     echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
     echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2

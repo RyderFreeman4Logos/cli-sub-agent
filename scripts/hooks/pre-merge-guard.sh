@@ -16,22 +16,30 @@
 set -euo pipefail
 
 PR_NUMBER="${1:?Usage: pre-merge-guard.sh <PR_NUMBER>}"
-MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers"
+
+# Derive repo slug from origin URL to scope markers per-repo.
+REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+if [ -z "${REPO_SLUG}" ]; then
+  echo "ERROR: Cannot determine repo slug from git origin." >&2
+  exit 1
+fi
+
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 
 if [ ! -d "${MARKER_DIR}" ]; then
   echo "ERROR: Marker directory does not exist: ${MARKER_DIR}" >&2
-  echo "pr-bot has never been run. Run pr-bot before merging." >&2
+  echo "pr-bot has never been run for ${REPO_SLUG}. Run pr-bot before merging." >&2
   exit 1
 fi
 
 # Glob match by PR number — covers HEAD changes from pr-bot fix cycles.
 if ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
   MARKER_FILE="$(ls -t "${MARKER_DIR}/${PR_NUMBER}"-*.done | head -1)"
-  echo "pre-merge-guard: pr-bot completion verified for PR #${PR_NUMBER}."
+  echo "pre-merge-guard: pr-bot completion verified for ${REPO_SLUG} PR #${PR_NUMBER}."
   echo "  Marker: ${MARKER_FILE}"
   exit 0
 else
-  echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
+  echo "ERROR: No pr-bot completion marker found for ${REPO_SLUG} PR #${PR_NUMBER}." >&2
   echo "  Expected: ${MARKER_DIR}/${PR_NUMBER}-<HEAD_SHA>.done" >&2
   echo "Run pr-bot before merging." >&2
   exit 1
