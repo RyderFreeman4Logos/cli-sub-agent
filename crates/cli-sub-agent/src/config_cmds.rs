@@ -187,6 +187,9 @@ max_recursion_depth = 5
 # cloud_bot_name = "gemini-code-assist"      # Bot name (for @mention and display)
 # cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
 # cloud_bot_login = ""                       # Override bot GitHub login (default: "<name>[bot]")
+# cloud_bot_retrigger_command = ""           # Command to re-trigger review after force-push
+#                                            # Default: "/gemini review" for gemini-code-assist,
+#                                            #          "@<name> review" for others
 # merge_strategy = "merge"                   # "merge" | "rebase" | "squash" (default: "merge")
 # delete_branch = false                      # Delete remote branch after merge (default: false)
 
