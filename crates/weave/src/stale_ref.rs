@@ -22,18 +22,15 @@ pub fn scan_stale_skill_references(
     let mut results = Vec::new();
 
     scan_settings_json(project_root, removed_names, &mut results);
-    scan_markdown(
-        project_root,
-        Path::new("CLAUDE.md"),
-        removed_names,
-        &mut results,
-    );
-    scan_markdown(
-        project_root,
-        Path::new(".claude/rules/AGENTS.md"),
-        removed_names,
-        &mut results,
-    );
+    // Scan markdown files that commonly reference skills.
+    for md_path in &["CLAUDE.md", "AGENTS.md", ".claude/rules/AGENTS.md"] {
+        scan_markdown(
+            project_root,
+            Path::new(md_path),
+            removed_names,
+            &mut results,
+        );
+    }
 
     results
 }

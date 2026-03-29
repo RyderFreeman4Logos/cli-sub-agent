@@ -95,3 +95,21 @@ fn test_detects_reference_in_agents_md() {
     assert_eq!(result[0].skill_name, "old-skill");
     assert_eq!(result[0].line, 3);
 }
+
+#[test]
+fn test_detects_reference_in_root_agents_md() {
+    let dir = tempdir().unwrap();
+    fs::write(
+        dir.path().join("AGENTS.md"),
+        "# Rules\n\nRun /old-skill after commit.\n",
+    )
+    .unwrap();
+
+    let result = scan_stale_skill_references(dir.path(), &["old-skill".to_string()]);
+    assert!(
+        !result.is_empty(),
+        "should detect old-skill in root AGENTS.md"
+    );
+    assert_eq!(result[0].file, PathBuf::from("AGENTS.md"));
+    assert_eq!(result[0].line, 3);
+}
