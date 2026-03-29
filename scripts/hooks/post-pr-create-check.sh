@@ -150,7 +150,7 @@ if [ ! -x "$SCRIPT" ]; then
 fi
 
 export CSA_PR_BOT_GUARD=1
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
 if [ -z "${REPO_SLUG}" ]; then
   REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
 fi

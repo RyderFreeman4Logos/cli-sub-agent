@@ -323,7 +323,7 @@ HEAD_SHA="$(git rev-parse --verify HEAD)"
 
 # --- Lock + Idempotency: skip if pr-bot already ran or is running ---
 # Bind markers to repo identity to prevent cross-repo PR# collisions.
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
 if [ -z "${REPO_SLUG}" ]; then
   REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
 fi
@@ -393,7 +393,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
     # NOTE: glob may match stale markers from previous pr-bot runs on the same
     # PR. The exact CSA_VAR path (above) is the primary defense; this fallback
     # exists only for edge cases where the variable is lost.
-    REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+    REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
     if [ -z "${REPO_SLUG}" ]; then
       REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
     fi

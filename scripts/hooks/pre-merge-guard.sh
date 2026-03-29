@@ -18,7 +18,7 @@ set -euo pipefail
 PR_NUMBER="${1:?Usage: pre-merge-guard.sh <PR_NUMBER>}"
 
 # Derive repo slug: prefer gh CLI for reliability, fall back to regex.
-REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
 if [ -z "${REPO_SLUG}" ]; then
   REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
 fi

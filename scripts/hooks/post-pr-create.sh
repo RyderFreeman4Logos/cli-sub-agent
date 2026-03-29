@@ -136,7 +136,7 @@ resolve_marker_paths() {
   local pr_number="$1"
   local head_sha="$2"
   local repo_slug
-  repo_slug="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+  repo_slug="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
   if [ -z "${repo_slug}" ]; then
     repo_slug="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
   fi
