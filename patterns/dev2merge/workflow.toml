@@ -406,7 +406,11 @@ HEAD_SHA="$(git rev-parse --verify HEAD)"
 
 # --- Lock + Idempotency: skip if pr-bot already ran or is running ---
 # Bind markers to repo identity to prevent cross-repo PR# collisions.
-REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+# Prefer gh CLI for reliable slug; fall back to regex for offline/non-GH repos.
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+if [ -z "${REPO_SLUG}" ]; then
+  REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
+fi
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 mkdir -p "${MARKER_DIR}"
 MARKER_BASE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}"
@@ -423,6 +427,7 @@ trap cleanup_lock EXIT
 
 if [ -f "${DONE_MARKER}" ]; then
   echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
+  echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
   echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
@@ -470,7 +475,13 @@ if [ -n "${PR_NUMBER:-}" ]; then
     echo "pr-bot completion marker verified (exact): ${PR_BOT_DONE_MARKER}"
   else
     # Fallback: glob match by repo slug + PR number.
-    REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+    # NOTE: glob may match stale markers from previous pr-bot runs on the same
+    # PR. The exact CSA_VAR path (above) is the primary defense; this fallback
+    # exists only for edge cases where the variable is lost.
+    REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
+    if [ -z "${REPO_SLUG}" ]; then
+      REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
+    fi
     MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
     if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
       echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2

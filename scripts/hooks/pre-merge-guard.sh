@@ -17,10 +17,13 @@ set -euo pipefail
 
 PR_NUMBER="${1:?Usage: pre-merge-guard.sh <PR_NUMBER>}"
 
-# Derive repo slug from origin URL to scope markers per-repo.
-REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^.+[:/]([^/]+/[^/.]+)(\.git)?$#\1#' | tr '/' '_')"
+# Derive repo slug: prefer gh CLI for reliability, fall back to regex.
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')"
 if [ -z "${REPO_SLUG}" ]; then
-  echo "ERROR: Cannot determine repo slug from git origin." >&2
+  REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
+fi
+if [ -z "${REPO_SLUG}" ]; then
+  echo "ERROR: Cannot determine repo slug from gh CLI or git origin." >&2
   exit 1
 fi
 
