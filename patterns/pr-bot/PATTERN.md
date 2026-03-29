@@ -353,7 +353,13 @@ run_with_hard_timeout() {
 # --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
 TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-WAIT_BASE_TS="${TRIGGER_TS}"
+if [ "${CLOUD_BOT_TRIGGER}" = "auto" ]; then
+  # Auto-trigger bots respond to push events, which happened earlier in Step 4.
+  # Backdate the window by 10 minutes to catch responses that arrived between push and now.
+  WAIT_BASE_TS="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
+else
+  WAIT_BASE_TS="${TRIGGER_TS}"
+fi
 if [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
   TRIGGER_BODY="@${CLOUD_BOT_NAME} review
 
@@ -686,9 +692,10 @@ if [ -z "${BOT_REVIEW_WINDOW_START:-}" ]; then
   exit 1
 fi
 
+# Query from ANY bot (not just target) to also catch non-target bot findings
 COMMENT_RECORD="$(
   gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-    --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
+    --jq '[.[] | select(.user.type == "Bot") | select(.created_at > "'"${BOT_REVIEW_WINDOW_START}"'") | select((.body | test("P0|P1|P2"))) ] | sort_by(.created_at) | .[0] | [(.id | tostring), (.path // ""), .created_at] | @tsv'
 )"
 if [ -z "${COMMENT_RECORD}" ] || [ "${COMMENT_RECORD}" = "null" ]; then
   echo "ERROR: BOT_HAS_ISSUES=true but no actionable current bot comment was found."
