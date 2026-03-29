@@ -458,7 +458,7 @@ else
     # push from being mistaken for a review of the current HEAD.
     set +e
     REVIEW_EVENT_COUNT="$(
-      gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
         --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
         2>/dev/null
     )"
@@ -1168,14 +1168,33 @@ else
     # --- Positive signal check (#505): verify a review EVENT exists ---
     set +e
     REVIEW_EVENT_COUNT="$(
-      gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
         --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
         2>/dev/null
     )"
     REVIEW_EVENT_RC=$?
     set -e
+    # --- Setup message check (runs before any fallback to catch config issues) ---
+    _check_setup_message() {
+      set +e
+      local setup_body
+      setup_body="$(
+        gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${RETRIGGER_TS}"'")] | .[0].body // ""' \
+          2>/dev/null
+      )"
+      set -e
+      if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+        echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
+        echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
+        echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
+        exit 1
+      fi
+    }
+
     if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
-      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); falling back to local review." >&2
+      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
+      _check_setup_message
       echo "No positive review signal — falling back to local review." >&2
       if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
         echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
@@ -1185,20 +1204,7 @@ else
     fi
     if [ "${BOT_CLEAN}" != "true" ] && [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
       echo "WARN: Bot activity detected but no review event for HEAD ${CURRENT_SHA} found after ${RETRIGGER_TS}." >&2
-      # Check if it's a setup/configuration message
-      set +e
-      SETUP_BODY="$(
-        gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${RETRIGGER_TS}"'")] | .[0].body // ""' \
-          2>/dev/null
-      )"
-      set -e
-      if [ -n "${SETUP_BODY}" ] && echo "${SETUP_BODY}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
-        echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
-        echo "Bot response (truncated): $(echo "${SETUP_BODY}" | head -c 500)" >&2
-        echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
-        exit 1
-      fi
+      _check_setup_message
       echo "No positive review signal — falling back to local review." >&2
       if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
         echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2

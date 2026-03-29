@@ -442,7 +442,7 @@ else
     # mistaken for a review of the current HEAD.
     set +e
     REVIEW_EVENT_COUNT="$(
-      gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
         --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
         2>/dev/null
     )"
