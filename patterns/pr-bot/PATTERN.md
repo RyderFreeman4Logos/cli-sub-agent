@@ -441,14 +441,14 @@ else
     # commit_id filter prevents a late review of a previous push from being
     # mistaken for a review of the current HEAD.
     set +e
-    REVIEW_EVENT_COUNT="$(
+    REVIEW_EVENT_RAW="$(
       gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
         --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-        2>/dev/null \
-      | awk '{s+=$1} END {print s+0}'
+        2>/dev/null
     )"
-    REVIEW_EVENT_RC=${PIPESTATUS[0]}
+    REVIEW_EVENT_RC=$?
     set -e
+    REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
     if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
       echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); treating as bot unavailable." >&2
       BOT_UNAVAILABLE=true
