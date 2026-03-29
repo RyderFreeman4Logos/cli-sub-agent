@@ -130,6 +130,7 @@ cloud_bot = true                           # false to skip cloud review entirely
 cloud_bot_name = "gemini-code-assist"      # bot name (for @mention and display)
 cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
 cloud_bot_login = ""                       # bot GitHub login override (default: "${cloud_bot_name}[bot]")
+cloud_bot_retrigger_command = ""           # command to re-trigger after fix push (default: derived from name)
 merge_strategy = "merge"                   # "merge" | "rebase" | "squash"
 delete_branch = false                      # delete remote branch after merge
 ```
@@ -137,8 +138,14 @@ delete_branch = false                      # delete remote branch after merge
 **Check at runtime**: `csa config get pr_review.cloud_bot_name --default gemini-code-assist`
 
 **Trigger modes**:
-- `"auto"` (default): Bot auto-reviews on PR push. No @mention needed.
+- `"auto"` (default): Bot auto-reviews on PR creation push. No @mention needed.
 - `"comment"`: Posts `@{cloud_bot_name} review` comment to trigger review.
+
+**Retrigger** (round 2+ after fix push): Bots like gemini-code-assist do NOT
+auto-review on subsequent pushes — only on PR creation. The workflow ALWAYS posts
+an explicit retrigger command on round 2+, regardless of `cloud_bot_trigger`.
+Default: `/gemini review` for gemini-code-assist, `@{name} review` for others.
+Override via `cloud_bot_retrigger_command`.
 
 **Timeout behavior**: If bot does not respond within ~15 minutes, the workflow
 **aborts** and presents options to the user. It does NOT silently fall back to
@@ -175,9 +182,10 @@ breaks prompt-guard propagation.
     (HEAD drift fallback), run full `csa review --branch main`. Then route through
     the bot-unavailable merge path (Step 6a).
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
-   - If `cloud_bot_trigger = "comment"`: post `@{cloud_bot_name} review` comment.
-   - If `cloud_bot_trigger = "auto"`: skip trigger (bot auto-reviews on push).
+   - **Round 0** (initial PR): follows `cloud_bot_trigger` config (`"comment"` → @mention, `"auto"` → skip).
+   - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist) because bots do NOT auto-review on subsequent pushes.
    - Wait 5 minutes quietly, then delegate 10-minute polling to CSA. Total: ~15 min.
+   - **Positive signal**: verifies a review EVENT exists (via `pulls/{pr}/reviews` API with `submitted_at` > push time), not merely absence of comments.
    - If bot times out: **ABORT workflow** and present options to user. NO silent fallback.
    - Non-target bot comments (e.g., codex auto-review) are also detected and included with a quota warning.
 5. **Evaluate bot comments**: Classify each as:
@@ -214,7 +222,7 @@ breaks prompt-guard propagation.
 2. Any local review issues are fixed before PR creation.
 3. PR resolved for the workflow branch (existing PR reused or a new PR created via strict owner-aware match, with create-race recovery and Step 4 precondition verified: `REVIEW_COMPLETED=true`).
 4. Cloud bot config checked (`csa config get pr_review.cloud_bot --default true`).
-5. **If cloud_bot enabled (default)**: cloud bot triggered, wait handled by delegated CSA gate with hard timeout and explicit marker checks, and timeout path handled. If bot responds with environment/configuration setup message instead of actual review, workflow STOPS and reports to user (Step 5a).
+5. **If cloud_bot enabled (default)**: cloud bot triggered (round-aware: auto on round 0, explicit retrigger on round 1+), wait handled by delegated CSA gate with hard timeout and positive review-event signal checks, and timeout path handled. If bot responds with environment/configuration setup message instead of actual review, workflow STOPS and reports to user (Step 5a).
 6. **If cloud_bot disabled**: supplementary check completed via one of:
    - fast-path: SHA match, review skipped, or
    - fallback path: SHA mismatch/missing (HEAD drift) and full `csa review --branch main` executed.
@@ -222,7 +230,7 @@ breaks prompt-guard propagation.
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
-10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD, uses the same 15-minute wait policy as the initial gate (5-minute quiet wait + 10-minute polling), and must return zero actionable findings before merge. This gate is enforced by the workflow engine — it cannot be skipped. If new findings appear, workflow aborts (user must re-run pr-bot).
+10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD via explicit retrigger command (NOT relying on auto-review), uses the same 15-minute wait policy as the initial gate (5-minute quiet wait + 10-minute polling), and must show a **positive review event** (via `pulls/{pr}/reviews` API) with zero actionable findings before merge. This gate is enforced by the workflow engine — it cannot be skipped. If new findings appear, workflow aborts (user must re-run pr-bot).
 10b. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
 10c. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.

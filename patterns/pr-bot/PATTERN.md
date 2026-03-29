@@ -244,6 +244,18 @@ if [ -z "${CLOUD_BOT_LOGIN_RAW}" ]; then
 else
   CLOUD_BOT_LOGIN="${CLOUD_BOT_LOGIN_RAW}"
 fi
+# Retrigger command for post-fix re-review (round 2+).
+# Default: "/gemini review" for gemini-code-assist, "@<name> review" for others.
+CLOUD_BOT_RETRIGGER_CMD_RAW=$(csa config get pr_review.cloud_bot_retrigger_command --default "")
+if [ -z "${CLOUD_BOT_RETRIGGER_CMD_RAW}" ]; then
+  if [ "${CLOUD_BOT_NAME}" = "gemini-code-assist" ]; then
+    CLOUD_BOT_RETRIGGER_CMD="/gemini review"
+  else
+    CLOUD_BOT_RETRIGGER_CMD="@${CLOUD_BOT_NAME} review"
+  fi
+else
+  CLOUD_BOT_RETRIGGER_CMD="${CLOUD_BOT_RETRIGGER_CMD_RAW}"
+fi
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
@@ -261,6 +273,7 @@ FALLBACK_REVIEW_HAS_ISSUES="${FALLBACK_REVIEW_HAS_ISSUES:-false}"
 echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
 echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
 echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
+echo "CSA_VAR:CLOUD_BOT_RETRIGGER_CMD=$CLOUD_BOT_RETRIGGER_CMD"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```
@@ -278,17 +291,21 @@ If `CLOUD_BOT` is `false`:
 
 > **Layer**: 0 + 1 (Orchestrator + CSA executor).
 > Layer 0 triggers cloud bot review (via @mention or auto-review depending on
-> `cloud_bot_trigger` config) and delegates the long wait to a single
-> CSA-managed step. No explicit caller-side polling loop.
+> `cloud_bot_trigger` config and review round) and delegates the long wait to a
+> single CSA-managed step. No explicit caller-side polling loop.
 
 Tool: bash
 OnFail: abort
 Condition: !(${BOT_UNAVAILABLE})
 
-Trigger cloud bot review for current HEAD (trigger method depends on
-`cloud_bot_trigger` config: "comment" posts `@bot review`, "auto" skips
-trigger since bot auto-reviews). Wait 5 minutes, then delegate 10-minute
-polling to CSA. Total wait: ~15 minutes.
+Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
+- **Round 0** (initial PR creation): follows `cloud_bot_trigger` config
+  ("comment" posts `@bot review`, "auto" skips trigger since bot auto-reviews).
+- **Round 1+** (after fix push): ALWAYS posts explicit retrigger command
+  (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
+  because bots do NOT auto-review on subsequent pushes (#506).
+
+Wait 5 minutes, then delegate 10-minute polling to CSA. Total wait: ~15 minutes.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
@@ -353,22 +370,34 @@ run_with_hard_timeout() {
 # --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
 TRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-if [ "${CLOUD_BOT_TRIGGER}" = "auto" ]; then
-  # Auto-trigger bots respond to push events, which happened earlier in Step 4.
-  # Backdate the window by 10 minutes to catch responses that arrived between push and now.
-  WAIT_BASE_TS="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
-else
+REVIEW_ROUND="${REVIEW_ROUND:-0}"
+
+# Round-aware trigger logic (#506):
+# - Round 0 (initial PR creation) + auto: bot auto-reviews on push, skip trigger
+# - Round 1+ (after fix push): bot does NOT auto-review on force-push,
+#   MUST explicitly trigger re-review regardless of cloud_bot_trigger setting
+if [ "${REVIEW_ROUND}" -gt 0 ]; then
+  # Post-fix round: ALWAYS trigger explicitly via retrigger command
+  TRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
+
+<!-- csa-retrigger:round${REVIEW_ROUND}:${CURRENT_SHA}:${TRIGGER_TS} -->"
+  gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
+  echo "Round ${REVIEW_ROUND}: Triggered re-review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA}."
   WAIT_BASE_TS="${TRIGGER_TS}"
-fi
-if [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
+elif [ "${CLOUD_BOT_TRIGGER}" = "comment" ]; then
+  # Round 0 + comment mode: trigger via @mention
   TRIGGER_BODY="@${CLOUD_BOT_NAME} review
 
 <!-- csa-trigger:${CURRENT_SHA}:${TRIGGER_TS} -->"
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${TRIGGER_BODY}"
   echo "Triggered @${CLOUD_BOT_NAME} review via comment for HEAD ${CURRENT_SHA}."
+  WAIT_BASE_TS="${TRIGGER_TS}"
 else
+  # Round 0 + auto mode: bot auto-reviews on PR push
   echo "Cloud bot trigger mode is '${CLOUD_BOT_TRIGGER}' (auto-review); skipping @mention trigger."
   echo "Bot will auto-review the PR push. Proceeding to polling phase."
+  # Backdate the window by 10 minutes to catch responses that arrived between push and now.
+  WAIT_BASE_TS="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
 # --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
@@ -381,7 +410,7 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
 WAIT_RESULT_FILE="$(mktemp)"
 set +e
-run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool auto --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review response posted after ${WAIT_BASE_TS} for HEAD ${CURRENT_SHA}. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
+run_with_hard_timeout 650 csa run --force-ignore-tier-setting --tool auto --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
 WAIT_RC=${PIPESTATUS[0]}
 set -e
 WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
@@ -403,31 +432,28 @@ else
     BOT_UNAVAILABLE=false
     BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
     sleep "${BOT_SETTLE_SECS}"
+
+    # --- Positive signal check (#505): verify a review EVENT exists ---
+    # A review event with submitted_at > WAIT_BASE_TS is the positive
+    # confirmation that the bot actually re-reviewed current HEAD.
+    # Without this, "0 new comments" is ambiguous (could mean bot
+    # reviewed and found nothing, or bot hasn't reviewed yet).
     set +e
-    ACTIONABLE_COMMENT_COUNT="$(
-      gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+    REVIEW_EVENT_COUNT="$(
+      gh api "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'")] | length' \
         2>/dev/null
     )"
-    ACTIONABLE_COMMENT_RC=$?
+    REVIEW_EVENT_RC=$?
     set -e
-    if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
-      echo "ERROR: Failed to query actionable bot comments for trigger window (rc=${ACTIONABLE_COMMENT_RC})." >&2
-      exit 1
+    if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
+      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC}); falling back to comment-based check." >&2
+      REVIEW_EVENT_COUNT="1"  # Assume review exists to preserve backward compat
     fi
-    case "${ACTIONABLE_COMMENT_COUNT:-}" in
-      ''|*[!0-9]*)
-        echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
-        exit 1
-        ;;
-    esac
-    if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
-      echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
-      BOT_HAS_ISSUES=true
-    else
-      # Bot replied but no P0/P1/P2 findings — verify it actually reviewed
-      # (detect environment/configuration messages that are NOT real reviews)
-      BOT_NEEDS_SETUP=false
+    if [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+      echo "WARN: Bot activity detected but no review event found after ${WAIT_BASE_TS}." >&2
+      echo "This likely means the bot posted a comment but did not submit a formal review." >&2
+      # Check if it's a setup/configuration message
       set +e
       SETUP_BODY="$(
         gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
@@ -441,6 +467,35 @@ else
         echo "" >&2
         echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
         BOT_NEEDS_SETUP=true
+      else
+        echo "Treating as bot unavailable — no positive review signal." >&2
+        BOT_UNAVAILABLE=true
+      fi
+    fi
+
+    # --- Check inline comments for actionable findings (only if review confirmed) ---
+    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
+      set +e
+      ACTIONABLE_COMMENT_COUNT="$(
+        gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          2>/dev/null
+      )"
+      ACTIONABLE_COMMENT_RC=$?
+      set -e
+      if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
+        echo "ERROR: Failed to query actionable bot comments for trigger window (rc=${ACTIONABLE_COMMENT_RC})." >&2
+        exit 1
+      fi
+      case "${ACTIONABLE_COMMENT_COUNT:-}" in
+        ''|*[!0-9]*)
+          echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
+          exit 1
+          ;;
+      esac
+      if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
+        echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
+        BOT_HAS_ISSUES=true
       fi
     fi
   elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
@@ -1012,20 +1067,25 @@ Loop back to Step 5 (delegated wait gate).
 
 ## Step 10b: Post-Fix Re-Review Gate (HARD GATE)
 
-After fixing bot findings, re-trigger @${CLOUD_BOT_NAME} review on current HEAD and
-verify zero actionable findings before any merge path can execute.
+After fixing bot findings, verify the bot has actually re-reviewed the current
+HEAD and found zero actionable findings before any merge path can execute.
 
 This is a **deterministic hard gate** — it prevents the linear workflow
 from falling through to merge without re-verification. The "Loop back
 to Step 5" above is guidance for LLM orchestrators but is NOT enforced
 by the workflow engine (`csa plan run` executes steps linearly).
 
+**Positive confirmation signal** (#505): The gate checks for a **review event**
+(via `pulls/{pr}/reviews` API) with `submitted_at` > push timestamp, NOT
+merely the absence of inline comments. This distinguishes "bot re-reviewed
+and found nothing" from "bot hasn't re-reviewed yet."
+
 The gate:
-1. Re-triggers `@${CLOUD_BOT_NAME} review` on current HEAD
-2. Waits 5 minutes quietly, then delegates the remaining 10-minute polling window to CSA
-3. If bot finds new P0/P1/P2 findings → **abort** (user must re-run pr-bot)
-4. If bot timeout → falls back to local `csa review --range main...HEAD`
-5. If clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
+1. Records push timestamp before checking
+2. Polls for a review event from `${CLOUD_BOT_LOGIN}` with `submitted_at` > push time
+3. If review event found AND has P0/P1/P2 inline comments → **abort** (user must re-run pr-bot)
+4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
+5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
 ## ELSE
 
