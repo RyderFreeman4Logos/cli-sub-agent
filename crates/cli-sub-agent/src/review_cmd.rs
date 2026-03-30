@@ -28,15 +28,17 @@ use output::{
     persist_review_meta, print_reviewer_outcomes, sanitize_review_output,
 };
 
+#[path = "review_cmd_fix.rs"]
+mod fix;
+
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
-    ANTI_RECURSION_PREAMBLE, build_review_instruction_for_project, derive_scope,
-    resolve_review_stream_mode, resolve_review_thinking, resolve_review_tool,
-    review_scope_allows_auto_discovery, verify_review_skill_available,
-    write_multi_reviewer_consolidated_artifact,
+    build_review_instruction_for_project, derive_scope, resolve_review_stream_mode,
+    resolve_review_thinking, resolve_review_tool, review_scope_allows_auto_discovery,
+    verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
 };
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
@@ -362,168 +364,44 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             return Ok(effective_exit_code);
         }
 
-        // --- Fix loop: resume the review session to apply fixes, then re-gate ---
-        let max_rounds = args.max_rounds;
-        let mut session_id = result.meta_session_id.clone();
-
-        for round in 1..=max_rounds {
-            info!(round, max_rounds, session_id = %session_id, "Fix round starting");
-
-            // Step 1: Resume the review session with a fix prompt
-            let fix_prompt = format!(
-                "{ANTI_RECURSION_PREAMBLE}\
-                 Fix round {round}/{max_rounds}.\n\
-                 Fix all issues found in the review. Run formatting and linting commands as needed.\n\
-                 After applying fixes, verify the changes compile and pass basic checks.\n\
-                 If no issues remain, emit verdict: CLEAN."
+        // Gate: skip fix loop when the review tool has file-editing restrictions.
+        // Tools like gemini-cli may be configured with allow_edit_existing_files=false,
+        // and resuming such a session for fixing would waste tokens producing no edits.
+        let tool_can_edit = config
+            .as_ref()
+            .is_none_or(|cfg| cfg.can_tool_edit_existing(tool.as_str()));
+        if !tool_can_edit {
+            warn!(
+                tool = %tool,
+                "--fix requested but tool has allow_edit_existing_files=false; skipping fix loop"
             );
-
-            let fix_future = execute_review(
-                tool,
-                fix_prompt,
-                Some(session_id.clone()),
-                review_model.clone(),
-                tier_model_spec.clone(),
-                review_thinking.clone(),
-                format!("fix round {round}/{max_rounds}"),
-                &project_root,
-                config.as_ref(),
-                &global_config,
-                review_routing.clone(),
-                stream_mode,
-                idle_timeout_seconds,
-                initial_response_timeout_seconds,
-                args.force_override_user_config,
-                args.no_fs_sandbox,
-                false, // fix pass must write — override readonly_project_root
-                &args.extra_writable,
-            );
-
-            let fix_result = if let Some(timeout_secs) = args.timeout {
-                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), fix_future)
-                    .await
-                {
-                    Ok(inner) => inner?,
-                    Err(_) => {
-                        error!(
-                            timeout_secs = timeout_secs,
-                            round, "Fix round aborted: wall-clock timeout exceeded"
-                        );
-                        anyhow::bail!(
-                            "Fix round {round}/{max_rounds} aborted: --timeout {timeout_secs}s exceeded."
-                        );
-                    }
-                }
-            } else {
-                fix_future.await?
-            };
-
-            print!("{}", sanitize_review_output(&fix_result.execution.output));
-            let fix_empty = is_review_output_empty(&fix_result.execution.output);
-            if fix_empty {
-                warn!(
-                    round,
-                    "Fix round produced no substantive output — treating as failed"
-                );
-            }
-            session_id = fix_result.meta_session_id.clone();
-
-            // Step 2: Run the quality gate after fix
-            let fix_gate_steps = global_config.review.effective_gate_steps();
-            let fix_gate_timeout = config
-                .as_ref()
-                .and_then(|c| c.review.as_ref())
-                .map(|r| r.gate_timeout_secs)
-                .unwrap_or_else(csa_config::ReviewConfig::default_gate_timeout);
-            let fix_gate_mode = &global_config.review.gate_mode;
-
-            let gate_passed = if fix_gate_steps.is_empty() {
-                let gate_command = config
-                    .as_ref()
-                    .and_then(|c| c.review.as_ref())
-                    .and_then(|r| r.gate_command.as_deref());
-                let gate_result = crate::pipeline::gate::evaluate_quality_gate(
-                    &project_root,
-                    gate_command,
-                    fix_gate_timeout,
-                    fix_gate_mode,
-                )
-                .await?;
-
-                if !gate_result.passed() {
-                    warn!(
-                        round,
-                        max_rounds,
-                        command = %gate_result.command,
-                        exit_code = ?gate_result.exit_code,
-                        "Quality gate still failing after fix round"
-                    );
-                }
-                gate_result.passed()
-            } else {
-                let pipeline_result = crate::pipeline::gate::evaluate_quality_gates(
-                    &project_root,
-                    &fix_gate_steps,
-                    fix_gate_timeout,
-                    fix_gate_mode,
-                )
-                .await?;
-
-                if !pipeline_result.passed {
-                    warn!(
-                        round,
-                        max_rounds,
-                        failed_step = ?pipeline_result.failed_step,
-                        "Quality gate pipeline still failing after fix round"
-                    );
-                }
-                pipeline_result.passed
-            };
-
-            if gate_passed && !fix_empty {
-                info!(round, "Fix round succeeded — quality gate passed");
-                // Update meta: fix succeeded
-                persist_review_meta(
-                    &project_root,
-                    &ReviewSessionMeta {
-                        session_id: session_id.clone(),
-                        head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
-                        decision: "pass".to_string(),
-                        verdict: CLEAN.to_string(),
-                        tool: tool.to_string(),
-                        scope: scope.clone(),
-                        exit_code: 0,
-                        fix_attempted: true,
-                        fix_rounds: u32::from(round),
-                        timestamp: chrono::Utc::now(),
-                    },
-                );
-                return Ok(0);
-            }
+            return Ok(effective_exit_code);
         }
 
-        // All fix rounds exhausted; gate still fails.
-        // Update meta: fix exhausted
-        persist_review_meta(
-            &project_root,
-            &ReviewSessionMeta {
-                session_id: result.meta_session_id.clone(),
-                head_sha: csa_session::detect_git_head(&project_root).unwrap_or_default(),
-                decision: decision.as_str().to_string(),
-                verdict: verdict.to_string(),
-                tool: tool.to_string(),
-                scope: scope.clone(),
-                exit_code: 1,
-                fix_attempted: true,
-                fix_rounds: u32::from(max_rounds),
-                timestamp: chrono::Utc::now(),
-            },
-        );
-        error!(
-            max_rounds,
-            "All fix rounds exhausted — quality gate still failing"
-        );
-        return Ok(1);
+        // --- Fix loop: resume the review session to apply fixes, then re-gate ---
+        return fix::run_fix_loop(fix::FixLoopContext {
+            tool,
+            config: config.as_ref(),
+            global_config: &global_config,
+            review_model,
+            tier_model_spec,
+            review_thinking,
+            review_routing,
+            stream_mode,
+            idle_timeout_seconds,
+            initial_response_timeout_seconds,
+            force_override_user_config: args.force_override_user_config,
+            no_fs_sandbox: args.no_fs_sandbox,
+            extra_writable: &args.extra_writable,
+            timeout: args.timeout,
+            project_root: &project_root,
+            scope,
+            decision: decision.as_str().to_string(),
+            verdict: verdict.to_string(),
+            max_rounds: args.max_rounds,
+            initial_session_id: result.meta_session_id.clone(),
+        })
+        .await;
     }
 
     if args.fix {

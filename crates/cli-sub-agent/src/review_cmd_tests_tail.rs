@@ -1,5 +1,5 @@
 use super::*;
-use csa_config::ProjectProfile;
+use csa_config::{ProjectProfile, ToolRestrictions};
 use tempfile::tempdir;
 
 // --- is_worktree_submodule tests ---
@@ -541,4 +541,36 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
 
     let execution = result.expect("review should ignore inherited stale CSA_SESSION_ID");
     assert_eq!(execution.execution.exit_code, 0);
+}
+
+// --- fix loop restriction gate tests ---
+
+/// When a tool has `allow_edit_existing_files = false`, the fix loop gate
+/// condition (`config.is_none_or(|cfg| cfg.can_tool_edit_existing(...))`)
+/// must evaluate to `false`, causing the fix loop to be skipped.
+#[test]
+fn fix_gate_blocks_restricted_tool() {
+    let mut cfg = project_config_with_enabled_tools(&["gemini-cli"]);
+    cfg.tools.get_mut("gemini-cli").unwrap().restrictions = Some(ToolRestrictions {
+        allow_edit_existing_files: false,
+        allow_write_new_files: false,
+    });
+
+    let can_edit = Some(&cfg).is_none_or(|c| c.can_tool_edit_existing("gemini-cli"));
+    assert!(!can_edit, "restricted tool must block fix loop");
+}
+
+#[test]
+fn fix_gate_allows_unrestricted_tool() {
+    let cfg = project_config_with_enabled_tools(&["claude-code"]);
+
+    let can_edit = Some(&cfg).is_none_or(|c| c.can_tool_edit_existing("claude-code"));
+    assert!(can_edit, "unrestricted tool must allow fix loop");
+}
+
+#[test]
+fn fix_gate_allows_when_no_config() {
+    let can_edit: bool =
+        Option::<&ProjectConfig>::None.is_none_or(|c| c.can_tool_edit_existing("gemini-cli"));
+    assert!(can_edit, "absent config must default to allowing fix");
 }
