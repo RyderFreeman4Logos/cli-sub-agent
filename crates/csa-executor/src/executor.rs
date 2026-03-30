@@ -337,6 +337,7 @@ impl Executor {
             output_spool_keep_rotated: options.output_spool_keep_rotated,
             setting_sources: options.setting_sources.clone(),
             sandbox: sandbox_transport.as_ref(),
+            gemini_sandbox: options.gemini_sandbox,
         };
         let transport = self.transport(session_config);
         let mut result = transport
