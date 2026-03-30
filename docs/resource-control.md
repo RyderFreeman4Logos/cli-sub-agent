@@ -201,9 +201,9 @@ Until P95 data is available, CSA uses configured initial estimates:
 | Tool | Recommended Initial (MB) |
 |------|-------------------------|
 | gemini-cli | 1024 |
-| codex | 2048 |
+| codex | 4096 |
 | opencode | 1536 |
-| claude-code | 2048 |
+| claude-code | 4096 |
 
 ## ResourceGuard API
 

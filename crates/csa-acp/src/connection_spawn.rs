@@ -90,6 +90,31 @@ pub struct AcpSandboxRequest<'a> {
     pub session_id: &'a str,
 }
 
+impl AcpSandboxHandle {
+    /// Check if the OOM killer was triggered in the sandbox scope.
+    ///
+    /// Only meaningful for the [`Cgroup`](Self::Cgroup) variant; returns
+    /// `false` for all others.  Must be called **before** the handle is
+    /// dropped, as the cgroup scope is stopped on drop.
+    pub fn check_oom_killed(&self) -> bool {
+        match self {
+            Self::Cgroup(guard) => guard.check_oom_killed(),
+            _ => false,
+        }
+    }
+
+    /// Produce an actionable OOM diagnosis string, if applicable.
+    ///
+    /// Returns `Some(hint)` when the cgroup OOM killer was triggered,
+    /// including peak/limit memory info and configuration advice.
+    pub fn oom_diagnosis(&self) -> Option<String> {
+        match self {
+            Self::Cgroup(guard) => guard.oom_diagnosis(),
+            _ => None,
+        }
+    }
+}
+
 impl AcpConnection {
     /// Spawn an ACP process without resource sandboxing.
     pub async fn spawn(

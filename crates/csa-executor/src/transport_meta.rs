@@ -170,7 +170,7 @@ pub(super) async fn run_acp_sandboxed(
     use csa_acp::AcpConnection;
     use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
 
-    let (connection, _sandbox_handle) = AcpConnection::spawn_sandboxed(
+    let (connection, sandbox_handle) = AcpConnection::spawn_sandboxed(
         AcpSpawnRequest {
             command,
             args,
@@ -228,7 +228,35 @@ pub(super) async fn run_acp_sandboxed(
                 keep_rotated_spool: output_spool_keep_rotated,
             },
         )
-        .await?;
+        .await;
+
+    // Check for OOM BEFORE the sandbox handle is dropped (which stops the
+    // cgroup scope).  Note: `run_acp_sandboxed` is called inside
+    // `spawn_blocking`, so synchronous systemctl queries are acceptable here.
+    let oom_diagnosis = sandbox_handle.oom_diagnosis();
+    if let Some(ref hint) = oom_diagnosis {
+        tracing::error!(tool = tool_name, "{hint}");
+    }
+
+    let result = result.map_err(|e| {
+        if let Some(hint) = &oom_diagnosis {
+            // Construct a typed ProcessExited error so callers retain
+            // programmatic access to exit code and signal fields.
+            let mut stderr = connection.stderr();
+            if !stderr.is_empty() && !stderr.ends_with('\n') {
+                stderr.push('\n');
+            }
+            stderr.push_str(&format!("OOM detected: {hint}\n"));
+            stderr.push_str(&format!("original error: {e}\n"));
+            csa_acp::AcpError::ProcessExited {
+                code: 137,
+                signal: Some(9),
+                stderr,
+            }
+        } else {
+            e
+        }
+    })?;
 
     let mut exit_code = connection.exit_code().await?.unwrap_or(0);
     let mut stderr = connection.stderr();
@@ -254,7 +282,7 @@ pub(super) async fn run_acp_sandboxed(
         stderr.push('\n');
     }
 
-    // _sandbox_handle dropped here, cleaning up cgroup scope if applicable.
+    // sandbox_handle dropped here, cleaning up cgroup scope if applicable.
 
     Ok(csa_acp::transport::AcpOutput {
         output: result.output,
