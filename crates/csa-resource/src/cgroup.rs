@@ -198,19 +198,58 @@ impl CgroupScopeGuard {
 
     /// Produce a diagnostic hint string when OOM is detected.
     ///
-    /// Returns `Some(hint)` with peak/limit info and config advice if
-    /// OOM was triggered, `None` otherwise.
+    /// Consolidates all systemd queries into a single `systemctl show`
+    /// call to minimize subprocess overhead.  Returns `Some(hint)` with
+    /// peak/limit info and config advice if OOM was triggered, `None`
+    /// otherwise.
     pub fn oom_diagnosis(&self) -> Option<String> {
-        if !self.check_oom_killed() {
+        // Fetch Result, MemoryPeak, MemoryMax in one systemctl call.
+        let output = Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                &self.scope_name,
+                "--property=Result,MemoryPeak,MemoryMax",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
             return None;
         }
-        let peak = self
-            .memory_peak_mb()
-            .map(|mb| format!("peak: {mb}MB"))
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut result_val = "";
+        let mut peak_bytes: Option<u64> = None;
+        let mut max_bytes: Option<u64> = None;
+
+        for line in stdout.lines() {
+            if let Some(v) = line.strip_prefix("Result=") {
+                result_val = v.trim();
+            } else if let Some(v) = line.strip_prefix("MemoryPeak=") {
+                let v = v.trim();
+                if v != "infinity" && !v.is_empty() {
+                    peak_bytes = v.parse().ok();
+                }
+            } else if let Some(v) = line.strip_prefix("MemoryMax=") {
+                let v = v.trim();
+                if v != "infinity" && !v.is_empty() {
+                    max_bytes = v.parse().ok();
+                }
+            }
+        }
+
+        if result_val != "oom-kill" {
+            return None;
+        }
+
+        let peak = peak_bytes
+            .map(|b| format!("peak: {}MB", b / 1024 / 1024))
             .unwrap_or_else(|| "peak: unknown".to_string());
-        let limit = self
-            .memory_max_mb()
-            .map(|mb| format!("limit: {mb}MB"))
+        let limit = max_bytes
+            .map(|b| format!("limit: {}MB", b / 1024 / 1024))
             .unwrap_or_else(|| "limit: unknown".to_string());
         Some(format!(
             "process was OOM-killed ({peak}, {limit}). \

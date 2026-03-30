@@ -230,7 +230,9 @@ pub(super) async fn run_acp_sandboxed(
         )
         .await;
 
-    // Check for OOM BEFORE the sandbox handle is dropped (which stops the cgroup scope).
+    // Check for OOM BEFORE the sandbox handle is dropped (which stops the
+    // cgroup scope).  Note: `run_acp_sandboxed` is called inside
+    // `spawn_blocking`, so synchronous systemctl queries are acceptable here.
     let oom_diagnosis = sandbox_handle.oom_diagnosis();
     if let Some(ref hint) = oom_diagnosis {
         tracing::error!(tool = tool_name, "{hint}");
@@ -238,9 +240,19 @@ pub(super) async fn run_acp_sandboxed(
 
     let result = result.map_err(|e| {
         if let Some(hint) = &oom_diagnosis {
-            // Wrap the original ACP error with OOM context so the user gets
-            // actionable guidance instead of a generic "server shut down".
-            csa_acp::AcpError::PromptFailed(format!("{e} (OOM detected: {hint})"))
+            // Construct a typed ProcessExited error so callers retain
+            // programmatic access to exit code and signal fields.
+            let mut stderr = connection.stderr();
+            if !stderr.is_empty() && !stderr.ends_with('\n') {
+                stderr.push('\n');
+            }
+            stderr.push_str(&format!("OOM detected: {hint}\n"));
+            stderr.push_str(&format!("original error: {e}\n"));
+            csa_acp::AcpError::ProcessExited {
+                code: 137,
+                signal: Some(9),
+                stderr,
+            }
         } else {
             e
         }
@@ -268,14 +280,6 @@ pub(super) async fn run_acp_sandboxed(
             "{label}: no ACP events/stderr for {timeout_secs}s; process killed",
         ));
         stderr.push('\n');
-    }
-
-    // Append OOM hint to stderr for visibility in session result output.
-    if let Some(hint) = &oom_diagnosis {
-        if !stderr.is_empty() && !stderr.ends_with('\n') {
-            stderr.push('\n');
-        }
-        stderr.push_str(&format!("OOM detected: {hint}\n"));
     }
 
     // sandbox_handle dropped here, cleaning up cgroup scope if applicable.
