@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "rust-skills@rust-skills": true,
+    "dev-browser@dev-browser-marketplace": false
+  }
+}

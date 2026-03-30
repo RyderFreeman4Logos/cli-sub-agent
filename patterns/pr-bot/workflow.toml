@@ -731,7 +731,13 @@ if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; the
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
 # shellcheck disable=SC2086
-gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG}
+gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+
+# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+mkdir -p "${MARKER_DIR}"
+touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1552,7 +1558,13 @@ if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; the
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
 # shellcheck disable=SC2086
-gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG}
+gh pr merge "${WORKFLOW_BRANCH}-clean" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+
+# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+mkdir -p "${MARKER_DIR}"
+touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 # Post-merge: sync local main with remote
 git fetch origin
@@ -1589,7 +1601,13 @@ if [ "$(csa config get pr_review.delete_branch --default false)" = "true" ]; the
   DELETE_BRANCH_FLAG="--delete-branch"
 fi
 # shellcheck disable=SC2086
-gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG}
+gh pr merge "${PR_NUM}" --repo "${REPO}" --"${MERGE_STRATEGY}" ${DELETE_BRANCH_FLAG} --force-skip-pr-bot
+
+# Write pr-bot completion marker (deterministic gate for pre-merge hook).
+REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' | tr '/' '_')"
+MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
+mkdir -p "${MARKER_DIR}"
+touch "${MARKER_DIR}/${PR_NUM}-$(git rev-parse HEAD).done"
 
 # Post-merge: sync local main with remote
 git fetch origin
