@@ -140,6 +140,12 @@ impl AcpTransport {
         if let Some(extra) = extra_env {
             env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+
+        // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
+        // `gh pr merge` unless pr-bot has completed.  This is deterministic
+        // environment-level enforcement — the tool subprocess cannot bypass it.
+        csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
+
         env
     }
 }

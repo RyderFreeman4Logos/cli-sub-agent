@@ -46,6 +46,7 @@ pub mod config;
 pub mod event;
 pub mod event_bus;
 pub mod guard;
+pub mod merge_guard;
 pub mod policy;
 pub mod runner;
 pub mod waiver;

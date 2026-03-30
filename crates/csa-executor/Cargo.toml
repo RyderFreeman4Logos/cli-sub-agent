@@ -11,6 +11,7 @@ csa-session.workspace = true
 csa-process.workspace = true
 csa-resource.workspace = true
 csa-acp = { path = "../csa-acp" }
+csa-hooks = { path = "../csa-hooks" }
 agent-teams.workspace = true
 tokio.workspace = true
 serde.workspace = true
