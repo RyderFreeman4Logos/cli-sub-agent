@@ -144,6 +144,10 @@ impl AcpTransport {
         // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
         // `gh pr merge` unless pr-bot has completed.  This is deterministic
         // environment-level enforcement — the tool subprocess cannot bypass it.
+        //
+        // Only applied to ACP tools (claude-code, codex) which have autonomous
+        // bash execution.  Legacy tools (gemini-cli, opencode) are text-mode
+        // and cannot independently call `gh pr merge`.
         csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
 
         env

@@ -87,12 +87,10 @@ done
 
 # Extract PR number from args.
 PR_NUMBER=""
-PREV=""
 for arg in "$@"; do
   case "$arg" in
     [0-9]*) PR_NUMBER="$arg"; break ;;
   esac
-  PREV="$arg"
 done
 
 if [ -z "${PR_NUMBER}" ]; then
