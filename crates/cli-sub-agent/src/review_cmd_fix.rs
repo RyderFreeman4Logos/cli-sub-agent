@@ -11,6 +11,7 @@ use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 
+use super::CLEAN;
 use super::output::{is_review_output_empty, persist_review_meta, sanitize_review_output};
 use super::resolve::ANTI_RECURSION_PREAMBLE;
 
@@ -169,7 +170,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                     session_id: session_id.clone(),
                     head_sha: csa_session::detect_git_head(ctx.project_root).unwrap_or_default(),
                     decision: "pass".to_string(),
-                    verdict: "CLEAN".to_string(),
+                    verdict: CLEAN.to_string(),
                     tool: ctx.tool.to_string(),
                     scope: ctx.scope.clone(),
                     exit_code: 0,
