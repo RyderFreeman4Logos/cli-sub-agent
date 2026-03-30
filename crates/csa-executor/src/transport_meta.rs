@@ -170,7 +170,7 @@ pub(super) async fn run_acp_sandboxed(
     use csa_acp::AcpConnection;
     use csa_acp::connection::{AcpConnectionOptions, AcpSandboxRequest, AcpSpawnRequest};
 
-    let (connection, _sandbox_handle) = AcpConnection::spawn_sandboxed(
+    let (connection, sandbox_handle) = AcpConnection::spawn_sandboxed(
         AcpSpawnRequest {
             command,
             args,
@@ -228,7 +228,23 @@ pub(super) async fn run_acp_sandboxed(
                 keep_rotated_spool: output_spool_keep_rotated,
             },
         )
-        .await?;
+        .await;
+
+    // Check for OOM BEFORE the sandbox handle is dropped (which stops the cgroup scope).
+    let oom_diagnosis = sandbox_handle.oom_diagnosis();
+    if let Some(ref hint) = oom_diagnosis {
+        tracing::error!(tool = tool_name, "{hint}");
+    }
+
+    let result = result.map_err(|e| {
+        if let Some(hint) = &oom_diagnosis {
+            // Wrap the original ACP error with OOM context so the user gets
+            // actionable guidance instead of a generic "server shut down".
+            csa_acp::AcpError::PromptFailed(format!("{e} (OOM detected: {hint})"))
+        } else {
+            e
+        }
+    })?;
 
     let mut exit_code = connection.exit_code().await?.unwrap_or(0);
     let mut stderr = connection.stderr();
@@ -254,7 +270,15 @@ pub(super) async fn run_acp_sandboxed(
         stderr.push('\n');
     }
 
-    // _sandbox_handle dropped here, cleaning up cgroup scope if applicable.
+    // Append OOM hint to stderr for visibility in session result output.
+    if let Some(hint) = &oom_diagnosis {
+        if !stderr.is_empty() && !stderr.ends_with('\n') {
+            stderr.push('\n');
+        }
+        stderr.push_str(&format!("OOM detected: {hint}\n"));
+    }
+
+    // sandbox_handle dropped here, cleaning up cgroup scope if applicable.
 
     Ok(csa_acp::transport::AcpOutput {
         output: result.output,

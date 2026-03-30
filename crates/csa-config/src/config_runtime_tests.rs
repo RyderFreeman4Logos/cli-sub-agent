@@ -200,8 +200,8 @@ fn memory_max_heavyweight_gets_profile_default() {
     let cfg = empty_config();
     assert_eq!(
         cfg.sandbox_memory_max_mb("claude-code"),
-        Some(2048),
-        "Heavyweight profile should provide 2048 MB default"
+        Some(4096),
+        "Heavyweight profile should provide 4096 MB default"
     );
 }
 
@@ -230,8 +230,8 @@ fn memory_max_codex_gets_heavyweight_default() {
     let cfg = empty_config();
     assert_eq!(
         cfg.sandbox_memory_max_mb("codex"),
-        Some(2048),
-        "codex (Heavyweight) should get 2048 MB default"
+        Some(4096),
+        "codex (Heavyweight) should get 4096 MB default"
     );
 }
 
@@ -389,14 +389,14 @@ fn memory_max_enforcement_only_inherits_heavyweight_defaults() {
         },
     );
     // Profile resolves to Custom (enforcement_mode set), but memory
-    // should fall back to inherent Heavyweight defaults (2048), not None.
+    // should fall back to inherent Heavyweight defaults (4096), not None.
     assert_eq!(
         cfg.tool_resource_profile("claude-code"),
         ToolResourceProfile::Custom,
     );
     assert_eq!(
         cfg.sandbox_memory_max_mb("claude-code"),
-        Some(2048),
+        Some(4096),
         "Custom profile with enforcement set must inherit Heavyweight memory_max_mb"
     );
     assert_eq!(
@@ -653,7 +653,7 @@ fn node_heap_limit_gemini_cli_defaults_to_none() {
 fn default_sandbox_for_tool_claude_code() {
     let opts = default_sandbox_for_tool("claude-code");
     assert_eq!(opts.enforcement, EnforcementMode::BestEffort);
-    assert_eq!(opts.memory_max_mb, Some(2048));
+    assert_eq!(opts.memory_max_mb, Some(4096));
     assert_eq!(opts.memory_swap_max_mb, Some(0));
     assert_eq!(
         opts.setting_sources,
@@ -673,7 +673,7 @@ fn default_sandbox_for_tool_codex() {
     );
     assert_eq!(
         opts.memory_max_mb,
-        Some(2048),
+        Some(4096),
         "codex (Heavyweight) must get default memory limit"
     );
     assert_eq!(

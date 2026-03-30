@@ -79,9 +79,9 @@ min_free_memory_mb = 4096
 
 [resources.initial_estimates]
 gemini-cli = 1024       # MB, used until P95 data available
-codex = 2048
+codex = 4096
 opencode = 1536
-claude-code = 2048
+claude-code = 4096
 ```
 
 See [Resource Control](resource-control.md) for P95 estimation details.

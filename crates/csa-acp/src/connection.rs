@@ -475,8 +475,19 @@ impl AcpConnection {
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?
         {
             let code = status.code().unwrap_or(-1);
+            #[cfg(unix)]
+            let signal = {
+                use std::os::unix::process::ExitStatusExt;
+                status.signal()
+            };
+            #[cfg(not(unix))]
+            let signal = None;
             let stderr = self.stderr();
-            return Err(AcpError::ProcessExited { code, stderr });
+            return Err(AcpError::ProcessExited {
+                code,
+                signal,
+                stderr,
+            });
         }
         Ok(())
     }

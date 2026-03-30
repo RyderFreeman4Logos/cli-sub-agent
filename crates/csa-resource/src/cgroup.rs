@@ -145,6 +145,109 @@ impl CgroupScopeGuard {
         &self.scope_name
     }
 
+    /// Check if the OOM killer was triggered inside this cgroup scope.
+    ///
+    /// Queries `systemctl --user show <scope> --property=Result` for
+    /// `oom-kill`, which systemd sets when the scope terminates due to
+    /// memory limit enforcement.  Must be called **before** [`Self::stop`]
+    /// or [`Drop`], as the property is unavailable after the scope is gone.
+    ///
+    /// Returns `false` if the scope has already been cleaned up or the
+    /// query fails (best-effort diagnostic).
+    pub fn check_oom_killed(&self) -> bool {
+        let output = Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                &self.scope_name,
+                "--property=Result",
+                "--value",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output();
+
+        match output {
+            Ok(out) if out.status.success() => {
+                let result = String::from_utf8_lossy(&out.stdout);
+                let trimmed = result.trim();
+                // systemd reports "oom-kill" when the scope was killed by the
+                // cgroup OOM handler.
+                trimmed == "oom-kill"
+            }
+            _ => false,
+        }
+    }
+
+    /// Query peak memory usage (in MB) for this scope.
+    ///
+    /// Uses `systemctl --user show <scope> --property=MemoryPeak`.
+    /// Returns `None` if the scope is gone or the query fails.
+    pub fn memory_peak_mb(&self) -> Option<u64> {
+        self.query_memory_property("MemoryPeak")
+    }
+
+    /// Query configured memory limit (in MB) for this scope.
+    ///
+    /// Uses `systemctl --user show <scope> --property=MemoryMax`.
+    /// Returns `None` if the scope is gone, the query fails, or the
+    /// property is `infinity` (no limit set).
+    pub fn memory_max_mb(&self) -> Option<u64> {
+        self.query_memory_property("MemoryMax")
+    }
+
+    /// Produce a diagnostic hint string when OOM is detected.
+    ///
+    /// Returns `Some(hint)` with peak/limit info and config advice if
+    /// OOM was triggered, `None` otherwise.
+    pub fn oom_diagnosis(&self) -> Option<String> {
+        if !self.check_oom_killed() {
+            return None;
+        }
+        let peak = self
+            .memory_peak_mb()
+            .map(|mb| format!("peak: {mb}MB"))
+            .unwrap_or_else(|| "peak: unknown".to_string());
+        let limit = self
+            .memory_max_mb()
+            .map(|mb| format!("limit: {mb}MB"))
+            .unwrap_or_else(|| "limit: unknown".to_string());
+        Some(format!(
+            "process was OOM-killed ({peak}, {limit}). \
+             Increase resources.memory_max_mb or tools.<tool>.memory_max_mb \
+             in .csa/config.toml"
+        ))
+    }
+
+    /// Query a memory property from systemd (bytes) and convert to MB.
+    fn query_memory_property(&self, property: &str) -> Option<u64> {
+        let output = Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                &self.scope_name,
+                &format!("--property={property}"),
+                "--value",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let value = String::from_utf8_lossy(&output.stdout);
+        let trimmed = value.trim();
+        // "infinity" means no limit set — return None.
+        if trimmed == "infinity" || trimmed.is_empty() {
+            return None;
+        }
+        // systemd reports memory properties in bytes.
+        trimmed.parse::<u64>().ok().map(|bytes| bytes / 1024 / 1024)
+    }
+
     /// Explicitly stop the scope.  Consumes the guard, preventing the
     /// [`Drop`] impl from running a second stop.
     pub fn stop(self) {
@@ -395,5 +498,30 @@ mod tests {
         assert_eq!(guard.scope_name(), "csa-claude-code-01JGUARD.scope");
         // Drop will attempt `systemctl stop` which will fail silently in CI
         // (no systemd user session). That's fine — it's best-effort.
+    }
+
+    #[test]
+    fn test_check_oom_killed_returns_false_for_nonexistent_scope() {
+        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
+        // Non-existent scope → systemctl show fails → false.
+        assert!(!guard.check_oom_killed());
+    }
+
+    #[test]
+    fn test_memory_peak_returns_none_for_nonexistent_scope() {
+        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
+        assert!(guard.memory_peak_mb().is_none());
+    }
+
+    #[test]
+    fn test_memory_max_returns_none_for_nonexistent_scope() {
+        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
+        assert!(guard.memory_max_mb().is_none());
+    }
+
+    #[test]
+    fn test_oom_diagnosis_returns_none_when_no_oom() {
+        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
+        assert!(guard.oom_diagnosis().is_none());
     }
 }

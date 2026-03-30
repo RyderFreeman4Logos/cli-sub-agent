@@ -35,7 +35,11 @@ fn profile_defaults(profile: ToolResourceProfile) -> ProfileDefaults {
         },
         ToolResourceProfile::Heavyweight => ProfileDefaults {
             enforcement: EnforcementMode::BestEffort,
-            memory_max_mb: Some(2048),
+            // 4096 MB: Node.js tools (claude-code, codex) need headroom for
+            // the runtime + subprocesses (cargo, npm) in large workspaces.
+            // The previous 2048 MB default caused OOM kills in monorepos.
+            // See: GitHub issue #508.
+            memory_max_mb: Some(4096),
             memory_swap_max_mb: Some(0),
         },
         ToolResourceProfile::Custom => ProfileDefaults {
