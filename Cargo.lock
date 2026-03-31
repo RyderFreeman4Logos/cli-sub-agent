@@ -515,7 +515,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli-sub-agent"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -541,6 +541,7 @@ dependencies = [
  "regex",
  "serde",
  "serde_json",
+ "serial_test",
  "sha2",
  "sysinfo",
  "tempfile",
@@ -703,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "csa-acp"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -723,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "csa-config"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -739,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "csa-core"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "agent-teams",
  "chrono",
@@ -754,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "csa-eval"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -768,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "csa-executor"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "agent-teams",
  "anyhow",
@@ -794,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "csa-hooks"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -811,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "csa-lock"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -823,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "csa-mcp-hub"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "axum",
@@ -845,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "csa-memory"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -863,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "csa-process"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -881,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "csa-resource"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "csa-core",
@@ -897,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "csa-scheduler"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -915,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "csa-session"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -936,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "csa-todo"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3070,6 +3071,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "scc"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46e6f046b7fef48e2660c57ed794263155d713de679057f2d0c169bfc6e756cc"
+dependencies = [
+ "sdd",
+]
+
+[[package]]
 name = "schannel"
 version = "0.1.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3119,6 +3129,12 @@ dependencies = [
  "ring",
  "untrusted",
 ]
+
+[[package]]
+name = "sdd"
+version = "3.0.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "490dcfcbfef26be6800d11870ff2df8774fa6e86d047e3e8c8a76b25655e41ca"
 
 [[package]]
 name = "security-framework"
@@ -3242,6 +3258,32 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serial_test"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "911bd979bf1070a3f3aa7b691a3b3e9968f339ceeec89e08c280a8a22207a32f"
+dependencies = [
+ "futures-executor",
+ "futures-util",
+ "log",
+ "once_cell",
+ "parking_lot",
+ "scc",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "3.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a7d91949b85b0d2fb687445e448b40d322b6b3e4af6b44a29b21d9a5f33e6d9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -4325,7 +4367,7 @@ dependencies = [
 
 [[package]]
 name = "weave"
-version = "0.1.198"
+version = "0.1.199"
 dependencies = [
  "anyhow",
  "clap",

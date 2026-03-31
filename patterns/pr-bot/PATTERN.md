@@ -80,7 +80,8 @@ REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || 
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
 else
-  csa review --branch main
+  SID=$(csa review --branch main)
+  csa session wait --session "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -265,7 +266,8 @@ if [ "${CLOUD_BOT}" = "false" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
-    csa review --branch main
+    SID=$(csa review --branch main)
+    csa session wait --session "$SID"
   fi
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"

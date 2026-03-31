@@ -69,6 +69,9 @@ name = "PR_BODY"
 name = "REVIEW_COMPLETED"
 
 [[workflow.variables]]
+name = "SID"
+
+[[workflow.variables]]
 name = "PR_NUM"
 
 [[workflow.variables]]
@@ -127,7 +130,8 @@ if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: latest local review already covers HEAD ${CURRENT_HEAD}; skip Step 2 review."
 else
   echo "No matching review HEAD found (or HEAD drift detected). Running full local review."
-  csa review --branch main
+  SID=$(csa review --branch main)
+  csa session wait --session "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -297,7 +301,8 @@ if [ "${CLOUD_BOT}" = "false" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
-    csa review --branch main
+    SID=$(csa review --branch main)
+    csa session wait --session "$SID"
   fi
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
@@ -1148,7 +1153,8 @@ else
         echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} after ${RETRIGGER_TS}." >&2
         _check_setup_message
         echo "Falling back to local review." >&2
-        if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
+        SID=$(csa review --sa-mode true --range main...HEAD)
+        if ! csa session wait --session "$SID"; then
           echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
           exit 1
         fi
@@ -1157,7 +1163,8 @@ else
     BOT_CLEAN=true
   else
     echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
-    if ! csa review --sa-mode true --range main...HEAD --timeout 1800; then
+    SID=$(csa review --sa-mode true --range main...HEAD)
+    if ! csa session wait --session "$SID"; then
       echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
       exit 1
     fi

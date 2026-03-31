@@ -17,6 +17,9 @@ name = "REVIEW_HAS_ISSUES"
 [[workflow.variables]]
 name = "SELF_AUTHORED"
 
+[[workflow.variables]]
+name = "SID"
+
 [[workflow.steps]]
 id = 1
 title = "Stage Changes"
@@ -54,7 +57,8 @@ title = "Step 4a: Run Debate Review"
 tool = "bash"
 prompt = """
 ```bash
-csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch."
+SID=$(csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch.")
+csa session wait --session "$SID"
 ```"""
 on_fail = "abort"
 condition = "${SELF_AUTHORED}"
@@ -65,7 +69,8 @@ title = "Step 4b: Run CSA Review"
 tool = "bash"
 prompt = """
 ```bash
-csa review --diff --allow-fallback
+SID=$(csa review --diff --allow-fallback)
+csa session wait --session "$SID"
 ```"""
 on_fail = "abort"
 condition = "!(${SELF_AUTHORED})"
@@ -102,7 +107,8 @@ prompt = """
 Loop back to review. Maximum 3 review-fix cycles.
 
 ```bash
-csa review --diff --allow-fallback
+SID=$(csa review --diff --allow-fallback)
+csa session wait --session "$SID"
 ```"""
 on_fail = "abort"
 condition = "${REVIEW_HAS_ISSUES}"

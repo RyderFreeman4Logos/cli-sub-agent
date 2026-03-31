@@ -64,7 +64,13 @@ pub(crate) fn handle_session_wait(session: String, cd: Option<String>) -> Result
                 let mut f = std::fs::File::open(&stdout_log)?;
                 std::io::copy(&mut f, &mut std::io::stdout().lock())?;
             }
-            return Ok(0);
+            // Propagate the session's exit code from result.toml.
+            let exit_code = fs::read_to_string(&result_path)
+                .ok()
+                .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())
+                .map(|r| r.exit_code)
+                .unwrap_or(0);
+            return Ok(exit_code);
         }
 
         // Detect dead daemon: PID gone but no result.toml.

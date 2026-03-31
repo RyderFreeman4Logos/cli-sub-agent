@@ -56,7 +56,8 @@ the research context into the debate prompt:
 # Gather context via forked session, then feed into debate
 SID=$(csa run --fork-from <research-session-id> "Summarize findings for debate context")
 csa session wait --session "$SID"
-csa debate "question (with research context above)"
+DEBATE_SID=$(csa debate "question (with research context above)")
+csa session wait --session "$DEBATE_SID"
 ```
 
 **Benefits**: Debaters inherit the research session's context (files read,

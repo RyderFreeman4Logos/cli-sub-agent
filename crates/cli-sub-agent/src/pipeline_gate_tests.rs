@@ -1,9 +1,10 @@
 use super::*;
+use serial_test::serial;
 
 /// Set CSA_DEPTH env var for test isolation.
 ///
 /// # Safety
-/// Tests using this must be run with `--test-threads=1` or accept
+/// Tests using this must be run with `#[serial]` or accept
 /// that env mutations are process-global. All gate tests restore the
 /// env var after use.
 unsafe fn set_depth(val: &str) {
@@ -83,6 +84,7 @@ fn test_gate_result_no_exit_code_is_not_passed() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn test_gate_skipped_when_csa_depth_set() {
     // SAFETY: Test-only env mutation; gate tests are not parallel-safe by nature.
     unsafe { set_depth("1") };
@@ -106,6 +108,7 @@ async fn test_gate_skipped_when_csa_depth_set() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_gate_skipped_when_no_command_and_no_hooks_path() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -131,6 +134,7 @@ async fn test_gate_skipped_when_no_command_and_no_hooks_path() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_gate_runs_explicit_command_success() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -151,6 +155,7 @@ async fn test_gate_runs_explicit_command_success() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_gate_runs_explicit_command_failure() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -175,6 +180,7 @@ async fn test_gate_runs_explicit_command_failure() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_gate_timeout() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -198,6 +204,7 @@ async fn test_gate_timeout() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_gate_monitor_mode_still_runs() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -218,6 +225,7 @@ async fn test_gate_monitor_mode_still_runs() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_gate_captures_stdout_and_stderr() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -245,6 +253,7 @@ async fn test_gate_captures_stdout_and_stderr() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn test_detect_no_hooks_path() {
     let dir = tempfile::tempdir().unwrap();
     tokio::process::Command::new("git")
@@ -259,6 +268,7 @@ async fn test_detect_no_hooks_path() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_detect_hooks_path_with_pre_commit() {
     let dir = tempfile::tempdir().unwrap();
     tokio::process::Command::new("git")
@@ -288,6 +298,7 @@ async fn test_detect_hooks_path_with_pre_commit() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_detect_hooks_path_without_pre_commit() {
     let dir = tempfile::tempdir().unwrap();
     tokio::process::Command::new("git")
@@ -313,6 +324,7 @@ async fn test_detect_hooks_path_without_pre_commit() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_detect_hooks_path_relative() {
     let dir = tempfile::tempdir().unwrap();
     tokio::process::Command::new("git")
@@ -344,6 +356,7 @@ async fn test_detect_hooks_path_relative() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[serial]
 async fn test_pipeline_skipped_when_csa_depth_set() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("1") };
@@ -368,6 +381,7 @@ async fn test_pipeline_skipped_when_csa_depth_set() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_pipeline_empty_steps_skipped() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -385,6 +399,7 @@ async fn test_pipeline_empty_steps_skipped() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_pipeline_sequential_all_pass() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -428,6 +443,7 @@ async fn test_pipeline_sequential_all_pass() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_pipeline_fail_fast_on_first_failure() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };
@@ -460,6 +476,7 @@ async fn test_pipeline_fail_fast_on_first_failure() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_pipeline_summary_for_review() {
     // SAFETY: Test-only env mutation.
     unsafe { set_depth("0") };

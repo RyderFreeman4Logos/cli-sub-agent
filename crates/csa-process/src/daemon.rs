@@ -17,6 +17,8 @@ pub struct DaemonSpawnConfig {
     pub session_id: String,
     pub session_dir: PathBuf,
     pub csa_binary: PathBuf,
+    /// Subcommand verb for the child process (e.g. "run", "review", "debate").
+    pub subcommand: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
 }
@@ -52,7 +54,12 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
     let stderr_file = open_log_file(&config.session_dir, "stderr.log")?;
 
     let mut cmd = Command::new(&config.csa_binary);
-    cmd.args(["run", "--daemon-child", "--session-id", &config.session_id]);
+    cmd.args([
+        config.subcommand.as_str(),
+        "--daemon-child",
+        "--session-id",
+        &config.session_id,
+    ]);
     cmd.args(&config.args);
 
     for (k, v) in &config.env {
@@ -132,6 +139,7 @@ mod tests {
             session_id: "TEST001".to_string(),
             session_dir: session_dir.clone(),
             csa_binary: wrapper,
+            subcommand: "run".to_string(),
             // After the injected flags, pass '--' then the real command.
             args: vec!["--".to_string(), "echo hello".to_string()],
             env: HashMap::new(),
@@ -170,6 +178,7 @@ mod tests {
             session_id: "TEST002".to_string(),
             session_dir: session_dir.clone(),
             csa_binary: wrapper,
+            subcommand: "run".to_string(),
             args: vec![
                 "--".to_string(),
                 "echo pid=$$ sid=$(ps -o sid= -p $$)".to_string(),

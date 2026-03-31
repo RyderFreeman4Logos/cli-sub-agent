@@ -75,6 +75,9 @@ name = "SKIP_PUBLISH"
 name = "SCOPE"
 
 [[workflow.variables]]
+name = "SID"
+
+[[workflow.variables]]
 name = "SPEC_OUTPUT"
 
 [[workflow.variables]]
@@ -411,7 +414,8 @@ Perform a cumulative review of the entire feature branch before pushing.
 This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
-csa review --range main...HEAD
+SID=$(csa review --range main...HEAD)
+csa session wait --session "$SID"
 ```"""
 tier = "tier-2-standard"
 on_fail = "abort"
