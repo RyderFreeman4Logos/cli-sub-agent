@@ -355,7 +355,6 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: None,
-        gemini_sandbox: false,
     };
 
     let result = transport
@@ -545,7 +544,6 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: None,
-        gemini_sandbox: false,
     };
 
     let result = transport
@@ -613,7 +611,6 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         output_spool_keep_rotated: csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
         setting_sources: None,
         sandbox: Some(&sandbox),
-        gemini_sandbox: false,
     };
 
     let result = transport

@@ -48,8 +48,6 @@ pub struct TransportOptions<'a> {
     pub output_spool_keep_rotated: bool,
     pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
-    /// When true, pass `--sandbox` to gemini-cli (prevents MCP server loading).
-    pub gemini_sandbox: bool,
 }
 
 #[async_trait]
@@ -232,10 +230,7 @@ impl LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
-        let (mut cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
-        if options.gemini_sandbox && matches!(executor, Executor::GeminiCli { .. }) {
-            cmd.arg("--sandbox");
-        }
+        let (cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
 
         let isolation_plan = options.sandbox.map(|s| &s.isolation_plan);
         let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
@@ -267,12 +262,9 @@ impl LegacyTransport {
                 tracing::warn!(
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
-                let mut fallback_cmd = executor
+                let fallback_cmd = executor
                     .build_command(prompt, tool_state, session, extra_env)
                     .0;
-                if options.gemini_sandbox && matches!(executor, Executor::GeminiCli { .. }) {
-                    fallback_cmd.arg("--sandbox");
-                }
                 let child =
                     spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options).await?;
                 (child, csa_process::SandboxHandle::None)
@@ -431,10 +423,12 @@ impl AcpTransport {
     }
 
     fn acp_command_for_tool(tool_name: &str) -> (String, Vec<String>) {
-        // ACP adapters: @zed-industries/{codex,claude-code}-acp via npm.
+        // ACP adapters: @zed-industries/{codex,claude-code}-acp via npm;
+        // gemini-cli has native ACP mode via `gemini --acp`.
         match tool_name {
             "claude-code" => ("claude-code-acp".into(), vec![]),
             "codex" => ("codex-acp".into(), vec![]),
+            "gemini-cli" => ("gemini".into(), vec!["--acp".into()]),
             _ => (format!("{tool_name}-acp"), vec![]),
         }
     }
@@ -647,7 +641,7 @@ pub struct TransportFactory;
 impl TransportFactory {
     pub fn mode_for_tool(tool_name: &str) -> TransportMode {
         match tool_name {
-            "claude-code" | "codex" => TransportMode::Acp,
+            "claude-code" | "codex" | "gemini-cli" => TransportMode::Acp,
             "openai-compat" => TransportMode::OpenaiCompat,
             _ => TransportMode::Legacy,
         }
@@ -690,17 +684,11 @@ mod tests {
 
     #[test]
     fn test_transport_factory_create_routes_tools_to_expected_transport() {
-        let legacy_tools = vec![
-            Executor::GeminiCli {
-                model_override: None,
-                thinking_budget: None,
-            },
-            Executor::Opencode {
-                model_override: None,
-                agent: None,
-                thinking_budget: None,
-            },
-        ];
+        let legacy_tools = vec![Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        }];
         for executor in legacy_tools {
             let transport = TransportFactory::create(&executor, None);
             assert!(
@@ -716,6 +704,10 @@ mod tests {
                 thinking_budget: None,
             },
             Executor::ClaudeCode {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::GeminiCli {
                 model_override: None,
                 thinking_budget: None,
             },
@@ -781,14 +773,15 @@ mod tests {
             AcpTransport::acp_command_for_tool("codex"),
             ("codex-acp".to_string(), vec![])
         );
+        // gemini-cli uses native ACP mode via `gemini --acp`
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("gemini-cli"),
+            ("gemini".to_string(), vec!["--acp".to_string()])
+        );
         // Unknown tools get "{name}-acp" convention
         assert_eq!(
             AcpTransport::acp_command_for_tool("opencode"),
             ("opencode-acp".to_string(), vec![])
-        );
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("gemini-cli"),
-            ("gemini-cli-acp".to_string(), vec![])
         );
     }
 

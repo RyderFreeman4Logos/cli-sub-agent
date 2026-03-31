@@ -578,15 +578,15 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
     let project_root = temp.path();
     let bin_dir = project_root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
-    let fake_gemini = bin_dir.join("gemini");
+    let fake_opencode = bin_dir.join("opencode");
     fs::write(
-        &fake_gemini,
+        &fake_opencode,
         "#!/bin/sh\nprintf '%s\\n' \"$CSA_FAKE_OUTPUT_PATH\"\n",
     )
     .unwrap();
-    let mut perms = fs::metadata(&fake_gemini).unwrap().permissions();
+    let mut perms = fs::metadata(&fake_opencode).unwrap().permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&fake_gemini, perms).unwrap();
+    fs::set_permissions(&fake_opencode, perms).unwrap();
 
     let foreign_dir = tempfile::tempdir().unwrap();
     let foreign_result = foreign_dir.path().join("result.toml");
@@ -603,13 +603,14 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
         foreign_result.display().to_string(),
     );
 
-    let executor = Executor::GeminiCli {
+    let executor = Executor::Opencode {
         model_override: None,
+        agent: None,
         thinking_budget: None,
     };
     let execution = execute_with_session_and_meta(
         &executor,
-        &ToolName::GeminiCli,
+        &ToolName::Opencode,
         "CSA_RESULT_TOML_PATH_CONTRACT=1",
         csa_core::types::OutputFormat::Json,
         None,
@@ -657,11 +658,11 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
     let project_root = temp.path();
     let bin_dir = project_root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
-    let fake_gemini = bin_dir.join("gemini");
-    fs::write(&fake_gemini, "#!/bin/sh\nprintf 'review-ok\\n'\n").unwrap();
-    let mut perms = fs::metadata(&fake_gemini).unwrap().permissions();
+    let fake_opencode = bin_dir.join("opencode");
+    fs::write(&fake_opencode, "#!/bin/sh\nprintf 'review-ok\\n'\n").unwrap();
+    let mut perms = fs::metadata(&fake_opencode).unwrap().permissions();
     perms.set_mode(0o755);
-    fs::set_permissions(&fake_gemini, perms).unwrap();
+    fs::set_permissions(&fake_opencode, perms).unwrap();
 
     let mut extra_env = HashMap::new();
     let inherited_path = std::env::var("PATH").unwrap_or_default();
@@ -670,14 +671,15 @@ async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_se
         format!("{}:{inherited_path}", bin_dir.display()),
     );
 
-    let executor = Executor::GeminiCli {
+    let executor = Executor::Opencode {
         model_override: None,
+        agent: None,
         thinking_budget: None,
     };
 
     let execution = execute_with_session_and_meta_with_parent_source(
         &executor,
-        &ToolName::GeminiCli,
+        &ToolName::Opencode,
         "review prompt",
         csa_core::types::OutputFormat::Json,
         None,

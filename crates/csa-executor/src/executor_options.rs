@@ -25,10 +25,6 @@ pub struct ExecuteOptions {
     /// Optional resource sandbox config (cgroup/rlimit limits).
     /// When `Some`, the spawned tool process will be wrapped in resource isolation.
     pub sandbox: Option<SandboxContext>,
-    /// When true, pass `--sandbox` to gemini-cli to prevent MCP server loading.
-    /// Set automatically for read-only contexts (review/debate) to avoid MCP
-    /// connectivity failures blocking the review.
-    pub gemini_sandbox: bool,
 }
 
 /// Sandbox configuration resolved from project/tool config.
@@ -64,7 +60,6 @@ impl ExecuteOptions {
             setting_sources: None,
             initial_response_timeout_seconds: None,
             sandbox: None,
-            gemini_sandbox: false,
         }
     }
 
@@ -108,12 +103,6 @@ impl ExecuteOptions {
     /// the first output is received.
     pub fn with_initial_response_timeout_seconds(mut self, seconds: Option<u64>) -> Self {
         self.initial_response_timeout_seconds = seconds;
-        self
-    }
-
-    /// Enable gemini-cli `--sandbox` mode (prevents MCP server loading).
-    pub fn with_gemini_sandbox(mut self, enabled: bool) -> Self {
-        self.gemini_sandbox = enabled;
         self
     }
 
