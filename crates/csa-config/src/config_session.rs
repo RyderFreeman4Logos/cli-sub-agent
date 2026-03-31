@@ -51,6 +51,13 @@ pub struct SessionConfig {
     /// Only effective when `tool_output_compression` is enabled.
     #[serde(default = "default_tool_output_threshold_bytes")]
     pub tool_output_threshold_bytes: u64,
+    /// Timeout (seconds) for `csa session wait` polling loop.
+    ///
+    /// The default of 250s is intentional: it lets the daemon's KV cache stay
+    /// warm while periodically returning control to the calling orchestrator.
+    /// The caller is expected to re-invoke `csa session wait` in a loop.
+    #[serde(default = "default_daemon_wait_seconds")]
+    pub daemon_wait_seconds: u64,
 }
 
 fn default_seed_max_age_secs() -> u64 {
@@ -63,6 +70,13 @@ fn default_max_seed_sessions() -> u32 {
 
 fn default_tool_output_threshold_bytes() -> u64 {
     8192
+}
+
+/// Default daemon wait timeout: 250s for KV cache warmth.
+pub const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
+
+fn default_daemon_wait_seconds() -> u64 {
+    DEFAULT_DAEMON_WAIT_SECS
 }
 
 const DEFAULT_SPOOL_MAX_MB: u32 = 32;
@@ -82,6 +96,7 @@ impl Default for SessionConfig {
             spool_keep_rotated: None,
             tool_output_compression: false,
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
+            daemon_wait_seconds: default_daemon_wait_seconds(),
         }
     }
 }
@@ -99,6 +114,7 @@ impl SessionConfig {
             && self.spool_keep_rotated.is_none()
             && !self.tool_output_compression
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
+            && self.daemon_wait_seconds == default_daemon_wait_seconds()
     }
 
     pub fn resolved_spool_max_mb(&self) -> u32 {

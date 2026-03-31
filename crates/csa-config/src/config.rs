@@ -184,7 +184,9 @@ fn default_recursion_depth() -> u32 {
     5
 }
 
-pub use super::config_session::{ExecutionConfig, HooksSection, SessionConfig, VcsConfig};
+pub use super::config_session::{
+    DEFAULT_DAEMON_WAIT_SECS, ExecutionConfig, HooksSection, SessionConfig, VcsConfig,
+};
 pub use super::config_tool::{ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions};
 
 impl ProjectConfig {
