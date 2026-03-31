@@ -94,7 +94,7 @@ pub(crate) fn handle_session_wait(
             // Emit structured retry hint for orchestrators / agents.
             let cd_arg = cd
                 .as_ref()
-                .map(|path| format!(" --cd \"{}\"", path))
+                .map(|path| format!(" --cd '{}'", path))
                 .unwrap_or_default();
             eprintln!(
                 "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s cmd=\"csa session wait --session {}{}\" -->",
