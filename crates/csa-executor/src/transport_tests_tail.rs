@@ -1,3 +1,106 @@
+    #[test]
+    fn test_transport_factory_create_routes_tools_to_expected_transport() {
+        let legacy_tools = vec![Executor::Opencode {
+            model_override: None,
+            agent: None,
+            thinking_budget: None,
+        }];
+        for executor in legacy_tools {
+            let transport = TransportFactory::create(&executor, None);
+            assert!(
+                transport.as_ref().as_any().is::<LegacyTransport>(),
+                "Expected LegacyTransport for {}",
+                executor.tool_name()
+            );
+        }
+
+        let acp_tools = vec![
+            Executor::Codex {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::ClaudeCode {
+                model_override: None,
+                thinking_budget: None,
+            },
+            Executor::GeminiCli {
+                model_override: None,
+                thinking_budget: None,
+            },
+        ];
+        for executor in acp_tools {
+            let transport = TransportFactory::create(&executor, Some(SessionConfig::default()));
+            assert!(
+                transport.as_ref().as_any().is::<AcpTransport>(),
+                "Expected AcpTransport for {}",
+                executor.tool_name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
+        let executor = Executor::Codex {
+            model_override: None,
+            thinking_budget: None,
+        };
+        let session_config = SessionConfig {
+            no_load: vec!["skills/foo".to_string()],
+            extra_load: vec!["skills/bar".to_string()],
+            tier: Some("tier-2".to_string()),
+            models: vec!["codex/openai/o3/medium".to_string()],
+            mcp_servers: Vec::new(),
+            mcp_proxy_socket: None,
+        };
+
+        let transport = TransportFactory::create(&executor, Some(session_config.clone()));
+        let acp = transport
+            .as_ref()
+            .as_any()
+            .downcast_ref::<AcpTransport>()
+            .expect("expected AcpTransport");
+
+        assert_eq!(acp.session_config, Some(session_config));
+    }
+
+    #[test]
+    fn test_legacy_transport_construction_from_executor() {
+        let executor = Executor::Opencode {
+            model_override: Some("model".to_string()),
+            agent: Some("coder".to_string()),
+            thinking_budget: None,
+        };
+        let transport = LegacyTransport::new(executor.clone());
+
+        assert_eq!(transport.executor.tool_name(), executor.tool_name());
+        assert_eq!(
+            transport.executor.executable_name(),
+            executor.executable_name()
+        );
+    }
+
+    #[test]
+    fn test_acp_command_for_tool_mappings() {
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("claude-code"),
+            ("claude-code-acp".to_string(), vec![])
+        );
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("codex"),
+            ("codex-acp".to_string(), vec![])
+        );
+        // gemini-cli uses native ACP mode via `gemini --acp`
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("gemini-cli"),
+            ("gemini".to_string(), vec!["--acp".to_string()])
+        );
+        // Unknown tools get "{name}-acp" convention
+        assert_eq!(
+            AcpTransport::acp_command_for_tool("opencode"),
+            ("opencode-acp".to_string(), vec![])
+        );
+    }
+
     // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not transport)
     // based on per-tool config via extra_env. See pipeline.rs suppress_notify logic.
     #[test]
@@ -135,19 +238,19 @@
 #[test]
 fn test_gemini_retry_model_sequence_matches_policy() {
     assert_eq!(
-        LegacyTransport::gemini_rate_limit_retry_model(1),
+        gemini_retry_model(1),
         None,
         "first attempt keeps original model"
     );
     assert_eq!(
-        LegacyTransport::gemini_rate_limit_retry_model(2),
+        gemini_retry_model(2),
         Some("gemini-3.1-pro-preview")
     );
     assert_eq!(
-        LegacyTransport::gemini_rate_limit_retry_model(3),
+        gemini_retry_model(3),
         Some("gemini-3-flash-preview")
     );
-    assert_eq!(LegacyTransport::gemini_rate_limit_retry_model(4), None);
+    assert_eq!(gemini_retry_model(4), None);
 }
 
 #[test]
@@ -453,11 +556,11 @@ fn test_no_flash_fallback_stops_retry_after_attempt_2() {
 #[test]
 fn test_gemini_rate_limit_backoff_is_exponential() {
     assert_eq!(
-        LegacyTransport::gemini_rate_limit_backoff(1),
+        gemini_rate_limit_backoff(1),
         Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS)
     );
     assert_eq!(
-        LegacyTransport::gemini_rate_limit_backoff(2),
+        gemini_rate_limit_backoff(2),
         Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS * 2)
     );
 }
@@ -468,7 +571,7 @@ fn test_inject_api_key_fallback_promotes_key_and_removes_internal() {
     env.insert("_CSA_API_KEY_FALLBACK".to_string(), "test-api-key-123".to_string());
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     env.insert("OTHER_VAR".to_string(), "keep".to_string());
-    let result = LegacyTransport::inject_api_key_fallback(Some(&env)).unwrap();
+    let result = gemini_inject_api_key_fallback(Some(&env)).unwrap();
     assert_eq!(result.get("GEMINI_API_KEY").unwrap(), "test-api-key-123");
     assert_eq!(result.get("_CSA_GEMINI_AUTH_MODE").unwrap(), "api_key");
     assert!(!result.contains_key("_CSA_API_KEY_FALLBACK"));
@@ -478,8 +581,8 @@ fn test_inject_api_key_fallback_promotes_key_and_removes_internal() {
 #[test]
 fn test_inject_api_key_fallback_returns_none_without_key() {
     let env = HashMap::new();
-    assert!(LegacyTransport::inject_api_key_fallback(Some(&env)).is_none());
-    assert!(LegacyTransport::inject_api_key_fallback(None).is_none());
+    assert!(gemini_inject_api_key_fallback(Some(&env)).is_none());
+    assert!(gemini_inject_api_key_fallback(None).is_none());
 }
 
 #[test]
@@ -487,7 +590,7 @@ fn test_inject_api_key_fallback_returns_none_for_api_key_mode() {
     let mut env = HashMap::new();
     env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "api_key".to_string());
-    assert!(LegacyTransport::inject_api_key_fallback(Some(&env)).is_none());
+    assert!(gemini_inject_api_key_fallback(Some(&env)).is_none());
 }
 
 #[tokio::test]

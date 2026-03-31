@@ -7,6 +7,7 @@ pub mod logging;
 pub mod model_spec;
 pub mod session_id;
 pub mod transport;
+pub(crate) mod transport_gemini_retry;
 pub mod transport_openai_compat;
 
 pub use agent_backend_adapter::ExecutorAgentBackend;
