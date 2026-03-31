@@ -186,7 +186,7 @@ Within the selected tier, models alternate via round-robin:
 
 **Round N (Proposal)**:
 ```bash
-SID=$(csa run --daemon --model-spec "{models[proposer_index]}" --ephemeral \
+SID=$(csa run --model-spec "{models[proposer_index]}" --ephemeral \
   "Question: {question}
 
 You are the PROPOSER in an adversarial debate. {context_from_previous_rounds}
@@ -196,12 +196,12 @@ Provide a concrete, actionable strategy. Structure your response as:
 2. Key Arguments (numbered, with evidence/reasoning)
 3. Implementation Steps (concrete actions)
 4. Anticipated Weaknesses (acknowledge limitations honestly)")
-csa session wait --session "$SID" --timeout 1800
+csa session wait --session "$SID"
 ```
 
 **Round N (Critique)**:
 ```bash
-SID=$(csa run --daemon --model-spec "{models[critic_index]}" --ephemeral \
+SID=$(csa run --model-spec "{models[critic_index]}" --ephemeral \
   "Question: {question}
 
 You are the CRITIC in an adversarial debate.
@@ -216,12 +216,12 @@ Rigorously critique this proposal:
 4. Strongest Counter-Arguments (the best case AGAINST this proposal)
 
 Be intellectually honest: acknowledge strengths before attacking weaknesses.")
-csa session wait --session "$SID" --timeout 1800
+csa session wait --session "$SID"
 ```
 
 **Round N (Response)**:
 ```bash
-SID=$(csa run --daemon --model-spec "{models[responder_index]}" --ephemeral \
+SID=$(csa run --model-spec "{models[responder_index]}" --ephemeral \
   "Question: {question}
 
 You are the PROPOSER responding to criticism.
@@ -238,7 +238,7 @@ Respond to each criticism:
 3. Present your REVISED STRATEGY incorporating lessons learned
 
 If the critique fundamentally undermines your approach, propose a new strategy.")
-csa session wait --session "$SID" --timeout 1800
+csa session wait --session "$SID"
 ```
 
 ### Step 4: Convergence Evaluation
@@ -266,7 +266,7 @@ When escalation is triggered:
 
 ```bash
 # Example: escalating from tier-1-quick to tier-2-standard
-SID=$(csa run --daemon --model-spec "{higher_tier_models[0]}" --ephemeral \
+SID=$(csa run --model-spec "{higher_tier_models[0]}" --ephemeral \
   "Question: {question}
 
 PREVIOUS DEBATE SUMMARY (lower-tier models could not resolve):
@@ -276,7 +276,7 @@ You have been escalated to provide deeper analysis. Build on the previous debate
 1. Identify what the previous debaters missed
 2. Propose a superior strategy with stronger reasoning
 3. Address all unresolved criticisms")
-csa session wait --session "$SID" --timeout 1800
+csa session wait --session "$SID"
 ```
 
 ### Step 6: Final Synthesis

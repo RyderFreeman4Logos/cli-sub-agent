@@ -1,4 +1,4 @@
-//! Daemon-specific session commands: wait and attach.
+//! Daemon-specific session commands: wait, attach, and kill.
 //!
 //! Extracted from session_cmds.rs to stay under the monolith file limit.
 
@@ -37,11 +37,10 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
 ///
 /// Exits 0 when result.toml appears (streams stdout.log), exits 124 on timeout,
 /// exits 1 if the daemon process died without producing a result.
-pub(crate) fn handle_session_wait(
-    session: String,
-    timeout_secs: u64,
-    cd: Option<String>,
-) -> Result<i32> {
+/// Hardcoded wait timeout in seconds.
+const WAIT_TIMEOUT_SECS: u64 = 250;
+
+pub(crate) fn handle_session_wait(session: String, cd: Option<String>) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
@@ -73,10 +72,10 @@ pub(crate) fn handle_session_wait(
             return Ok(1);
         }
 
-        if timeout_secs > 0 && start.elapsed().as_secs() >= timeout_secs {
+        if start.elapsed().as_secs() >= WAIT_TIMEOUT_SECS {
             eprintln!(
                 "Timeout: session {} did not complete within {}s",
-                resolved.session_id, timeout_secs
+                resolved.session_id, WAIT_TIMEOUT_SECS
             );
             return Ok(124);
         }
@@ -192,4 +191,69 @@ pub(crate) fn handle_session_attach(
             std::thread::sleep(poll_interval);
         }
     }
+}
+
+/// Kill a running daemon session by sending SIGTERM to the process group,
+/// then SIGKILL after a 5-second grace period if still alive.
+pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+
+    let pid = read_daemon_pid(&session_dir).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No daemon PID found for session {} — may not be a daemon session",
+            resolved.session_id,
+        )
+    })?;
+
+    if !is_pid_alive(pid) {
+        eprintln!(
+            "Session {} (PID {}) is already dead",
+            resolved.session_id, pid,
+        );
+        return Ok(());
+    }
+
+    // Send SIGTERM to the process group (negative PID).
+    eprintln!(
+        "Sending SIGTERM to session {} (PID {})...",
+        resolved.session_id, pid,
+    );
+    // SAFETY: kill(-pid, SIGTERM) sends to the entire process group.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGTERM);
+    }
+
+    // Grace period: wait up to 5 seconds for clean shutdown.
+    for _ in 0..50 {
+        if !is_pid_alive(pid) {
+            eprintln!("Session {} terminated", resolved.session_id);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Force kill.
+    eprintln!(
+        "Session {} still alive after 5s, sending SIGKILL...",
+        resolved.session_id,
+    );
+    // SAFETY: kill(-pid, SIGKILL) force-kills the entire process group.
+    unsafe {
+        libc::kill(-(pid as i32), libc::SIGKILL);
+    }
+
+    // Wait for reaping.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if is_pid_alive(pid) {
+        anyhow::bail!(
+            "Failed to kill session {} (PID {})",
+            resolved.session_id,
+            pid,
+        );
+    }
+
+    eprintln!("Session {} killed", resolved.session_id);
+    Ok(())
 }

@@ -89,15 +89,14 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         } => {
             session_cmds::handle_session_tool_output(session, index, list, cd)?;
         }
-        SessionCommands::Wait {
-            session,
-            timeout,
-            cd,
-        } => {
-            let exit_code = session_cmds::handle_session_wait(session, timeout, cd)?;
+        SessionCommands::Wait { session, cd } => {
+            let exit_code = session_cmds::handle_session_wait(session, cd)?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
+        }
+        SessionCommands::Kill { session, cd } => {
+            session_cmds::handle_session_kill(session, cd)?;
         }
         SessionCommands::Attach {
             session,

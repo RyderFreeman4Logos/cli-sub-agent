@@ -107,8 +107,8 @@ Tier: tier-1-quick
 Delegate commit message generation to cheaper tool.
 
 ```bash
-SID=$(csa run --daemon "Run 'git diff --staged' and generate a Conventional Commits message")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits message")
+csa session wait --session "$SID"
 ```
 
 ## Step 10: Commit

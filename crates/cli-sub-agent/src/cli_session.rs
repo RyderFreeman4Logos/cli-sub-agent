@@ -191,15 +191,23 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
-    /// Wait for a daemon session to complete (poll until result.toml exists)
+    /// Wait for a daemon session to complete (poll until result.toml exists).
+    /// Hardcoded timeout: 250 seconds.
     Wait {
         /// Session ID to wait for
         #[arg(long)]
         session: String,
 
-        /// Timeout in seconds (0 = wait forever)
-        #[arg(long, default_value = "0")]
-        timeout: u64,
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Kill a running daemon session (SIGTERM, then SIGKILL after grace period)
+    Kill {
+        /// Session ID to kill
+        #[arg(long)]
+        session: String,
 
         /// Working directory
         #[arg(long)]

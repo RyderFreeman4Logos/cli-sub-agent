@@ -407,12 +407,13 @@ async fn run() -> Result<()> {
             force_ignore_tier_setting,
             no_fs_sandbox,
             extra_writable,
-            daemon,
+            daemon: _daemon,
+            no_daemon,
             daemon_child,
             session_id,
         } => {
-            // Daemon spawn: when --daemon is set and not already the child, fork and exit.
-            if daemon && !daemon_child {
+            // Daemon spawn: daemon mode is the default; --no-daemon opts out.
+            if !no_daemon && !daemon_child {
                 if let Some(ref _id) = session_id {
                     anyhow::bail!("--session-id is an internal flag and must not be used directly");
                 }
