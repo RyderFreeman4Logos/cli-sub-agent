@@ -362,19 +362,18 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             },
         );
 
-        // Fire PostReview hook (observational — does not block).
-        crate::pipeline::fire_observational_hook(
-            csa_hooks::HookEvent::PostReview,
-            &[
-                ("session_id", result.meta_session_id.as_str()),
-                ("decision", decision.as_str()),
-                ("verdict", verdict),
-                ("scope", &scope),
-            ],
-            &project_root,
-        );
-
         if !args.fix || verdict == CLEAN {
+            // Fire PostReview hook only for final results (no fix loop pending).
+            crate::pipeline::fire_observational_hook(
+                csa_hooks::HookEvent::PostReview,
+                &[
+                    ("session_id", result.meta_session_id.as_str()),
+                    ("decision", decision.as_str()),
+                    ("verdict", verdict),
+                    ("scope", &scope),
+                ],
+                &project_root,
+            );
             return Ok(effective_exit_code);
         }
 
@@ -393,7 +392,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
 
         // --- Fix loop: resume the review session to apply fixes, then re-gate ---
-        return fix::run_fix_loop(fix::FixLoopContext {
+        let scope_for_hook = scope.clone();
+        let fix_exit_code = fix::run_fix_loop(fix::FixLoopContext {
             tool,
             config: config.as_ref(),
             global_config: &global_config,
@@ -416,6 +416,21 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             initial_session_id: result.meta_session_id.clone(),
         })
         .await;
+
+        // Fire PostReview hook after fix loop completes (final result).
+        let fix_passed = matches!(&fix_exit_code, Ok(0));
+        crate::pipeline::fire_observational_hook(
+            csa_hooks::HookEvent::PostReview,
+            &[
+                ("session_id", result.meta_session_id.as_str()),
+                ("decision", if fix_passed { "pass" } else { "fail" }),
+                ("verdict", if fix_passed { CLEAN } else { verdict }),
+                ("scope", &scope_for_hook),
+            ],
+            &project_root,
+        );
+
+        return fix_exit_code;
     }
 
     if args.fix {

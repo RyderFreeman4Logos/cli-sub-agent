@@ -185,19 +185,36 @@ pub fn run_hook_capturing(
     let expanded_command = substitute_variables(template, variables);
     tracing::debug!(event = ?event, "Executing hook (capturing)");
 
-    let output = Command::new("sh")
+    let mut child = Command::new("sh")
         .arg("-c")
         .arg(&expanded_command)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()?;
+        .spawn()?;
 
-    if !output.status.success() {
-        let exit_code = output.status.code().unwrap_or(-1);
-        bail!("Hook {event:?} exited with code {exit_code}");
+    let timeout = Duration::from_secs(config.timeout_secs);
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let output = child.wait_with_output()?;
+                if !status.success() {
+                    let exit_code = status.code().unwrap_or(-1);
+                    bail!("Hook {event:?} exited with code {exit_code}");
+                }
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+            None => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("Hook {event:?} timed out after {}s", config.timeout_secs);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
     }
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Execute all hooks for an event, using the merged config.
