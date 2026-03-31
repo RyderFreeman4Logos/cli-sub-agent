@@ -305,7 +305,7 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
 
-Wait 5 minutes, then delegate 10-minute polling to CSA. Total wait: ~15 minutes.
+Wait 250 seconds, then delegate 10-minute polling to CSA. Total wait: ~14 minutes.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.

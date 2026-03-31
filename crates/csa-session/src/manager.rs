@@ -57,7 +57,18 @@ pub(crate) fn create_session_in(
     parent_id: Option<&str>,
     tool: Option<&str>,
 ) -> Result<MetaSessionState> {
-    let session_id = new_session_id();
+    // Daemon child processes pre-assign a session ID via env so that the
+    // pipeline session directory matches the daemon spool directory.
+    let session_id = match std::env::var("CSA_DAEMON_SESSION_ID")
+        .ok()
+        .filter(|s| !s.is_empty())
+    {
+        Some(id) => {
+            validate_session_id(&id)?;
+            id
+        }
+        None => new_session_id(),
+    };
     let session_dir = get_session_dir_in(base_dir, &session_id);
     let normalized_project_path = normalize_project_path(project_path);
 

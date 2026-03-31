@@ -190,4 +190,34 @@ pub enum SessionCommands {
         #[arg(long)]
         cd: Option<String>,
     },
+
+    /// Wait for a daemon session to complete (poll until result.toml exists)
+    Wait {
+        /// Session ID to wait for
+        #[arg(long)]
+        session: String,
+
+        /// Timeout in seconds (0 = wait forever)
+        #[arg(long, default_value = "0")]
+        timeout: u64,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
+
+    /// Attach to a running daemon session (tail stdout/stderr in real time)
+    Attach {
+        /// Session ID to attach to
+        #[arg(long)]
+        session: String,
+
+        /// Show stderr alongside stdout
+        #[arg(long)]
+        stderr: bool,
+
+        /// Working directory
+        #[arg(long)]
+        cd: Option<String>,
+    },
 }

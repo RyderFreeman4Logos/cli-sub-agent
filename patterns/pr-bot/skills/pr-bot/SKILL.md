@@ -147,7 +147,7 @@ an explicit retrigger command on round 2+, regardless of `cloud_bot_trigger`.
 Default: `/gemini review` for gemini-code-assist, `@{name} review` for others.
 Override via `cloud_bot_retrigger_command`.
 
-**Timeout behavior**: If bot does not respond within ~15 minutes, the workflow
+**Timeout behavior**: If bot does not respond within ~14 minutes, the workflow
 **aborts** and presents options to the user. It does NOT silently fall back to
 local review and merge.
 
@@ -155,7 +155,7 @@ When `cloud_bot = false`:
 - Steps 4-9 (cloud bot trigger, delegated wait gate, classify, arbitrate, fix) are **skipped entirely**
 - A SHA-verified fast-path check is applied before supplementary local review
 - The workflow proceeds directly to merge after local review passes
-- This avoids the 15-minute wait and GitHub API dependency
+- This avoids the 14-minute wait and GitHub API dependency
 
 ### Quick Start
 
@@ -184,7 +184,7 @@ breaks prompt-guard propagation.
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
    - **Round 0** (initial PR): follows `cloud_bot_trigger` config (`"comment"` → @mention, `"auto"` → skip).
    - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist) because bots do NOT auto-review on subsequent pushes.
-   - Wait 5 minutes quietly, then delegate 10-minute polling to CSA. Total: ~15 min.
+   - Wait 250 seconds quietly, then delegate 10-minute polling to CSA. Total: ~14 min.
    - **Positive signal**: verifies a review EVENT exists (via `pulls/{pr}/reviews` API with `submitted_at` > push time), not merely absence of comments.
    - If bot times out: **ABORT workflow** and present options to user. NO silent fallback.
    - Non-target bot comments (e.g., codex auto-review) are also detected and included with a quota warning.
@@ -194,7 +194,7 @@ breaks prompt-guard propagation.
    - Category C (real issue): queue for staleness filter, then fix.
 6. **Staleness filter** (before arbitration/fix): For each comment classified as B or C, check if the referenced code has been modified since the comment was posted. Compare comment file paths and line ranges against `git diff main...HEAD` and `git log --since="${COMMENT_TIMESTAMP}"`. Comments referencing lines changed after the comment timestamp are reclassified as Category A (potentially stale, already addressed) and skipped. This prevents debates and fix cycles on already-resolved issues.
 7. **Arbitrate non-stale false positives**: For surviving Category B comments, arbitrate via `csa debate` with independent model. Require structured debate output, then post the PR audit trail through an explicit `gh pr comment` step. If debate overturns the false-positive classification, reroute that comment into the real-issue fix step instead of posting a dismissal comment.
-8. **Fix non-stale real issues**: For surviving Category C comments, fix using `csa review --fix` to resume the reviewer session (preserves review context, avoids 50K+ token waste of spawning fresh). Commit and push.
+8. **Fix non-stale real issues**: For surviving Category C comments, fix using `csa review --fix` to resume the reviewer session (preserves review context, avoids 50K+ token waste of spawning fresh). Commit fixes, then run `csa review --range main...HEAD` (review gate) BEFORE pushing — unreviewed fix code must not reach the remote.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
 10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Set `REBASE_ENABLED=true` to re-enable for squash-merge workflows.
@@ -230,7 +230,7 @@ breaks prompt-guard propagation.
 8. Staleness filter applied (cloud_bot enabled only).
 9. Non-stale false positives arbitrated via `csa debate` (cloud_bot enabled only).
 10. Real issues fixed and re-reviewed (cloud_bot enabled only).
-10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD via explicit retrigger command (NOT relying on auto-review), uses the same 15-minute wait policy as the initial gate (5-minute quiet wait + 10-minute polling), and requires a **positive review event** (via `pulls/{pr}/reviews` API, filtered by `commit_id`) with zero actionable findings. If no review event or API failure, falls back to local `csa review --range main...HEAD`. If new findings appear, workflow aborts (user must re-run pr-bot).
+10a. **Post-fix re-review gate** (HARD GATE): After fixing bot findings, bot is re-triggered on current HEAD via explicit retrigger command (NOT relying on auto-review), uses the same 14-minute wait policy as the initial gate (5-minute quiet wait + 10-minute polling), and requires a **positive review event** (via `pulls/{pr}/reviews` API, filtered by `commit_id`) with zero actionable findings. If no review event or API failure, falls back to local `csa review --range main...HEAD`. If new findings appear, workflow aborts (user must re-run pr-bot).
 10b. **Round limit**: If `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), user was prompted with options (merge/continue/abort) and explicitly chose before proceeding.
 10c. ~~**Rebase for clean history**~~ (Step 10.5): DISABLED — merge commits preserve audit trail directly.
 11. **Audit trail**: Every dismissed PR-page finding (for example, a bot finding) has a corresponding explanatory PR comment posted by an explicit workflow step BEFORE proceeding or merging.

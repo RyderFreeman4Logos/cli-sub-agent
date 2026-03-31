@@ -40,13 +40,16 @@ mod review_consensus;
 mod review_context;
 mod review_routing;
 mod run_cmd;
+mod run_cmd_daemon;
 mod run_cmd_fork;
 mod run_cmd_post;
 mod run_cmd_tool_selection;
 mod run_helpers;
 mod self_update;
 mod session_cmds;
+mod session_cmds_daemon;
 mod session_cmds_result;
+mod session_dispatch;
 mod session_guard;
 mod setup_cmds;
 mod skill_cmds;
@@ -62,8 +65,8 @@ mod sa_mode_tests;
 mod test_env_lock;
 
 use cli::{
-    Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SessionCommands, SetupCommands,
-    SkillCommands, TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
+    Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SetupCommands, SkillCommands,
+    TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
     validate_command_args,
 };
 use csa_core::types::OutputFormat;
@@ -386,7 +389,28 @@ async fn run() -> Result<()> {
             force_ignore_tier_setting,
             no_fs_sandbox,
             extra_writable,
+            daemon,
+            daemon_child,
+            session_id,
         } => {
+            // Daemon spawn: when --daemon is set and not already the child, fork and exit.
+            if daemon && !daemon_child {
+                if let Some(ref _id) = session_id {
+                    anyhow::bail!("--session-id is an internal flag and must not be used directly");
+                }
+                // spawn_and_exit() calls process::exit(0) on success — never returns.
+                run_cmd_daemon::spawn_and_exit(cd.as_deref())?;
+            }
+
+            // Daemon child: propagate pre-assigned session ID via env so the
+            // pipeline's create_session reuses it (same directory as spool files).
+            if let Some(ref sid) = session_id {
+                // SAFETY: This runs in the daemon child before tokio spawns worker
+                // threads (we are still in the synchronous dispatch path of main).
+                unsafe { std::env::set_var("CSA_DAEMON_SESSION_ID", sid) };
+            }
+
+            // Daemon child path: continue with normal run logic.
             // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
             // default: stream for Text output in all contexts.
             let stream_mode = if no_stream_stdout {
@@ -438,86 +462,9 @@ async fn run() -> Result<()> {
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
-        Commands::Session { cmd } => match cmd {
-            SessionCommands::List {
-                cd,
-                branch,
-                tool,
-                tree,
-            } => {
-                session_cmds::handle_session_list(cd, branch, tool, tree, output_format)?;
-            }
-            SessionCommands::Compress { session, cd } => {
-                session_cmds::handle_session_compress(session, cd)?;
-            }
-            SessionCommands::Delete { session, cd } => {
-                session_cmds::handle_session_delete(session, cd)?;
-            }
-            SessionCommands::Clean {
-                days,
-                dry_run,
-                tool,
-                cd,
-            } => {
-                session_cmds::handle_session_clean(days, dry_run, tool, cd)?;
-            }
-            SessionCommands::Logs {
-                session,
-                tail,
-                events,
-                cd,
-            } => {
-                session_cmds::handle_session_logs(session, tail, events, cd)?;
-            }
-            SessionCommands::IsAlive { session, cd } => {
-                let alive = session_cmds::handle_session_is_alive(session, cd)?;
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().flush();
-                std::process::exit(if alive { 0 } else { 1 });
-            }
-            SessionCommands::Result {
-                session,
-                json,
-                summary,
-                section,
-                full,
-                cd,
-            } => {
-                session_cmds::handle_session_result(
-                    session,
-                    json,
-                    cd,
-                    session_cmds::StructuredOutputOpts {
-                        summary,
-                        section,
-                        full,
-                    },
-                )?;
-            }
-            SessionCommands::Artifacts { session, cd } => {
-                session_cmds::handle_session_artifacts(session, cd)?;
-            }
-            SessionCommands::Log { session, cd } => {
-                session_cmds::handle_session_log(session, cd)?;
-            }
-            SessionCommands::Checkpoint { session, cd } => {
-                session_cmds::handle_session_checkpoint(session, cd)?;
-            }
-            SessionCommands::Checkpoints { cd } => {
-                session_cmds::handle_session_checkpoints(cd)?;
-            }
-            SessionCommands::Measure { session, json, cd } => {
-                session_cmds::handle_session_measure(session, json, cd)?;
-            }
-            SessionCommands::ToolOutput {
-                session,
-                index,
-                list,
-                cd,
-            } => {
-                session_cmds::handle_session_tool_output(session, index, list, cd)?;
-            }
-        },
+        Commands::Session { cmd } => {
+            session_dispatch::dispatch(cmd, output_format)?;
+        }
         Commands::Audit { command } => {
             audit_cmds::handle_audit(command)?;
         }

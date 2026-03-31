@@ -759,6 +759,9 @@ pub(crate) fn handle_session_checkpoints(cd: Option<String>) -> Result<()> {
     Ok(())
 }
 
+// Daemon-specific commands (wait, attach) are in session_cmds_daemon.rs.
+pub(crate) use crate::session_cmds_daemon::{handle_session_attach, handle_session_wait};
+
 #[cfg(test)]
 #[path = "session_cmds_tests.rs"]
 mod tests;
