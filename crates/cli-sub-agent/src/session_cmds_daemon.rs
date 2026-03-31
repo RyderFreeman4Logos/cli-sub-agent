@@ -39,14 +39,22 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
     None
 }
 
+/// Default daemon wait timeout (seconds).
+///
+/// 250s keeps the daemon's KV cache warm while periodically returning control
+/// to the calling orchestrator. The caller is expected to re-invoke
+/// `csa session wait` when it receives exit code 124.
+pub(crate) const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
+
 /// Wait for a daemon session to complete by polling for result.toml.
 ///
 /// Exits 0 when result.toml appears (streams stdout.log), exits 124 on timeout,
 /// exits 1 if the daemon process died without producing a result.
-/// Hardcoded wait timeout in seconds.
-const WAIT_TIMEOUT_SECS: u64 = 250;
-
-pub(crate) fn handle_session_wait(session: String, cd: Option<String>) -> Result<i32> {
+pub(crate) fn handle_session_wait(
+    session: String,
+    cd: Option<String>,
+    wait_timeout_secs: u64,
+) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
@@ -84,10 +92,16 @@ pub(crate) fn handle_session_wait(session: String, cd: Option<String>) -> Result
             return Ok(1);
         }
 
-        if start.elapsed().as_secs() >= WAIT_TIMEOUT_SECS {
+        let elapsed = start.elapsed().as_secs();
+        if elapsed >= wait_timeout_secs {
             eprintln!(
                 "Timeout: session {} did not complete within {}s",
-                resolved.session_id, WAIT_TIMEOUT_SECS
+                resolved.session_id, wait_timeout_secs,
+            );
+            // Emit structured retry hint for orchestrators / agents.
+            eprintln!(
+                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s cmd=\"csa session wait --session {}\" -->",
+                resolved.session_id, elapsed, resolved.session_id,
             );
             return Ok(124);
         }

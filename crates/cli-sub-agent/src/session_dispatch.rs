@@ -7,6 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
+use crate::session_cmds_daemon::DEFAULT_DAEMON_WAIT_SECS;
 use csa_core::types::OutputFormat;
 
 pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
@@ -90,7 +91,8 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             session_cmds::handle_session_tool_output(session, index, list, cd)?;
         }
         SessionCommands::Wait { session, cd } => {
-            let exit_code = session_cmds::handle_session_wait(session, cd)?;
+            let wait_timeout = resolve_daemon_wait_timeout(cd.as_deref());
+            let exit_code = session_cmds::handle_session_wait(session, cd, wait_timeout)?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
@@ -110,4 +112,16 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         }
     }
     Ok(())
+}
+
+/// Resolve daemon wait timeout from project/global config, falling back to the
+/// compile-time default.
+fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
+    let project_root = crate::pipeline::determine_project_root(cd).ok();
+    if let Some(ref root) = project_root
+        && let Ok(Some(config)) = csa_config::ProjectConfig::load(root)
+    {
+        return config.session.daemon_wait_seconds;
+    }
+    DEFAULT_DAEMON_WAIT_SECS
 }
