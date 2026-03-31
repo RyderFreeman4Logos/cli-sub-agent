@@ -39,7 +39,7 @@ pub(crate) use session_exec::{
     execute_with_session_and_meta_with_parent_source,
 };
 
-pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 120;
+pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 300;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +72,26 @@ pub(crate) fn resolve_initial_response_timeout_seconds(
         .or_else(|| config.and_then(|cfg| cfg.resources.initial_response_timeout_seconds));
     // 0 means explicitly disabled.
     raw.filter(|&v| v > 0)
+}
+
+/// Resolve the initial-response timeout with idle-timeout awareness.
+///
+/// When the user explicitly sets `--idle-timeout` but does NOT set
+/// `--initial-response-timeout`, the initial-response timeout is disabled
+/// so that the user's explicit idle timeout is always respected.
+/// This prevents the config default (120s) from silently overriding a
+/// longer `--idle-timeout` value (e.g., 1200s).
+pub(crate) fn resolve_initial_response_timeout(
+    config: Option<&ProjectConfig>,
+    cli_initial_response_timeout: Option<u64>,
+    cli_idle_timeout: Option<u64>,
+) -> Option<u64> {
+    if cli_idle_timeout.is_some() && cli_initial_response_timeout.is_none() {
+        // User explicitly set --idle-timeout but not --initial-response-timeout.
+        // Disable the two-phase timeout to honor the user's intent.
+        return None;
+    }
+    resolve_initial_response_timeout_seconds(config, cli_initial_response_timeout)
 }
 
 pub(crate) fn resolve_liveness_dead_seconds(config: Option<&ProjectConfig>) -> u64 {
