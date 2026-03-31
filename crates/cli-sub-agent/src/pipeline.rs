@@ -385,6 +385,28 @@ pub(crate) fn run_pipeline_hook(
     Ok(())
 }
 
+/// Fire an observational hook with auto-loaded config. Failures are logged and
+/// silently discarded (observational events never block the caller).
+pub(crate) fn fire_observational_hook(
+    event: HookEvent,
+    pairs: &[(&str, &str)],
+    project_root: &std::path::Path,
+) {
+    let hooks_config = csa_hooks::load_hooks_config(
+        csa_session::get_session_root(project_root)
+            .ok()
+            .map(|r| r.join("hooks.toml"))
+            .as_deref(),
+        csa_hooks::global_hooks_path().as_deref(),
+        None,
+    );
+    let variables: std::collections::HashMap<String, String> = pairs
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let _ = run_pipeline_hook(event, &hooks_config, &variables);
+}
+
 pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {
     let path = if let Some(cd_path) = cd {
         PathBuf::from(cd_path)

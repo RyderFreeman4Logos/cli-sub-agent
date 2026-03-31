@@ -30,6 +30,10 @@ pub enum HookEvent {
     /// Observational: runs a quick clippy check on changed crates.
     /// Triggered in `pipeline_post_exec::process_execution_result`.
     PostEdit,
+    /// After a review completes (success or failure).
+    /// Observational: useful for chaining review → next step in pipelines.
+    /// Template vars: `{session_id}`, `{decision}`, `{verdict}`, `{scope}`.
+    PostReview,
 }
 
 impl HookEvent {
@@ -49,6 +53,7 @@ impl HookEvent {
             HookEvent::PreRun => "pre_run",
             HookEvent::PostRun => "post_run",
             HookEvent::PostEdit => "post_edit",
+            HookEvent::PostReview => "post_review",
         }
     }
 
@@ -102,7 +107,8 @@ impl HookEvent {
             HookEvent::TodoCreate
             | HookEvent::TodoSave
             | HookEvent::PreRun
-            | HookEvent::PostRun => None,
+            | HookEvent::PostRun
+            | HookEvent::PostReview => None,
         }
     }
 }
@@ -122,6 +128,7 @@ mod tests {
         assert_eq!(HookEvent::PreRun.as_config_key(), "pre_run");
         assert_eq!(HookEvent::PostRun.as_config_key(), "post_run");
         assert_eq!(HookEvent::PostEdit.as_config_key(), "post_edit");
+        assert_eq!(HookEvent::PostReview.as_config_key(), "post_review");
     }
 
     #[test]
@@ -137,6 +144,7 @@ mod tests {
         assert!(HookEvent::TodoSave.builtin_command().is_none());
         assert!(HookEvent::PreRun.builtin_command().is_none());
         assert!(HookEvent::PostRun.builtin_command().is_none());
+        assert!(HookEvent::PostReview.builtin_command().is_none());
     }
 
     #[test]
@@ -158,6 +166,7 @@ mod tests {
             HookEvent::PreRun,
             HookEvent::PostRun,
             HookEvent::PostEdit,
+            HookEvent::PostReview,
         ];
 
         let mut seen_keys = std::collections::HashSet::new();
@@ -169,8 +178,8 @@ mod tests {
                 "Duplicate config key: {key} (from {event:?})"
             );
         }
-        // Ensure we covered all 6 variants
-        assert_eq!(seen_keys.len(), 6, "Expected 6 unique config keys");
+        // Ensure we covered all 7 variants
+        assert_eq!(seen_keys.len(), 7, "Expected 7 unique config keys");
     }
 
     #[test]
@@ -203,6 +212,11 @@ mod tests {
         assert!(!HookEvent::PostEdit.is_gatekeeping());
     }
 
+    #[test]
+    fn test_is_gatekeeping_post_review_false() {
+        assert!(!HookEvent::PostReview.is_gatekeeping());
+    }
+
     /// Verify config keys match the expected snake_case convention.
     #[test]
     fn test_config_keys_are_snake_case() {
@@ -213,6 +227,7 @@ mod tests {
             HookEvent::PreRun,
             HookEvent::PostRun,
             HookEvent::PostEdit,
+            HookEvent::PostReview,
         ];
 
         for event in &all_events {
