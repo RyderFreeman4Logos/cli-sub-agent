@@ -165,4 +165,62 @@ mod tests {
         let resolved = crate::validate_sa_mode(&cli.command, 0).expect("doctor should pass");
         assert!(!resolved);
     }
+
+    #[test]
+    fn sa_mode_caller_guard_emits_at_root_depth_text_mode() {
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 0, true);
+        assert!(
+            emitted,
+            "guard should emit when sa_mode=true, depth=0, text_mode=true"
+        );
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_skips_when_disabled() {
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(false, 0, true);
+        assert!(!emitted, "guard should not emit when sa_mode=false");
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_skips_at_child_depth() {
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 1, true);
+        assert!(!emitted, "guard should not emit at child depth");
+
+        let emitted2 = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 3, true);
+        assert!(!emitted2, "guard should not emit at depth 3");
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_skips_in_json_mode() {
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 0, false);
+        assert!(
+            !emitted,
+            "guard should not emit when text_mode=false (JSON)"
+        );
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_content_has_required_markers() {
+        // Verify the guard constant contains key structural markers.
+        let guard = crate::pipeline::prompt_guard::SA_MODE_CALLER_GUARD;
+        assert!(
+            guard.contains("<csa-caller-sa-guard>"),
+            "missing opening tag"
+        );
+        assert!(
+            guard.contains("</csa-caller-sa-guard>"),
+            "missing closing tag"
+        );
+        assert!(guard.contains("FORBIDDEN"), "missing FORBIDDEN section");
+        assert!(guard.contains("ALLOWED"), "missing ALLOWED section");
+        assert!(guard.contains("Layer 0 Manager"), "missing role identifier");
+        assert!(
+            guard.contains("csa run --sa-mode true"),
+            "missing dispatch command"
+        );
+        assert!(
+            guard.contains("result.toml"),
+            "missing result.toml reference"
+        );
+    }
 }

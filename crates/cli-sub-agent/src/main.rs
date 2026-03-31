@@ -159,9 +159,18 @@ fn resolve_effective_min_timeout() -> u64 {
     compile_default
 }
 
-fn apply_sa_mode_prompt_guard(command: &Commands, current_depth: u32) -> anyhow::Result<()> {
+/// Apply SA mode prompt guard and emit caller-side constraint if active.
+///
+/// Returns `true` when SA mode is effectively enabled for this invocation.
+/// When SA mode is active at root depth, a structured guard block is emitted
+/// to stdout so the calling agent sees the Layer 0 Manager constraints.
+fn apply_sa_mode_prompt_guard(
+    command: &Commands,
+    current_depth: u32,
+    output_format: OutputFormat,
+) -> anyhow::Result<bool> {
     if command_sa_mode_arg(command).is_none() {
-        return Ok(());
+        return Ok(false);
     }
 
     let sa_mode_enabled = validate_sa_mode(command, current_depth)?;
@@ -175,7 +184,16 @@ fn apply_sa_mode_prompt_guard(command: &Commands, current_depth: u32) -> anyhow:
         )
     };
 
-    Ok(())
+    // Emit SA mode caller guard to stdout (pre-session constraint).
+    // Only for Text output — JSON mode must not be corrupted by guard XML.
+    let text_mode = matches!(output_format, OutputFormat::Text);
+    crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+        sa_mode_enabled,
+        current_depth,
+        text_mode,
+    );
+
+    Ok(sa_mode_enabled)
 }
 
 #[tokio::main]
@@ -219,7 +237,7 @@ async fn run() -> Result<()> {
         err.exit();
     }
 
-    apply_sa_mode_prompt_guard(&command, current_depth)?;
+    let sa_mode_active = apply_sa_mode_prompt_guard(&command, current_depth, output_format)?;
 
     // Check weave.lock version alignment (non-fatal).
     if let Ok(cwd) = std::env::current_dir() {
@@ -458,6 +476,12 @@ async fn run() -> Result<()> {
                 extra_writable,
             )
             .await?;
+            // Post-session SA mode reminder so caller sees constraint before next action.
+            crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+                sa_mode_active,
+                current_depth,
+                matches!(output_format, OutputFormat::Text),
+            );
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
@@ -511,12 +535,22 @@ async fn run() -> Result<()> {
         }
         Commands::Review(args) => {
             let exit_code = review_cmd::handle_review(args, current_depth).await?;
+            crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+                sa_mode_active,
+                current_depth,
+                matches!(output_format, OutputFormat::Text),
+            );
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
         Commands::Debate(args) => {
             let exit_code = debate_cmd::handle_debate(args, current_depth, output_format).await?;
+            crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+                sa_mode_active,
+                current_depth,
+                matches!(output_format, OutputFormat::Text),
+            );
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
@@ -539,6 +573,11 @@ async fn run() -> Result<()> {
             dry_run,
         } => {
             batch::handle_batch(file, cd, dry_run, current_depth).await?;
+            crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+                sa_mode_active,
+                current_depth,
+                matches!(output_format, OutputFormat::Text),
+            );
         }
         Commands::McpServer => {
             mcp_server::run_mcp_server().await?;
@@ -704,6 +743,11 @@ async fn run() -> Result<()> {
             } => {
                 plan_cmd::handle_plan_run(file, pattern, vars, tool, dry_run, cd, current_depth)
                     .await?;
+                crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+                    sa_mode_active,
+                    current_depth,
+                    matches!(output_format, OutputFormat::Text),
+                );
             }
         },
         Commands::Migrate { dry_run, status } => {
@@ -715,6 +759,11 @@ async fn run() -> Result<()> {
         Commands::ClaudeSubAgent(args) => {
             let exit_code =
                 claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth).await?;
+            crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
+                sa_mode_active,
+                current_depth,
+                matches!(output_format, OutputFormat::Text),
+            );
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
