@@ -4,9 +4,9 @@ use std::time::Duration;
 
 use crate::executor::Executor;
 use crate::transport_gemini_retry::{
-    gemini_inject_api_key_fallback, gemini_max_attempts, gemini_rate_limit_backoff,
-    gemini_retry_model, gemini_should_use_api_key, is_gemini_rate_limited_error,
-    is_gemini_rate_limited_result,
+    gemini_auth_mode, gemini_inject_api_key_fallback, gemini_max_attempts,
+    gemini_rate_limit_backoff, gemini_retry_model, gemini_should_use_api_key,
+    is_gemini_rate_limited_error, is_gemini_rate_limited_result,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -238,13 +238,35 @@ impl LegacyTransport {
         idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
         // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
+        let has_fallback_key = extra_env
+            .is_some_and(|env| env.contains_key(csa_core::gemini::API_KEY_FALLBACK_ENV_KEY));
+        let auth_mode = gemini_auth_mode(extra_env).unwrap_or("unknown");
+        let max_attempts = gemini_max_attempts(extra_env);
+        tracing::debug!(
+            max_attempts,
+            has_fallback_key,
+            auth_mode,
+            "gemini-cli legacy retry chain initialized"
+        );
+
         let mut attempt = 1u8;
         loop {
             let executor = self.executor_for_attempt(attempt);
 
             // Phase 2+: inject API key auth if available, otherwise keep original env.
             let api_key_env = if gemini_should_use_api_key(attempt) {
-                gemini_inject_api_key_fallback(extra_env)
+                let injected = gemini_inject_api_key_fallback(extra_env);
+                if injected.is_none() {
+                    tracing::warn!(
+                        attempt,
+                        auth_mode,
+                        has_fallback_key,
+                        "gemini-cli legacy: API key fallback unavailable for retry \
+                         (auth_mode must be 'oauth' and _CSA_API_KEY_FALLBACK must be set); \
+                         retrying with original auth"
+                    );
+                }
+                injected
             } else {
                 None
             };
@@ -576,17 +598,39 @@ impl Transport for AcpTransport {
 
         // Gemini-cli: 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let max_attempts = gemini_max_attempts(extra_env);
+        let has_fallback_key = extra_env
+            .is_some_and(|env| env.contains_key(csa_core::gemini::API_KEY_FALLBACK_ENV_KEY));
+        let auth_mode = gemini_auth_mode(extra_env).unwrap_or("unknown");
+        tracing::debug!(
+            max_attempts,
+            has_fallback_key,
+            auth_mode,
+            "gemini-cli ACP retry chain initialized"
+        );
+
         let mut attempt = 1u8;
         loop {
             // Build ACP args for this attempt, injecting model override in phase 3.
             let mut args = self.acp_args.clone();
             if let Some(model) = gemini_retry_model(attempt) {
+                tracing::info!(attempt, model, "gemini-cli ACP: overriding model for retry");
                 args.extend(["-m".into(), model.into()]);
             }
 
             // Phase 2+: inject API key auth if available, otherwise keep original env.
             let api_key_env = if gemini_should_use_api_key(attempt) {
-                gemini_inject_api_key_fallback(extra_env)
+                let injected = gemini_inject_api_key_fallback(extra_env);
+                if injected.is_none() {
+                    tracing::warn!(
+                        attempt,
+                        auth_mode,
+                        has_fallback_key,
+                        "gemini-cli ACP: API key fallback unavailable for retry \
+                         (auth_mode must be 'oauth' and _CSA_API_KEY_FALLBACK must be set); \
+                         retrying with original auth"
+                    );
+                }
+                injected
             } else {
                 None
             };
@@ -602,6 +646,13 @@ impl Transport for AcpTransport {
             if let Some(ref session_id) = resume_session_id {
                 tracing::debug!(%session_id, "resuming ACP session from tool state");
             }
+
+            tracing::debug!(
+                attempt,
+                max_attempts,
+                has_api_key_override = api_key_env.is_some(),
+                "gemini-cli ACP: executing attempt"
+            );
 
             let result = self
                 .execute_acp_attempt(
@@ -633,6 +684,14 @@ impl Transport for AcpTransport {
                 tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
                 attempt = attempt.saturating_add(1);
                 continue;
+            }
+
+            if should_retry {
+                tracing::warn!(
+                    attempt,
+                    max_attempts,
+                    "gemini-cli ACP: all retry phases exhausted, returning last result"
+                );
             }
 
             return result;
@@ -725,6 +784,7 @@ mod tests {
     use crate::transport_gemini_retry::*;
 
     include!("transport_tests_tail.rs");
+    include!("transport_tests_gemini_fallback.rs");
     include!("transport_tests_extra.rs");
 }
 
