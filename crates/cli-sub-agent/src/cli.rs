@@ -227,6 +227,19 @@ pub enum Commands {
         /// Append extra writable paths to the filesystem sandbox (comma-separated)
         #[arg(long, value_delimiter = ',', value_name = "PATH")]
         extra_writable: Vec<PathBuf>,
+
+        /// Detach as a background daemon; prints session ID and exits immediately.
+        /// Use `csa session wait/attach/result` to interact with the daemon.
+        #[arg(long)]
+        daemon: bool,
+
+        /// Internal flag: this process IS the daemon child. Skip re-spawning.
+        #[arg(long, hide = true)]
+        daemon_child: bool,
+
+        /// Internal: pre-assigned session ID from daemon parent
+        #[arg(long, hide = true)]
+        session_id: Option<String>,
     },
 
     /// Manage sessions

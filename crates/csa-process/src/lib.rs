@@ -34,6 +34,8 @@ use subprocess_helpers::terminate_child_process_group;
 use tool_liveness::record_spool_bytes_written;
 pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
+pub mod daemon;
+
 #[cfg(feature = "codex-pty-fork")]
 pub mod pty_fork;
 
