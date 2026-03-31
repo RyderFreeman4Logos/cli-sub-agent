@@ -90,9 +90,12 @@ Decisions MUST be based on result.toml reports, not direct code inspection.
 /// Emit SA mode caller guard to stdout.
 ///
 /// Returns `true` if the guard was emitted. The guard is only emitted when
-/// `sa_mode` is `true` AND `depth` is 0 (root caller).
-pub(crate) fn emit_sa_mode_caller_guard(sa_mode: bool, depth: u32) -> bool {
-    if !sa_mode || depth > 0 {
+/// ALL conditions are met:
+/// - `sa_mode` is `true`
+/// - `depth` is 0 (root caller)
+/// - `text_mode` is `true` (non-JSON output; avoids corrupting structured output)
+pub(crate) fn emit_sa_mode_caller_guard(sa_mode: bool, depth: u32, text_mode: bool) -> bool {
+    if !sa_mode || depth > 0 || !text_mode {
         return false;
     }
     println!("{SA_MODE_CALLER_GUARD}");

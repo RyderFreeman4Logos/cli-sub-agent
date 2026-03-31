@@ -167,24 +167,36 @@ mod tests {
     }
 
     #[test]
-    fn sa_mode_caller_guard_emits_at_root_depth() {
-        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 0);
-        assert!(emitted, "guard should emit when sa_mode=true and depth=0");
+    fn sa_mode_caller_guard_emits_at_root_depth_text_mode() {
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 0, true);
+        assert!(
+            emitted,
+            "guard should emit when sa_mode=true, depth=0, text_mode=true"
+        );
     }
 
     #[test]
     fn sa_mode_caller_guard_skips_when_disabled() {
-        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(false, 0);
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(false, 0, true);
         assert!(!emitted, "guard should not emit when sa_mode=false");
     }
 
     #[test]
     fn sa_mode_caller_guard_skips_at_child_depth() {
-        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 1);
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 1, true);
         assert!(!emitted, "guard should not emit at child depth");
 
-        let emitted2 = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 3);
+        let emitted2 = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 3, true);
         assert!(!emitted2, "guard should not emit at depth 3");
+    }
+
+    #[test]
+    fn sa_mode_caller_guard_skips_in_json_mode() {
+        let emitted = crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(true, 0, false);
+        assert!(
+            !emitted,
+            "guard should not emit when text_mode=false (JSON)"
+        );
     }
 
     #[test]
