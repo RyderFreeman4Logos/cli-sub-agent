@@ -34,7 +34,7 @@ This skill exists to keep the main agent out of code-level work.
 │ Forbidden: code reading/writing/testing/investigation        │
 └─────────────────────────────┬────────────────────────────────┘
                               │
-                              │ csa run < prompt_file
+                              │ csa run --prompt-file prompt_file
                               v
 ┌──────────────────────────────────────────────────────────────┐
 │ Layer 1: Senior Employee (Planner / Implementer)             │
@@ -299,7 +299,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
-csa run --sa-mode true < "$PROMPT_FILE"
+SID=$(csa run --daemon --sa-mode true --prompt-file "$PROMPT_FILE")
+csa session wait --session "$SID" --timeout 1800
 ```
 
 ### Template B: Implementation Dispatch (Manager -> Layer 1)
@@ -340,7 +341,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml exists and is self-contained for manager decision
 IMPL_EOF
 
-csa run --sa-mode true --session "$SESSION_ID" < "$PROMPT_FILE"
+SID=$(csa run --daemon --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
+csa session wait --session "$SID" --timeout 1800
 ```
 
 ### Template C: Trust Verification Dispatch (Manager -> Reviewer Employee)
@@ -375,7 +377,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
-csa run --sa-mode true < "$PROMPT_FILE"
+SID=$(csa run --daemon --sa-mode true --prompt-file "$PROMPT_FILE")
+csa session wait --session "$SID" --timeout 1800
 ```
 
 ## Model Selection Guidelines

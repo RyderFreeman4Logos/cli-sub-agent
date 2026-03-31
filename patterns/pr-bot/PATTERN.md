@@ -312,60 +312,6 @@ configured bot is gemini-code-assist) and includes them with a quota warning.
 
 ```bash
 set -euo pipefail
-TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
-run_with_hard_timeout() {
-  local timeout_secs="$1"
-  shift
-  if [ -n "${TIMEOUT_BIN}" ]; then
-    "${TIMEOUT_BIN}" -k 5s "${timeout_secs}s" "$@" 2>&1
-    return $?
-  fi
-
-  local tmp_out timeout_flag child_pid watcher_pid rc use_pgroup
-  tmp_out="$(mktemp)"
-  timeout_flag="$(mktemp)"
-  rm -f "${timeout_flag}"
-  use_pgroup=false
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" >"${tmp_out}" 2>&1 &
-    use_pgroup=true
-    child_pid=$!
-  else
-    "$@" >"${tmp_out}" 2>&1 &
-    child_pid=$!
-  fi
-  (
-    sleep "${timeout_secs}"
-    if kill -0 "${child_pid}" 2>/dev/null; then
-      : >"${timeout_flag}"
-      if [ "${use_pgroup}" = "true" ]; then
-        kill -TERM "-${child_pid}" 2>/dev/null || true
-      else
-        kill -TERM "${child_pid}" 2>/dev/null || true
-      fi
-      sleep 2
-      if kill -0 "${child_pid}" 2>/dev/null; then
-        if [ "${use_pgroup}" = "true" ]; then
-          kill -KILL "-${child_pid}" 2>/dev/null || true
-        else
-          kill -KILL "${child_pid}" 2>/dev/null || true
-        fi
-      fi
-    fi
-  ) &
-  watcher_pid=$!
-  wait "${child_pid}"
-  rc=$?
-  kill "${watcher_pid}" 2>/dev/null || true
-  cat "${tmp_out}"
-  rm -f "${tmp_out}"
-  if [ -f "${timeout_flag}" ]; then
-    rm -f "${timeout_flag}"
-    return 124
-  fi
-  rm -f "${timeout_flag}"
-  return "${rc}"
-}
 
 # --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
@@ -408,115 +354,119 @@ sleep 250
 BOT_UNAVAILABLE=true
 FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
-WAIT_RESULT_FILE="$(mktemp)"
 set +e
-run_with_hard_timeout 650 csa run --sa-mode true --force-ignore-tier-setting --tool auto --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout." | tee "${WAIT_RESULT_FILE}"
-WAIT_RC=${PIPESTATUS[0]}
+WAIT_SID="$(csa run --daemon --sa-mode true --force-ignore-tier-setting --tool auto --timeout 1800 --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
+DAEMON_RC=$?
 set -e
-WAIT_RESULT="$(cat "${WAIT_RESULT_FILE}")"
-rm -f "${WAIT_RESULT_FILE}"
-if [ "${WAIT_RC}" -eq 124 ]; then
-  BOT_UNAVAILABLE=true
-elif [ "${WAIT_RC}" -ne 0 ]; then
-  echo "WARN: Delegated bot wait failed (rc=${WAIT_RC}); treating cloud bot as unavailable." >&2
+if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
+  echo "WARN: Failed to launch daemon for bot wait (rc=${DAEMON_RC}); treating cloud bot as unavailable." >&2
   BOT_UNAVAILABLE=true
 else
-  WAIT_MARKER="$(
-    printf '%s\n' "${WAIT_RESULT}" \
-      | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
-      | tail -n 1 \
-      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
-      || true
-  )"
-  if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
-    BOT_UNAVAILABLE=false
-    BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
-    sleep "${BOT_SETTLE_SECS}"
-
-    # --- Positive signal check (#505): verify a review EVENT exists ---
-    # A review event with submitted_at > WAIT_BASE_TS AND commit_id matching
-    # CURRENT_SHA is the positive confirmation that the bot actually reviewed
-    # current HEAD. Without this, "0 new comments" is ambiguous (could mean
-    # bot reviewed and found nothing, or bot hasn't reviewed yet). The
-    # commit_id filter prevents a late review of a previous push from being
-    # mistaken for a review of the current HEAD.
-    set +e
-    REVIEW_EVENT_RAW="$(
-      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
-        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
-        2>/dev/null
+  set +e
+  WAIT_RESULT="$(csa session wait --session "${WAIT_SID}" --timeout 1800)"
+  WAIT_RC=$?
+  set -e
+  if [ "${WAIT_RC}" -ne 0 ]; then
+    echo "WARN: Delegated bot wait failed (rc=${WAIT_RC}); treating cloud bot as unavailable." >&2
+    BOT_UNAVAILABLE=true
+  else
+    WAIT_MARKER="$(
+      printf '%s\n' "${WAIT_RESULT}" \
+        | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
+        | tail -n 1 \
+        | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+        || true
     )"
-    REVIEW_EVENT_RC=$?
-    set -e
-    REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
-    # Helper: check for setup/configuration messages before marking unavailable
-    _check_setup_message_step5() {
-      set +e
-      local setup_body
-      setup_body="$(
-        gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
-          2>/dev/null
-      )"
-      set -e
-      if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
-        echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
-        echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
-        echo "" >&2
-        echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
-        BOT_NEEDS_SETUP=true
-        return 0
-      fi
-      return 1
-    }
+    if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
+      BOT_UNAVAILABLE=false
+      BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+      sleep "${BOT_SETTLE_SECS}"
 
-    if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
-      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
-      _check_setup_message_step5 || {
-        echo "Treating as bot unavailable — API failure with no setup message." >&2
-        BOT_UNAVAILABLE=true
-      }
-    fi
-    # --- Check inline comments for actionable findings ---
-    # This runs regardless of REVIEW_EVENT_COUNT because some bots
-    # post inline comments without a formal review event.
-    if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
+      # --- Positive signal check (#505): verify a review EVENT exists ---
+      # A review event with submitted_at > WAIT_BASE_TS AND commit_id matching
+      # CURRENT_SHA is the positive confirmation that the bot actually reviewed
+      # current HEAD. Without this, "0 new comments" is ambiguous (could mean
+      # bot reviewed and found nothing, or bot hasn't reviewed yet). The
+      # commit_id filter prevents a late review of a previous push from being
+      # mistaken for a review of the current HEAD.
       set +e
-      ACTIONABLE_COMMENT_COUNT="$(
-        gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
-          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+      REVIEW_EVENT_RAW="$(
+        gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${WAIT_BASE_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
           2>/dev/null
       )"
-      ACTIONABLE_COMMENT_RC=$?
+      REVIEW_EVENT_RC=$?
       set -e
-      if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
-        echo "ERROR: Failed to query actionable bot comments for trigger window (rc=${ACTIONABLE_COMMENT_RC})." >&2
-        exit 1
-      fi
-      case "${ACTIONABLE_COMMENT_COUNT:-}" in
-        ''|*[!0-9]*)
-          echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
-          exit 1
-          ;;
-      esac
-      if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
-        echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
-        BOT_HAS_ISSUES=true
-      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
-        # No review event AND no inline comments — bot responded but
-        # didn't actually review. Check for setup message, then mark unavailable.
-        echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${WAIT_BASE_TS}." >&2
+      REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
+      # Helper: check for setup/configuration messages before marking unavailable
+      _check_setup_message_step5() {
+        set +e
+        local setup_body
+        setup_body="$(
+          gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+            --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'")] | .[0].body // ""' \
+            2>/dev/null
+        )"
+        set -e
+        if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+          echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
+          echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
+          echo "" >&2
+          echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
+          BOT_NEEDS_SETUP=true
+          return 0
+        fi
+        return 1
+      }
+
+      if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
+        echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
         _check_setup_message_step5 || {
-          echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
+          echo "Treating as bot unavailable — API failure with no setup message." >&2
           BOT_UNAVAILABLE=true
         }
       fi
+      # --- Check inline comments for actionable findings ---
+      # This runs regardless of REVIEW_EVENT_COUNT because some bots
+      # post inline comments without a formal review event.
+      if [ "${BOT_UNAVAILABLE}" = "false" ] && [ "${BOT_NEEDS_SETUP:-false}" = "false" ]; then
+        set +e
+        ACTIONABLE_COMMENT_COUNT="$(
+          gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+            --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${WAIT_BASE_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+            2>/dev/null
+        )"
+        ACTIONABLE_COMMENT_RC=$?
+        set -e
+        if [ "${ACTIONABLE_COMMENT_RC}" -ne 0 ]; then
+          echo "ERROR: Failed to query actionable bot comments for trigger window (rc=${ACTIONABLE_COMMENT_RC})." >&2
+          exit 1
+        fi
+        case "${ACTIONABLE_COMMENT_COUNT:-}" in
+          ''|*[!0-9]*)
+            echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COMMENT_COUNT}'." >&2
+            exit 1
+            ;;
+        esac
+        if [ "${ACTIONABLE_COMMENT_COUNT}" -gt 0 ]; then
+          echo "Detected ${ACTIONABLE_COMMENT_COUNT} actionable bot comment(s) after trigger window; marking BOT_HAS_ISSUES=true."
+          BOT_HAS_ISSUES=true
+        elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ]; then
+          # No review event AND no inline comments — bot responded but
+          # didn't actually review. Check for setup message, then mark unavailable.
+          echo "WARN: No review event or inline comments for HEAD ${CURRENT_SHA} after ${WAIT_BASE_TS}." >&2
+          _check_setup_message_step5 || {
+            echo "Treating as bot unavailable — no positive signal (neither review event nor comments)." >&2
+            BOT_UNAVAILABLE=true
+          }
+        fi
+      fi
+    elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
+      BOT_UNAVAILABLE=true
+    else
+      echo "WARN: Delegated bot wait returned no marker; treating cloud bot as unavailable." >&2
+      BOT_UNAVAILABLE=true
     fi
-  elif [ "${WAIT_MARKER}" = "BOT_REPLY=timeout" ]; then
-    BOT_UNAVAILABLE=true
-  else
-    echo "WARN: Delegated bot wait returned no marker; treating cloud bot as unavailable." >&2
-    BOT_UNAVAILABLE=true
   fi
 fi
 
@@ -591,79 +541,26 @@ timeout branch. Steps 7-10 are structurally inside the `BOT_UNAVAILABLE=false`
 branch and are NOT reachable from here.
 
 Delegate this cycle to CSA as a single operation and enforce hard bounds:
-- command-level hard timeout: `timeout 1800s`
+- CSA daemon + session wait with `--timeout 1800`
 - no `|| true` silent downgrade
 - success requires marker `FALLBACK_FIX=clean`
 - on success, orchestrator explicitly sets `FALLBACK_REVIEW_HAS_ISSUES=false`
 
 ```bash
 set -euo pipefail
-TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
-run_with_hard_timeout() {
-  local timeout_secs="$1"
-  shift
-  if [ -n "${TIMEOUT_BIN}" ]; then
-    "${TIMEOUT_BIN}" -k 5s "${timeout_secs}s" "$@" 2>&1
-    return $?
-  fi
-
-  local tmp_out timeout_flag child_pid watcher_pid rc use_pgroup
-  tmp_out="$(mktemp)"
-  timeout_flag="$(mktemp)"
-  rm -f "${timeout_flag}"
-  use_pgroup=false
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" >"${tmp_out}" 2>&1 &
-    use_pgroup=true
-    child_pid=$!
-  else
-    "$@" >"${tmp_out}" 2>&1 &
-    child_pid=$!
-  fi
-  (
-    sleep "${timeout_secs}"
-    if kill -0 "${child_pid}" 2>/dev/null; then
-      : >"${timeout_flag}"
-      if [ "${use_pgroup}" = "true" ]; then
-        kill -TERM "-${child_pid}" 2>/dev/null || true
-      else
-        kill -TERM "${child_pid}" 2>/dev/null || true
-      fi
-      sleep 2
-      if kill -0 "${child_pid}" 2>/dev/null; then
-        if [ "${use_pgroup}" = "true" ]; then
-          kill -KILL "-${child_pid}" 2>/dev/null || true
-        else
-          kill -KILL "${child_pid}" 2>/dev/null || true
-        fi
-      fi
-    fi
-  ) &
-  watcher_pid=$!
-  wait "${child_pid}"
-  rc=$?
-  kill "${watcher_pid}" 2>/dev/null || true
-  cat "${tmp_out}"
-  rm -f "${tmp_out}"
-  if [ -f "${timeout_flag}" ]; then
-    rm -f "${timeout_flag}"
-    return 124
-  fi
-  rm -f "${timeout_flag}"
-  return "${rc}"
-}
 set +e
-FIX_RESULT_FILE="$(mktemp)"
-run_with_hard_timeout 1800 csa run --sa-mode true --force-ignore-tier-setting --tool auto --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero." | tee "${FIX_RESULT_FILE}"
-FIX_RC=${PIPESTATUS[0]}
+FIX_SID="$(csa run --daemon --sa-mode true --force-ignore-tier-setting --tool auto --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
+DAEMON_RC=$?
 set -e
-FIX_RESULT="$(cat "${FIX_RESULT_FILE}")"
-rm -f "${FIX_RESULT_FILE}"
-
-if [ "${FIX_RC}" -eq 124 ]; then
-  echo "ERROR: Fallback fix cycle exceeded hard timeout (1800s)." >&2
+if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
+  echo "ERROR: Failed to launch daemon for fallback fix cycle (rc=${DAEMON_RC})." >&2
   exit 1
 fi
+set +e
+FIX_RESULT="$(csa session wait --session "${FIX_SID}" --timeout 1800)"
+FIX_RC=$?
+set -e
+
 if [ "${FIX_RC}" -ne 0 ]; then
   echo "ERROR: Fallback fix cycle failed (rc=${FIX_RC})." >&2
   exit 1
@@ -1133,68 +1030,13 @@ wait/fix/review loop to a single CSA-managed step.
 - CSA delegated step handles both paths:
   - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same 15-minute wait policy for each trigger (5-minute quiet wait + 10-minute polling).
   - Bot times out → CSA runs fallback `csa review --range main...HEAD` and bounded fix/review retries (max 3 rounds).
-- command-level hard timeout is enforced for the delegated gate (`timeout 5400s`).
-- if `timeout/gtimeout` is unavailable, a built-in watchdog fallback still enforces the same timeout bound.
+- CSA daemon + session wait with `--timeout 5400` enforces the hard timeout.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
 
 ```bash
 set -euo pipefail
-TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
-run_with_hard_timeout() {
-  local timeout_secs="$1"
-  shift
-  if [ -n "${TIMEOUT_BIN}" ]; then
-    "${TIMEOUT_BIN}" -k 5s "${timeout_secs}s" "$@" 2>&1
-    return $?
-  fi
-
-  local tmp_out timeout_flag child_pid watcher_pid rc use_pgroup
-  tmp_out="$(mktemp)"
-  timeout_flag="$(mktemp)"
-  rm -f "${timeout_flag}"
-  use_pgroup=false
-  if command -v setsid >/dev/null 2>&1; then
-    setsid "$@" >"${tmp_out}" 2>&1 &
-    use_pgroup=true
-    child_pid=$!
-  else
-    "$@" >"${tmp_out}" 2>&1 &
-    child_pid=$!
-  fi
-  (
-    sleep "${timeout_secs}"
-    if kill -0 "${child_pid}" 2>/dev/null; then
-      : >"${timeout_flag}"
-      if [ "${use_pgroup}" = "true" ]; then
-        kill -TERM "-${child_pid}" 2>/dev/null || true
-      else
-        kill -TERM "${child_pid}" 2>/dev/null || true
-      fi
-      sleep 2
-      if kill -0 "${child_pid}" 2>/dev/null; then
-        if [ "${use_pgroup}" = "true" ]; then
-          kill -KILL "-${child_pid}" 2>/dev/null || true
-        else
-          kill -KILL "${child_pid}" 2>/dev/null || true
-        fi
-      fi
-    fi
-  ) &
-  watcher_pid=$!
-  wait "${child_pid}"
-  rc=$?
-  kill "${watcher_pid}" 2>/dev/null || true
-  cat "${tmp_out}"
-  rm -f "${tmp_out}"
-  if [ -f "${timeout_flag}" ]; then
-    rm -f "${timeout_flag}"
-    return 124
-  fi
-  rm -f "${timeout_flag}"
-  return "${rc}"
-}
 
 COMMIT_COUNT=$(git rev-list --count main..HEAD)
 if [ "${COMMIT_COUNT}" -gt 3 ]; then
@@ -1237,20 +1079,21 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   echo "Triggered post-rebase review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${REBASE_CURRENT_SHA}."
 
   set +e
-  GATE_RESULT_FILE="$(mktemp)"
-  run_with_hard_timeout 5400 csa run --sa-mode true --force-ignore-tier-setting --tool auto --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each @codex trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, run csa review --range main...HEAD and execute a max-3-round fix/review cycle; leave an audit-trail PR comment whenever timeout fallback path is used; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero." | tee "${GATE_RESULT_FILE}"
-  GATE_RC=${PIPESTATUS[0]}
+  GATE_SID="$(csa run --daemon --sa-mode true --force-ignore-tier-setting --tool auto --timeout 5400 --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each cloud bot trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, abort and report to user; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
+  DAEMON_RC=$?
   set -e
-  GATE_RESULT="$(cat "${GATE_RESULT_FILE}")"
-  rm -f "${GATE_RESULT_FILE}"
-  if [ "${GATE_RC}" -eq 124 ]; then
+  if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${GATE_SID}" ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true
     echo "CSA_VAR:REBASE_REVIEW_HAS_ISSUES=$REBASE_REVIEW_HAS_ISSUES"
     echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
-    echo "ERROR: Post-rebase delegated gate exceeded hard timeout (5400s)." >&2
+    echo "ERROR: Failed to launch daemon for post-rebase gate (rc=${DAEMON_RC})." >&2
     exit 1
   fi
+  set +e
+  GATE_RESULT="$(csa session wait --session "${GATE_SID}" --timeout 5400)"
+  GATE_RC=$?
+  set -e
   if [ "${GATE_RC}" -ne 0 ]; then
     REBASE_REVIEW_HAS_ISSUES=true
     FALLBACK_REVIEW_HAS_ISSUES=true

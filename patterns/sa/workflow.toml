@@ -42,6 +42,9 @@ name = "SCOPE"
 name = "SESSION_ID"
 
 [[workflow.variables]]
+name = "SID"
+
+[[workflow.variables]]
 name = "STATUS"
 
 [[workflow.variables]]
@@ -118,7 +121,8 @@ Layer 1 (claude-code) will:
 4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
 
 ```bash
-csa run < "${PROMPT_FILE}"
+SID=$(csa run --daemon --prompt-file "${PROMPT_FILE}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 on_fail = "abort"
 
@@ -182,7 +186,8 @@ Fix the underlying issues to ensure codebase integrity.
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 echo "CSA_VAR:IMPL_FILE=$IMPL_FILE"
-csa run --session "${SESSION_ID}" < "${IMPL_FILE}"
+SID=$(csa run --daemon --session "${SESSION_ID}" --prompt-file "${IMPL_FILE}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 on_fail = "abort"
 condition = "${USER_APPROVES}"
@@ -197,7 +202,8 @@ Resume Layer 1 with user's revision feedback.
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
 echo "CSA_VAR:RESUME_FILE=$RESUME_FILE"
-csa run --session "${SESSION_ID}" < "${RESUME_FILE}"
+SID=$(csa run --daemon --session "${SESSION_ID}" --prompt-file "${RESUME_FILE}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 on_fail = "abort"
 condition = "(!(${USER_APPROVES})) && (${USER_MODIFIES})"

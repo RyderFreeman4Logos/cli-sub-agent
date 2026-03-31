@@ -198,7 +198,7 @@ Even FAST_PATH runs cumulative review before push.
 
 ```bash
 set -euo pipefail
-REVIEW_OUTPUT="$(timeout 1800 csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD" 2>&1)" || true
+REVIEW_OUTPUT="$(csa review --sa-mode true --timeout 1800 --range "${DEFAULT_BRANCH}...HEAD" 2>&1)" || true
 printf '%s\n' "${REVIEW_OUTPUT}"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 ```'''
@@ -223,7 +223,7 @@ if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
 else
   MKTD_TOOL_ARGS=()
 fi
-timeout 1800 csa plan run patterns/mktd/workflow.toml \
+csa plan run patterns/mktd/workflow.toml \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
@@ -288,13 +288,13 @@ Sets REVIEW_COMPLETED=true as gate for push step.
 set -euo pipefail
 REVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
-timeout 1800 csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+csa review --sa-mode true --timeout 1800 --range "${DEFAULT_BRANCH}...HEAD" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
 REVIEW_STATUS=${PIPESTATUS[0]}
 set -e
 REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"
 rm -f "${REVIEW_OUTPUT_FILE}"
-if [ "${REVIEW_STATUS}" -eq 124 ]; then
-  echo "ERROR: Cumulative review timed out." >&2
+if [ "${REVIEW_STATUS}" -ne 0 ]; then
+  echo "ERROR: Cumulative review failed (exit ${REVIEW_STATUS})." >&2
   exit 1
 fi
 VERDICT_LINE="$(printf '%s\n' "${REVIEW_OUTPUT}" | grep '^final_decision:' | tail -1 || true)"
