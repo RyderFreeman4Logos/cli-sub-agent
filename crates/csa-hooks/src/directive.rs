@@ -67,17 +67,31 @@ pub fn parse_next_step_directive(output: &str) -> Option<NextStepDirective> {
                 remaining = &remaining[eq_pos + 1..];
 
                 // Parse value (quoted or bare)
+                let value_owned;
                 let value = if remaining.starts_with('"') {
-                    // Quoted value: find closing quote
+                    // Quoted value: find unescaped closing quote
                     remaining = &remaining[1..];
-                    let end = remaining.find('"').unwrap_or(remaining.len());
-                    let val = &remaining[..end];
+                    let mut end = 0;
+                    let bytes = remaining.as_bytes();
+                    while end < bytes.len() {
+                        if bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\') {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    let raw = &remaining[..end];
                     remaining = if end < remaining.len() {
                         &remaining[end + 1..]
                     } else {
                         ""
                     };
-                    val
+                    // Unescape escaped double quotes
+                    if raw.contains(r#"\""#) {
+                        value_owned = raw.replace(r#"\""#, "\"");
+                        value_owned.as_str()
+                    } else {
+                        raw
+                    }
                 } else {
                     // Bare value: ends at whitespace
                     let end = remaining
@@ -126,9 +140,10 @@ pub fn parse_next_step_directive(output: &str) -> Option<NextStepDirective> {
 /// This is the canonical way for weave steps and hooks to emit next-step
 /// directives that orchestrators can parse mechanically.
 pub fn format_next_step_directive(cmd: &str, required: bool) -> String {
+    let escaped = cmd.replace('"', r#"\""#);
     format!(
         "<!-- CSA:NEXT_STEP cmd=\"{}\" required={} -->",
-        cmd, required
+        escaped, required
     )
 }
 
@@ -228,5 +243,15 @@ mod tests {
         let parsed = parse_next_step_directive(&directive_str).unwrap();
         assert_eq!(parsed.cmd.as_deref(), Some(cmd));
         assert!(parsed.required);
+    }
+
+    #[test]
+    fn format_roundtrip_with_quotes() {
+        let cmd = r#"echo "hello world""#;
+        let directive_str = format_next_step_directive(cmd, false);
+        assert!(directive_str.contains(r#"echo \"hello world\""#));
+        let parsed = parse_next_step_directive(&directive_str).unwrap();
+        assert_eq!(parsed.cmd.as_deref(), Some(cmd));
+        assert!(!parsed.required);
     }
 }
