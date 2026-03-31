@@ -14,7 +14,7 @@ max_recursion_depth = 5
 
 [resources]
 min_free_memory_mb = 4096
-idle_timeout_seconds = 300
+idle_timeout_seconds = 250
 
 [resources.initial_estimates]
 gemini-cli = 150
@@ -58,7 +58,7 @@ max_recursion_depth = 5
 
 [resources]
 min_free_memory_mb = 4096
-idle_timeout_seconds = 300
+idle_timeout_seconds = 250
 
 [resources.initial_estimates]
 codex = 800

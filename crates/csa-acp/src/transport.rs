@@ -66,7 +66,7 @@ pub struct AcpRunOptions<'a> {
 impl Default for AcpRunOptions<'_> {
     fn default() -> Self {
         Self {
-            idle_timeout: Duration::from_secs(300),
+            idle_timeout: Duration::from_secs(250),
             initial_response_timeout: None,
             init_timeout: Duration::from_secs(120),
             termination_grace_period: Duration::from_secs(5),
@@ -183,7 +183,7 @@ impl AcpSession {
 
     pub async fn prompt(&self, prompt: &str) -> AcpResult<PromptResult> {
         self.connection
-            .prompt(&self.session_id, prompt, Duration::from_secs(300), None)
+            .prompt(&self.session_id, prompt, Duration::from_secs(250), None)
             .await
     }
 
