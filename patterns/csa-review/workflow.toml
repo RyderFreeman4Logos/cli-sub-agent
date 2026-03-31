@@ -23,6 +23,9 @@ name = "SCOPE_IS_PRE_PR"
 [[workflow.variables]]
 name = "SESSION_ID"
 
+[[workflow.variables]]
+name = "SID"
+
 [[workflow.steps]]
 id = 1
 title = "Role Detection"

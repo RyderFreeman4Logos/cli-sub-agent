@@ -29,6 +29,9 @@ name = "PROPOSER_MODEL"
 [[workflow.variables]]
 name = "RESPONSE_PROMPT"
 
+[[workflow.variables]]
+name = "SID"
+
 [[workflow.steps]]
 id = 1
 title = "Role Detection"
