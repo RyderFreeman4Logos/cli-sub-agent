@@ -19,6 +19,7 @@ pub const RATE_LIMIT_PATTERNS: &[&str] = &[
     "resource_exhausted",
     "capacity exhausted",
     "capacity_exhausted",
+    "no capacity available",
     "quota exhausted",
     "quota_exhausted",
     "quota exceeded",
