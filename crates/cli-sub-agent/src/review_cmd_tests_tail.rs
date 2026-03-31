@@ -575,29 +575,26 @@ fn fix_gate_allows_when_no_config() {
     assert!(can_edit, "absent config must default to allowing fix");
 }
 
-// --- gemini sandbox for readonly review context ---
+// --- gemini sandbox for review/debate context (#512, #515) ---
 
 #[test]
-fn gemini_sandbox_enabled_for_readonly_gemini() {
-    // Simulates the pipeline logic: readonly_project_root + gemini-cli → gemini_sandbox.
-    let readonly_project_root = true;
+fn gemini_sandbox_enabled_for_review_gemini() {
+    // Simulates the pipeline logic: is_review_or_debate + gemini-cli → gemini_sandbox.
+    let is_review_or_debate = true;
     let tool_name = "gemini-cli";
     let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
-    if readonly_project_root && tool_name == "gemini-cli" {
+    if is_review_or_debate && tool_name == "gemini-cli" {
         opts.gemini_sandbox = true;
     }
-    assert!(
-        opts.gemini_sandbox,
-        "readonly gemini-cli must enable sandbox"
-    );
+    assert!(opts.gemini_sandbox, "review gemini-cli must enable sandbox");
 }
 
 #[test]
-fn gemini_sandbox_not_enabled_for_non_gemini() {
-    let readonly_project_root = true;
+fn gemini_sandbox_not_enabled_for_non_gemini_review() {
+    let is_review_or_debate = true;
     let tool_name = "claude-code";
     let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
-    if readonly_project_root && tool_name == "gemini-cli" {
+    if is_review_or_debate && tool_name == "gemini-cli" {
         opts.gemini_sandbox = true;
     }
     assert!(
@@ -607,15 +604,15 @@ fn gemini_sandbox_not_enabled_for_non_gemini() {
 }
 
 #[test]
-fn gemini_sandbox_not_enabled_for_writable_gemini() {
-    let readonly_project_root = false;
+fn gemini_sandbox_not_enabled_for_run_gemini() {
+    let is_review_or_debate = false; // csa run is not review/debate
     let tool_name = "gemini-cli";
     let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
-    if readonly_project_root && tool_name == "gemini-cli" {
+    if is_review_or_debate && tool_name == "gemini-cli" {
         opts.gemini_sandbox = true;
     }
     assert!(
         !opts.gemini_sandbox,
-        "writable context must not enable gemini sandbox"
+        "csa run must not enable gemini sandbox"
     );
 }
