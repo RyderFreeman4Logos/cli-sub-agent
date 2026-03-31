@@ -299,8 +299,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
-SID=$(csa run --daemon --sa-mode true --prompt-file "$PROMPT_FILE")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
+csa session wait --session "$SID"
 ```
 
 ### Template B: Implementation Dispatch (Manager -> Layer 1)
@@ -341,8 +341,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml exists and is self-contained for manager decision
 IMPL_EOF
 
-SID=$(csa run --daemon --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
+csa session wait --session "$SID"
 ```
 
 ### Template C: Trust Verification Dispatch (Manager -> Reviewer Employee)
@@ -377,8 +377,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
-SID=$(csa run --daemon --sa-mode true --prompt-file "$PROMPT_FILE")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
+csa session wait --session "$SID"
 ```
 
 ## Model Selection Guidelines

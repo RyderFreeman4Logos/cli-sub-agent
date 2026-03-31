@@ -80,6 +80,11 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
 
     let pid = child.id();
 
+    // Write daemon PID file for `csa session kill` and `wait` liveness checks.
+    let pid_path = config.session_dir.join("daemon.pid");
+    std::fs::write(&pid_path, pid.to_string())
+        .with_context(|| format!("failed to write {}", pid_path.display()))?;
+
     // Detach: the daemon child will outlive us. We must not leave a
     // zombie, so `try_wait` reaps it if it already exited (unlikely)
     // and `forget` prevents the Drop impl from killing the child.

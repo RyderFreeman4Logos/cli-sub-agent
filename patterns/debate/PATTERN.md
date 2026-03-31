@@ -54,8 +54,8 @@ the research context into the debate prompt:
 
 ```bash
 # Gather context via forked session, then feed into debate
-SID=$(csa run --daemon --fork-from <research-session-id> "Summarize findings for debate context")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --fork-from <research-session-id> "Summarize findings for debate context")
+csa session wait --session "$SID"
 csa debate "question (with research context above)"
 ```
 
@@ -78,8 +78,8 @@ Proposer presents concrete, actionable strategy with:
 4. Anticipated Weaknesses (honest limitations)
 
 ```bash
-SID=$(csa run --daemon --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}")
+csa session wait --session "$SID"
 ```
 
 ## Step 6: Round 1 — Critique
@@ -94,8 +94,8 @@ Critic rigorously evaluates the proposal:
 4. Strongest Counter-Arguments
 
 ```bash
-SID=$(csa run --daemon --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}")
+csa session wait --session "$SID"
 ```
 
 ## Step 7: Round 1 — Response
@@ -109,8 +109,8 @@ Proposer responds to each criticism:
 3. Present revised strategy
 
 ```bash
-SID=$(csa run --daemon --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}")
+csa session wait --session "$SID"
 ```
 
 ## Step 8: Convergence Evaluation
@@ -130,8 +130,8 @@ Restart debate loop with higher tier models.
 Max 2 escalations.
 
 ```bash
-SID=$(csa run --daemon --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}")
+csa session wait --session "$SID"
 ```
 
 ## ENDIF

@@ -1,4 +1,4 @@
-//! Daemon-specific session commands: wait and attach.
+//! Daemon-specific session commands: wait, attach, and kill.
 //!
 //! Extracted from session_cmds.rs to stay under the monolith file limit.
 
@@ -16,19 +16,25 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-/// Read the daemon PID from the session directory's spool metadata.
-/// Returns None if the PID file doesn't exist or can't be parsed.
+/// Read the daemon PID from the session directory.
+/// Primary source: `daemon.pid` file written by `spawn_daemon`.
+/// Fallback: parse the `CSA:SESSION_STARTED` directive from stderr.log (legacy).
 fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
-    // The daemon parent writes the PID to stdout.log's parent dir as pid.txt
-    // (not yet implemented); fall back to parsing stderr for the RPJ directive.
+    // Primary: daemon.pid file (written by spawn_daemon since v0.1.198).
+    let pid_path = session_dir.join("daemon.pid");
+    if let Ok(content) = fs::read_to_string(&pid_path)
+        && let Ok(pid) = content.trim().parse()
+    {
+        return Some(pid);
+    }
+    // Fallback: parse stderr for the RPJ directive (legacy sessions).
     let stderr_path = session_dir.join("stderr.log");
-    if let Ok(content) = fs::read_to_string(&stderr_path) {
-        // Parse "CSA:SESSION_STARTED id=... pid=<N> ..."
-        if let Some(pid_start) = content.find("pid=") {
-            let rest = &content[pid_start + 4..];
-            let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            return pid_str.parse().ok();
-        }
+    if let Ok(content) = fs::read_to_string(&stderr_path)
+        && let Some(pid_start) = content.find("pid=")
+    {
+        let rest = &content[pid_start + 4..];
+        let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        return pid_str.parse().ok();
     }
     None
 }
@@ -37,11 +43,10 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
 ///
 /// Exits 0 when result.toml appears (streams stdout.log), exits 124 on timeout,
 /// exits 1 if the daemon process died without producing a result.
-pub(crate) fn handle_session_wait(
-    session: String,
-    timeout_secs: u64,
-    cd: Option<String>,
-) -> Result<i32> {
+/// Hardcoded wait timeout in seconds.
+const WAIT_TIMEOUT_SECS: u64 = 250;
+
+pub(crate) fn handle_session_wait(session: String, cd: Option<String>) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
@@ -73,10 +78,10 @@ pub(crate) fn handle_session_wait(
             return Ok(1);
         }
 
-        if timeout_secs > 0 && start.elapsed().as_secs() >= timeout_secs {
+        if start.elapsed().as_secs() >= WAIT_TIMEOUT_SECS {
             eprintln!(
                 "Timeout: session {} did not complete within {}s",
-                resolved.session_id, timeout_secs
+                resolved.session_id, WAIT_TIMEOUT_SECS
             );
             return Ok(124);
         }
@@ -192,4 +197,81 @@ pub(crate) fn handle_session_attach(
             std::thread::sleep(poll_interval);
         }
     }
+}
+
+/// Kill a running daemon session by sending SIGTERM to the process group,
+/// then SIGKILL after a 5-second grace period if still alive.
+pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result<()> {
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+
+    let pid = read_daemon_pid(&session_dir).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No daemon PID found for session {} — may not be a daemon session",
+            resolved.session_id,
+        )
+    })?;
+
+    if pid <= 1 {
+        anyhow::bail!(
+            "Refusing to kill PID {} — invalid daemon PID (would target init or caller's process group)",
+            pid,
+        );
+    }
+
+    if !is_pid_alive(pid) {
+        eprintln!(
+            "Session {} (PID {}) is already dead",
+            resolved.session_id, pid,
+        );
+        return Ok(());
+    }
+
+    // Send SIGTERM to the process group (negative PID).
+    eprintln!(
+        "Sending SIGTERM to session {} (PID {})...",
+        resolved.session_id, pid,
+    );
+    // SAFETY: kill(-pid, SIGTERM) sends to the entire process group.
+    let pgid = -(pid as libc::pid_t);
+    let rc = unsafe { libc::kill(pgid, libc::SIGTERM) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        eprintln!("Warning: SIGTERM failed for PID {pid}: {err}");
+    }
+
+    // Grace period: wait up to 5 seconds for clean shutdown.
+    for _ in 0..50 {
+        if !is_pid_alive(pid) {
+            eprintln!("Session {} terminated", resolved.session_id);
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Force kill.
+    eprintln!(
+        "Session {} still alive after 5s, sending SIGKILL...",
+        resolved.session_id,
+    );
+    // SAFETY: kill(-pid, SIGKILL) force-kills the entire process group.
+    let rc = unsafe { libc::kill(pgid, libc::SIGKILL) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        eprintln!("Warning: SIGKILL failed for PID {pid}: {err}");
+    }
+
+    // Wait for reaping.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    if is_pid_alive(pid) {
+        anyhow::bail!(
+            "Failed to kill session {} (PID {})",
+            resolved.session_id,
+            pid,
+        );
+    }
+
+    eprintln!("Session {} killed", resolved.session_id);
+    Ok(())
 }

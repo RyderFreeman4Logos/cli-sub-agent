@@ -93,8 +93,8 @@ implementation context. Note: `csa review` does not yet support `--fork-from`
 directly. Use `csa run --fork-from` with a review prompt instead:
 
 ```bash
-SID=$(csa run --daemon --fork-from <impl-session-id> "Review the uncommitted changes: $(git diff)")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --fork-from <impl-session-id> "Review the uncommitted changes: $(git diff)")
+csa session wait --session "$SID"
 ```
 
 **Benefits**: The reviewer inherits the implementer's context (files read,
@@ -110,8 +110,8 @@ are immediately visible. Also saves tokens by avoiding redundant file reads.
 When no implementation session is available, use standard review:
 
 ```bash
-SID=$(csa run --daemon --force-ignore-tier-setting --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}")
+csa session wait --session "$SID"
 ```
 
 ## Step 6: Present Results
@@ -131,8 +131,8 @@ Generate fix-summary.md and post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
 ```bash
-SID=$(csa run --daemon --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
-csa session wait --session "$SID" --timeout 1800
+SID=$(csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
+csa session wait --session "$SID"
 ```
 
 ## ENDIF

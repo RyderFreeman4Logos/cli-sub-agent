@@ -1,4 +1,4 @@
-//! Daemon spawn logic for `csa run --daemon`.
+//! Daemon spawn logic for `csa run` (daemon mode is the default).
 //!
 //! Extracted from main.rs to keep the dispatch function under the
 //! monolith file limit.
@@ -26,7 +26,12 @@ pub(crate) fn spawn_and_exit(cd: Option<&str>) -> Result<()> {
     // that may appear before the subcommand (e.g. `csa --format json run ...`).
     let all_args: Vec<String> = std::env::args().collect();
     let run_pos = all_args.iter().position(|a| a == "run").unwrap_or(1);
-    let forwarded_args: Vec<String> = all_args.iter().skip(run_pos + 1).cloned().collect();
+    let forwarded_args: Vec<String> = all_args
+        .iter()
+        .skip(run_pos + 1)
+        .filter(|a| *a != "--daemon") // daemon is now default; strip no-op flag
+        .cloned()
+        .collect();
 
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
 
