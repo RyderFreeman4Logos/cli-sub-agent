@@ -28,12 +28,11 @@ pub(crate) fn handle_session_wait(
 
     loop {
         if result_path.exists() {
+            // Stream stdout.log to avoid OOM on large daemon output.
             let stdout_log = session_dir.join("stdout.log");
             if stdout_log.is_file() {
-                let content = fs::read_to_string(&stdout_log)?;
-                if !content.is_empty() {
-                    print!("{content}");
-                }
+                let mut f = std::fs::File::open(&stdout_log)?;
+                std::io::copy(&mut f, &mut std::io::stdout().lock())?;
             }
             return Ok(0);
         }
@@ -107,6 +106,7 @@ pub(crate) fn handle_session_attach(
         }
 
         if result_path.exists() {
+            // Drain remaining stdout.
             loop {
                 let n = stdout_file.read(&mut buf)?;
                 if n == 0 {
@@ -115,7 +115,24 @@ pub(crate) fn handle_session_attach(
                 std::io::stdout().write_all(&buf[..n])?;
             }
             std::io::stdout().flush()?;
-            return Ok(0);
+            // Drain remaining stderr.
+            if let Some(ref mut f) = stderr_file {
+                loop {
+                    let n = f.read(&mut buf)?;
+                    if n == 0 {
+                        break;
+                    }
+                    std::io::stderr().write_all(&buf[..n])?;
+                }
+                std::io::stderr().flush()?;
+            }
+            // Return the session's exit code from result.toml.
+            let exit_code = fs::read_to_string(&result_path)
+                .ok()
+                .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())
+                .map(|r| r.exit_code)
+                .unwrap_or(0);
+            return Ok(exit_code);
         }
 
         if !any_output {
