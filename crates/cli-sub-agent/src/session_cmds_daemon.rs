@@ -39,13 +39,6 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
     None
 }
 
-/// Default daemon wait timeout (seconds).
-///
-/// 250s keeps the daemon's KV cache warm while periodically returning control
-/// to the calling orchestrator. The caller is expected to re-invoke
-/// `csa session wait` when it receives exit code 124.
-pub(crate) const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
-
 /// Wait for a daemon session to complete by polling for result.toml.
 ///
 /// Exits 0 when result.toml appears (streams stdout.log), exits 124 on timeout,
@@ -99,9 +92,13 @@ pub(crate) fn handle_session_wait(
                 resolved.session_id, wait_timeout_secs,
             );
             // Emit structured retry hint for orchestrators / agents.
+            let cd_arg = cd
+                .as_ref()
+                .map(|path| format!(" --cd \"{}\"", path))
+                .unwrap_or_default();
             eprintln!(
-                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s cmd=\"csa session wait --session {}\" -->",
-                resolved.session_id, elapsed, resolved.session_id,
+                "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s cmd=\"csa session wait --session {}{}\" -->",
+                resolved.session_id, elapsed, resolved.session_id, cd_arg,
             );
             return Ok(124);
         }

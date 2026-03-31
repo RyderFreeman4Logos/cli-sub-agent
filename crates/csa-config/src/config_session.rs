@@ -73,8 +73,10 @@ fn default_tool_output_threshold_bytes() -> u64 {
 }
 
 /// Default daemon wait timeout: 250s for KV cache warmth.
+pub const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
+
 fn default_daemon_wait_seconds() -> u64 {
-    250
+    DEFAULT_DAEMON_WAIT_SECS
 }
 
 const DEFAULT_SPOOL_MAX_MB: u32 = 32;

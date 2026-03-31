@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
-use crate::session_cmds_daemon::DEFAULT_DAEMON_WAIT_SECS;
+use csa_config::DEFAULT_DAEMON_WAIT_SECS;
 use csa_core::types::OutputFormat;
 
 pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
@@ -118,10 +118,14 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
 /// compile-time default.
 fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
     let project_root = crate::pipeline::determine_project_root(cd).ok();
-    if let Some(ref root) = project_root
-        && let Ok(Some(config)) = csa_config::ProjectConfig::load(root)
-    {
-        return config.session.daemon_wait_seconds;
+    if let Some(ref root) = project_root {
+        match csa_config::ProjectConfig::load(root) {
+            Ok(Some(config)) => return config.session.daemon_wait_seconds,
+            Ok(None) => {} // No project config file — use default.
+            Err(e) => {
+                tracing::warn!("Failed to load project config for daemon_wait_seconds: {e}")
+            }
+        }
     }
     DEFAULT_DAEMON_WAIT_SECS
 }
