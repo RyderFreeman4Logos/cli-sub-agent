@@ -3,14 +3,13 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::executor::Executor;
+use crate::transport_gemini_retry::{
+    gemini_inject_api_key_fallback, gemini_max_attempts, gemini_rate_limit_backoff,
+    gemini_retry_model, is_gemini_rate_limited_error, is_gemini_rate_limited_result,
+};
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
 use csa_acp::{SessionConfig, SessionEvent};
-use csa_core::gemini::{
-    API_KEY_ENV as GEMINI_API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY,
-    AUTH_MODE_ENV_KEY as GEMINI_AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH, NO_FLASH_FALLBACK_ENV_KEY,
-    detect_rate_limit_pattern,
-};
 use csa_process::{
     ExecutionResult, SpawnOptions, StreamMode, spawn_tool_sandboxed, spawn_tool_with_options,
     wait_and_capture_with_idle_timeout,
@@ -77,15 +76,6 @@ pub struct LegacyTransport {
     executor: Executor,
 }
 
-const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
-const GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS: u8 = 2;
-#[cfg(test)]
-const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
-#[cfg(not(test))]
-const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 1_000;
-const GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST: &str = "gemini-3.1-pro-preview";
-const GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND: &str = "gemini-3-flash-preview";
-
 impl LegacyTransport {
     pub fn new(executor: Executor) -> Self {
         Self { executor }
@@ -97,72 +87,14 @@ impl LegacyTransport {
         attempt: u8,
         extra_env: Option<&HashMap<String, String>>,
     ) -> Option<Duration> {
-        let max = if Self::is_no_flash(extra_env) {
-            GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS
-        } else {
-            GEMINI_RATE_LIMIT_MAX_ATTEMPTS
-        };
+        let max = gemini_max_attempts(extra_env);
         if !matches!(self.executor, Executor::GeminiCli { .. })
             || attempt >= max
-            || !Self::is_gemini_rate_limited(execution)
+            || !is_gemini_rate_limited_result(execution)
         {
             return None;
         }
-        Some(Self::gemini_rate_limit_backoff(attempt))
-    }
-
-    fn is_no_flash(extra_env: Option<&HashMap<String, String>>) -> bool {
-        extra_env.is_some_and(|env| env.contains_key(NO_FLASH_FALLBACK_ENV_KEY))
-    }
-
-    fn is_gemini_rate_limited(execution: &ExecutionResult) -> bool {
-        if execution.exit_code == 0 {
-            return false;
-        }
-        detect_rate_limit_pattern(&format!(
-            "{}\n{}",
-            execution.stderr_output, execution.output
-        ))
-        .is_some()
-    }
-
-    fn gemini_rate_limit_backoff(attempt: u8) -> Duration {
-        let exponent = u32::from(attempt.saturating_sub(1));
-        let multiplier = 1u64.checked_shl(exponent).unwrap_or(u64::MAX);
-        Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS.saturating_mul(multiplier))
-    }
-
-    fn gemini_rate_limit_retry_model(attempt: u8) -> Option<&'static str> {
-        match attempt {
-            2 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST),
-            3 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND),
-            _ => None,
-        }
-    }
-
-    fn gemini_auth_mode(extra_env: Option<&HashMap<String, String>>) -> Option<&str> {
-        extra_env
-            .and_then(|env| env.get(GEMINI_AUTH_MODE_ENV_KEY))
-            .map(String::as_str)
-    }
-
-    /// Build extra_env with GEMINI_API_KEY injected from the fallback key.
-    /// Returns None if no fallback key is available.
-    fn inject_api_key_fallback(
-        extra_env: Option<&HashMap<String, String>>,
-    ) -> Option<HashMap<String, String>> {
-        if Self::gemini_auth_mode(extra_env) != Some(AUTH_MODE_OAUTH) {
-            return None;
-        }
-        let fallback_key = extra_env?.get(API_KEY_FALLBACK_ENV_KEY)?;
-        let mut env = extra_env.cloned().unwrap_or_default();
-        env.insert(GEMINI_API_KEY_ENV.to_string(), fallback_key.clone());
-        env.insert(
-            GEMINI_AUTH_MODE_ENV_KEY.to_string(),
-            AUTH_MODE_API_KEY.to_string(),
-        );
-        env.remove(API_KEY_FALLBACK_ENV_KEY);
-        Some(env)
+        Some(gemini_rate_limit_backoff(attempt))
     }
 
     fn executor_for_attempt(&self, attempt: u8) -> Executor {
@@ -170,7 +102,7 @@ impl LegacyTransport {
             Executor::GeminiCli {
                 thinking_budget, ..
             } => {
-                if let Some(model) = Self::gemini_rate_limit_retry_model(attempt) {
+                if let Some(model) = gemini_retry_model(attempt) {
                     Executor::GeminiCli {
                         model_override: Some(model.to_string()),
                         thinking_budget: thinking_budget.clone(),
@@ -326,8 +258,8 @@ impl LegacyTransport {
                 continue;
             }
             // API key fallback: all model retries exhausted, still quota error.
-            if Self::is_gemini_rate_limited(&result.execution)
-                && let Some(env_with_key) = Self::inject_api_key_fallback(extra_env)
+            if is_gemini_rate_limited_result(&result.execution)
+                && let Some(env_with_key) = gemini_inject_api_key_fallback(extra_env)
             {
                 tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
                 return self
@@ -378,8 +310,8 @@ impl Transport for LegacyTransport {
                 continue;
             }
             // API key fallback: all model retries exhausted, still quota error.
-            if Self::is_gemini_rate_limited(&result.execution)
-                && let Some(env_with_key) = Self::inject_api_key_fallback(extra_env)
+            if is_gemini_rate_limited_result(&result.execution)
+                && let Some(env_with_key) = gemini_inject_api_key_fallback(extra_env)
             {
                 tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
                 return self
@@ -434,27 +366,28 @@ impl AcpTransport {
     }
 }
 
-#[async_trait]
-impl Transport for AcpTransport {
-    #[tracing::instrument(skip_all, fields(tool = %self.tool_name))]
-    async fn execute(
+impl AcpTransport {
+    /// Execute a single ACP attempt with the given args and env.
+    ///
+    /// This is the core spawn_blocking logic extracted so the retry loop in
+    /// `Transport::execute` can call it multiple times without duplicating
+    /// the entire spawn/sandbox orchestration.
+    async fn execute_acp_attempt(
         &self,
         prompt: &str,
-        tool_state: Option<&ToolState>,
         session: &MetaSessionState,
         extra_env: Option<&HashMap<String, String>>,
-        options: TransportOptions<'_>,
+        options: &TransportOptions<'_>,
+        acp_args: &[String],
+        resume_session_id: Option<&str>,
     ) -> Result<TransportResult> {
         let env = self.build_env(session, extra_env);
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
         let acp_command = self.acp_command.clone();
-        let acp_args = self.acp_args.clone();
+        let acp_args = acp_args.to_vec();
         let prompt = prompt.to_string();
-        let resume_session_id = tool_state.and_then(|s| s.provider_session_id.clone());
-        if let Some(session_id) = resume_session_id.as_deref() {
-            tracing::debug!(session_id, "resuming ACP session from tool state");
-        }
+        let resume_session_id = resume_session_id.map(String::from);
 
         let sandbox_plan = options.sandbox.map(|s| s.isolation_plan.clone());
         let sandbox_tool_name = options.sandbox.map(|s| s.tool_name.clone());
@@ -597,6 +530,103 @@ impl Transport for AcpTransport {
             metadata: output.metadata,
         })
     }
+}
+
+#[async_trait]
+impl Transport for AcpTransport {
+    #[tracing::instrument(skip_all, fields(tool = %self.tool_name))]
+    async fn execute(
+        &self,
+        prompt: &str,
+        tool_state: Option<&ToolState>,
+        session: &MetaSessionState,
+        extra_env: Option<&HashMap<String, String>>,
+        options: TransportOptions<'_>,
+    ) -> Result<TransportResult> {
+        let is_gemini = self.tool_name == "gemini-cli";
+
+        // Non-gemini tools: single attempt, no retry loop.
+        if !is_gemini {
+            let resume_session_id = tool_state.and_then(|s| s.provider_session_id.clone());
+            if let Some(ref session_id) = resume_session_id {
+                tracing::debug!(%session_id, "resuming ACP session from tool state");
+            }
+            return self
+                .execute_acp_attempt(
+                    prompt,
+                    session,
+                    extra_env,
+                    &options,
+                    &self.acp_args,
+                    resume_session_id.as_deref(),
+                )
+                .await;
+        }
+
+        // Gemini-cli: retry loop with model switching and API key fallback.
+        let max_attempts = gemini_max_attempts(extra_env);
+        let mut attempt = 1u8;
+        loop {
+            // Build ACP args for this attempt, injecting model override on retries.
+            let mut args = self.acp_args.clone();
+            if let Some(model) = gemini_retry_model(attempt) {
+                args.extend(["-m".into(), model.into()]);
+            }
+
+            // Only resume a provider session on the first attempt; retries start fresh.
+            let resume_session_id = if attempt == 1 {
+                tool_state.and_then(|s| s.provider_session_id.clone())
+            } else {
+                None
+            };
+            if let Some(ref session_id) = resume_session_id {
+                tracing::debug!(%session_id, "resuming ACP session from tool state");
+            }
+
+            let result = self
+                .execute_acp_attempt(
+                    prompt,
+                    session,
+                    extra_env,
+                    &options,
+                    &args,
+                    resume_session_id.as_deref(),
+                )
+                .await;
+
+            let should_retry = match &result {
+                Ok(tr) => is_gemini_rate_limited_result(&tr.execution),
+                Err(e) => is_gemini_rate_limited_error(&e.to_string()),
+            };
+
+            if should_retry && attempt < max_attempts {
+                tracing::info!(
+                    attempt,
+                    "gemini-cli ACP quota exhausted; retrying with model switch"
+                );
+                tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
+                attempt = attempt.saturating_add(1);
+                continue;
+            }
+
+            // API key fallback: all model retries exhausted, still quota error.
+            if should_retry && let Some(env_with_key) = gemini_inject_api_key_fallback(extra_env) {
+                tracing::info!("gemini-cli ACP quota exhausted; falling back to API key auth");
+                return self
+                    .execute_acp_attempt(
+                        prompt,
+                        session,
+                        Some(&env_with_key),
+                        &options,
+                        &self.acp_args,
+                        None,
+                    )
+                    .await;
+            }
+
+            return result;
+        }
+    }
 
     #[cfg(test)]
     fn as_any(&self) -> &dyn std::any::Any {
@@ -681,109 +711,7 @@ mod tests {
     use csa_acp::SessionConfig;
 
     use super::*;
-
-    #[test]
-    fn test_transport_factory_create_routes_tools_to_expected_transport() {
-        let legacy_tools = vec![Executor::Opencode {
-            model_override: None,
-            agent: None,
-            thinking_budget: None,
-        }];
-        for executor in legacy_tools {
-            let transport = TransportFactory::create(&executor, None);
-            assert!(
-                transport.as_ref().as_any().is::<LegacyTransport>(),
-                "Expected LegacyTransport for {}",
-                executor.tool_name()
-            );
-        }
-
-        let acp_tools = vec![
-            Executor::Codex {
-                model_override: None,
-                thinking_budget: None,
-            },
-            Executor::ClaudeCode {
-                model_override: None,
-                thinking_budget: None,
-            },
-            Executor::GeminiCli {
-                model_override: None,
-                thinking_budget: None,
-            },
-        ];
-        for executor in acp_tools {
-            let transport = TransportFactory::create(&executor, Some(SessionConfig::default()));
-            assert!(
-                transport.as_ref().as_any().is::<AcpTransport>(),
-                "Expected AcpTransport for {}",
-                executor.tool_name()
-            );
-        }
-    }
-
-    #[test]
-    fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
-        let executor = Executor::Codex {
-            model_override: None,
-            thinking_budget: None,
-        };
-        let session_config = SessionConfig {
-            no_load: vec!["skills/foo".to_string()],
-            extra_load: vec!["skills/bar".to_string()],
-            tier: Some("tier-2".to_string()),
-            models: vec!["codex/openai/o3/medium".to_string()],
-            mcp_servers: Vec::new(),
-            mcp_proxy_socket: None,
-        };
-
-        let transport = TransportFactory::create(&executor, Some(session_config.clone()));
-        let acp = transport
-            .as_ref()
-            .as_any()
-            .downcast_ref::<AcpTransport>()
-            .expect("expected AcpTransport");
-
-        assert_eq!(acp.session_config, Some(session_config));
-    }
-
-    #[test]
-    fn test_legacy_transport_construction_from_executor() {
-        let executor = Executor::Opencode {
-            model_override: Some("model".to_string()),
-            agent: Some("coder".to_string()),
-            thinking_budget: None,
-        };
-        let transport = LegacyTransport::new(executor.clone());
-
-        assert_eq!(transport.executor.tool_name(), executor.tool_name());
-        assert_eq!(
-            transport.executor.executable_name(),
-            executor.executable_name()
-        );
-    }
-
-    #[test]
-    fn test_acp_command_for_tool_mappings() {
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("claude-code"),
-            ("claude-code-acp".to_string(), vec![])
-        );
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("codex"),
-            ("codex-acp".to_string(), vec![])
-        );
-        // gemini-cli uses native ACP mode via `gemini --acp`
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("gemini-cli"),
-            ("gemini".to_string(), vec!["--acp".to_string()])
-        );
-        // Unknown tools get "{name}-acp" convention
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("opencode"),
-            ("opencode-acp".to_string(), vec![])
-        );
-    }
+    use crate::transport_gemini_retry::*;
 
     include!("transport_tests_tail.rs");
 }
