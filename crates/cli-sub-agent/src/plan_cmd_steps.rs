@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use csa_config::ProjectConfig;
 use csa_core::types::ToolName;
 use csa_executor::ModelSpec;
+use csa_hooks::format_next_step_directive;
 use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
 
 use super::plan_cmd_exec::{
@@ -265,6 +266,21 @@ pub(super) async fn execute_plan_with_journal(
         );
         if let Some(path) = run_ctx.journal_path {
             persist_plan_journal(path, run_ctx.journal)?;
+        }
+
+        // Emit CSA:NEXT_STEP directive for pipeline chaining.
+        // On success: point to the next step in the plan.
+        // On failure: no directive (pipeline stops on abort).
+        if !is_failure
+            && !result.skipped
+            && let Some(next_step) = find_next_step(step, &plan.steps)
+        {
+            let cmd = format!(
+                "csa plan run --step {} \"{}\"",
+                next_step.id, next_step.title
+            );
+            let required = matches!(next_step.on_fail, FailAction::Abort);
+            eprintln!("{}", format_next_step_directive(&cmd, required));
         }
 
         // Abort on failure when: on_fail=abort, or retry exhausted (retries
@@ -614,4 +630,12 @@ pub(crate) fn should_inject_assignment_markers(step: &PlanStep) -> bool {
 
 pub(crate) fn is_assignment_marker_key(key: &str) -> bool {
     validate_variable_name(key).is_ok()
+}
+
+/// Find the next step in the plan after the current step.
+///
+/// Returns the first step with an ID greater than the current step's ID,
+/// which is the sequential successor in a linear workflow.
+fn find_next_step<'a>(current: &PlanStep, steps: &'a [PlanStep]) -> Option<&'a PlanStep> {
+    steps.iter().find(|s| s.id > current.id)
 }

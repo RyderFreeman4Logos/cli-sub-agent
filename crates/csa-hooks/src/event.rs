@@ -135,7 +135,6 @@ mod tests {
     fn test_builtin_command() {
         // Events with built-in commands
         assert!(HookEvent::SessionComplete.builtin_command().is_some());
-
         assert!(HookEvent::PostEdit.builtin_command().is_some());
 
         // Events without built-in commands (TodoCreate/TodoSave have no builtins

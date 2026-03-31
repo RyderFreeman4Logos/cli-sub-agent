@@ -374,6 +374,19 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 ],
                 &project_root,
             );
+
+            // Emit CSA:NEXT_STEP directive for pipeline chaining.
+            // Orchestrators can parse this to mechanically chain review → pr-bot.
+            if verdict == CLEAN {
+                eprintln!(
+                    "{}",
+                    csa_hooks::format_next_step_directive(
+                        "csa plan run patterns/dev2merge/workflow.toml --step pr-bot",
+                        true,
+                    )
+                );
+            }
+
             return Ok(effective_exit_code);
         }
 
@@ -429,6 +442,17 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             ],
             &project_root,
         );
+
+        // Emit CSA:NEXT_STEP directive for pipeline chaining after fix loop.
+        if fix_passed {
+            eprintln!(
+                "{}",
+                csa_hooks::format_next_step_directive(
+                    "csa plan run patterns/dev2merge/workflow.toml --step pr-bot",
+                    true,
+                )
+            );
+        }
 
         return fix_exit_code;
     }

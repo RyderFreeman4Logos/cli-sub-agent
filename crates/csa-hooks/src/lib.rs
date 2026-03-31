@@ -54,7 +54,9 @@ pub mod waiver;
 
 // Re-export key types
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
-pub use directive::parse_next_step;
+pub use directive::{
+    NextStepDirective, format_next_step_directive, parse_next_step, parse_next_step_directive,
+};
 pub use event::HookEvent;
 #[cfg(feature = "async-hooks")]
 pub use event_bus::AsyncEventBus;
