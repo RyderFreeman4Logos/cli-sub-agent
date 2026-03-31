@@ -400,9 +400,9 @@ else
   WAIT_BASE_TS="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-# --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
-echo "Waiting 5 minutes before polling (bot responses rarely arrive faster)..."
-sleep 300
+# --- Initial quiet wait (~4 min) — bot responses rarely arrive faster ---
+echo "Waiting ~4 minutes before polling (bot responses rarely arrive faster)..."
+sleep 250
 
 # --- Delegate remaining polling to CSA-managed step (max 10 min) ---
 BOT_UNAVAILABLE=true

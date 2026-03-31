@@ -566,9 +566,9 @@ transcript_redaction = true
 # require_commit_on_mutation = true
 [resources]
 min_free_memory_mb = 4096
-idle_timeout_seconds = 300
+idle_timeout_seconds = 250
 liveness_dead_seconds = 600
-slot_wait_timeout_seconds = 300
+slot_wait_timeout_seconds = 250
 stdin_write_timeout_seconds = 30
 termination_grace_period_seconds = 5
 [gc]

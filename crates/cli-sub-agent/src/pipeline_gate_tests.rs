@@ -91,7 +91,7 @@ async fn test_gate_skipped_when_csa_depth_set() {
     let result = evaluate_quality_gate(
         dir.path(),
         Some("echo should-not-run"),
-        300,
+        250,
         &GateMode::Full,
     )
     .await
@@ -119,7 +119,7 @@ async fn test_gate_skipped_when_no_command_and_no_hooks_path() {
         .await
         .unwrap();
 
-    let result = evaluate_quality_gate(dir.path(), None, 300, &GateMode::Full)
+    let result = evaluate_quality_gate(dir.path(), None, 250, &GateMode::Full)
         .await
         .unwrap();
 
@@ -137,7 +137,7 @@ async fn test_gate_runs_explicit_command_success() {
     let dir = tempfile::tempdir().unwrap();
 
     let result =
-        evaluate_quality_gate(dir.path(), Some("echo 'gate passed'"), 300, &GateMode::Full)
+        evaluate_quality_gate(dir.path(), Some("echo 'gate passed'"), 250, &GateMode::Full)
             .await
             .unwrap();
 
@@ -159,7 +159,7 @@ async fn test_gate_runs_explicit_command_failure() {
     let result = evaluate_quality_gate(
         dir.path(),
         Some("echo 'lint error' >&2; exit 1"),
-        300,
+        250,
         &GateMode::Full,
     )
     .await
@@ -205,7 +205,7 @@ async fn test_gate_monitor_mode_still_runs() {
 
     // Even in monitor mode, the gate runs — the mode only affects how callers
     // handle the result.
-    let result = evaluate_quality_gate(dir.path(), Some("exit 1"), 300, &GateMode::Monitor)
+    let result = evaluate_quality_gate(dir.path(), Some("exit 1"), 250, &GateMode::Monitor)
         .await
         .unwrap();
 
@@ -226,7 +226,7 @@ async fn test_gate_captures_stdout_and_stderr() {
     let result = evaluate_quality_gate(
         dir.path(),
         Some("echo 'stdout-content'; echo 'stderr-content' >&2"),
-        300,
+        250,
         &GateMode::Full,
     )
     .await
@@ -355,7 +355,7 @@ async fn test_pipeline_skipped_when_csa_depth_set() {
         level: 1,
     }];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full)
         .await
         .unwrap();
 
@@ -373,7 +373,7 @@ async fn test_pipeline_empty_steps_skipped() {
     unsafe { set_depth("0") };
 
     let dir = tempfile::tempdir().unwrap();
-    let result = evaluate_quality_gates(dir.path(), &[], 300, &GateMode::Full)
+    let result = evaluate_quality_gates(dir.path(), &[], 250, &GateMode::Full)
         .await
         .unwrap();
 
@@ -408,7 +408,7 @@ async fn test_pipeline_sequential_all_pass() {
         },
     ];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full)
         .await
         .unwrap();
 
@@ -446,7 +446,7 @@ async fn test_pipeline_fail_fast_on_first_failure() {
         },
     ];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full)
         .await
         .unwrap();
 
@@ -478,7 +478,7 @@ async fn test_pipeline_summary_for_review() {
         },
     ];
 
-    let result = evaluate_quality_gates(dir.path(), &steps, 300, &GateMode::Full)
+    let result = evaluate_quality_gates(dir.path(), &steps, 250, &GateMode::Full)
         .await
         .unwrap();
 

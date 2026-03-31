@@ -57,11 +57,11 @@ fn default_min_mem() -> u64 {
 }
 
 fn default_idle_timeout_seconds() -> u64 {
-    300
+    250
 }
 
 fn default_slot_wait_timeout_seconds() -> u64 {
-    300
+    250
 }
 
 fn default_liveness_dead_seconds() -> Option<u64> {

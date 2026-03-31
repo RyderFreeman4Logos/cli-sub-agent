@@ -620,12 +620,12 @@ fn debate_cli_parses_both_timeouts() {
         "csa",
         "debate",
         "--timeout",
-        "300",
+        "250",
         "--idle-timeout",
         "30",
         "question",
     ]);
-    assert_eq!(args.timeout, Some(300));
+    assert_eq!(args.timeout, Some(250));
     assert_eq!(args.idle_timeout, Some(30));
 }
 

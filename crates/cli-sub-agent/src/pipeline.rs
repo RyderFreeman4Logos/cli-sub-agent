@@ -39,7 +39,7 @@ pub(crate) use session_exec::{
     execute_with_session_and_meta_with_parent_source,
 };
 
-pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 300;
+pub(crate) const DEFAULT_IDLE_TIMEOUT_SECONDS: u64 = 250;
 pub(crate) const DEFAULT_LIVENESS_DEAD_SECONDS: u64 = csa_process::DEFAULT_LIVENESS_DEAD_SECS;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

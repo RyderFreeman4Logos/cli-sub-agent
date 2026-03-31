@@ -154,7 +154,7 @@ fn is_retry_noise(line: &str) -> bool {
     false
 }
 
-pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 300;
+pub const DEFAULT_IDLE_TIMEOUT_SECS: u64 = 250;
 pub const DEFAULT_STDIN_WRITE_TIMEOUT_SECS: u64 = 30;
 pub const DEFAULT_TERMINATION_GRACE_PERIOD_SECS: u64 = 5;
 const WORKSPACE_BOUNDARY_ERROR_THRESHOLD: usize = 3;

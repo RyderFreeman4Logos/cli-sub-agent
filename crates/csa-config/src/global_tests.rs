@@ -321,7 +321,7 @@ gate_timeout_secs = 600
 fn test_review_config_gate_fields_default() {
     let config = ReviewConfig::default();
     assert!(config.gate_command.is_none());
-    assert_eq!(config.gate_timeout_secs, 300);
+    assert_eq!(config.gate_timeout_secs, 250);
 }
 
 #[test]
@@ -352,7 +352,7 @@ fn test_review_config_is_not_default_with_gate_timeout() {
 fn test_review_config_gate_timeout_default_skipped_in_serialization() {
     let config = ReviewConfig::default();
     let toml_str = toml::to_string(&config).unwrap();
-    // Default gate_timeout_secs (300) should be skipped via skip_serializing_if
+    // Default gate_timeout_secs (250) should be skipped via skip_serializing_if
     assert!(
         !toml_str.contains("gate_timeout_secs"),
         "Default gate_timeout_secs should be omitted from TOML output"

@@ -663,6 +663,6 @@ fn override_thinking_budget_works_for_all_tools() {
 #[test]
 fn default_acp_init_timeout_is_120() {
     use csa_process::StreamMode;
-    let opts = ExecuteOptions::new(StreamMode::TeeToStderr, 300);
+    let opts = ExecuteOptions::new(StreamMode::TeeToStderr, 250);
     assert_eq!(opts.acp_init_timeout_seconds, 120);
 }

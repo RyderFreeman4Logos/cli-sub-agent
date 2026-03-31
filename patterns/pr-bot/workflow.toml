@@ -418,9 +418,9 @@ else
   WAIT_BASE_TS="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-# --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
-echo "Waiting 5 minutes before polling (bot responses rarely arrive faster)..."
-sleep 300
+# --- Initial quiet wait (~4 min) — bot responses rarely arrive faster ---
+echo "Waiting ~4 minutes before polling (bot responses rarely arrive faster)..."
+sleep 250
 
 # --- Delegate remaining polling to CSA-managed step (max 10 min) ---
 BOT_UNAVAILABLE=true
@@ -1140,9 +1140,9 @@ RETRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
 gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${RETRIGGER_BODY}"
 echo "Re-triggered review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA} at ${RETRIGGER_TS}"
 
-# --- Initial quiet wait (5 min) — bot responses rarely arrive faster ---
-echo "Waiting 5 minutes before polling post-fix review (bot responses rarely arrive faster)..."
-sleep 300
+# --- Initial quiet wait (~4 min) — bot responses rarely arrive faster ---
+echo "Waiting ~4 minutes before polling post-fix review (bot responses rarely arrive faster)..."
+sleep 250
 
 # --- Delegate remaining polling to CSA (max 10 min) ---
 BOT_CLEAN=false

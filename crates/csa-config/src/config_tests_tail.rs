@@ -226,7 +226,7 @@ initial_response_timeout_seconds = 0
 #[test]
 fn test_resources_config_deser_initial_response_timeout_omitted_defaults_to_120() {
     let toml_str = r#"
-idle_timeout_seconds = 300
+idle_timeout_seconds = 250
 "#;
     let cfg: ResourcesConfig = toml::from_str(toml_str).unwrap();
     assert_eq!(cfg.initial_response_timeout_seconds, Some(120));

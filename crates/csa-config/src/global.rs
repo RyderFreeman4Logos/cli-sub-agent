@@ -152,7 +152,7 @@ pub struct ReviewConfig {
 }
 
 const fn default_gate_timeout_secs() -> u64 {
-    300
+    250
 }
 
 fn is_default_gate_timeout(val: &u64) -> bool {
