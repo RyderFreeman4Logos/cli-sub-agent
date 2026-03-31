@@ -503,11 +503,11 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
     let project_dir = tempdir().unwrap();
     let bin_dir = project_dir.path().join("bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
-    let fake_gemini = bin_dir.join("gemini");
-    std::fs::write(&fake_gemini, "#!/bin/sh\nprintf 'review-ok\\n'\n").unwrap();
-    let mut perms = std::fs::metadata(&fake_gemini).unwrap().permissions();
+    let fake_opencode = bin_dir.join("opencode");
+    std::fs::write(&fake_opencode, "#!/bin/sh\nprintf 'review-ok\\n'\n").unwrap();
+    let mut perms = std::fs::metadata(&fake_opencode).unwrap().permissions();
     perms.set_mode(0o755);
-    std::fs::set_permissions(&fake_gemini, perms).unwrap();
+    std::fs::set_permissions(&fake_opencode, perms).unwrap();
 
     let inherited_path = std::env::var("PATH").unwrap_or_default();
     let patched_path = format!("{}:{inherited_path}", bin_dir.display());
@@ -515,7 +515,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
 
     let global = GlobalConfig::default();
     let result = execute_review(
-        ToolName::GeminiCli,
+        ToolName::Opencode,
         "scope=uncommitted mode=review-only security=auto".to_string(),
         None,
         None,
@@ -575,47 +575,26 @@ fn fix_gate_allows_when_no_config() {
     assert!(can_edit, "absent config must default to allowing fix");
 }
 
-// --- gemini sandbox for readonly review context ---
+// --- gemini-cli ACP transport routing (#512, #515) ---
 
 #[test]
-fn gemini_sandbox_enabled_for_readonly_gemini() {
-    // Simulates the pipeline logic: readonly_project_root + gemini-cli → gemini_sandbox.
-    let readonly_project_root = true;
-    let tool_name = "gemini-cli";
-    let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
-    if readonly_project_root && tool_name == "gemini-cli" {
-        opts.gemini_sandbox = true;
-    }
-    assert!(
-        opts.gemini_sandbox,
-        "readonly gemini-cli must enable sandbox"
+fn gemini_cli_routes_to_acp_transport() {
+    use csa_executor::transport::TransportFactory;
+    let mode = TransportFactory::mode_for_tool("gemini-cli");
+    assert_eq!(
+        mode,
+        csa_executor::transport::TransportMode::Acp,
+        "gemini-cli must route to ACP transport"
     );
 }
 
 #[test]
-fn gemini_sandbox_not_enabled_for_non_gemini() {
-    let readonly_project_root = true;
-    let tool_name = "claude-code";
-    let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
-    if readonly_project_root && tool_name == "gemini-cli" {
-        opts.gemini_sandbox = true;
-    }
-    assert!(
-        !opts.gemini_sandbox,
-        "claude-code must not enable gemini sandbox"
-    );
-}
-
-#[test]
-fn gemini_sandbox_not_enabled_for_writable_gemini() {
-    let readonly_project_root = false;
-    let tool_name = "gemini-cli";
-    let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
-    if readonly_project_root && tool_name == "gemini-cli" {
-        opts.gemini_sandbox = true;
-    }
-    assert!(
-        !opts.gemini_sandbox,
-        "writable context must not enable gemini sandbox"
+fn claude_code_also_routes_to_acp_transport() {
+    use csa_executor::transport::TransportFactory;
+    let mode = TransportFactory::mode_for_tool("claude-code");
+    assert_eq!(
+        mode,
+        csa_executor::transport::TransportMode::Acp,
+        "claude-code must route to ACP transport"
     );
 }

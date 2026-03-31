@@ -596,10 +596,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
 
-    // Enable gemini --sandbox for read-only contexts to prevent MCP failures (#512).
-    if readonly_project_root && executor.tool_name() == "gemini-cli" {
-        execute_options.gemini_sandbox = true;
-    }
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
     crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
 
