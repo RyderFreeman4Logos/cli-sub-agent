@@ -251,11 +251,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let stream_mode = resolve_review_stream_mode(args.stream_stdout, args.no_stream_stdout);
     let idle_timeout_seconds =
         crate::pipeline::resolve_idle_timeout_seconds(config.as_ref(), args.idle_timeout);
-    let initial_response_timeout_seconds =
-        crate::pipeline::resolve_initial_response_timeout_seconds(
-            config.as_ref(),
-            args.initial_response_timeout,
-        );
+    let initial_response_timeout_seconds = crate::pipeline::resolve_initial_response_timeout(
+        config.as_ref(),
+        args.initial_response_timeout,
+        args.idle_timeout,
+    );
 
     // Resolve readonly_project_root from config (default: false).
     let readonly_project_root = global_config.review.readonly_sandbox.unwrap_or(false);

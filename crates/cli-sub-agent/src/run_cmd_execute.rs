@@ -217,9 +217,10 @@ pub(crate) async fn handle_run(
         // --no-idle-timeout disables both idle and initial-response timeouts.
         None
     } else {
-        pipeline::resolve_initial_response_timeout_seconds(
+        pipeline::resolve_initial_response_timeout(
             config.as_ref(),
             initial_response_timeout,
+            idle_timeout,
         )
     };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());

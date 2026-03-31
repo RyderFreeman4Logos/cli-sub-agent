@@ -341,17 +341,23 @@ impl AcpConnection {
                                 &mut stdout_line_buf,
                                 &mut thought_line_buf,
                             );
-                            let effective_timeout = if processed_event_count == 0 {
-                                initial_response_timeout.unwrap_or(idle_timeout)
-                            } else {
-                                idle_timeout
-                            };
+                            let (effective_timeout, timeout_phase) =
+                                if processed_event_count == 0 {
+                                    if let Some(irt) = initial_response_timeout {
+                                        (irt, TimeoutPhase::InitialResponse)
+                                    } else {
+                                        (idle_timeout, TimeoutPhase::Idle)
+                                    }
+                                } else {
+                                    (idle_timeout, TimeoutPhase::Idle)
+                                };
                             maybe_emit_heartbeat(
                                 heartbeat_interval,
                                 execution_start,
                                 *self.last_activity.borrow(),
                                 &mut last_heartbeat,
                                 effective_timeout,
+                                timeout_phase,
                             );
                             if self.last_activity.borrow().elapsed() >= effective_timeout {
                                 break PromptOutcome::IdleTimeout;
@@ -539,12 +545,22 @@ fn resolve_heartbeat_interval() -> Option<Duration> {
     Some(Duration::from_secs(secs))
 }
 
+/// Indicates which timeout phase the heartbeat is reporting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeoutPhase {
+    /// Waiting for the first response from the backend tool.
+    InitialResponse,
+    /// Normal idle timeout (after first output received, or no initial-response-timeout configured).
+    Idle,
+}
+
 fn maybe_emit_heartbeat(
     heartbeat_interval: Option<Duration>,
     execution_start: Instant,
     last_activity: Instant,
     last_heartbeat: &mut Instant,
-    idle_timeout: Duration,
+    effective_timeout: Duration,
+    phase: TimeoutPhase,
 ) {
     let Some(interval) = heartbeat_interval else {
         return;
@@ -560,11 +576,15 @@ fn maybe_emit_heartbeat(
     }
 
     let elapsed = now.saturating_duration_since(execution_start);
+    let phase_label = match phase {
+        TimeoutPhase::InitialResponse => "initial-response-timeout",
+        TimeoutPhase::Idle => "idle-timeout",
+    };
     eprintln!(
-        "[csa-heartbeat] ACP prompt still running: elapsed={}s idle={}s idle-timeout={}s",
+        "[csa-heartbeat] ACP prompt still running: elapsed={}s idle={}s {phase_label}={}s",
         elapsed.as_secs(),
         idle_for.as_secs(),
-        idle_timeout.as_secs()
+        effective_timeout.as_secs()
     );
     *last_heartbeat = now;
 }
