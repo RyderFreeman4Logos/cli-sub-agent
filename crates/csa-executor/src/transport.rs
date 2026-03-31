@@ -5,7 +5,8 @@ use std::time::Duration;
 use crate::executor::Executor;
 use crate::transport_gemini_retry::{
     gemini_inject_api_key_fallback, gemini_max_attempts, gemini_rate_limit_backoff,
-    gemini_retry_model, is_gemini_rate_limited_error, is_gemini_rate_limited_result,
+    gemini_retry_model, gemini_should_use_api_key, is_gemini_rate_limited_error,
+    is_gemini_rate_limited_result,
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
@@ -236,15 +237,25 @@ impl LegacyTransport {
         stream_mode: StreamMode,
         idle_timeout_seconds: u64,
     ) -> Result<TransportResult> {
+        // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let mut attempt = 1u8;
         loop {
             let executor = self.executor_for_attempt(attempt);
+
+            // Phase 2+: inject API key auth if available, otherwise keep original env.
+            let api_key_env = if gemini_should_use_api_key(attempt) {
+                gemini_inject_api_key_fallback(extra_env)
+            } else {
+                None
+            };
+            let attempt_env = api_key_env.as_ref().map_or(extra_env, Some);
+
             let result = self
                 .execute_in_single_attempt(
                     &executor,
                     prompt,
                     work_dir,
-                    extra_env,
+                    attempt_env,
                     stream_mode,
                     idle_timeout_seconds,
                 )
@@ -252,26 +263,19 @@ impl LegacyTransport {
             if let Some(backoff) =
                 self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
             {
-                tracing::debug!(attempt, "gemini-cli rate limit; retrying with model switch");
+                let phase_desc = match attempt {
+                    1 => "OAuth→APIKey(same model)",
+                    2 => "APIKey(same model)→APIKey(flash)",
+                    _ => "final",
+                };
+                tracing::info!(
+                    attempt,
+                    phase_desc,
+                    "gemini-cli rate limited; advancing phase"
+                );
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
-            }
-            // API key fallback: all model retries exhausted, still quota error.
-            if is_gemini_rate_limited_result(&result.execution)
-                && let Some(env_with_key) = gemini_inject_api_key_fallback(extra_env)
-            {
-                tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
-                return self
-                    .execute_in_single_attempt(
-                        &self.executor,
-                        prompt,
-                        work_dir,
-                        Some(&env_with_key),
-                        stream_mode,
-                        idle_timeout_seconds,
-                    )
-                    .await;
             }
             return Ok(result);
         }
@@ -288,42 +292,45 @@ impl Transport for LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
+        // 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let mut attempt = 1u8;
         loop {
             let executor = self.executor_for_attempt(attempt);
+
+            // Phase 2+: inject API key auth if available, otherwise keep original env.
+            let api_key_env = if gemini_should_use_api_key(attempt) {
+                gemini_inject_api_key_fallback(extra_env)
+            } else {
+                None
+            };
+            let attempt_env = api_key_env.as_ref().map_or(extra_env, Some);
+
             let result = self
                 .execute_single_attempt(
                     &executor,
                     prompt,
                     tool_state,
                     session,
-                    extra_env,
+                    attempt_env,
                     options.clone(),
                 )
                 .await?;
             if let Some(backoff) =
                 self.should_retry_gemini_rate_limited(&result.execution, attempt, extra_env)
             {
-                tracing::debug!(attempt, "gemini-cli rate limit; retrying with model switch");
+                let phase_desc = match attempt {
+                    1 => "OAuth→APIKey(same model)",
+                    2 => "APIKey(same model)→APIKey(flash)",
+                    _ => "final",
+                };
+                tracing::info!(
+                    attempt,
+                    phase_desc,
+                    "gemini-cli rate limited; advancing phase"
+                );
                 tokio::time::sleep(backoff).await;
                 attempt = attempt.saturating_add(1);
                 continue;
-            }
-            // API key fallback: all model retries exhausted, still quota error.
-            if is_gemini_rate_limited_result(&result.execution)
-                && let Some(env_with_key) = gemini_inject_api_key_fallback(extra_env)
-            {
-                tracing::info!("gemini-cli quota exhausted; falling back to API key auth");
-                return self
-                    .execute_single_attempt(
-                        &self.executor,
-                        prompt,
-                        tool_state,
-                        session,
-                        Some(&env_with_key),
-                        options,
-                    )
-                    .await;
             }
             return Ok(result);
         }
@@ -567,15 +574,24 @@ impl Transport for AcpTransport {
                 .await;
         }
 
-        // Gemini-cli: retry loop with model switching and API key fallback.
+        // Gemini-cli: 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
         let max_attempts = gemini_max_attempts(extra_env);
         let mut attempt = 1u8;
         loop {
-            // Build ACP args for this attempt, injecting model override on retries.
+            // Build ACP args for this attempt, injecting model override in phase 3.
             let mut args = self.acp_args.clone();
             if let Some(model) = gemini_retry_model(attempt) {
                 args.extend(["-m".into(), model.into()]);
             }
+
+            // Phase 2+: inject API key auth if available, otherwise keep original env.
+            let api_key_env = if gemini_should_use_api_key(attempt) {
+                gemini_inject_api_key_fallback(extra_env)
+            } else {
+                None
+            };
+            let attempt_env: Option<&HashMap<String, String>> =
+                api_key_env.as_ref().map_or(extra_env, Some);
 
             // Only resume a provider session on the first attempt; retries start fresh.
             let resume_session_id = if attempt == 1 {
@@ -591,7 +607,7 @@ impl Transport for AcpTransport {
                 .execute_acp_attempt(
                     prompt,
                     session,
-                    extra_env,
+                    attempt_env,
                     &options,
                     &args,
                     resume_session_id.as_deref(),
@@ -604,28 +620,19 @@ impl Transport for AcpTransport {
             };
 
             if should_retry && attempt < max_attempts {
+                let phase_desc = match attempt {
+                    1 => "OAuth→APIKey(same model)",
+                    2 => "APIKey(same model)→APIKey(flash)",
+                    _ => "final",
+                };
                 tracing::info!(
                     attempt,
-                    "gemini-cli ACP quota exhausted; retrying with model switch"
+                    phase_desc,
+                    "gemini-cli ACP rate limited; advancing phase"
                 );
                 tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
                 attempt = attempt.saturating_add(1);
                 continue;
-            }
-
-            // API key fallback: all model retries exhausted, still quota error.
-            if should_retry && let Some(env_with_key) = gemini_inject_api_key_fallback(extra_env) {
-                tracing::info!("gemini-cli ACP quota exhausted; falling back to API key auth");
-                return self
-                    .execute_acp_attempt(
-                        prompt,
-                        session,
-                        Some(&env_with_key),
-                        &options,
-                        &self.acp_args,
-                        None,
-                    )
-                    .await;
             }
 
             return result;
@@ -718,6 +725,7 @@ mod tests {
     use crate::transport_gemini_retry::*;
 
     include!("transport_tests_tail.rs");
+    include!("transport_tests_extra.rs");
 }
 
 #[cfg(test)]

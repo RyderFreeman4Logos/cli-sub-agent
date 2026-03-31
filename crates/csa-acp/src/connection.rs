@@ -28,7 +28,7 @@ use crate::{
     error::{AcpError, AcpResult},
 };
 
-const DEFAULT_HEARTBEAT_SECS: u64 = 20;
+const DEFAULT_HEARTBEAT_SECS: u64 = 15;
 const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 
 #[derive(Debug, Clone, Default)]
