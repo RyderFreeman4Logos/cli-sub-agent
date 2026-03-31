@@ -406,10 +406,7 @@ impl AcpConnection {
                 timed_out: false,
                 metadata,
             }),
-            PromptOutcome::Completed(Err(err)) => {
-                let stderr_detail = Self::format_stderr(&self.stderr());
-                Err(AcpError::PromptFailed(format!("{err}{stderr_detail}")))
-            }
+            PromptOutcome::Completed(Err(err)) => Err(AcpError::PromptFailed(err.to_string())),
             PromptOutcome::IdleTimeout => {
                 let _ = self.kill().await;
                 let exit_reason =

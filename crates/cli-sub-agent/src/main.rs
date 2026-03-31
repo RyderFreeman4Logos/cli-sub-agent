@@ -1,5 +1,3 @@
-use std::io::Write;
-
 use anyhow::Result;
 use clap::Parser;
 
@@ -184,8 +182,6 @@ async fn main() {
             eprintln!();
             eprintln!("{hint}");
         }
-        let _ = std::io::stdout().flush();
-        let _ = std::io::stderr().flush();
         std::process::exit(1);
     }
 }
@@ -434,8 +430,6 @@ async fn run() -> Result<()> {
                 extra_writable,
             )
             .await?;
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
         Commands::Session { cmd } => match cmd {
@@ -471,8 +465,6 @@ async fn run() -> Result<()> {
             }
             SessionCommands::IsAlive { session, cd } => {
                 let alive = session_cmds::handle_session_is_alive(session, cd)?;
-                let _ = std::io::stdout().flush();
-                let _ = std::io::stderr().flush();
                 std::process::exit(if alive { 0 } else { 1 });
             }
             SessionCommands::Result {
@@ -564,14 +556,10 @@ async fn run() -> Result<()> {
         }
         Commands::Review(args) => {
             let exit_code = review_cmd::handle_review(args, current_depth).await?;
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
         Commands::Debate(args) => {
             let exit_code = debate_cmd::handle_debate(args, current_depth, output_format).await?;
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
         Commands::Eval {
@@ -768,8 +756,6 @@ async fn run() -> Result<()> {
         Commands::ClaudeSubAgent(args) => {
             let exit_code =
                 claude_sub_agent_cmd::handle_claude_sub_agent(args, current_depth).await?;
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
         Commands::Tokuin { cmd } => {
