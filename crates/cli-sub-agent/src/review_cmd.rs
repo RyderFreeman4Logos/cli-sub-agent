@@ -21,6 +21,9 @@ use csa_core::consensus::AgentResponse;
 use csa_core::types::{OutputFormat, ToolName};
 use csa_session::state::ReviewSessionMeta;
 
+/// Next-step command emitted after a clean review verdict for pipeline chaining.
+const NEXT_STEP_PR_BOT_CMD: &str = "csa plan run patterns/dev2merge/workflow.toml --step pr-bot";
+
 #[path = "review_cmd_output.rs"]
 mod output;
 use output::{
@@ -374,6 +377,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 ],
                 &project_root,
             );
+
+            // Emit CSA:NEXT_STEP directive for pipeline chaining.
+            // Orchestrators can parse this to mechanically chain review → pr-bot.
+            if verdict == CLEAN {
+                eprintln!(
+                    "{}",
+                    csa_hooks::format_next_step_directive(NEXT_STEP_PR_BOT_CMD, true,)
+                );
+            }
+
             return Ok(effective_exit_code);
         }
 
@@ -429,6 +442,14 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             ],
             &project_root,
         );
+
+        // Emit CSA:NEXT_STEP directive for pipeline chaining after fix loop.
+        if fix_passed {
+            eprintln!(
+                "{}",
+                csa_hooks::format_next_step_directive(NEXT_STEP_PR_BOT_CMD, true,)
+            );
+        }
 
         return fix_exit_code;
     }

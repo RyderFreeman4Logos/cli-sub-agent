@@ -1,6 +1,6 @@
 ---
 name = "dev2merge"
-description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), pre-PR review, push, PR, codex-bot merge"
+description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), pre-PR review, push, PR creation, pr-bot hard gate, post-merge sync"
 allowed-tools = "Bash, Read, Edit, Write, Grep, Glob, Task, TaskCreate, TaskUpdate, TaskList, TaskGet"
 tier = "tier-3-complex"
 version = "0.4.0"

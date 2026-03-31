@@ -1,13 +1,23 @@
 //! CSA directive parsing from hook/step output.
 //!
-//! Directives are HTML-comment-style markers embedded in stdout:
-//! `<!-- CSA:NEXT_STEP step_id=<id> -->` — instruct weave to jump to a step.
+//! Directives are HTML-comment-style markers embedded in stdout/stderr:
+//!
+//! - `<!-- CSA:NEXT_STEP step_id=<id> -->` — instruct weave to jump to a step.
+//! - `<!-- CSA:NEXT_STEP cmd="<command>" required=true|false -->` — suggest a
+//!   follow-up command for orchestrators to chain steps mechanically.
+//!
+//! Both forms can coexist; the richer `cmd=` form is preferred for pipeline
+//! enforcement while `step_id=` is used for intra-workflow jumps.
 
-/// A parsed CSA directive from hook or step output.
+/// A parsed CSA next-step directive from hook or step output.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CsaDirective {
-    /// Jump to the named weave step.
-    NextStep { step_id: String },
+pub struct NextStepDirective {
+    /// Intra-workflow step ID to jump to (used by weave executor).
+    pub step_id: Option<String>,
+    /// Shell command for the orchestrator to run next.
+    pub cmd: Option<String>,
+    /// Whether this next step is required (pipeline enforcement).
+    pub required: bool,
 }
 
 /// Parse all `CSA:NEXT_STEP` directives from text output.
@@ -15,25 +25,126 @@ pub enum CsaDirective {
 /// Returns the **last** `NEXT_STEP` directive found (later directives
 /// override earlier ones, matching the "last writer wins" convention).
 pub fn parse_next_step(output: &str) -> Option<String> {
-    let mut last_step_id = None;
+    parse_next_step_directive(output).and_then(|d| d.step_id)
+}
+
+/// Parse a rich `NextStepDirective` from text output.
+///
+/// Supports both legacy `step_id=<value>` and extended `cmd="..." required=true|false`.
+/// Returns the **last** directive found.
+pub fn parse_next_step_directive(output: &str) -> Option<NextStepDirective> {
+    let mut last: Option<NextStepDirective> = None;
 
     for line in output.lines() {
         let trimmed = line.trim();
-        // Match: <!-- CSA:NEXT_STEP step_id=<value> -->
+        // Match: <!-- CSA:NEXT_STEP ... -->
         if let Some(rest) = trimmed.strip_prefix("<!-- CSA:NEXT_STEP")
             && let Some(rest) = rest.strip_suffix("-->")
         {
             let rest = rest.trim();
-            if let Some(value) = rest.strip_prefix("step_id=") {
-                let id = value.trim().trim_matches('"').trim();
-                if !id.is_empty() {
-                    last_step_id = Some(id.to_string());
+            if rest.is_empty() {
+                continue;
+            }
+
+            let mut step_id = None;
+            let mut cmd = None;
+            let mut required = false;
+
+            // Parse key=value pairs from the directive body.
+            // Handles both quoted ("value") and unquoted (value) forms.
+            let mut remaining = rest;
+            while !remaining.is_empty() {
+                remaining = remaining.trim_start();
+                if remaining.is_empty() {
+                    break;
                 }
+                // Find key
+                let eq_pos = match remaining.find('=') {
+                    Some(pos) => pos,
+                    None => break,
+                };
+                let key = remaining[..eq_pos].trim();
+                remaining = &remaining[eq_pos + 1..];
+
+                // Parse value (quoted or bare)
+                let value_owned;
+                let value = if remaining.starts_with('"') {
+                    // Quoted value: find unescaped closing quote
+                    remaining = &remaining[1..];
+                    let mut end = 0;
+                    let bytes = remaining.as_bytes();
+                    while end < bytes.len() {
+                        if bytes[end] == b'"' && (end == 0 || bytes[end - 1] != b'\\') {
+                            break;
+                        }
+                        end += 1;
+                    }
+                    let raw = &remaining[..end];
+                    remaining = if end < remaining.len() {
+                        &remaining[end + 1..]
+                    } else {
+                        ""
+                    };
+                    // Unescape escaped double quotes
+                    if raw.contains(r#"\""#) {
+                        value_owned = raw.replace(r#"\""#, "\"");
+                        value_owned.as_str()
+                    } else {
+                        raw
+                    }
+                } else {
+                    // Bare value: ends at whitespace
+                    let end = remaining
+                        .find(char::is_whitespace)
+                        .unwrap_or(remaining.len());
+                    let val = &remaining[..end];
+                    remaining = &remaining[end..];
+                    val
+                };
+
+                match key {
+                    "step_id" => {
+                        let v = value.trim();
+                        if !v.is_empty() {
+                            step_id = Some(v.to_string());
+                        }
+                    }
+                    "cmd" => {
+                        let v = value.trim();
+                        if !v.is_empty() {
+                            cmd = Some(v.to_string());
+                        }
+                    }
+                    "required" => {
+                        required = value.trim().eq_ignore_ascii_case("true");
+                    }
+                    _ => {} // Ignore unknown keys for forward-compat
+                }
+            }
+
+            if step_id.is_some() || cmd.is_some() {
+                last = Some(NextStepDirective {
+                    step_id,
+                    cmd,
+                    required,
+                });
             }
         }
     }
 
-    last_step_id
+    last
+}
+
+/// Format a `CSA:NEXT_STEP` directive for emission to stderr.
+///
+/// This is the canonical way for weave steps and hooks to emit next-step
+/// directives that orchestrators can parse mechanically.
+pub fn format_next_step_directive(cmd: &str, required: bool) -> String {
+    let escaped = cmd.replace('"', r#"\""#);
+    format!(
+        "<!-- CSA:NEXT_STEP cmd=\"{}\" required={} -->",
+        escaped, required
+    )
 }
 
 #[cfg(test)]
@@ -66,5 +177,81 @@ mod tests {
     #[test]
     fn parse_next_step_empty_id() {
         assert_eq!(parse_next_step("<!-- CSA:NEXT_STEP step_id= -->"), None);
+    }
+
+    #[test]
+    fn parse_directive_cmd_and_required() {
+        let output = r#"<!-- CSA:NEXT_STEP cmd="csa plan run patterns/pr-bot/workflow.toml" required=true -->"#;
+        let d = parse_next_step_directive(output).unwrap();
+        assert_eq!(
+            d.cmd.as_deref(),
+            Some("csa plan run patterns/pr-bot/workflow.toml")
+        );
+        assert!(d.required);
+        assert!(d.step_id.is_none());
+    }
+
+    #[test]
+    fn parse_directive_cmd_required_false() {
+        let output = r#"<!-- CSA:NEXT_STEP cmd="echo done" required=false -->"#;
+        let d = parse_next_step_directive(output).unwrap();
+        assert_eq!(d.cmd.as_deref(), Some("echo done"));
+        assert!(!d.required);
+    }
+
+    #[test]
+    fn parse_directive_mixed_step_id_and_cmd() {
+        let output = r#"<!-- CSA:NEXT_STEP step_id=merge cmd="gh pr merge" required=true -->"#;
+        let d = parse_next_step_directive(output).unwrap();
+        assert_eq!(d.step_id.as_deref(), Some("merge"));
+        assert_eq!(d.cmd.as_deref(), Some("gh pr merge"));
+        assert!(d.required);
+    }
+
+    #[test]
+    fn parse_directive_last_wins() {
+        let output = "<!-- CSA:NEXT_STEP cmd=\"first\" required=false -->\n<!-- CSA:NEXT_STEP cmd=\"second\" required=true -->";
+        let d = parse_next_step_directive(output).unwrap();
+        assert_eq!(d.cmd.as_deref(), Some("second"));
+        assert!(d.required);
+    }
+
+    #[test]
+    fn parse_directive_none_on_empty() {
+        assert!(parse_next_step_directive("no directives here").is_none());
+    }
+
+    #[test]
+    fn format_directive_required() {
+        let s = format_next_step_directive("csa plan run workflow.toml", true);
+        assert_eq!(
+            s,
+            "<!-- CSA:NEXT_STEP cmd=\"csa plan run workflow.toml\" required=true -->"
+        );
+    }
+
+    #[test]
+    fn format_directive_not_required() {
+        let s = format_next_step_directive("echo done", false);
+        assert_eq!(s, "<!-- CSA:NEXT_STEP cmd=\"echo done\" required=false -->");
+    }
+
+    #[test]
+    fn format_roundtrip() {
+        let cmd = "csa review --diff";
+        let directive_str = format_next_step_directive(cmd, true);
+        let parsed = parse_next_step_directive(&directive_str).unwrap();
+        assert_eq!(parsed.cmd.as_deref(), Some(cmd));
+        assert!(parsed.required);
+    }
+
+    #[test]
+    fn format_roundtrip_with_quotes() {
+        let cmd = r#"echo "hello world""#;
+        let directive_str = format_next_step_directive(cmd, false);
+        assert!(directive_str.contains(r#"echo \"hello world\""#));
+        let parsed = parse_next_step_directive(&directive_str).unwrap();
+        assert_eq!(parsed.cmd.as_deref(), Some(cmd));
+        assert!(!parsed.required);
     }
 }
