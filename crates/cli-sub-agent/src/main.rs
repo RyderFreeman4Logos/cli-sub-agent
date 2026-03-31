@@ -405,7 +405,8 @@ async fn run() -> Result<()> {
             // Daemon child: propagate pre-assigned session ID via env so the
             // pipeline's create_session reuses it (same directory as spool files).
             if let Some(ref sid) = session_id {
-                // SAFETY: daemon child is a single-threaded process at this point.
+                // SAFETY: This runs in the daemon child before tokio spawns worker
+                // threads (we are still in the synchronous dispatch path of main).
                 unsafe { std::env::set_var("CSA_DAEMON_SESSION_ID", sid) };
             }
 
