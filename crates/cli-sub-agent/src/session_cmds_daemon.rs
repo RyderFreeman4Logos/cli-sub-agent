@@ -16,19 +16,25 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
-/// Read the daemon PID from the session directory's spool metadata.
-/// Returns None if the PID file doesn't exist or can't be parsed.
+/// Read the daemon PID from the session directory.
+/// Primary source: `daemon.pid` file written by `spawn_daemon`.
+/// Fallback: parse the `CSA:SESSION_STARTED` directive from stderr.log (legacy).
 fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
-    // The daemon parent writes the PID to stdout.log's parent dir as pid.txt
-    // (not yet implemented); fall back to parsing stderr for the RPJ directive.
+    // Primary: daemon.pid file (written by spawn_daemon since v0.1.198).
+    let pid_path = session_dir.join("daemon.pid");
+    if let Ok(content) = fs::read_to_string(&pid_path)
+        && let Ok(pid) = content.trim().parse()
+    {
+        return Some(pid);
+    }
+    // Fallback: parse stderr for the RPJ directive (legacy sessions).
     let stderr_path = session_dir.join("stderr.log");
-    if let Ok(content) = fs::read_to_string(&stderr_path) {
-        // Parse "CSA:SESSION_STARTED id=... pid=<N> ..."
-        if let Some(pid_start) = content.find("pid=") {
-            let rest = &content[pid_start + 4..];
-            let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            return pid_str.parse().ok();
-        }
+    if let Ok(content) = fs::read_to_string(&stderr_path)
+        && let Some(pid_start) = content.find("pid=")
+    {
+        let rest = &content[pid_start + 4..];
+        let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+        return pid_str.parse().ok();
     }
     None
 }
