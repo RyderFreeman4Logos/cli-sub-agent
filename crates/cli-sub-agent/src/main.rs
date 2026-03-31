@@ -412,22 +412,13 @@ async fn run() -> Result<()> {
             daemon_child,
             session_id,
         } => {
-            // Daemon spawn: daemon mode is the default; --no-daemon opts out.
-            if !no_daemon && !daemon_child {
-                if let Some(ref _id) = session_id {
-                    anyhow::bail!("--session-id is an internal flag and must not be used directly");
-                }
-                // spawn_and_exit() calls process::exit(0) on success — never returns.
-                run_cmd_daemon::spawn_and_exit(cd.as_deref())?;
-            }
-
-            // Daemon child: propagate pre-assigned session ID via env so the
-            // pipeline's create_session reuses it (same directory as spool files).
-            if let Some(ref sid) = session_id {
-                // SAFETY: This runs in the daemon child before tokio spawns worker
-                // threads (we are still in the synchronous dispatch path of main).
-                unsafe { std::env::set_var("CSA_DAEMON_SESSION_ID", sid) };
-            }
+            run_cmd_daemon::check_daemon_flags(
+                "run",
+                no_daemon,
+                daemon_child,
+                &session_id,
+                cd.as_deref(),
+            )?;
 
             // Daemon child path: continue with normal run logic.
             // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
@@ -535,6 +526,13 @@ async fn run() -> Result<()> {
             memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
+            run_cmd_daemon::check_daemon_flags(
+                "review",
+                args.no_daemon,
+                args.daemon_child,
+                &args.session_id,
+                args.cd.as_deref(),
+            )?;
             let exit_code = review_cmd::handle_review(args, current_depth).await?;
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
@@ -546,6 +544,13 @@ async fn run() -> Result<()> {
             std::process::exit(exit_code);
         }
         Commands::Debate(args) => {
+            run_cmd_daemon::check_daemon_flags(
+                "debate",
+                args.no_daemon,
+                args.daemon_child,
+                &args.session_id,
+                args.cd.as_deref(),
+            )?;
             let exit_code = debate_cmd::handle_debate(args, current_depth, output_format).await?;
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,

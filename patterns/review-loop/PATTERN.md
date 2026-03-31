@@ -36,7 +36,8 @@ OnFail: skip
 Run heterogeneous code review on current diff.
 
 ```bash
-csa review --diff
+SID=$(csa review --diff)
+csa session wait --session "$SID"
 ```
 
 Parse the output to determine if issues were found.

@@ -69,6 +69,9 @@ name = "REMOTE_SHA"
 name = "REVIEW_OUTPUT"
 
 [[workflow.variables]]
+name = "SID"
+
+[[workflow.variables]]
 name = "REVIEW_OUTPUT_FILE"
 
 [[workflow.variables]]
@@ -198,7 +201,8 @@ Even FAST_PATH runs cumulative review before push.
 
 ```bash
 set -euo pipefail
-REVIEW_OUTPUT="$(csa review --sa-mode true --timeout 1800 --range "${DEFAULT_BRANCH}...HEAD" 2>&1)" || true
+SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD") || true
+REVIEW_OUTPUT="$(csa session wait --session "$SID" 2>&1)" || true
 printf '%s\n' "${REVIEW_OUTPUT}"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 ```'''
@@ -288,7 +292,8 @@ Sets REVIEW_COMPLETED=true as gate for push step.
 set -euo pipefail
 REVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
-csa review --sa-mode true --timeout 1800 --range "${DEFAULT_BRANCH}...HEAD" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
+csa session wait --session "$SID" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
 REVIEW_STATUS=${PIPESTATUS[0]}
 set -e
 REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"

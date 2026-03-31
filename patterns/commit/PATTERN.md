@@ -330,7 +330,8 @@ Perform a cumulative review of the entire feature branch before pushing.
 This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
-csa review --range main...HEAD
+SID=$(csa review --range main...HEAD)
+csa session wait --session "$SID"
 ```
 
 ## Step 19: Auto PR Transaction

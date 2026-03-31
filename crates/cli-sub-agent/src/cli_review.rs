@@ -166,6 +166,22 @@ pub struct ReviewArgs {
     /// Read supplementary prompt/context from a file (bypasses shell quoting issues)
     #[arg(long, value_name = "PATH")]
     pub prompt_file: Option<PathBuf>,
+
+    /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
+    #[arg(long, hide = true)]
+    pub daemon: bool,
+
+    /// Run in foreground blocking mode instead of the default daemon mode.
+    #[arg(long)]
+    pub no_daemon: bool,
+
+    /// Internal flag: this process IS the daemon child. Skip re-spawning.
+    #[arg(long, hide = true)]
+    pub daemon_child: bool,
+
+    /// Internal: pre-assigned session ID from daemon parent
+    #[arg(long, hide = true)]
+    pub session_id: Option<String>,
 }
 
 impl ReviewArgs {
@@ -342,4 +358,20 @@ pub struct DebateArgs {
     /// Read the debate question from a file (bypasses shell quoting issues)
     #[arg(long, value_name = "PATH", conflicts_with_all = ["question", "topic"])]
     pub prompt_file: Option<PathBuf>,
+
+    /// [DEPRECATED] Daemon mode is now the default. This flag is a no-op.
+    #[arg(long, hide = true)]
+    pub daemon: bool,
+
+    /// Run in foreground blocking mode instead of the default daemon mode.
+    #[arg(long)]
+    pub no_daemon: bool,
+
+    /// Internal flag: this process IS the daemon child. Skip re-spawning.
+    #[arg(long, hide = true)]
+    pub daemon_child: bool,
+
+    /// Internal: pre-assigned session ID from daemon parent
+    #[arg(long, hide = true)]
+    pub session_id: Option<String>,
 }

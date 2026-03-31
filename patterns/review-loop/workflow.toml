@@ -12,6 +12,9 @@ name = "REMAINING_ISSUES"
 name = "REVIEW_HAS_ISSUES"
 
 [[workflow.variables]]
+name = "SID"
+
+[[workflow.variables]]
 name = "ROUND"
 
 [[workflow.steps]]
@@ -41,7 +44,8 @@ prompt = """
 Run heterogeneous code review on current diff.
 
 ```bash
-csa review --diff
+SID=$(csa review --diff)
+csa session wait --session "$SID"
 ```
 
 Parse the output to determine if issues were found.

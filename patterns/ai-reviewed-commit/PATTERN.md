@@ -44,7 +44,8 @@ Determine who authored the staged code:
 Tool: bash
 
 ```bash
-csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch."
+SID=$(csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch.")
+csa session wait --session "$SID"
 ```
 
 ## ELSE
@@ -54,7 +55,8 @@ csa debate "Review my staged changes for correctness, security, and test gaps. R
 Tool: bash
 
 ```bash
-csa review --diff --allow-fallback
+SID=$(csa review --diff --allow-fallback)
+csa session wait --session "$SID"
 ```
 
 ## ENDIF
@@ -85,7 +87,8 @@ Tool: bash
 Loop back to review. Maximum 3 review-fix cycles.
 
 ```bash
-csa review --diff --allow-fallback
+SID=$(csa review --diff --allow-fallback)
+csa session wait --session "$SID"
 ```
 
 ## ENDIF

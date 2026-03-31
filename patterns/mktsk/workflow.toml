@@ -5,6 +5,9 @@ description = "Execute TODO plans as deterministic, resumable serial checklists 
 [[workflow.variables]]
 name = "CONTEXT_ABOVE_80_PERCENT"
 
+[[workflow.variables]]
+name = "SID"
+
 [[workflow.steps]]
 id = 1
 title = "Parse TODO Plan"
@@ -58,7 +61,7 @@ After each item:
 1) just fmt
 2) just clippy
 3) just test
-4) csa review --diff
+4) SID=$(csa review --diff) && csa session wait --session "$SID"
 5) mark TODO checkbox as completed
 
 ## Execution Checklist
@@ -129,7 +132,8 @@ if command -v just >/dev/null 2>&1; then
 fi
 
 # Pre-PR cumulative review (hard gate — must pass before push)
-if ! csa review --sa-mode true --range main...HEAD; then
+SID=$(csa review --sa-mode true --range main...HEAD)
+if ! csa session wait --session "$SID"; then
   echo "ERROR: Cumulative review failed. Fix issues before publishing." >&2
   exit 1
 fi

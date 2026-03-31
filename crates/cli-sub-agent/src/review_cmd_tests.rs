@@ -330,15 +330,14 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 
 // --- derive_scope tests ---
 
-#[test]
-fn derive_scope_uncommitted() {
-    let args = ReviewArgs {
+fn default_review_args() -> ReviewArgs {
+    ReviewArgs {
         tool: None,
         sa_mode: None,
         session: None,
         model: None,
         thinking: None,
-        diff: true,
+        diff: false,
         branch: None,
         commit: None,
         range: None,
@@ -365,6 +364,18 @@ fn derive_scope_uncommitted() {
         no_fs_sandbox: false,
         extra_writable: vec![],
         prompt_file: None,
+        daemon: false,
+        no_daemon: true,
+        daemon_child: false,
+        session_id: None,
+    }
+}
+
+#[test]
+fn derive_scope_uncommitted() {
+    let args = ReviewArgs {
+        diff: true,
+        ..default_review_args()
     };
     assert_eq!(derive_scope(&args), "uncommitted");
 }
@@ -372,38 +383,8 @@ fn derive_scope_uncommitted() {
 #[test]
 fn derive_scope_commit() {
     let args = ReviewArgs {
-        tool: None,
-        sa_mode: None,
-        session: None,
-        model: None,
-        thinking: None,
-        diff: false,
-        branch: None,
         commit: Some("abc123".to_string()),
-        range: None,
-        files: None,
-        fix: false,
-        max_rounds: 3,
-        review_mode: None,
-        red_team: false,
-        security_mode: "auto".to_string(),
-        context: None,
-        reviewers: 1,
-        consensus: "majority".to_string(),
-        cd: None,
-        timeout: None,
-        idle_timeout: None,
-        initial_response_timeout: None,
-        stream_stdout: false,
-        no_stream_stdout: false,
-        allow_fallback: false,
-        force_override_user_config: false,
-        spec: None,
-        tier: None,
-        force_ignore_tier_setting: false,
-        no_fs_sandbox: false,
-        extra_writable: vec![],
-        prompt_file: None,
+        ..default_review_args()
     };
     assert_eq!(derive_scope(&args), "commit:abc123");
 }
@@ -411,38 +392,8 @@ fn derive_scope_commit() {
 #[test]
 fn derive_scope_range() {
     let args = ReviewArgs {
-        tool: None,
-        sa_mode: None,
-        session: None,
-        model: None,
-        thinking: None,
-        diff: false,
-        branch: None,
-        commit: None,
         range: Some("main...HEAD".to_string()),
-        files: None,
-        fix: false,
-        max_rounds: 3,
-        review_mode: None,
-        red_team: false,
-        security_mode: "auto".to_string(),
-        context: None,
-        reviewers: 1,
-        consensus: "majority".to_string(),
-        cd: None,
-        timeout: None,
-        idle_timeout: None,
-        initial_response_timeout: None,
-        stream_stdout: false,
-        no_stream_stdout: false,
-        allow_fallback: false,
-        force_override_user_config: false,
-        spec: None,
-        tier: None,
-        force_ignore_tier_setting: false,
-        no_fs_sandbox: false,
-        extra_writable: vec![],
-        prompt_file: None,
+        ..default_review_args()
     };
     assert_eq!(derive_scope(&args), "range:main...HEAD");
 }
@@ -450,38 +401,8 @@ fn derive_scope_range() {
 #[test]
 fn derive_scope_files() {
     let args = ReviewArgs {
-        tool: None,
-        sa_mode: None,
-        session: None,
-        model: None,
-        thinking: None,
-        diff: false,
-        branch: None,
-        commit: None,
-        range: None,
         files: Some("src/**/*.rs".to_string()),
-        fix: false,
-        max_rounds: 3,
-        review_mode: None,
-        red_team: false,
-        security_mode: "auto".to_string(),
-        context: None,
-        reviewers: 1,
-        consensus: "majority".to_string(),
-        cd: None,
-        timeout: None,
-        idle_timeout: None,
-        initial_response_timeout: None,
-        stream_stdout: false,
-        no_stream_stdout: false,
-        allow_fallback: false,
-        force_override_user_config: false,
-        spec: None,
-        tier: None,
-        force_ignore_tier_setting: false,
-        no_fs_sandbox: false,
-        extra_writable: vec![],
-        prompt_file: None,
+        ..default_review_args()
     };
     assert_eq!(derive_scope(&args), "files:src/**/*.rs");
 }
@@ -489,38 +410,8 @@ fn derive_scope_files() {
 #[test]
 fn derive_scope_default_branch() {
     let args = ReviewArgs {
-        tool: None,
-        sa_mode: None,
-        session: None,
-        model: None,
-        thinking: None,
-        diff: false,
         branch: Some("develop".to_string()),
-        commit: None,
-        range: None,
-        files: None,
-        fix: false,
-        max_rounds: 3,
-        review_mode: None,
-        red_team: false,
-        security_mode: "auto".to_string(),
-        context: None,
-        reviewers: 1,
-        consensus: "majority".to_string(),
-        cd: None,
-        timeout: None,
-        idle_timeout: None,
-        initial_response_timeout: None,
-        stream_stdout: false,
-        no_stream_stdout: false,
-        allow_fallback: false,
-        force_override_user_config: false,
-        spec: None,
-        tier: None,
-        force_ignore_tier_setting: false,
-        no_fs_sandbox: false,
-        extra_writable: vec![],
-        prompt_file: None,
+        ..default_review_args()
     };
     assert_eq!(derive_scope(&args), "base:develop");
 }

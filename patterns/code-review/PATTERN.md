@@ -47,7 +47,8 @@ Do NOT pre-read diff into main agent context.
 
 ```bash
 gh pr checkout ${PR_NUM}
-csa review --branch $(gh pr view --json baseRefName -q .baseRefName)
+SID=$(csa review --branch $(gh pr view --json baseRefName -q .baseRefName))
+csa session wait --session "$SID"
 ```
 
 ## ELSE
