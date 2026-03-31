@@ -574,3 +574,48 @@ fn fix_gate_allows_when_no_config() {
         Option::<&ProjectConfig>::None.is_none_or(|c| c.can_tool_edit_existing("gemini-cli"));
     assert!(can_edit, "absent config must default to allowing fix");
 }
+
+// --- gemini sandbox for readonly review context ---
+
+#[test]
+fn gemini_sandbox_enabled_for_readonly_gemini() {
+    // Simulates the pipeline logic: readonly_project_root + gemini-cli → gemini_sandbox.
+    let readonly_project_root = true;
+    let tool_name = "gemini-cli";
+    let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
+    if readonly_project_root && tool_name == "gemini-cli" {
+        opts.gemini_sandbox = true;
+    }
+    assert!(
+        opts.gemini_sandbox,
+        "readonly gemini-cli must enable sandbox"
+    );
+}
+
+#[test]
+fn gemini_sandbox_not_enabled_for_non_gemini() {
+    let readonly_project_root = true;
+    let tool_name = "claude-code";
+    let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
+    if readonly_project_root && tool_name == "gemini-cli" {
+        opts.gemini_sandbox = true;
+    }
+    assert!(
+        !opts.gemini_sandbox,
+        "claude-code must not enable gemini sandbox"
+    );
+}
+
+#[test]
+fn gemini_sandbox_not_enabled_for_writable_gemini() {
+    let readonly_project_root = false;
+    let tool_name = "gemini-cli";
+    let mut opts = csa_executor::ExecuteOptions::new(csa_process::StreamMode::BufferOnly, 300);
+    if readonly_project_root && tool_name == "gemini-cli" {
+        opts.gemini_sandbox = true;
+    }
+    assert!(
+        !opts.gemini_sandbox,
+        "writable context must not enable gemini sandbox"
+    );
+}

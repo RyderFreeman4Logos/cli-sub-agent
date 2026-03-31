@@ -48,6 +48,8 @@ pub struct TransportOptions<'a> {
     pub output_spool_keep_rotated: bool,
     pub setting_sources: Option<Vec<String>>,
     pub sandbox: Option<&'a SandboxTransportConfig>,
+    /// When true, pass `--sandbox` to gemini-cli (prevents MCP server loading).
+    pub gemini_sandbox: bool,
 }
 
 #[async_trait]
@@ -230,7 +232,10 @@ impl LegacyTransport {
         extra_env: Option<&HashMap<String, String>>,
         options: TransportOptions<'_>,
     ) -> Result<TransportResult> {
-        let (cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
+        let (mut cmd, stdin_data) = executor.build_command(prompt, tool_state, session, extra_env);
+        if options.gemini_sandbox && matches!(executor, Executor::GeminiCli { .. }) {
+            cmd.arg("--sandbox");
+        }
 
         let isolation_plan = options.sandbox.map(|s| &s.isolation_plan);
         let best_effort = options.sandbox.is_some_and(|s| s.best_effort);
@@ -262,14 +267,14 @@ impl LegacyTransport {
                 tracing::warn!(
                     "sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e:#}"
                 );
-                let child = spawn_tool_with_options(
-                    executor
-                        .build_command(prompt, tool_state, session, extra_env)
-                        .0,
-                    stdin_data,
-                    spawn_options,
-                )
-                .await?;
+                let mut fallback_cmd = executor
+                    .build_command(prompt, tool_state, session, extra_env)
+                    .0;
+                if options.gemini_sandbox && matches!(executor, Executor::GeminiCli { .. }) {
+                    fallback_cmd.arg("--sandbox");
+                }
+                let child =
+                    spawn_tool_with_options(fallback_cmd, stdin_data, spawn_options).await?;
                 (child, csa_process::SandboxHandle::None)
             }
             Err(e) => return Err(e),
