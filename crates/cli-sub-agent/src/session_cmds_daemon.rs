@@ -227,8 +227,11 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
         resolved.session_id, pid,
     );
     // SAFETY: kill(-pid, SIGTERM) sends to the entire process group.
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGTERM);
+    let pgid = -(pid as libc::pid_t);
+    let rc = unsafe { libc::kill(pgid, libc::SIGTERM) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        eprintln!("Warning: SIGTERM failed for PID {pid}: {err}");
     }
 
     // Grace period: wait up to 5 seconds for clean shutdown.
@@ -246,8 +249,10 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
         resolved.session_id,
     );
     // SAFETY: kill(-pid, SIGKILL) force-kills the entire process group.
-    unsafe {
-        libc::kill(-(pid as i32), libc::SIGKILL);
+    let rc = unsafe { libc::kill(pgid, libc::SIGKILL) };
+    if rc != 0 {
+        let err = std::io::Error::last_os_error();
+        eprintln!("Warning: SIGKILL failed for PID {pid}: {err}");
     }
 
     // Wait for reaping.
