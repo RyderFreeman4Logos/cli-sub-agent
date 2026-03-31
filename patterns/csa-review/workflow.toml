@@ -23,6 +23,9 @@ name = "SCOPE_IS_PRE_PR"
 [[workflow.variables]]
 name = "SESSION_ID"
 
+[[workflow.variables]]
+name = "SID"
+
 [[workflow.steps]]
 id = 1
 title = "Role Detection"
@@ -107,7 +110,8 @@ implementation context. Note: `csa review` does not yet support `--fork-from`
 directly. Use `csa run --fork-from` with a review prompt instead:
 
 ```bash
-csa run --fork-from <impl-session-id> "Review the uncommitted changes: $(git diff)"
+SID=$(csa run --daemon --fork-from <impl-session-id> "Review the uncommitted changes: $(git diff)")
+csa session wait --session "$SID" --timeout 1800
 ```
 
 **Benefits**: The reviewer inherits the implementer's context (files read,
@@ -123,7 +127,8 @@ are immediately visible. Also saves tokens by avoiding redundant file reads.
 When no implementation session is available, use standard review:
 
 ```bash
-csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}"
+SID=$(csa run --daemon --force-ignore-tier-setting --tool ${REVIEW_TOOL} --description "code-review: ${SCOPE}" "${REVIEW_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 tier = "tier-3-complex"
 on_fail = "abort"
@@ -146,7 +151,8 @@ Generate fix-summary.md and post-fix-review-findings.json.
 Mark remaining P0/P1 as incomplete.
 
 ```bash
-csa run --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}"
+SID=$(csa run --daemon --force-ignore-tier-setting --tool ${REVIEW_TOOL} --session ${SESSION_ID} "${FIX_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 tier = "tier-3-complex"
 on_fail = "abort"

@@ -104,9 +104,10 @@ The review prompt instructs the agent to: read project context (CLAUDE.md + AGEN
 ### Step 3: Execute Review via CSA
 
 ```bash
-csa run --sa-mode true --force-ignore-tier-setting --tool {review_tool} \
+SID=$(csa run --daemon --sa-mode true --force-ignore-tier-setting --tool {review_tool} \
   --description "code-review: {scope}" \
-  "{REVIEW_PROMPT}"
+  "{REVIEW_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```
 
 Key behaviors:

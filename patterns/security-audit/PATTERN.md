@@ -45,10 +45,11 @@ OnFail: abort
 Module too large for local audit. Delegate entire audit to CSA.
 
 ```bash
-csa run "Perform security audit following security-audit skill protocol.
+SID=$(csa run --daemon "Perform security audit following security-audit skill protocol.
          Review changed files and associated tests.
          Three phases: test completeness, vulnerability scan, code quality.
-         Output structured audit report."
+         Output structured audit report.")
+csa session wait --session "$SID" --timeout 1800
 ```
 
 ## ELSE

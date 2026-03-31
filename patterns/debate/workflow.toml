@@ -29,6 +29,9 @@ name = "PROPOSER_MODEL"
 [[workflow.variables]]
 name = "RESPONSE_PROMPT"
 
+[[workflow.variables]]
+name = "SID"
+
 [[workflow.steps]]
 id = 1
 title = "Role Detection"
@@ -83,7 +86,8 @@ Proposer presents concrete, actionable strategy with:
 4. Anticipated Weaknesses (honest limitations)
 
 ```bash
-csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}"
+SID=$(csa run --daemon --model-spec "${PROPOSER_MODEL}" --ephemeral "${PROPOSAL_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 tier = "${CURRENT_TIER}"
 on_fail = "abort"
@@ -100,7 +104,8 @@ Critic rigorously evaluates the proposal:
 4. Strongest Counter-Arguments
 
 ```bash
-csa run --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}"
+SID=$(csa run --daemon --model-spec "${CRITIC_MODEL}" --ephemeral "${CRITIQUE_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 tier = "${CURRENT_TIER}"
 on_fail = "abort"
@@ -116,7 +121,8 @@ Proposer responds to each criticism:
 3. Present revised strategy
 
 ```bash
-csa run --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}"
+SID=$(csa run --daemon --model-spec "${PROPOSER_MODEL}" --ephemeral "${RESPONSE_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 tier = "${CURRENT_TIER}"
 on_fail = "abort"
@@ -141,7 +147,8 @@ Restart debate loop with higher tier models.
 Max 2 escalations.
 
 ```bash
-csa run --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}"
+SID=$(csa run --daemon --model-spec "${HIGHER_TIER_MODEL}" --ephemeral "${ESCALATION_PROMPT}")
+csa session wait --session "$SID" --timeout 1800
 ```"""
 on_fail = "abort"
 condition = "${NEEDS_ESCALATION}"
