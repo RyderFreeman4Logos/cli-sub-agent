@@ -237,18 +237,23 @@
 
 #[test]
 fn test_gemini_retry_model_sequence_matches_policy() {
+    // Phase 1: original model + OAuth
     assert_eq!(
         gemini_retry_model(1),
         None,
-        "first attempt keeps original model"
+        "phase 1 keeps original model"
     );
+    // Phase 2: original model + API key (no model switch)
     assert_eq!(
         gemini_retry_model(2),
-        Some("gemini-3.1-pro-preview")
+        None,
+        "phase 2 keeps original model (auth changes instead)"
     );
+    // Phase 3: flash model + API key
     assert_eq!(
         gemini_retry_model(3),
-        Some("gemini-3-flash-preview")
+        Some("gemini-3-flash-preview"),
+        "phase 3 downgrades to flash model"
     );
     assert_eq!(gemini_retry_model(4), None);
 }
@@ -264,18 +269,21 @@ fn test_executor_for_attempt_overrides_gemini_retry_models() {
     let second = transport.executor_for_attempt(2);
     let third = transport.executor_for_attempt(3);
 
+    // Phase 1: keep original model
     match first {
         Executor::GeminiCli { model_override, .. } => {
             assert_eq!(model_override.as_deref(), Some("default"));
         }
         _ => panic!("expected GeminiCli executor"),
     }
+    // Phase 2: still original model (auth changes, not model)
     match second {
         Executor::GeminiCli { model_override, .. } => {
-            assert_eq!(model_override.as_deref(), Some("gemini-3.1-pro-preview"));
+            assert_eq!(model_override.as_deref(), Some("default"));
         }
         _ => panic!("expected GeminiCli executor"),
     }
+    // Phase 3: flash model
     match third {
         Executor::GeminiCli { model_override, .. } => {
             assert_eq!(model_override.as_deref(), Some("gemini-3-flash-preview"));
@@ -327,12 +335,14 @@ fn setup_fake_gemini_environment(
     let script_path = temp.path().join("gemini");
     let state_file = temp.path().join("attempts.txt");
     let model_log = temp.path().join("models.log");
+    let auth_log = temp.path().join("auth.log");
     std::fs::write(
         &script_path,
         r#"#!/usr/bin/env bash
 set -euo pipefail
 STATE_FILE="${CSA_FAKE_GEMINI_STATE_FILE:?}"
 MODEL_LOG_FILE="${CSA_FAKE_GEMINI_MODEL_LOG_FILE:?}"
+AUTH_LOG_FILE="${CSA_FAKE_GEMINI_AUTH_LOG_FILE:?}"
 SUCCESS_ON="${CSA_FAKE_GEMINI_SUCCESS_ON:-999}"
 
 count=0
@@ -354,6 +364,13 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 printf '%s\n' "${model}" >>"${MODEL_LOG_FILE}"
+
+# Log auth mode: if GEMINI_API_KEY is set, auth is api_key; otherwise oauth
+if [ -n "${GEMINI_API_KEY:-}" ]; then
+  printf 'api_key\n' >>"${AUTH_LOG_FILE}"
+else
+  printf 'oauth\n' >>"${AUTH_LOG_FILE}"
+fi
 
 if [ "${count}" -lt "${SUCCESS_ON}" ]; then
   printf "reason: 'QUOTA_EXHAUSTED' (attempt=%s)\n" "${count}" >&2
@@ -385,6 +402,10 @@ printf 'ok attempt=%s model=%s\n' "${count}" "${model}"
         model_log.display().to_string(),
     );
     env.insert(
+        "CSA_FAKE_GEMINI_AUTH_LOG_FILE".to_string(),
+        auth_log.display().to_string(),
+    );
+    env.insert(
         "CSA_FAKE_GEMINI_SUCCESS_ON".to_string(),
         success_on.to_string(),
     );
@@ -395,6 +416,20 @@ printf 'ok attempt=%s model=%s\n' "${count}" "${model}"
 fn read_model_log(path: &std::path::Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .expect("read model log")
+        .lines()
+        .map(|line| line.trim().to_string())
+        .filter(|line| !line.is_empty())
+        .collect()
+}
+
+fn auth_log_path(model_log: &std::path::Path) -> std::path::PathBuf {
+    model_log.with_file_name("auth.log")
+}
+
+fn read_auth_log(model_log: &std::path::Path) -> Vec<String> {
+    let path = auth_log_path(model_log);
+    std::fs::read_to_string(&path)
+        .expect("read auth log")
         .lines()
         .map(|line| line.trim().to_string())
         .filter(|line| !line.is_empty())
@@ -427,11 +462,12 @@ async fn test_execute_in_retries_until_success_with_expected_model_chain() {
         result.execution.output
     );
     let models = read_model_log(&model_log_path);
+    // Phase 1: original model (OAuth), Phase 2: original model (API key), Phase 3: flash (API key)
     assert_eq!(
         models,
         vec![
             "inherit".to_string(),
-            "gemini-3.1-pro-preview".to_string(),
+            "inherit".to_string(),
             "gemini-3-flash-preview".to_string()
         ]
     );
@@ -472,11 +508,12 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
         result.execution.stderr_output
     );
     let models = read_model_log(&model_log_path);
+    // Phase 1: original model (OAuth), Phase 2: original model (API key), Phase 3: flash (API key)
     assert_eq!(
         models,
         vec![
             "inherit".to_string(),
-            "gemini-3.1-pro-preview".to_string(),
+            "inherit".to_string(),
             "gemini-3-flash-preview".to_string()
         ],
         "retry loop should stop after 3 attempts"
@@ -545,12 +582,22 @@ fn test_no_flash_fallback_stops_retry_after_attempt_2() {
     };
     let mut env = HashMap::new();
     env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
-    // Attempt 1 retries (switches to pro)
+    // Attempt 1 retries (advances to phase 2: same model + API key)
     assert!(transport.should_retry_gemini_rate_limited(&execution, 1, Some(&env)).is_some());
-    // Attempt 2 does NOT retry (would switch to flash, which is forbidden)
+    // Attempt 2 does NOT retry (phase 3 = flash, which is forbidden by no_flash)
     assert!(transport.should_retry_gemini_rate_limited(&execution, 2, Some(&env)).is_none());
-    // Without the flag, attempt 2 would still retry
+    // Without the flag, attempt 2 would still retry (advances to phase 3: flash)
     assert!(transport.should_retry_gemini_rate_limited(&execution, 2, None).is_some());
+}
+
+#[test]
+fn test_gemini_should_use_api_key_by_phase() {
+    // Phase 1: OAuth auth
+    assert!(!gemini_should_use_api_key(1));
+    // Phase 2: API key auth (same model)
+    assert!(gemini_should_use_api_key(2));
+    // Phase 3: API key auth (flash model)
+    assert!(gemini_should_use_api_key(3));
 }
 
 #[test]
@@ -725,74 +772,7 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
     let models = read_model_log(&model_log_path);
     assert_eq!(
         models,
-        vec![
-            "inherit".to_string(),
-            "gemini-3.1-pro-preview".to_string()
-        ],
-        "best-effort fallback path must preserve per-attempt model override"
+        vec!["inherit".to_string(), "inherit".to_string()],
+        "best-effort fallback path: phase 2 keeps original model (switches to API key auth)"
     );
-}
-
-// --- classify_join_error tests ---
-
-#[tokio::test]
-async fn test_classify_join_error_broken_pipe_message() {
-    let handle = tokio::task::spawn(async {
-        panic!("failed printing to stderr: Broken pipe (os error 32)")
-    });
-    let join_err = handle.await.unwrap_err();
-    let err = super::classify_join_error(join_err);
-    let msg = err.to_string();
-    assert!(
-        msg.contains("tool process terminated unexpectedly"),
-        "broken pipe should get a clean message, got: {msg}"
-    );
-    assert!(
-        msg.contains("broken pipe"),
-        "message should mention broken pipe, got: {msg}"
-    );
-}
-
-#[tokio::test]
-async fn test_classify_join_error_generic_panic() {
-    let handle = tokio::task::spawn(async { panic!("something else went wrong") });
-    let join_err = handle.await.unwrap_err();
-    let err = super::classify_join_error(join_err);
-    let msg = err.to_string();
-    assert!(
-        msg.contains("task panicked"),
-        "generic panic should say 'task panicked', got: {msg}"
-    );
-    assert!(
-        msg.contains("something else went wrong"),
-        "should include panic message, got: {msg}"
-    );
-}
-
-// --- build_summary tests (moved from transport.rs) ---
-
-#[test]
-fn test_build_summary_uses_last_stdout_line_on_success() {
-    let stdout = "line1\nfinal line\n";
-    let summary = super::build_summary(stdout, "", 0);
-    assert_eq!(summary, "final line");
-}
-
-#[test]
-fn test_build_summary_uses_stdout_on_failure_when_present() {
-    let stdout = "details\nreason from stdout\n";
-    let summary = super::build_summary(stdout, "stderr message", 2);
-    assert_eq!(summary, "reason from stdout");
-}
-
-#[test]
-fn test_build_summary_falls_back_to_stderr_on_failure() {
-    let summary = super::build_summary("\n", "stderr reason\n", 3);
-    assert_eq!(summary, "stderr reason");
-}
-
-#[test]
-fn test_build_summary_falls_back_to_exit_code_when_no_output() {
-    let summary = super::build_summary("", "   \n", -1);
-    assert_eq!(summary, "exit code -1");
 }

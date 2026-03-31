@@ -8,14 +8,19 @@ use csa_core::gemini::{
 };
 use csa_process::ExecutionResult;
 
+/// Total retry attempts for the 3-phase fallback chain:
+///   Phase 1 (attempt 1): Original model + OAuth auth
+///   Phase 2 (attempt 2): Original model + API key auth
+///   Phase 3 (attempt 3): Flash model  + API key auth
 pub(crate) const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
+/// When `_CSA_NO_FLASH_FALLBACK` is set, skip phase 3 (flash model).
 pub(crate) const GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS: u8 = 2;
 #[cfg(test)]
 pub(crate) const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 10;
 #[cfg(not(test))]
 pub(crate) const GEMINI_RATE_LIMIT_BASE_BACKOFF_MS: u64 = 1_000;
-pub(crate) const GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST: &str = "gemini-3.1-pro-preview";
-pub(crate) const GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND: &str = "gemini-3-flash-preview";
+/// Flash model used in phase 3 of the fallback chain.
+pub(crate) const GEMINI_RATE_LIMIT_FLASH_MODEL: &str = "gemini-3-flash-preview";
 
 pub(crate) fn gemini_is_no_flash(extra_env: Option<&HashMap<String, String>>) -> bool {
     extra_env.is_some_and(|env| env.contains_key(NO_FLASH_FALLBACK_ENV_KEY))
@@ -27,12 +32,24 @@ pub(crate) fn gemini_rate_limit_backoff(attempt: u8) -> Duration {
     Duration::from_millis(GEMINI_RATE_LIMIT_BASE_BACKOFF_MS.saturating_mul(multiplier))
 }
 
+/// Return the model override for a given retry attempt.
+///
+/// Phase 1 (attempt 1): None — keep original model.
+/// Phase 2 (attempt 2): None — keep original model (auth changes instead).
+/// Phase 3 (attempt 3): Flash model.
 pub(crate) fn gemini_retry_model(attempt: u8) -> Option<&'static str> {
     match attempt {
-        2 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_FIRST),
-        3 => Some(GEMINI_RATE_LIMIT_RETRY_MODEL_SECOND),
+        3 => Some(GEMINI_RATE_LIMIT_FLASH_MODEL),
         _ => None,
     }
+}
+
+/// Whether this attempt should use API key auth instead of OAuth.
+///
+/// Phase 1 (attempt 1): false — use original OAuth auth.
+/// Phase 2+ (attempt 2, 3): true — switch to API key auth.
+pub(crate) fn gemini_should_use_api_key(attempt: u8) -> bool {
+    attempt >= 2
 }
 
 pub(crate) fn gemini_max_attempts(extra_env: Option<&HashMap<String, String>>) -> u8 {

@@ -12,7 +12,7 @@ use csa_process::check_tool_installed;
 use crate::pipeline::execute_with_session_and_meta;
 use crate::run_helpers::build_executor;
 
-const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(20);
+const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
 
 pub(super) struct StepExecutionOutcome {
     pub(super) exit_code: i32,

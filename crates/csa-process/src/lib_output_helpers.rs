@@ -20,7 +20,7 @@ pub(super) const TAIL_BUFFER_MAX_BYTES: usize = 1024 * 1024; // 1 MiB
 /// per chunk, avoiding O(N²) behaviour.
 pub(super) const TAIL_BUFFER_HIGH_WATER: usize = TAIL_BUFFER_MAX_BYTES * 2; // 2 MiB
 
-pub(super) const DEFAULT_HEARTBEAT_SECS: u64 = 20;
+pub(super) const DEFAULT_HEARTBEAT_SECS: u64 = 15;
 pub(super) const HEARTBEAT_INTERVAL_ENV: &str = "CSA_TOOL_HEARTBEAT_SECS";
 pub const DEFAULT_SPOOL_MAX_BYTES: u64 = 32 * 1024 * 1024;
 pub const DEFAULT_SPOOL_KEEP_ROTATED: bool = true;
