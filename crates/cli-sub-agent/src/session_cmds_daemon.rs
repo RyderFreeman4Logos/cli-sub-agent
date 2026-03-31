@@ -213,6 +213,13 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
         )
     })?;
 
+    if pid <= 1 {
+        anyhow::bail!(
+            "Refusing to kill PID {} — invalid daemon PID (would target init or caller's process group)",
+            pid,
+        );
+    }
+
     if !is_pid_alive(pid) {
         eprintln!(
             "Session {} (PID {}) is already dead",
