@@ -161,6 +161,62 @@ pub fn run_hook(
     }
 }
 
+/// Execute a hook command capturing stdout for directive parsing.
+///
+/// Same as `run_hook` but returns the stdout content on success,
+/// enabling callers to parse directives like `CSA:NEXT_STEP`.
+pub fn run_hook_capturing(
+    event: HookEvent,
+    config: &HookConfig,
+    variables: &HashMap<String, String>,
+) -> Result<String> {
+    if !config.enabled {
+        return Ok(String::new());
+    }
+
+    let template = match config.command.as_deref() {
+        Some(cmd) => cmd,
+        None => match event.builtin_command() {
+            Some(cmd) => cmd,
+            None => return Ok(String::new()),
+        },
+    };
+
+    let expanded_command = substitute_variables(template, variables);
+    tracing::debug!(event = ?event, "Executing hook (capturing)");
+
+    let mut child = Command::new("sh")
+        .arg("-c")
+        .arg(&expanded_command)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()?;
+
+    let timeout = Duration::from_secs(config.timeout_secs);
+    let start = Instant::now();
+
+    loop {
+        match child.try_wait()? {
+            Some(status) => {
+                let output = child.wait_with_output()?;
+                if !status.success() {
+                    let exit_code = status.code().unwrap_or(-1);
+                    bail!("Hook {event:?} exited with code {exit_code}");
+                }
+                return Ok(String::from_utf8_lossy(&output.stdout).to_string());
+            }
+            None => {
+                if start.elapsed() >= timeout {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!("Hook {event:?} timed out after {}s", config.timeout_secs);
+                }
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+    }
+}
+
 /// Execute all hooks for an event, using the merged config.
 ///
 /// This wraps `run_hook` with per-hook fail-policy and waiver enforcement.

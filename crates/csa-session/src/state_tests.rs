@@ -661,6 +661,7 @@ fn review_session_meta_serde_roundtrip() {
         fix_attempted: true,
         fix_rounds: 2,
         timestamp: chrono::Utc::now(),
+        diff_fingerprint: Some("sha256:abc123".to_string()),
     };
 
     let json = serde_json::to_string_pretty(&meta).expect("serialize");
@@ -682,6 +683,7 @@ fn review_session_meta_write_and_read() {
         fix_attempted: false,
         fix_rounds: 0,
         timestamp: chrono::Utc::now(),
+        diff_fingerprint: None,
     };
 
     write_review_meta(td.path(), &meta).expect("write");
@@ -712,6 +714,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         fix_attempted: false,
         fix_rounds: 0,
         timestamp: chrono::Utc::now(),
+        diff_fingerprint: None,
     };
     write_review_meta(td.path(), &meta1).expect("write initial");
 
@@ -727,6 +730,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         fix_attempted: true,
         fix_rounds: 1,
         timestamp: chrono::Utc::now(),
+        diff_fingerprint: Some("sha256:def456".to_string()),
     };
     write_review_meta(td.path(), &meta2).expect("write after fix");
 

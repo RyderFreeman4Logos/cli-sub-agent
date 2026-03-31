@@ -146,6 +146,11 @@ pub struct ReviewSessionMeta {
     pub fix_rounds: u32,
     /// ISO 8601 timestamp of when this metadata was written.
     pub timestamp: DateTime<Utc>,
+    /// Content hash of the diff being reviewed (e.g., "sha256:abc123...").
+    /// Enables deduplication: revert-revert scenarios with identical diffs
+    /// can reuse a previous review without re-running.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub diff_fingerprint: Option<String>,
 }
 
 /// Write review session metadata to the session directory.

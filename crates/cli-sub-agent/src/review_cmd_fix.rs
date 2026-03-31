@@ -177,6 +177,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
                     fix_attempted: true,
                     fix_rounds: u32::from(round),
                     timestamp: chrono::Utc::now(),
+                    diff_fingerprint: None,
                 },
             );
             return Ok(0);
@@ -197,6 +198,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             fix_attempted: true,
             fix_rounds: u32::from(ctx.max_rounds),
             timestamp: chrono::Utc::now(),
+            diff_fingerprint: None,
         },
     );
     error!(

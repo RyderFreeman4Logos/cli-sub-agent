@@ -344,6 +344,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         } else {
             result.execution.exit_code
         };
+        let diff_fingerprint = compute_diff_fingerprint(&project_root, &scope);
         persist_review_meta(
             &project_root,
             &ReviewSessionMeta {
@@ -357,10 +358,22 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 fix_attempted: args.fix,
                 fix_rounds: 0,
                 timestamp: chrono::Utc::now(),
+                diff_fingerprint,
             },
         );
 
         if !args.fix || verdict == CLEAN {
+            // Fire PostReview hook only for final results (no fix loop pending).
+            crate::pipeline::fire_observational_hook(
+                csa_hooks::HookEvent::PostReview,
+                &[
+                    ("session_id", result.meta_session_id.as_str()),
+                    ("decision", decision.as_str()),
+                    ("verdict", verdict),
+                    ("scope", &scope),
+                ],
+                &project_root,
+            );
             return Ok(effective_exit_code);
         }
 
@@ -379,7 +392,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         }
 
         // --- Fix loop: resume the review session to apply fixes, then re-gate ---
-        return fix::run_fix_loop(fix::FixLoopContext {
+        let scope_for_hook = scope.clone();
+        let fix_exit_code = fix::run_fix_loop(fix::FixLoopContext {
             tool,
             config: config.as_ref(),
             global_config: &global_config,
@@ -402,6 +416,21 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             initial_session_id: result.meta_session_id.clone(),
         })
         .await;
+
+        // Fire PostReview hook after fix loop completes (final result).
+        let fix_passed = matches!(&fix_exit_code, Ok(0));
+        crate::pipeline::fire_observational_hook(
+            csa_hooks::HookEvent::PostReview,
+            &[
+                ("session_id", result.meta_session_id.as_str()),
+                ("decision", if fix_passed { "pass" } else { "fail" }),
+                ("verdict", if fix_passed { CLEAN } else { verdict }),
+                ("scope", &scope_for_hook),
+            ],
+            &project_root,
+        );
+
+        return fix_exit_code;
     }
 
     if args.fix {
@@ -667,6 +696,38 @@ async fn execute_review(
     persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
 
     Ok(execution)
+}
+
+/// Compute a SHA-256 content hash of the diff being reviewed.
+///
+/// The fingerprint enables diff-level deduplication: if two review
+/// invocations produce the same diff content (e.g., revert-then-revert),
+/// the second can reuse the first review's result.
+fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Option<String> {
+    use sha2::{Digest, Sha256};
+
+    let diff_args: Vec<&str> = if scope == "uncommitted" {
+        vec!["diff", "HEAD"]
+    } else if let Some(range) = scope.strip_prefix("range:") {
+        vec!["diff", range]
+    } else if let Some(base) = scope.strip_prefix("base:") {
+        vec!["diff", base]
+    } else {
+        return None;
+    };
+
+    let output = std::process::Command::new("git")
+        .args(&diff_args)
+        .current_dir(project_root)
+        .output()
+        .ok()?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return None;
+    }
+
+    let digest = Sha256::digest(&output.stdout);
+    Some(format!("sha256:{digest:x}"))
 }
 
 #[cfg(test)]

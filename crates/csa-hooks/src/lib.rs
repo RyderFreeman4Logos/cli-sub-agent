@@ -43,6 +43,7 @@
 //! - `{message}`: Commit message
 
 pub mod config;
+pub mod directive;
 pub mod event;
 pub mod event_bus;
 pub mod guard;
@@ -53,6 +54,7 @@ pub mod waiver;
 
 // Re-export key types
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
+pub use directive::parse_next_step;
 pub use event::HookEvent;
 #[cfg(feature = "async-hooks")]
 pub use event_bus::AsyncEventBus;
@@ -62,5 +64,5 @@ pub use guard::{
     run_prompt_guards,
 };
 pub use policy::FailPolicy;
-pub use runner::{run_hook, run_hooks_for_event};
+pub use runner::{run_hook, run_hook_capturing, run_hooks_for_event};
 pub use waiver::{Waiver, WaiverSet};
