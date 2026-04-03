@@ -57,6 +57,13 @@ fn test_build_summary_falls_back_to_stderr_on_failure() {
 }
 
 #[test]
+fn test_build_summary_ignores_csa_section_markers() {
+    let stdout = "Valid summary line\n<!-- CSA:SECTION:summary:END -->\n";
+    let summary = super::build_summary(stdout, "", 0);
+    assert_eq!(summary, "Valid summary line");
+}
+
+#[test]
 fn test_build_summary_falls_back_to_exit_code_when_no_output() {
     let summary = super::build_summary("", "   \n", -1);
     assert_eq!(summary, "exit code -1");

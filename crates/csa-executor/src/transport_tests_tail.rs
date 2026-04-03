@@ -1,248 +1,244 @@
-    #[test]
-    fn test_transport_factory_create_routes_tools_to_expected_transport() {
-        let legacy_tools = vec![Executor::Opencode {
-            model_override: None,
-            agent: None,
-            thinking_budget: None,
-        }];
-        for executor in legacy_tools {
-            let transport = TransportFactory::create(&executor, None);
-            assert!(
-                transport.as_ref().as_any().is::<LegacyTransport>(),
-                "Expected LegacyTransport for {}",
-                executor.tool_name()
-            );
-        }
-
-        let acp_tools = vec![
-            Executor::Codex {
-                model_override: None,
-                thinking_budget: None,
-            },
-            Executor::ClaudeCode {
-                model_override: None,
-                thinking_budget: None,
-            },
-            Executor::GeminiCli {
-                model_override: None,
-                thinking_budget: None,
-            },
-        ];
-        for executor in acp_tools {
-            let transport = TransportFactory::create(&executor, Some(SessionConfig::default()));
-            assert!(
-                transport.as_ref().as_any().is::<AcpTransport>(),
-                "Expected AcpTransport for {}",
-                executor.tool_name()
-            );
-        }
+#[test]
+fn test_transport_factory_create_routes_tools_to_expected_transport() {
+    let legacy_tools = vec![Executor::Opencode {
+        model_override: None,
+        agent: None,
+        thinking_budget: None,
+    }];
+    for executor in legacy_tools {
+        let transport = TransportFactory::create(&executor, None);
+        assert!(
+            transport.as_ref().as_any().is::<LegacyTransport>(),
+            "Expected LegacyTransport for {}",
+            executor.tool_name()
+        );
     }
 
-    #[test]
-    fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
-        let executor = Executor::Codex {
+    let acp_tools = vec![
+        Executor::Codex {
             model_override: None,
             thinking_budget: None,
-        };
-        let session_config = SessionConfig {
-            no_load: vec!["skills/foo".to_string()],
-            extra_load: vec!["skills/bar".to_string()],
-            tier: Some("tier-2".to_string()),
-            models: vec!["codex/openai/o3/medium".to_string()],
-            mcp_servers: Vec::new(),
-            mcp_proxy_socket: None,
-        };
-
-        let transport = TransportFactory::create(&executor, Some(session_config.clone()));
-        let acp = transport
-            .as_ref()
-            .as_any()
-            .downcast_ref::<AcpTransport>()
-            .expect("expected AcpTransport");
-
-        assert_eq!(acp.session_config, Some(session_config));
-    }
-
-    #[test]
-    fn test_legacy_transport_construction_from_executor() {
-        let executor = Executor::Opencode {
-            model_override: Some("model".to_string()),
-            agent: Some("coder".to_string()),
+        },
+        Executor::ClaudeCode {
+            model_override: None,
             thinking_budget: None,
-        };
-        let transport = LegacyTransport::new(executor.clone());
-
-        assert_eq!(transport.executor.tool_name(), executor.tool_name());
-        assert_eq!(
-            transport.executor.executable_name(),
-            executor.executable_name()
-        );
-    }
-
-    #[test]
-    fn test_acp_command_for_tool_mappings() {
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("claude-code"),
-            ("claude-code-acp".to_string(), vec![])
-        );
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("codex"),
-            ("codex-acp".to_string(), vec![])
-        );
-        // gemini-cli uses native ACP mode via `gemini --acp`
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("gemini-cli"),
-            ("gemini".to_string(), vec!["--acp".to_string()])
-        );
-        // Unknown tools get "{name}-acp" convention
-        assert_eq!(
-            AcpTransport::acp_command_for_tool("opencode"),
-            ("opencode-acp".to_string(), vec![])
-        );
-    }
-
-    // NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not transport)
-    // based on per-tool config via extra_env. See pipeline.rs suppress_notify logic.
-    #[test]
-    fn test_acp_build_env_propagates_extra_env() {
-        let transport = AcpTransport::new("claude-code", None);
-        let now = chrono::Utc::now();
-        let session = csa_session::state::MetaSessionState {
-            meta_session_id: "01HTEST000000000000000000".to_string(),
-            description: Some("test".to_string()),
-            project_path: "/tmp/test".to_string(),
-            branch: None,
-            created_at: now,
-            last_accessed: now,
-            genealogy: csa_session::state::Genealogy {
-                parent_session_id: None,
-                depth: 0,
-                ..Default::default()
-            },
-            tools: HashMap::new(),
-            context_status: csa_session::state::ContextStatus::default(),
-            total_token_usage: None,
-            phase: csa_session::state::SessionPhase::Active,
-            task_context: csa_session::state::TaskContext::default(),
-            turn_count: 0,
-            token_budget: None,
-            sandbox_info: None,
-
-            termination_reason: None,
-            is_seed_candidate: false,
-            git_head_at_creation: None,
-            last_return_packet: None,
-            change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
-        };
-
-        let mut extra = HashMap::new();
-        extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
-        let env = transport.build_env(&session, Some(&extra));
-        assert_eq!(
-            env.get("CSA_SUPPRESS_NOTIFY"),
-            Some(&"1".to_string()),
-            "ACP transport should propagate CSA_SUPPRESS_NOTIFY from extra_env"
-        );
-
-        // Without extra_env, suppress_notify should NOT be present.
-        let env_no_extra = transport.build_env(&session, None);
-        assert_eq!(
-            env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
-            None,
-            "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
-        );
-    }
-
-    #[test]
-    fn test_acp_build_env_includes_csa_session_dir() {
-        let transport = AcpTransport::new("claude-code", None);
-        let now = chrono::Utc::now();
-        let session = csa_session::state::MetaSessionState {
-            meta_session_id: "01HTEST000000000000000000".to_string(),
-            description: Some("test".to_string()),
-            project_path: "/tmp/test".to_string(),
-            branch: None,
-            created_at: now,
-            last_accessed: now,
-            genealogy: csa_session::state::Genealogy {
-                parent_session_id: None,
-                depth: 0,
-                ..Default::default()
-            },
-            tools: HashMap::new(),
-            context_status: csa_session::state::ContextStatus::default(),
-            total_token_usage: None,
-            phase: csa_session::state::SessionPhase::Active,
-            task_context: csa_session::state::TaskContext::default(),
-            turn_count: 0,
-            token_budget: None,
-            sandbox_info: None,
-
-            termination_reason: None,
-            is_seed_candidate: false,
-            git_head_at_creation: None,
-            last_return_packet: None,
-            change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
-        };
-
-        let env = transport.build_env(&session, None);
-        let session_dir = env
-            .get("CSA_SESSION_DIR")
-            .expect("CSA_SESSION_DIR should be present in env");
+        },
+        Executor::GeminiCli {
+            model_override: None,
+            thinking_budget: None,
+        },
+    ];
+    for executor in acp_tools {
+        let transport = TransportFactory::create(&executor, Some(SessionConfig::default()));
         assert!(
-            session_dir.contains("/sessions/"),
-            "CSA_SESSION_DIR should contain /sessions/ path segment, got: {session_dir}"
-        );
-        assert!(
-            session_dir.contains("01HTEST000000000000000000"),
-            "CSA_SESSION_DIR should contain the session ID, got: {session_dir}"
+            transport.as_ref().as_any().is::<AcpTransport>(),
+            "Expected AcpTransport for {}",
+            executor.tool_name()
         );
     }
+}
 
-    #[test]
-    fn test_resume_session_id_extraction() {
-        let now = chrono::Utc::now();
-        let tool_state = ToolState {
-            provider_session_id: Some("test-session-123".to_string()),
-            last_action_summary: String::new(),
-            last_exit_code: 0,
-            updated_at: now,
-            token_usage: None,
-        };
-        let resume_id = tool_state.provider_session_id.as_deref();
-        assert_eq!(resume_id, Some("test-session-123"));
-    }
+#[test]
+fn test_transport_factory_create_preserves_session_config_for_acp_transport() {
+    let executor = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session_config = SessionConfig {
+        no_load: vec!["skills/foo".to_string()],
+        extra_load: vec!["skills/bar".to_string()],
+        tier: Some("tier-2".to_string()),
+        models: vec!["codex/openai/o3/medium".to_string()],
+        mcp_servers: Vec::new(),
+        mcp_proxy_socket: None,
+    };
 
-    #[test]
-    fn test_resume_session_id_none_when_absent() {
-        let now = chrono::Utc::now();
-        let tool_state = ToolState {
-            provider_session_id: None,
-            last_action_summary: String::new(),
-            last_exit_code: 0,
-            updated_at: now,
-            token_usage: None,
-        };
-        let resume_id = tool_state.provider_session_id.as_deref();
-        assert!(resume_id.is_none());
-    }
+    let transport = TransportFactory::create(&executor, Some(session_config.clone()));
+    let acp = transport
+        .as_ref()
+        .as_any()
+        .downcast_ref::<AcpTransport>()
+        .expect("expected AcpTransport");
+
+    assert_eq!(acp.session_config, Some(session_config));
+}
+
+#[test]
+fn test_legacy_transport_construction_from_executor() {
+    let executor = Executor::Opencode {
+        model_override: Some("model".to_string()),
+        agent: Some("coder".to_string()),
+        thinking_budget: None,
+    };
+    let transport = LegacyTransport::new(executor.clone());
+
+    assert_eq!(transport.executor.tool_name(), executor.tool_name());
+    assert_eq!(
+        transport.executor.executable_name(),
+        executor.executable_name()
+    );
+}
+
+#[test]
+fn test_acp_command_for_tool_mappings() {
+    assert_eq!(
+        AcpTransport::acp_command_for_tool("claude-code"),
+        ("claude-code-acp".to_string(), vec![])
+    );
+    assert_eq!(
+        AcpTransport::acp_command_for_tool("codex"),
+        ("codex-acp".to_string(), vec![])
+    );
+    // gemini-cli uses native ACP mode via `gemini --acp`
+    assert_eq!(
+        AcpTransport::acp_command_for_tool("gemini-cli"),
+        ("gemini".to_string(), vec!["--acp".to_string()])
+    );
+    // Unknown tools get "{name}-acp" convention
+    assert_eq!(
+        AcpTransport::acp_command_for_tool("opencode"),
+        ("opencode-acp".to_string(), vec![])
+    );
+}
+
+// NOTE: CSA_SUPPRESS_NOTIFY is injected by the pipeline layer (not transport)
+// based on per-tool config via extra_env. See pipeline.rs suppress_notify logic.
+#[test]
+fn test_acp_build_env_propagates_extra_env() {
+    let transport = AcpTransport::new("claude-code", None);
+    let now = chrono::Utc::now();
+    let session = csa_session::state::MetaSessionState {
+        meta_session_id: "01HTEST000000000000000000".to_string(),
+        description: Some("test".to_string()),
+        project_path: "/tmp/test".to_string(),
+        branch: None,
+        created_at: now,
+        last_accessed: now,
+        genealogy: csa_session::state::Genealogy {
+            parent_session_id: None,
+            depth: 0,
+            ..Default::default()
+        },
+        tools: HashMap::new(),
+        context_status: csa_session::state::ContextStatus::default(),
+        total_token_usage: None,
+        phase: csa_session::state::SessionPhase::Active,
+        task_context: csa_session::state::TaskContext::default(),
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+
+        termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
+        last_return_packet: None,
+        change_id: None,
+        spec_id: None,
+        fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
+    };
+
+    let mut extra = HashMap::new();
+    extra.insert("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string());
+    let env = transport.build_env(&session, Some(&extra));
+    assert_eq!(
+        env.get("CSA_SUPPRESS_NOTIFY"),
+        Some(&"1".to_string()),
+        "ACP transport should propagate CSA_SUPPRESS_NOTIFY from extra_env"
+    );
+
+    // Without extra_env, suppress_notify should NOT be present.
+    let env_no_extra = transport.build_env(&session, None);
+    assert_eq!(
+        env_no_extra.get("CSA_SUPPRESS_NOTIFY"),
+        None,
+        "ACP transport should not inject CSA_SUPPRESS_NOTIFY on its own"
+    );
+}
+
+#[test]
+fn test_acp_build_env_includes_csa_session_dir() {
+    let transport = AcpTransport::new("claude-code", None);
+    let now = chrono::Utc::now();
+    let session = csa_session::state::MetaSessionState {
+        meta_session_id: "01HTEST000000000000000000".to_string(),
+        description: Some("test".to_string()),
+        project_path: "/tmp/test".to_string(),
+        branch: None,
+        created_at: now,
+        last_accessed: now,
+        genealogy: csa_session::state::Genealogy {
+            parent_session_id: None,
+            depth: 0,
+            ..Default::default()
+        },
+        tools: HashMap::new(),
+        context_status: csa_session::state::ContextStatus::default(),
+        total_token_usage: None,
+        phase: csa_session::state::SessionPhase::Active,
+        task_context: csa_session::state::TaskContext::default(),
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+
+        termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
+        last_return_packet: None,
+        change_id: None,
+        spec_id: None,
+        fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
+    };
+
+    let env = transport.build_env(&session, None);
+    let session_dir = env
+        .get("CSA_SESSION_DIR")
+        .expect("CSA_SESSION_DIR should be present in env");
+    assert!(
+        session_dir.contains("/sessions/"),
+        "CSA_SESSION_DIR should contain /sessions/ path segment, got: {session_dir}"
+    );
+    assert!(
+        session_dir.contains("01HTEST000000000000000000"),
+        "CSA_SESSION_DIR should contain the session ID, got: {session_dir}"
+    );
+}
+
+#[test]
+fn test_resume_session_id_extraction() {
+    let now = chrono::Utc::now();
+    let tool_state = ToolState {
+        provider_session_id: Some("test-session-123".to_string()),
+        last_action_summary: String::new(),
+        last_exit_code: 0,
+        updated_at: now,
+        token_usage: None,
+    };
+    let resume_id = tool_state.provider_session_id.as_deref();
+    assert_eq!(resume_id, Some("test-session-123"));
+}
+
+#[test]
+fn test_resume_session_id_none_when_absent() {
+    let now = chrono::Utc::now();
+    let tool_state = ToolState {
+        provider_session_id: None,
+        last_action_summary: String::new(),
+        last_exit_code: 0,
+        updated_at: now,
+        token_usage: None,
+    };
+    let resume_id = tool_state.provider_session_id.as_deref();
+    assert!(resume_id.is_none());
+}
 
 #[test]
 fn test_gemini_retry_model_sequence_matches_policy() {
     // Phase 1: original model + OAuth
-    assert_eq!(
-        gemini_retry_model(1),
-        None,
-        "phase 1 keeps original model"
-    );
+    assert_eq!(gemini_retry_model(1), None, "phase 1 keeps original model");
     // Phase 2: original model + API key (no model switch)
     assert_eq!(
         gemini_retry_model(2),
@@ -319,16 +315,20 @@ fn build_test_meta_session(project_path: &str) -> MetaSessionState {
         git_head_at_creation: None,
         last_return_packet: None,
         change_id: None,
-            spec_id: None,
-            fork_call_timestamps: Vec::new(),
-            vcs_identity: None,
-            identity_version: 1,
+        spec_id: None,
+        fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
     }
 }
 
 fn setup_fake_gemini_environment(
     success_on: u32,
-) -> (tempfile::TempDir, HashMap<String, String>, std::path::PathBuf) {
+) -> (
+    tempfile::TempDir,
+    HashMap<String, String>,
+    std::path::PathBuf,
+) {
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempfile::tempdir().expect("tempdir");
@@ -344,6 +344,7 @@ STATE_FILE="${CSA_FAKE_GEMINI_STATE_FILE:?}"
 MODEL_LOG_FILE="${CSA_FAKE_GEMINI_MODEL_LOG_FILE:?}"
 AUTH_LOG_FILE="${CSA_FAKE_GEMINI_AUTH_LOG_FILE:?}"
 SUCCESS_ON="${CSA_FAKE_GEMINI_SUCCESS_ON:-999}"
+FAILURE_REASON="${CSA_FAKE_GEMINI_FAILURE_REASON:-QUOTA_EXHAUSTED}"
 
 count=0
 if [ -f "${STATE_FILE}" ]; then
@@ -373,7 +374,7 @@ else
 fi
 
 if [ "${count}" -lt "${SUCCESS_ON}" ]; then
-  printf "reason: 'QUOTA_EXHAUSTED' (attempt=%s)\n" "${count}" >&2
+  printf "reason: '%s' (attempt=%s)\n" "${FAILURE_REASON}" "${count}" >&2
   exit 1
 fi
 
@@ -533,9 +534,21 @@ fn test_should_retry_gemini_rate_limited_until_final_attempt() {
         exit_code: 1,
     };
 
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 1, None).is_some());
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 2, None).is_some());
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 3, None).is_none());
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 1, None)
+            .is_some()
+    );
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 2, None)
+            .is_some()
+    );
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 3, None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -550,7 +563,11 @@ fn test_should_not_retry_on_success_exit_code() {
         stderr_output: String::new(),
         exit_code: 0,
     };
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 1, None).is_none());
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 1, None)
+            .is_none()
+    );
 }
 
 #[test]
@@ -565,7 +582,11 @@ fn test_should_retry_on_quota_exhausted_marker() {
         stderr_output: "reason: 'QUOTA_EXHAUSTED'".to_string(),
         exit_code: 1,
     };
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 1, None).is_some());
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 1, None)
+            .is_some()
+    );
 }
 
 #[test]
@@ -583,9 +604,21 @@ fn test_no_flash_fallback_stops_retry_after_attempt_2() {
     let mut env = HashMap::new();
     env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
     // Attempt 1 retries (advances to phase 2: same model + API key)
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 1, Some(&env)).is_some());
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 1, Some(&env))
+            .is_some()
+    );
     // Attempt 2 does NOT retry (phase 3 = flash, which is forbidden by no_flash)
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 2, Some(&env)).is_none());
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 2, Some(&env))
+            .is_none()
+    );
     // Without the flag, attempt 2 would still retry (advances to phase 3: flash)
-    assert!(transport.should_retry_gemini_rate_limited(&execution, 2, None).is_some());
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 2, None)
+            .is_some()
+    );
 }
