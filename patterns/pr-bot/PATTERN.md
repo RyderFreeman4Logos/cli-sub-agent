@@ -76,12 +76,12 @@ This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 ```bash
 set -euo pipefail
 CURRENT_HEAD="$(git rev-parse HEAD)"
-REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
 else
   SID=$(csa review --branch main)
-  csa session wait --session "$SID"
+  bash scripts/csa/session-wait-until-done.sh "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -95,7 +95,7 @@ echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
 > code, applies fixes, and returns results. Orchestrator reviews outcome.
 
 Tool: csa
-Tier: tier-2-standard
+Tier: tier-4-critical
 OnFail: retry 3
 
 Fix issues found by local review. Loop until clean (max 3 rounds).
@@ -261,13 +261,13 @@ if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
   CURRENT_HEAD="$(git rev-parse HEAD)"
-  REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+  REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
     SID=$(csa review --branch main)
-    csa session wait --session "$SID"
+    bash scripts/csa/session-wait-until-done.sh "$SID"
   fi
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
@@ -365,7 +365,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
   BOT_UNAVAILABLE=true
 else
   set +e
-  WAIT_RESULT="$(csa session wait --session "${WAIT_SID}")"
+  WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
   WAIT_RC=$?
   set -e
   if [ "${WAIT_RC}" -ne 0 ]; then
@@ -551,7 +551,7 @@ Delegate this cycle to CSA as a single operation and enforce hard bounds:
 ```bash
 set -euo pipefail
 set +e
-FIX_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
+FIX_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool codex --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
 DAEMON_RC=$?
 set -e
 if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
@@ -559,7 +559,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
   exit 1
 fi
 set +e
-FIX_RESULT="$(csa session wait --session "${FIX_SID}")"
+FIX_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${FIX_SID}")"
 FIX_RC=$?
 set -e
 
@@ -851,7 +851,7 @@ esac
 > CSA reads code, applies fix, commits. Orchestrator verifies result.
 
 Tool: csa
-Tier: tier-2-standard
+Tier: tier-4-critical
 OnFail: retry 2
 
 Fix the real issue for the current bot review comment (non-stale,
@@ -1093,7 +1093,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     exit 1
   fi
   set +e
-  GATE_RESULT="$(csa session wait --session "${GATE_SID}")"
+  GATE_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${GATE_SID}")"
   GATE_RC=$?
   set -e
   if [ "${GATE_RC}" -ne 0 ]; then

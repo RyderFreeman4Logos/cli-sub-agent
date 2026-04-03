@@ -45,7 +45,7 @@ Tool: bash
 
 ```bash
 SID=$(csa debate "Review my staged changes for correctness, security, and test gaps. Run 'git diff --staged' yourself to see the full patch.")
-csa session wait --session "$SID"
+bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ELSE
@@ -56,7 +56,7 @@ Tool: bash
 
 ```bash
 SID=$(csa review --diff --allow-fallback)
-csa session wait --session "$SID"
+bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ENDIF
@@ -88,7 +88,7 @@ Loop back to review. Maximum 3 review-fix cycles.
 
 ```bash
 SID=$(csa review --diff --allow-fallback)
-csa session wait --session "$SID"
+bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ENDIF
@@ -111,7 +111,7 @@ Delegate commit message generation to cheaper tool.
 
 ```bash
 SID=$(csa run "Run 'git diff --staged' and generate a Conventional Commits message")
-csa session wait --session "$SID"
+bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## Step 10: Commit

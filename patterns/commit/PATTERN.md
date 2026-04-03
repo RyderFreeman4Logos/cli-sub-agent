@@ -90,6 +90,16 @@ Stage all relevant files. Verify no untracked files remain.
 
 ```bash
 git add ${FILES}
+# Allow deletions so cleanup commits can remove previously tracked artifacts.
+STAGED_GENERATED_ARTIFACTS="$(
+  git diff --cached --name-only --diff-filter=ACMR \
+    | rg '^([.]test-target/|[.]tmp/|target/|diff[.]txt$|test-write$)' || true
+)"
+if [ -n "${STAGED_GENERATED_ARTIFACTS}" ]; then
+  echo "ERROR: Generated or scratch artifacts are staged."
+  printf '%s\n' "${STAGED_GENERATED_ARTIFACTS}"
+  exit 1
+fi
 if git ls-files --others --exclude-standard | grep -q .; then
   echo "ERROR: Untracked files detected."
   git ls-files --others --exclude-standard
@@ -331,7 +341,7 @@ This catches cross-commit issues that per-commit reviews might miss.
 
 ```bash
 SID=$(csa review --range main...HEAD)
-csa session wait --session "$SID"
+bash scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## Step 19: Auto PR Transaction
