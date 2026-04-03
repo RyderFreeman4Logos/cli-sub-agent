@@ -51,6 +51,7 @@ mod session_cmds_daemon;
 mod session_cmds_result;
 mod session_dispatch;
 mod session_guard;
+mod session_observability;
 mod setup_cmds;
 mod skill_cmds;
 mod skill_resolver;
@@ -60,6 +61,9 @@ mod todo_ref_cmd;
 
 #[cfg(test)]
 mod sa_mode_tests;
+
+#[cfg(test)]
+mod main_auto_weave_tests;
 
 #[cfg(test)]
 mod test_env_lock;
@@ -76,6 +80,13 @@ mod migrate_cmd;
 const SA_MODE_REQUIRED_ERROR_PREFIX: &str = "--sa-mode true|false is required for root callers on execution commands.\n\
      Hint: add --sa-mode false for interactive use, or --sa-mode true for autonomous workflows";
 const CSA_INTERNAL_INVOCATION_ENV: &str = "CSA_INTERNAL_INVOCATION";
+
+fn exit_current_process(exit_code: i32) -> ! {
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    crate::session_cmds_daemon::persist_daemon_completion_from_env(exit_code);
+    std::process::exit(exit_code);
+}
 
 fn command_name_for_sa_mode(command: &Commands) -> Option<&'static str> {
     match command {
@@ -159,6 +170,11 @@ fn resolve_effective_min_timeout() -> u64 {
     compile_default
 }
 
+fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
+    // TODO lifecycle commands must stay available for recovery even when weave is unhealthy.
+    !matches!(command, Commands::Todo { .. })
+}
+
 /// Apply SA mode prompt guard and emit caller-side constraint if active.
 ///
 /// Returns `true` when SA mode is effectively enabled for this invocation.
@@ -205,9 +221,7 @@ async fn main() {
             eprintln!();
             eprintln!("{hint}");
         }
-        let _ = std::io::stdout().flush();
-        let _ = std::io::stderr().flush();
-        std::process::exit(1);
+        exit_current_process(1);
     }
 }
 
@@ -282,6 +296,7 @@ async fn run() -> Result<()> {
             .unwrap_or(false);
 
         let auto_upgrade = has_weave_lock
+            && should_attempt_auto_weave_upgrade(&command)
             && std::env::current_dir()
                 .ok()
                 .and_then(|cwd| csa_config::ProjectConfig::load(&cwd).ok().flatten())
@@ -474,9 +489,7 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
-            std::process::exit(exit_code);
+            exit_current_process(exit_code);
         }
         Commands::Session { cmd } => {
             session_dispatch::dispatch(cmd, output_format)?;
@@ -539,9 +552,7 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
-            std::process::exit(exit_code);
+            exit_current_process(exit_code);
         }
         Commands::Debate(args) => {
             run_cmd_daemon::check_daemon_flags(
@@ -557,9 +568,7 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
-            std::process::exit(exit_code);
+            exit_current_process(exit_code);
         }
         Commands::Eval {
             passive: _,
@@ -770,9 +779,7 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
-            let _ = std::io::stdout().flush();
-            let _ = std::io::stderr().flush();
-            std::process::exit(exit_code);
+            exit_current_process(exit_code);
         }
         Commands::Tokuin { cmd } => {
             handle_tokuin(cmd)?;

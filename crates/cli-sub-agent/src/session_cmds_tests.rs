@@ -1,10 +1,15 @@
+use super::resolve::resolve_session_prefix_from_dirs;
 use super::{
-    display_acp_events, display_log_files, ensure_terminal_result_for_dead_active_session,
-    handle_session_is_alive, print_content_with_tail, resolve_session_prefix_from_dirs,
-    select_sessions_for_list, session_to_json, status_from_phase_and_result,
-    truncate_with_ellipsis,
+    display_acp_events, display_daemon_spool_logs, display_log_files,
+    ensure_terminal_result_for_dead_active_session, handle_session_is_alive, handle_session_wait,
+    print_content_with_tail, select_sessions_for_list, session_to_json,
+    status_from_phase_and_result, truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};
+use crate::session_cmds_daemon::{
+    persist_daemon_completion_from_env, seed_daemon_session_env, synthesized_wait_next_step,
+};
+use crate::test_env_lock::TEST_ENV_LOCK;
 use chrono::Utc;
 use clap::Parser;
 use csa_session::{
@@ -78,6 +83,32 @@ fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
         }
     }
     set_file_mtime_seconds_ago(path, seconds_ago);
+}
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 }
 
 #[test]
@@ -336,6 +367,31 @@ fn display_log_files_returns_false_when_no_log_files() {
     assert!(!result, "should return false when no .log files exist");
 }
 
+#[test]
+fn display_daemon_spool_logs_returns_true_when_stdout_or_stderr_exist() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join("stdout.log"), "daemon stdout\n").unwrap();
+    std::fs::write(session_dir.join("stderr.log"), "daemon stderr\n").unwrap();
+
+    let displayed = display_daemon_spool_logs(&session_dir, None).unwrap();
+    assert!(displayed, "daemon spool logs should count as session logs");
+}
+
+#[test]
+fn display_daemon_spool_logs_returns_false_when_spools_missing() {
+    let td = tempdir().unwrap();
+    let session_dir = td.path().join("session");
+    std::fs::create_dir_all(&session_dir).unwrap();
+
+    let displayed = display_daemon_spool_logs(&session_dir, None).unwrap();
+    assert!(
+        !displayed,
+        "missing daemon spool logs should not report output"
+    );
+}
+
 // ── display_acp_events tests ──────────────────────────────────────
 
 #[test]
@@ -351,7 +407,7 @@ fn display_acp_events_succeeds_when_jsonl_exists() {
     std::fs::write(output_dir.join("acp-events.jsonl"), events).unwrap();
 
     // Should not error
-    display_acp_events(&session_dir, "test-session", None).unwrap();
+    display_acp_events(&session_dir, "test-session", None, None).unwrap();
 }
 
 #[test]
@@ -368,7 +424,7 @@ fn display_acp_events_succeeds_with_tail() {
     std::fs::write(output_dir.join("acp-events.jsonl"), events).unwrap();
 
     // Should not error with tail
-    display_acp_events(&session_dir, "test-session", Some(1)).unwrap();
+    display_acp_events(&session_dir, "test-session", Some(1), None).unwrap();
 }
 
 #[test]
@@ -378,7 +434,7 @@ fn display_acp_events_handles_missing_file() {
     std::fs::create_dir_all(&session_dir).unwrap();
 
     // No output/acp-events.jsonl — should succeed (prints message to stderr)
-    display_acp_events(&session_dir, "test-session", None).unwrap();
+    display_acp_events(&session_dir, "test-session", None, None).unwrap();
 }
 
 // ── CLI --events flag parsing ─────────────────────────────────────
@@ -717,48 +773,6 @@ fn session_to_json_includes_depth_and_parent() {
         Some("01PARENT000000000000000000")
     );
     assert_eq!(value.get("depth").and_then(|v| v.as_u64()), Some(2));
-}
-
-#[cfg(unix)]
-#[test]
-fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
-    let td = tempdir().unwrap();
-    let project = td.path();
-
-    let session = create_session(project, Some("orphan"), None, None).unwrap();
-    let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).unwrap();
-    std::fs::create_dir_all(session_dir.join("output")).unwrap();
-    std::fs::write(
-        session_dir.join("output/acp-events.jsonl"),
-        "{\"seq\":1,\"ts\":\"2026-01-01T00:00:00Z\"}\n",
-    )
-    .unwrap();
-
-    backdate_tree(&session_dir, 120);
-
-    let reconciled =
-        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
-            .unwrap();
-    assert!(reconciled);
-
-    let result = load_result(project, &session_id).unwrap().unwrap();
-    assert_eq!(result.status, "failure");
-    assert_eq!(result.exit_code, 1);
-    assert!(result.summary.contains("session list"));
-    assert!(
-        result
-            .artifacts
-            .iter()
-            .any(|artifact| artifact.path == "output/acp-events.jsonl"),
-        "fallback should preserve output artifact references"
-    );
-
-    let persisted = load_session(project, &session_id).unwrap();
-    assert_eq!(
-        persisted.termination_reason.as_deref(),
-        Some("orphaned_process")
-    );
 }
 
 #[path = "session_cmds_tests_tail.rs"]

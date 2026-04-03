@@ -1,5 +1,41 @@
 use super::*;
+use std::sync::{LazyLock, Mutex};
 use tempfile::tempdir;
+
+static MANAGER_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation is guarded by MANAGER_ENV_LOCK.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation is guarded by MANAGER_ENV_LOCK.
+        unsafe { std::env::remove_var(key) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env restoration is guarded by MANAGER_ENV_LOCK.
+        unsafe {
+            match self.original.take() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 #[test]
 fn test_create_session() {
@@ -39,6 +75,22 @@ fn test_list_all_sessions() {
     let td = tempdir().unwrap();
     create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
     create_session_in(td.path(), td.path(), Some("S2"), None, None).unwrap();
+    assert_eq!(list_all_sessions_in(td.path()).unwrap().len(), 2);
+}
+
+#[test]
+fn test_create_session_ignores_bare_inherited_daemon_session_id() {
+    let _env_lock = MANAGER_ENV_LOCK.lock().unwrap();
+    let _daemon_session_id =
+        EnvVarGuard::set("CSA_DAEMON_SESSION_ID", "01K00000000000000000000000");
+    let _daemon_session_dir = EnvVarGuard::unset("CSA_DAEMON_SESSION_DIR");
+    let _daemon_project_root = EnvVarGuard::unset("CSA_DAEMON_PROJECT_ROOT");
+
+    let td = tempdir().unwrap();
+    let first = create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
+    let second = create_session_in(td.path(), td.path(), Some("S2"), None, None).unwrap();
+
+    assert_ne!(first.meta_session_id, second.meta_session_id);
     assert_eq!(list_all_sessions_in(td.path()).unwrap().len(), 2);
 }
 

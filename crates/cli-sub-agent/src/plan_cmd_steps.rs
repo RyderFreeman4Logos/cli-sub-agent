@@ -65,11 +65,27 @@ pub(crate) struct StepResult {
 
 pub(super) struct PlanRunContext<'a> {
     pub(super) project_root: &'a Path,
+    pub(super) workflow_path: &'a Path,
     pub(super) config: Option<&'a ProjectConfig>,
     pub(super) tool_override: Option<&'a ToolName>,
     pub(super) journal: &'a mut PlanRunJournal,
     pub(super) journal_path: Option<&'a Path>,
     pub(super) resume_completed_steps: &'a HashSet<usize>,
+}
+
+fn shell_escape_for_command(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\\''"))
+}
+
+fn format_plan_resume_command(project_root: &Path, workflow_path: &Path) -> String {
+    let display_path = workflow_path
+        .strip_prefix(project_root)
+        .unwrap_or(workflow_path);
+    let display = display_path.to_string_lossy();
+    format!(
+        "csa plan run --sa-mode true {}",
+        shell_escape_for_command(&display)
+    )
 }
 
 /// Resolve a step's execution target from its annotations and config.
@@ -182,10 +198,12 @@ pub(crate) async fn execute_plan(
     config: Option<&ProjectConfig>,
     tool_override: Option<&ToolName>,
 ) -> Result<Vec<StepResult>> {
-    let mut journal = PlanRunJournal::new(&plan.name, Path::new("."), variables.clone());
+    let workflow_path = project_root.join("workflow.toml");
+    let mut journal = PlanRunJournal::new(&plan.name, &workflow_path, variables.clone());
     let completed = HashSet::new();
     let mut run_ctx = PlanRunContext {
         project_root,
+        workflow_path: &workflow_path,
         config,
         tool_override,
         journal: &mut journal,
@@ -275,10 +293,7 @@ pub(super) async fn execute_plan_with_journal(
             && !result.skipped
             && let Some(next_step) = find_next_step(step, &plan.steps)
         {
-            let cmd = format!(
-                "csa plan run --step {} \"{}\"",
-                next_step.id, next_step.title
-            );
+            let cmd = format_plan_resume_command(run_ctx.project_root, run_ctx.workflow_path);
             let required = matches!(next_step.on_fail, FailAction::Abort);
             eprintln!("{}", format_next_step_directive(&cmd, required));
         }
@@ -638,4 +653,31 @@ pub(crate) fn is_assignment_marker_key(key: &str) -> bool {
 /// which is the sequential successor in a linear workflow.
 fn find_next_step<'a>(current: &PlanStep, steps: &'a [PlanStep]) -> Option<&'a PlanStep> {
     steps.iter().find(|s| s.id > current.id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_plan_resume_command_uses_project_relative_path() {
+        let project_root = Path::new("/tmp/workspace");
+        let workflow_path = Path::new("/tmp/workspace/patterns/dev2merge/workflow.toml");
+
+        assert_eq!(
+            format_plan_resume_command(project_root, workflow_path),
+            "csa plan run --sa-mode true 'patterns/dev2merge/workflow.toml'"
+        );
+    }
+
+    #[test]
+    fn format_plan_resume_command_escapes_special_characters() {
+        let project_root = Path::new("/tmp/workspace");
+        let workflow_path = Path::new("/tmp/workspace/patterns/weird name's/workflow.toml");
+
+        assert_eq!(
+            format_plan_resume_command(project_root, workflow_path),
+            "csa plan run --sa-mode true 'patterns/weird name'\\''s/workflow.toml'"
+        );
+    }
 }

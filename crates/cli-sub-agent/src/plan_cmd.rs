@@ -437,6 +437,7 @@ pub(crate) async fn handle_plan_run(
     persist_plan_journal(&journal_path, &journal)?;
     let mut run_ctx = PlanRunContext {
         project_root: &project_root,
+        workflow_path: &workflow_path,
         config: config.as_ref(),
         tool_override: tool_override.as_ref(),
         journal: &mut journal,

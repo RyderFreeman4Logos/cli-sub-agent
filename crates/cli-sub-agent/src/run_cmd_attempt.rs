@@ -35,8 +35,8 @@ use super::attempt_exec::{
 use super::policy::is_post_run_commit_policy_block;
 use super::resume::{
     build_resume_hint_command, emit_run_timeout, extract_meta_session_id_from_error,
-    resolve_remaining_run_timeout, signal_interruption_exit_code, signal_name_from_exit_code,
-    wall_timeout_seconds_from_error,
+    resolve_remaining_run_timeout, run_error_timeout_seconds, signal_interruption_exit_code,
+    signal_name_from_exit_code,
 };
 
 pub(crate) struct RunLoopRequest<'a> {
@@ -464,22 +464,21 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             AttemptExecution::Exit(exit_code) => return Ok(RunLoopCompletion::Exit(exit_code)),
             AttemptExecution::Finished(Ok(result)) => result,
             AttemptExecution::Finished(Err(e)) => {
-                let wall_timeout_secs = wall_timeout_seconds_from_error(&e);
-                if let Some(timeout_secs) = wall_timeout_secs.or(request.run_timeout_seconds) {
+                if let Some(timeout_secs) =
+                    run_error_timeout_seconds(&e, request.run_timeout_seconds)
+                {
                     let interrupted_session_id = extract_meta_session_id_from_error(&e)
                         .or_else(|| executed_session_id.clone())
                         .or_else(|| pre_created_fork_session_id.clone())
                         .or_else(|| effective_session_arg.clone());
-                    if wall_timeout_secs.is_some() {
-                        persist_fork_timeout_result_if_missing(
-                            request.project_root,
-                            is_fork,
-                            current_tool,
-                            interrupted_session_id.as_deref(),
-                            chrono::Utc::now(),
-                            timeout_secs,
-                        );
-                    }
+                    persist_fork_timeout_result_if_missing(
+                        request.project_root,
+                        is_fork,
+                        current_tool,
+                        interrupted_session_id.as_deref(),
+                        chrono::Utc::now(),
+                        timeout_secs,
+                    );
                     let exit_code = emit_run_timeout(
                         request.output_format,
                         timeout_secs,

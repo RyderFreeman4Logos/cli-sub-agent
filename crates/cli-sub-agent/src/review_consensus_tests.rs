@@ -143,8 +143,30 @@ fn parse_review_verdict_prefers_has_issues_token() {
 
 #[test]
 fn parse_review_verdict_falls_back_to_exit_code() {
-    assert_eq!(parse_review_verdict("no explicit verdict", 0), CLEAN);
+    assert_eq!(parse_review_verdict("no explicit verdict", 0), HAS_ISSUES);
     assert_eq!(parse_review_verdict("no explicit verdict", 1), HAS_ISSUES);
+}
+
+#[test]
+fn parse_review_verdict_does_not_treat_findings_as_clean_from_exit_zero() {
+    let output = "<!-- CSA:SECTION:details -->\n1. P1 issue in workflow.toml\n<!-- CSA:SECTION:details:END -->";
+    assert_eq!(parse_review_verdict(output, 0), HAS_ISSUES);
+}
+
+#[test]
+fn parse_review_verdict_accepts_clean_phrase_without_explicit_token() {
+    assert_eq!(
+        parse_review_verdict("No issues found in this scope.", 0),
+        CLEAN
+    );
+    assert_eq!(
+        parse_review_verdict("No critical security or functional issues were found.", 0),
+        CLEAN
+    );
+    assert_eq!(
+        parse_review_verdict("\u{672a}\u{53d1}\u{73b0}\u{95ee}\u{9898}\u{3002}", 0),
+        CLEAN
+    );
 }
 
 #[test]
@@ -526,13 +548,37 @@ fn parse_review_decision_fail_takes_priority() {
 fn parse_review_decision_exit_code_fallback() {
     use csa_core::types::ReviewDecision;
 
-    // No verdict token: fall back to exit code
+    // No verdict token: fail closed unless the review explicitly says it is clean.
     assert_eq!(
         parse_review_decision("no verdict here", 0),
-        ReviewDecision::Pass
+        ReviewDecision::Fail
     );
     assert_eq!(
         parse_review_decision("no verdict here", 1),
         ReviewDecision::Fail
+    );
+}
+
+#[test]
+fn parse_review_decision_does_not_treat_findings_as_pass_from_exit_zero() {
+    use csa_core::types::ReviewDecision;
+
+    assert_eq!(
+        parse_review_decision("1. P1 issue in cli.rs", 0),
+        ReviewDecision::Fail
+    );
+}
+
+#[test]
+fn parse_review_decision_accepts_clean_phrase_without_explicit_token() {
+    use csa_core::types::ReviewDecision;
+
+    assert_eq!(
+        parse_review_decision("No blocking issues found.", 0),
+        ReviewDecision::Pass
+    );
+    assert_eq!(
+        parse_review_decision("No security, privacy, or safety issues were introduced.", 0),
+        ReviewDecision::Pass
     );
 }

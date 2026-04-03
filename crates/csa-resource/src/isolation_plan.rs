@@ -197,6 +197,8 @@ impl IsolationPlanBuilder {
                     self.writable_paths.push(home.join(".gemini"));
                     // XDG config dir (settings.json, etc.)
                     self.writable_paths.push(home.join(".config/gemini-cli"));
+                    // mise shims may need a writable cache during Gemini startup.
+                    self.writable_paths.push(home.join(".cache/mise"));
                 }
                 "opencode" => {
                     self.writable_paths.push(home.join(".config/opencode"));
@@ -248,6 +250,20 @@ impl IsolationPlanBuilder {
                 // Off is a no-op for the resource axis (capabilities are kept as-is
                 // because cgroup limits don't need explicit disabling here).
             }
+        }
+
+        // Landlock operates in the calling thread via pre_exec. That makes it
+        // incompatible with CgroupV2's `systemd-run --scope` wrapper: applying
+        // Landlock there would sandbox the wrapper itself and break its D-Bus
+        // connection to the user manager. Prefer Setrlimit so the actual tool
+        // process still receives filesystem isolation.
+        if self.resource == ResourceCapability::CgroupV2
+            && self.filesystem == FilesystemCapability::Landlock
+        {
+            self.resource = ResourceCapability::Setrlimit;
+            self.degraded_reasons.push(
+                "landlock cannot be combined with cgroup wrapper; falling back to setrlimit resource isolation".into(),
+            );
         }
 
         Ok(IsolationPlan {
@@ -353,6 +369,25 @@ mod tests {
         assert_eq!(plan.resource, ResourceCapability::CgroupV2);
         assert_eq!(plan.filesystem, FilesystemCapability::Bwrap);
         assert!(plan.degraded_reasons.is_empty());
+    }
+
+    #[test]
+    fn test_builder_degrades_cgroup_landlock_to_setrlimit() {
+        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+            .with_resource_capability(ResourceCapability::CgroupV2)
+            .with_filesystem_capability(FilesystemCapability::Landlock)
+            .build()
+            .expect("best-effort build should succeed");
+
+        assert_eq!(plan.resource, ResourceCapability::Setrlimit);
+        assert_eq!(plan.filesystem, FilesystemCapability::Landlock);
+        assert!(
+            plan.degraded_reasons
+                .iter()
+                .any(|reason| reason.contains("landlock cannot be combined with cgroup wrapper")),
+            "expected degradation reason, got {:?}",
+            plan.degraded_reasons
+        );
     }
 
     #[test]
@@ -550,6 +585,10 @@ mod tests {
                 plan.writable_paths
                     .contains(&home.join(".config/gemini-cli")),
                 "gemini-cli defaults should include ~/.config/gemini-cli"
+            );
+            assert!(
+                plan.writable_paths.contains(&home.join(".cache/mise")),
+                "gemini-cli defaults should include ~/.cache/mise for mise-managed shims"
             );
         }
     }

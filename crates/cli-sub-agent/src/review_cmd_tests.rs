@@ -126,6 +126,38 @@ fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
     }
 }
 
+#[test]
+fn build_post_review_output_synthesizes_builtin_directive_for_clean_cumulative_review() {
+    let output = build_post_review_output("", csa_core::types::ReviewDecision::Pass, "base:main");
+    let directive = csa_hooks::parse_next_step_directive(&output).expect("directive");
+    assert_eq!(
+        directive.cmd.as_deref(),
+        Some("csa plan run --sa-mode true --pattern pr-bot")
+    );
+    assert!(directive.required);
+}
+
+#[test]
+fn build_post_review_output_does_not_synthesize_for_files_scope() {
+    let output = build_post_review_output(
+        "",
+        csa_core::types::ReviewDecision::Pass,
+        "files:crates/csa-hooks/src/",
+    );
+    assert!(output.is_empty());
+}
+
+#[test]
+fn build_post_review_output_preserves_existing_directive_without_duplication() {
+    let existing = "<!-- CSA:NEXT_STEP cmd=\"custom cmd\" required=false -->\nextra explanation";
+    let output = build_post_review_output(
+        existing,
+        csa_core::types::ReviewDecision::Pass,
+        "range:main...HEAD",
+    );
+    assert_eq!(output, existing);
+}
+
 // --- resolve_review_tool tests ---
 
 #[test]

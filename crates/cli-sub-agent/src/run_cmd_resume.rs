@@ -139,6 +139,15 @@ pub(crate) fn wall_timeout_seconds_from_error(error: &anyhow::Error) -> Option<u
     None
 }
 
+pub(crate) fn run_error_timeout_seconds(
+    error: &anyhow::Error,
+    _configured_run_timeout_seconds: Option<u64>,
+) -> Option<u64> {
+    // A configured wall-clock budget constrains execution, but it must not
+    // reclassify unrelated pre-exec or transport errors as timeout.
+    wall_timeout_seconds_from_error(error)
+}
+
 pub(crate) fn signal_name_from_exit_code(exit_code: i32) -> &'static str {
     match exit_code {
         143 => "SIGTERM",

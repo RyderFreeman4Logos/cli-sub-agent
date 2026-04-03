@@ -25,6 +25,7 @@ pub(crate) fn check_daemon_flags(
     if let Some(sid) = session_id {
         // SAFETY: Runs in the daemon child before tokio spawns worker threads.
         unsafe { std::env::set_var("CSA_DAEMON_SESSION_ID", sid) };
+        crate::session_cmds_daemon::seed_daemon_session_env(sid, cd);
     }
     Ok(())
 }
@@ -56,6 +57,16 @@ pub(crate) fn spawn_and_exit(subcommand: &str, cd: Option<&str>) -> Result<()> {
         .collect();
 
     let csa_binary = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("csa"));
+    let mut daemon_env = std::collections::HashMap::new();
+    daemon_env.insert("CSA_DAEMON_SESSION_ID".to_string(), sid.clone());
+    daemon_env.insert(
+        "CSA_DAEMON_SESSION_DIR".to_string(),
+        session_dir.display().to_string(),
+    );
+    daemon_env.insert(
+        "CSA_DAEMON_PROJECT_ROOT".to_string(),
+        project_root.display().to_string(),
+    );
 
     let config = csa_process::daemon::DaemonSpawnConfig {
         session_id: sid.clone(),
@@ -63,7 +74,7 @@ pub(crate) fn spawn_and_exit(subcommand: &str, cd: Option<&str>) -> Result<()> {
         csa_binary,
         subcommand: subcommand.to_string(),
         args: forwarded_args,
-        env: std::collections::HashMap::new(),
+        env: daemon_env,
     };
 
     let result = csa_process::daemon::spawn_daemon(config)?;

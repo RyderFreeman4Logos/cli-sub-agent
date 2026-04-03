@@ -256,18 +256,22 @@ fn validate_timeout(
     if let Some(t) = timeout
         && t < min_timeout
     {
-        let min_minutes = min_timeout / 60;
         return Err(clap::Error::raw(
             clap::error::ErrorKind::ValueValidation,
-            format!(
-                "Absolute timeout (--timeout) must be at least {min_timeout} seconds ({min_minutes} minutes). \
-                     Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
-                     Record this in your CLAUDE.md or memory: CSA minimum timeout is {min_timeout} seconds. \
-                     Configure via [execution] min_timeout_seconds in .csa/config.toml or global config."
-            ),
+            timeout_validation_message(min_timeout),
         ));
     }
     Ok(())
+}
+
+fn timeout_validation_message(min_timeout: u64) -> String {
+    let min_minutes = min_timeout / 60;
+    format!(
+        "Absolute timeout (--timeout) must be at least {min_timeout} seconds ({min_minutes} minutes). \
+         Short timeouts waste tokens because the agent starts working but gets killed before producing output. \
+         Record this in your CLAUDE.md or memory: CSA minimum timeout is {min_timeout} seconds. \
+         Use --timeout >= {min_timeout}, or inspect the effective floor with `csa config get execution.min_timeout_seconds`."
+    )
 }
 
 #[derive(clap::Args)]
@@ -374,4 +378,28 @@ pub struct DebateArgs {
     /// Internal: pre-assigned session ID from daemon parent
     #[arg(long, hide = true)]
     pub session_id: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{timeout_validation_message, validate_timeout};
+
+    #[test]
+    fn validate_timeout_rejects_sub_floor_without_lowering_hint() {
+        let err = validate_timeout(Some(600), 1800).expect_err("timeout below floor must fail");
+        let rendered = err.to_string();
+        assert!(rendered.contains("must be at least 1800 seconds"));
+        assert!(rendered.contains("csa config get execution.min_timeout_seconds"));
+        assert!(
+            !rendered.contains("Configure via [execution] min_timeout_seconds"),
+            "error text should not encourage lowering the configured safety floor"
+        );
+    }
+
+    #[test]
+    fn timeout_validation_message_guides_toward_effective_floor() {
+        let rendered = timeout_validation_message(2400);
+        assert!(rendered.contains("Use --timeout >= 2400"));
+        assert!(rendered.contains("effective floor"));
+    }
 }

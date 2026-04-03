@@ -399,7 +399,12 @@ pub(crate) async fn handle_debate(
         extract_debate_summary(&output, execution.execution.summary.as_str(), debate_mode);
     let session_dir = csa_session::get_session_dir(&project_root, &execution.meta_session_id)?;
     let artifacts = persist_debate_output_artifacts(&session_dir, &debate_summary, &output)?;
-    append_debate_artifacts_to_result(&project_root, &execution.meta_session_id, &artifacts)?;
+    append_debate_artifacts_to_result(
+        &project_root,
+        &execution.meta_session_id,
+        &artifacts,
+        &debate_summary,
+    )?;
 
     let rendered_output = render_debate_cli_output(
         output_format,

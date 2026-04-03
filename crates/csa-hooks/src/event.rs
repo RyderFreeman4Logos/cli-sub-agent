@@ -9,6 +9,8 @@
 /// - `SessionComplete` — fired after session save in `pipeline::execute_with_session_and_meta`
 /// - `TodoCreate` — fired after plan creation + git commit in `todo_cmd::handle_create` (no builtin; git already committed)
 /// - `TodoSave` — fired after plan save + git commit in `todo_cmd::handle_save` (no builtin; git already committed)
+/// - `PostReview` — fired after final `csa review` result; builtin emits a next-step
+///   directive for passing cumulative review → `pr-bot` chaining
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
     /// After a session execution completes (success or failure).
@@ -104,11 +106,18 @@ impl HookEvent {
             HookEvent::PostEdit => Some(
                 "set -o pipefail; cargo clippy {!CHANGED_CRATES_FLAGS} --message-format=short 2>&1 | head -30",
             ),
+            HookEvent::PostReview => Some(concat!(
+                "case {scope} in ",
+                "'base:'*|'range:'*) ",
+                "if [ {decision} = 'pass' ]; then ",
+                "echo '<!-- CSA:NEXT_STEP cmd=\"csa plan run --sa-mode true --pattern pr-bot\" required=true -->'; ",
+                "fi ;; ",
+                "esac"
+            )),
             HookEvent::TodoCreate
             | HookEvent::TodoSave
             | HookEvent::PreRun
-            | HookEvent::PostRun
-            | HookEvent::PostReview => None,
+            | HookEvent::PostRun => None,
         }
     }
 }
@@ -136,6 +145,7 @@ mod tests {
         // Events with built-in commands
         assert!(HookEvent::SessionComplete.builtin_command().is_some());
         assert!(HookEvent::PostEdit.builtin_command().is_some());
+        assert!(HookEvent::PostReview.builtin_command().is_some());
 
         // Events without built-in commands (TodoCreate/TodoSave have no builtins
         // because git::save() already commits before hooks fire)
@@ -143,7 +153,6 @@ mod tests {
         assert!(HookEvent::TodoSave.builtin_command().is_none());
         assert!(HookEvent::PreRun.builtin_command().is_none());
         assert!(HookEvent::PostRun.builtin_command().is_none());
-        assert!(HookEvent::PostReview.builtin_command().is_none());
     }
 
     #[test]
@@ -151,6 +160,10 @@ mod tests {
         let cmd = HookEvent::SessionComplete.builtin_command().unwrap();
         assert!(cmd.contains("{session_id}"));
         assert!(cmd.contains("git commit"));
+
+        let review_cmd = HookEvent::PostReview.builtin_command().unwrap();
+        assert!(review_cmd.contains("{decision}"));
+        assert!(review_cmd.contains("pr-bot"));
 
         // TodoCreate and TodoSave have no builtins (covered by test_builtin_command)
     }
@@ -242,7 +255,11 @@ mod tests {
     /// at least one template variable placeholder.
     #[test]
     fn test_builtin_commands_contain_template_vars() {
-        let events_with_builtins = [HookEvent::SessionComplete, HookEvent::PostEdit];
+        let events_with_builtins = [
+            HookEvent::SessionComplete,
+            HookEvent::PostEdit,
+            HookEvent::PostReview,
+        ];
 
         for event in &events_with_builtins {
             let cmd = event

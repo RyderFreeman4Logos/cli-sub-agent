@@ -90,6 +90,10 @@ impl AcpConnection {
         // Entrypoint tracking for the parent session — not meaningful for
         // the ACP subprocess.
         "CLAUDE_CODE_ENTRYPOINT",
+        // Gemini auth/routing must be controlled by CSA retry state so each
+        // fresh invocation still starts on the quota-backed path.
+        "GEMINI_API_KEY",
+        "GOOGLE_GEMINI_BASE_URL",
     ];
 
     /// Internal constructor used by `connection_spawn` after assembling parts.

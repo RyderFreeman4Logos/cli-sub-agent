@@ -191,8 +191,8 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
-    /// Wait for a daemon session to complete (poll until result.toml exists).
-    /// Hardcoded timeout: 250 seconds.
+    /// Wait for a daemon session to complete (poll until result exists and the daemon exits).
+    /// Hardcoded timeout: 250 seconds; prints stdout.log plus a completion marker.
     Wait {
         /// Session ID to wait for
         #[arg(long)]
@@ -214,7 +214,7 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
-    /// Attach to a running daemon session (tail stdout/stderr in real time)
+    /// Attach to a running daemon session (tail stdout/stderr until the daemon exits)
     Attach {
         /// Session ID to attach to
         #[arg(long)]

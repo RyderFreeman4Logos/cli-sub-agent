@@ -13,11 +13,11 @@ pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Re
 
     match format {
         OutputFormat::Json => {
-            let json_str = serde_json::to_string_pretty(&config)?;
+            let json_str = serde_json::to_string_pretty(&build_project_display_json(&config)?)?;
             println!("{json_str}");
         }
         OutputFormat::Text => {
-            let toml_str = toml::to_string_pretty(&config)?;
+            let toml_str = toml::to_string_pretty(&build_project_display_toml(&config)?)?;
             print!("{toml_str}");
         }
     }
@@ -34,7 +34,9 @@ pub(crate) fn handle_config_edit(cd: Option<String>) -> Result<()> {
     }
 
     let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-    let status = std::process::Command::new(editor)
+    let (program, args) = parse_editor_command(&editor)?;
+    let status = std::process::Command::new(program)
+        .args(args)
         .arg(&config_path)
         .status()?;
 
@@ -43,6 +45,62 @@ pub(crate) fn handle_config_edit(cd: Option<String>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn parse_editor_command(editor: &str) -> Result<(String, Vec<String>)> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_single_quotes = false;
+    let mut in_double_quotes = false;
+    let mut escaping = false;
+    let mut token_started = false;
+
+    for ch in editor.chars() {
+        if escaping {
+            current.push(ch);
+            escaping = false;
+            token_started = true;
+            continue;
+        }
+
+        match ch {
+            '\\' if !in_single_quotes => {
+                escaping = true;
+                token_started = true;
+            }
+            '\'' if !in_double_quotes => {
+                in_single_quotes = !in_single_quotes;
+                token_started = true;
+            }
+            '"' if !in_single_quotes => {
+                in_double_quotes = !in_double_quotes;
+                token_started = true;
+            }
+            ch if ch.is_whitespace() && !in_single_quotes && !in_double_quotes => {
+                if token_started {
+                    parts.push(std::mem::take(&mut current));
+                    token_started = false;
+                }
+            }
+            _ => {
+                current.push(ch);
+                token_started = true;
+            }
+        }
+    }
+
+    if escaping || in_single_quotes || in_double_quotes {
+        anyhow::bail!("Failed to parse $EDITOR: {editor}");
+    }
+
+    if token_started {
+        parts.push(current);
+    }
+
+    let (program, args) = parts
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("$EDITOR is set but empty"))?;
+    Ok((program.clone(), args.to_vec()))
 }
 
 pub(crate) fn handle_init(non_interactive: bool, full: bool, template: bool) -> Result<()> {
@@ -227,10 +285,16 @@ pub(crate) fn handle_config_get(
     global_only: bool,
     cd: Option<String>,
 ) -> Result<()> {
+    let project_root = (!global_only)
+        .then(|| crate::pipeline::determine_project_root(cd.as_deref()))
+        .transpose()?;
+
     // Try project config first (unless --global flag)
     if !global_only {
-        let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-        let project_config_path = ProjectConfig::config_path(&project_root);
+        let project_root = project_root
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("Failed to determine project root"))?;
+        let project_config_path = ProjectConfig::config_path(project_root);
         match load_and_resolve(&project_config_path, &key) {
             Ok(Some(value)) => {
                 println!("{}", format_toml_value(&value));
@@ -267,6 +331,15 @@ pub(crate) fn handle_config_get(
         }
     }
 
+    if !project_only
+        && !global_only
+        && let Some(project_root) = project_root.as_deref()
+        && let Some(value) = resolve_effective_execution_key(project_root, &key)?
+    {
+        println!("{}", format_toml_value(&value));
+        return Ok(());
+    }
+
     // Fall back to --default or report key not found
     match default {
         Some(d) => {
@@ -292,6 +365,72 @@ fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Va
     // TOML files, while the serde `Deserialize` path works correctly.
     let root: toml::Value =
         toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML parse error: {e}"))?;
+    Ok(resolve_key(&root, key))
+}
+
+fn build_execution_toml(execution: &csa_config::ExecutionConfig) -> toml::Value {
+    let mut table = toml::map::Map::new();
+    table.insert(
+        "min_timeout_seconds".to_string(),
+        toml::Value::Integer(execution.min_timeout_seconds as i64),
+    );
+    table.insert(
+        "auto_weave_upgrade".to_string(),
+        toml::Value::Boolean(execution.auto_weave_upgrade),
+    );
+    toml::Value::Table(table)
+}
+
+fn build_project_display_toml(config: &ProjectConfig) -> Result<toml::Value> {
+    let mut root = toml::Value::try_from(config.clone())?;
+    root.as_table_mut()
+        .expect("serialized project config should be a TOML table")
+        .insert(
+            "execution".to_string(),
+            build_execution_toml(&config.execution),
+        );
+    Ok(root)
+}
+
+fn build_project_display_json(config: &ProjectConfig) -> Result<serde_json::Value> {
+    let mut root = serde_json::to_value(config)?;
+    root.as_object_mut()
+        .expect("serialized project config should be a JSON object")
+        .insert(
+            "execution".to_string(),
+            serde_json::json!({
+                "min_timeout_seconds": config.execution.min_timeout_seconds,
+                "auto_weave_upgrade": config.execution.auto_weave_upgrade,
+            }),
+        );
+    Ok(root)
+}
+
+fn build_global_display_toml(config: &GlobalConfig) -> Result<toml::Value> {
+    let mut root = toml::Value::try_from(config.clone())?;
+    root.as_table_mut()
+        .expect("serialized global config should be a TOML table")
+        .insert(
+            "execution".to_string(),
+            build_execution_toml(&config.execution),
+        );
+    Ok(root)
+}
+
+fn resolve_effective_execution_key(
+    project_root: &std::path::Path,
+    key: &str,
+) -> Result<Option<toml::Value>> {
+    if !key.starts_with("execution.") {
+        return Ok(None);
+    }
+
+    if let Some(config) = ProjectConfig::load(project_root)? {
+        let root = build_project_display_toml(&config.redacted_for_display())?;
+        return Ok(resolve_key(&root, key));
+    }
+
+    let root = build_global_display_toml(&GlobalConfig::default())?;
     Ok(resolve_key(&root, key))
 }
 
@@ -336,6 +475,35 @@ pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_env_lock::TEST_ENV_LOCK;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe {
+                match self.original.as_deref() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn resolve_key_scalar() {
@@ -396,5 +564,169 @@ mod tests {
         std::fs::write(&path, "{{invalid toml").unwrap();
         let result = load_and_resolve(&path, "key");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_project_display_toml_keeps_effective_execution_defaults_visible() {
+        let config: ProjectConfig = toml::from_str("schema_version = 1\n").unwrap();
+        let rendered =
+            toml::to_string_pretty(&build_project_display_toml(&config).unwrap()).unwrap();
+        assert!(rendered.contains("[execution]"));
+        assert!(rendered.contains("min_timeout_seconds = 1800"));
+        assert!(rendered.contains("auto_weave_upgrade = false"));
+    }
+
+    #[test]
+    fn build_project_display_json_keeps_effective_execution_defaults_visible() {
+        let config: ProjectConfig = toml::from_str("schema_version = 1\n").unwrap();
+        let rendered = build_project_display_json(&config).unwrap();
+        assert_eq!(
+            rendered
+                .get("execution")
+                .and_then(|value| value.get("min_timeout_seconds"))
+                .and_then(|value| value.as_u64()),
+            Some(1800)
+        );
+        assert_eq!(
+            rendered
+                .get("execution")
+                .and_then(|value| value.get("auto_weave_upgrade"))
+                .and_then(|value| value.as_bool()),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn resolve_effective_execution_key_uses_compile_default_when_no_config_exists() {
+        let dir = tempfile::tempdir().unwrap();
+        let value = resolve_effective_execution_key(dir.path(), "execution.min_timeout_seconds")
+            .unwrap()
+            .expect("effective timeout floor should exist");
+        assert_eq!(value.as_integer(), Some(1800));
+    }
+
+    #[test]
+    fn resolve_effective_execution_key_prefers_project_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let csa_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[execution]
+min_timeout_seconds = 2400
+auto_weave_upgrade = true
+"#,
+        )
+        .unwrap();
+
+        let timeout = resolve_effective_execution_key(dir.path(), "execution.min_timeout_seconds")
+            .unwrap()
+            .expect("project timeout should resolve");
+        let auto_upgrade =
+            resolve_effective_execution_key(dir.path(), "execution.auto_weave_upgrade")
+                .unwrap()
+                .expect("project auto upgrade should resolve");
+
+        assert_eq!(timeout.as_integer(), Some(2400));
+        assert_eq!(auto_upgrade.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn resolve_effective_execution_key_uses_global_fallback_when_project_missing() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[execution]
+min_timeout_seconds = 3600
+auto_weave_upgrade = true
+"#,
+        )
+        .unwrap();
+
+        let timeout = resolve_effective_execution_key(dir.path(), "execution.min_timeout_seconds")
+            .unwrap()
+            .expect("global timeout should resolve");
+        let auto_upgrade =
+            resolve_effective_execution_key(dir.path(), "execution.auto_weave_upgrade")
+                .unwrap()
+                .expect("global auto upgrade should resolve");
+
+        assert_eq!(timeout.as_integer(), Some(3600));
+        assert_eq!(auto_upgrade.as_bool(), Some(true));
+    }
+
+    #[test]
+    fn parse_editor_command_supports_embedded_args() {
+        let (program, args) = parse_editor_command("code --wait").unwrap();
+        assert_eq!(program, "code");
+        assert_eq!(args, vec!["--wait"]);
+    }
+
+    #[test]
+    fn parse_editor_command_supports_plain_editor() {
+        let (program, args) = parse_editor_command("vim").unwrap();
+        assert_eq!(program, "vim");
+        assert!(args.is_empty());
+    }
+
+    #[test]
+    fn parse_editor_command_rejects_whitespace_only_value() {
+        let error = parse_editor_command("   ").unwrap_err();
+        assert!(error.to_string().contains("$EDITOR is set but empty"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn handle_config_edit_supports_quoted_editor_path_with_embedded_args() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&config_dir).unwrap();
+
+        let config_path = config_dir.join("config.toml");
+        std::fs::write(&config_path, "schema_version = 1\n").unwrap();
+
+        let editor_dir = dir.path().join("editor bin");
+        std::fs::create_dir_all(&editor_dir).unwrap();
+        let editor_path = editor_dir.join("mock editor.sh");
+        write_recording_editor(&editor_path).unwrap();
+
+        let captured_args_path = dir.path().join("captured-args.txt");
+        let _capture_guard = EnvVarGuard::set("CSA_TEST_EDITOR_ARGS_FILE", &captured_args_path);
+        let editor_value = format!("'{}' --wait", editor_path.display());
+        let _editor_guard = EnvVarGuard::set("EDITOR", &editor_value);
+
+        handle_config_edit(Some(dir.path().display().to_string())).unwrap();
+
+        let captured_args = std::fs::read_to_string(&captured_args_path).unwrap();
+        let captured_lines: Vec<_> = captured_args.lines().collect();
+        assert_eq!(
+            captured_lines,
+            vec!["--wait", config_path.to_str().unwrap()]
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_recording_editor(path: &std::path::Path) -> Result<()> {
+        std::fs::write(
+            path,
+            "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$CSA_TEST_EDITOR_ARGS_FILE\"\n",
+        )?;
+        let mut permissions = std::fs::metadata(path)?.permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions)?;
+        Ok(())
     }
 }

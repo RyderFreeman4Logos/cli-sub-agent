@@ -566,6 +566,41 @@ fn resolve_tool_and_model_tier_with_tool_blocked_without_force() {
     assert_eq!(tool, ToolName::GeminiCli, "tier should win over --tool");
 }
 
+#[test]
+fn resolve_tool_and_model_tier_with_tool_and_force_ignore_errors_on_conflict() {
+    let cfg = config_with_tier(
+        "quality",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli", "codex"],
+    );
+
+    let result = super::resolve_tool_and_model(
+        Some(ToolName::Codex),
+        None,
+        None,
+        Some(&cfg),
+        std::path::Path::new("/tmp"),
+        false,
+        false,
+        false,
+        Some("quality"),
+        true,
+        false, // tool_is_auto_resolved
+    );
+
+    let err = result.expect_err("tier + direct tool bypass must be explicit, not silent");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Conflicting routing flags"),
+        "unexpected error: {msg}"
+    );
+    assert!(msg.contains("--tier"), "unexpected error: {msg}");
+    assert!(
+        msg.contains("--force-ignore-tier-setting"),
+        "unexpected error: {msg}"
+    );
+}
+
 // --- tier_mapping alias tests ---
 
 #[test]

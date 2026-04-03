@@ -98,6 +98,20 @@ pub(crate) fn handle_session_result(
             "Failed to reconcile dead Active session in session result"
         );
     }
+    let repaired_result = match crate::session_observability::refresh_and_repair_result(
+        &project_root,
+        &resolved_id,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %resolved_id,
+                error = %err,
+                "Failed to refresh session result contract in session result"
+            );
+            None
+        }
+    };
 
     // If structured output flags are active, handle them and return early
     if structured.is_active() {
@@ -116,7 +130,7 @@ pub(crate) fn handle_session_result(
             None
         }
     };
-    match csa_session::load_result(&project_root, &resolved_id)? {
+    match repaired_result {
         Some(result) => {
             if json {
                 display_result_json(&result, transcript_summary.as_ref())?;
@@ -125,7 +139,17 @@ pub(crate) fn handle_session_result(
             }
         }
         None => {
-            eprintln!("No result found for session '{resolved_id}'");
+            let phase_label = csa_session::load_session(&project_root, &resolved_id)
+                .ok()
+                .map(|session| session.phase.to_string());
+            eprintln!(
+                "{}",
+                crate::session_observability::build_missing_result_diagnostic(
+                    &resolved_id,
+                    &session_dir,
+                    phase_label.as_deref(),
+                )
+            );
         }
     }
     Ok(())
@@ -392,6 +416,7 @@ pub(crate) fn handle_session_artifacts(session: String, cd: Option<String>) -> R
         );
     }
     let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
+    let _ = crate::session_observability::refresh_and_repair_result(&project_root, &resolved_id);
     let output_dir = session_dir.join("output");
 
     // Show structured output index if available

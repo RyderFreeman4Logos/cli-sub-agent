@@ -24,6 +24,7 @@
 //!                       └─ codex  ← gets its own independent limits
 //! ```
 
+use std::collections::HashMap;
 use std::process::Command;
 
 use anyhow::{Context, Result};
@@ -93,10 +94,14 @@ pub(crate) fn scope_unit_name(tool_name: &str, session_id: &str) -> String {
 /// cmd.arg("claude-code").arg("--yolo");
 /// // let child = cmd.spawn()?;
 /// ```
-pub fn create_scope_command(tool_name: &str, session_id: &str, config: &SandboxConfig) -> Command {
+fn populate_scope_command(
+    cmd: &mut Command,
+    tool_name: &str,
+    session_id: &str,
+    config: &SandboxConfig,
+) {
     let unit = scope_unit_name(tool_name, session_id);
 
-    let mut cmd = Command::new("systemd-run");
     cmd.args(["--user", "--scope", "--unit", &unit]);
 
     // Resource properties -------------------------------------------------
@@ -112,7 +117,27 @@ pub fn create_scope_command(tool_name: &str, session_id: &str, config: &SandboxC
 
     // Separator: everything after "--" is the actual command the scope runs.
     cmd.arg("--");
+}
 
+pub fn create_scope_command(tool_name: &str, session_id: &str, config: &SandboxConfig) -> Command {
+    let mut cmd = Command::new("systemd-run");
+    populate_scope_command(&mut cmd, tool_name, session_id, config);
+    cmd
+}
+
+/// Build a `systemd-run` scope command for callers that also apply an
+/// environment block via [`Command::env`].
+///
+/// The environment must NOT be copied onto the `systemd-run` command line,
+/// because that would expose secrets such as API keys via `ps` / `/proc`.
+pub fn create_scope_command_with_env(
+    tool_name: &str,
+    session_id: &str,
+    config: &SandboxConfig,
+    _env: &HashMap<String, String>,
+) -> Command {
+    let mut cmd = Command::new("systemd-run");
+    populate_scope_command(&mut cmd, tool_name, session_id, config);
     cmd
 }
 
@@ -529,6 +554,38 @@ mod tests {
         // The "--" separator must be the last argument we set so that the
         // caller can append the tool binary after it.
         assert_eq!(args.last().unwrap(), "--");
+    }
+
+    #[test]
+    fn test_create_scope_command_with_env_keeps_secrets_off_command_line() {
+        let cfg = SandboxConfig {
+            memory_max_mb: 512,
+            memory_swap_max_mb: None,
+            pids_max: None,
+        };
+        let env = HashMap::from([
+            ("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string()),
+            ("GEMINI_API_KEY".to_string(), "fallback-key".to_string()),
+        ]);
+
+        let cmd = create_scope_command_with_env("gemini-cli", "01JENV", &cfg, &env);
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().to_string())
+            .collect();
+
+        assert!(
+            !args.iter().any(|arg| arg == "-E"),
+            "systemd-run scope command must not expose env via -E: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg.contains("GEMINI_API_KEY")),
+            "secret env values must stay out of the systemd-run argv: {args:?}"
+        );
+        assert!(
+            !args.iter().any(|arg| arg.contains("fallback-key")),
+            "secret env contents must stay out of the systemd-run argv: {args:?}"
+        );
     }
 
     #[test]

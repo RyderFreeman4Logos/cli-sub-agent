@@ -24,6 +24,18 @@ pub use manager_result::{list_artifacts, load_result, save_result};
 pub(crate) use manager_result::{list_artifacts_in, load_result_in, save_result_in};
 
 const STATE_FILE_NAME: &str = "state.toml";
+const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
+const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
+const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
+
+fn preassigned_daemon_session_id() -> Option<String> {
+    let session_id = std::env::var(DAEMON_SESSION_ID_ENV)
+        .ok()
+        .filter(|value| !value.is_empty())?;
+    let has_daemon_context = std::env::var_os(DAEMON_SESSION_DIR_ENV).is_some()
+        || std::env::var_os(DAEMON_PROJECT_ROOT_ENV).is_some();
+    has_daemon_context.then_some(session_id)
+}
 
 /// Resolved identifiers for resuming a tool session.
 #[derive(Debug, Clone)]
@@ -58,11 +70,11 @@ pub(crate) fn create_session_in(
     tool: Option<&str>,
 ) -> Result<MetaSessionState> {
     // Daemon child processes pre-assign a session ID via env so that the
-    // pipeline session directory matches the daemon spool directory.
-    let session_id = match std::env::var("CSA_DAEMON_SESSION_ID")
-        .ok()
-        .filter(|s| !s.is_empty())
-    {
+    // pipeline session directory matches the daemon spool directory. Ignore a
+    // bare inherited session ID unless the rest of the daemon context was also
+    // seeded; otherwise nested commands and tests collapse multiple sessions
+    // onto the caller's daemon session directory.
+    let session_id = match preassigned_daemon_session_id() {
         Some(id) => {
             validate_session_id(&id)?;
             id

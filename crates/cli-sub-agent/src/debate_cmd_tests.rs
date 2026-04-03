@@ -1,12 +1,40 @@
 use super::*;
 use crate::debate_cmd_output::*;
 use crate::debate_cmd_resolve::resolve_debate_tool;
+use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_config::global::ReviewConfig;
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::types::ToolName;
+use csa_session::{SessionArtifact, create_session, load_result, save_result};
 use serde_json::Value;
 use std::collections::HashMap;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -546,6 +574,63 @@ fn persist_debate_output_artifacts_includes_mode_for_same_model() {
 }
 
 #[test]
+fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().expect("debate env lock poisoned");
+    let state_home = temp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", temp.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+
+    let project_root = temp.path();
+    let session = create_session(project_root, Some("debate"), None, None).unwrap();
+
+    save_result(
+        project_root,
+        &session.meta_session_id,
+        &csa_session::SessionResult {
+            status: "success".to_string(),
+            exit_code: 0,
+            summary: "<!-- CSA:SECTION:summary:END -->".to_string(),
+            tool: "codex".to_string(),
+            started_at: chrono::Utc::now(),
+            completed_at: chrono::Utc::now(),
+            events_count: 0,
+            artifacts: Vec::new(),
+        },
+    )
+    .unwrap();
+
+    let debate_summary = DebateSummary {
+        verdict: "APPROVE".to_string(),
+        confidence: "high".to_string(),
+        summary: "Persist the parsed debate summary.".to_string(),
+        key_points: vec!["Key point".to_string()],
+        mode: DebateMode::Heterogeneous,
+    };
+    let artifacts = vec![SessionArtifact::new("output/debate-verdict.json")];
+
+    append_debate_artifacts_to_result(
+        project_root,
+        &session.meta_session_id,
+        &artifacts,
+        &debate_summary,
+    )
+    .unwrap();
+
+    let saved = load_result(project_root, &session.meta_session_id)
+        .unwrap()
+        .expect("saved result");
+    assert_eq!(saved.summary, "Persist the parsed debate summary.");
+    assert!(
+        saved
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == "output/debate-verdict.json")
+    );
+}
+
+#[test]
 fn extract_debate_summary_does_not_leak_provider_session_id() {
     // Simulate sanitized output where provider ID has already been replaced by
     // render_debate_output before reaching extract_debate_summary.
@@ -672,69 +757,6 @@ fn debate_cli_rejects_zero_idle_timeout() {
     let result =
         crate::cli::Cli::try_parse_from(["csa", "debate", "--idle-timeout", "0", "question"]);
     assert!(result.is_err(), "idle_timeout=0 should be rejected");
-}
-
-// --- CLI parse tests for --rounds flag (#138) ---
-
-#[test]
-fn debate_cli_parses_rounds_flag() {
-    let args = parse_debate_args(&["csa", "debate", "--rounds", "5", "question"]);
-    assert_eq!(args.rounds, 5);
-}
-
-#[test]
-fn debate_cli_rounds_defaults_to_3() {
-    let args = parse_debate_args(&["csa", "debate", "question"]);
-    assert_eq!(args.rounds, 3);
-}
-
-#[test]
-fn debate_cli_rejects_zero_rounds() {
-    use clap::Parser;
-    let result = crate::cli::Cli::try_parse_from(["csa", "debate", "--rounds", "0", "question"]);
-    assert!(result.is_err(), "rounds=0 should be rejected");
-}
-
-// --- resolve_debate_stream_mode tests ---
-
-#[test]
-fn debate_stream_mode_default_non_tty_is_buffer_only() {
-    // In test environment (non-TTY stderr), default should be BufferOnly.
-    // Note: in interactive TTY, default would be TeeToStderr (symmetric with review, #139)
-    let mode = resolve_debate_stream_mode(false, false);
-    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
-}
-
-#[test]
-fn debate_stream_mode_explicit_stream() {
-    let mode = resolve_debate_stream_mode(true, false);
-    assert!(matches!(mode, csa_process::StreamMode::TeeToStderr));
-}
-
-#[test]
-fn debate_stream_mode_explicit_no_stream() {
-    let mode = resolve_debate_stream_mode(false, true);
-    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
-}
-
-#[test]
-fn render_debate_cli_output_respects_json_format() {
-    use csa_core::types::OutputFormat;
-
-    let summary = DebateSummary {
-        verdict: "REVISE".to_string(),
-        confidence: "medium".to_string(),
-        summary: "Need more evidence.".to_string(),
-        key_points: vec!["Point A".to_string()],
-        mode: DebateMode::Heterogeneous,
-    };
-
-    let rendered =
-        render_debate_cli_output(OutputFormat::Json, &summary, "Transcript body", "01META")
-            .unwrap();
-    let parsed: Value = serde_json::from_str(&rendered).unwrap();
-    assert_eq!(parsed["meta_session_id"], "01META");
-    assert_eq!(parsed["transcript"], "Transcript body");
 }
 
 #[path = "debate_cmd_tier_tests.rs"]

@@ -134,3 +134,66 @@ fn verify_debate_skill_no_fallback_without_skill() {
         "missing skill must be a hard error, not a warning"
     );
 }
+
+// --- CLI parse tests for --rounds flag (#138) ---
+
+#[test]
+fn debate_cli_parses_rounds_flag() {
+    let args = parse_debate_args(&["csa", "debate", "--rounds", "5", "question"]);
+    assert_eq!(args.rounds, 5);
+}
+
+#[test]
+fn debate_cli_rounds_defaults_to_3() {
+    let args = parse_debate_args(&["csa", "debate", "question"]);
+    assert_eq!(args.rounds, 3);
+}
+
+#[test]
+fn debate_cli_rejects_zero_rounds() {
+    use clap::Parser;
+    let result = crate::cli::Cli::try_parse_from(["csa", "debate", "--rounds", "0", "question"]);
+    assert!(result.is_err(), "rounds=0 should be rejected");
+}
+
+// --- resolve_debate_stream_mode tests ---
+
+#[test]
+fn debate_stream_mode_default_non_tty_is_buffer_only() {
+    // In test environment (non-TTY stderr), default should be BufferOnly.
+    // Note: in interactive TTY, default would be TeeToStderr (symmetric with review, #139)
+    let mode = resolve_debate_stream_mode(false, false);
+    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+#[test]
+fn debate_stream_mode_explicit_stream() {
+    let mode = resolve_debate_stream_mode(true, false);
+    assert!(matches!(mode, csa_process::StreamMode::TeeToStderr));
+}
+
+#[test]
+fn debate_stream_mode_explicit_no_stream() {
+    let mode = resolve_debate_stream_mode(false, true);
+    assert!(matches!(mode, csa_process::StreamMode::BufferOnly));
+}
+
+#[test]
+fn render_debate_cli_output_respects_json_format() {
+    use csa_core::types::OutputFormat;
+
+    let summary = DebateSummary {
+        verdict: "REVISE".to_string(),
+        confidence: "medium".to_string(),
+        summary: "Need more evidence.".to_string(),
+        key_points: vec!["Point A".to_string()],
+        mode: DebateMode::Heterogeneous,
+    };
+
+    let rendered =
+        render_debate_cli_output(OutputFormat::Json, &summary, "Transcript body", "01META")
+            .unwrap();
+    let parsed: Value = serde_json::from_str(&rendered).unwrap();
+    assert_eq!(parsed["meta_session_id"], "01META");
+    assert_eq!(parsed["transcript"], "Transcript body");
+}

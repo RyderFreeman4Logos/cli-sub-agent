@@ -125,7 +125,7 @@ pub(crate) fn parse_review_verdict(output: &str, exit_code: i32) -> &'static str
 
     if has_issues {
         HAS_ISSUES
-    } else if clean || exit_code == 0 {
+    } else if clean || (exit_code == 0 && contains_clean_phrase(output)) {
         CLEAN
     } else {
         HAS_ISSUES
@@ -156,7 +156,7 @@ pub(crate) fn parse_review_decision(
         ReviewDecision::Pass
     } else if has_skip {
         ReviewDecision::Skip
-    } else if exit_code == 0 {
+    } else if exit_code == 0 && contains_clean_phrase(output) {
         ReviewDecision::Pass
     } else {
         ReviewDecision::Fail
@@ -167,6 +167,64 @@ fn contains_verdict_token(haystack: &str, token: &str) -> bool {
     haystack
         .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
         .any(|part| part.eq_ignore_ascii_case(token))
+}
+
+fn contains_clean_phrase(output: &str) -> bool {
+    let lower = output.to_ascii_lowercase();
+    if [
+        "no issues found",
+        "no issues were found",
+        "no blocking issues",
+        "no findings",
+        "\u{6ca1}\u{6709}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
+        "\u{672a}\u{53d1}\u{73b0}\u{95ee}\u{9898}",
+        "\u{65e0}\u{963b}\u{65ad}\u{95ee}\u{9898}",
+    ]
+    .iter()
+    .any(|phrase| lower.contains(phrase))
+    {
+        return true;
+    }
+
+    contains_positive_no_issue_clause(&lower)
+}
+
+fn contains_positive_no_issue_clause(lower: &str) -> bool {
+    const NOUNS: &[&str] = &[
+        "issue", "issues", "finding", "findings", "concern", "concerns",
+    ];
+    const TAIL_VERBS: &[&str] = &["found", "identified", "detected", "introduced"];
+    const MAX_TOKENS_BEFORE_NOUN: usize = 6;
+    const MAX_TOKENS_AFTER_NOUN: usize = 4;
+
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+
+    for (no_index, token) in tokens.iter().enumerate() {
+        if *token != "no" {
+            continue;
+        }
+
+        let search_end = (no_index + 1 + MAX_TOKENS_BEFORE_NOUN).min(tokens.len());
+        let Some(relative_noun_index) = tokens[no_index + 1..search_end]
+            .iter()
+            .position(|candidate| NOUNS.contains(candidate))
+        else {
+            continue;
+        };
+        let noun_index = no_index + 1 + relative_noun_index;
+        let tail_end = (noun_index + 1 + MAX_TOKENS_AFTER_NOUN).min(tokens.len());
+        if tokens[noun_index + 1..tail_end]
+            .iter()
+            .any(|candidate| TAIL_VERBS.contains(candidate))
+        {
+            return true;
+        }
+    }
+
+    false
 }
 
 pub(crate) fn consensus_verdict(consensus_result: &ConsensusResult) -> &'static str {

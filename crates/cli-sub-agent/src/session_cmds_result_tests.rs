@@ -2,8 +2,35 @@ use super::{
     StructuredOutputOpts, compute_token_measurement, display_all_sections, display_single_section,
     display_summary_section, format_number, handle_session_artifacts, handle_session_result,
 };
+use crate::test_env_lock::TEST_ENV_LOCK;
 use csa_session::{create_session, get_session_dir, load_result};
 use tempfile::tempdir;
+
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
 
 // ── display_structured_output tests ───────────────────────────────
 
@@ -239,6 +266,11 @@ fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
 #[test]
 fn handle_session_result_reconciles_orphaned_active_session() {
     let tmp = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let state_home = tmp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = tmp.path();
 
     let session = create_session(project, Some("result-reconcile"), None, None).unwrap();
@@ -264,6 +296,11 @@ fn handle_session_result_reconciles_orphaned_active_session() {
 #[test]
 fn handle_session_artifacts_reconciles_orphaned_active_session() {
     let tmp = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let state_home = tmp.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", tmp.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
     let project = tmp.path();
 
     let session = create_session(project, Some("artifacts-reconcile"), None, None).unwrap();
