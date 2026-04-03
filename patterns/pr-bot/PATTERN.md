@@ -85,6 +85,7 @@ else
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
+echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 4)" required=true -->'
 ```
 
 ## IF ${LOCAL_REVIEW_HAS_ISSUES}
@@ -223,6 +224,7 @@ fi
 REPO="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
 echo "CSA_VAR:PR_NUM=$PR_NUM"
 echo "CSA_VAR:REPO=$REPO"
+echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" required=true -->'
 ```
 
 ## Step 4a: Check Cloud Bot Configuration
@@ -637,6 +639,7 @@ git fetch origin
 git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```
 
 ## ELSE
@@ -1234,6 +1237,7 @@ git fetch origin
 git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
 
 ## ELSE
@@ -1280,6 +1284,7 @@ git fetch origin
 git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
+echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
 ```
 
 ## ENDIF
