@@ -326,6 +326,7 @@ fi
 
 trap 'rm -f "${COMMIT_MESSAGE_FILE_LOCAL}"' EXIT
 git commit -F "${COMMIT_MESSAGE_FILE_LOCAL}"
+echo '<!-- CSA:NEXT_STEP cmd="cumulative branch review (Step 18) or publish" required=true -->'
 ```
 
 ## IF NOT ${SKIP_PUBLISH} (Auto-Publish — standalone by default)
@@ -342,6 +343,7 @@ This catches cross-commit issues that per-commit reviews might miss.
 ```bash
 SID=$(csa review --range main...HEAD)
 bash scripts/csa/session-wait-until-done.sh "$SID"
+echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 19)" required=true -->'
 ```
 
 ## Step 19: Auto PR Transaction
@@ -377,6 +379,7 @@ if [ "${CREATE_RC}" -ne 0 ]; then
   echo "INFO: PR already exists for ${BRANCH}; continuing with post-create helper."
 fi
 scripts/hooks/post-pr-create.sh --base main
+echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml" required=true -->'
 ```
 
 ## ENDIF

@@ -205,6 +205,7 @@ SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
 REVIEW_OUTPUT="$(bash scripts/csa/session-wait-until-done.sh "$SID" 2>&1)"
 printf '%s\n' "${REVIEW_OUTPUT}"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
+echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 11)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "${FAST_PATH}"
@@ -308,6 +309,7 @@ if [ "${VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
   exit 1
 fi
 echo "CSA_VAR:REVIEW_COMPLETED=true"
+echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 11)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "!(${FAST_PATH})"
@@ -328,6 +330,7 @@ fi
 BRANCH="$(git branch --show-current)"
 git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
+echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 12)" required=true -->'
 ```"""
 on_fail = "abort"
 
@@ -389,6 +392,7 @@ fi
 echo "PR #${PR_NUMBER} resolved: ${PR_URL}"
 echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
 echo "CSA_VAR:PR_URL=${PR_URL}"
+echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml" required=true -->'
 ```'''
 on_fail = "abort"
 
@@ -436,6 +440,7 @@ trap cleanup_lock EXIT
 if [ -f "${DONE_MARKER}" ]; then
   echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
   echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
+  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 14)" required=true -->'
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
   echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
@@ -447,6 +452,7 @@ else
   if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
     touch "${DONE_MARKER}"
     echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
+    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 14)" required=true -->'
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
   else
