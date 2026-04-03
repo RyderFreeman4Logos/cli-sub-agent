@@ -18,11 +18,8 @@ use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
 use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
 use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
-use csa_core::types::{OutputFormat, ToolName};
+use csa_core::types::{OutputFormat, ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
-
-/// Next-step command emitted after a clean review verdict for pipeline chaining.
-const NEXT_STEP_PR_BOT_CMD: &str = "csa plan run patterns/dev2merge/workflow.toml --step pr-bot";
 
 #[path = "review_cmd_output.rs"]
 mod output;
@@ -34,8 +31,12 @@ use output::{
 #[path = "review_cmd_fix.rs"]
 mod fix;
 
+#[path = "review_cmd_post_review.rs"]
+mod post_review;
+
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
+use post_review::{build_post_review_output, emit_post_review_output};
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
@@ -367,25 +368,23 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
         if !args.fix || verdict == CLEAN {
             // Fire PostReview hook only for final results (no fix loop pending).
-            crate::pipeline::fire_observational_hook(
-                csa_hooks::HookEvent::PostReview,
-                &[
-                    ("session_id", result.meta_session_id.as_str()),
-                    ("decision", decision.as_str()),
-                    ("verdict", verdict),
-                    ("scope", &scope),
-                ],
-                &project_root,
+            // Hook stdout is forwarded so callers can mechanically chain the
+            // next required step without inferring it from prompts or docs.
+            let post_review_output = build_post_review_output(
+                &crate::pipeline::capture_observational_hook_output(
+                    csa_hooks::HookEvent::PostReview,
+                    &[
+                        ("session_id", result.meta_session_id.as_str()),
+                        ("decision", decision.as_str()),
+                        ("verdict", verdict),
+                        ("scope", &scope),
+                    ],
+                    &project_root,
+                ),
+                decision,
+                &scope,
             );
-
-            // Emit CSA:NEXT_STEP directive for pipeline chaining.
-            // Orchestrators can parse this to mechanically chain review → pr-bot.
-            if verdict == CLEAN {
-                eprintln!(
-                    "{}",
-                    csa_hooks::format_next_step_directive(NEXT_STEP_PR_BOT_CMD, true,)
-                );
-            }
+            emit_post_review_output(&post_review_output);
 
             return Ok(effective_exit_code);
         }
@@ -431,24 +430,29 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .await;
 
         // Fire PostReview hook after fix loop completes (final result).
+        // Hook stdout is forwarded so callers can mechanically chain the
+        // next required step without inferring it from prompts or docs.
         let fix_passed = matches!(&fix_exit_code, Ok(0));
-        crate::pipeline::fire_observational_hook(
-            csa_hooks::HookEvent::PostReview,
-            &[
-                ("session_id", result.meta_session_id.as_str()),
-                ("decision", if fix_passed { "pass" } else { "fail" }),
-                ("verdict", if fix_passed { CLEAN } else { verdict }),
-                ("scope", &scope_for_hook),
-            ],
-            &project_root,
+        let post_review_output = build_post_review_output(
+            &crate::pipeline::capture_observational_hook_output(
+                csa_hooks::HookEvent::PostReview,
+                &[
+                    ("session_id", result.meta_session_id.as_str()),
+                    ("decision", if fix_passed { "pass" } else { "fail" }),
+                    ("verdict", if fix_passed { CLEAN } else { verdict }),
+                    ("scope", &scope_for_hook),
+                ],
+                &project_root,
+            ),
+            if fix_passed {
+                ReviewDecision::Pass
+            } else {
+                ReviewDecision::Fail
+            },
+            &scope_for_hook,
         );
-
-        // Emit CSA:NEXT_STEP directive for pipeline chaining after fix loop.
         if fix_passed {
-            eprintln!(
-                "{}",
-                csa_hooks::format_next_step_directive(NEXT_STEP_PR_BOT_CMD, true,)
-            );
+            emit_post_review_output(&post_review_output);
         }
 
         return fix_exit_code;

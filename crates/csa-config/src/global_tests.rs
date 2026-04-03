@@ -1,6 +1,6 @@
 use super::*;
 use csa_core::gemini::{
-    API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
+    API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
     NO_FLASH_FALLBACK_ENV_KEY,
 };
 use std::collections::HashMap;
@@ -92,10 +92,11 @@ fn test_build_execution_env_adds_gemini_fallback_and_oauth_mode() {
 }
 
 #[test]
-fn test_build_execution_env_detects_api_key_mode_and_no_flash() {
+fn test_build_execution_env_promotes_legacy_api_key_to_fallback_and_no_flash() {
     let mut config = GlobalConfig::default();
     let mut env = HashMap::new();
     env.insert(API_KEY_ENV.to_string(), "configured-key".to_string());
+    env.insert("OTHER_VAR".to_string(), "keep".to_string());
     config.tools.insert(
         "gemini-cli".to_string(),
         GlobalToolConfig {
@@ -107,14 +108,23 @@ fn test_build_execution_env_detects_api_key_mode_and_no_flash() {
     let env = config
         .build_execution_env("gemini-cli", ExecutionEnvOptions::with_no_flash_fallback())
         .unwrap();
+    assert!(
+        !env.contains_key(API_KEY_ENV),
+        "legacy GEMINI_API_KEY should not force API key mode on a fresh invocation"
+    );
+    assert_eq!(
+        env.get(API_KEY_FALLBACK_ENV_KEY).map(String::as_str),
+        Some("configured-key")
+    );
     assert_eq!(
         env.get(AUTH_MODE_ENV_KEY).map(String::as_str),
-        Some(AUTH_MODE_API_KEY)
+        Some(AUTH_MODE_OAUTH)
     );
     assert_eq!(
         env.get(NO_FLASH_FALLBACK_ENV_KEY).map(String::as_str),
         Some("1")
     );
+    assert_eq!(env.get("OTHER_VAR").map(String::as_str), Some("keep"));
 }
 
 #[test]

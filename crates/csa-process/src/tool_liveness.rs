@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
+const DAEMON_PID_FILE: &str = "daemon.pid";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
@@ -72,6 +73,20 @@ impl ToolLiveness {
         Self::probe(session_dir).has_any_signal()
     }
 
+    /// Return a live process PID that still matches this session's context.
+    ///
+    /// This intentionally ignores coarse filesystem activity so callers can
+    /// distinguish "session files were touched recently" from "the daemon
+    /// process that should produce result.toml is still alive".
+    pub fn live_process_pid(session_dir: &Path) -> Option<u32> {
+        find_session_pid(session_dir)
+    }
+
+    /// Whether a session still has a live process associated with it.
+    pub fn has_live_process(session_dir: &Path) -> bool {
+        Self::live_process_pid(session_dir).is_some()
+    }
+
     /// Zero-cost observation of whether the tool process is actively working.
     ///
     /// Reads `/proc/{pid}/stat` for the PID found in session lock files and
@@ -97,6 +112,12 @@ pub(crate) fn record_spool_bytes_written(session_dir: &Path, bytes_written: u64)
 
 /// Extract the first live PID from session lock files.
 fn find_session_pid(session_dir: &Path) -> Option<u32> {
+    if let Some(pid) = read_daemon_pid(session_dir)
+        && pid_matches_session_context(pid, None, session_dir, None)
+    {
+        return Some(pid);
+    }
+
     let locks_dir = session_dir.join("locks");
     let entries = fs::read_dir(&locks_dir).ok()?;
 
@@ -111,7 +132,9 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
         let Some(pid) = extract_pid(&content) else {
             continue;
         };
-        if is_process_alive(pid) {
+        let tool_name = path.file_stem().and_then(|stem| stem.to_str());
+        let recent = lock_file_is_recent(&path, SystemTime::now());
+        if pid_matches_session_context(pid, tool_name, session_dir, Some(recent)) {
             return Some(pid);
         }
     }
@@ -152,35 +175,7 @@ fn is_pid_working(pid: u32) -> bool {
 }
 
 fn has_live_pid_signal(session_dir: &Path) -> bool {
-    let now = SystemTime::now();
-    let locks_dir = session_dir.join("locks");
-    let entries = match fs::read_dir(&locks_dir) {
-        Ok(entries) => entries,
-        Err(_) => return false,
-    };
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "lock") {
-            continue;
-        }
-
-        let Some(content) = fs::read_to_string(&path).ok() else {
-            continue;
-        };
-        let Some(pid) = extract_pid(&content) else {
-            continue;
-        };
-        if !is_process_alive(pid) {
-            continue;
-        }
-
-        if lock_file_is_recent(&path, now) || process_matches_lock_context(pid, &path, session_dir)
-        {
-            return true;
-        }
-    }
-    false
+    find_session_pid(session_dir).is_some()
 }
 
 fn lock_file_is_recent(lock_path: &Path, now: SystemTime) -> bool {
@@ -192,7 +187,7 @@ fn lock_file_is_recent(lock_path: &Path, now: SystemTime) -> bool {
     elapsed <= Duration::from_secs(LOCK_FILE_STALE_SECS)
 }
 
-fn process_matches_lock_context(pid: u32, lock_path: &Path, session_dir: &Path) -> bool {
+fn process_matches_session_context(pid: u32, tool_name: Option<&str>, session_dir: &Path) -> bool {
     #[cfg(unix)]
     {
         let cmdline_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
@@ -200,7 +195,6 @@ fn process_matches_lock_context(pid: u32, lock_path: &Path, session_dir: &Path) 
             return false;
         };
         let cmdline = String::from_utf8_lossy(&raw_cmdline).replace('\0', " ");
-        let tool_name = lock_path.file_stem().and_then(|stem| stem.to_str());
         let session_id = session_dir.file_name().and_then(|name| name.to_str());
 
         tool_name.is_some_and(|tool| cmdline.contains(tool))
@@ -211,6 +205,25 @@ fn process_matches_lock_context(pid: u32, lock_path: &Path, session_dir: &Path) 
         let _ = (pid, lock_path, session_dir);
         false
     }
+}
+
+fn pid_matches_session_context(
+    pid: u32,
+    tool_name: Option<&str>,
+    session_dir: &Path,
+    recent_file: Option<bool>,
+) -> bool {
+    if !is_process_alive(pid) {
+        return false;
+    }
+
+    process_matches_session_context(pid, tool_name, session_dir) || recent_file.unwrap_or(false)
+}
+
+fn read_daemon_pid(session_dir: &Path) -> Option<u32> {
+    let pid_path = session_dir.join(DAEMON_PID_FILE);
+    let content = fs::read_to_string(&pid_path).ok()?;
+    content.trim().parse::<u32>().ok()
 }
 
 fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {

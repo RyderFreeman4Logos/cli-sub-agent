@@ -102,8 +102,7 @@ is_compacted = false
 #[test]
 fn test_session_state_with_vcs_identity_roundtrip() {
     // Create a v2 session TOML with vcs_identity
-    let toml_str = format!(
-        r#"
+    let toml_str = r#"
 meta_session_id = "01BBBBBBBBBBBBBBBBBBBBBBBBB"
 project_path = "/tmp/test"
 created_at = "2026-01-01T00:00:00Z"
@@ -126,8 +125,7 @@ depth = 0
 is_compacted = false
 
 [task_context]
-"#
-    );
+"#;
 
     let state: MetaSessionState = toml::from_str(&toml_str).unwrap();
 

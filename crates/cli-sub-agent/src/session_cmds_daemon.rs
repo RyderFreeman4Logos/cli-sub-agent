@@ -4,11 +4,34 @@
 
 use std::fs;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use csa_session::get_session_dir;
+use csa_session::state::ReviewSessionMeta;
+use serde::{Deserialize, Serialize};
 
 use crate::session_cmds::resolve_session_prefix_with_fallback;
+
+const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
+const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
+const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
+const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-bot";
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DaemonCompletionPacket {
+    exit_code: i32,
+    status: String,
+}
+
+impl DaemonCompletionPacket {
+    fn from_exit_code(exit_code: i32) -> Self {
+        Self {
+            exit_code,
+            status: csa_session::SessionResult::status_from_exit_code(exit_code),
+        }
+    }
+}
 
 /// Check whether a daemon PID is still running.
 fn is_pid_alive(pid: u32) -> bool {
@@ -39,10 +62,37 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
     None
 }
 
-/// Wait for a daemon session to complete by polling for result.toml.
+pub(crate) fn seed_daemon_session_env(session_id: &str, cd: Option<&str>) {
+    let project_root = match crate::pipeline::determine_project_root(cd) {
+        Ok(root) => root,
+        Err(_) => return,
+    };
+    let session_dir = match get_session_dir(&project_root, session_id) {
+        Ok(dir) => dir,
+        Err(_) => return,
+    };
+
+    // SAFETY: daemon child sets process-scoped env before async worker tasks rely on it.
+    unsafe {
+        std::env::set_var(DAEMON_PROJECT_ROOT_ENV, &project_root);
+        std::env::set_var(DAEMON_SESSION_DIR_ENV, &session_dir);
+    }
+}
+
+pub(crate) fn persist_daemon_completion_from_env(exit_code: i32) {
+    let session_dir = resolve_daemon_session_dir_from_env();
+    let Some(session_dir) = session_dir else {
+        return;
+    };
+    let _ = persist_daemon_completion(&session_dir, exit_code);
+}
+
+/// Wait for a daemon session to complete by polling for a terminal result and
+/// the daemon process exiting.
 ///
-/// Exits 0 when result.toml appears (streams stdout.log), exits 124 on timeout,
-/// exits 1 if the daemon process died without producing a result.
+/// Exits 0 when result.toml exists and the daemon process has finished
+/// producing stdout/stderr, exits 124 on timeout, exits 1 if the daemon
+/// process died without producing a result.
 pub(crate) fn handle_session_wait(
     session: String,
     cd: Option<String>,
@@ -51,36 +101,90 @@ pub(crate) fn handle_session_wait(
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
-    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
 
     let start = std::time::Instant::now();
     let poll_interval = std::time::Duration::from_secs(1);
-    let daemon_pid = read_daemon_pid(&session_dir);
 
     loop {
-        if result_path.exists() {
-            // Stream stdout.log to avoid OOM on large daemon output.
-            let stdout_log = session_dir.join("stdout.log");
-            if stdout_log.is_file() {
-                let mut f = std::fs::File::open(&stdout_log)?;
-                std::io::copy(&mut f, &mut std::io::stdout().lock())?;
-            }
-            // Propagate the session's exit code from result.toml.
-            let exit_code = fs::read_to_string(&result_path)
-                .ok()
-                .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())
-                .map(|r| r.exit_code)
-                .unwrap_or(0);
-            return Ok(exit_code);
+        if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
+            let _ = crate::session_observability::refresh_and_repair_result(
+                &project_root,
+                &resolved.session_id,
+            )?;
+            let streamed_output = stream_wait_output(&session_dir)?;
+            emit_wait_next_step_if_needed(&session_dir)?;
+            emit_wait_completion_signal(
+                &resolved.session_id,
+                &completion.status,
+                completion.exit_code,
+                false,
+                !streamed_output,
+            );
+            return Ok(completion.exit_code);
         }
 
-        // Detect dead daemon: PID gone but no result.toml.
-        if let Some(pid) = daemon_pid
-            && !is_pid_alive(pid)
+        if let Some(result) =
+            load_completed_daemon_result(&project_root, &resolved.session_id, &session_dir)?
         {
+            let streamed_output = stream_wait_output(&session_dir)?;
+            emit_wait_next_step_if_needed(&session_dir)?;
+            emit_wait_completion_signal(
+                &resolved.session_id,
+                &result.status,
+                result.exit_code,
+                false,
+                !streamed_output,
+            );
+            return Ok(result.exit_code);
+        }
+
+        if crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+            &project_root,
+            &resolved.session_id,
+            "session wait",
+        )? && let Some(result) =
+            load_completed_daemon_result(&project_root, &resolved.session_id, &session_dir)?
+        {
+            let streamed_output = stream_wait_output(&session_dir)?;
+            emit_wait_next_step_if_needed(&session_dir)?;
+            emit_wait_completion_signal(
+                &resolved.session_id,
+                &result.status,
+                result.exit_code,
+                true,
+                !streamed_output,
+            );
+            if !streamed_output {
+                eprintln!(
+                    "Session {} reached a synthesized terminal result because no live daemon process remained.",
+                    resolved.session_id,
+                );
+            }
+            return Ok(result.exit_code);
+        }
+
+        if !csa_process::ToolLiveness::has_live_process(&session_dir) {
+            if let Some(result) =
+                load_completed_daemon_result(&project_root, &resolved.session_id, &session_dir)?
+            {
+                let streamed_output = stream_wait_output(&session_dir)?;
+                emit_wait_next_step_if_needed(&session_dir)?;
+                emit_wait_completion_signal(
+                    &resolved.session_id,
+                    &result.status,
+                    result.exit_code,
+                    false,
+                    !streamed_output,
+                );
+                return Ok(result.exit_code);
+            }
             eprintln!(
-                "Daemon process {} exited without producing result.toml",
-                pid,
+                "Session {} has no live daemon process and no terminal result packet.",
+                resolved.session_id,
+            );
+            eprintln!(
+                "Run `csa session result --session {}` for diagnostics.",
+                resolved.session_id
             );
             return Ok(1);
         }
@@ -107,8 +211,135 @@ pub(crate) fn handle_session_wait(
     }
 }
 
+fn stream_wait_output(session_dir: &std::path::Path) -> Result<bool> {
+    let stdout_log = session_dir.join("stdout.log");
+    if !stdout_log.is_file() {
+        return Ok(false);
+    }
+
+    let mut file = std::fs::File::open(&stdout_log)?;
+    let mut stdout = std::io::stdout().lock();
+    let bytes = std::io::copy(&mut file, &mut stdout)?;
+    stdout.flush()?;
+    Ok(bytes > 0)
+}
+
+pub(crate) fn synthesized_wait_next_step(session_dir: &Path) -> Result<Option<String>> {
+    let stdout_path = session_dir.join("stdout.log");
+    if let Ok(stdout) = fs::read_to_string(&stdout_path)
+        && csa_hooks::parse_next_step_directive(&stdout).is_some()
+    {
+        return Ok(None);
+    }
+
+    let review_meta_path = session_dir.join("review_meta.json");
+    if !review_meta_path.is_file() {
+        return Ok(None);
+    }
+
+    let review_meta: ReviewSessionMeta =
+        serde_json::from_str(&fs::read_to_string(review_meta_path)?)?;
+    if review_meta.decision != "pass" {
+        return Ok(None);
+    }
+    if !(review_meta.scope.starts_with("base:") || review_meta.scope.starts_with("range:")) {
+        return Ok(None);
+    }
+
+    Ok(Some(csa_hooks::format_next_step_directive(
+        POST_REVIEW_PR_BOT_CMD,
+        true,
+    )))
+}
+
+fn emit_wait_next_step_if_needed(session_dir: &Path) -> Result<()> {
+    if let Some(directive) = synthesized_wait_next_step(session_dir)? {
+        println!("{directive}");
+    }
+    Ok(())
+}
+
+fn load_completed_daemon_result(
+    project_root: &std::path::Path,
+    session_id: &str,
+    session_dir: &std::path::Path,
+) -> Result<Option<csa_session::SessionResult>> {
+    let daemon_alive_at_refresh_start = csa_process::ToolLiveness::has_live_process(session_dir);
+    let result =
+        match crate::session_observability::refresh_and_repair_result(project_root, session_id) {
+            Ok(Some(result)) => result,
+            Ok(None) => return Ok(None),
+            Err(err) if daemon_alive_at_refresh_start => {
+                tracing::debug!(
+                    session_id,
+                    error = %err,
+                    "Ignoring transient result refresh failure while daemon is still alive"
+                );
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
+
+    if csa_process::ToolLiveness::has_live_process(session_dir) {
+        return Ok(None);
+    }
+
+    Ok(Some(result))
+}
+
+fn load_daemon_completion_packet(session_dir: &Path) -> Result<Option<DaemonCompletionPacket>> {
+    let path = daemon_completion_path(session_dir);
+    if !path.is_file() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&path)?;
+    let packet = toml::from_str(&content)?;
+    Ok(Some(packet))
+}
+
+fn persist_daemon_completion(session_dir: &Path, exit_code: i32) -> Result<()> {
+    let packet = DaemonCompletionPacket::from_exit_code(exit_code);
+    let path = daemon_completion_path(session_dir);
+    let temp_path = path.with_extension("toml.tmp");
+    fs::write(&temp_path, toml::to_string_pretty(&packet)?)?;
+    fs::rename(temp_path, path)?;
+    Ok(())
+}
+
+fn daemon_completion_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(DAEMON_COMPLETION_FILE)
+}
+
+fn resolve_daemon_session_dir_from_env() -> Option<PathBuf> {
+    if let Some(session_dir) = std::env::var_os(DAEMON_SESSION_DIR_ENV) {
+        return Some(PathBuf::from(session_dir));
+    }
+
+    let session_id = std::env::var("CSA_DAEMON_SESSION_ID").ok()?;
+    let project_root = std::env::var_os(DAEMON_PROJECT_ROOT_ENV)
+        .map(PathBuf::from)
+        .or_else(|| std::env::current_dir().ok())?;
+    get_session_dir(&project_root, &session_id).ok()
+}
+
+fn emit_wait_completion_signal(
+    session_id: &str,
+    status: &str,
+    exit_code: i32,
+    synthetic: bool,
+    _mirror_to_stdout: bool,
+) {
+    let signal = format!(
+        "<!-- CSA:SESSION_WAIT_COMPLETED session={} status={} exit={} synthetic={} -->",
+        session_id, status, exit_code, synthetic
+    );
+    println!("{signal}");
+    eprintln!("{signal}");
+}
+
 /// Attach to a running daemon session: tail stdout.log (and optionally
-/// stderr.log) in real time until the session completes.
+/// stderr.log) in real time until the daemon fully completes.
 pub(crate) fn handle_session_attach(
     session: String,
     show_stderr: bool,
@@ -169,7 +400,7 @@ pub(crate) fn handle_session_attach(
             }
         }
 
-        if result_path.exists() {
+        if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
             // Drain remaining stdout.
             loop {
                 let n = stdout_file.read(&mut buf)?;
@@ -191,6 +422,10 @@ pub(crate) fn handle_session_attach(
                 std::io::stderr().flush()?;
             }
             // Return the session's exit code from result.toml.
+            return Ok(completion.exit_code);
+        }
+
+        if result_path.exists() && !csa_process::ToolLiveness::has_live_process(&session_dir) {
             let exit_code = fs::read_to_string(&result_path)
                 .ok()
                 .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())

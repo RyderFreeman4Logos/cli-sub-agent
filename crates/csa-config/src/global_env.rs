@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use csa_core::gemini::{
-    API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
+    API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
     NO_FLASH_FALLBACK_ENV_KEY, is_gemini_tool,
 };
 
@@ -30,19 +30,14 @@ impl GlobalConfig {
         let mut env = self.env_vars(tool).cloned().unwrap_or_default();
 
         if is_gemini_tool(tool) {
+            let legacy_api_key = env.remove(API_KEY_ENV);
             if options.no_flash_fallback {
                 env.insert(NO_FLASH_FALLBACK_ENV_KEY.to_string(), "1".to_string());
             }
-            if let Some(key) = self.api_key_fallback(tool) {
+            if let Some(key) = self.api_key_fallback(tool).or(legacy_api_key.as_deref()) {
                 env.insert(API_KEY_FALLBACK_ENV_KEY.to_string(), key.to_string());
             }
-
-            let auth_mode = if env.contains_key(API_KEY_ENV) {
-                AUTH_MODE_API_KEY
-            } else {
-                AUTH_MODE_OAUTH
-            };
-            env.insert(AUTH_MODE_ENV_KEY.to_string(), auth_mode.to_string());
+            env.insert(AUTH_MODE_ENV_KEY.to_string(), AUTH_MODE_OAUTH.to_string());
         }
 
         if env.is_empty() { None } else { Some(env) }

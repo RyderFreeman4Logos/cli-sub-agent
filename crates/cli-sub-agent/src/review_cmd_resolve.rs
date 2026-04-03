@@ -413,7 +413,7 @@ pub(crate) fn build_review_instruction(
     context: Option<&ResolvedReviewContext>,
 ) -> String {
     let mut instruction = format!(
-        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}."
+        "{ANTI_RECURSION_PREAMBLE}Use the csa-review skill. scope={scope}, mode={mode}, security_mode={security_mode}, review_mode={review_mode}. Emit exactly one final verdict token: PASS, FAIL, SKIP, or UNCERTAIN."
     );
     if let Some(ctx) = context {
         instruction.push_str(&format!(" context={}", ctx.path));

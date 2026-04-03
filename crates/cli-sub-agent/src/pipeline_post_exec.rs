@@ -97,9 +97,13 @@ pub(crate) async fn process_execution_result(
     // Write effective_prompt to input/ for audit trail
     write_prompt_audit(&ctx.session_dir, ctx.effective_prompt);
 
+    // Persist structured output sections from output.log markers before
+    // finalizing result.toml so we can repair low-signal summaries.
+    persist_output_sections(&ctx.session_dir);
+
     // Write structured result
     let execution_end_time = chrono::Utc::now();
-    let session_result = SessionResult {
+    let mut session_result = SessionResult {
         status: SessionResult::status_from_exit_code(result.exit_code),
         exit_code: result.exit_code,
         summary: result.summary.clone(),
@@ -109,12 +113,26 @@ pub(crate) async fn process_execution_result(
         events_count: ctx.events_count,
         artifacts: ctx.transcript_artifacts,
     };
+    if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
+        ctx.project_root,
+        &session.meta_session_id,
+        &ctx.session_dir,
+        &mut session_result,
+    ) {
+        warn!(
+            session = %session.meta_session_id,
+            error = %err,
+            "Failed to enrich session result from persisted artifacts"
+        );
+    } else if session_result.summary != result.summary {
+        result.summary = session_result.summary.clone();
+        if let Some(tool_state) = session.tools.get_mut(ctx.executor.tool_name()) {
+            tool_state.last_action_summary = session_result.summary.clone();
+        }
+    }
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);
     }
-
-    // Persist structured output sections from output.log markers
-    persist_output_sections(&ctx.session_dir);
 
     // Save session
     save_session(session)?;

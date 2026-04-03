@@ -1,16 +1,12 @@
 use anyhow::{Result, anyhow};
-use csa_session::checkpoint::CheckpointNote;
-use std::collections::HashSet;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{info, warn};
 
-use csa_config::paths;
 use csa_core::types::OutputFormat;
 use csa_session::{
     MetaSessionState, SessionPhase, SessionResult, delete_session, get_session_dir, list_sessions,
-    list_sessions_tree_filtered, load_result, load_session, resolve_session_prefix,
-    save_session_in,
+    list_sessions_tree_filtered, load_result, load_session, save_session_in,
 };
 
 // Re-export types and functions from session_cmds_result so that
@@ -18,6 +14,14 @@ use csa_session::{
 pub(crate) use crate::session_cmds_result::{
     StructuredOutputOpts, handle_session_artifacts, handle_session_measure, handle_session_result,
     handle_session_tool_output,
+};
+
+#[path = "session_cmds_resolve.rs"]
+mod resolve;
+use resolve::list_checkpoints_from_dirs;
+pub(crate) use resolve::{
+    SessionPrefixResolution, legacy_sessions_dir_from_primary_root,
+    resolve_session_prefix_with_fallback,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
@@ -82,7 +86,7 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
     }
 
     let session_dir = get_session_dir(project_root, session_id)?;
-    if csa_process::ToolLiveness::is_alive(&session_dir) {
+    if csa_process::ToolLiveness::has_live_process(&session_dir) {
         return Ok(false);
     }
 
@@ -238,88 +242,6 @@ fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_jso
         value["spec_id"] = serde_json::json!(spec_id);
     }
     value
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionPrefixResolution {
-    pub session_id: String,
-    pub sessions_dir: PathBuf,
-}
-
-pub(crate) fn resolve_session_prefix_with_fallback(
-    project_root: &Path,
-    prefix: &str,
-) -> Result<SessionPrefixResolution> {
-    let primary_root = csa_session::get_session_root(project_root)?;
-    let primary_sessions_dir = primary_root.join("sessions");
-    let legacy_sessions_dir = legacy_sessions_dir_from_primary_root(&primary_root);
-    resolve_session_prefix_from_dirs(
-        prefix,
-        &primary_sessions_dir,
-        legacy_sessions_dir.as_deref(),
-    )
-}
-
-fn resolve_session_prefix_from_dirs(
-    prefix: &str,
-    primary_sessions_dir: &Path,
-    legacy_sessions_dir: Option<&Path>,
-) -> Result<SessionPrefixResolution> {
-    match resolve_session_prefix(primary_sessions_dir, prefix) {
-        Ok(session_id) => Ok(SessionPrefixResolution {
-            session_id,
-            sessions_dir: primary_sessions_dir.to_path_buf(),
-        }),
-        Err(primary_err) if should_fallback_to_legacy(&primary_err) => {
-            let Some(legacy_sessions_dir) = legacy_sessions_dir else {
-                return Err(primary_err);
-            };
-
-            match resolve_session_prefix(legacy_sessions_dir, prefix) {
-                Ok(session_id) => Ok(SessionPrefixResolution {
-                    session_id,
-                    sessions_dir: legacy_sessions_dir.to_path_buf(),
-                }),
-                Err(legacy_err) if should_fallback_to_legacy(&legacy_err) => Err(primary_err),
-                Err(legacy_err) => Err(legacy_err),
-            }
-        }
-        Err(primary_err) => Err(primary_err),
-    }
-}
-
-fn should_fallback_to_legacy(err: &anyhow::Error) -> bool {
-    err.to_string().contains("No session matching prefix")
-}
-
-fn legacy_sessions_dir_from_primary_root(primary_root: &Path) -> Option<PathBuf> {
-    let primary_state_dir = paths::state_dir_write()?;
-    let legacy_state_dir = paths::legacy_state_dir()?;
-    let relative_root = primary_root.strip_prefix(primary_state_dir).ok()?;
-    let legacy_root = legacy_state_dir.join(relative_root);
-    (legacy_root != primary_root).then(|| legacy_root.join("sessions"))
-}
-
-fn list_checkpoints_from_dirs(
-    primary_sessions_dir: &Path,
-    legacy_sessions_dir: Option<&Path>,
-) -> Result<Vec<(String, CheckpointNote)>> {
-    let mut checkpoints = csa_session::checkpoint::list_checkpoints(primary_sessions_dir)?;
-    let mut seen_ids: HashSet<String> = checkpoints
-        .iter()
-        .map(|(_, note)| note.session_id.clone())
-        .collect();
-
-    if let Some(legacy_dir) = legacy_sessions_dir {
-        for (commit, note) in csa_session::checkpoint::list_checkpoints(legacy_dir)? {
-            if seen_ids.insert(note.session_id.clone()) {
-                checkpoints.push((commit, note));
-            }
-        }
-    }
-
-    checkpoints.sort_by(|a, b| b.1.completed_at.cmp(&a.1.completed_at));
-    Ok(checkpoints)
 }
 
 pub(crate) fn handle_session_list(
@@ -507,13 +429,41 @@ pub(crate) fn handle_session_logs(
     let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
     let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    if let Err(err) =
+        ensure_terminal_result_for_dead_active_session(&project_root, &resolved_id, "session logs")
+    {
+        tracing::warn!(
+            session_id = %resolved_id,
+            error = %err,
+            "Failed to reconcile dead Active session in session logs"
+        );
+    }
+    let repaired_result = match crate::session_observability::refresh_and_repair_result(
+        &project_root,
+        &resolved_id,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %resolved_id,
+                error = %err,
+                "Failed to refresh session result contract in session logs"
+            );
+            None
+        }
+    };
 
     if events {
-        return display_acp_events(&session_dir, &resolved_id, tail);
+        return display_acp_events(&session_dir, &resolved_id, tail, repaired_result.as_ref());
     }
 
     // Try logs/ directory first (Legacy transport)
     if display_log_files(&session_dir, &resolved_id, tail)? {
+        return Ok(());
+    }
+
+    // Daemon mode persists stdout/stderr spools even when logs/ is empty.
+    if display_daemon_spool_logs(&session_dir, tail)? {
         return Ok(());
     }
 
@@ -528,7 +478,14 @@ pub(crate) fn handle_session_logs(
         }
     }
 
-    eprintln!("No logs found for session {resolved_id}");
+    eprintln!(
+        "{}",
+        crate::session_observability::build_missing_logs_diagnostic(
+            &resolved_id,
+            &session_dir,
+            repaired_result.as_ref(),
+        )
+    );
     eprintln!("Hint: use --events to view ACP transcript events (if available)");
     Ok(())
 }
@@ -577,17 +534,58 @@ fn display_log_files(session_dir: &Path, session_id: &str, tail: Option<usize>) 
     Ok(true)
 }
 
+fn display_daemon_spool_logs(session_dir: &Path, tail: Option<usize>) -> Result<bool> {
+    let mut displayed_any = false;
+    for file_name in ["stdout.log", "stderr.log"] {
+        let path = session_dir.join(file_name);
+        if !path.is_file() {
+            continue;
+        }
+
+        let content = fs::read_to_string(&path)?;
+        if content.is_empty() {
+            continue;
+        }
+
+        eprintln!("=== {file_name} ===");
+        print_content_with_tail(&content, tail);
+        println!();
+        displayed_any = true;
+    }
+
+    Ok(displayed_any)
+}
+
 /// Display ACP JSONL events from output/acp-events.jsonl.
-fn display_acp_events(session_dir: &Path, session_id: &str, tail: Option<usize>) -> Result<()> {
+fn display_acp_events(
+    session_dir: &Path,
+    session_id: &str,
+    tail: Option<usize>,
+    result: Option<&SessionResult>,
+) -> Result<()> {
     let events_path = session_dir.join("output").join("acp-events.jsonl");
     if !events_path.is_file() {
-        eprintln!("No ACP events found for session {session_id} (no output/acp-events.jsonl)");
+        eprintln!(
+            "{}",
+            crate::session_observability::build_missing_events_diagnostic(
+                session_id,
+                session_dir,
+                result,
+            )
+        );
         return Ok(());
     }
 
     let content = fs::read_to_string(&events_path)?;
     if content.is_empty() {
-        eprintln!("ACP events file is empty for session {session_id}");
+        eprintln!(
+            "{}",
+            crate::session_observability::build_missing_events_diagnostic(
+                session_id,
+                session_dir,
+                result,
+            )
+        );
         return Ok(());
     }
 

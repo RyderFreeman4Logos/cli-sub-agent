@@ -1,4 +1,5 @@
 use std::collections::{BTreeSet, HashMap};
+use std::ffi::OsStr;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -139,6 +140,9 @@ impl NewFileGuard {
         // Snapshot pre-existing untracked files to detect modifications.
         let mut pre_untracked_snapshots = HashMap::new();
         for path in &pre_untracked {
+            if is_internal_prompt_temp_path(path) {
+                continue;
+            }
             let snapshot = capture_path_state(&project_root.join(path)).with_context(|| {
                 format!("failed to snapshot untracked file '{}'", path.display())
             })?;
@@ -166,12 +170,18 @@ impl NewFileGuard {
 
         // Case 1: New untracked files that didn't exist before.
         for path in post_untracked.difference(&self.pre_untracked) {
+            if is_internal_prompt_temp_path(path) {
+                continue;
+            }
             violating_paths.insert(path.clone());
         }
 
         // Case 2: New staged files that weren't staged before (tool ran
         // `git add` on a newly created file, hiding it from --others).
         for path in post_staged.difference(&self.pre_staged) {
+            if is_internal_prompt_temp_path(path) {
+                continue;
+            }
             // Only flag if it wasn't already a pre-existing untracked file
             // (modifications to pre-existing untracked are handled in case 3).
             if !self.pre_untracked.contains(path) {
@@ -181,6 +191,9 @@ impl NewFileGuard {
 
         // Case 3: Pre-existing untracked files that were modified.
         for (path, previous_state) in &self.pre_untracked_snapshots {
+            if is_internal_prompt_temp_path(path) {
+                continue;
+            }
             let current_state =
                 capture_path_state(&self.project_root.join(path)).with_context(|| {
                     format!("failed to inspect untracked file '{}'", path.display())
@@ -246,6 +259,20 @@ fn git_untracked_set(project_root: &Path) -> Result<BTreeSet<PathBuf>> {
         project_root,
         &["ls-files", "--others", "--exclude-standard", "-z"],
     )
+}
+
+fn is_internal_prompt_temp_path(path: &Path) -> bool {
+    let mut components = path.components();
+    let Some(first_component) = components.next() else {
+        return false;
+    };
+    if first_component.as_os_str() != OsStr::new(".tmp") {
+        return false;
+    }
+
+    path.file_name()
+        .and_then(OsStr::to_str)
+        .is_some_and(|name| name.ends_with(".prompt.md"))
 }
 
 impl TrackedFileEditGuard {
@@ -600,7 +627,7 @@ mod tests {
         );
     }
 
-    fn setup_git_repo() -> TempDir {
+    pub(super) fn setup_git_repo() -> TempDir {
         let temp = TempDir::new().expect("create tempdir");
         run_git(temp.path(), &["init"]);
         run_git(temp.path(), &["config", "user.email", "test@example.com"]);
@@ -613,7 +640,7 @@ mod tests {
         temp
     }
 
-    fn git_status_porcelain(repo: &Path) -> String {
+    pub(super) fn git_status_porcelain(repo: &Path) -> String {
         let output = Command::new("git")
             .arg("-C")
             .arg(repo)
@@ -729,3 +756,7 @@ mod tests {
         assert!(git_status_porcelain(repo.path()).trim().is_empty());
     }
 }
+
+#[cfg(test)]
+#[path = "edit_restriction_guard_tests_tail.rs"]
+mod tests_tail;

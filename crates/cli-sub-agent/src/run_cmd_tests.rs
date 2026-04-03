@@ -506,6 +506,18 @@ fn wall_timeout_seconds_from_error_returns_none_without_marker() {
 }
 
 #[test]
+fn run_error_timeout_seconds_ignores_configured_timeout_without_marker() {
+    let err = anyhow::anyhow!("--extra-writable validation failed: rejected paths [\"/ssd\"]");
+    assert_eq!(run_error_timeout_seconds(&err, Some(1800)), None);
+}
+
+#[test]
+fn run_error_timeout_seconds_preserves_real_timeout_marker() {
+    let err = anyhow::anyhow!("Execution interrupted by WALL_TIMEOUT timeout_secs=1800");
+    assert_eq!(run_error_timeout_seconds(&err, Some(1800)), Some(1800));
+}
+
+#[test]
 fn evaluate_post_run_commit_guard_returns_none_when_workspace_clean() {
     let before = GitWorkspaceSnapshot {
         head: Some("abc123".to_string()),

@@ -97,6 +97,15 @@ pub(crate) fn resolve_tool_and_model(
         None
     };
 
+    if canonical_tier.is_some() && force_ignore_tier_setting && tool_triggers_enforcement {
+        anyhow::bail!(
+            "Conflicting routing flags: --tier selects a tier, while --tool with \
+             --force-ignore-tier-setting bypasses tier routing.\n\
+             Remove --tier to force a direct tool, or remove --tool/\
+             --force-ignore-tier-setting to use tier routing."
+        );
+    }
+
     // Case 0: --tier provided → resolve tool/model from tier definition
     if let Some(ref canonical_name) = canonical_tier
         && let Some(cfg) = config

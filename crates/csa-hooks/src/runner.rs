@@ -258,6 +258,7 @@ pub fn run_hooks_for_event(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::directive::parse_next_step_directive;
 
     #[test]
     fn test_shell_escape_safe_string() {
@@ -357,6 +358,74 @@ mod tests {
 
         let result = run_hook(HookEvent::PreRun, &config, &vars);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_run_hook_capturing_post_review_builtin_emits_next_step_on_clean() {
+        let config = HookConfig {
+            enabled: true,
+            command: None,
+            timeout_secs: HookEvent::PostReview.default_timeout_secs(),
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
+        };
+        let vars = HashMap::from([
+            ("session_id".to_string(), "01TESTSESSION".to_string()),
+            ("decision".to_string(), "pass".to_string()),
+            ("verdict".to_string(), "CLEAN".to_string()),
+            ("scope".to_string(), "range:main...HEAD".to_string()),
+        ]);
+
+        let output = run_hook_capturing(HookEvent::PostReview, &config, &vars).unwrap();
+        let directive = parse_next_step_directive(&output).unwrap();
+        assert_eq!(
+            directive.cmd.as_deref(),
+            Some("csa plan run --sa-mode true --pattern pr-bot")
+        );
+        assert!(directive.required);
+    }
+
+    #[test]
+    fn test_run_hook_capturing_post_review_builtin_is_silent_on_non_clean() {
+        let config = HookConfig {
+            enabled: true,
+            command: None,
+            timeout_secs: HookEvent::PostReview.default_timeout_secs(),
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
+        };
+        let vars = HashMap::from([
+            ("session_id".to_string(), "01TESTSESSION".to_string()),
+            ("decision".to_string(), "fail".to_string()),
+            ("verdict".to_string(), "HAS_ISSUES".to_string()),
+            ("scope".to_string(), "range:main...HEAD".to_string()),
+        ]);
+
+        let output = run_hook_capturing(HookEvent::PostReview, &config, &vars).unwrap();
+        assert!(output.trim().is_empty());
+    }
+
+    #[test]
+    fn test_run_hook_capturing_post_review_builtin_is_silent_outside_cumulative_scope() {
+        let config = HookConfig {
+            enabled: true,
+            command: None,
+            timeout_secs: HookEvent::PostReview.default_timeout_secs(),
+            fail_policy: FailPolicy::Open,
+            waivers: Vec::new(),
+        };
+        let vars = HashMap::from([
+            ("session_id".to_string(), "01TESTSESSION".to_string()),
+            ("decision".to_string(), "pass".to_string()),
+            ("verdict".to_string(), "CLEAN".to_string()),
+            (
+                "scope".to_string(),
+                "files:crates/csa-hooks/src/".to_string(),
+            ),
+        ]);
+
+        let output = run_hook_capturing(HookEvent::PostReview, &config, &vars).unwrap();
+        assert!(output.trim().is_empty());
     }
 
     #[test]

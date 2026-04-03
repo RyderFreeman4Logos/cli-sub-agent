@@ -385,26 +385,47 @@ pub(crate) fn run_pipeline_hook(
     Ok(())
 }
 
-/// Fire an observational hook with auto-loaded config. Failures are logged and
-/// silently discarded (observational events never block the caller).
-pub(crate) fn fire_observational_hook(
-    event: HookEvent,
-    pairs: &[(&str, &str)],
-    project_root: &std::path::Path,
-) {
-    let hooks_config = csa_hooks::load_hooks_config(
+fn load_runtime_hooks(project_root: &std::path::Path) -> csa_hooks::HooksConfig {
+    csa_hooks::load_hooks_config(
         csa_session::get_session_root(project_root)
             .ok()
             .map(|r| r.join("hooks.toml"))
             .as_deref(),
         csa_hooks::global_hooks_path().as_deref(),
         None,
-    );
-    let variables: std::collections::HashMap<String, String> = pairs
+    )
+}
+
+fn hook_variables(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+    pairs
         .iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-    let _ = run_pipeline_hook(event, &hooks_config, &variables);
+        .collect()
+}
+
+/// Capture stdout from an observational hook and return it to the caller.
+///
+/// This is used for hooks whose output is part of the orchestration contract,
+/// such as `post_review` emitting `CSA:NEXT_STEP` directives. Failures remain
+/// observational and therefore degrade to an empty string.
+pub(crate) fn capture_observational_hook_output(
+    event: HookEvent,
+    pairs: &[(&str, &str)],
+    project_root: &std::path::Path,
+) -> String {
+    let hooks_config = load_runtime_hooks(project_root);
+    let variables = hook_variables(pairs);
+    let hook_config = hooks_config.get_for_event(event);
+
+    match csa_hooks::run_hook_capturing(event, &hook_config, &variables) {
+        Ok(output) => output,
+        Err(err) => {
+            warn!(
+                "{event:?} hook failed while capturing output (observational, continuing): {err}"
+            );
+            String::new()
+        }
+    }
 }
 
 pub(crate) fn determine_project_root(cd: Option<&str>) -> Result<PathBuf> {

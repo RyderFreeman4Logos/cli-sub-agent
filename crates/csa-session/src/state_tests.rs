@@ -695,7 +695,7 @@ fn review_session_meta_write_and_read() {
     let decoded: ReviewSessionMeta = serde_json::from_str(&content).expect("parse");
     assert_eq!(decoded.session_id, meta.session_id);
     assert_eq!(decoded.decision, "pass");
-    assert_eq!(decoded.fix_attempted, false);
+    assert!(!decoded.fix_attempted);
 }
 
 #[test]
@@ -737,7 +737,7 @@ fn review_session_meta_overwrite_on_fix_round() {
     let content = std::fs::read_to_string(td.path().join("review_meta.json")).expect("read");
     let decoded: ReviewSessionMeta = serde_json::from_str(&content).expect("parse");
     assert_eq!(decoded.decision, "pass");
-    assert_eq!(decoded.fix_attempted, true);
+    assert!(decoded.fix_attempted);
     assert_eq!(decoded.fix_rounds, 1);
     assert_eq!(decoded.head_sha, "bbb");
 }

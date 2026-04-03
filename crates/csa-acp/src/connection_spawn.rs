@@ -7,7 +7,7 @@
 use std::{
     cell::RefCell,
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     process::Stdio,
     rc::Rc,
     time::{Duration, Instant},
@@ -88,6 +88,16 @@ pub struct AcpSandboxRequest<'a> {
     pub isolation_plan: &'a IsolationPlan,
     pub tool_name: &'a str,
     pub session_id: &'a str,
+    pub env_overrides: Option<&'a HashMap<String, String>>,
+}
+
+#[derive(Debug)]
+struct PreparedSandboxCommand {
+    effective_command: String,
+    effective_args: Vec<String>,
+    effective_env: HashMap<String, String>,
+    landlock_paths: Option<Vec<PathBuf>>,
+    has_bwrap: bool,
 }
 
 impl AcpSandboxHandle {
@@ -116,6 +126,101 @@ impl AcpSandboxHandle {
 }
 
 impl AcpConnection {
+    fn merge_sandbox_env(
+        base_env: &HashMap<String, String>,
+        sandbox_env_overrides: Option<&HashMap<String, String>>,
+    ) -> HashMap<String, String> {
+        let mut merged_env = base_env.clone();
+        if let Some(overrides) = sandbox_env_overrides {
+            merged_env.extend(
+                overrides
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+        merged_env
+    }
+
+    fn merged_bwrap_isolation_plan(
+        plan: &IsolationPlan,
+        sandbox_env_overrides: Option<&HashMap<String, String>>,
+    ) -> IsolationPlan {
+        let mut merged_plan = plan.clone();
+        if let Some(overrides) = sandbox_env_overrides {
+            merged_plan.env_overrides.extend(
+                overrides
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone())),
+            );
+        }
+        merged_plan
+    }
+
+    fn prepare_sandbox_command(
+        request: AcpSpawnRequest<'_>,
+        sandbox: &AcpSandboxRequest<'_>,
+    ) -> PreparedSandboxCommand {
+        let plan = sandbox.isolation_plan;
+        let effective_env = Self::merge_sandbox_env(request.env, sandbox.env_overrides);
+
+        // --- Filesystem axis: optionally wrap the command with bwrap ---
+        // Landlock paths are captured here and applied in pre_exec later,
+        // since Landlock operates on the calling thread (not via a wrapper binary).
+        let mut landlock_paths: Option<Vec<PathBuf>> = None;
+
+        let (effective_command, effective_args, has_bwrap) = match plan.filesystem {
+            FilesystemCapability::Bwrap => {
+                let tool_args: Vec<String> = request.args.to_vec();
+                let bwrap_plan = Self::merged_bwrap_isolation_plan(plan, sandbox.env_overrides);
+                if let Some(bwrap_cmd) = csa_resource::bwrap::from_isolation_plan(
+                    &bwrap_plan,
+                    request.command,
+                    &tool_args,
+                ) {
+                    let program = bwrap_cmd.get_program().to_string_lossy().to_string();
+                    let args: Vec<String> = bwrap_cmd
+                        .get_args()
+                        .map(|a| a.to_string_lossy().to_string())
+                        .collect();
+                    debug!("wrapped ACP command with bwrap filesystem sandbox");
+                    (program, args, true)
+                } else {
+                    warn!(
+                        "bwrap requested but from_isolation_plan returned None; proceeding without"
+                    );
+                    (request.command.to_owned(), request.args.to_vec(), false)
+                }
+            }
+            FilesystemCapability::Landlock => {
+                debug!("Landlock filesystem isolation will be applied in pre_exec");
+                // Filter out project_root when readonly_project_root is set,
+                // mirroring the bwrap --ro-bind behavior.
+                let paths = if plan.readonly_project_root {
+                    plan.writable_paths
+                        .iter()
+                        .filter(|p| plan.project_root.as_ref().is_none_or(|root| *p != root))
+                        .cloned()
+                        .collect()
+                } else {
+                    plan.writable_paths.clone()
+                };
+                landlock_paths = Some(paths);
+                (request.command.to_owned(), request.args.to_vec(), false)
+            }
+            FilesystemCapability::None => {
+                (request.command.to_owned(), request.args.to_vec(), false)
+            }
+        };
+
+        PreparedSandboxCommand {
+            effective_command,
+            effective_args,
+            effective_env,
+            landlock_paths,
+            has_bwrap,
+        }
+    }
+
     /// Spawn an ACP process without resource sandboxing.
     pub async fn spawn(
         command: &str,
@@ -184,56 +289,24 @@ impl AcpConnection {
         };
 
         let plan = sandbox.isolation_plan;
-
-        // --- Filesystem axis: optionally wrap the command with bwrap ---
-        // Landlock paths are captured here and applied in pre_exec later,
-        // since Landlock operates on the calling thread (not via a wrapper binary).
-        let mut landlock_paths: Option<Vec<std::path::PathBuf>> = None;
-
-        let (effective_command, effective_args, has_bwrap) = match plan.filesystem {
-            FilesystemCapability::Bwrap => {
-                let tool_args: Vec<String> = request.args.to_vec();
-                if let Some(bwrap_cmd) =
-                    csa_resource::bwrap::from_isolation_plan(plan, request.command, &tool_args)
-                {
-                    let program = bwrap_cmd.get_program().to_string_lossy().to_string();
-                    let args: Vec<String> = bwrap_cmd
-                        .get_args()
-                        .map(|a| a.to_string_lossy().to_string())
-                        .collect();
-                    debug!("wrapped ACP command with bwrap filesystem sandbox");
-                    (program, args, true)
-                } else {
-                    warn!(
-                        "bwrap requested but from_isolation_plan returned None; proceeding without"
-                    );
-                    (request.command.to_owned(), request.args.to_vec(), false)
-                }
-            }
-            FilesystemCapability::Landlock => {
-                debug!("Landlock filesystem isolation will be applied in pre_exec");
-                // Filter out project_root when readonly_project_root is set,
-                // mirroring the bwrap --ro-bind behavior.
-                let paths = if plan.readonly_project_root {
-                    plan.writable_paths
-                        .iter()
-                        .filter(|p| plan.project_root.as_ref().is_none_or(|root| *p != root))
-                        .cloned()
-                        .collect()
-                } else {
-                    plan.writable_paths.clone()
-                };
-                landlock_paths = Some(paths);
-                (request.command.to_owned(), request.args.to_vec(), false)
-            }
-            FilesystemCapability::None => {
-                (request.command.to_owned(), request.args.to_vec(), false)
-            }
-        };
+        let PreparedSandboxCommand {
+            effective_command,
+            effective_args,
+            effective_env,
+            mut landlock_paths,
+            has_bwrap,
+        } = Self::prepare_sandbox_command(request, &sandbox);
 
         // --- Resource axis: apply resource isolation ---
         match plan.resource {
             ResourceCapability::CgroupV2 => {
+                if landlock_paths.is_some() {
+                    return Err(AcpError::ConfigError(
+                        "invalid isolation plan: Landlock cannot be combined with CgroupV2; degrade to Setrlimit before spawning ACP"
+                            .to_string(),
+                    ));
+                }
+
                 // Build systemd-run wrapper command, then append the
                 // (possibly bwrap-wrapped) ACP binary + args.
                 let cgroup_config = csa_resource::cgroup::SandboxConfig {
@@ -241,10 +314,11 @@ impl AcpConnection {
                     memory_swap_max_mb: plan.memory_swap_max_mb,
                     pids_max: plan.pids_max.or(Some(512)),
                 };
-                let scope_cmd = csa_resource::cgroup::create_scope_command(
+                let scope_cmd = csa_resource::cgroup::create_scope_command_with_env(
                     sandbox.tool_name,
                     sandbox.session_id,
                     &cgroup_config,
+                    &effective_env,
                 );
                 let mut cmd = Command::from(scope_cmd);
                 cmd.arg(&effective_command);
@@ -253,19 +327,14 @@ impl AcpConnection {
                     .stdin(Stdio::piped())
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped());
+                cmd.kill_on_drop(true);
 
-                // SAFETY: setsid() is async-signal-safe, runs before exec in child.
-                //         Landlock syscalls are also safe in this context.
+                // SAFETY: setsid() is async-signal-safe and runs before exec in child.
                 #[cfg(unix)]
                 {
-                    let ll_paths = landlock_paths.take();
                     unsafe {
                         cmd.pre_exec(move || {
                             libc::setsid();
-                            if let Some(ref paths) = ll_paths {
-                                csa_resource::apply_landlock_rules(paths)
-                                    .map_err(std::io::Error::other)?;
-                            }
                             Ok(())
                         });
                     }
@@ -274,7 +343,7 @@ impl AcpConnection {
                 for var in Self::STRIPPED_ENV_VARS {
                     cmd.env_remove(var);
                 }
-                for (key, value) in request.env {
+                for (key, value) in &effective_env {
                     cmd.env(key, value);
                 }
 
@@ -296,7 +365,7 @@ impl AcpConnection {
                     &effective_command,
                     &effective_args,
                     request.working_dir,
-                    request.env,
+                    &effective_env,
                 );
 
                 // Apply setsid + rlimits + optional Landlock in a single pre_exec hook.
@@ -343,7 +412,7 @@ impl AcpConnection {
                         &effective_command,
                         &effective_args,
                         request.working_dir,
-                        request.env,
+                        &effective_env,
                     );
 
                     // SAFETY: setsid(), OOM adj, and Landlock syscalls are
@@ -379,7 +448,7 @@ impl AcpConnection {
                         request.command,
                         request.args,
                         request.working_dir,
-                        request.env,
+                        &effective_env,
                         request.options,
                     )
                     .await?;
@@ -539,5 +608,106 @@ impl AcpConnection {
             working_dir.to_path_buf(),
             options,
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_setenv(args: &[String], key: &str, value: &str) -> bool {
+        args.windows(3)
+            .any(|window| window[0] == "--setenv" && window[1] == key && window[2] == value)
+    }
+
+    #[test]
+    fn prepare_sandbox_command_merges_runtime_env_overrides_into_bwrap_invocation() {
+        let request_env = HashMap::from([
+            ("HOME".to_string(), "/home/original".to_string()),
+            ("PATH".to_string(), "/usr/bin".to_string()),
+        ]);
+        let sandbox_env_overrides = HashMap::from([
+            (
+                "HOME".to_string(),
+                "/tmp/cli-sub-agent-gemini/01TEST".to_string(),
+            ),
+            (
+                "XDG_STATE_HOME".to_string(),
+                "/tmp/cli-sub-agent-gemini/01TEST/.local/state".to_string(),
+            ),
+            (
+                "MISE_CACHE_DIR".to_string(),
+                "/tmp/cli-sub-agent-gemini/01TEST/.cache/mise".to_string(),
+            ),
+        ]);
+        let isolation_plan = IsolationPlan {
+            resource: ResourceCapability::None,
+            filesystem: FilesystemCapability::Bwrap,
+            writable_paths: vec![
+                PathBuf::from("/project"),
+                PathBuf::from("/tmp/cli-sub-agent-gemini/01TEST"),
+            ],
+            env_overrides: HashMap::new(),
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
+            readonly_project_root: false,
+            project_root: Some(PathBuf::from("/project")),
+        };
+        let args = vec!["--acp".to_string()];
+        let request = AcpSpawnRequest {
+            command: "/usr/bin/gemini",
+            args: &args,
+            working_dir: Path::new("/project"),
+            env: &request_env,
+            options: AcpConnectionOptions::default(),
+        };
+        let sandbox = AcpSandboxRequest {
+            isolation_plan: &isolation_plan,
+            tool_name: "gemini-cli",
+            session_id: "01TEST",
+            env_overrides: Some(&sandbox_env_overrides),
+        };
+
+        let prepared = AcpConnection::prepare_sandbox_command(request, &sandbox);
+
+        assert_eq!(prepared.effective_command, "bwrap");
+        assert_eq!(
+            prepared.effective_env.get("HOME"),
+            Some(&"/tmp/cli-sub-agent-gemini/01TEST".to_string()),
+            "scope env should see the Gemini runtime HOME override"
+        );
+        assert_eq!(
+            prepared.effective_env.get("XDG_STATE_HOME"),
+            Some(&"/tmp/cli-sub-agent-gemini/01TEST/.local/state".to_string())
+        );
+        assert!(
+            has_setenv(
+                &prepared.effective_args,
+                "HOME",
+                "/tmp/cli-sub-agent-gemini/01TEST",
+            ),
+            "bwrap args must include runtime HOME override: {:?}",
+            prepared.effective_args
+        );
+        assert!(
+            has_setenv(
+                &prepared.effective_args,
+                "XDG_STATE_HOME",
+                "/tmp/cli-sub-agent-gemini/01TEST/.local/state",
+            ),
+            "bwrap args must include XDG_STATE_HOME override: {:?}",
+            prepared.effective_args
+        );
+        assert!(
+            has_setenv(
+                &prepared.effective_args,
+                "MISE_CACHE_DIR",
+                "/tmp/cli-sub-agent-gemini/01TEST/.cache/mise",
+            ),
+            "bwrap args must include mise cache override: {:?}",
+            prepared.effective_args
+        );
     }
 }

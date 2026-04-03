@@ -303,46 +303,54 @@ async fn spawn_with_cgroup(
     session_id: &str,
     fs_sandbox: FsSandboxParams,
 ) -> Result<(tokio::process::Child, SandboxHandle)> {
+    if fs_sandbox.landlock_paths.is_some() {
+        return Err(anyhow::anyhow!(
+            "invalid isolation plan: Landlock cannot be combined with CgroupV2; degrade to Setrlimit before spawning"
+        ));
+    }
+
     let cgroup_config = csa_resource::cgroup::SandboxConfig {
         memory_max_mb: plan.memory_max_mb.unwrap_or(4096),
         memory_swap_max_mb: plan.memory_swap_max_mb,
         pids_max: plan.pids_max.or(Some(512)),
     };
 
-    let scope_cmd =
-        csa_resource::cgroup::create_scope_command(tool_name, session_id, &cgroup_config);
-
-    let mut tokio_cmd = Command::from(scope_cmd);
-    tokio_cmd.arg(original_cmd.as_std().get_program());
-    tokio_cmd.args(original_cmd.as_std().get_args());
-
     let envs: Vec<_> = original_cmd
         .as_std()
         .get_envs()
         .filter_map(|(k, v)| v.map(|val| (k.to_owned(), val.to_owned())))
         .collect();
+    let scope_env: std::collections::HashMap<String, String> = envs
+        .iter()
+        .map(|(key, val)| {
+            (
+                key.to_string_lossy().into_owned(),
+                val.to_string_lossy().into_owned(),
+            )
+        })
+        .collect();
+
+    let scope_cmd = csa_resource::cgroup::create_scope_command_with_env(
+        tool_name,
+        session_id,
+        &cgroup_config,
+        &scope_env,
+    );
+
+    let mut tokio_cmd = Command::from(scope_cmd);
+    tokio_cmd.arg(original_cmd.as_std().get_program());
+    tokio_cmd.args(original_cmd.as_std().get_args());
+
     for (key, val) in &envs {
         tokio_cmd.env(key, val);
     }
+    tokio_cmd.kill_on_drop(true);
 
     if let Some(dir) = original_cmd.as_std().get_current_dir() {
         tokio_cmd.current_dir(dir);
     }
 
-    // When Landlock is requested alongside cgroup, apply it via pre_exec
-    // on the systemd-run wrapper command (which eventually exec's the tool).
-    let child = if fs_sandbox.landlock_paths.is_some() {
-        spawn_tool_with_pre_exec(
-            tokio_cmd,
-            stdin_data,
-            PreExecPolicy::Setsid,
-            spawn_options,
-            fs_sandbox.landlock_paths,
-        )
-        .await?
-    } else {
-        spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?
-    };
+    let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
     let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
 
     debug!(

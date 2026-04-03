@@ -195,6 +195,7 @@ pub(super) async fn run_acp_sandboxed(
             isolation_plan,
             tool_name,
             session_id,
+            env_overrides: None,
         }),
     )
     .await?;

@@ -104,6 +104,7 @@ pub(crate) fn append_debate_artifacts_to_result(
     project_root: &Path,
     session_id: &str,
     debate_artifacts: &[SessionArtifact],
+    summary: &DebateSummary,
 ) -> Result<()> {
     let mut result = csa_session::load_result(project_root, session_id)?
         .ok_or_else(|| anyhow::anyhow!("Missing result.toml for debate session {session_id}"))?;
@@ -117,6 +118,8 @@ pub(crate) fn append_debate_artifacts_to_result(
             result.artifacts.push(artifact.clone());
         }
     }
+
+    result.summary = summary.summary.clone();
 
     csa_session::save_result(project_root, session_id, &result)
         .with_context(|| format!("Failed to update result.toml for debate session {session_id}"))?;

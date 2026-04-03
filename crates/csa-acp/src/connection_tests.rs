@@ -53,6 +53,14 @@ fn stripped_env_vars_contains_claudecode() {
         AcpConnection::STRIPPED_ENV_VARS.contains(&"CLAUDE_CODE_ENTRYPOINT"),
         "STRIPPED_ENV_VARS must strip CLAUDE_CODE_ENTRYPOINT (parent context)"
     );
+    assert!(
+        AcpConnection::STRIPPED_ENV_VARS.contains(&"GEMINI_API_KEY"),
+        "STRIPPED_ENV_VARS must strip GEMINI_API_KEY so ACP retries stay quota-first"
+    );
+    assert!(
+        AcpConnection::STRIPPED_ENV_VARS.contains(&"GOOGLE_GEMINI_BASE_URL"),
+        "STRIPPED_ENV_VARS must strip GOOGLE_GEMINI_BASE_URL so ACP retries control routing"
+    );
 }
 
 #[test]
@@ -90,12 +98,16 @@ async fn env_remove_strips_claudecode_from_child() {
     // Save original values so we can restore after the test.
     let orig_claudecode = std::env::var("CLAUDECODE").ok();
     let orig_entrypoint = std::env::var("CLAUDE_CODE_ENTRYPOINT").ok();
+    let orig_gemini_api_key = std::env::var("GEMINI_API_KEY").ok();
+    let orig_gemini_base_url = std::env::var("GOOGLE_GEMINI_BASE_URL").ok();
 
     // SAFETY: set_var is unsound under parallel test execution (Rust
     // 1.66+ deprecation).  Acceptable here: this test is short-lived,
     // single-threaded (#[tokio::test] default), and we restore the
     // original value immediately after spawning the child.
     unsafe { std::env::set_var("CLAUDECODE", "1") };
+    unsafe { std::env::set_var("GEMINI_API_KEY", "test-key") };
+    unsafe { std::env::set_var("GOOGLE_GEMINI_BASE_URL", "https://example.invalid") };
 
     let mut std_cmd = std::process::Command::new("printenv");
     std_cmd.current_dir(std::env::current_dir().unwrap());
@@ -116,6 +128,14 @@ async fn env_remove_strips_claudecode_from_child() {
             Some(v) => std::env::set_var("CLAUDE_CODE_ENTRYPOINT", v),
             None => std::env::remove_var("CLAUDE_CODE_ENTRYPOINT"),
         }
+        match orig_gemini_api_key {
+            Some(v) => std::env::set_var("GEMINI_API_KEY", v),
+            None => std::env::remove_var("GEMINI_API_KEY"),
+        }
+        match orig_gemini_base_url {
+            Some(v) => std::env::set_var("GOOGLE_GEMINI_BASE_URL", v),
+            None => std::env::remove_var("GOOGLE_GEMINI_BASE_URL"),
+        }
     }
 
     assert!(
@@ -127,6 +147,18 @@ async fn env_remove_strips_claudecode_from_child() {
             .lines()
             .any(|line| line.starts_with("CLAUDE_CODE_ENTRYPOINT=")),
         "CLAUDE_CODE_ENTRYPOINT should have been stripped"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.starts_with("GEMINI_API_KEY=")),
+        "GEMINI_API_KEY should have been stripped from ACP child environment, got:\n{stdout}"
+    );
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.starts_with("GOOGLE_GEMINI_BASE_URL=")),
+        "GOOGLE_GEMINI_BASE_URL should have been stripped"
     );
 }
 

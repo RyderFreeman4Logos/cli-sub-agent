@@ -127,16 +127,25 @@ pub fn try_acquire_slot(
     fs::create_dir_all(&tool_dir)
         .with_context(|| format!("Failed to create slot directory: {}", tool_dir.display()))?;
 
+    let mut open_failures = Vec::new();
+    let mut occupied = 0u32;
+
     for index in 0..max_concurrent {
         let slot_path = tool_dir.join(format!("slot-{index:02}.lock"));
 
-        let file = OpenOptions::new()
+        let file = match OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
             .truncate(false)
             .open(&slot_path)
-            .with_context(|| format!("Failed to open slot file: {}", slot_path.display()))?;
+        {
+            Ok(file) => file,
+            Err(err) => {
+                open_failures.push(format!("{} ({err})", slot_path.display()));
+                continue;
+            }
+        };
 
         let fd = file.as_raw_fd();
 
@@ -171,6 +180,24 @@ pub fn try_acquire_slot(
             return Ok(SlotAcquireResult::Acquired(slot));
         }
         // This slot is held; try the next one.
+        occupied += 1;
+    }
+
+    if !open_failures.is_empty() {
+        let sample = open_failures
+            .iter()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .join("; ");
+        anyhow::bail!(
+            "Failed to open {} slot file(s) for '{}'. Locked slots: {}/{}. Examples: {}",
+            open_failures.len(),
+            tool_name,
+            occupied,
+            max_concurrent,
+            sample
+        );
     }
 
     // All slots occupied.
@@ -589,5 +616,39 @@ mod tests {
             matches!(second, SlotAcquireResult::Acquired(_)),
             "slot should be reacquired after explicit release"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_try_acquire_slot_skips_malformed_slot_file_and_uses_next_slot() {
+        let dir = tempdir().unwrap();
+        let tool_dir = dir.path().join("codex");
+        fs::create_dir_all(&tool_dir).unwrap();
+        std::os::unix::fs::symlink("slot-00.lock", tool_dir.join("slot-00.lock")).unwrap();
+
+        let result = try_acquire_slot(dir.path(), "codex", 2, None).unwrap();
+        match result {
+            SlotAcquireResult::Acquired(slot) => assert_eq!(slot.slot_index(), 1),
+            SlotAcquireResult::Exhausted(_) => panic!("expected slot acquisition"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_try_acquire_slot_errors_when_all_slot_files_are_malformed() {
+        let dir = tempdir().unwrap();
+        let tool_dir = dir.path().join("codex");
+        fs::create_dir_all(&tool_dir).unwrap();
+        std::os::unix::fs::symlink("slot-00.lock", tool_dir.join("slot-00.lock")).unwrap();
+        std::os::unix::fs::symlink("slot-01.lock", tool_dir.join("slot-01.lock")).unwrap();
+
+        let err = match try_acquire_slot(dir.path(), "codex", 2, None) {
+            Ok(_) => panic!("expected malformed slot files to fail"),
+            Err(err) => err,
+        };
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to open 2 slot file(s) for 'codex'"));
+        assert!(msg.contains("slot-00.lock"));
+        assert!(msg.contains("slot-01.lock"));
     }
 }
