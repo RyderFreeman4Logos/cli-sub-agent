@@ -6,7 +6,7 @@ Note: Workflow logic is defined in `./patterns/`. `skills/csa-review` and
 `skills/debate` are kept as compatibility shims so `csa skill install` still
 installs the workflow entrypoints required by `csa review` and `csa debate`.
 
-## Global Persona Skills (6)
+## Global Persona Skills (7)
 
 | Skill | Description |
 |---|---|
@@ -16,6 +16,7 @@ installs the workflow entrypoints required by `csa review` and `csa debate`.
 | `csa-rust-dev` | Comprehensive Rust development guidance for architecture, implementation, and standards. |
 | `csa-security` | Adversarial security analysis to identify vulnerabilities before release. |
 | `csa-test-gen` | Core-first test design and TDD guidance following the test pyramid. |
+| `nohup-poll` | Launch long-running commands via nohup and poll at 245s intervals to keep KV cache warm. |
 
 ## Compatibility Workflow Skills (2)
 
