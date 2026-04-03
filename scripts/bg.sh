@@ -21,9 +21,10 @@ fi
 
 LOGFILE="$1"; shift
 mkdir -p "$(dirname "$LOGFILE")"
+export LOGFILE
 
-# Launch with nohup, fully detached
-nohup "$@" >> "$LOGFILE" 2>&1 &
+# Launch with nohup, fully detached, and persist the exit code for cross-shell polling.
+nohup bash -c '"$@"; echo $? > "${LOGFILE}.exitcode"' _ "$@" >> "$LOGFILE" 2>&1 &
 PID=$!
 echo "PID=$PID LOG=$LOGFILE"
 

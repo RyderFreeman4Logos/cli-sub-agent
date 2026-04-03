@@ -55,7 +55,8 @@ mkdir -p scripts && cat > scripts/bg.sh << 'BGEOF'
 set -euo pipefail
 if [ $# -lt 2 ]; then echo "Usage: bg.sh <logfile> <command...>" >&2; exit 1; fi
 LOGFILE="$1"; shift; mkdir -p "$(dirname "$LOGFILE")"
-nohup "$@" >> "$LOGFILE" 2>&1 &
+export LOGFILE
+nohup bash -c '"$@"; echo $? > "${LOGFILE}.exitcode"' _ "$@" >> "$LOGFILE" 2>&1 &
 PID=$!; echo "PID=$PID LOG=$LOGFILE"
 sleep 3
 if kill -0 "$PID" 2>/dev/null; then echo "ALIVE pid=$PID"; exit 0
@@ -82,7 +83,7 @@ gap and the cache expires.
 **Single poll command (copy-paste ready):**
 
 ```bash
-sleep 245 && if kill -0 <PID> 2>/dev/null; then echo "POLL:RUNNING"; tail -3 <LOG>; else echo "POLL:DONE exit=$(wait <PID> 2>/dev/null; echo $?)"; tail -20 <LOG>; fi
+sleep 245 && if kill -0 <PID> 2>/dev/null; then echo "POLL:RUNNING"; tail -3 <LOG>; else echo "POLL:DONE exit=$(cat <LOG>.exitcode 2>/dev/null || echo unknown)"; tail -20 <LOG>; fi
 ```
 
 Set Bash timeout to **300000** ms (300s = 245s sleep + 55s margin).
@@ -159,7 +160,7 @@ bash scripts/bg.sh /tmp/cargo-build-$(date +%s).log cargo build --release
 # → PID=12345 LOG=/tmp/cargo-build-1743666000.log
 
 # Step 2: First poll (separate Bash call, timeout 300000ms)
-sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/cargo-build-1743666000.log; else echo "POLL:DONE exit=$(wait 12345 2>/dev/null; echo $?)"; tail -20 /tmp/cargo-build-1743666000.log; fi
+sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/cargo-build-1743666000.log; else echo "POLL:DONE exit=$(cat /tmp/cargo-build-1743666000.log.exitcode 2>/dev/null || echo unknown)"; tail -20 /tmp/cargo-build-1743666000.log; fi
 
 # Step 3: Repeat until POLL:DONE
 ```
@@ -172,7 +173,7 @@ bash scripts/bg.sh /tmp/csa-run-$(date +%s).log csa run --sa-mode true --tier ti
 # → PID=23456 LOG=/tmp/csa-run-1743666000.log
 
 # Step 2: Poll (can also check session status)
-sleep 245 && if kill -0 23456 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/csa-run-1743666000.log; else echo "POLL:DONE exit=$(wait 23456 2>/dev/null; echo $?)"; tail -20 /tmp/csa-run-1743666000.log; fi
+sleep 245 && if kill -0 23456 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/csa-run-1743666000.log; else echo "POLL:DONE exit=$(cat /tmp/csa-run-1743666000.log.exitcode 2>/dev/null || echo unknown)"; tail -20 /tmp/csa-run-1743666000.log; fi
 ```
 
 ### Just Pre-commit
@@ -183,7 +184,7 @@ bash scripts/bg.sh /tmp/precommit-$(date +%s).log just pre-commit
 # → PID=34567 LOG=/tmp/precommit-1743666000.log
 
 # Step 2: Poll
-sleep 245 && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/precommit-1743666000.log; else echo "POLL:DONE exit=$(wait 34567 2>/dev/null; echo $?)"; tail -20 /tmp/precommit-1743666000.log; fi
+sleep 245 && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/precommit-1743666000.log; else echo "POLL:DONE exit=$(cat /tmp/precommit-1743666000.log.exitcode 2>/dev/null || echo unknown)"; tail -20 /tmp/precommit-1743666000.log; fi
 ```
 
 ## Anti-Patterns
@@ -194,3 +195,4 @@ sleep 245 && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tm
 | `sleep 400 && check` | 400s > 300s TTL — cache expires | `sleep 245` (under TTL) |
 | `run_in_background: true` then forget | No periodic API calls — cache expires | Poll or do other work |
 | Blocking Bash with 600s timeout | 600s > TTL — cache expires | Use nohup-poll instead |
+| `wait <PID>` from a later Bash call | PID is not a child of the new shell, so `wait` returns 127 | Read `<LOG>.exitcode` written by `bg.sh` |
