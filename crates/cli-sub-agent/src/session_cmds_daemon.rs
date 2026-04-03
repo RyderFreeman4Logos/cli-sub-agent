@@ -204,6 +204,12 @@ pub(crate) fn handle_session_wait(
                 "<!-- CSA:SESSION_WAIT_TIMEOUT session={} elapsed={}s cmd=\"csa session wait --session {}{}\" -->",
                 resolved.session_id, elapsed, resolved.session_id, cd_arg,
             );
+            eprintln!(
+                "Hint: Call `csa session wait` again individually (not in a tight loop script). \
+                 The {}s timeout is designed to let the calling agent generate tokens between waits, \
+                 keeping its KV cache warm.",
+                wait_timeout_secs,
+            );
             return Ok(124);
         }
 
