@@ -31,6 +31,14 @@ Register each parsed TODO item via TaskCreate. Each task must include:
 
 Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate.
 
+MANDATORY publish-phase task decomposition (when publish is not skipped):
+The publish pipeline MUST be registered as SEPARATE tasks:
+1. Push to remote
+2. Create or reuse PR
+3. Run pr-bot — SEPARATE task from PR creation. NEVER combine with step 2.
+   NEVER skip pr-bot. NEVER merge the PR manually.
+4. Post-merge local sync
+
 ## Parsed Items
 ${STEP_1_OUTPUT}"""
 on_fail = "abort"

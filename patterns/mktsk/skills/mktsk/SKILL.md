@@ -48,4 +48,9 @@ For `csa` commands within pattern steps (e.g., `csa review --diff`), add
 
 1. All TODO items executed and verified via `DONE WHEN` conditions.
 2. All tasks marked complete via TaskUpdate.
-3. Branch pushed, PR created, pr-bot completed (or skipped when `CSA_SKIP_PUBLISH=true`).
+3. Branch pushed to remote.
+4. PR created (or reused).
+5. **pr-bot completed** — this is a SEPARATE gate from PR creation. NEVER mark
+   pipeline as done after PR creation without running pr-bot. pr-bot performs
+   cloud review and the actual merge.
+   (Steps 3-5 skipped when `CSA_SKIP_PUBLISH=true`.)
