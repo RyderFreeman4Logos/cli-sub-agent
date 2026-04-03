@@ -17,6 +17,7 @@ mod manager_result;
 #[cfg(test)]
 use manager_paths::project_storage_key_from_path;
 pub use manager_paths::{get_session_dir, get_session_root};
+pub use manager_paths::{get_session_dir_global, list_all_project_session_roots};
 use manager_paths::{get_session_dir_in, resolve_read_base_dir, resolve_write_base_dir};
 use manager_paths::{legacy_session_root, normalize_project_path};
 pub use manager_result::{list_artifacts, load_result, save_result};
@@ -221,6 +222,44 @@ fn detect_current_branch(project_path: &Path) -> Option<String> {
 pub fn load_session(project_path: &Path, session_id: &str) -> Result<MetaSessionState> {
     let base_dir = resolve_read_base_dir(project_path, Some(session_id))?;
     load_session_in(&base_dir, session_id)
+}
+
+/// Load a session via global exact ULID lookup (cross-project, read-only).
+///
+/// Returns `None` if no session with this exact ULID is found anywhere.
+/// Unlike `load_session`, this bypasses project path validation.
+pub fn load_session_global_exact(session_id: &str) -> Result<Option<MetaSessionState>> {
+    use manager_paths::resolve_read_base_dir_global_exact;
+    if let Some((base_dir, _)) = resolve_read_base_dir_global_exact(session_id)? {
+        match load_session_in(&base_dir, session_id) {
+            Ok(state) => return Ok(Some(state)),
+            Err(_) => return Ok(None),
+        }
+    }
+    Ok(None)
+}
+
+/// List sessions from all projects (for `session list --all-projects`).
+///
+/// Returns sessions from every project directory in the state dir,
+/// with no project-scope filtering.
+pub fn list_all_sessions_all_projects() -> Result<Vec<MetaSessionState>> {
+    let roots = list_all_project_session_roots()?;
+    let mut all_sessions = Vec::new();
+    for (root, _key) in roots {
+        match list_all_sessions_in_readonly(&root) {
+            Ok(sessions) => all_sessions.extend(sessions),
+            Err(err) => {
+                tracing::debug!(
+                    root = %root.display(),
+                    error = %err,
+                    "Skipping project root with unreadable sessions"
+                );
+            }
+        }
+    }
+    all_sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    Ok(all_sessions)
 }
 
 /// Internal implementation: load session from explicit base directory

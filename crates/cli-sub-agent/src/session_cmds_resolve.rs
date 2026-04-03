@@ -87,3 +87,44 @@ pub(crate) fn resolve_session_prefix_from_dirs(
 fn should_fallback_to_legacy(err: &anyhow::Error) -> bool {
     err.to_string().contains("No session matching prefix")
 }
+
+/// Resolve a session by first trying project-scoped prefix lookup, then
+/// falling back to global exact ULID lookup across all projects (read-only).
+///
+/// When the global fallback finds a match, a warning is emitted to stderr
+/// and the resolution includes the foreign project's session directory.
+pub(crate) fn resolve_session_prefix_with_global_fallback(
+    project_root: &std::path::Path,
+    prefix: &str,
+) -> Result<SessionPrefixResolution> {
+    // First try the normal project-scoped resolution.
+    match resolve_session_prefix_with_fallback(project_root, prefix) {
+        Ok(resolution) => Ok(resolution),
+        Err(project_err) => {
+            // Only attempt global fallback for full 26-char ULIDs
+            if prefix.len() != 26 {
+                return Err(project_err);
+            }
+            // Validate it's actually a ULID
+            if csa_session::validate_session_id(prefix).is_err() {
+                return Err(project_err);
+            }
+            // Try global exact lookup
+            if let Some(session_dir) = csa_session::get_session_dir_global(prefix)? {
+                let sessions_dir = session_dir
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| session_dir.clone());
+                eprintln!(
+                    "Warning: session {} not found in current project, using cross-project fallback",
+                    prefix,
+                );
+                return Ok(SessionPrefixResolution {
+                    session_id: prefix.to_string(),
+                    sessions_dir,
+                });
+            }
+            Err(project_err)
+        }
+    }
+}

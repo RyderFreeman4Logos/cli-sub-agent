@@ -17,8 +17,9 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             branch,
             tool,
             tree,
+            all_projects,
         } => {
-            session_cmds::handle_session_list(cd, branch, tool, tree, output_format)?;
+            session_cmds::handle_session_list(cd, branch, tool, tree, all_projects, output_format)?;
         }
         SessionCommands::Compress { session, cd } => {
             session_cmds::handle_session_compress(session, cd)?;

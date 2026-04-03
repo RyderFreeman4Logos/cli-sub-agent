@@ -20,6 +20,10 @@ pub enum SessionCommands {
         /// Show tree structure
         #[arg(long)]
         tree: bool,
+
+        /// List sessions from all projects (incompatible with --tree)
+        #[arg(long, conflicts_with = "tree")]
+        all_projects: bool,
     },
 
     /// Compress session context (gemini-cli: /compress, others: /compact)

@@ -81,13 +81,16 @@ pub(crate) fn spawn_and_exit(subcommand: &str, cd: Option<&str>) -> Result<()> {
     // stdout: machine-readable session ID (for script capture).
     println!("{}", result.session_id);
     // stderr: structured RPJ directive for orchestrators.
+    // Include --cd <project_root> so cross-project callers can find the session.
+    let cd_hint = format!(" --cd '{}'", project_root.display());
     eprintln!(
         "<!-- CSA:SESSION_STARTED id={id} pid={pid} dir=\"{dir}\" \
-         wait_cmd=\"csa session wait --session {id}\" \
-         attach_cmd=\"csa session attach --session {id}\" -->",
+         wait_cmd=\"csa session wait --session {id}{cd}\" \
+         attach_cmd=\"csa session attach --session {id}{cd}\" -->",
         id = result.session_id,
         pid = result.pid,
         dir = result.session_dir.display(),
+        cd = cd_hint,
     );
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();

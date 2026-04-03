@@ -11,7 +11,9 @@ use csa_session::get_session_dir;
 use csa_session::state::ReviewSessionMeta;
 use serde::{Deserialize, Serialize};
 
-use crate::session_cmds::resolve_session_prefix_with_fallback;
+use crate::session_cmds::{
+    resolve_session_prefix_with_fallback, resolve_session_prefix_with_global_fallback,
+};
 
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
@@ -99,8 +101,9 @@ pub(crate) fn handle_session_wait(
     wait_timeout_secs: u64,
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    // For cross-project sessions, derive session_dir from the resolved sessions_dir
+    let session_dir = resolved.sessions_dir.join(&resolved.session_id);
 
     let start = std::time::Instant::now();
     let poll_interval = std::time::Duration::from_secs(1);
@@ -352,8 +355,8 @@ pub(crate) fn handle_session_attach(
     cd: Option<String>,
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    let session_dir = resolved.sessions_dir.join(&resolved.session_id);
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
 
     let stdout_path = session_dir.join("stdout.log");

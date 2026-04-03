@@ -7,7 +7,7 @@ use csa_session::SessionResult;
 
 use crate::session_cmds::{
     ensure_terminal_result_for_dead_active_session, format_file_size,
-    resolve_session_prefix_with_fallback,
+    resolve_session_prefix_with_fallback, resolve_session_prefix_with_global_fallback,
 };
 
 #[derive(Debug, Clone)]
@@ -83,9 +83,9 @@ pub(crate) fn handle_session_result(
     structured: StructuredOutputOpts,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
-    let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
+    let session_dir = resolved.sessions_dir.join(&resolved_id);
 
     if let Err(err) = ensure_terminal_result_for_dead_active_session(
         &project_root,
