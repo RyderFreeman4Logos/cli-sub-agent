@@ -34,7 +34,13 @@ if kill -0 "$PID" 2>/dev/null; then
   echo "ALIVE pid=$PID"
   exit 0
 else
-  echo "DEAD pid=$PID — last 20 lines:" >&2
+  # If dead, check if it finished successfully in under 3 seconds
+  if [ -f "${LOGFILE}.exitcode" ] && [ "$(cat "${LOGFILE}.exitcode")" -eq 0 ]; then
+    echo "DONE pid=$PID exit=0"
+    exit 0
+  fi
+  # Otherwise it failed quickly or crashed
+  echo "DEAD pid=$PID exit=$(cat "${LOGFILE}.exitcode" 2>/dev/null || echo unknown) — last 20 lines:" >&2
   tail -20 "$LOGFILE" >&2
   exit 1
 fi

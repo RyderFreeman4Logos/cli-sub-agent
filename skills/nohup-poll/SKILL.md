@@ -60,7 +60,13 @@ nohup bash -c '"$@"; echo $? > "${LOGFILE}.exitcode"' _ "$@" >> "$LOGFILE" 2>&1 
 PID=$!; echo "PID=$PID LOG=$LOGFILE"
 sleep 3
 if kill -0 "$PID" 2>/dev/null; then echo "ALIVE pid=$PID"; exit 0
-else echo "DEAD pid=$PID" >&2; tail -20 "$LOGFILE" >&2; exit 1; fi
+else
+  if [ -f "${LOGFILE}.exitcode" ] && [ "$(cat "${LOGFILE}.exitcode")" -eq 0 ]; then
+    echo "DONE pid=$PID exit=0"; exit 0
+  fi
+  echo "DEAD pid=$PID exit=$(cat "${LOGFILE}.exitcode" 2>/dev/null || echo unknown)" >&2
+  tail -20 "$LOGFILE" >&2; exit 1
+fi
 BGEOF
 chmod +x scripts/bg.sh
 ```
