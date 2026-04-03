@@ -509,8 +509,16 @@ pub(crate) fn handle_session_logs(
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
     let session_dir = resolved.sessions_dir.join(&resolved_id);
-    if let Err(err) =
-        ensure_terminal_result_for_dead_active_session(&project_root, &resolved_id, "session logs")
+
+    // Detect cross-project session to skip project_root-based operations.
+    let is_cross_project = get_session_dir(&project_root, &resolved_id).is_err();
+
+    if !is_cross_project
+        && let Err(err) = ensure_terminal_result_for_dead_active_session(
+            &project_root,
+            &resolved_id,
+            "session logs",
+        )
     {
         tracing::warn!(
             session_id = %resolved_id,
@@ -518,18 +526,33 @@ pub(crate) fn handle_session_logs(
             "Failed to reconcile dead Active session in session logs"
         );
     }
-    let repaired_result = match crate::session_observability::refresh_and_repair_result(
-        &project_root,
-        &resolved_id,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            tracing::warn!(
-                session_id = %resolved_id,
-                error = %err,
-                "Failed to refresh session result contract in session logs"
-            );
-            None
+
+    let repaired_result = if is_cross_project {
+        match crate::session_observability::refresh_and_repair_result_from_dir(&session_dir) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to refresh cross-project session result in session logs"
+                );
+                None
+            }
+        }
+    } else {
+        match crate::session_observability::refresh_and_repair_result(
+            &project_root,
+            &resolved_id,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to refresh session result contract in session logs"
+                );
+                None
+            }
         }
     };
 
@@ -689,9 +712,9 @@ fn print_content_with_tail(content: &str, tail: Option<usize>) {
 
 pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Result<bool> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
-    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    let session_dir = resolved.sessions_dir.join(&resolved_id);
     let alive = csa_process::ToolLiveness::is_alive(&session_dir);
     let working = csa_process::ToolLiveness::is_working(&session_dir);
 
@@ -702,7 +725,10 @@ pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Re
     } else {
         "not alive"
     };
+    // Skip dead-session reconciliation for cross-project sessions (requires write access).
+    let is_cross_project = get_session_dir(&project_root, &resolved_id).is_err();
     if !alive
+        && !is_cross_project
         && let Err(err) = ensure_terminal_result_for_dead_active_session(
             &project_root,
             &resolved_id,
@@ -775,7 +801,7 @@ pub(crate) fn format_file_size(bytes: u64) -> String {
 
 pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let log = csa_session::git::history(&resolved.sessions_dir, &resolved.session_id)?;
     if log.is_empty() {
         eprintln!("No git history for session '{}'", resolved.session_id);
