@@ -11,7 +11,7 @@ use csa_session::get_session_dir;
 use csa_session::state::ReviewSessionMeta;
 use serde::{Deserialize, Serialize};
 
-use crate::session_cmds::resolve_session_prefix_with_fallback;
+use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
@@ -99,18 +99,25 @@ pub(crate) fn handle_session_wait(
     wait_timeout_secs: u64,
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    // For cross-project sessions, derive session_dir from the resolved sessions_dir
+    let session_dir = resolved.sessions_dir.join(&resolved.session_id);
+
+    // Use the foreign project root for cross-project sessions, local otherwise.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let is_cross_project = resolved.foreign_project_root.is_some();
 
     let start = std::time::Instant::now();
     let poll_interval = std::time::Duration::from_secs(1);
 
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
-            let _ = crate::session_observability::refresh_and_repair_result(
-                &project_root,
+            let _ = refresh_result_for_wait(
+                effective_root,
                 &resolved.session_id,
-            )?;
+                &session_dir,
+                is_cross_project,
+            );
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
             emit_wait_completion_signal(
@@ -123,9 +130,12 @@ pub(crate) fn handle_session_wait(
             return Ok(completion.exit_code);
         }
 
-        if let Some(result) =
-            load_completed_daemon_result(&project_root, &resolved.session_id, &session_dir)?
-        {
+        if let Some(result) = load_completed_daemon_result_adaptive(
+            effective_root,
+            &resolved.session_id,
+            &session_dir,
+            is_cross_project,
+        )? {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
             emit_wait_completion_signal(
@@ -138,12 +148,20 @@ pub(crate) fn handle_session_wait(
             return Ok(result.exit_code);
         }
 
-        if crate::session_cmds::ensure_terminal_result_for_dead_active_session(
-            &project_root,
-            &resolved.session_id,
-            "session wait",
-        )? && let Some(result) =
-            load_completed_daemon_result(&project_root, &resolved.session_id, &session_dir)?
+        // Synthesize terminal result for dead Active sessions.
+        let synthesized =
+            crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+                effective_root,
+                &resolved.session_id,
+                "session wait",
+            )?;
+        if synthesized
+            && let Some(result) = load_completed_daemon_result_adaptive(
+                effective_root,
+                &resolved.session_id,
+                &session_dir,
+                is_cross_project,
+            )?
         {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
@@ -164,9 +182,12 @@ pub(crate) fn handle_session_wait(
         }
 
         if !csa_process::ToolLiveness::has_live_process(&session_dir) {
-            if let Some(result) =
-                load_completed_daemon_result(&project_root, &resolved.session_id, &session_dir)?
-            {
+            if let Some(result) = load_completed_daemon_result_adaptive(
+                effective_root,
+                &resolved.session_id,
+                &session_dir,
+                is_cross_project,
+            )? {
                 let streamed_output = stream_wait_output(&session_dir)?;
                 emit_wait_next_step_if_needed(&session_dir)?;
                 emit_wait_completion_signal(
@@ -293,6 +314,54 @@ fn load_completed_daemon_result(
     Ok(Some(result))
 }
 
+/// Refresh result using session_dir directly (for cross-project sessions) or
+/// via project_root (for same-project sessions).
+fn refresh_result_for_wait(
+    project_root: &std::path::Path,
+    session_id: &str,
+    session_dir: &std::path::Path,
+    is_cross_project: bool,
+) -> Result<Option<csa_session::SessionResult>> {
+    if is_cross_project {
+        crate::session_observability::refresh_and_repair_result_from_dir(session_dir)
+    } else {
+        crate::session_observability::refresh_and_repair_result(project_root, session_id)
+    }
+}
+
+/// Load completed daemon result, adapting for cross-project sessions.
+fn load_completed_daemon_result_adaptive(
+    project_root: &std::path::Path,
+    session_id: &str,
+    session_dir: &std::path::Path,
+    is_cross_project: bool,
+) -> Result<Option<csa_session::SessionResult>> {
+    if is_cross_project {
+        let daemon_alive_at_refresh_start =
+            csa_process::ToolLiveness::has_live_process(session_dir);
+        let result =
+            match crate::session_observability::refresh_and_repair_result_from_dir(session_dir) {
+                Ok(Some(result)) => result,
+                Ok(None) => return Ok(None),
+                Err(err) if daemon_alive_at_refresh_start => {
+                    tracing::debug!(
+                        session_id,
+                        error = %err,
+                        "Ignoring transient result refresh failure (cross-project) while daemon is still alive"
+                    );
+                    return Ok(None);
+                }
+                Err(err) => return Err(err),
+            };
+        if csa_process::ToolLiveness::has_live_process(session_dir) {
+            return Ok(None);
+        }
+        Ok(Some(result))
+    } else {
+        load_completed_daemon_result(project_root, session_id, session_dir)
+    }
+}
+
 fn load_daemon_completion_packet(session_dir: &Path) -> Result<Option<DaemonCompletionPacket>> {
     let path = daemon_completion_path(session_dir);
     if !path.is_file() {
@@ -352,8 +421,8 @@ pub(crate) fn handle_session_attach(
     cd: Option<String>,
 ) -> Result<i32> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    let session_dir = resolved.sessions_dir.join(&resolved.session_id);
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
 
     let stdout_path = session_dir.join("stdout.log");
@@ -449,13 +518,22 @@ pub(crate) fn handle_session_attach(
                 "Daemon process {} exited without producing result.toml; synthesizing fallback",
                 pid,
             );
-            let _ = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
-                &project_root,
-                &resolved.session_id,
-                "session attach (daemon dead)",
-            );
-            // Try to load the synthesized or pre-existing result.
-            if let Ok(Some(result)) = csa_session::load_result(&project_root, &resolved.session_id)
+            // For cross-project sessions, skip synthesis (requires project_root write access).
+            let is_cross_project =
+                csa_session::get_session_dir(&project_root, &resolved.session_id).is_err();
+            if !is_cross_project {
+                let _ = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+                    &project_root,
+                    &resolved.session_id,
+                    "session attach (daemon dead)",
+                );
+            }
+            // Try to load the synthesized or pre-existing result from session_dir directly.
+            let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+            if result_path.is_file()
+                && let Ok(contents) = fs::read_to_string(&result_path)
+                && let Ok(result) =
+                    toml::from_str::<csa_session::result::SessionResult>(&contents)
             {
                 return Ok(result.exit_code);
             }
@@ -472,8 +550,8 @@ pub(crate) fn handle_session_attach(
 /// then SIGKILL after a 5-second grace period if still alive.
 pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
-    let session_dir = get_session_dir(&project_root, &resolved.session_id)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
+    let session_dir = resolved.sessions_dir.join(&resolved.session_id);
 
     let pid = read_daemon_pid(&session_dir).ok_or_else(|| {
         anyhow::anyhow!(

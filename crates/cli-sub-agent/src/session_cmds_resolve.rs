@@ -10,6 +10,10 @@ use csa_session::resolve_session_prefix;
 pub(crate) struct SessionPrefixResolution {
     pub session_id: String,
     pub sessions_dir: PathBuf,
+    /// When the session was resolved via global cross-project fallback, this
+    /// contains the foreign project's root path. Callers can use this instead
+    /// of the local `project_root` to call project-scoped session APIs.
+    pub foreign_project_root: Option<PathBuf>,
 }
 
 pub(crate) fn resolve_session_prefix_with_fallback(
@@ -65,6 +69,7 @@ pub(crate) fn resolve_session_prefix_from_dirs(
         Ok(session_id) => Ok(SessionPrefixResolution {
             session_id,
             sessions_dir: primary_sessions_dir.to_path_buf(),
+            foreign_project_root: None,
         }),
         Err(primary_err) if should_fallback_to_legacy(&primary_err) => {
             let Some(legacy_sessions_dir) = legacy_sessions_dir else {
@@ -75,6 +80,7 @@ pub(crate) fn resolve_session_prefix_from_dirs(
                 Ok(session_id) => Ok(SessionPrefixResolution {
                     session_id,
                     sessions_dir: legacy_sessions_dir.to_path_buf(),
+                    foreign_project_root: None,
                 }),
                 Err(legacy_err) if should_fallback_to_legacy(&legacy_err) => Err(primary_err),
                 Err(legacy_err) => Err(legacy_err),
@@ -86,4 +92,71 @@ pub(crate) fn resolve_session_prefix_from_dirs(
 
 fn should_fallback_to_legacy(err: &anyhow::Error) -> bool {
     err.to_string().contains("No session matching prefix")
+}
+
+/// Resolve a session by first trying project-scoped prefix lookup, then
+/// falling back to global exact ULID lookup across all projects (read-only).
+///
+/// When the global fallback finds a match, a warning is emitted to stderr
+/// and the resolution includes the foreign project's session directory.
+pub(crate) fn resolve_session_prefix_with_global_fallback(
+    project_root: &std::path::Path,
+    prefix: &str,
+) -> Result<SessionPrefixResolution> {
+    // First try the normal project-scoped resolution.
+    match resolve_session_prefix_with_fallback(project_root, prefix) {
+        Ok(resolution) => Ok(resolution),
+        Err(project_err) => {
+            // Only attempt global fallback for full 26-char ULIDs
+            if prefix.len() != 26 {
+                return Err(project_err);
+            }
+            // Validate it's actually a ULID
+            if csa_session::validate_session_id(prefix).is_err() {
+                return Err(project_err);
+            }
+            // Try global exact lookup
+            if let Some(session_dir) = csa_session::get_session_dir_global(prefix)? {
+                let sessions_dir = session_dir
+                    .parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| session_dir.clone());
+                // Extract the foreign project_path from state.toml for callers
+                // that need to call project-scoped session APIs.
+                let foreign_project_root =
+                    extract_foreign_project_root(&session_dir);
+                eprintln!(
+                    "Warning: session {} not found in current project, using cross-project fallback",
+                    prefix,
+                );
+                return Ok(SessionPrefixResolution {
+                    session_id: prefix.to_string(),
+                    sessions_dir,
+                    foreign_project_root,
+                });
+            }
+            Err(project_err)
+        }
+    }
+}
+
+/// Read `state.toml` from a session directory and extract the `project_path`
+/// field. Returns `None` if the file is missing or the field cannot be parsed.
+fn extract_foreign_project_root(session_dir: &Path) -> Option<PathBuf> {
+    let state_path = session_dir.join("state.toml");
+    let content = std::fs::read_to_string(&state_path).ok()?;
+    // Lightweight line-based extraction — avoids full TOML deserialization.
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("project_path") {
+            let rest = rest.trim();
+            if let Some(rest) = rest.strip_prefix('=') {
+                let value = rest.trim().trim_matches('"');
+                if !value.is_empty() {
+                    return Some(PathBuf::from(value));
+                }
+            }
+        }
+    }
+    None
 }

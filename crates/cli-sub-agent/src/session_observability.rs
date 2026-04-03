@@ -26,6 +26,45 @@ pub(crate) fn refresh_and_repair_result(
     Ok(Some(result))
 }
 
+/// Like [`refresh_and_repair_result`] but operates directly on a known
+/// `session_dir` without going through project-root-based path resolution.
+///
+/// Used for cross-project sessions where the session directory was resolved
+/// via global ULID fallback and the current project_root would reject it.
+pub(crate) fn refresh_and_repair_result_from_dir(
+    session_dir: &Path,
+) -> Result<Option<SessionResult>> {
+    refresh_structured_output(session_dir);
+
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    if !result_path.is_file() {
+        return Ok(None);
+    }
+    let contents = fs::read_to_string(&result_path)?;
+    let mut result: SessionResult = toml::from_str(&contents)?;
+
+    let mut changed = false;
+    if let Some(summary) = derive_better_summary(session_dir, &result.summary)?
+        && summary != result.summary
+    {
+        result.summary = summary;
+        changed = true;
+    }
+    if let Some(events_count) = count_transcript_events(session_dir)?
+        && events_count != result.events_count
+    {
+        result.events_count = events_count;
+        changed = true;
+    }
+
+    if changed {
+        // Write repaired result back (best-effort for cross-project sessions).
+        let _ = fs::write(&result_path, toml::to_string_pretty(&result)?);
+    }
+
+    Ok(Some(result))
+}
+
 pub(crate) fn enrich_result_from_session_dir(
     project_root: &Path,
     session_id: &str,

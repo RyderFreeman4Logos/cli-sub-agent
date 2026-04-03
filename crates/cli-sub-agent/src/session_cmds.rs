@@ -21,7 +21,7 @@ mod resolve;
 use resolve::list_checkpoints_from_dirs;
 pub(crate) use resolve::{
     SessionPrefixResolution, legacy_sessions_dir_from_primary_root,
-    resolve_session_prefix_with_fallback,
+    resolve_session_prefix_with_fallback, resolve_session_prefix_with_global_fallback,
 };
 
 fn truncate_with_ellipsis(input: &str, max_chars: usize) -> String {
@@ -175,7 +175,9 @@ pub(crate) fn retire_if_dead_with_result(
     Ok(true)
 }
 
-fn resolve_session_status(project_root: &Path, session: &MetaSessionState) -> String {
+fn resolve_session_status(session: &MetaSessionState) -> String {
+    // Use the session's own project_path so cross-project sessions resolve correctly.
+    let project_root = Path::new(&session.project_path);
     let sid = &session.meta_session_id;
     match load_result(project_root, sid) {
         Ok(Some(result)) => {
@@ -224,13 +226,31 @@ fn select_sessions_for_list(
     Ok(sessions)
 }
 
-fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_json::Value {
+fn select_sessions_for_list_all_projects(
+    branch: Option<&str>,
+    tool_filter: Option<&[&str]>,
+) -> Result<Vec<MetaSessionState>> {
+    let mut sessions = csa_session::list_all_sessions_all_projects()?;
+
+    if let Some(branch_filter) = branch {
+        sessions.retain(|session| session.branch.as_deref() == Some(branch_filter));
+    }
+
+    if let Some(tools) = tool_filter {
+        sessions.retain(|session| tools.iter().any(|tool| session.tools.contains_key(*tool)));
+    }
+
+    sessions.sort_by(|a, b| b.last_accessed.cmp(&a.last_accessed));
+    Ok(sessions)
+}
+
+fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
     let mut value = serde_json::json!({
         "session_id": session.meta_session_id,
         "last_accessed": session.last_accessed,
         "description": session.description.as_deref().unwrap_or(""),
         "tools": session.tools.keys().collect::<Vec<_>>(),
-        "status": resolve_session_status(project_root, session),
+        "status": resolve_session_status(session),
         "phase": format!("{:?}", session.phase),
         "branch": session.branch,
         "task_type": session.task_context.task_type,
@@ -267,6 +287,7 @@ pub(crate) fn handle_session_list(
     branch: Option<String>,
     tool: Option<String>,
     tree: bool,
+    all_projects: bool,
     format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
@@ -277,8 +298,11 @@ pub(crate) fn handle_session_list(
             list_sessions_tree_filtered(&project_root, tool_filter.as_deref(), branch.as_deref())?;
         print!("{tree_output}");
     } else {
-        let sessions =
-            select_sessions_for_list(&project_root, branch.as_deref(), tool_filter.as_deref())?;
+        let sessions = if all_projects {
+            select_sessions_for_list_all_projects(branch.as_deref(), tool_filter.as_deref())?
+        } else {
+            select_sessions_for_list(&project_root, branch.as_deref(), tool_filter.as_deref())?
+        };
         if sessions.is_empty() {
             match format {
                 OutputFormat::Json => {
@@ -296,22 +320,42 @@ pub(crate) fn handle_session_list(
                 // Serialize sessions as JSON array
                 let json_sessions: Vec<_> = sessions
                     .iter()
-                    .map(|s| session_to_json(&project_root, s))
+                    .map(|s| {
+                        let mut v = session_to_json(s);
+                        if all_projects {
+                            v["project_path"] = serde_json::json!(&s.project_path);
+                        }
+                        v
+                    })
                     .collect();
                 println!("{}", serde_json::to_string_pretty(&json_sessions)?);
             }
             OutputFormat::Text => {
                 // Print table header
-                println!(
-                    "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
-                    "SESSION", "LAST ACCESSED", "STATUS", "DESCRIPTION", "TOOLS", "BRANCH"
-                );
-                println!("{}", "-".repeat(130));
+                if all_projects {
+                    println!(
+                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  TOKENS",
+                        "SESSION",
+                        "LAST ACCESSED",
+                        "STATUS",
+                        "DESCRIPTION",
+                        "TOOLS",
+                        "BRANCH",
+                        "PROJECT"
+                    );
+                    println!("{}", "-".repeat(160));
+                } else {
+                    println!(
+                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  TOKENS",
+                        "SESSION", "LAST ACCESSED", "STATUS", "DESCRIPTION", "TOOLS", "BRANCH"
+                    );
+                    println!("{}", "-".repeat(130));
+                }
                 for session in sessions {
                     // Truncate ULID to 11 chars for readability
                     let short_id =
                         &session.meta_session_id[..11.min(session.meta_session_id.len())];
-                    let status_str = resolve_session_status(&project_root, &session);
+                    let status_str = resolve_session_status(&session);
                     let desc = session
                         .description
                         .as_deref()
@@ -370,21 +414,41 @@ pub(crate) fn handle_session_list(
                         format!("  {id}")
                     };
 
-                    println!(
-                        "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}{}",
-                        short_id,
-                        session
-                            .last_accessed
-                            .with_timezone(&chrono::Local)
-                            .format("%Y-%m-%d %H:%M"),
-                        status_str,
-                        desc_display,
-                        tools_str,
-                        branch_str,
-                        tokens_str,
-                        fork_suffix,
-                        change_suffix,
-                    );
+                    if all_projects {
+                        let project_display = truncate_with_ellipsis(&session.project_path, 30);
+                        println!(
+                            "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {:<30}  {}{}{}",
+                            short_id,
+                            session
+                                .last_accessed
+                                .with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M"),
+                            status_str,
+                            desc_display,
+                            tools_str,
+                            branch_str,
+                            project_display,
+                            tokens_str,
+                            fork_suffix,
+                            change_suffix,
+                        );
+                    } else {
+                        println!(
+                            "{:<11}  {:<19}  {:<10}  {:<25}  {:<20}  {:<18}  {}{}{}",
+                            short_id,
+                            session
+                                .last_accessed
+                                .with_timezone(&chrono::Local)
+                                .format("%Y-%m-%d %H:%M"),
+                            status_str,
+                            desc_display,
+                            tools_str,
+                            branch_str,
+                            tokens_str,
+                            fork_suffix,
+                            change_suffix,
+                        );
+                    }
                 }
             }
         }
@@ -444,30 +508,52 @@ pub(crate) fn handle_session_logs(
     cd: Option<String>,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
-    let session_dir = get_session_dir(&project_root, &resolved_id)?;
-    if let Err(err) =
-        ensure_terminal_result_for_dead_active_session(&project_root, &resolved_id, "session logs")
-    {
+    let session_dir = resolved.sessions_dir.join(&resolved_id);
+
+    // Use the foreign project root for cross-project sessions, local otherwise.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let is_cross_project = resolved.foreign_project_root.is_some();
+
+    if let Err(err) = ensure_terminal_result_for_dead_active_session(
+        effective_root,
+        &resolved_id,
+        "session logs",
+    ) {
         tracing::warn!(
             session_id = %resolved_id,
             error = %err,
             "Failed to reconcile dead Active session in session logs"
         );
     }
-    let repaired_result = match crate::session_observability::refresh_and_repair_result(
-        &project_root,
-        &resolved_id,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            tracing::warn!(
-                session_id = %resolved_id,
-                error = %err,
-                "Failed to refresh session result contract in session logs"
-            );
-            None
+
+    let repaired_result = if is_cross_project {
+        match crate::session_observability::refresh_and_repair_result_from_dir(&session_dir) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to refresh cross-project session result in session logs"
+                );
+                None
+            }
+        }
+    } else {
+        match crate::session_observability::refresh_and_repair_result(
+            &project_root,
+            &resolved_id,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to refresh session result contract in session logs"
+                );
+                None
+            }
         }
     };
 
@@ -627,9 +713,9 @@ fn print_content_with_tail(content: &str, tail: Option<usize>) {
 
 pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Result<bool> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
-    let session_dir = get_session_dir(&project_root, &resolved_id)?;
+    let session_dir = resolved.sessions_dir.join(&resolved_id);
     let alive = csa_process::ToolLiveness::is_alive(&session_dir);
     let working = csa_process::ToolLiveness::is_working(&session_dir);
 
@@ -640,9 +726,11 @@ pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Re
     } else {
         "not alive"
     };
+    // Use the foreign project root for cross-project sessions.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
     if !alive
         && let Err(err) = ensure_terminal_result_for_dead_active_session(
-            &project_root,
+            effective_root,
             &resolved_id,
             "session is-alive",
         )
@@ -713,7 +801,7 @@ pub(crate) fn format_file_size(bytes: u64) -> String {
 
 pub(crate) fn handle_session_log(session: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let log = csa_session::git::history(&resolved.sessions_dir, &resolved.session_id)?;
     if log.is_empty() {
         eprintln!("No git history for session '{}'", resolved.session_id);
@@ -728,6 +816,7 @@ pub(crate) fn handle_session_checkpoint(session: String, cd: Option<String>) -> 
     let SessionPrefixResolution {
         session_id: resolved_id,
         sessions_dir,
+        ..
     } = resolve_session_prefix_with_fallback(&project_root, &session)?;
 
     // Load the session state to build the checkpoint note

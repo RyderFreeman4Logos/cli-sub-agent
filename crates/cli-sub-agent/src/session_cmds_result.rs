@@ -7,7 +7,7 @@ use csa_session::SessionResult;
 
 use crate::session_cmds::{
     ensure_terminal_result_for_dead_active_session, format_file_size,
-    resolve_session_prefix_with_fallback,
+    resolve_session_prefix_with_fallback, resolve_session_prefix_with_global_fallback,
 };
 
 #[derive(Debug, Clone)]
@@ -83,12 +83,16 @@ pub(crate) fn handle_session_result(
     structured: StructuredOutputOpts,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
-    let resolved = resolve_session_prefix_with_fallback(&project_root, &session)?;
+    let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let resolved_id = resolved.session_id;
-    let session_dir = csa_session::get_session_dir(&project_root, &resolved_id)?;
+    let session_dir = resolved.sessions_dir.join(&resolved_id);
+
+    // Use the foreign project root for cross-project sessions, local otherwise.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let is_cross_project = resolved.foreign_project_root.is_some();
 
     if let Err(err) = ensure_terminal_result_for_dead_active_session(
-        &project_root,
+        effective_root,
         &resolved_id,
         "session result",
     ) {
@@ -98,18 +102,33 @@ pub(crate) fn handle_session_result(
             "Failed to reconcile dead Active session in session result"
         );
     }
-    let repaired_result = match crate::session_observability::refresh_and_repair_result(
-        &project_root,
-        &resolved_id,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            tracing::warn!(
-                session_id = %resolved_id,
-                error = %err,
-                "Failed to refresh session result contract in session result"
-            );
-            None
+
+    let repaired_result = if is_cross_project {
+        match crate::session_observability::refresh_and_repair_result_from_dir(&session_dir) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to refresh cross-project session result"
+                );
+                None
+            }
+        }
+    } else {
+        match crate::session_observability::refresh_and_repair_result(
+            &project_root,
+            &resolved_id,
+        ) {
+            Ok(result) => result,
+            Err(err) => {
+                tracing::warn!(
+                    session_id = %resolved_id,
+                    error = %err,
+                    "Failed to refresh session result contract in session result"
+                );
+                None
+            }
         }
     };
 
@@ -139,9 +158,14 @@ pub(crate) fn handle_session_result(
             }
         }
         None => {
-            let phase_label = csa_session::load_session(&project_root, &resolved_id)
-                .ok()
-                .map(|session| session.phase.to_string());
+            // For cross-project sessions, skip phase lookup (would fail).
+            let phase_label = if is_cross_project {
+                None
+            } else {
+                csa_session::load_session(&project_root, &resolved_id)
+                    .ok()
+                    .map(|session| session.phase.to_string())
+            };
             eprintln!(
                 "{}",
                 crate::session_observability::build_missing_result_diagnostic(
