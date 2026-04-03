@@ -34,6 +34,16 @@ Register each parsed TODO item via TaskCreate. Each task MUST include:
 
 Do NOT modify TODO.md checkboxes — task progress is tracked via TaskUpdate status.
 
+**MANDATORY publish-phase task decomposition** (when Step 6 applies):
+The publish pipeline MUST be registered as **separate, individually tracked tasks**:
+1. Push to remote
+2. Create or reuse PR
+3. **Run pr-bot** — SEPARATE task from PR creation. NEVER combine with step 2.
+4. Post-merge local sync
+
+pr-bot is the step that performs cloud review and the actual merge. Without a
+dedicated task for it, agents consistently skip it after PR creation.
+
 ## Step 3: Execute Tasks Serially
 
 Execute tasks strictly in order. Do not parallelize implementation work.
@@ -94,7 +104,13 @@ parent), complete the full pipeline:
 2. Run cumulative review (`csa review --range main...HEAD`).
 3. Push to remote (`--force-with-lease`).
 4. Create or reuse PR (`gh pr create`).
-5. Run pr-bot workflow for review + merge.
+5. **Run pr-bot** (`csa plan run --sa-mode true patterns/pr-bot/workflow.toml`).
+
+**CRITICAL — pr-bot is a SEPARATE step from PR creation:**
+- NEVER skip pr-bot after creating a PR.
+- NEVER merge the PR manually or via `gh pr merge`.
+- NEVER consider the pipeline "done" after PR creation.
+- pr-bot performs cloud review and the actual merge. It is the final gate.
 
 **Skipped when**: `CSA_SKIP_PUBLISH=true` is set by the parent workflow.
 dev2merge sets this before calling mktsk, since it handles publish in its

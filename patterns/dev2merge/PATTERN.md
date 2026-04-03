@@ -13,7 +13,14 @@ hard gates (`on_fail = "abort"`). No step can be skipped by the LLM.
 
 Pipeline: Branch Validation → FAST_PATH Detection → mktd (planning) →
 mktsk N*(implement → commit) → Pre-PR Cumulative Review → Push →
-PR Creation → pr-bot Hard Gate → Post-Merge Sync.
+PR Creation → **pr-bot Hard Gate** → Post-Merge Sync.
+
+**CRITICAL PIPELINE INVARIANT**: PR creation (Step 12) and pr-bot (Step 13) are
+**two separate hard gates**. Creating a PR does NOT complete the pipeline. You
+MUST run pr-bot (Step 13) after PR creation. NEVER skip Step 13. NEVER merge
+the PR manually or via `gh pr merge`. The pr-bot workflow handles the merge.
+Agents that stop after Step 12 leave the PR unmerged — this is a known failure
+mode that this invariant exists to prevent.
 
 Sub-workflows are included via `## INCLUDE`, not inlined.
 
