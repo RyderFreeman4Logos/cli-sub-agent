@@ -200,8 +200,10 @@ fn test_resources_config_is_default_with_default_initial_response_timeout() {
 
 #[test]
 fn test_resources_config_is_default_false_with_custom_initial_response_timeout() {
-    let mut cfg = ResourcesConfig::default();
-    cfg.initial_response_timeout_seconds = Some(60);
+    let cfg = ResourcesConfig {
+        initial_response_timeout_seconds: Some(60),
+        ..Default::default()
+    };
     assert!(!cfg.is_default());
 }
 
