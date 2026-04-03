@@ -142,8 +142,31 @@ pub fn try_acquire_slot(
         {
             Ok(file) => file,
             Err(err) => {
-                open_failures.push(format!("{} ({err})", slot_path.display()));
-                continue;
+                // Self-heal: if the slot file is a dangling symlink or other
+                // non-regular entry, remove it and retry once.
+                if slot_path.symlink_metadata().is_ok() && !slot_path.is_file() {
+                    let _ = fs::remove_file(&slot_path);
+                    if let Ok(file) = OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .create(true)
+                        .truncate(false)
+                        .open(&slot_path)
+                    {
+                        // Retry succeeded after cleanup.
+                        file
+                    } else {
+                        open_failures.push(format!(
+                            "{} ({}; retry after cleanup also failed)",
+                            slot_path.display(),
+                            err
+                        ));
+                        continue;
+                    }
+                } else {
+                    open_failures.push(format!("{} ({})", slot_path.display(), err));
+                    continue;
+                }
             }
         };
 
@@ -189,14 +212,32 @@ pub fn try_acquire_slot(
             .take(3)
             .cloned()
             .collect::<Vec<_>>()
-            .join("; ");
+            .join("\n  - ");
+        let hint = if occupied == 0 && open_failures.len() as u32 == max_concurrent {
+            // All slots failed to open and none are locked — likely a filesystem issue.
+            format!(
+                "\nHint: all {} slot files for '{}' could not be opened. \
+                 Check permissions on {}, or run `csa gc` to clean stale state.",
+                max_concurrent,
+                tool_name,
+                tool_dir.display()
+            )
+        } else {
+            format!(
+                "\nHint: {} of {} slots locked by other processes, \
+                 {} slot file(s) could not be opened.",
+                occupied,
+                max_concurrent,
+                open_failures.len()
+            )
+        };
         anyhow::bail!(
-            "Failed to open {} slot file(s) for '{}'. Locked slots: {}/{}. Examples: {}",
-            open_failures.len(),
+            "Slot file open failure for '{}': {}/{} files could not be opened.\n\
+             Errors:\n  - {}{hint}",
             tool_name,
-            occupied,
+            open_failures.len(),
             max_concurrent,
-            sample
+            sample,
         );
     }
 
@@ -620,35 +661,69 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_try_acquire_slot_skips_malformed_slot_file_and_uses_next_slot() {
+    fn test_try_acquire_slot_self_heals_dangling_symlink() {
         let dir = tempdir().unwrap();
         let tool_dir = dir.path().join("codex");
         fs::create_dir_all(&tool_dir).unwrap();
+        // Create a self-referencing (dangling) symlink in slot 0.
         std::os::unix::fs::symlink("slot-00.lock", tool_dir.join("slot-00.lock")).unwrap();
 
+        // Self-heal removes the symlink and creates a regular file — slot 0 acquired.
         let result = try_acquire_slot(dir.path(), "codex", 2, None).unwrap();
         match result {
-            SlotAcquireResult::Acquired(slot) => assert_eq!(slot.slot_index(), 1),
+            SlotAcquireResult::Acquired(slot) => assert_eq!(slot.slot_index(), 0),
             SlotAcquireResult::Exhausted(_) => panic!("expected slot acquisition"),
         }
     }
 
     #[cfg(unix)]
     #[test]
-    fn test_try_acquire_slot_errors_when_all_slot_files_are_malformed() {
+    fn test_try_acquire_slot_self_heals_all_dangling_symlinks() {
         let dir = tempdir().unwrap();
         let tool_dir = dir.path().join("codex");
         fs::create_dir_all(&tool_dir).unwrap();
         std::os::unix::fs::symlink("slot-00.lock", tool_dir.join("slot-00.lock")).unwrap();
         std::os::unix::fs::symlink("slot-01.lock", tool_dir.join("slot-01.lock")).unwrap();
 
-        let err = match try_acquire_slot(dir.path(), "codex", 2, None) {
-            Ok(_) => panic!("expected malformed slot files to fail"),
-            Err(err) => err,
+        // Both dangling symlinks are cleaned up — slot 0 acquired.
+        let result = try_acquire_slot(dir.path(), "codex", 2, None).unwrap();
+        match result {
+            SlotAcquireResult::Acquired(slot) => assert_eq!(slot.slot_index(), 0),
+            SlotAcquireResult::Exhausted(_) => panic!("expected slot acquisition after self-heal"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_try_acquire_slot_errors_with_diagnostic_on_permission_denied() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let tool_dir = dir.path().join("perm-tool");
+        fs::create_dir_all(&tool_dir).unwrap();
+
+        // Create a slot file and make it unreadable/unwritable.
+        let slot_path = tool_dir.join("slot-00.lock");
+        fs::write(&slot_path, "").unwrap();
+        fs::set_permissions(&slot_path, fs::Permissions::from_mode(0o000)).unwrap();
+
+        let result = try_acquire_slot(dir.path(), "perm-tool", 1, None);
+        // Restore permissions for cleanup.
+        let _ = fs::set_permissions(&slot_path, fs::Permissions::from_mode(0o644));
+
+        let err = match result {
+            Err(e) => e,
+            Ok(_) => panic!("expected error for permission-denied slot file"),
         };
         let msg = err.to_string();
-        assert!(msg.contains("Failed to open 2 slot file(s) for 'codex'"));
-        assert!(msg.contains("slot-00.lock"));
-        assert!(msg.contains("slot-01.lock"));
+        assert!(
+            msg.contains("Slot file open failure for 'perm-tool'"),
+            "error should mention tool name: {msg}"
+        );
+        assert!(
+            msg.contains("slot-00.lock"),
+            "error should include file path: {msg}"
+        );
+        assert!(msg.contains("Hint:"), "error should include hint: {msg}");
     }
 }

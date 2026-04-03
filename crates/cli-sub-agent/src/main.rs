@@ -171,8 +171,18 @@ fn resolve_effective_min_timeout() -> u64 {
 }
 
 fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
-    // TODO lifecycle commands must stay available for recovery even when weave is unhealthy.
-    !matches!(command, Commands::Todo { .. })
+    // Only execution commands need upgraded weave patterns.
+    // All management/read-only commands stay available even when weave is unhealthy.
+    matches!(
+        command,
+        Commands::Run { .. }
+            | Commands::Review(_)
+            | Commands::Debate(_)
+            | Commands::Batch { .. }
+            | Commands::Plan { .. }
+            | Commands::ClaudeSubAgent(_)
+            | Commands::McpServer
+    )
 }
 
 /// Apply SA mode prompt guard and emit caller-side constraint if active.
@@ -321,41 +331,25 @@ async fn run() -> Result<()> {
                     .status()
                     .await;
 
-                match result {
-                    Ok(status) if status.success() => {
-                        success = true;
-                        break;
-                    }
-                    Ok(status) => {
-                        if attempt < 2 {
-                            tracing::debug!(
-                                "weave upgrade failed (exit {}), retrying in {:?}...",
-                                status.code().unwrap_or(-1),
-                                delay
-                            );
-                            tokio::time::sleep(delay).await;
-                            delay *= 2;
-                        }
-                    }
-                    Err(e) => {
-                        if attempt < 2 {
-                            tracing::debug!(
-                                "weave upgrade failed ({}), retrying in {:?}...",
-                                e,
-                                delay
-                            );
-                            tokio::time::sleep(delay).await;
-                            delay *= 2;
-                        }
-                    }
+                let ok = result.as_ref().map(|s| s.success()).unwrap_or(false);
+                if ok {
+                    success = true;
+                    break;
+                }
+                if attempt < 2 {
+                    tracing::debug!(
+                        "weave upgrade attempt {attempt} failed, retrying in {delay:?}"
+                    );
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
                 }
             }
 
             if !success {
-                anyhow::bail!(
-                    "auto weave upgrade failed after 3 attempts. \
-                     Disable with [execution] auto_weave_upgrade = false"
-                );
+                let msg = "auto weave upgrade failed after 3 attempts (non-fatal). \
+                           Disable with [execution] auto_weave_upgrade = false";
+                tracing::warn!(msg);
+                eprintln!("warning: {msg}");
             }
         }
     }
