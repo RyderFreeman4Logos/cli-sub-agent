@@ -22,9 +22,28 @@ use csa_session::state::{MetaSessionState, ToolState};
 mod transport_meta;
 use transport_meta::{build_summary, run_acp_sandboxed};
 
+#[path = "transport_gemini_helpers.rs"]
+mod transport_gemini_helpers;
+#[cfg(test)]
+use transport_gemini_helpers::format_gemini_retry_report;
+use transport_gemini_helpers::{
+    GeminiRetryPhase, annotate_gemini_retry_error, append_gemini_retry_report,
+    apply_gemini_sandbox_runtime_env_overrides, classify_join_error,
+    ensure_gemini_runtime_home_writable_path, gemini_phase_desc,
+    gemini_sandbox_runtime_env_overrides,
+};
+
+#[path = "transport_gemini_acp_runtime.rs"]
+mod transport_gemini_acp_runtime;
+use transport_gemini_acp_runtime::{gemini_runtime_home_from_env, prepare_gemini_acp_runtime};
+
 #[path = "transport_fork.rs"]
 mod transport_fork;
 pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
+
+#[path = "transport_factory.rs"]
+mod transport_factory;
+pub use transport_factory::{TransportFactory, TransportMode};
 
 #[derive(Debug, Clone)]
 pub struct SandboxTransportConfig {
@@ -72,6 +91,7 @@ pub struct TransportResult {
     pub events: Vec<SessionEvent>,
     pub metadata: csa_acp::StreamingMetadata,
 }
+
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
     executor: Executor,
@@ -410,15 +430,35 @@ impl AcpTransport {
         acp_args: &[String],
         resume_session_id: Option<&str>,
     ) -> Result<TransportResult> {
-        let env = self.build_env(session, extra_env);
+        let mut env = self.build_env(session, extra_env);
         let working_dir = Path::new(&session.project_path).to_path_buf();
         let system_prompt = Self::build_system_prompt(self.session_config.as_ref());
-        let acp_command = self.acp_command.clone();
-        let acp_args = acp_args.to_vec();
+        let mut acp_command = self.acp_command.clone();
+        let mut acp_args = acp_args.to_vec();
         let prompt = prompt.to_string();
         let resume_session_id = resume_session_id.map(String::from);
 
-        let sandbox_plan = options.sandbox.map(|s| s.isolation_plan.clone());
+        let mut gemini_runtime_home = None;
+        if self.tool_name == "gemini-cli" {
+            let launch = prepare_gemini_acp_runtime(&mut env, &session.meta_session_id, &acp_args)?;
+            acp_command = launch.command;
+            acp_args = launch.args;
+            gemini_runtime_home = gemini_runtime_home_from_env(&env);
+        }
+        let gemini_sandbox_env_overrides =
+            (self.tool_name == "gemini-cli").then(|| gemini_sandbox_runtime_env_overrides(&env));
+
+        let sandbox_plan = options.sandbox.map(|s| {
+            let mut isolation_plan = s.isolation_plan.clone();
+            if let Some(ref env_overrides) = gemini_sandbox_env_overrides {
+                ensure_gemini_runtime_home_writable_path(
+                    &mut isolation_plan,
+                    gemini_runtime_home.as_deref(),
+                );
+                apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, env_overrides);
+            }
+            isolation_plan
+        });
         let sandbox_tool_name = options.sandbox.map(|s| s.tool_name.clone());
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
@@ -609,7 +649,9 @@ impl Transport for AcpTransport {
         );
 
         let mut attempt = 1u8;
+        let mut retry_phases = Vec::new();
         loop {
+            retry_phases.push(GeminiRetryPhase::for_attempt(attempt));
             // Build ACP args for this attempt, injecting model override in phase 3.
             let mut args = self.acp_args.clone();
             if let Some(model) = gemini_retry_model(attempt) {
@@ -667,18 +709,13 @@ impl Transport for AcpTransport {
 
             let should_retry = match &result {
                 Ok(tr) => is_gemini_rate_limited_result(&tr.execution),
-                Err(e) => is_gemini_rate_limited_error(&e.to_string()),
+                Err(e) => is_gemini_rate_limited_error(&format!("{e:#}")),
             };
 
             if should_retry && attempt < max_attempts {
-                let phase_desc = match attempt {
-                    1 => "OAuth→APIKey(same model)",
-                    2 => "APIKey(same model)→APIKey(flash)",
-                    _ => "final",
-                };
                 tracing::info!(
                     attempt,
-                    phase_desc,
+                    phase_desc = gemini_phase_desc(attempt),
                     "gemini-cli ACP rate limited; advancing phase"
                 );
                 tokio::time::sleep(gemini_rate_limit_backoff(attempt)).await;
@@ -694,85 +731,19 @@ impl Transport for AcpTransport {
                 );
             }
 
-            return result;
+            return match result {
+                Ok(mut transport_result) => {
+                    append_gemini_retry_report(&mut transport_result.execution, &retry_phases);
+                    Ok(transport_result)
+                }
+                Err(error) => Err(annotate_gemini_retry_error(error, &retry_phases)),
+            };
         }
     }
 
     #[cfg(test)]
     fn as_any(&self) -> &dyn std::any::Any {
         self
-    }
-}
-
-/// Convert a `tokio::task::JoinError` into a descriptive `anyhow::Error`.
-///
-/// Broken-pipe panics (from `eprintln!` after the tool process closes stderr)
-/// are rewritten into a clean message that mentions the tool died, instead of
-/// surfacing the raw tokio panic trace.
-fn classify_join_error(e: tokio::task::JoinError) -> anyhow::Error {
-    if e.is_panic() {
-        let msg = match e.into_panic().downcast::<String>() {
-            Ok(s) => *s,
-            Err(any) => match any.downcast::<&str>() {
-                Ok(s) => s.to_string(),
-                Err(_) => "unknown panic".to_string(),
-            },
-        };
-        if msg.contains("Broken pipe") || msg.contains("os error 32") {
-            return anyhow!(
-                "ACP transport: tool process terminated unexpectedly (broken pipe on stderr)"
-            );
-        }
-        anyhow!("ACP transport: task panicked: {msg}")
-    } else {
-        anyhow!("ACP transport: task cancelled: {e}")
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TransportMode {
-    Legacy,
-    Acp,
-    OpenaiCompat,
-}
-
-pub struct TransportFactory;
-
-impl TransportFactory {
-    pub fn mode_for_tool(tool_name: &str) -> TransportMode {
-        match tool_name {
-            "claude-code" | "codex" | "gemini-cli" => TransportMode::Acp,
-            "openai-compat" => TransportMode::OpenaiCompat,
-            _ => TransportMode::Legacy,
-        }
-    }
-
-    pub fn create(
-        executor: &Executor,
-        session_config: Option<SessionConfig>,
-    ) -> Box<dyn Transport> {
-        match Self::mode_for_tool(executor.tool_name()) {
-            TransportMode::Legacy => Box::new(LegacyTransport::new(executor.clone())),
-            TransportMode::Acp => Box::new(AcpTransport::new(executor.tool_name(), session_config)),
-            TransportMode::OpenaiCompat => {
-                let default_model = if let Executor::OpenaiCompat { model_override, .. } = executor
-                {
-                    model_override.clone()
-                } else {
-                    None
-                };
-                Box::new(crate::transport_openai_compat::OpenaiCompatTransport::new(
-                    default_model,
-                ))
-            }
-        }
-    }
-
-    /// Create an OpenAI-compat transport with explicit config.
-    pub fn create_openai_compat(
-        config: crate::transport_openai_compat::OpenaiCompatConfig,
-    ) -> Box<dyn Transport> {
-        Box::new(crate::transport_openai_compat::OpenaiCompatTransport::with_config(config))
     }
 }
 

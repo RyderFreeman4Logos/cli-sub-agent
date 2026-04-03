@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 #[test]
 fn test_gemini_should_use_api_key_by_phase() {
     // Phase 1: OAuth auth
@@ -23,7 +25,10 @@ fn test_gemini_rate_limit_backoff_is_exponential() {
 #[test]
 fn test_inject_api_key_fallback_promotes_key_and_removes_internal() {
     let mut env = HashMap::new();
-    env.insert("_CSA_API_KEY_FALLBACK".to_string(), "test-api-key-123".to_string());
+    env.insert(
+        "_CSA_API_KEY_FALLBACK".to_string(),
+        "test-api-key-123".to_string(),
+    );
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     env.insert("OTHER_VAR".to_string(), "keep".to_string());
     let result = gemini_inject_api_key_fallback(Some(&env)).unwrap();
@@ -43,7 +48,10 @@ fn test_inject_api_key_fallback_returns_none_without_key() {
 #[test]
 fn test_inject_api_key_fallback_returns_none_for_api_key_mode() {
     let mut env = HashMap::new();
-    env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
+    env.insert(
+        "_CSA_API_KEY_FALLBACK".to_string(),
+        "fallback-key".to_string(),
+    );
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "api_key".to_string());
     assert!(gemini_inject_api_key_fallback(Some(&env)).is_none());
 }
@@ -51,7 +59,10 @@ fn test_inject_api_key_fallback_returns_none_for_api_key_mode() {
 #[tokio::test]
 async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
     let (_temp, mut env, _model_log_path) = setup_fake_gemini_environment(99);
-    env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
+    env.insert(
+        "_CSA_API_KEY_FALLBACK".to_string(),
+        "fallback-key".to_string(),
+    );
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
@@ -82,7 +93,10 @@ async fn test_execute_in_falls_back_to_api_key_after_all_retries_exhausted() {
 #[tokio::test]
 async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
     let (temp, mut env, _model_log_path) = setup_fake_gemini_environment(99);
-    env.insert("_CSA_API_KEY_FALLBACK".to_string(), "fallback-key".to_string());
+    env.insert(
+        "_CSA_API_KEY_FALLBACK".to_string(),
+        "fallback-key".to_string(),
+    );
     env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
     let transport = LegacyTransport::new(Executor::GeminiCli {
         model_override: None,
@@ -113,6 +127,106 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
     // (3 model retries + 1 fallback) confirms the fallback path was taken.
     assert_ne!(result.execution.exit_code, 0);
     assert!(result.execution.stderr_output.contains("QUOTA_EXHAUSTED"));
+}
+
+#[tokio::test]
+async fn test_execute_in_new_invocation_restarts_with_oauth_before_fallback() {
+    let (_temp, mut env, model_log_path) = setup_fake_gemini_environment(99);
+    env.insert(
+        "_CSA_API_KEY_FALLBACK".to_string(),
+        "fallback-key".to_string(),
+    );
+    env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
+    env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let first = transport
+        .execute_in(
+            "first invocation",
+            std::path::Path::new("/tmp"),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+        )
+        .await
+        .expect("first invocation should return the last failed attempt");
+    assert_ne!(first.execution.exit_code, 0);
+
+    let second = transport
+        .execute_in(
+            "second invocation",
+            std::path::Path::new("/tmp"),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+        )
+        .await
+        .expect("second invocation should return the last failed attempt");
+    assert_ne!(second.execution.exit_code, 0);
+
+    let auths = read_auth_log(&model_log_path);
+    assert_eq!(
+        auths,
+        vec![
+            "oauth".to_string(),
+            "api_key".to_string(),
+            "oauth".to_string(),
+            "api_key".to_string(),
+        ],
+        "each invocation must restart on the quota-backed path before reusing API key fallback"
+    );
+}
+
+#[tokio::test]
+async fn test_execute_in_non_quota_failure_does_not_trigger_api_key_fallback() {
+    let (_temp, mut env, model_log_path) = setup_fake_gemini_environment(99);
+    env.insert(
+        "_CSA_API_KEY_FALLBACK".to_string(),
+        "fallback-key".to_string(),
+    );
+    env.insert("_CSA_GEMINI_AUTH_MODE".to_string(), "oauth".to_string());
+    env.insert(
+        "CSA_FAKE_GEMINI_FAILURE_REASON".to_string(),
+        "internal server error".to_string(),
+    );
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+
+    let result = transport
+        .execute_in(
+            "non quota failure",
+            std::path::Path::new("/tmp"),
+            Some(&env),
+            StreamMode::BufferOnly,
+            30,
+        )
+        .await
+        .expect("non-quota failures should be returned directly");
+
+    assert_ne!(result.execution.exit_code, 0);
+    assert!(
+        result
+            .execution
+            .stderr_output
+            .contains("internal server error"),
+        "unexpected stderr: {}",
+        result.execution.stderr_output
+    );
+    assert_eq!(
+        read_model_log(&model_log_path),
+        vec!["inherit".to_string()],
+        "non-quota failures must not trigger another Gemini attempt"
+    );
+    assert_eq!(
+        read_auth_log(&model_log_path),
+        vec!["oauth".to_string()],
+        "non-quota failures must not switch auth modes"
+    );
 }
 
 #[tokio::test]
@@ -172,7 +286,13 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
     };
 
     let result = transport
-        .execute("test best effort fallback", None, &session, Some(&env), options)
+        .execute(
+            "test best effort fallback",
+            None,
+            &session,
+            Some(&env),
+            options,
+        )
         .await
         .expect("execute should succeed after best-effort fallback and retry");
 
@@ -219,6 +339,26 @@ fn test_is_gemini_rate_limited_error_matches_acp_wrapped_quota_exhausted() {
 }
 
 #[test]
+fn test_is_gemini_rate_limited_error_matches_new_capacity_phrase() {
+    let acp_error_msg = "ACP transport failed: ACP prompt failed: You have exhausted your capacity on this model. Your quota will reset after 13h52m46s.";
+    assert!(
+        is_gemini_rate_limited_error(acp_error_msg),
+        "should detect Gemini's newer exhausted-capacity wording"
+    );
+}
+
+#[test]
+fn test_is_gemini_rate_limited_error_matches_anyhow_context_chain() {
+    let error = anyhow::anyhow!("You have exhausted your capacity on this model.")
+        .context("ACP prompt failed")
+        .context("ACP transport failed");
+    assert!(
+        is_gemini_rate_limited_error(&format!("{error:#}")),
+        "should detect rate limits in anyhow context chains"
+    );
+}
+
+#[test]
 fn test_is_gemini_rate_limited_error_matches_unsandboxed_fallback_error() {
     let acp_error_msg =
         "ACP transport (unsandboxed fallback) failed: ACP prompt failed: resource exhausted";
@@ -230,8 +370,7 @@ fn test_is_gemini_rate_limited_error_matches_unsandboxed_fallback_error() {
 
 #[test]
 fn test_is_gemini_rate_limited_error_matches_plain_acp_error() {
-    let acp_error_msg =
-        "ACP transport failed: ACP prompt failed: No capacity available for model";
+    let acp_error_msg = "ACP transport failed: ACP prompt failed: No capacity available for model";
     assert!(
         is_gemini_rate_limited_error(acp_error_msg),
         "should detect rate limit in non-sandboxed ACP path"
@@ -287,5 +426,279 @@ fn test_is_gemini_rate_limited_result_ignores_success_exit_code() {
     assert!(
         !is_gemini_rate_limited_result(&execution),
         "should not retry when exit code is 0 even if output contains rate limit text"
+    );
+}
+
+#[test]
+fn test_format_gemini_retry_report_lists_attempt_phases() {
+    let phases = vec![
+        GeminiRetryPhase::for_attempt(1),
+        GeminiRetryPhase::for_attempt(2),
+        GeminiRetryPhase::for_attempt(3),
+    ];
+
+    let report = format_gemini_retry_report(&phases);
+
+    assert!(report.contains("attempt=1"));
+    assert!(report.contains("auth=oauth"));
+    assert!(report.contains("attempt=2"));
+    assert!(report.contains("auth=api_key"));
+    assert!(report.contains("model=gemini-3-flash-preview"));
+}
+
+#[test]
+fn test_annotate_gemini_retry_error_includes_phase_history() {
+    let phases = vec![
+        GeminiRetryPhase::for_attempt(1),
+        GeminiRetryPhase::for_attempt(2),
+    ];
+
+    let error = annotate_gemini_retry_error(anyhow::anyhow!("quota exhausted"), &phases);
+    let rendered = format!("{error:#}");
+
+    assert!(rendered.contains("Gemini ACP retry chain exhausted."));
+    assert!(rendered.contains("attempt=1"));
+    assert!(rendered.contains("attempt=2"));
+    assert!(rendered.contains("quota exhausted"));
+}
+
+#[test]
+fn test_ensure_gemini_runtime_home_writable_path_adds_runtime_home_under_tmp() {
+    let runtime_home = PathBuf::from("/tmp/cli-sub-agent-gemini/01TEST/session-home");
+    let mut isolation_plan = IsolationPlan {
+        resource: csa_resource::sandbox::ResourceCapability::None,
+        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+        writable_paths: vec![PathBuf::from("/tmp")],
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+    };
+
+    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
+
+    assert!(
+        isolation_plan.writable_paths.contains(&runtime_home),
+        "runtime home under /tmp must be bound explicitly because bwrap skips --bind /tmp"
+    );
+}
+
+#[test]
+fn test_ensure_gemini_runtime_home_writable_path_skips_when_parent_is_bound() {
+    let runtime_root = PathBuf::from("/tmp/cli-sub-agent-gemini");
+    let runtime_home = runtime_root.join("01TEST/session-home");
+    let mut isolation_plan = IsolationPlan {
+        resource: csa_resource::sandbox::ResourceCapability::None,
+        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+        writable_paths: vec![runtime_root.clone()],
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+    };
+
+    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
+
+    assert_eq!(
+        isolation_plan
+            .writable_paths
+            .iter()
+            .filter(|path| **path == runtime_root || **path == runtime_home)
+            .count(),
+        1,
+        "an existing non-/tmp parent bind already exposes the runtime home"
+    );
+}
+
+#[test]
+fn test_ensure_gemini_runtime_home_writable_path_is_noop_without_runtime_home() {
+    let mut isolation_plan = IsolationPlan {
+        resource: csa_resource::sandbox::ResourceCapability::None,
+        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+        writable_paths: vec![PathBuf::from("/project")],
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+    };
+
+    ensure_gemini_runtime_home_writable_path(&mut isolation_plan, None);
+
+    assert_eq!(
+        isolation_plan.writable_paths,
+        vec![PathBuf::from("/project")]
+    );
+}
+
+#[test]
+fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears_api_key() {
+    let runtime_home = "/tmp/cli-sub-agent-gemini/01TEST/runtime-home";
+    let mut env = HashMap::new();
+    env.insert("HOME".to_string(), runtime_home.to_string());
+    env.insert(
+        "PATH".to_string(),
+        "/runtime/node/bin:/runtime/yarn/bin:/usr/local/bin".to_string(),
+    );
+    env.insert("GEMINI_CLI_HOME".to_string(), runtime_home.to_string());
+    env.insert(
+        "XDG_CONFIG_HOME".to_string(),
+        format!("{runtime_home}/.config"),
+    );
+    env.insert(
+        "XDG_CACHE_HOME".to_string(),
+        format!("{runtime_home}/.cache"),
+    );
+    env.insert(
+        "XDG_STATE_HOME".to_string(),
+        format!("{runtime_home}/.local/state"),
+    );
+    env.insert(
+        "MISE_CACHE_DIR".to_string(),
+        format!("{runtime_home}/.cache/mise"),
+    );
+    env.insert(
+        "MISE_STATE_DIR".to_string(),
+        format!("{runtime_home}/.local/state/mise"),
+    );
+    env.insert("MISE_SHIM".to_string(), String::new());
+    env.insert("MISE_SHIMS_DIR".to_string(), String::new());
+    env.insert(
+        csa_core::gemini::AUTH_MODE_ENV_KEY.to_string(),
+        csa_core::gemini::AUTH_MODE_OAUTH.to_string(),
+    );
+    let mut isolation_plan = IsolationPlan {
+        resource: csa_resource::sandbox::ResourceCapability::None,
+        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+    };
+
+    let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
+    apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
+
+    assert_eq!(
+        isolation_plan.env_overrides.get("HOME"),
+        Some(&runtime_home.to_string())
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("GEMINI_CLI_HOME"),
+        Some(&runtime_home.to_string())
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("PATH"),
+        Some(&"/runtime/node/bin:/runtime/yarn/bin:/usr/local/bin".to_string()),
+        "sandbox should receive the sanitized runtime PATH so nested yarn/node launches avoid mise shims"
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("XDG_STATE_HOME"),
+        Some(&format!("{runtime_home}/.local/state"))
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("MISE_CACHE_DIR"),
+        Some(&format!("{runtime_home}/.cache/mise")),
+        "sandbox should pin mise cache inside the Gemini runtime home"
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("MISE_STATE_DIR"),
+        Some(&format!("{runtime_home}/.local/state/mise")),
+        "sandbox should pin mise state inside the Gemini runtime home"
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("MISE_SHIM"),
+        Some(&String::new())
+    );
+    assert_eq!(
+        isolation_plan.env_overrides.get("MISE_SHIMS_DIR"),
+        Some(&String::new())
+    );
+    assert_eq!(
+        isolation_plan
+            .env_overrides
+            .get(csa_core::gemini::AUTH_MODE_ENV_KEY),
+        Some(&csa_core::gemini::AUTH_MODE_OAUTH.to_string())
+    );
+    assert_eq!(
+        isolation_plan
+            .env_overrides
+            .get(csa_core::gemini::API_KEY_ENV),
+        Some(&String::new()),
+        "phase 1 must clear inherited GEMINI_API_KEY inside the sandbox"
+    );
+    assert_eq!(
+        isolation_plan
+            .env_overrides
+            .get(csa_core::gemini::BASE_URL_ENV),
+        Some(&String::new()),
+        "sandbox should also clear inherited Gemini base-url overrides when absent"
+    );
+}
+
+#[test]
+fn test_apply_gemini_sandbox_runtime_env_overrides_preserves_phase2_api_key() {
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        "/tmp/cli-sub-agent-gemini/01TEST".to_string(),
+    );
+    env.insert(
+        csa_core::gemini::AUTH_MODE_ENV_KEY.to_string(),
+        csa_core::gemini::AUTH_MODE_API_KEY.to_string(),
+    );
+    env.insert(
+        csa_core::gemini::API_KEY_ENV.to_string(),
+        "fallback-key".to_string(),
+    );
+    env.insert(
+        csa_core::gemini::BASE_URL_ENV.to_string(),
+        "https://proxy.example.test".to_string(),
+    );
+    let mut isolation_plan = IsolationPlan {
+        resource: csa_resource::sandbox::ResourceCapability::None,
+        filesystem: csa_resource::filesystem_sandbox::FilesystemCapability::Bwrap,
+        writable_paths: Vec::new(),
+        env_overrides: HashMap::new(),
+        degraded_reasons: Vec::new(),
+        memory_max_mb: None,
+        memory_swap_max_mb: None,
+        pids_max: None,
+        readonly_project_root: false,
+        project_root: None,
+    };
+
+    let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
+    apply_gemini_sandbox_runtime_env_overrides(&mut isolation_plan, &env_overrides);
+
+    assert_eq!(
+        isolation_plan
+            .env_overrides
+            .get(csa_core::gemini::AUTH_MODE_ENV_KEY),
+        Some(&csa_core::gemini::AUTH_MODE_API_KEY.to_string())
+    );
+    assert_eq!(
+        isolation_plan
+            .env_overrides
+            .get(csa_core::gemini::API_KEY_ENV),
+        Some(&"fallback-key".to_string())
+    );
+    assert_eq!(
+        isolation_plan
+            .env_overrides
+            .get(csa_core::gemini::BASE_URL_ENV),
+        Some(&"https://proxy.example.test".to_string())
     );
 }

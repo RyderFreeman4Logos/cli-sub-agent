@@ -326,7 +326,10 @@ fn last_non_empty_line(output: &str) -> &str {
     output
         .lines()
         .rev()
-        .find(|line| !line.trim().is_empty())
+        .find(|line| {
+            let trimmed = line.trim();
+            !trimmed.is_empty() && !trimmed.starts_with("<!-- CSA:SECTION:")
+        })
         .unwrap_or_default()
 }
 
