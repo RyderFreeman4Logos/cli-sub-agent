@@ -54,14 +54,17 @@ mkdir -p scripts && cat > scripts/bg.sh << 'BGEOF'
 #!/bin/bash
 set -euo pipefail
 if [ $# -lt 2 ]; then echo "Usage: bg.sh <logfile> <command...>" >&2; exit 1; fi
-LOGFILE="$1"; shift; mkdir -p "$(dirname "$LOGFILE")"
+LOGFILE="$1"; shift
+LOGDIR="$(dirname "$LOGFILE")"
+mkdir -p "$LOGDIR"
+LOGFILE="$(cd "$LOGDIR" && pwd)/$(basename "$LOGFILE")"
 export LOGFILE
 nohup bash -c '"$@"; echo $? > "${LOGFILE}.exitcode"' _ "$@" >> "$LOGFILE" 2>&1 &
 PID=$!; echo "PID=$PID LOG=$LOGFILE"
 sleep 3
 if kill -0 "$PID" 2>/dev/null; then echo "ALIVE pid=$PID"; exit 0
 else
-  if [ -f "${LOGFILE}.exitcode" ] && [ "$(cat "${LOGFILE}.exitcode")" -eq 0 ]; then
+  if [ -f "${LOGFILE}.exitcode" ] && [ "$(cat "${LOGFILE}.exitcode")" = "0" ]; then
     echo "DONE pid=$PID exit=0"; exit 0
   fi
   echo "DEAD pid=$PID exit=$(cat "${LOGFILE}.exitcode" 2>/dev/null || echo unknown)" >&2
@@ -74,7 +77,7 @@ chmod +x scripts/bg.sh
 ### Step 2: Launch
 
 ```bash
-bash scripts/bg.sh /tmp/<task>-$(date +%s).log <command...>
+bash scripts/bg.sh "/tmp/<task>-$(date +%s).log" <command...>
 ```
 
 Parse the output to extract `PID` and `LOG` path. If output says `DEAD`, the
@@ -89,7 +92,7 @@ gap and the cache expires.
 **Single poll command (copy-paste ready):**
 
 ```bash
-sleep 245 && if kill -0 <PID> 2>/dev/null; then echo "POLL:RUNNING"; tail -3 <LOG>; else echo "POLL:DONE exit=$(cat <LOG>.exitcode 2>/dev/null || echo unknown)"; tail -20 <LOG>; fi
+sleep 245 && if kill -0 <PID> 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "<LOG>"; else echo "POLL:DONE exit=$(cat "<LOG>.exitcode" 2>/dev/null || echo unknown)"; tail -20 "<LOG>"; fi
 ```
 
 Set Bash timeout to **300000** ms (300s = 245s sleep + 55s margin).
@@ -107,13 +110,13 @@ Set Bash timeout to **300000** ms (300s = 245s sleep + 55s margin).
 When process finishes, read the full log:
 
 ```bash
-cat <LOG>
+cat "<LOG>"
 ```
 
 Or tail a reasonable amount if the log is large:
 
 ```bash
-tail -100 <LOG>
+tail -100 "<LOG>"
 ```
 
 ## Interleaving with Other Work
@@ -162,11 +165,11 @@ The break-even point is ~12–18 days of continuous polling.
 
 ```bash
 # Step 1: Launch
-bash scripts/bg.sh /tmp/cargo-build-$(date +%s).log cargo build --release
+bash scripts/bg.sh "/tmp/cargo-build-$(date +%s).log" cargo build --release
 # → PID=12345 LOG=/tmp/cargo-build-1743666000.log
 
 # Step 2: First poll (separate Bash call, timeout 300000ms)
-sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/cargo-build-1743666000.log; else echo "POLL:DONE exit=$(cat /tmp/cargo-build-1743666000.log.exitcode 2>/dev/null || echo unknown)"; tail -20 /tmp/cargo-build-1743666000.log; fi
+sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/cargo-build-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/cargo-build-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/cargo-build-1743666000.log"; fi
 
 # Step 3: Repeat until POLL:DONE
 ```
@@ -175,22 +178,22 @@ sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tm
 
 ```bash
 # Step 1: Launch
-bash scripts/bg.sh /tmp/csa-run-$(date +%s).log csa run --sa-mode true --tier tier-1 "Implement feature X"
+bash scripts/bg.sh "/tmp/csa-run-$(date +%s).log" csa run --sa-mode true --tier tier-1 "Implement feature X"
 # → PID=23456 LOG=/tmp/csa-run-1743666000.log
 
 # Step 2: Poll (can also check session status)
-sleep 245 && if kill -0 23456 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/csa-run-1743666000.log; else echo "POLL:DONE exit=$(cat /tmp/csa-run-1743666000.log.exitcode 2>/dev/null || echo unknown)"; tail -20 /tmp/csa-run-1743666000.log; fi
+sleep 245 && if kill -0 23456 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/csa-run-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/csa-run-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/csa-run-1743666000.log"; fi
 ```
 
 ### Just Pre-commit
 
 ```bash
 # Step 1: Launch
-bash scripts/bg.sh /tmp/precommit-$(date +%s).log just pre-commit
+bash scripts/bg.sh "/tmp/precommit-$(date +%s).log" just pre-commit
 # → PID=34567 LOG=/tmp/precommit-1743666000.log
 
 # Step 2: Poll
-sleep 245 && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 /tmp/precommit-1743666000.log; else echo "POLL:DONE exit=$(cat /tmp/precommit-1743666000.log.exitcode 2>/dev/null || echo unknown)"; tail -20 /tmp/precommit-1743666000.log; fi
+sleep 245 && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/precommit-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/precommit-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/precommit-1743666000.log"; fi
 ```
 
 ## Anti-Patterns

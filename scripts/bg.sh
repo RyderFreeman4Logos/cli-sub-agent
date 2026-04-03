@@ -20,7 +20,9 @@ if [ $# -lt 2 ]; then
 fi
 
 LOGFILE="$1"; shift
-mkdir -p "$(dirname "$LOGFILE")"
+LOGDIR="$(dirname "$LOGFILE")"
+mkdir -p "$LOGDIR"
+LOGFILE="$(cd "$LOGDIR" && pwd)/$(basename "$LOGFILE")"
 export LOGFILE
 
 # Launch with nohup, fully detached, and persist the exit code for cross-shell polling.
@@ -35,7 +37,7 @@ if kill -0 "$PID" 2>/dev/null; then
   exit 0
 else
   # If dead, check if it finished successfully in under 3 seconds
-  if [ -f "${LOGFILE}.exitcode" ] && [ "$(cat "${LOGFILE}.exitcode")" -eq 0 ]; then
+  if [ -f "${LOGFILE}.exitcode" ] && [ "$(cat "${LOGFILE}.exitcode")" = "0" ]; then
     echo "DONE pid=$PID exit=0"
     exit 0
   fi
