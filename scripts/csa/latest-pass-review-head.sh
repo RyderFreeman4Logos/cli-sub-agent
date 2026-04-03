@@ -32,7 +32,7 @@ done < <(
   csa session list --branch "${branch}" --format json 2>/dev/null \
     | jq -r '
         sort_by(.last_accessed) | reverse | .[]
-        | select(.task_type == "review" or ((.description // "") | startswith("review:")))
+        | select((.task_context.task_type // "") == "review" or ((.description // "") | startswith("review:")))
         | .session_id
       ' 2>/dev/null || true
 )

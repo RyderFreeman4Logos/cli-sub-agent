@@ -95,7 +95,7 @@ echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
 > code, applies fixes, and returns results. Orchestrator reviews outcome.
 
 Tool: csa
-Tier: tier-2-standard
+Tier: tier-4-critical
 OnFail: retry 3
 
 Fix issues found by local review. Loop until clean (max 3 rounds).
@@ -551,7 +551,7 @@ Delegate this cycle to CSA as a single operation and enforce hard bounds:
 ```bash
 set -euo pipefail
 set +e
-FIX_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
+FIX_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool codex --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
 DAEMON_RC=$?
 set -e
 if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
@@ -851,7 +851,7 @@ esac
 > CSA reads code, applies fix, commits. Orchestrator verifies result.
 
 Tool: csa
-Tier: tier-2-standard
+Tier: tier-4-critical
 OnFail: retry 2
 
 Fix the real issue for the current bot review comment (non-stale,

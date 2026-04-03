@@ -106,7 +106,7 @@ check-generated-artifacts:
     # Allow deletions so cleanup commits can remove previously tracked artifacts.
     blocked_paths="$(
         git diff --cached --name-only --diff-filter=ACMR \
-            | rg '^(\\.test-target/|\\.tmp/|target/|diff\\.txt$|test-write$)' || true
+            | rg '^([.]test-target/|[.]tmp/|target/|diff[.]txt$|test-write$)' || true
     )"
     if [ -n "${blocked_paths}" ]; then
         echo ""
@@ -173,7 +173,7 @@ pre-commit:
 # Requires: ripgrep (rg)
 check-chinese:
     @echo "Checking for Chinese characters..."
-    @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**'
+    @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**' --glob '!.claude/rules/**' --glob '!.agents/**' --glob '!CLAUDE.md' --glob '!GEMINI.md'
 
 # Format code and auto-stage modified .rs files.
 # This allows 'just fmt' to be run immediately before commit without manual 'git add'.

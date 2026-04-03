@@ -183,7 +183,7 @@ git add ${FILES}
 # Allow deletions so cleanup commits can remove previously tracked artifacts.
 STAGED_GENERATED_ARTIFACTS="$(
   git diff --cached --name-only --diff-filter=ACMR \
-    | rg '^(\\.test-target/|\\.tmp/|target/|diff\\.txt$|test-write$)' || true
+    | rg '^([.]test-target/|[.]tmp/|target/|diff[.]txt$|test-write$)' || true
 )"
 if [ -n "${STAGED_GENERATED_ARTIFACTS}" ]; then
   echo "ERROR: Generated or scratch artifacts are staged."
