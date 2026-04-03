@@ -435,13 +435,24 @@ pub(crate) fn handle_session_attach(
         }
 
         // Detect dead daemon: PID gone but no result.toml.
+        // Synthesize a terminal result so callers always observe result.toml (#543).
         if let Some(pid) = daemon_pid
             && !is_pid_alive(pid)
         {
             eprintln!(
-                "Daemon process {} exited without producing result.toml",
+                "Daemon process {} exited without producing result.toml; synthesizing fallback",
                 pid,
             );
+            let _ = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+                &project_root,
+                &resolved.session_id,
+                "session attach (daemon dead)",
+            );
+            // Try to load the synthesized or pre-existing result.
+            if let Ok(Some(result)) = csa_session::load_result(&project_root, &resolved.session_id)
+            {
+                return Ok(result.exit_code);
+            }
             return Ok(1);
         }
 

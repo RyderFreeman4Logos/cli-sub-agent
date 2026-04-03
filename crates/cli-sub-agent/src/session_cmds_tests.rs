@@ -153,10 +153,19 @@ fn session_status_marks_unknown_result_as_error() {
 }
 
 #[test]
-fn retired_phase_takes_precedence_over_failure_result() {
+fn retired_phase_shows_failure_when_result_failed() {
     let failure = make_result("failure", 1);
     assert_eq!(
         status_from_phase_and_result(&SessionPhase::Retired, Some(&failure)),
+        "Failed"
+    );
+}
+
+#[test]
+fn retired_phase_shows_retired_when_result_succeeded() {
+    let success = make_result("success", 0);
+    assert_eq!(
+        status_from_phase_and_result(&SessionPhase::Retired, Some(&success)),
         "Retired"
     );
 }
