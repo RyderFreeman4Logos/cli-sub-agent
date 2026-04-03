@@ -49,6 +49,34 @@ command = "echo post-run: session={session_id} exit={exit_code}"
 timeout_secs = 30
 ```
 
+### `post_review`
+
+Fires after `csa review` produces its final result (including after a `--fix`
+loop). This hook is observational: failures never block review completion.
+
+Unlike generic lifecycle hooks, `csa review` forwards `post_review` hook stdout
+to stderr so orchestrators can parse directives such as `CSA:NEXT_STEP`.
+
+**Available variables:**
+
+| Variable | Description |
+|----------|-------------|
+| `{session_id}` | Review session ULID |
+| `{decision}` | Structured decision (`pass`, `fail`, `uncertain`) |
+| `{verdict}` | Legacy verdict (`CLEAN`, `HAS_ISSUES`, etc.) |
+| `{scope}` | Review scope (`range:main...HEAD`, `uncommitted`, `files:docs/hooks.md`, etc.) |
+
+Built-in default: when `{decision}` is `pass` for a cumulative review scope
+(`base:*` or `range:*`), emits a `CSA:NEXT_STEP` directive that points to
+`pr-bot`:
+
+```toml
+[post_review]
+enabled = true
+command = "case {scope} in 'base:'*|'range:'*) if [ {decision} = 'pass' ]; then echo '<!-- CSA:NEXT_STEP cmd=\"csa plan run --sa-mode true --pattern pr-bot\" required=true -->'; fi ;; esac"
+timeout_secs = 30
+```
+
 ### `session_complete`
 
 Fires after `post_run`, at the end of `csa run` execution.

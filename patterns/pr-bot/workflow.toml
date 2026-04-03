@@ -125,13 +125,13 @@ audit-trail comment path starts only after a PR exists.
 ```bash
 set -euo pipefail
 CURRENT_HEAD="$(git rev-parse HEAD)"
-REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: latest local review already covers HEAD ${CURRENT_HEAD}; skip Step 2 review."
 else
   echo "No matching review HEAD found (or HEAD drift detected). Running full local review."
   SID=$(csa review --branch main)
-  csa session wait --session "$SID"
+  bash scripts/csa/session-wait-until-done.sh "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -143,7 +143,7 @@ id = 3
 title = "Fix Local Review Issues"
 tool = "csa"
 prompt = "Fix issues found by local review. Loop until clean (max 3 rounds)."
-tier = "tier-2-standard"
+tier = "tier-4-critical"
 condition = "${LOCAL_REVIEW_HAS_ISSUES}"
 
 [workflow.steps.on_fail]
@@ -296,13 +296,13 @@ if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
   CURRENT_HEAD="$(git rev-parse HEAD)"
-  REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+  REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
     SID=$(csa review --branch main)
-    csa session wait --session "$SID"
+    bash scripts/csa/session-wait-until-done.sh "$SID"
   fi
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
@@ -385,7 +385,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
   BOT_UNAVAILABLE=true
 else
   set +e
-  WAIT_RESULT="$(csa session wait --session "${WAIT_SID}")"
+  WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
   WAIT_RC=$?
   set -e
     if [ "${WAIT_RC}" -ne 0 ]; then
@@ -565,7 +565,7 @@ DONE WHEN:
 ```bash
 set -euo pipefail
 set +e
-FIX_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
+FIX_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool codex --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
 DAEMON_RC=$?
 set -e
 if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
@@ -573,7 +573,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
   exit 1
 fi
 set +e
-FIX_RESULT="$(csa session wait --session "${FIX_SID}")"
+FIX_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${FIX_SID}")"
 FIX_RC=$?
 set -e
 
@@ -785,7 +785,7 @@ description in the answer.
 Do NOT post to GitHub yourself. The next workflow step posts the PR comment
 explicitly when VERDICT is DISMISSED, and reroutes to the fix step when
 VERDICT is CONFIRMED."""
-tier = "tier-2-standard"
+tier = "tier-4-critical"
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && ((${COMMENT_IS_FALSE_POSITIVE}) && (!(${COMMENT_IS_STALE}))))"
 
@@ -918,7 +918,7 @@ Fetch the review comment body yourself via:
 - `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`
 
 Read the referenced code at the current HEAD, apply the fix, and commit it."""
-tier = "tier-2-standard"
+tier = "tier-4-critical"
 condition = "(!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE})) && (!(${COMMENT_IS_STALE})))"
 
 [workflow.steps.on_fail]
@@ -1064,7 +1064,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
   exit 1
 fi
 set +e
-WAIT_RESULT="$(csa session wait --session "${WAIT_SID}")"
+WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
 WAIT_RC=$?
 set -e
 
@@ -1154,7 +1154,7 @@ else
         _check_setup_message
         echo "Falling back to local review." >&2
         SID=$(csa review --sa-mode true --range main...HEAD)
-        if ! csa session wait --session "$SID"; then
+        if ! bash scripts/csa/session-wait-until-done.sh "$SID"; then
           echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
           exit 1
         fi
@@ -1164,7 +1164,7 @@ else
   else
     echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
     SID=$(csa review --sa-mode true --range main...HEAD)
-    if ! csa session wait --session "$SID"; then
+    if ! bash scripts/csa/session-wait-until-done.sh "$SID"; then
       echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
       exit 1
     fi
@@ -1274,7 +1274,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     exit 1
   fi
   set +e
-  GATE_RESULT="$(csa session wait --session "${GATE_SID}")"
+  GATE_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${GATE_SID}")"
   GATE_RC=$?
   set -e
   if [ "${GATE_RC}" -ne 0 ]; then

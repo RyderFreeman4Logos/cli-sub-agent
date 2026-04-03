@@ -76,12 +76,12 @@ This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 ```bash
 set -euo pipefail
 CURRENT_HEAD="$(git rev-parse HEAD)"
-REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
 else
   SID=$(csa review --branch main)
-  csa session wait --session "$SID"
+  bash scripts/csa/session-wait-until-done.sh "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -261,13 +261,13 @@ if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
   CURRENT_HEAD="$(git rev-parse HEAD)"
-  REVIEW_HEAD="$(csa session list --recent-review 2>/dev/null | parse_head_sha || true)"
+  REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
     SID=$(csa review --branch main)
-    csa session wait --session "$SID"
+    bash scripts/csa/session-wait-until-done.sh "$SID"
   fi
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
@@ -365,7 +365,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
   BOT_UNAVAILABLE=true
 else
   set +e
-  WAIT_RESULT="$(csa session wait --session "${WAIT_SID}")"
+  WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
   WAIT_RC=$?
   set -e
   if [ "${WAIT_RC}" -ne 0 ]; then
@@ -559,7 +559,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
   exit 1
 fi
 set +e
-FIX_RESULT="$(csa session wait --session "${FIX_SID}")"
+FIX_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${FIX_SID}")"
 FIX_RC=$?
 set -e
 
@@ -1093,7 +1093,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     exit 1
   fi
   set +e
-  GATE_RESULT="$(csa session wait --session "${GATE_SID}")"
+  GATE_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${GATE_SID}")"
   GATE_RC=$?
   set -e
   if [ "${GATE_RC}" -ne 0 ]; then

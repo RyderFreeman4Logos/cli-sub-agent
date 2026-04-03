@@ -201,8 +201,8 @@ Even FAST_PATH runs cumulative review before push.
 
 ```bash
 set -euo pipefail
-SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD") || true
-REVIEW_OUTPUT="$(csa session wait --session "$SID" 2>&1)" || true
+SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
+REVIEW_OUTPUT="$(bash scripts/csa/session-wait-until-done.sh "$SID" 2>&1)"
 printf '%s\n' "${REVIEW_OUTPUT}"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
 ```'''
@@ -293,7 +293,7 @@ set -euo pipefail
 REVIEW_OUTPUT_FILE="$(mktemp)"
 set +e
 SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
-csa session wait --session "$SID" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
+bash scripts/csa/session-wait-until-done.sh "$SID" 2>&1 | tee "${REVIEW_OUTPUT_FILE}"
 REVIEW_STATUS=${PIPESTATUS[0]}
 set -e
 REVIEW_OUTPUT="$(cat "${REVIEW_OUTPUT_FILE}")"
