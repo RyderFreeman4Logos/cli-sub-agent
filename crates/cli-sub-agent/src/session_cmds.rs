@@ -175,7 +175,9 @@ pub(crate) fn retire_if_dead_with_result(
     Ok(true)
 }
 
-fn resolve_session_status(project_root: &Path, session: &MetaSessionState) -> String {
+fn resolve_session_status(session: &MetaSessionState) -> String {
+    // Use the session's own project_path so cross-project sessions resolve correctly.
+    let project_root = Path::new(&session.project_path);
     let sid = &session.meta_session_id;
     match load_result(project_root, sid) {
         Ok(Some(result)) => {
@@ -242,13 +244,13 @@ fn select_sessions_for_list_all_projects(
     Ok(sessions)
 }
 
-fn session_to_json(project_root: &Path, session: &MetaSessionState) -> serde_json::Value {
+fn session_to_json(session: &MetaSessionState) -> serde_json::Value {
     let mut value = serde_json::json!({
         "session_id": session.meta_session_id,
         "last_accessed": session.last_accessed,
         "description": session.description.as_deref().unwrap_or(""),
         "tools": session.tools.keys().collect::<Vec<_>>(),
-        "status": resolve_session_status(project_root, session),
+        "status": resolve_session_status(session),
         "phase": format!("{:?}", session.phase),
         "branch": session.branch,
         "task_type": session.task_context.task_type,
@@ -319,7 +321,7 @@ pub(crate) fn handle_session_list(
                 let json_sessions: Vec<_> = sessions
                     .iter()
                     .map(|s| {
-                        let mut v = session_to_json(&project_root, s);
+                        let mut v = session_to_json(s);
                         if all_projects {
                             v["project_path"] = serde_json::json!(&s.project_path);
                         }
@@ -353,7 +355,7 @@ pub(crate) fn handle_session_list(
                     // Truncate ULID to 11 chars for readability
                     let short_id =
                         &session.meta_session_id[..11.min(session.meta_session_id.len())];
-                    let status_str = resolve_session_status(&project_root, &session);
+                    let status_str = resolve_session_status(&session);
                     let desc = session
                         .description
                         .as_deref()
@@ -510,16 +512,15 @@ pub(crate) fn handle_session_logs(
     let resolved_id = resolved.session_id;
     let session_dir = resolved.sessions_dir.join(&resolved_id);
 
-    // Detect cross-project session to skip project_root-based operations.
-    let is_cross_project = get_session_dir(&project_root, &resolved_id).is_err();
+    // Use the foreign project root for cross-project sessions, local otherwise.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let is_cross_project = resolved.foreign_project_root.is_some();
 
-    if !is_cross_project
-        && let Err(err) = ensure_terminal_result_for_dead_active_session(
-            &project_root,
-            &resolved_id,
-            "session logs",
-        )
-    {
+    if let Err(err) = ensure_terminal_result_for_dead_active_session(
+        effective_root,
+        &resolved_id,
+        "session logs",
+    ) {
         tracing::warn!(
             session_id = %resolved_id,
             error = %err,
@@ -725,12 +726,11 @@ pub(crate) fn handle_session_is_alive(session: String, cd: Option<String>) -> Re
     } else {
         "not alive"
     };
-    // Skip dead-session reconciliation for cross-project sessions (requires write access).
-    let is_cross_project = get_session_dir(&project_root, &resolved_id).is_err();
+    // Use the foreign project root for cross-project sessions.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
     if !alive
-        && !is_cross_project
         && let Err(err) = ensure_terminal_result_for_dead_active_session(
-            &project_root,
+            effective_root,
             &resolved_id,
             "session is-alive",
         )
@@ -816,6 +816,7 @@ pub(crate) fn handle_session_checkpoint(session: String, cd: Option<String>) -> 
     let SessionPrefixResolution {
         session_id: resolved_id,
         sessions_dir,
+        ..
     } = resolve_session_prefix_with_fallback(&project_root, &session)?;
 
     // Load the session state to build the checkpoint note

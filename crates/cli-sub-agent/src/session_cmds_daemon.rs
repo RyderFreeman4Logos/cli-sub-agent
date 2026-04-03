@@ -103,9 +103,9 @@ pub(crate) fn handle_session_wait(
     // For cross-project sessions, derive session_dir from the resolved sessions_dir
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
 
-    // Detect cross-project session: project_root-based functions would reject it.
-    let is_cross_project = csa_session::get_session_dir(&project_root, &resolved.session_id)
-        .is_err();
+    // Use the foreign project root for cross-project sessions, local otherwise.
+    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let is_cross_project = resolved.foreign_project_root.is_some();
 
     let start = std::time::Instant::now();
     let poll_interval = std::time::Duration::from_secs(1);
@@ -113,7 +113,7 @@ pub(crate) fn handle_session_wait(
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
             let _ = refresh_result_for_wait(
-                &project_root,
+                effective_root,
                 &resolved.session_id,
                 &session_dir,
                 is_cross_project,
@@ -131,7 +131,7 @@ pub(crate) fn handle_session_wait(
         }
 
         if let Some(result) = load_completed_daemon_result_adaptive(
-            &project_root,
+            effective_root,
             &resolved.session_id,
             &session_dir,
             is_cross_project,
@@ -148,19 +148,16 @@ pub(crate) fn handle_session_wait(
             return Ok(result.exit_code);
         }
 
-        // Synthesize terminal result for dead Active sessions (skip for cross-project).
-        let synthesized = if !is_cross_project {
+        // Synthesize terminal result for dead Active sessions.
+        let synthesized =
             crate::session_cmds::ensure_terminal_result_for_dead_active_session(
-                &project_root,
+                effective_root,
                 &resolved.session_id,
                 "session wait",
-            )?
-        } else {
-            false
-        };
+            )?;
         if synthesized
             && let Some(result) = load_completed_daemon_result_adaptive(
-                &project_root,
+                effective_root,
                 &resolved.session_id,
                 &session_dir,
                 is_cross_project,
@@ -186,7 +183,7 @@ pub(crate) fn handle_session_wait(
 
         if !csa_process::ToolLiveness::has_live_process(&session_dir) {
             if let Some(result) = load_completed_daemon_result_adaptive(
-                &project_root,
+                effective_root,
                 &resolved.session_id,
                 &session_dir,
                 is_cross_project,
