@@ -1,0 +1,47 @@
+name: Pre-commit Quality Gates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  pre-commit:
+    name: Pre-commit Quality Gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mise
+        uses: jdx/mise-action@v2
+
+      - name: Install cargo tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-nextest
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq parallel
+
+      - name: Build csa (for tokuin)
+        run: cargo build --quiet -p cli-sub-agent --bin csa
+
+      - name: Add csa to PATH
+        run: echo "${{ github.workspace }}/target/debug" >> "$GITHUB_PATH"
+
+      - name: Run just pre-commit
+        run: just pre-commit
