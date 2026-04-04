@@ -243,7 +243,7 @@ fi
 
 # Skip if required tool is missing (graceful degradation)
 if ! command -v <tool> >/dev/null 2>&1; then
-    echo "[<hook>] <tool> not found -- skipping." >&2
+    echo "WARNING: [<hook>] <tool> not found -- skipping." >&2
     exit 0
 fi
 
@@ -277,6 +277,7 @@ done
 ```bash
 #!/usr/bin/env bash
 # Skip sandbox, check writable target, rebuild
+set -euo pipefail
 if [ -n "${CSA_SESSION_ID:-}" ]; then exit 0; fi
 if [ ! -w /usr/local/bin ]; then
     echo "[post-merge] Install target not writable -- skipping."
