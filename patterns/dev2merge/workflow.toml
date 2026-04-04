@@ -261,7 +261,7 @@ else
   MKTD_INTENSITY="full"
   echo "Planning intensity: full (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
 fi
-csa plan run patterns/mktd/workflow.toml \
+csa plan run --sa-mode true patterns/mktd/workflow.toml \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \

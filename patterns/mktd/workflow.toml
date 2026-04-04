@@ -90,9 +90,6 @@ name = "STEP_11_OUTPUT"
 name = "STEP_12_OUTPUT"
 
 [[workflow.variables]]
-name = "STEP_15_OUTPUT"
-
-[[workflow.variables]]
 name = "SUMMARY_LINE"
 
 [[workflow.variables]]
@@ -213,22 +210,17 @@ if [[ -n "${FEATURE:-}" ]]; then
   exit 0
 fi
 echo "Chinese (Simplified)"
-```'''
-on_fail = "abort"
+```
 
-[[workflow.steps]]
-id = 15
-title = "Intensity Detection"
-tool = "bash"
-prompt = '''
-Detect planning intensity mode. Sets INTENSITY_IS_LIGHT=true when light mode.
+Detect planning intensity mode after language resolution.
+Sets `INTENSITY_IS_LIGHT` as a side-effect variable.
 
 ```bash
 if [[ "${INTENSITY:-full}" == "light" ]]; then
-  echo "Planning intensity: light (skipping threat model, debate, revision)"
+  echo "Planning intensity: light (skipping threat model, debate, revision)" >&2
   echo "CSA_VAR:INTENSITY_IS_LIGHT=true"
 else
-  echo "Planning intensity: full"
+  echo "Planning intensity: full" >&2
   echo "CSA_VAR:INTENSITY_IS_LIGHT=false"
 fi
 ```'''

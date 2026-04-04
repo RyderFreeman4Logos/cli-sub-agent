@@ -126,20 +126,15 @@ fi
 echo "Chinese (Simplified)"
 ```
 
-## Step 1b: Intensity Detection
-
-Tool: bash
-
-Detect planning intensity mode. Sets `INTENSITY_IS_LIGHT=true` when light mode
-is active, enabling conditional step skipping for threat model, debate,
-validation, and revision phases.
+Detect planning intensity mode after language resolution.
+Sets `INTENSITY_IS_LIGHT` as a side-effect variable.
 
 ```bash
 if [[ "${INTENSITY:-full}" == "light" ]]; then
-  echo "Planning intensity: light (skipping threat model, debate, revision)"
+  echo "Planning intensity: light (skipping threat model, debate, revision)" >&2
   echo "CSA_VAR:INTENSITY_IS_LIGHT=true"
 else
-  echo "Planning intensity: full"
+  echo "Planning intensity: full" >&2
   echo "CSA_VAR:INTENSITY_IS_LIGHT=false"
 fi
 ```

@@ -39,7 +39,7 @@ mod reviewers;
 
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
-use post_review::{build_post_review_output, emit_post_review_output};
+use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
@@ -385,11 +385,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
         // Accumulate findings from failed reviews for dedup and eventual
         // promotion to the project review checklist.
-        // Skip during range reviews (cumulative PR review) to keep the working
-        // tree clean — range reviews should not write to .csa/ files.
-        let is_range_review = scope.starts_with("range:");
-        if verdict != CLEAN && !empty_output && !is_range_review {
-            crate::review_findings::accumulate_findings(&project_root, &result.execution.output);
+        // Skip during cumulative reviews (range: and base: scopes) to keep the
+        // working tree clean — cumulative reviews should not write to .csa/ files.
+        let is_cumulative_review = review_scope_is_cumulative(&scope);
+        if verdict != CLEAN && !empty_output && !is_cumulative_review {
+            crate::review_findings::accumulate_findings(&project_root, &sanitized);
         }
 
         if !args.fix || verdict == CLEAN {
