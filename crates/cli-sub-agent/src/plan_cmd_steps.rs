@@ -260,12 +260,15 @@ pub(super) async fn execute_plan_with_journal(
 
         // Inject step output for subsequent steps (successful steps only).
         let var_key = format!("STEP_{}_OUTPUT", result.step_id);
-        let var_value = result.output.as_deref().unwrap_or("").to_string();
+        let raw_output = result.output.as_deref().unwrap_or("").to_string();
         let assignment_markers = if !is_failure && should_inject_assignment_markers(step) {
-            extract_output_assignment_markers(&var_value, &assignment_marker_allowlist)
+            extract_output_assignment_markers(&raw_output, &assignment_marker_allowlist)
         } else {
             Vec::new()
         };
+        // Strip CSA_VAR: lines from the step output so downstream
+        // variable references (e.g. ${STEP_2_OUTPUT}) get clean values.
+        let var_value = strip_assignment_marker_lines(&raw_output);
         vars.insert(var_key, var_value);
         let session_var_key = format!("STEP_{}_SESSION", result.step_id);
         let session_var_value = result.session_id.as_deref().unwrap_or("").to_string();
@@ -611,6 +614,16 @@ pub(crate) async fn execute_step(
             }
         }
     }
+}
+
+/// Remove `CSA_VAR:` lines from step output so that `STEP_<id>_OUTPUT`
+/// contains only the step's logical output, not assignment-marker metadata.
+pub(crate) fn strip_assignment_marker_lines(output: &str) -> String {
+    output
+        .lines()
+        .filter(|line| !line.trim().starts_with(OUTPUT_ASSIGNMENT_MARKER_PREFIX))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub(crate) fn extract_output_assignment_markers(

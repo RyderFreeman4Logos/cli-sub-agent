@@ -57,9 +57,16 @@ done
 
 REAL_GH="${CSA_REAL_GH:-}"
 if [ -z "${REAL_GH}" ]; then
-  # Fallback: find gh by stripping our guard dir from PATH.
+  # Fallback: find gh by stripping our guard dir AND user-installed
+  # csa-gh-guard dirs from PATH to prevent recursive wrapper loops.
   GUARD_DIR="$(cd "$(dirname "$0")" && pwd)"
-  CLEAN_PATH="$(echo "${PATH}" | tr ':' '\n' | grep -v "^${GUARD_DIR}$" | tr '\n' ':')"
+  CLEAN_PATH=""
+  IFS=: read -ra _PATH_DIRS <<< "${PATH}"
+  for _dir in "${_PATH_DIRS[@]}"; do
+    [[ "$_dir" == "$GUARD_DIR" ]] && continue
+    [[ "$_dir" == *csa-gh-guard* ]] && continue
+    CLEAN_PATH="${CLEAN_PATH:+${CLEAN_PATH}:}${_dir}"
+  done
   REAL_GH="$(PATH="${CLEAN_PATH}" command -v gh 2>/dev/null)" || true
 fi
 
@@ -194,7 +201,16 @@ pub fn inject_merge_guard_env(env: &mut HashMap<String, String>) {
     };
 
     // Find the real `gh` binary BEFORE we modify PATH.
-    if let Ok(real_gh) = which::which("gh") {
+    // Skip our own guard directories (contain "csa-gh-guard" or match the
+    // guard dir we just created) to avoid recursive wrapper loops.
+    let real_gh = which::which_all("gh").ok().and_then(|iter| {
+        let guard_dir_str = guard_dir.to_string_lossy();
+        iter.into_iter().find(|p| {
+            let s = p.to_string_lossy();
+            !s.contains("csa-gh-guard") && !s.starts_with(guard_dir_str.as_ref())
+        })
+    });
+    if let Some(real_gh) = real_gh {
         env.insert(
             "CSA_REAL_GH".to_string(),
             real_gh.to_string_lossy().into_owned(),
