@@ -510,3 +510,55 @@ fn test_wrapper_pr_number_after_flags_with_values() {
         "flag values should not block numeric PR number: {stderr}"
     );
 }
+
+#[test]
+fn test_wrapper_blocks_repo_equals_form() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+    let (code, _stdout, stderr) = run_wrapper(
+        &guard_dir,
+        &fake_gh,
+        &["pr", "merge", "123", "--repo=other/repo"],
+    );
+    assert_eq!(code, 1, "should exit 1 for --repo=owner/repo");
+    assert!(
+        stderr.contains("cross-repo merge"),
+        "stderr should mention cross-repo: {stderr}"
+    );
+}
+
+#[test]
+fn test_wrapper_numeric_flag_value_not_treated_as_pr_number() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (guard_dir, _) = setup_wrapper_env(tmp.path());
+
+    // Create a fake `gh` that fails on `pr view` (no current PR) but
+    // succeeds on everything else. This simulates "no PR on current branch".
+    let fake_gh = tmp.path().join("fake_gh_smart");
+    fs::write(
+        &fake_gh,
+        "#!/bin/bash\n\
+         # Fail on 'pr view' to simulate no current-branch PR.\n\
+         for a in \"$@\"; do [ \"$a\" = \"view\" ] && exit 1; done\n\
+         echo REAL_GH_CALLED\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    fs::set_permissions(&fake_gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+    // `gh pr merge -t 123` — 123 is the subject/title, NOT a PR number.
+    // Without an actual PR number, the wrapper should fall through to
+    // `gh pr view --json number` (which will fail), then emit
+    // "cannot determine PR number". It must NOT treat 123 as PR number.
+    let (_code, _stdout, stderr) = run_wrapper(&guard_dir, &fake_gh, &["pr", "merge", "-t", "123"]);
+    assert!(
+        !stderr.contains("pr-bot has not completed for PR #123"),
+        "-t 123: '123' must not be treated as PR number: {stderr}"
+    );
+    // Should reach the "cannot determine PR number" path instead.
+    assert!(
+        stderr.contains("cannot determine PR number"),
+        "-t 123: should fail to determine PR number: {stderr}"
+    );
+}

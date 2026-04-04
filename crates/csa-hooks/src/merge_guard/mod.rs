@@ -126,23 +126,31 @@ done
 # Block -R/--repo (cross-repo merges bypass local guard context).
 for arg in "$@"; do
   case "$arg" in
-    -R|--repo)
+    -R|--repo|--repo=*)
       echo "BLOCKED: cross-repo merge (-R/--repo) is not supported by CSA merge guard." >&2
       exit 1
       ;;
   esac
 done
 
-# Extract PR number — scan ALL args, use the LAST pure-numeric token.
-# This avoids needing to know which flags take values (e.g. --merge-method squash).
-# URLs and branch names are ignored; only pure-digit tokens qualify.
+# Extract PR number — scan args after "merge", skip flag values.
+# Flags that take a following value (e.g. -t <subject>, --body <text>)
+# are tracked so their values are not misidentified as PR numbers.
 PR_NUMBER=""
 SEEN_MERGE=false
 HAS_NON_NUMERIC_POSITIONAL=false
+SKIP_NEXT=false
 for arg in "$@"; do
+  if $SKIP_NEXT; then SKIP_NEXT=false; continue; fi
   case "$arg" in
     pr|merge) SEEN_MERGE=true ;;
-    --*|-*) ;; # skip flags
+    # Flags whose NEXT token is a value (not a PR number).
+    -t|--subject|-b|--body|-F|--body-file|--merge-method|--match-head-commit|-H|--head)
+      SKIP_NEXT=true ;;
+    # Equals-form: value is embedded, just skip the whole token.
+    --subject=*|--body=*|--body-file=*|--merge-method=*|--match-head-commit=*|--head=*)
+      ;;
+    --*|-*) ;; # other flags (no value)
     *)
       if [ "${SEEN_MERGE}" = "true" ]; then
         if echo "$arg" | grep -qxE '[0-9]+'; then
