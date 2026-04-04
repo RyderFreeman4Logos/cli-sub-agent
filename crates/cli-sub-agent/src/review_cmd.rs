@@ -6,9 +6,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
-    CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
-    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_decision,
-    parse_review_verdict, resolve_consensus,
+    CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
+    consensus_verdict, parse_consensus_strategy, parse_review_decision, parse_review_verdict,
+    resolve_consensus,
 };
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
@@ -34,6 +34,9 @@ mod fix;
 #[path = "review_cmd_post_review.rs"]
 mod post_review;
 
+#[path = "review_cmd_reviewers.rs"]
+mod reviewers;
+
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
 use post_review::{build_post_review_output, emit_post_review_output};
@@ -45,6 +48,7 @@ use resolve::{
     review_scope_allows_auto_discovery, verify_review_skill_available,
     write_multi_reviewer_consolidated_artifact,
 };
+use reviewers::resolve_multi_reviewer_pool;
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -480,32 +484,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     let reviewers = args.reviewers as usize;
     let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
-    let reviewer_tools = build_reviewer_tools(
+    let reviewer_pool = resolve_multi_reviewer_pool(
+        reviewers,
         args.tool,
         tool,
-        config.as_ref(),
-        Some(&global_config),
         resolved_tier_name.as_deref(),
-        reviewers,
-    );
-    let tier_reviewer_specs = resolved_tier_name
-        .as_deref()
-        .and_then(|tier_name| {
-            config.as_ref().map(|cfg| {
-                let effective_selection = cfg
-                    .review
-                    .as_ref()
-                    .map(|review| &review.tool)
-                    .unwrap_or(&global_config.review.tool);
-                crate::run_helpers::collect_available_tier_models(
-                    tier_name,
-                    cfg,
-                    effective_selection.whitelist(),
-                    &[],
-                )
-            })
-        })
-        .unwrap_or_default();
+        config.as_ref(),
+        &global_config,
+    )?;
+    let reviewer_tools = reviewer_pool.reviewer_tools;
+    let tier_reviewer_specs = reviewer_pool.tier_reviewer_specs;
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {

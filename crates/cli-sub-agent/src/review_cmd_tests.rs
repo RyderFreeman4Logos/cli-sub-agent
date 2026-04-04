@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
+use crate::review_consensus::build_reviewer_tools;
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};

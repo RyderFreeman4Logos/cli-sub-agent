@@ -144,28 +144,14 @@ fn build_reviewer_tools_respects_explicit_tool_override() {
 
 #[test]
 fn build_reviewer_tools_uses_tier_pool_when_present() {
-    let mut cfg = project_config_with_enabled_tools(&["gemini-cli", "codex", "claude-code"]);
-    cfg.tiers.insert(
-        "tier-review".to_string(),
-        csa_config::config::TierConfig {
-            description: "Review tier".to_string(),
-            models: vec![
-                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
-                "codex/openai/o3/medium".to_string(),
-                "claude-code/anthropic/claude-sonnet-4-20250514/none".to_string(),
-            ],
-            strategy: csa_config::TierStrategy::default(),
-            token_budget: None,
-            max_turns: None,
-        },
-    );
+    let tier_tools = [ToolName::GeminiCli, ToolName::Codex, ToolName::ClaudeCode];
 
     let tools = build_reviewer_tools(
         None,
         ToolName::Codex,
-        Some(&cfg),
+        None,
         Some(&GlobalConfig::default()),
-        Some("tier-review"),
+        Some(&tier_tools),
         5,
     );
     assert_eq!(
@@ -178,6 +164,31 @@ fn build_reviewer_tools_uses_tier_pool_when_present() {
             ToolName::GeminiCli
         ]
     );
+}
+
+#[test]
+fn validate_multi_reviewer_tier_pool_rejects_single_tool_consensus() {
+    let error =
+        validate_multi_reviewer_tier_pool("tier-review", 3, ToolName::Codex, &[ToolName::Codex])
+            .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("only resolves to one available reviewer tool"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn validate_multi_reviewer_tier_pool_reports_unique_tool_count() {
+    let unique_tools = validate_multi_reviewer_tier_pool(
+        "tier-review",
+        3,
+        ToolName::Codex,
+        &[ToolName::GeminiCli, ToolName::ClaudeCode],
+    )
+    .unwrap();
+    assert_eq!(unique_tools, 3);
 }
 
 #[test]
