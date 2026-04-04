@@ -1,6 +1,21 @@
 use super::*;
 
 #[test]
+fn context_load_options_with_skips_empty_returns_none() {
+    let skip_files: Vec<String> = Vec::new();
+    let options = context_load_options_with_skips(&skip_files);
+    assert!(options.is_none());
+}
+
+#[test]
+fn context_load_options_with_skips_propagates_files() {
+    let skip_files = vec!["AGENTS.md".to_string(), "rules/private.md".to_string()];
+    let options = context_load_options_with_skips(&skip_files).expect("must return options");
+    assert_eq!(options.skip_files, skip_files);
+    assert_eq!(options.max_bytes, None);
+}
+
+#[test]
 fn result_toml_path_contract_extracts_embedded_path() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");

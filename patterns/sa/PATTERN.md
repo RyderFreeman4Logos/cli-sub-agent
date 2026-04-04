@@ -122,12 +122,17 @@ one cumulative review at the end. Small-scope reviews catch issues when
 context is focused, avoiding large diffs where reviewers can only surface
 2 findings per round.
 
-COMMIT HOOK POLICY (MANDATORY): NEVER use `git commit --no-verify` or
-`git commit -n` unless the prompt explicitly includes
-`ALLOW_GIT_COMMIT_NO_VERIFY=1`. Bypassing hooks is a critical SOP violation.
+COMMIT HOOK POLICY (MANDATORY): ABSOLUTE PROHIBITION on ALL hook bypass methods.
+NEVER use `git commit --no-verify` or `git commit -n`. NEVER set `LEFTHOOK=0`
+or `LEFTHOOK_SKIP` environment variables. NEVER use `env LEFTHOOK=0 git commit`
+or `export LEFTHOOK=0` before git commands. NEVER modify `.git/hooks/*` files.
+NEVER set `core.hooksPath` to bypass hooks. No exception unless the prompt
+explicitly includes `ALLOW_GIT_COMMIT_NO_VERIFY=1`.
+Bypassing hooks by ANY method is a critical SOP violation.
 If hooks fail (including failures caused by unrelated workspace crates), STOP
 and return a blocker / `needs_clarification` instead of bypassing hooks.
-Fix the underlying issues to ensure codebase integrity.
+Fix the underlying issues to ensure codebase integrity. NEVER treat pre-existing
+failures as justification for disabling hooks.
 
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)

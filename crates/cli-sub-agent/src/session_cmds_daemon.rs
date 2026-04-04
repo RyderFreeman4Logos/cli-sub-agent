@@ -104,7 +104,10 @@ pub(crate) fn handle_session_wait(
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
 
     // Use the foreign project root for cross-project sessions, local otherwise.
-    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let effective_root = resolved
+        .foreign_project_root
+        .as_deref()
+        .unwrap_or(&project_root);
     let is_cross_project = resolved.foreign_project_root.is_some();
 
     let start = std::time::Instant::now();
@@ -149,12 +152,11 @@ pub(crate) fn handle_session_wait(
         }
 
         // Synthesize terminal result for dead Active sessions.
-        let synthesized =
-            crate::session_cmds::ensure_terminal_result_for_dead_active_session(
-                effective_root,
-                &resolved.session_id,
-                "session wait",
-            )?;
+        let synthesized = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+            effective_root,
+            &resolved.session_id,
+            "session wait",
+        )?;
         if synthesized
             && let Some(result) = load_completed_daemon_result_adaptive(
                 effective_root,
@@ -339,20 +341,21 @@ fn load_completed_daemon_result_adaptive(
     if is_cross_project {
         let daemon_alive_at_refresh_start =
             csa_process::ToolLiveness::has_live_process(session_dir);
-        let result =
-            match crate::session_observability::refresh_and_repair_result_from_dir(session_dir) {
-                Ok(Some(result)) => result,
-                Ok(None) => return Ok(None),
-                Err(err) if daemon_alive_at_refresh_start => {
-                    tracing::debug!(
-                        session_id,
-                        error = %err,
-                        "Ignoring transient result refresh failure (cross-project) while daemon is still alive"
-                    );
-                    return Ok(None);
-                }
-                Err(err) => return Err(err),
-            };
+        let result = match crate::session_observability::refresh_and_repair_result_from_dir(
+            session_dir,
+        ) {
+            Ok(Some(result)) => result,
+            Ok(None) => return Ok(None),
+            Err(err) if daemon_alive_at_refresh_start => {
+                tracing::debug!(
+                    session_id,
+                    error = %err,
+                    "Ignoring transient result refresh failure (cross-project) while daemon is still alive"
+                );
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
         if csa_process::ToolLiveness::has_live_process(session_dir) {
             return Ok(None);
         }
@@ -532,8 +535,7 @@ pub(crate) fn handle_session_attach(
             let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
             if result_path.is_file()
                 && let Ok(contents) = fs::read_to_string(&result_path)
-                && let Ok(result) =
-                    toml::from_str::<csa_session::result::SessionResult>(&contents)
+                && let Ok(result) = toml::from_str::<csa_session::result::SessionResult>(&contents)
             {
                 return Ok(result.exit_code);
             }

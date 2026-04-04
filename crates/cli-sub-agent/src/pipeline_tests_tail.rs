@@ -571,10 +571,10 @@ fn result_toml_path_contract_not_applied_when_exit_code_nonzero_even_with_marker
 async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = PIPELINE_ENV_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp);
     let _csa_session_id_guard = ScopedEnvVarRestore::unset("CSA_SESSION_ID");
 
-    let temp = tempfile::tempdir().unwrap();
     let project_root = temp.path();
     let bin_dir = project_root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();
@@ -650,11 +650,11 @@ async fn execute_with_session_and_meta_rejects_illegal_result_path_in_real_flow(
 async fn execute_with_session_and_meta_explicit_only_ignores_inherited_parent_session() {
     use std::os::unix::fs::PermissionsExt;
 
-    let _env_lock = PIPELINE_ENV_LOCK.lock().await;
+    let temp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&temp);
     let _csa_session_id_guard =
         ScopedEnvVarRestore::set("CSA_SESSION_ID", "01K00000000000000000000000");
 
-    let temp = tempfile::tempdir().unwrap();
     let project_root = temp.path();
     let bin_dir = project_root.join("bin");
     fs::create_dir_all(&bin_dir).unwrap();

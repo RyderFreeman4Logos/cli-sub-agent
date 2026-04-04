@@ -4,6 +4,67 @@ use tempfile::tempdir;
 
 static MANAGER_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+/// RAII guard that redirects `XDG_STATE_HOME` into a temp directory and clears
+/// daemon-inherited env vars (`CSA_DAEMON_SESSION_ID`, `CSA_DAEMON_SESSION_DIR`,
+/// `CSA_DAEMON_PROJECT_ROOT`) so tests don't collide with a live daemon or the
+/// real state directory.  The process-wide `MANAGER_ENV_LOCK` serialises all
+/// env-mutating tests.
+struct ScopedXdgOverride {
+    orig_xdg: Option<String>,
+    orig_daemon_id: Option<String>,
+    orig_daemon_dir: Option<String>,
+    orig_daemon_root: Option<String>,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+impl ScopedXdgOverride {
+    fn new(tmp: &tempfile::TempDir) -> Self {
+        let lock = MANAGER_ENV_LOCK.lock().expect("env lock poisoned");
+        let orig_xdg = std::env::var("XDG_STATE_HOME").ok();
+        let orig_daemon_id = std::env::var("CSA_DAEMON_SESSION_ID").ok();
+        let orig_daemon_dir = std::env::var("CSA_DAEMON_SESSION_DIR").ok();
+        let orig_daemon_root = std::env::var("CSA_DAEMON_PROJECT_ROOT").ok();
+        // SAFETY: test-scoped env mutation protected by MANAGER_ENV_LOCK.
+        unsafe {
+            std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap());
+            std::env::remove_var("CSA_DAEMON_SESSION_ID");
+            std::env::remove_var("CSA_DAEMON_SESSION_DIR");
+            std::env::remove_var("CSA_DAEMON_PROJECT_ROOT");
+        }
+        Self {
+            orig_xdg,
+            orig_daemon_id,
+            orig_daemon_dir,
+            orig_daemon_root,
+            _lock: lock,
+        }
+    }
+}
+
+impl Drop for ScopedXdgOverride {
+    fn drop(&mut self) {
+        // SAFETY: restoration of test-scoped env mutation (lock still held).
+        unsafe {
+            restore_env("XDG_STATE_HOME", &self.orig_xdg);
+            restore_env("CSA_DAEMON_SESSION_ID", &self.orig_daemon_id);
+            restore_env("CSA_DAEMON_SESSION_DIR", &self.orig_daemon_dir);
+            restore_env("CSA_DAEMON_PROJECT_ROOT", &self.orig_daemon_root);
+        }
+    }
+}
+
+/// # Safety
+/// Caller must hold `MANAGER_ENV_LOCK`.
+unsafe fn restore_env(key: &str, original: &Option<String>) {
+    // SAFETY: caller holds MANAGER_ENV_LOCK, ensuring serial access.
+    unsafe {
+        match original {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+}
+
 struct EnvVarGuard {
     key: &'static str,
     original: Option<String>,
@@ -73,6 +134,7 @@ fn test_delete_session() {
 #[test]
 fn test_list_all_sessions() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
     create_session_in(td.path(), td.path(), Some("S2"), None, None).unwrap();
     assert_eq!(list_all_sessions_in(td.path()).unwrap().len(), 2);
@@ -97,6 +159,7 @@ fn test_create_session_ignores_bare_inherited_daemon_session_id() {
 #[test]
 fn test_list_sessions_with_tool_filter() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     let mut s1 = create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
     s1.tools.insert(
         "codex".to_string(),

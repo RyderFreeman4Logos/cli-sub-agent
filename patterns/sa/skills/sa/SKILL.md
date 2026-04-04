@@ -59,8 +59,22 @@ This skill exists to keep the main agent out of code-level work.
 
 ## Operating Contract
 
-<prompt-guard name="no-verify-forbidden">
-ABSOLUTE PROHIBITION: You MUST NOT use `--no-verify` or `-n` with any `git commit` or `git push` command. All quality hooks (pre-commit, etc.) MUST be allowed to run. Bypassing hooks is a critical SOP violation. If hooks fail, fix the underlying code issues instead of bypassing.
+<prompt-guard name="hook-bypass-forbidden">
+ABSOLUTE PROHIBITION on ALL hook bypass methods. You MUST NOT:
+- Use `--no-verify` or `-n` with `git commit` or `git push`
+- Set `LEFTHOOK=0` environment variable (e.g., `env LEFTHOOK=0 git commit`, `export LEFTHOOK=0`)
+- Set `LEFTHOOK_SKIP` environment variable
+- Modify `.git/hooks/*` files to disable or weaken hooks
+- Set `core.hooksPath` to an empty or permissive directory
+- Use ANY other mechanism that prevents Lefthook/pre-commit hooks from running
+
+All quality hooks MUST be allowed to run. Bypassing hooks is a critical SOP violation.
+
+When `just pre-commit` fails:
+1. Code quality issues (clippy, fmt, test) → FIX the code, do NOT bypass
+2. Environment/sandbox limitations → report status="needs_clarification" with exact error, do NOT bypass
+3. Pre-existing failures from unrelated crates → report as blocker with exact error, do NOT bypass
+NEVER treat pre-existing failures as justification for LEFTHOOK=0.
 </prompt-guard>
 
 ### Layer 0 Manager: What You MUST Do
