@@ -65,6 +65,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             Some(session_id.clone()),
             ctx.review_model.clone(),
             ctx.tier_model_spec.clone(),
+            None,
             ctx.review_thinking.clone(),
             format!("fix round {round}/{}", ctx.max_rounds),
             ctx.project_root,

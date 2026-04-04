@@ -26,6 +26,7 @@ pub(crate) fn build_reviewer_tools(
     primary_tool: ToolName,
     project_config: Option<&ProjectConfig>,
     global_config: Option<&GlobalConfig>,
+    tier_name: Option<&str>,
     reviewer_count: usize,
 ) -> Vec<ToolName> {
     if reviewer_count == 0 {
@@ -35,7 +36,16 @@ pub(crate) fn build_reviewer_tools(
         return vec![primary_tool; reviewer_count];
     }
 
-    let enabled_tools: Vec<ToolName> = if let Some(cfg) = project_config {
+    let enabled_tools: Vec<ToolName> = if let (Some(cfg), Some(tier)) = (project_config, tier_name)
+    {
+        let effective_selection = cfg
+            .review
+            .as_ref()
+            .map(|review| &review.tool)
+            .or_else(|| global_config.map(|gc| &gc.review.tool));
+        let whitelist = effective_selection.and_then(|selection| selection.whitelist());
+        collect_available_tier_reviewer_tools(tier, cfg, whitelist)
+    } else if let Some(cfg) = project_config {
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
@@ -66,6 +76,62 @@ pub(crate) fn build_reviewer_tools(
     (0..reviewer_count)
         .map(|idx| pool[idx % pool.len()])
         .collect()
+}
+
+fn collect_available_tier_reviewer_tools(
+    tier_name: &str,
+    config: &ProjectConfig,
+    whitelist: Option<&[String]>,
+) -> Vec<ToolName> {
+    let Some(tier) = config.tiers.get(tier_name) else {
+        return Vec::new();
+    };
+
+    let mut tools = Vec::new();
+    for spec in &tier.models {
+        let Some(tool_name) = spec.split('/').next() else {
+            continue;
+        };
+        if let Some(wl) = whitelist
+            && !wl.iter().any(|allowed| allowed == tool_name)
+        {
+            continue;
+        }
+        if !config.is_tool_enabled(tool_name) || !is_tool_binary_available(tool_name) {
+            continue;
+        }
+        let Some(tool) = csa_config::global::all_known_tools()
+            .iter()
+            .find(|candidate| candidate.as_str() == tool_name)
+            .copied()
+        else {
+            continue;
+        };
+        if !tools.contains(&tool) {
+            tools.push(tool);
+        }
+    }
+    tools
+}
+
+fn is_tool_binary_available(tool_name: &str) -> bool {
+    if tool_name == "openai-compat" {
+        return true;
+    }
+    let binary = match tool_name {
+        "gemini-cli" => "gemini",
+        "opencode" => "opencode",
+        "codex" => "codex-acp",
+        "claude-code" => "claude-code-acp",
+        _ => return false,
+    };
+    std::process::Command::new("which")
+        .arg(binary)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false)
 }
 
 pub(crate) fn build_multi_reviewer_instruction(

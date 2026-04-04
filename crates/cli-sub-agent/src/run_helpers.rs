@@ -474,6 +474,48 @@ pub(crate) struct TierToolResolution {
     pub model_spec: String,
 }
 
+/// Collect all enabled + available model specs from a named tier in config order.
+///
+/// Applies the same availability and whitelist rules as tier resolution so
+/// callers can consistently build reviewer pools or per-tool model-spec maps.
+pub(crate) fn collect_available_tier_models(
+    tier_name: &str,
+    config: &ProjectConfig,
+    whitelist: Option<&[String]>,
+    skip_specs: &[String],
+) -> Vec<TierToolResolution> {
+    let Some(tier) = config.tiers.get(tier_name) else {
+        return Vec::new();
+    };
+
+    tier.models
+        .iter()
+        .filter_map(|spec| {
+            if skip_specs.iter().any(|s| s == spec) {
+                return None;
+            }
+            let parts: Vec<&str> = spec.splitn(4, '/').collect();
+            if parts.len() != 4 {
+                return None;
+            }
+            let tool_str = parts[0];
+            let tool = parse_tool_name(tool_str).ok()?;
+            if !config.is_tool_enabled(tool_str) || !is_tool_binary_available(tool_str) {
+                return None;
+            }
+            if let Some(wl) = whitelist
+                && !wl.iter().any(|w| w == tool_str)
+            {
+                return None;
+            }
+            Some(TierToolResolution {
+                tool,
+                model_spec: spec.clone(),
+            })
+        })
+        .collect()
+}
+
 /// Resolve a tool from a named tier's models list with heterogeneous preference.
 ///
 /// Filters tier models by enabled + binary available, then prefers a tool from
@@ -491,39 +533,11 @@ pub(crate) fn resolve_tool_from_tier(
     whitelist: Option<&[String]>,
     skip_specs: &[String],
 ) -> Option<TierToolResolution> {
-    let tier = config.tiers.get(tier_name)?;
-
     let parent_family = parent_tool
         .and_then(|p| parse_tool_name(p).ok())
         .map(|t| t.model_family());
 
-    // Collect available (enabled + binary present + whitelisted) models from the tier
-    let available: Vec<(ToolName, &str)> = tier
-        .models
-        .iter()
-        .filter_map(|spec| {
-            // Skip specs that have already been tried in the failover chain
-            if skip_specs.iter().any(|s| s == spec) {
-                return None;
-            }
-            let parts: Vec<&str> = spec.splitn(4, '/').collect();
-            if parts.len() != 4 {
-                return None;
-            }
-            let tool_str = parts[0];
-            let tool = parse_tool_name(tool_str).ok()?;
-            if !config.is_tool_enabled(tool_str) || !is_tool_binary_available(tool_str) {
-                return None;
-            }
-            // Apply whitelist filter if provided
-            if let Some(wl) = whitelist
-                && !wl.iter().any(|w| w == tool_str)
-            {
-                return None;
-            }
-            Some((tool, spec.as_str()))
-        })
-        .collect();
+    let available = collect_available_tier_models(tier_name, config, whitelist, skip_specs);
 
     if available.is_empty() {
         return None;
@@ -531,22 +545,15 @@ pub(crate) fn resolve_tool_from_tier(
 
     // Prefer heterogeneous (different model family from parent)
     if let Some(parent_fam) = parent_family
-        && let Some((tool, spec)) = available
+        && let Some(resolution) = available
             .iter()
-            .find(|(t, _)| t.model_family() != parent_fam)
+            .find(|resolution| resolution.tool.model_family() != parent_fam)
     {
-        return Some(TierToolResolution {
-            tool: *tool,
-            model_spec: spec.to_string(),
-        });
+        return Some(resolution.clone());
     }
 
     // No heterogeneous option (or no parent) — use first available
-    let (tool, spec) = &available[0];
-    Some(TierToolResolution {
-        tool: *tool,
-        model_spec: spec.to_string(),
-    })
+    Some(available[0].clone())
 }
 
 /// Check if a tool's binary is available on PATH (synchronous).

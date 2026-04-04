@@ -587,7 +587,8 @@ fn review_cli_builds_multi_reviewer_config_from_args() {
 
     let strategy = parse_consensus_strategy(&args.consensus).unwrap();
     let reviewers = args.reviewers as usize;
-    let reviewer_tools = build_reviewer_tools(args.tool, ToolName::Codex, None, None, reviewers);
+    let reviewer_tools =
+        build_reviewer_tools(args.tool, ToolName::Codex, None, None, None, reviewers);
 
     assert!(reviewers > 1);
     assert_eq!(consensus_strategy_label(strategy), "unanimous");

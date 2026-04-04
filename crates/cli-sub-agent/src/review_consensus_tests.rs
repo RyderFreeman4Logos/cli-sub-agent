@@ -1,5 +1,5 @@
 use super::*;
-use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use tempfile::tempdir;
 
@@ -105,14 +105,14 @@ fn artifact_with_findings(session_id: &str, findings: Vec<Finding>) -> ReviewArt
 #[test]
 fn build_reviewer_tools_returns_empty_when_reviewer_count_is_zero() {
     let cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
-    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, 0);
+    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, None, 0);
     assert!(tools.is_empty());
 }
 
 #[test]
 fn build_reviewer_tools_round_robin_across_enabled_tools() {
     let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
-    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, 5);
+    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, None, 5);
     assert_eq!(
         tools,
         vec![
@@ -128,10 +128,55 @@ fn build_reviewer_tools_round_robin_across_enabled_tools() {
 #[test]
 fn build_reviewer_tools_respects_explicit_tool_override() {
     let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
-    let tools = build_reviewer_tools(Some(ToolName::Codex), ToolName::Codex, Some(&cfg), None, 3);
+    let tools = build_reviewer_tools(
+        Some(ToolName::Codex),
+        ToolName::Codex,
+        Some(&cfg),
+        None,
+        None,
+        3,
+    );
     assert_eq!(
         tools,
         vec![ToolName::Codex, ToolName::Codex, ToolName::Codex]
+    );
+}
+
+#[test]
+fn build_reviewer_tools_uses_tier_pool_when_present() {
+    let mut cfg = project_config_with_enabled_tools(&["gemini-cli", "codex", "claude-code"]);
+    cfg.tiers.insert(
+        "tier-review".to_string(),
+        csa_config::config::TierConfig {
+            description: "Review tier".to_string(),
+            models: vec![
+                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "codex/openai/o3/medium".to_string(),
+                "claude-code/anthropic/claude-sonnet-4-20250514/none".to_string(),
+            ],
+            strategy: csa_config::TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let tools = build_reviewer_tools(
+        None,
+        ToolName::Codex,
+        Some(&cfg),
+        Some(&GlobalConfig::default()),
+        Some("tier-review"),
+        5,
+    );
+    assert_eq!(
+        tools,
+        vec![
+            ToolName::Codex,
+            ToolName::GeminiCli,
+            ToolName::ClaudeCode,
+            ToolName::Codex,
+            ToolName::GeminiCli
+        ]
     );
 }
 
