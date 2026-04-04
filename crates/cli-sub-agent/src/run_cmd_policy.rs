@@ -7,6 +7,7 @@ use csa_core::types::OutputFormat;
 
 use super::git::PostRunCommitGuard;
 use super::shell::{
+    detect_lefthook_bypass_commands, detect_lefthook_bypass_commands_from_tool_output,
     detect_no_verify_commit_commands, detect_no_verify_commit_commands_from_tool_output,
 };
 
@@ -16,12 +17,15 @@ const POST_RUN_POLICY_UNVERIFIABLE_SUMMARY: &str =
     "post-run policy blocked: unable to verify workspace mutation state";
 const POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY: &str =
     "post-run policy blocked: forbidden git commit --no-verify detected";
+const POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY: &str =
+    "post-run policy blocked: forbidden LEFTHOOK=0/LEFTHOOK_SKIP bypass detected";
 const ALLOW_NO_VERIFY_COMMIT_MARKER: &str = "allow_git_commit_no_verify=1";
 
 pub(crate) fn is_post_run_commit_policy_block(summary: &str) -> bool {
     summary == POST_RUN_POLICY_BLOCKED_SUMMARY
         || summary == POST_RUN_POLICY_UNVERIFIABLE_SUMMARY
         || summary == POST_RUN_POLICY_FORBIDDEN_NO_VERIFY_SUMMARY
+        || summary == POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY
 }
 
 pub(crate) fn apply_post_run_commit_policy(
@@ -130,6 +134,55 @@ pub(crate) fn apply_no_verify_commit_policy(
     let mut message = String::from(
         "ERROR: forbidden `git commit --no-verify` (or `git commit -n`) detected in executed shell commands.\n\
 If this is intentional, add `ALLOW_GIT_COMMIT_NO_VERIFY=1` to the prompt.\n\
+Matched commands:",
+    );
+    for command in matched_commands {
+        message.push_str("\n- ");
+        message.push_str(&command);
+    }
+    match output_format {
+        OutputFormat::Text => eprintln!("{message}"),
+        OutputFormat::Json => append_stderr_block(&mut result.stderr_output, &message),
+    }
+}
+
+/// Block the run if any executed command sets `LEFTHOOK=0` or `LEFTHOOK_SKIP`
+/// to bypass pre-commit hooks.  This enforces AGENTS.md rule 029
+/// (hook-bypass-prevention).
+pub(crate) fn apply_lefthook_bypass_policy(
+    result: &mut csa_process::ExecutionResult,
+    output_format: &OutputFormat,
+    executed_shell_commands: &[String],
+    execute_events_observed: bool,
+) {
+    let mut matched_commands = detect_lefthook_bypass_commands(executed_shell_commands);
+    if matched_commands.is_empty() && !execute_events_observed {
+        matched_commands = detect_lefthook_bypass_commands_from_tool_output(
+            result,
+            !executed_shell_commands.is_empty(),
+        );
+    }
+    if matched_commands.is_empty() {
+        return;
+    }
+
+    let previous_summary = result.summary.clone();
+    if result.exit_code == 0 {
+        result.exit_code = 1;
+    }
+    if !previous_summary.trim().is_empty()
+        && previous_summary != POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY
+    {
+        append_stderr_block(
+            &mut result.stderr_output,
+            &format!("Original summary before commit policy: {previous_summary}"),
+        );
+    }
+    result.summary = POST_RUN_POLICY_FORBIDDEN_LEFTHOOK_BYPASS_SUMMARY.to_string();
+
+    let mut message = String::from(
+        "ERROR: forbidden `LEFTHOOK=0` or `LEFTHOOK_SKIP` bypass detected in executed shell commands.\n\
+Hook bypass is absolutely prohibited (AGENTS.md rule 029).\n\
 Matched commands:",
     );
     for command in matched_commands {

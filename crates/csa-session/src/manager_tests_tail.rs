@@ -54,6 +54,7 @@ fn test_save_and_load_result() {
 #[test]
 fn test_save_session_and_result_preserve_legacy_symlink_root() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     let project = td.path().join("project");
     std::fs::create_dir_all(&project).unwrap();
 
@@ -477,6 +478,7 @@ fn test_create_session_records_branch_in_git_repo() {
 #[test]
 fn test_find_sessions_multi_condition_filtering() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     let mut s1 = create_session_in(td.path(), td.path(), Some("S1"), None, None).unwrap();
     s1.branch = Some("feature/a".to_string());
     s1.phase = SessionPhase::Available;
@@ -545,6 +547,7 @@ fn test_find_sessions_multi_condition_filtering() {
 #[test]
 fn test_find_sessions_sorts_desc_and_limits_to_ten() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     for i in 0..12 {
         let mut session = create_session_in(td.path(), td.path(), Some("S"), None, None).unwrap();
         session.branch = Some("feature/a".to_string());
@@ -575,6 +578,7 @@ fn test_find_sessions_sorts_desc_and_limits_to_ten() {
 #[test]
 fn test_global_exact_finds_cross_project_session() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
 
     // Create two "project" directories under the temp dir
     let project_a_root = td.path().join("project_a");
@@ -626,6 +630,7 @@ description = "test"
 #[test]
 fn test_list_all_sessions_from_multiple_roots() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     let root_a = td.path().join("root_a");
     let root_b = td.path().join("root_b");
 
@@ -650,21 +655,22 @@ fn test_list_all_sessions_from_multiple_roots() {
 #[test]
 fn test_prefix_stays_project_scoped() {
     let td = tempdir().unwrap();
+    let _xdg = ScopedXdgOverride::new(&td);
     let root_a = td.path().join("root_a");
     let root_b = td.path().join("root_b");
 
     let s1 = create_session_in(&root_a, &root_a, Some("A"), None, None).unwrap();
     let _s2 = create_session_in(&root_b, &root_b, Some("B"), None, None).unwrap();
 
-    // Prefix resolution should only find sessions in the specified root
+    // Full-ID resolution should only find sessions in the specified root
     let sessions_dir_a = root_a.join("sessions");
-    let prefix = &s1.meta_session_id[..6];
-    let resolved = crate::validate::resolve_session_prefix(&sessions_dir_a, prefix).unwrap();
+    let resolved =
+        crate::validate::resolve_session_prefix(&sessions_dir_a, &s1.meta_session_id).unwrap();
     assert_eq!(resolved, s1.meta_session_id);
 
-    // Same prefix should NOT match in root_b's sessions dir
+    // Same full ID should NOT match in root_b's sessions dir
     let sessions_dir_b = root_b.join("sessions");
-    let result = crate::validate::resolve_session_prefix(&sessions_dir_b, prefix);
+    let result = crate::validate::resolve_session_prefix(&sessions_dir_b, &s1.meta_session_id);
     assert!(result.is_err());
 }
 

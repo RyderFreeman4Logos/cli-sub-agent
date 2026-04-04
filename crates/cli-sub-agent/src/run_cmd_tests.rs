@@ -780,3 +780,6 @@ fn apply_no_verify_commit_policy_sets_failure_when_forbidden_flag_detected() {
 
 #[path = "run_cmd_tests_tail.rs"]
 mod tail_tests;
+
+#[path = "run_cmd_tests_lefthook.rs"]
+mod lefthook_tests;

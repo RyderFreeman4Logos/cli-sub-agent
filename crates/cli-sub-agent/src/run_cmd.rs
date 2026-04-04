@@ -23,8 +23,8 @@ pub(crate) use git::{
     is_git_worktree,
 };
 pub(crate) use policy::{
-    apply_no_verify_commit_policy, apply_post_run_commit_policy, apply_unverifiable_commit_policy,
-    execute_tool_calls_observed, extract_executed_shell_commands,
+    apply_lefthook_bypass_policy, apply_no_verify_commit_policy, apply_post_run_commit_policy,
+    apply_unverifiable_commit_policy, execute_tool_calls_observed, extract_executed_shell_commands,
 };
 
 #[cfg(test)]

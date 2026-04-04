@@ -435,9 +435,15 @@ impl Executor {
     /// Environment variables to strip from child processes.
     ///
     /// These prevent recursive-invocation guards in CLI tools from blocking
-    /// legitimate CSA sub-agent launches.  Mirrors the same list in
+    /// legitimate CSA sub-agent launches, and ensure hook-bypass env vars
+    /// never leak into child tool processes.  Mirrors the same list in
     /// `csa-acp::AcpConnection::STRIPPED_ENV_VARS`.
-    const STRIPPED_ENV_VARS: &[&str] = &["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT"];
+    const STRIPPED_ENV_VARS: &[&str] = &[
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "LEFTHOOK",
+        "LEFTHOOK_SKIP",
+    ];
 
     /// Strip process-inherited gemini auth/routing env vars so that CSA's
     /// extra_env controls auth mode exclusively (OAuth-first, API key fallback

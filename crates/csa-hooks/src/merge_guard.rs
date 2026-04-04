@@ -213,10 +213,48 @@ pub fn is_merge_guard_enabled(hooks_path: Option<&Path>) -> bool {
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use std::sync::{LazyLock, Mutex};
     use tempfile::NamedTempFile;
+
+    /// Process-wide lock for tests that mutate `XDG_STATE_HOME`.
+    static GUARD_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    /// RAII guard that sets `XDG_STATE_HOME` to a temp path and restores
+    /// the original value on drop — even if the test panics.
+    struct ScopedXdgOverride {
+        orig: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ScopedXdgOverride {
+        fn new(tmp: &tempfile::TempDir) -> Self {
+            let lock = GUARD_ENV_LOCK.lock().expect("env lock poisoned");
+            let orig = std::env::var("XDG_STATE_HOME").ok();
+            // SAFETY: test-scoped env mutation protected by GUARD_ENV_LOCK.
+            unsafe {
+                std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap());
+            }
+            Self { orig, _lock: lock }
+        }
+    }
+
+    impl Drop for ScopedXdgOverride {
+        fn drop(&mut self) {
+            // SAFETY: restoration of test-scoped env mutation (lock still held).
+            unsafe {
+                match &self.orig {
+                    Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+                    None => std::env::remove_var("XDG_STATE_HOME"),
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_ensure_guard_dir_creates_wrapper() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _xdg = ScopedXdgOverride::new(&tmp);
+
         let dir = ensure_guard_dir().unwrap();
         let wrapper = dir.join("gh");
         assert!(wrapper.exists(), "gh wrapper should exist");
@@ -228,6 +266,9 @@ mod tests {
 
     #[test]
     fn test_inject_merge_guard_env_sets_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _xdg = ScopedXdgOverride::new(&tmp);
+
         let mut env = HashMap::new();
         env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
         inject_merge_guard_env(&mut env);
@@ -245,6 +286,9 @@ mod tests {
 
     #[test]
     fn test_inject_merge_guard_env_sets_real_gh() {
+        let tmp = tempfile::tempdir().unwrap();
+        let _xdg = ScopedXdgOverride::new(&tmp);
+
         let mut env = HashMap::new();
         inject_merge_guard_env(&mut env);
         // CSA_REAL_GH is set only if `gh` is installed.

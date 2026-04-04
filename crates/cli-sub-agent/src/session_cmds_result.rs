@@ -88,7 +88,10 @@ pub(crate) fn handle_session_result(
     let session_dir = resolved.sessions_dir.join(&resolved_id);
 
     // Use the foreign project root for cross-project sessions, local otherwise.
-    let effective_root = resolved.foreign_project_root.as_deref().unwrap_or(&project_root);
+    let effective_root = resolved
+        .foreign_project_root
+        .as_deref()
+        .unwrap_or(&project_root);
     let is_cross_project = resolved.foreign_project_root.is_some();
 
     if let Err(err) = ensure_terminal_result_for_dead_active_session(
@@ -116,10 +119,7 @@ pub(crate) fn handle_session_result(
             }
         }
     } else {
-        match crate::session_observability::refresh_and_repair_result(
-            &project_root,
-            &resolved_id,
-        ) {
+        match crate::session_observability::refresh_and_repair_result(&project_root, &resolved_id) {
             Ok(result) => result,
             Err(err) => {
                 tracing::warn!(

@@ -123,8 +123,7 @@ pub(crate) fn resolve_session_prefix_with_global_fallback(
                     .unwrap_or_else(|| session_dir.clone());
                 // Extract the foreign project_path from state.toml for callers
                 // that need to call project-scoped session APIs.
-                let foreign_project_root =
-                    extract_foreign_project_root(&session_dir);
+                let foreign_project_root = extract_foreign_project_root(&session_dir);
                 eprintln!(
                     "Warning: session {} not found in current project, using cross-project fallback",
                     prefix,

@@ -53,7 +53,7 @@ fn session_to_json_reconciles_orphaned_active_session_status() {
     backdate_tree(&session_dir, 120);
 
     let session = load_session(project, &session_id).unwrap();
-    let value = session_to_json(project, &session);
+    let value = session_to_json(&session);
     assert_eq!(value.get("status").and_then(|v| v.as_str()), Some("Failed"));
 
     let persisted = load_result(project, &session_id).unwrap();

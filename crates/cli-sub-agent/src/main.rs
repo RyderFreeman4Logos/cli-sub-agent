@@ -67,6 +67,8 @@ mod main_auto_weave_tests;
 
 #[cfg(test)]
 mod test_env_lock;
+#[cfg(test)]
+mod test_session_sandbox;
 
 use cli::{
     Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SetupCommands, SkillCommands,

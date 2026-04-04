@@ -10,6 +10,7 @@ use crate::session_cmds_daemon::{
     persist_daemon_completion_from_env, seed_daemon_session_env, synthesized_wait_next_step,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use chrono::Utc;
 use clap::Parser;
 use csa_session::{
@@ -215,7 +216,7 @@ fn sample_session_state() -> MetaSessionState {
 #[test]
 fn session_to_json_includes_branch_and_task_type() {
     let session = sample_session_state();
-    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+    let value = session_to_json(&session);
     assert_eq!(
         value.get("branch").and_then(|v| v.as_str()),
         Some("feature/x")
@@ -229,6 +230,7 @@ fn session_to_json_includes_branch_and_task_type() {
 #[test]
 fn session_list_branch_filter_returns_matching_sessions() {
     let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&td);
     let project = td.path();
 
     let s1 = create_session(project, Some("S1"), None, None).unwrap();
@@ -253,6 +255,7 @@ fn session_list_branch_filter_returns_matching_sessions() {
 #[test]
 fn session_list_selection_not_truncated_to_ten() {
     let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&td);
     let project = td.path();
 
     for _ in 0..12 {
@@ -740,7 +743,7 @@ fn sample_fork_session() -> MetaSessionState {
 #[test]
 fn session_to_json_includes_fork_fields() {
     let session = sample_fork_session();
-    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+    let value = session_to_json(&session);
 
     assert_eq!(value.get("is_fork").and_then(|v| v.as_bool()), Some(true));
     assert_eq!(
@@ -763,7 +766,7 @@ fn session_to_json_includes_fork_fields() {
 #[test]
 fn session_to_json_non_fork_has_is_fork_false() {
     let session = sample_session_state();
-    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+    let value = session_to_json(&session);
 
     assert_eq!(value.get("is_fork").and_then(|v| v.as_bool()), Some(false));
     assert!(value.get("fork_of_session_id").is_none());
@@ -776,7 +779,7 @@ fn session_to_json_includes_depth_and_parent() {
     session.genealogy.parent_session_id = Some("01PARENT000000000000000000".to_string());
     session.genealogy.depth = 2;
 
-    let value = session_to_json(std::path::Path::new("/tmp/project"), &session);
+    let value = session_to_json(&session);
     assert_eq!(
         value.get("parent_session_id").and_then(|v| v.as_str()),
         Some("01PARENT000000000000000000")

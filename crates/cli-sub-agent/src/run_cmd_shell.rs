@@ -19,6 +19,71 @@ pub(crate) fn detect_no_verify_commit_commands(executed_shell_commands: &[String
     matches
 }
 
+/// Detect commands that set `LEFTHOOK=0` or `LEFTHOOK_SKIP` to bypass
+/// pre-commit hooks.  Mirrors `detect_no_verify_commit_commands` for the
+/// hook-bypass-prevention policy (AGENTS.md rule 029).
+pub(crate) fn detect_lefthook_bypass_commands(executed_shell_commands: &[String]) -> Vec<String> {
+    let mut matches = Vec::new();
+    for command in executed_shell_commands {
+        let trimmed = command.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if !command_contains_forbidden_lefthook_bypass(trimmed) {
+            continue;
+        }
+        if !matches.iter().any(|existing| existing == trimmed) {
+            matches.push(trimmed.to_string());
+        }
+    }
+    matches
+}
+
+pub(crate) fn detect_lefthook_bypass_commands_from_tool_output(
+    result: &csa_process::ExecutionResult,
+    trace_only: bool,
+) -> Vec<String> {
+    let mut matches = Vec::new();
+    collect_lefthook_bypass_command_like_lines(&result.output, &mut matches, trace_only);
+    collect_lefthook_bypass_command_like_lines(&result.summary, &mut matches, trace_only);
+    collect_lefthook_bypass_command_like_lines(&result.stderr_output, &mut matches, trace_only);
+    matches
+}
+
+fn collect_lefthook_bypass_command_like_lines(
+    source: &str,
+    matches: &mut Vec<String>,
+    trace_only: bool,
+) {
+    let mut inside_code_fence = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") {
+            inside_code_fence = !inside_code_fence;
+            continue;
+        }
+        if inside_code_fence || trimmed.is_empty() {
+            continue;
+        }
+        if trace_only && !has_command_prompt_prefix(trimmed) {
+            continue;
+        }
+        if !looks_like_shell_command_line(trimmed) {
+            continue;
+        }
+        let normalized_command = strip_command_prompt_prefix(trimmed);
+        if !command_contains_forbidden_lefthook_bypass(normalized_command) {
+            continue;
+        }
+        if !matches
+            .iter()
+            .any(|existing| existing == normalized_command)
+        {
+            matches.push(normalized_command.to_string());
+        }
+    }
+}
+
 pub(crate) fn detect_no_verify_commit_commands_from_tool_output(
     result: &csa_process::ExecutionResult,
     trace_only: bool,
@@ -76,6 +141,7 @@ fn looks_like_shell_command_line(line: &str) -> bool {
         || first_token.eq_ignore_ascii_case("env")
         || first_token.eq_ignore_ascii_case("command")
         || first_token.eq_ignore_ascii_case("time")
+        || first_token.eq_ignore_ascii_case("export")
 }
 
 fn has_command_prompt_prefix(line: &str) -> bool {
@@ -560,4 +626,89 @@ fn long_option_consumes_value(token: &str) -> bool {
 
 fn long_option_is_message_like(token: &str) -> bool {
     token == "--message"
+}
+
+// ── LEFTHOOK bypass detection ──────────────────────────────────────
+
+/// Forbidden LEFTHOOK env var names that disable pre-commit hooks.
+const FORBIDDEN_LEFTHOOK_ENV_VARS: &[&str] = &["LEFTHOOK", "LEFTHOOK_SKIP"];
+
+fn command_contains_forbidden_lefthook_bypass(command: &str) -> bool {
+    split_shell_segments_preserving_quotes(command)
+        .into_iter()
+        .any(|segment| segment_contains_forbidden_lefthook_bypass(&segment))
+}
+
+/// Check whether a single shell segment sets a forbidden LEFTHOOK env var.
+///
+/// Detects patterns:
+/// - `LEFTHOOK=0 git commit ...`  (inline env assignment before command)
+/// - `export LEFTHOOK=0`
+/// - `env LEFTHOOK=0 git commit ...`
+/// - `LEFTHOOK_SKIP=... git push ...`
+fn segment_contains_forbidden_lefthook_bypass(segment: &str) -> bool {
+    let tokens = tokenize_shell_tokens(segment);
+    if tokens.is_empty() {
+        return false;
+    }
+
+    // Check for `sh -c "export LEFTHOOK=0; ..."` or similar shell wrappers.
+    if let Some(shell_script_tokens) = extract_shell_c_payload_tokens(&tokens)
+        && shell_script_contains_forbidden_lefthook_bypass(shell_script_tokens)
+    {
+        return true;
+    }
+
+    tokens_contain_lefthook_bypass(&tokens)
+}
+
+fn shell_script_contains_forbidden_lefthook_bypass(tokens: &[String]) -> bool {
+    let script_tokens = expand_shell_script_tokens(tokens);
+    tokens_contain_lefthook_bypass(&script_tokens)
+}
+
+/// Scan a flat token list for any LEFTHOOK bypass env assignment.
+///
+/// Handles:
+///   - Inline env prefix: `LEFTHOOK=0 git commit`
+///   - `export LEFTHOOK=0`
+///   - `env LEFTHOOK=0 git ...`
+fn tokens_contain_lefthook_bypass(tokens: &[String]) -> bool {
+    for (idx, token) in tokens.iter().enumerate() {
+        let t = token.as_str();
+
+        // Inline env assignment: `LEFTHOOK=0 cmd`, `LEFTHOOK_SKIP=... cmd`
+        if is_lefthook_env_assignment(t) {
+            return true;
+        }
+
+        // `export LEFTHOOK=0` / `export LEFTHOOK_SKIP=...`
+        if t.eq_ignore_ascii_case("export") {
+            for next in &tokens[idx + 1..] {
+                let n = next.as_str();
+                if is_lefthook_env_assignment(n) {
+                    return true;
+                }
+                // export can chain multiple assignments; stop at non-assignment
+                if !is_env_assignment(n) {
+                    break;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Return true if `token` is `LEFTHOOK=<val>` or `LEFTHOOK_SKIP=<val>`.
+fn is_lefthook_env_assignment(token: &str) -> bool {
+    let Some(eq_pos) = token.find('=') else {
+        return false;
+    };
+    if eq_pos == 0 || token.starts_with('-') {
+        return false;
+    }
+    let var_name = &token[..eq_pos];
+    FORBIDDEN_LEFTHOOK_ENV_VARS
+        .iter()
+        .any(|forbidden| var_name.eq_ignore_ascii_case(forbidden))
 }

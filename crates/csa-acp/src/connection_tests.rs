@@ -61,6 +61,14 @@ fn stripped_env_vars_contains_claudecode() {
         AcpConnection::STRIPPED_ENV_VARS.contains(&"GOOGLE_GEMINI_BASE_URL"),
         "STRIPPED_ENV_VARS must strip GOOGLE_GEMINI_BASE_URL so ACP retries control routing"
     );
+    assert!(
+        AcpConnection::STRIPPED_ENV_VARS.contains(&"LEFTHOOK"),
+        "STRIPPED_ENV_VARS must strip LEFTHOOK (hook bypass prevention)"
+    );
+    assert!(
+        AcpConnection::STRIPPED_ENV_VARS.contains(&"LEFTHOOK_SKIP"),
+        "STRIPPED_ENV_VARS must strip LEFTHOOK_SKIP (hook bypass prevention)"
+    );
 }
 
 #[test]

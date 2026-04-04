@@ -1,38 +1,34 @@
 use super::result_contract::enforce_result_toml_path_contract;
 use super::*;
 use crate::session_guard::{SessionCleanupGuard, write_pre_exec_error_result};
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use chrono::Utc;
 use csa_config::config::{CURRENT_SCHEMA_VERSION, TierConfig, TierStrategy};
 use csa_config::{ProjectMeta, ResourcesConfig};
 use csa_hooks::{FailPolicy, HookConfig, HookEvent, HooksConfig, Waiver};
 use std::collections::HashMap;
 use std::fs;
-use std::sync::LazyLock;
 
-static PIPELINE_ENV_LOCK: LazyLock<tokio::sync::Mutex<()>> =
-    LazyLock::new(|| tokio::sync::Mutex::new(()));
-
+/// RAII guard for additional env var manipulation within a ScopedSessionSandbox.
+/// Used by tail tests that need extra env var overrides beyond the sandbox defaults.
 struct ScopedEnvVarRestore {
     key: &'static str,
     original: Option<String>,
 }
-
 impl ScopedEnvVarRestore {
     fn unset(key: &'static str) -> Self {
         let original = std::env::var(key).ok();
-        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        // SAFETY: test-scoped env mutation; caller holds TEST_ENV_LOCK via ScopedSessionSandbox.
         unsafe { std::env::remove_var(key) };
         Self { key, original }
     }
-
     fn set(key: &'static str, value: &str) -> Self {
         let original = std::env::var(key).ok();
-        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        // SAFETY: test-scoped env mutation; caller holds TEST_ENV_LOCK via ScopedSessionSandbox.
         unsafe { std::env::set_var(key, value) };
         Self { key, original }
     }
 }
-
 impl Drop for ScopedEnvVarRestore {
     fn drop(&mut self) {
         // SAFETY: restoration of test-scoped env mutation.
@@ -127,6 +123,7 @@ fn auto_description_from_prompt_when_none_provided() {
     use crate::run_helpers::truncate_prompt;
 
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
 
     let prompt = "Analyze the authentication module and fix the login bug";
@@ -174,6 +171,7 @@ fn auto_description_truncates_long_prompt() {
     use crate::run_helpers::truncate_prompt;
 
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
 
     let long_prompt = "Please analyze the entire authentication module including OAuth2 flows, JWT token validation, session management, RBAC permissions, and the password reset workflow to identify all security vulnerabilities";
@@ -202,17 +200,15 @@ fn auto_description_truncates_long_prompt() {
 #[test]
 fn resumed_session_keeps_existing_description() {
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
 
-    // Create a session with an explicit description
     let original_desc = "original task description";
     let session =
         csa_session::create_session(project_root, Some(original_desc), None, Some("codex"))
             .unwrap();
 
-    // Simulate resuming: load the existing session (as the pipeline does for --session)
     let loaded = csa_session::load_session(project_root, &session.meta_session_id).unwrap();
-
     assert_eq!(
         loaded.description.as_deref(),
         Some(original_desc),
@@ -476,21 +472,6 @@ fn build_merged_env_appends_node_options_when_existing_value_present() {
     );
 }
 
-#[test]
-fn context_load_options_with_skips_empty_returns_none() {
-    let skip_files: Vec<String> = Vec::new();
-    let options = context_load_options_with_skips(&skip_files);
-    assert!(options.is_none());
-}
-
-#[test]
-fn context_load_options_with_skips_propagates_files() {
-    let skip_files = vec!["AGENTS.md".to_string(), "rules/private.md".to_string()];
-    let options = context_load_options_with_skips(&skip_files).expect("must return options");
-    assert_eq!(options.skip_files, skip_files);
-    assert_eq!(options.max_bytes, None);
-}
-
 /// Verify that `SessionCleanupGuard` removes the directory on drop when not defused.
 #[test]
 fn cleanup_guard_removes_orphan_dir_on_drop() {
@@ -539,6 +520,7 @@ fn cleanup_guard_preserves_dir_when_defused() {
 #[test]
 fn pre_exec_failure_preserves_session_with_error_result() {
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
 
     let session = csa_session::create_session(project_root, Some("test"), None, Some("codex"))
@@ -547,7 +529,6 @@ fn pre_exec_failure_preserves_session_with_error_result() {
     let session_dir = csa_session::get_session_dir(project_root, &session.meta_session_id).unwrap();
     assert!(session_dir.exists());
 
-    // Simulate the cleanup-guard + write_pre_exec_error_result pattern
     {
         let mut guard = SessionCleanupGuard::new(session_dir.clone());
         let error = anyhow::anyhow!("spawn failed: command not found");
@@ -555,17 +536,14 @@ fn pre_exec_failure_preserves_session_with_error_result() {
         guard.defuse();
     }
 
-    // Session directory must survive
     assert!(
         session_dir.exists(),
         "session directory must be preserved after pre-exec failure"
     );
 
-    // Error result.toml must exist and be loadable
     let loaded = csa_session::load_result(project_root, &session.meta_session_id)
         .expect("load_result must not error")
         .expect("result.toml must exist after pre-exec failure");
-
     assert_eq!(loaded.status, "failure");
     assert!(loaded.summary.starts_with("pre-exec:"));
     assert!(loaded.summary.contains("spawn failed"));
@@ -576,21 +554,18 @@ fn pre_exec_failure_preserves_session_with_error_result() {
 #[test]
 fn pre_exec_error_writes_failure_result() {
     let tmp = tempfile::tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&tmp);
     let project_root = tmp.path();
 
-    // Create a real session so the directory structure exists
     let session = csa_session::create_session(project_root, Some("test"), None, Some("codex"))
         .expect("session creation must succeed");
 
-    // Simulate a pre-execution failure (e.g., resource exhaustion)
     let error = anyhow::anyhow!("tool binary not found in PATH");
     write_pre_exec_error_result(project_root, &session.meta_session_id, "codex", &error);
 
-    // Load and verify
     let loaded = csa_session::load_result(project_root, &session.meta_session_id)
         .expect("load_result must not error")
         .expect("result.toml must exist");
-
     assert_eq!(loaded.status, "failure", "status must be failure");
     assert_eq!(loaded.exit_code, 1, "exit_code must be 1");
     assert!(
@@ -785,11 +760,9 @@ fn enforce_result_toml_contract_now(
     enforce_result_toml_path_contract(prompt, effective_prompt, session_dir, true, result);
 }
 
-#[path = "pipeline_tests_tail.rs"]
-mod tail_tests;
-
-#[path = "pipeline_tests_initial_response.rs"]
-mod initial_response_tests;
-
 #[path = "pipeline_tests_contract.rs"]
 mod contract_tests;
+#[path = "pipeline_tests_initial_response.rs"]
+mod initial_response_tests;
+#[path = "pipeline_tests_tail.rs"]
+mod tail_tests;

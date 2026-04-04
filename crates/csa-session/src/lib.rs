@@ -23,6 +23,20 @@ pub mod vcs_backends;
 #[path = "vcs_identity_tests.rs"]
 mod vcs_identity_tests;
 
+/// Shared test-only environment lock.
+///
+/// All tests that mutate process-wide environment variables (e.g.
+/// `XDG_STATE_HOME`, `CSA_DAEMON_*`) **must** acquire this lock to prevent
+/// data races between test threads.  Previously `manager_tests` and
+/// `genealogy::tests` each had their own static lock, which did not
+/// protect against cross-module races.
+#[cfg(test)]
+pub(crate) mod test_env {
+    use std::sync::{LazyLock, Mutex};
+
+    pub static TEST_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+}
+
 // Re-export key types
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};
 pub use state::{

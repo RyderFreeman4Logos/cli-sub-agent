@@ -754,8 +754,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             &executed_shell_commands,
             execute_events_observed,
         );
+        crate::run_cmd::apply_lefthook_bypass_policy(
+            &mut result,
+            &output_format,
+            &executed_shell_commands,
+            execute_events_observed,
+        );
     }
-
     let post_ctx = crate::pipeline_post_exec::PostExecContext {
         executor,
         prompt,
