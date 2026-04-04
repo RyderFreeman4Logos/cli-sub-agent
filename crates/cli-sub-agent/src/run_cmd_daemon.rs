@@ -92,6 +92,14 @@ pub(crate) fn spawn_and_exit(subcommand: &str, cd: Option<&str>) -> Result<()> {
         dir = result.session_dir.display(),
         cd = cd_hint,
     );
+    eprintln!(
+        "<!-- CSA:CALLER_HINT action=\"wait\" \
+         rule=\"Call 'csa session wait --session {id}{cd}' in a SEPARATE Bash call. \
+         NEVER batch multiple waits in a for/while loop. \
+         Each wait returns periodically so you can generate tokens and keep your KV cache warm.\" -->",
+        id = result.session_id,
+        cd = cd_hint,
+    );
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     std::process::exit(0);

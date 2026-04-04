@@ -3,6 +3,24 @@ use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
 #[cfg(unix)]
+fn wait_for_spawned_daemon_visibility(
+    session_dir: &std::path::Path,
+    child: &mut std::process::Child,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
+    while std::time::Instant::now() < deadline {
+        if csa_process::ToolLiveness::has_live_process(session_dir) {
+            return;
+        }
+        if let Some(status) = child.try_wait().expect("daemon child status check failed") {
+            panic!("daemon child exited before wait began: {status}");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("daemon child never became visible to ToolLiveness");
+}
+
+#[cfg(unix)]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_is_noop_when_result_exists() {
     let td = tempdir().unwrap();
@@ -383,6 +401,7 @@ fn handle_session_wait_waits_for_daemon_exit_before_returning_success() {
         .spawn()
         .unwrap();
     std::fs::write(session_dir.join("daemon.pid"), child.id().to_string()).unwrap();
+    wait_for_spawned_daemon_visibility(&session_dir, &mut child);
 
     let started = Instant::now();
     let exit_code = handle_session_wait(
@@ -444,6 +463,7 @@ fn handle_session_wait_ignores_incomplete_result_while_daemon_alive() {
         .spawn()
         .unwrap();
     std::fs::write(session_dir.join("daemon.pid"), child.id().to_string()).unwrap();
+    wait_for_spawned_daemon_visibility(&session_dir, &mut child);
 
     let exit_code = handle_session_wait(
         session_id.clone(),
