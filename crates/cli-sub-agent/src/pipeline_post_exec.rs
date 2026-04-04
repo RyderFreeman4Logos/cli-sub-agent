@@ -112,6 +112,7 @@ pub(crate) async fn process_execution_result(
         completed_at: execution_end_time,
         events_count: ctx.events_count,
         artifacts: ctx.transcript_artifacts,
+        peak_memory_mb: result.peak_memory_mb,
     };
     if let Err(err) = crate::session_observability::enrich_result_from_session_dir(
         ctx.project_root,
@@ -349,6 +350,7 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         completed_at,
         events_count: 0,
         artifacts,
+        peak_memory_mb: None,
     };
 
     if let Err(save_err) = save_result(project_root, &session.meta_session_id, &fallback_result) {
@@ -602,6 +604,7 @@ mod tests {
             completed_at: now,
             events_count: 1,
             artifacts: vec![SessionArtifact::new("output/acp-events.jsonl")],
+            peak_memory_mb: None,
         };
         save_result(project_root, &session.meta_session_id, &existing)
             .expect("write existing result");

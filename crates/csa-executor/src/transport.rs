@@ -20,6 +20,7 @@ use csa_session::state::{MetaSessionState, ToolState};
 
 #[path = "transport_meta.rs"]
 mod transport_meta;
+pub use transport_meta::PeakMemoryContext;
 use transport_meta::{build_summary, run_acp_sandboxed};
 
 #[path = "transport_gemini_helpers.rs"]
@@ -200,7 +201,7 @@ impl LegacyTransport {
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
         };
-        let (child, _sandbox_handle) = match spawn_tool_sandboxed(
+        let (child, sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
             stdin_data.clone(),
             spawn_options,
@@ -225,7 +226,21 @@ impl LegacyTransport {
             Err(e) => return Err(e),
         };
 
-        let execution = wait_and_capture_with_idle_timeout(
+        // Start memory monitor for legacy transport (mirrors ACP path).
+        let memory_monitor = if let csa_process::SandboxHandle::Cgroup(ref guard) = sandbox_handle {
+            isolation_plan.and_then(|plan| {
+                transport_meta::start_memory_monitor(
+                    guard.scope_name(),
+                    child.id().unwrap_or(0),
+                    plan,
+                    std::time::Duration::from_secs(options.termination_grace_period_seconds),
+                )
+            })
+        } else {
+            None
+        };
+
+        let mut execution = wait_and_capture_with_idle_timeout(
             child,
             options.stream_mode,
             std::time::Duration::from_secs(options.idle_timeout_seconds),
@@ -239,7 +254,23 @@ impl LegacyTransport {
         )
         .await?;
 
-        // _sandbox_handle is kept alive until here, then dropped (cleanup).
+        // Stop memory monitor before reading peak memory.
+        if let Some(monitor) = memory_monitor {
+            monitor.stop().await;
+        }
+
+        // Read peak memory from cgroup before sandbox_handle is dropped.
+        if let csa_process::SandboxHandle::Cgroup(ref guard) = sandbox_handle {
+            execution.peak_memory_mb = guard.memory_peak_mb();
+            if let Some(peak) = execution.peak_memory_mb {
+                tracing::info!(
+                    tool = tool_name,
+                    peak_memory_mb = peak,
+                    "legacy transport: cgroup peak memory recorded"
+                );
+            }
+        }
+        // sandbox_handle is dropped here, cleaning up cgroup scope if applicable.
 
         Ok(TransportResult {
             execution,
@@ -489,7 +520,7 @@ impl AcpTransport {
                 if let Some(ref plan) = sandbox_plan {
                     let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
                     let sess_id = sandbox_session_id.as_deref().unwrap_or("");
-                    match rt.block_on(run_acp_sandboxed(
+                    let sr = rt.block_on(run_acp_sandboxed(
                         &acp_command,
                         &acp_args,
                         &working_dir,
@@ -510,9 +541,13 @@ impl AcpTransport {
                         output_spool.as_deref(),
                         output_spool_max_bytes,
                         output_spool_keep_rotated,
-                    )) {
-                        Ok(output) => Ok(output),
-                        Err(e) if sandbox_best_effort => {
+                    ));
+                    match sr.result {
+                        Ok(mut output) => {
+                            output.peak_memory_mb = output.peak_memory_mb.or(sr.peak_memory_mb);
+                            Ok(output)
+                        }
+                        Err(e) if sandbox_best_effort && sr.sandbox_spawn_failed => {
                             tracing::warn!(
                                 "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
                             );
@@ -550,7 +585,8 @@ impl AcpTransport {
                             ))
                             .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
                         }
-                        Err(e) => Err(anyhow!("ACP transport (sandboxed) failed: {e}")),
+                        Err(e) => Err(PeakMemoryContext(sr.peak_memory_mb)
+                            .into_anyhow(format!("sandboxed ACP: {e}"))),
                     }
                 } else {
                     rt.block_on(csa_acp::transport::run_prompt_with_io(
@@ -588,12 +624,12 @@ impl AcpTransport {
             })
             .await
             .map_err(classify_join_error)??;
-
         let execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
             output: output.output,
             stderr_output: output.stderr,
             exit_code: output.exit_code,
+            peak_memory_mb: output.peak_memory_mb,
         };
 
         Ok(TransportResult {

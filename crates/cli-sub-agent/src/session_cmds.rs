@@ -71,6 +71,7 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
         completed_at: now,
         events_count: 0,
         artifacts,
+        peak_memory_mb: None,
     };
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
     if result_path.exists() {

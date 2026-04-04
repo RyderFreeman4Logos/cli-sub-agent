@@ -87,7 +87,7 @@ pub enum SandboxHandle {
 }
 
 /// Result of executing a command.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub struct ExecutionResult {
     /// Combined stdout output.
     pub output: String,
@@ -101,6 +101,10 @@ pub struct ExecutionResult {
     pub summary: String,
     /// Exit code (1 if signal-killed).
     pub exit_code: i32,
+    /// Peak memory usage in MB from cgroup `memory.peak`.
+    /// `None` when cgroup monitoring is unavailable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_memory_mb: Option<u64>,
 }
 
 impl ExecutionResult {
@@ -670,6 +674,7 @@ pub async fn wait_and_capture_with_idle_timeout(
         stderr_output,
         summary,
         exit_code,
+        peak_memory_mb: None,
     })
 }
 

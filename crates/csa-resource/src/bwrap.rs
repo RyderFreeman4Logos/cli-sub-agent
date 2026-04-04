@@ -256,6 +256,8 @@ mod tests {
             pids_max: None,
             readonly_project_root: false,
             project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         };
 
         let result = from_isolation_plan(&plan, "/usr/bin/tool", &["run".into()]);
@@ -280,6 +282,8 @@ mod tests {
             pids_max: None,
             readonly_project_root: false,
             project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         };
 
         let result = from_isolation_plan(&plan, "/usr/bin/tool", &[]);
@@ -324,6 +328,8 @@ mod tests {
             pids_max: None,
             readonly_project_root: true,
             project_root: Some(PathBuf::from("/project")),
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         };
 
         let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");

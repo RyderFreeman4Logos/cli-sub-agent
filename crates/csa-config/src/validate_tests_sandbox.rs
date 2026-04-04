@@ -448,3 +448,211 @@ fn test_validate_node_heap_limit_mb_too_low_in_tool() {
             .contains("tools.claude-code.node_heap_limit_mb must be >= 512")
     );
 }
+
+#[test]
+fn test_validate_soft_limit_percent_zero_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            soft_limit_percent: Some(0),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("soft_limit_percent must be 1-100")
+    );
+}
+
+#[test]
+fn test_validate_soft_limit_percent_over_100_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            soft_limit_percent: Some(101),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("soft_limit_percent must be 1-100")
+    );
+}
+
+#[test]
+fn test_validate_soft_limit_percent_valid() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            soft_limit_percent: Some(80),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_ok(), "soft_limit_percent 80 should be valid");
+}
+
+#[test]
+fn test_validate_memory_monitor_interval_zero_rejected() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            memory_monitor_interval_seconds: Some(0),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_err());
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("memory_monitor_interval_seconds must be >= 1")
+    );
+}
+
+#[test]
+fn test_validate_memory_monitor_interval_valid() {
+    let dir = tempdir().unwrap();
+
+    let config = ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig {
+            memory_monitor_interval_seconds: Some(5),
+            ..Default::default()
+        },
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+    };
+
+    config.save(dir.path()).unwrap();
+    let config_path = dir.path().join(".csa").join("config.toml");
+    let result = validate_config_with_paths(None, &config_path);
+    assert!(result.is_ok(), "memory_monitor_interval_seconds 5 should be valid");
+}

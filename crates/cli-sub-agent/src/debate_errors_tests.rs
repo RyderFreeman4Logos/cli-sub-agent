@@ -50,6 +50,7 @@ fn classify_exit_137_with_sandbox_memory_as_transient() {
         stderr_output: "killed".to_string(),
         summary: "killed".to_string(),
         exit_code: 137,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, Some(&state), tmp.path());
@@ -64,6 +65,7 @@ fn classify_exit_1_as_deterministic_argument_error() {
         stderr_output: "invalid argument".to_string(),
         summary: "invalid argument".to_string(),
         exit_code: 1,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -91,6 +93,7 @@ fn classify_exit_144_sigstkflt_as_transient() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 144,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -109,6 +112,7 @@ fn classify_exit_128_as_deterministic() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 128,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -127,6 +131,7 @@ fn classify_exit_129_sighup_as_transient() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 129,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -145,6 +150,7 @@ fn classify_exit_192_sigrtmax_as_transient() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 192,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -163,6 +169,7 @@ fn classify_exit_193_as_deterministic() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 193,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -181,6 +188,7 @@ fn classify_exit_255_as_deterministic() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 255,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());
@@ -198,6 +206,7 @@ fn classify_exit_2_still_deterministic() {
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 2,
+        peak_memory_mb: None,
     };
 
     let classified = classify_execution_outcome(&execution, None, tmp.path());

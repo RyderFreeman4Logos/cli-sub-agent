@@ -5,9 +5,8 @@ use csa_core::types::OutputFormat;
 fn apply_no_verify_commit_policy_allows_explicit_override_marker() {
     let mut result = ExecutionResult {
         output: "git commit -n -m \"feat: intentional\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit -n -m \"feat: intentional\"".to_string()];
 
@@ -29,9 +28,8 @@ fn apply_no_verify_commit_policy_ignores_plain_text_mentions_without_execute_eve
     let mut result = ExecutionResult {
         output: "I can mention `git commit --no-verify` in a plan, but did not execute it.\n"
             .to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = Vec::new();
 
@@ -52,9 +50,8 @@ fn apply_no_verify_commit_policy_ignores_plain_text_mentions_without_execute_eve
 fn apply_no_verify_commit_policy_blocks_legacy_command_like_output_when_events_missing() {
     let mut result = ExecutionResult {
         output: "$ git commit --no-verify -m \"unsafe\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = Vec::new();
 
@@ -80,9 +77,8 @@ fn apply_no_verify_commit_policy_ignores_markdown_code_fence_mentions() {
     let mut result = ExecutionResult {
         output: "Planned command:\n```bash\ngit commit --no-verify -m \"unsafe\"\n```\n"
             .to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = Vec::new();
 
@@ -103,9 +99,8 @@ fn apply_no_verify_commit_policy_ignores_markdown_code_fence_mentions() {
 fn apply_no_verify_commit_policy_does_not_block_echo_mentions() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["echo \"git commit --no-verify\"".to_string()];
 
@@ -126,9 +121,8 @@ fn apply_no_verify_commit_policy_does_not_block_echo_mentions() {
 fn apply_no_verify_commit_policy_blocks_shell_wrapped_git_commit() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands =
         vec!["bash -lc \"git commit -n -m 'unsafe wrapper'\"".to_string()];
@@ -154,9 +148,8 @@ fn apply_no_verify_commit_policy_blocks_shell_wrapped_git_commit() {
 fn apply_no_verify_commit_policy_blocks_shell_wrapped_commit_with_quoted_ampersand() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["bash -lc \"git commit -m 'A & B' -n\"".to_string()];
 
@@ -179,9 +172,8 @@ fn apply_no_verify_commit_policy_blocks_shell_wrapped_commit_with_quoted_ampersa
 fn apply_no_verify_commit_policy_blocks_git_global_option_form() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git -C /tmp/repo commit -n -m \"unsafe\"".to_string()];
 
@@ -204,9 +196,8 @@ fn apply_no_verify_commit_policy_blocks_git_global_option_form() {
 fn apply_no_verify_commit_policy_blocks_prefixed_env_assignment_form() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands =
         vec!["GIT_AUTHOR_NAME=bot git commit -n -m \"unsafe\"".to_string()];
@@ -230,9 +221,8 @@ fn apply_no_verify_commit_policy_blocks_prefixed_env_assignment_form() {
 fn apply_no_verify_commit_policy_blocks_env_command_with_options() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["env -i git commit --no-verify -m \"unsafe\"".to_string()];
 
@@ -255,9 +245,8 @@ fn apply_no_verify_commit_policy_blocks_env_command_with_options() {
 fn apply_no_verify_commit_policy_blocks_sudo_command_with_options() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["sudo -u root git commit -n -m \"unsafe\"".to_string()];
 
@@ -280,9 +269,8 @@ fn apply_no_verify_commit_policy_blocks_sudo_command_with_options() {
 fn apply_no_verify_commit_policy_blocks_no_verify_when_message_contains_ampersand() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit -m \"A & B\" -n".to_string()];
 
@@ -305,9 +293,8 @@ fn apply_no_verify_commit_policy_blocks_no_verify_when_message_contains_ampersan
 fn apply_no_verify_commit_policy_blocks_short_flag_combinations_containing_n() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit -nq -m \"unsafe\"".to_string()];
 
@@ -330,9 +317,8 @@ fn apply_no_verify_commit_policy_blocks_short_flag_combinations_containing_n() {
 fn apply_no_verify_commit_policy_blocks_short_gpg_sign_followed_by_no_verify_flag() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit -S -n -m \"unsafe\"".to_string()];
 
@@ -355,9 +341,8 @@ fn apply_no_verify_commit_policy_blocks_short_gpg_sign_followed_by_no_verify_fla
 fn apply_no_verify_commit_policy_blocks_long_gpg_sign_followed_by_no_verify_flag() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit --gpg-sign -n -m \"unsafe\"".to_string()];
 
@@ -380,9 +365,8 @@ fn apply_no_verify_commit_policy_blocks_long_gpg_sign_followed_by_no_verify_flag
 fn apply_no_verify_commit_policy_does_not_treat_message_values_as_no_verify_flags() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git commit -m \"-new release\"".to_string()];
 
@@ -403,9 +387,8 @@ fn apply_no_verify_commit_policy_does_not_treat_message_values_as_no_verify_flag
 fn apply_no_verify_commit_policy_does_not_use_output_fallback_when_execute_events_are_present() {
     let mut result = ExecutionResult {
         output: "$ git commit --no-verify -m \"mentioned only\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git status".to_string()];
 
@@ -426,9 +409,8 @@ fn apply_no_verify_commit_policy_does_not_use_output_fallback_when_execute_event
 fn apply_no_verify_commit_policy_does_not_block_plain_mentions_when_execute_events_are_present() {
     let mut result = ExecutionResult {
         output: "git commit --no-verify -m \"mentioned only\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git status".to_string()];
 
@@ -449,9 +431,8 @@ fn apply_no_verify_commit_policy_does_not_block_plain_mentions_when_execute_even
 fn apply_no_verify_commit_policy_skips_output_fallback_when_execute_event_seen_without_titles() {
     let mut result = ExecutionResult {
         output: "$ git commit --no-verify -m \"mentioned only\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = Vec::new();
 
@@ -472,9 +453,8 @@ fn apply_no_verify_commit_policy_skips_output_fallback_when_execute_event_seen_w
 fn apply_no_verify_commit_policy_ignores_markdown_quote_prefix_with_execute_events() {
     let mut result = ExecutionResult {
         output: "> git commit --no-verify -m \"quoted mention\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["git status".to_string()];
 
@@ -495,9 +475,8 @@ fn apply_no_verify_commit_policy_ignores_markdown_quote_prefix_with_execute_even
 fn apply_no_verify_commit_policy_legacy_fallback_handles_env_assignment_prefix() {
     let mut result = ExecutionResult {
         output: "GIT_AUTHOR_NAME=bot git commit -n -m \"unsafe\"\n".to_string(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = Vec::new();
 
@@ -520,9 +499,8 @@ fn apply_no_verify_commit_policy_legacy_fallback_handles_env_assignment_prefix()
 fn apply_no_verify_commit_policy_blocks_shell_script_with_preceding_commands() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands =
         vec!["bash -lc \"echo pre; git commit -n -m unsafe\"".to_string()];
@@ -546,9 +524,8 @@ fn apply_no_verify_commit_policy_blocks_shell_script_with_preceding_commands() {
 fn apply_no_verify_commit_policy_blocks_shell_script_without_space_after_separator() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["bash -lc \"echo pre;git commit -n -m unsafe\"".to_string()];
 
@@ -571,9 +548,8 @@ fn apply_no_verify_commit_policy_blocks_shell_script_without_space_after_separat
 fn apply_no_verify_commit_policy_does_not_cross_pipe_boundary_into_other_commands() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let executed_shell_commands = vec!["bash -lc \"git commit -m safe | grep -n foo\"".to_string()];
 
@@ -682,9 +658,9 @@ fn events_contain_execute_tool_calls_returns_false_without_execute_entries() {
 fn apply_post_run_commit_policy_overrides_summary_on_preexisting_failure() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "tool failed".to_string(),
         exit_code: 2,
+        ..Default::default()
     };
     let guard = PostRunCommitGuard {
         workspace_mutated: true,
@@ -710,9 +686,9 @@ fn apply_post_run_commit_policy_overrides_summary_on_preexisting_failure() {
 fn apply_unverifiable_commit_policy_overrides_summary_on_preexisting_failure() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "transport failed".to_string(),
         exit_code: 7,
+        ..Default::default()
     };
 
     apply_unverifiable_commit_policy(&mut result, &OutputFormat::Json, true);
@@ -773,9 +749,8 @@ fn evaluate_post_run_commit_guard_detects_index_mutation_when_status_is_unchange
 fn apply_post_run_commit_policy_does_not_fail_closed_when_head_changed() {
     let mut result = ExecutionResult {
         output: String::new(),
-        stderr_output: String::new(),
         summary: "ok".to_string(),
-        exit_code: 0,
+        ..Default::default()
     };
     let guard = PostRunCommitGuard {
         workspace_mutated: true,

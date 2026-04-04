@@ -301,7 +301,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         return Err(e);
     }
-
+    if let (Some(guard), Some(cfg)) = (&mut resource_guard, config) {
+        guard.check_health(
+            cfg.sandbox_memory_max_mb(executor.tool_name()),
+            cfg.sandbox_memory_swap_max_mb(executor.tool_name()),
+            60,
+        );
+    }
     // Token budget is observability-only (never a kill gate).
     if let Some(ref budget) = session.token_budget {
         if budget.is_hard_exceeded() {
@@ -359,7 +365,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             effective_prompt = format!("{context_block}{effective_prompt}");
         }
     }
-
     // Inject memory after context, before restrictions.
     let is_review_or_debate = matches!(task_type, Some("review" | "debate"));
     if !is_review_or_debate {
@@ -389,7 +394,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             }
         }
     }
-
     // Apply restrictions after context and memory injection.
     if !can_edit || !can_write_new {
         info!(
@@ -489,7 +493,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         overrides
     });
-
     // Load hooks config once, reused by PreRun, PostRun, and SessionComplete hooks.
     let hooks_config = load_hooks_config(
         csa_session::get_session_root(project_root)
@@ -618,7 +621,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     if let Some(ref mut guard) = cleanup_guard {
         guard.defuse();
     }
-
     let provider_session_id =
         csa_executor::extract_session_id_from_transport(tool, &transport_result);
     let events_count = transport_result
@@ -644,13 +646,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     let transcript_artifacts =
         crate::pipeline_transcript::persist_if_enabled(config, &session_dir, &transport_result);
     let mut result = transport_result.execution;
-
     // Best-effort EACCES diagnostic when filesystem sandbox is active.
     crate::pipeline_sandbox::check_sandbox_permission_errors(
         &result.stderr_output,
         session.sandbox_info.as_ref(),
     );
-
     enforce_result_toml_path_contract(
         prompt,
         &effective_prompt,

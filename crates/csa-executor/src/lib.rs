@@ -21,8 +21,8 @@ pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
 pub use session_id::{extract_session_id, extract_session_id_from_transport};
 pub use transport::{
-    AcpTransport, LegacyTransport, SandboxTransportConfig, Transport, TransportFactory,
-    TransportMode, TransportOptions, TransportResult,
+    AcpTransport, LegacyTransport, PeakMemoryContext, SandboxTransportConfig, Transport,
+    TransportFactory, TransportMode, TransportOptions, TransportResult,
 };
 
 // Re-export session config types from csa-acp for pipeline integration.

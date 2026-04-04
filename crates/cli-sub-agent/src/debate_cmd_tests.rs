@@ -597,6 +597,7 @@ fn append_debate_artifacts_to_result_updates_summary_and_artifacts() {
             completed_at: chrono::Utc::now(),
             events_count: 0,
             artifacts: Vec::new(),
+            peak_memory_mb: None,
         },
     )
     .unwrap();

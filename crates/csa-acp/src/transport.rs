@@ -30,6 +30,9 @@ pub struct AcpOutput {
     pub session_id: String,
     pub exit_code: i32,
     pub metadata: crate::client::StreamingMetadata,
+    /// Peak memory usage in MB from cgroup `memory.peak`.
+    /// `None` when cgroup monitoring is unavailable.
+    pub peak_memory_mb: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -326,6 +329,7 @@ pub async fn run_prompt_with_io(
         session_id: session.session_id().to_string(),
         exit_code,
         metadata: result.metadata,
+        peak_memory_mb: None,
     })
 }
 

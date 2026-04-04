@@ -80,6 +80,7 @@ fn test_execution_result_construction() {
         stderr_output: String::new(),
         summary: "test summary".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     assert_eq!(result.output, "test output");
     assert_eq!(result.summary, "test summary");

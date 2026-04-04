@@ -253,6 +253,10 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         thinking_budget: None,
     });
     let session = build_test_meta_session(temp.path().to_str().expect("utf8 temp path"));
+    // NOTE: resource=None means the cgroup spawn path is not exercised here;
+    // real cgroup spawn requires systemd user scope access which is not
+    // available in most CI environments.  The early return guard above
+    // already skips this test when CgroupV2 is not detected.
     let sandbox = SandboxTransportConfig {
         isolation_plan: csa_resource::isolation_plan::IsolationPlan {
             resource: csa_resource::sandbox::ResourceCapability::None,
@@ -265,6 +269,8 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
             pids_max: None,
             readonly_project_root: false,
             project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         },
         tool_name: "gemini-cli".to_string(),
         best_effort: true,
@@ -394,6 +400,7 @@ fn test_is_gemini_rate_limited_result_matches_capacity_in_stdout() {
         output: "No capacity available for model gemini-3.1-pro-preview".to_string(),
         stderr_output: String::new(),
         exit_code: 1,
+            peak_memory_mb: None,
     };
     assert!(
         is_gemini_rate_limited_result(&execution),
@@ -408,6 +415,7 @@ fn test_is_gemini_rate_limited_result_matches_capacity_in_stderr() {
         output: String::new(),
         stderr_output: "No capacity available for model gemini-3.1-pro-preview".to_string(),
         exit_code: 1,
+            peak_memory_mb: None,
     };
     assert!(
         is_gemini_rate_limited_result(&execution),
@@ -422,6 +430,7 @@ fn test_is_gemini_rate_limited_result_ignores_success_exit_code() {
         output: "No capacity available for model".to_string(),
         stderr_output: String::new(),
         exit_code: 0,
+            peak_memory_mb: None,
     };
     assert!(
         !is_gemini_rate_limited_result(&execution),
@@ -476,6 +485,8 @@ fn test_ensure_gemini_runtime_home_writable_path_adds_runtime_home_under_tmp() {
         pids_max: None,
         readonly_project_root: false,
         project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
     };
 
     ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
@@ -501,6 +512,8 @@ fn test_ensure_gemini_runtime_home_writable_path_skips_when_parent_is_bound() {
         pids_max: None,
         readonly_project_root: false,
         project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
     };
 
     ensure_gemini_runtime_home_writable_path(&mut isolation_plan, Some(&runtime_home));
@@ -529,6 +542,8 @@ fn test_ensure_gemini_runtime_home_writable_path_is_noop_without_runtime_home() 
         pids_max: None,
         readonly_project_root: false,
         project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
     };
 
     ensure_gemini_runtime_home_writable_path(&mut isolation_plan, None);
@@ -586,6 +601,8 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
         pids_max: None,
         readonly_project_root: false,
         project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
     };
 
     let env_overrides = gemini_sandbox_runtime_env_overrides(&env);
@@ -678,6 +695,8 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_preserves_phase2_api_key() {
         pids_max: None,
         readonly_project_root: false,
         project_root: None,
+        soft_limit_percent: None,
+        memory_monitor_interval_seconds: None,
     };
 
     let env_overrides = gemini_sandbox_runtime_env_overrides(&env);

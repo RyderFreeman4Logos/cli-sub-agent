@@ -94,6 +94,7 @@ mod tests {
                 stderr_output: String::new(),
                 summary: String::new(),
                 exit_code: 0,
+                peak_memory_mb: None,
             },
             provider_session_id: None,
             events,

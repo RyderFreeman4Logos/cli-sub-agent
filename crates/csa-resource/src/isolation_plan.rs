@@ -53,6 +53,11 @@ pub struct IsolationPlan {
     pub readonly_project_root: bool,
     /// Project root path, used by bwrap to decide bind mount mode.
     pub project_root: Option<PathBuf>,
+    /// Soft memory limit as a percentage of `memory_max_mb`.
+    /// When set, a background monitor sends SIGTERM when usage exceeds this.
+    pub soft_limit_percent: Option<u8>,
+    /// Polling interval for the memory monitor in seconds.
+    pub memory_monitor_interval_seconds: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +90,8 @@ pub struct IsolationPlanBuilder {
     pids_max: Option<u32>,
     readonly_project_root: bool,
     project_root: Option<PathBuf>,
+    soft_limit_percent: Option<u8>,
+    memory_monitor_interval_seconds: Option<u64>,
 }
 
 impl IsolationPlanBuilder {
@@ -103,6 +110,8 @@ impl IsolationPlanBuilder {
             pids_max: None,
             readonly_project_root: false,
             project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         }
     }
 
@@ -156,6 +165,18 @@ impl IsolationPlanBuilder {
         self
     }
 
+    /// Set the soft memory limit percentage for the memory monitor.
+    pub fn with_soft_limit_percent(mut self, percent: Option<u8>) -> Self {
+        self.soft_limit_percent = percent;
+        self
+    }
+
+    /// Set the memory monitor polling interval in seconds.
+    pub fn with_memory_monitor_interval(mut self, seconds: Option<u64>) -> Self {
+        self.memory_monitor_interval_seconds = seconds;
+        self
+    }
+
     /// Apply per-tool default paths and environment overrides.
     ///
     /// Always adds `project_root`, `session_dir`, and common writable paths
@@ -206,6 +227,51 @@ impl IsolationPlanBuilder {
             if mise_cache.exists() {
                 self.writable_paths.push(mise_cache);
             }
+
+            // Cargo home directory: cargo needs write access to registry/, git/,
+            // and .package-cache (lock file).
+            //
+            // When CARGO_HOME is explicitly set to a non-default location, we
+            // ONLY expose that directory — not ~/.cargo — to avoid leaking
+            // credentials/config from the real cargo home.  For cold starts
+            // where the directory doesn't exist yet, we add it anyway so bwrap
+            // can create it (the parent must exist).
+            let default_cargo_home = home.join(".cargo");
+            if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
+                let cargo_home = PathBuf::from(&cargo_home_env);
+                if cargo_home == default_cargo_home {
+                    // CARGO_HOME points to the default — treat as if unset.
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
+                } else {
+                    // CARGO_HOME points elsewhere — only expose that directory.
+                    // Do NOT add ~/.cargo (may contain credentials/config).
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &cargo_home);
+                }
+            } else {
+                add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
+            }
+
+            // RUSTUP_HOME: rustup needs write access for toolchain management
+            // (downloading components, updating toolchains). Same pattern as
+            // CARGO_HOME: when explicitly set elsewhere, don't expose ~/.rustup.
+            let default_rustup = home.join(".rustup");
+            if let Ok(rustup_home) = std::env::var("RUSTUP_HOME") {
+                let rustup_path = PathBuf::from(&rustup_home);
+                if rustup_path == default_rustup {
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
+                } else {
+                    // RUSTUP_HOME points elsewhere — only expose that directory.
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &rustup_path);
+                }
+            } else {
+                add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
+            }
+
+            // NOTE: mise-managed Rust toolchain paths are intentionally NOT added
+            // as writable. Making the entire install dir writable (rustc, stdlib)
+            // is an isolation regression. The cargo registry/git cache dirs are
+            // already covered by the CARGO_HOME logic above — when mise sets
+            // CARGO_HOME into the toolchain dir, those subdirs get write access.
 
             // Tool-specific config/data directories (only if they exist).
             let tool_dirs: &[&str] = match tool_name {
@@ -293,6 +359,8 @@ impl IsolationPlanBuilder {
             pids_max: self.pids_max,
             readonly_project_root: self.readonly_project_root,
             project_root: self.project_root,
+            soft_limit_percent: self.soft_limit_percent,
+            memory_monitor_interval_seconds: self.memory_monitor_interval_seconds,
         })
     }
 }
@@ -334,6 +402,57 @@ pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
     }
 }
 
+/// Add `dir` to `paths` if it exists, otherwise pre-create it when its
+/// parent exists (bwrap `--bind` requires the source path to exist).
+///
+/// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
+/// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
+/// escaping the sandbox boundary.
+fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
+    if is_sensitive_system_path(dir) {
+        tracing::warn!(
+            path = %dir.display(),
+            "rejecting writable path under sensitive system directory"
+        );
+        return;
+    }
+
+    if dir.exists() {
+        paths.push(dir.to_path_buf());
+    } else if dir.parent().is_some_and(|p| p.exists()) {
+        // Pre-create the directory so bwrap --bind can mount it.
+        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME) the dir won't
+        // exist yet; bwrap requires the source path to be present.
+        match std::fs::create_dir_all(dir) {
+            Ok(()) => paths.push(dir.to_path_buf()),
+            Err(e) => tracing::warn!(
+                path = %dir.display(),
+                error = %e,
+                "failed to pre-create directory for sandbox writable mount, skipping"
+            ),
+        }
+    }
+}
+
+/// Reject paths under sensitive system directories that should never be
+/// writable inside a sandbox.  Allows legitimate paths like home dirs,
+/// `/tmp`, `/usr/local/share/mise`, etc.
+fn is_sensitive_system_path(path: &Path) -> bool {
+    /// Prefixes that indicate sensitive system directories.
+    const SENSITIVE_PREFIXES: &[&str] = &[
+        "/etc", "/var/lib", "/var/log", "/var/run", "/boot", "/sbin", "/bin", "/lib", "/lib64",
+        "/sys", "/proc", "/dev", "/run",
+    ];
+
+    for prefix in SENSITIVE_PREFIXES {
+        if path.starts_with(prefix) {
+            return true;
+        }
+    }
+    // Reject bare root path
+    path == Path::new("/")
+}
+
 /// Portable home-directory lookup (avoids pulling in the `dirs` crate).
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
@@ -366,420 +485,6 @@ fn detect_superproject_root(project_root: &Path) -> Option<PathBuf> {
     None
 }
 
-// ===========================================================================
-// Tests
-// ===========================================================================
-
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_builder_best_effort_with_bwrap() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_resource_capability(ResourceCapability::CgroupV2)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .build()
-            .expect("BestEffort with Bwrap should succeed");
-
-        assert_eq!(plan.resource, ResourceCapability::CgroupV2);
-        assert_eq!(plan.filesystem, FilesystemCapability::Bwrap);
-        assert!(plan.degraded_reasons.is_empty());
-    }
-
-    #[test]
-    fn test_builder_degrades_cgroup_landlock_to_setrlimit() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_resource_capability(ResourceCapability::CgroupV2)
-            .with_filesystem_capability(FilesystemCapability::Landlock)
-            .build()
-            .expect("best-effort build should succeed");
-
-        assert_eq!(plan.resource, ResourceCapability::Setrlimit);
-        assert_eq!(plan.filesystem, FilesystemCapability::Landlock);
-        assert!(
-            plan.degraded_reasons
-                .iter()
-                .any(|reason| reason.contains("landlock cannot be combined with cgroup wrapper")),
-            "expected degradation reason, got {:?}",
-            plan.degraded_reasons
-        );
-    }
-
-    #[test]
-    fn test_builder_best_effort_degradation() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_resource_capability(ResourceCapability::None)
-            .with_filesystem_capability(FilesystemCapability::None)
-            .build()
-            .expect("BestEffort should never fail");
-
-        assert_eq!(plan.filesystem, FilesystemCapability::None);
-        assert_eq!(plan.degraded_reasons.len(), 2);
-        assert!(plan.degraded_reasons[0].contains("filesystem"));
-        assert!(plan.degraded_reasons[1].contains("resource"));
-    }
-
-    #[test]
-    fn test_builder_required_fails_without_capability() {
-        let result = IsolationPlanBuilder::new(EnforcementMode::Required)
-            .with_resource_capability(ResourceCapability::CgroupV2)
-            .with_filesystem_capability(FilesystemCapability::None)
-            .build();
-
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(
-            msg.contains("filesystem isolation required"),
-            "unexpected error: {msg}"
-        );
-    }
-
-    #[test]
-    fn test_builder_off_forces_none() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::Off)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_resource_capability(ResourceCapability::CgroupV2)
-            .build()
-            .expect("Off mode should always succeed");
-
-        assert_eq!(
-            plan.filesystem,
-            FilesystemCapability::None,
-            "Off mode must force filesystem to None"
-        );
-        // Resource capability is kept as-is (Off only governs filesystem).
-        assert_eq!(plan.resource, ResourceCapability::CgroupV2);
-    }
-
-    #[test]
-    fn test_tool_defaults_claude_code() {
-        let project = PathBuf::from("/tmp/project");
-        let session = PathBuf::from("/tmp/session");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("claude-code", &project, &session)
-            .build()
-            .expect("should succeed");
-
-        assert!(plan.writable_paths.contains(&project));
-        assert!(plan.writable_paths.contains(&session));
-
-        if let Some(home) = home_dir() {
-            assert!(
-                plan.writable_paths.contains(&home.join(".claude")),
-                "claude-code defaults should include ~/.claude"
-            );
-            // Common paths: XDG_STATE_HOME and mise cache
-            let xdg_state = std::env::var("XDG_STATE_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| home.join(".local/state"));
-            assert!(
-                plan.writable_paths.contains(&xdg_state),
-                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-            );
-            assert!(
-                plan.writable_paths.contains(&home.join(".cache/mise")),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
-
-    #[test]
-    fn test_submodule_detection_adds_superproject_root() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let superproject = tmp.path().join("monorepo");
-        let submodule = superproject.join("crates").join("sub-crate");
-
-        // Superproject has a .git directory
-        std::fs::create_dir_all(superproject.join(".git")).expect("create .git dir");
-        // Submodule has a .git file (not directory)
-        std::fs::create_dir_all(&submodule).expect("create submodule dir");
-        std::fs::write(
-            submodule.join(".git"),
-            "gitdir: ../../.git/modules/crates/sub-crate\n",
-        )
-        .expect("write .git file");
-
-        let session = tmp.path().join("session");
-        std::fs::create_dir_all(&session).expect("create session dir");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("claude-code", &submodule, &session)
-            .build()
-            .expect("should succeed");
-
-        assert!(
-            plan.writable_paths.contains(&superproject),
-            "superproject root should be in writable_paths, got: {:?}",
-            plan.writable_paths
-        );
-        assert!(
-            plan.writable_paths.contains(&submodule),
-            "submodule (project_root) should still be in writable_paths"
-        );
-    }
-
-    #[test]
-    fn test_non_submodule_does_not_add_superproject() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let project = tmp.path().join("project");
-
-        // Normal repo: .git is a directory
-        std::fs::create_dir_all(project.join(".git")).expect("create .git dir");
-
-        let session = tmp.path().join("session");
-        std::fs::create_dir_all(&session).expect("create session dir");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("claude-code", &project, &session)
-            .build()
-            .expect("should succeed");
-
-        // project + session should be present (no superproject)
-        assert!(plan.writable_paths.contains(&project));
-        assert!(plan.writable_paths.contains(&session));
-        // Superproject should NOT be present
-        assert!(
-            !plan.writable_paths.contains(&tmp.path().to_path_buf()),
-            "non-submodule should not add superproject root"
-        );
-    }
-
-    #[test]
-    fn test_submodule_no_superproject_found() {
-        let tmp = tempfile::tempdir().expect("tempdir");
-        let orphan = tmp.path().join("orphan");
-
-        // .git is a file but no ancestor has a .git directory
-        std::fs::create_dir_all(&orphan).expect("create dir");
-        std::fs::write(orphan.join(".git"), "gitdir: ../somewhere\n").expect("write .git file");
-
-        let result = detect_superproject_root(&orphan);
-        assert!(
-            result.is_none(),
-            "should return None when no superproject found"
-        );
-    }
-
-    #[test]
-    fn test_tool_defaults_codex() {
-        let project = PathBuf::from("/tmp/project");
-        let session = PathBuf::from("/tmp/session");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("codex", &project, &session)
-            .build()
-            .expect("should succeed");
-
-        assert!(plan.writable_paths.contains(&project));
-        assert!(plan.writable_paths.contains(&session));
-
-        if let Some(home) = home_dir() {
-            assert!(
-                plan.writable_paths.contains(&home.join(".codex")),
-                "codex defaults should include ~/.codex"
-            );
-            // Common paths: XDG_STATE_HOME and mise cache
-            let xdg_state = std::env::var("XDG_STATE_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| home.join(".local/state"));
-            assert!(
-                plan.writable_paths.contains(&xdg_state),
-                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-            );
-            assert!(
-                plan.writable_paths.contains(&home.join(".cache/mise")),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
-
-    #[test]
-    fn test_tool_defaults_gemini_cli() {
-        let project = PathBuf::from("/tmp/project");
-        let session = PathBuf::from("/tmp/session");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("gemini-cli", &project, &session)
-            .build()
-            .expect("should succeed");
-
-        assert!(plan.writable_paths.contains(&project));
-        assert!(plan.writable_paths.contains(&session));
-
-        if let Some(home) = home_dir() {
-            assert!(
-                plan.writable_paths.contains(&home.join(".gemini")),
-                "gemini-cli defaults should include ~/.gemini"
-            );
-            assert!(
-                plan.writable_paths
-                    .contains(&home.join(".config/gemini-cli")),
-                "gemini-cli defaults should include ~/.config/gemini-cli"
-            );
-            // mise cache is now a common path for all tools
-            assert!(
-                plan.writable_paths.contains(&home.join(".cache/mise")),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
-
-    #[test]
-    fn test_tool_defaults_opencode() {
-        let project = PathBuf::from("/tmp/project");
-        let session = PathBuf::from("/tmp/session");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("opencode", &project, &session)
-            .build()
-            .expect("should succeed");
-
-        assert!(plan.writable_paths.contains(&project));
-        assert!(plan.writable_paths.contains(&session));
-
-        if let Some(home) = home_dir() {
-            assert!(
-                plan.writable_paths.contains(&home.join(".config/opencode")),
-                "opencode defaults should include ~/.config/opencode"
-            );
-            // Common paths: XDG_STATE_HOME and mise cache
-            let xdg_state = std::env::var("XDG_STATE_HOME")
-                .map(PathBuf::from)
-                .unwrap_or_else(|_| home.join(".local/state"));
-            assert!(
-                plan.writable_paths.contains(&xdg_state),
-                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-            );
-            assert!(
-                plan.writable_paths.contains(&home.join(".cache/mise")),
-                "all tools should include ~/.cache/mise for mise-managed toolchains"
-            );
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // validate_writable_paths tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_validate_rejects_root_path() {
-        let result = validate_writable_paths(&[PathBuf::from("/")], Path::new("/tmp/project"));
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("rejected paths"), "unexpected error: {msg}");
-    }
-
-    #[test]
-    fn test_validate_rejects_etc() {
-        let result =
-            validate_writable_paths(&[PathBuf::from("/etc/shadow")], Path::new("/tmp/project"));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_rejects_usr() {
-        let result =
-            validate_writable_paths(&[PathBuf::from("/usr/local")], Path::new("/tmp/project"));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_validate_accepts_tmp_subpath() {
-        let result = validate_writable_paths(&[PathBuf::from("/tmp/foo")], Path::new("/project"));
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_accepts_home_subpath() {
-        if let Some(home) = home_dir() {
-            let result =
-                validate_writable_paths(&[home.join("workspace")], Path::new("/tmp/project"));
-            assert!(result.is_ok());
-        }
-    }
-
-    #[test]
-    fn test_validate_accepts_project_root_subpath() {
-        let project = PathBuf::from("/opt/myproject");
-        let result = validate_writable_paths(&[PathBuf::from("/opt/myproject/src")], &project);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_validate_mixed_accepted_and_rejected() {
-        let result = validate_writable_paths(
-            &[PathBuf::from("/tmp/ok"), PathBuf::from("/var/bad")],
-            Path::new("/tmp/project"),
-        );
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
-        assert!(msg.contains("/var/bad"));
-    }
-
-    // ── Security audit scenarios ───────────────────────────────────────
-
-    #[test]
-    fn test_validate_rejects_relative_path_traversal() {
-        // Scenario 3: ../../../etc should be rejected even as relative path
-        let result =
-            validate_writable_paths(&[PathBuf::from("../../../etc")], Path::new("/tmp/project"));
-        assert!(
-            result.is_err(),
-            "relative path traversal to /etc must be rejected"
-        );
-    }
-
-    #[test]
-    fn test_validate_empty_writable_paths_is_ok() {
-        // Scenario 5: empty writable_paths = [] means only session_dir and
-        // tool config dir are writable (handled by IsolationPlanBuilder separately)
-        let result = validate_writable_paths(&[], Path::new("/tmp/project"));
-        assert!(
-            result.is_ok(),
-            "empty writable_paths should be valid (no user paths to validate)"
-        );
-    }
-
-    // -----------------------------------------------------------------------
-    // readonly_project_root tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn test_readonly_project_root_default_false() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::Off)
-            .build()
-            .expect("should succeed");
-        assert!(!plan.readonly_project_root);
-    }
-
-    #[test]
-    fn test_readonly_project_root_propagates() {
-        let plan = IsolationPlanBuilder::new(EnforcementMode::Off)
-            .with_readonly_project_root(true)
-            .build()
-            .expect("should succeed");
-        assert!(plan.readonly_project_root);
-    }
-
-    #[test]
-    fn test_with_tool_defaults_stores_project_root() {
-        let project = PathBuf::from("/tmp/project");
-        let session = PathBuf::from("/tmp/session");
-
-        let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
-            .with_filesystem_capability(FilesystemCapability::Bwrap)
-            .with_tool_defaults("claude-code", &project, &session)
-            .build()
-            .expect("should succeed");
-
-        assert_eq!(plan.project_root, Some(project));
-    }
-}
+#[path = "isolation_plan_tests.rs"]
+mod tests;

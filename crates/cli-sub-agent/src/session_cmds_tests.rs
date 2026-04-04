@@ -51,6 +51,7 @@ fn make_result(status: &str, exit_code: i32) -> SessionResult {
         completed_at: now,
         events_count: 0,
         artifacts: Vec::new(),
+        peak_memory_mb: None,
     }
 }
 

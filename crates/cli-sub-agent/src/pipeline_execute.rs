@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Duration;
 use tracing::warn;
 
-use csa_executor::{ExecuteOptions, Executor, SessionConfig, TransportResult};
+use csa_executor::{ExecuteOptions, Executor, PeakMemoryContext, SessionConfig, TransportResult};
 use csa_session::{MetaSessionState, SessionResult, ToolState, save_result, save_session};
 
 use crate::session_guard::SessionCleanupGuard;
@@ -159,6 +159,12 @@ pub(crate) async fn execute_transport_with_signal(
             // execution began (before ACP init), not "now", fixing the
             // Start == End timing bug for slow failures like ACP init timeout.
             let completed_at = chrono::Utc::now();
+            // Extract peak_memory_mb from error context if the sandbox
+            // captured it before the ACP session failed.
+            let peak_memory_mb = e
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<PeakMemoryContext>())
+                .and_then(|ctx| ctx.0);
             let result = SessionResult {
                 status: "failure".to_string(),
                 exit_code: 1,
@@ -168,6 +174,7 @@ pub(crate) async fn execute_transport_with_signal(
                 completed_at,
                 events_count: 0,
                 artifacts: Vec::new(),
+                peak_memory_mb,
             };
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
                 warn!("Failed to save transport error result: {}", save_err);
@@ -204,6 +211,7 @@ fn record_session_termination(
         completed_at,
         events_count: 0,
         artifacts: Vec::new(),
+        peak_memory_mb: None,
     };
     if let Err(e) = save_result(project_root, &session.meta_session_id, &updated_result) {
         warn!(

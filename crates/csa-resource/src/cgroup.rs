@@ -212,6 +212,36 @@ impl CgroupScopeGuard {
         self.query_memory_property("MemoryPeak")
     }
 
+    /// Query current memory usage in bytes for this scope.
+    ///
+    /// Uses `systemctl --user show <scope> --property=MemoryCurrent`.
+    /// Returns `None` if the scope is gone or the query fails.
+    pub fn memory_current_bytes(&self) -> Option<u64> {
+        let output = Command::new("systemctl")
+            .args([
+                "--user",
+                "show",
+                &self.scope_name,
+                "--property=MemoryCurrent",
+                "--value",
+            ])
+            .stdin(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .output()
+            .ok()?;
+
+        if !output.status.success() {
+            return None;
+        }
+
+        let value = String::from_utf8_lossy(&output.stdout);
+        let trimmed = value.trim();
+        if trimmed == "infinity" || trimmed.is_empty() {
+            return None;
+        }
+        trimmed.parse::<u64>().ok()
+    }
+
     /// Query configured memory limit (in MB) for this scope.
     ///
     /// Uses `systemctl --user show <scope> --property=MemoryMax`.

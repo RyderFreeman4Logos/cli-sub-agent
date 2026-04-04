@@ -127,7 +127,7 @@ is_compacted = false
 [task_context]
 "#;
 
-    let state: MetaSessionState = toml::from_str(&toml_str).unwrap();
+    let state: MetaSessionState = toml::from_str(toml_str).unwrap();
 
     // v2 session should have vcs_identity
     assert!(state.vcs_identity.is_some());

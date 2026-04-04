@@ -7,6 +7,7 @@ pub mod guard;
 pub mod isolation_plan;
 pub mod landlock;
 pub mod memory_balloon;
+pub mod memory_monitor;
 pub mod rlimit;
 pub mod sandbox;
 
