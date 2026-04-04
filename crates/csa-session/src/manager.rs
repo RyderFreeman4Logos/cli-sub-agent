@@ -70,11 +70,10 @@ pub fn enforce_project_cooldown(project_path: &Path, cooldown_seconds: u64) -> b
         Err(_) => return false,
     };
 
-    // Find the most recently accessed Retired session for this project.
-    let most_recent = sessions
-        .iter()
-        .filter(|s| s.phase == SessionPhase::Retired)
-        .max_by_key(|s| s.last_accessed);
+    // Find the most recently accessed session for this project, regardless of
+    // phase.  Sessions after normal execution are Active or Available — filtering
+    // only Retired would miss the common case.
+    let most_recent = sessions.iter().max_by_key(|s| s.last_accessed);
 
     if let Some(recent) = most_recent {
         crate::cooldown::enforce_cooldown_sync(recent.last_accessed, cooldown_seconds)
