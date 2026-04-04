@@ -20,6 +20,7 @@ use csa_session::state::{MetaSessionState, ToolState};
 
 #[path = "transport_meta.rs"]
 mod transport_meta;
+pub use transport_meta::PeakMemoryContext;
 use transport_meta::{build_summary, run_acp_sandboxed};
 
 #[path = "transport_gemini_helpers.rs"]
@@ -519,7 +520,7 @@ impl AcpTransport {
                 if let Some(ref plan) = sandbox_plan {
                     let tool_name = sandbox_tool_name.as_deref().unwrap_or("");
                     let sess_id = sandbox_session_id.as_deref().unwrap_or("");
-                    match rt.block_on(run_acp_sandboxed(
+                    let sr = rt.block_on(run_acp_sandboxed(
                         &acp_command,
                         &acp_args,
                         &working_dir,
@@ -540,8 +541,12 @@ impl AcpTransport {
                         output_spool.as_deref(),
                         output_spool_max_bytes,
                         output_spool_keep_rotated,
-                    )) {
-                        Ok(output) => Ok(output),
+                    ));
+                    match sr.result {
+                        Ok(mut output) => {
+                            output.peak_memory_mb = output.peak_memory_mb.or(sr.peak_memory_mb);
+                            Ok(output)
+                        }
                         Err(e) if sandbox_best_effort => {
                             tracing::warn!(
                                 "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
@@ -580,7 +585,8 @@ impl AcpTransport {
                             ))
                             .map_err(|e| anyhow!("ACP transport (unsandboxed fallback) failed: {e}"))
                         }
-                        Err(e) => Err(anyhow!("ACP transport (sandboxed) failed: {e}")),
+                        Err(e) => Err(PeakMemoryContext(sr.peak_memory_mb)
+                            .into_anyhow(format!("sandboxed ACP: {e}"))),
                     }
                 } else {
                     rt.block_on(csa_acp::transport::run_prompt_with_io(
@@ -618,7 +624,6 @@ impl AcpTransport {
             })
             .await
             .map_err(classify_join_error)??;
-
         let execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
             output: output.output,

@@ -110,12 +110,32 @@ fn test_tool_defaults_claude_code() {
             "all tools should include ~/.cache/mise for mise-managed toolchains"
         );
 
-        // Cargo home dir (if it exists on this system)
-        let cargo_home = home.join(".cargo");
-        if cargo_home.exists() {
+        // Cargo home: when CARGO_HOME is set to a non-default dir, only
+        // CARGO_HOME is added (not ~/.cargo, which may contain credentials).
+        let default_cargo_home = home.join(".cargo");
+        if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
+            let cargo_home = PathBuf::from(&cargo_home_env);
+            if cargo_home != default_cargo_home {
+                assert!(
+                    !plan.writable_paths.contains(&default_cargo_home),
+                    "~/.cargo must NOT be writable when CARGO_HOME differs"
+                );
+                if cargo_home.exists() || cargo_home.parent().is_some_and(|p| p.exists()) {
+                    assert!(
+                        plan.writable_paths.contains(&cargo_home),
+                        "CARGO_HOME should be writable"
+                    );
+                }
+            } else if default_cargo_home.exists() {
+                assert!(
+                    plan.writable_paths.contains(&default_cargo_home),
+                    "~/.cargo should be writable when CARGO_HOME equals default"
+                );
+            }
+        } else if default_cargo_home.exists() {
             assert!(
-                plan.writable_paths.contains(&cargo_home),
-                "all tools should include ~/.cargo for cargo registry/git/lock"
+                plan.writable_paths.contains(&default_cargo_home),
+                "~/.cargo should be writable when CARGO_HOME is unset"
             );
         }
     }
@@ -123,8 +143,8 @@ fn test_tool_defaults_claude_code() {
 
 #[test]
 fn test_cargo_and_rustup_paths_presence_matches_filesystem() {
-    // Verify that cargo/rustup paths are included if and only if they
-    // exist on the current system.  This test runs against the real HOME.
+    // Verify that cargo/rustup paths are included correctly based on env
+    // vars and filesystem state.  This test runs against the real HOME.
     let project = PathBuf::from("/tmp/project");
     let session = PathBuf::from("/tmp/session");
 
@@ -135,20 +155,65 @@ fn test_cargo_and_rustup_paths_presence_matches_filesystem() {
         .expect("should succeed");
 
     if let Some(home) = home_dir() {
-        // Cargo home dir — added as parent instead of individual subdirs
-        let cargo_home = home.join(".cargo");
-        assert_eq!(
-            plan.writable_paths.contains(&cargo_home),
-            cargo_home.exists(),
-            "cargo home inclusion should match filesystem existence"
-        );
-        // Default rustup (when RUSTUP_HOME is not set)
-        if std::env::var("RUSTUP_HOME").is_err() {
-            let default_rustup = home.join(".rustup");
-            assert_eq!(
-                plan.writable_paths.contains(&default_rustup),
-                default_rustup.exists(),
-                "default rustup inclusion should match filesystem existence"
+        let default_cargo_home = home.join(".cargo");
+
+        if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
+            let cargo_home = PathBuf::from(&cargo_home_env);
+            if cargo_home == default_cargo_home {
+                // CARGO_HOME == default: treated as if unset
+                assert!(
+                    plan.writable_paths.contains(&default_cargo_home)
+                        || !default_cargo_home.exists()
+                            && !default_cargo_home.parent().is_some_and(|p| p.exists()),
+                    "default cargo home should be included when CARGO_HOME equals default"
+                );
+            } else {
+                // CARGO_HOME differs: only CARGO_HOME should be writable,
+                // NOT ~/.cargo (avoids leaking credentials).
+                assert!(
+                    !plan.writable_paths.contains(&default_cargo_home),
+                    "~/.cargo must NOT be writable when CARGO_HOME is set elsewhere"
+                );
+                if cargo_home.exists() || cargo_home.parent().is_some_and(|p| p.exists()) {
+                    assert!(
+                        plan.writable_paths.contains(&cargo_home),
+                        "CARGO_HOME should be writable when it (or parent) exists"
+                    );
+                }
+            }
+        } else {
+            // No CARGO_HOME: default path used
+            assert!(
+                plan.writable_paths.contains(&default_cargo_home)
+                    || !default_cargo_home.exists()
+                        && !default_cargo_home.parent().is_some_and(|p| p.exists()),
+                "default cargo home should be included when CARGO_HOME is unset"
+            );
+        }
+
+        // RUSTUP_HOME: same pattern as CARGO_HOME
+        let default_rustup = home.join(".rustup");
+        if let Ok(rustup_home_env) = std::env::var("RUSTUP_HOME") {
+            let rustup_path = PathBuf::from(&rustup_home_env);
+            if rustup_path == default_rustup {
+                assert!(
+                    plan.writable_paths.contains(&default_rustup)
+                        || !default_rustup.exists()
+                            && !default_rustup.parent().is_some_and(|p| p.exists()),
+                    "default rustup should be included when RUSTUP_HOME equals default"
+                );
+            } else {
+                assert!(
+                    !plan.writable_paths.contains(&default_rustup),
+                    "~/.rustup must NOT be writable when RUSTUP_HOME is set elsewhere"
+                );
+            }
+        } else {
+            assert!(
+                plan.writable_paths.contains(&default_rustup)
+                    || !default_rustup.exists()
+                        && !default_rustup.parent().is_some_and(|p| p.exists()),
+                "default rustup should be included when RUSTUP_HOME is unset"
             );
         }
     }

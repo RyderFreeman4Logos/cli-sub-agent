@@ -229,38 +229,42 @@ impl IsolationPlanBuilder {
             }
 
             // Cargo home directory: cargo needs write access to registry/, git/,
-            // and .package-cache (lock file). Adding the parent dir avoids
-            // cold-start failures where subdirs don't exist yet — cargo will
-            // create them at first use.  bwrap handles nonexistent subdirs
-            // correctly when the parent is mounted writable.
+            // and .package-cache (lock file).
+            //
+            // When CARGO_HOME is explicitly set to a non-default location, we
+            // ONLY expose that directory — not ~/.cargo — to avoid leaking
+            // credentials/config from the real cargo home.  For cold starts
+            // where the directory doesn't exist yet, we add it anyway so bwrap
+            // can create it (the parent must exist).
             let default_cargo_home = home.join(".cargo");
             if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
-                let cargo_home = PathBuf::from(cargo_home_env);
-                let is_default = cargo_home == default_cargo_home;
-                if cargo_home.exists() {
-                    self.writable_paths.push(cargo_home);
+                let cargo_home = PathBuf::from(&cargo_home_env);
+                if cargo_home == default_cargo_home {
+                    // CARGO_HOME points to the default — treat as if unset.
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
+                } else {
+                    // CARGO_HOME points elsewhere — only expose that directory.
+                    // Do NOT add ~/.cargo (may contain credentials/config).
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &cargo_home);
                 }
-                // Also add default if it exists and differs from CARGO_HOME
-                if !is_default && default_cargo_home.exists() {
-                    self.writable_paths.push(default_cargo_home);
-                }
-            } else if default_cargo_home.exists() {
-                self.writable_paths.push(default_cargo_home);
+            } else {
+                add_dir_or_creatable_parent(&mut self.writable_paths, &default_cargo_home);
             }
 
             // RUSTUP_HOME: rustup needs write access for toolchain management
-            // (downloading components, updating toolchains). Defaults to ~/.rustup
-            // but can be overridden via env var.
+            // (downloading components, updating toolchains). Same pattern as
+            // CARGO_HOME: when explicitly set elsewhere, don't expose ~/.rustup.
+            let default_rustup = home.join(".rustup");
             if let Ok(rustup_home) = std::env::var("RUSTUP_HOME") {
-                let rustup_path = PathBuf::from(rustup_home);
-                if rustup_path.exists() {
-                    self.writable_paths.push(rustup_path);
+                let rustup_path = PathBuf::from(&rustup_home);
+                if rustup_path == default_rustup {
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
+                } else {
+                    // RUSTUP_HOME points elsewhere — only expose that directory.
+                    add_dir_or_creatable_parent(&mut self.writable_paths, &rustup_path);
                 }
             } else {
-                let default_rustup = home.join(".rustup");
-                if default_rustup.exists() {
-                    self.writable_paths.push(default_rustup);
-                }
+                add_dir_or_creatable_parent(&mut self.writable_paths, &default_rustup);
             }
 
             // NOTE: mise-managed Rust toolchain paths are intentionally NOT added
@@ -395,6 +399,18 @@ pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
             "writable_paths validation failed: rejected paths {rejected:?}. \
              Allowed: subpaths of home dir, /tmp, or project root"
         );
+    }
+}
+
+/// Add `dir` to `paths` if it exists, otherwise add it if its parent exists
+/// (so bwrap can create the directory on first use — handles cold starts).
+fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
+    if dir.exists() {
+        paths.push(dir.to_path_buf());
+    } else if dir.parent().is_some_and(|p| p.exists()) {
+        // Parent exists: bwrap/landlock can mount this path and cargo/rustup
+        // will create the directory at first use.
+        paths.push(dir.to_path_buf());
     }
 }
 
