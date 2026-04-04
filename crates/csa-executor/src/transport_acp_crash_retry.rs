@@ -34,23 +34,8 @@ const OOM_SIGNALS: &[i32] = &[
 /// unexpected process exit with non-OOM signals). Returns `false` for
 /// configuration errors, spawn failures, timeouts, and OOM kills.
 pub(crate) fn is_retryable_acp_crash(error_display: &str) -> bool {
-    // Never retry OOM / resource limit kills — the same limit will be hit again.
-    if is_oom_error(error_display) {
-        return false;
-    }
-
-    // Never retry configuration or spawn errors — these are deterministic.
-    if is_config_or_spawn_error(error_display) {
-        return false;
-    }
-
-    // Never retry timeout errors — the agent already consumed its time budget.
-    if is_timeout_error(error_display) {
-        return false;
-    }
-
-    // Retry server crashes and internal errors.
-    is_crash_error(error_display)
+    let lowered = error_display.to_lowercase();
+    is_retryable_crash_lowered(&lowered)
 }
 
 /// Check if the error indicates an OOM or resource-limit kill.
@@ -59,7 +44,36 @@ pub(crate) fn is_retryable_acp_crash(error_display: &str) -> bool {
 /// error messages even when no retry was attempted.
 pub(crate) fn is_oom_error(error_display: &str) -> bool {
     let lowered = error_display.to_lowercase();
+    is_oom_lowered(&lowered)
+}
 
+// ---------------------------------------------------------------------------
+// Internal classifiers operating on pre-lowered strings.
+// ---------------------------------------------------------------------------
+
+/// Core retryable-crash classification on a pre-lowered string.
+fn is_retryable_crash_lowered(lowered: &str) -> bool {
+    // Never retry OOM / resource limit kills — the same limit will be hit again.
+    if is_oom_lowered(lowered) {
+        return false;
+    }
+
+    // Never retry configuration or spawn errors — these are deterministic.
+    if is_config_or_spawn_lowered(lowered) {
+        return false;
+    }
+
+    // Never retry timeout errors — the agent already consumed its time budget.
+    if is_timeout_lowered(lowered) {
+        return false;
+    }
+
+    // Retry server crashes and internal errors.
+    is_crash_lowered(lowered)
+}
+
+/// OOM classification on a pre-lowered string.
+fn is_oom_lowered(lowered: &str) -> bool {
     // Signal-based OOM detection: "signal 9 (SIGKILL)" from ProcessExited display.
     // Word-boundary check: ensure the character after the number is NOT a digit,
     // preventing false matches like "signal 90" matching the pattern for signal 9.
@@ -80,25 +94,21 @@ pub(crate) fn is_oom_error(error_display: &str) -> bool {
         || lowered.contains("memorymax")
 }
 
-/// Check if the error is a configuration or spawn failure (deterministic, never retry).
-fn is_config_or_spawn_error(error_display: &str) -> bool {
-    let lowered = error_display.to_lowercase();
+/// Configuration or spawn failure (deterministic, never retry).
+fn is_config_or_spawn_lowered(lowered: &str) -> bool {
     lowered.contains("configuration error")
         || lowered.contains("spawn failed")
         || lowered.contains("binary not found")
         || lowered.contains("no such file or directory")
 }
 
-/// Check if the error is a timeout (already consumed time budget).
-fn is_timeout_error(error_display: &str) -> bool {
-    let lowered = error_display.to_lowercase();
+/// Timeout (already consumed time budget).
+fn is_timeout_lowered(lowered: &str) -> bool {
     lowered.contains("timed out") || lowered.contains("idle timeout")
 }
 
-/// Check if the error indicates a server crash that might succeed on retry.
-fn is_crash_error(error_display: &str) -> bool {
-    let lowered = error_display.to_lowercase();
-
+/// Server crash that might succeed on retry.
+fn is_crash_lowered(lowered: &str) -> bool {
     // Claude-code ACP server crash (the primary Issue #567 scenario)
     lowered.contains("shut down unexpectedly")
         || lowered.contains("server shut down")
