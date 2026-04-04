@@ -49,44 +49,13 @@ pub(crate) fn resolve_debate_tool(
         return Ok((tool, DebateMode::Heterogeneous, None));
     }
 
-    // CLI --tier overrides config tier when provided.
-    // Tier-based resolution: CLI tier > project tier > global tier > tool-based fallback.
-    // Tier takes priority over tool when both are set.
-    // CLI --tier is canonicalized via resolve_tier_selector (accepts tier_mapping aliases).
-    let tier_name: Option<String> = if let Some(cli) = cli_tier {
-        if let Some(cfg) = project_config {
-            if let Some(canonical) = cfg.resolve_tier_selector(cli) {
-                Some(canonical)
-            } else if bypass_tier {
-                // bypass mode: tolerate unknown selector (pass through as-is)
-                Some(cli.to_string())
-            } else {
-                let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
-                let alias_hint = cfg.format_tier_aliases();
-                let suggest_hint = cfg
-                    .suggest_tier(cli)
-                    .map(|s| format!("\nDid you mean '{s}'?"))
-                    .unwrap_or_default();
-                anyhow::bail!(
-                    "Tier selector '{}' not found.\n\
-                     Available tiers: [{}]{alias_hint}{suggest_hint}",
-                    cli,
-                    available.join(", ")
-                );
-            }
-        } else {
-            Some(cli.to_string())
-        }
-    } else {
-        // Config-sourced tier names are used as-is (validated at config load time).
-        // NOTE: config fields [debate].tier do not support tier_mapping aliases yet —
-        // only CLI --tier does. This is intentional (see debate findings in TODO).
-        project_config
-            .and_then(|cfg| cfg.debate.as_ref())
-            .and_then(|d| d.tier.as_deref())
-            .or(global_config.debate.tier.as_deref())
-            .map(|s| s.to_string())
-    };
+    let tier_name = resolve_debate_tier_name(
+        project_config,
+        global_config,
+        cli_tier,
+        force_override_user_config,
+        force_ignore_tier_setting,
+    )?;
 
     // Compute effective whitelist from tool selection (project > global)
     let effective_whitelist = project_config
@@ -149,6 +118,46 @@ pub(crate) fn resolve_debate_tool(
         project_root,
     )
     .map(|(t, m)| (t, m, None))
+}
+
+pub(crate) fn resolve_debate_tier_name(
+    project_config: Option<&ProjectConfig>,
+    global_config: &GlobalConfig,
+    cli_tier: Option<&str>,
+    force_override_user_config: bool,
+    force_ignore_tier_setting: bool,
+) -> Result<Option<String>> {
+    let bypass_tier = force_ignore_tier_setting || force_override_user_config;
+
+    if let Some(cli) = cli_tier {
+        if let Some(cfg) = project_config {
+            if let Some(canonical) = cfg.resolve_tier_selector(cli) {
+                return Ok(Some(canonical));
+            }
+            if bypass_tier {
+                return Ok(Some(cli.to_string()));
+            }
+            let available: Vec<&str> = cfg.tiers.keys().map(|k| k.as_str()).collect();
+            let alias_hint = cfg.format_tier_aliases();
+            let suggest_hint = cfg
+                .suggest_tier(cli)
+                .map(|s| format!("\nDid you mean '{s}'?"))
+                .unwrap_or_default();
+            anyhow::bail!(
+                "Tier selector '{}' not found.\n\
+                 Available tiers: [{}]{alias_hint}{suggest_hint}",
+                cli,
+                available.join(", ")
+            );
+        }
+        return Ok(Some(cli.to_string()));
+    }
+
+    Ok(project_config
+        .and_then(|cfg| cfg.debate.as_ref())
+        .and_then(|d| d.tier.as_deref())
+        .or(global_config.debate.tier.as_deref())
+        .map(|s| s.to_string()))
 }
 
 fn resolve_debate_tool_from_selection(

@@ -1,5 +1,5 @@
 use super::*;
-use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_config::{GlobalConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_session::review_artifact::{Finding, ReviewArtifact, Severity, SeveritySummary};
 use tempfile::tempdir;
 
@@ -105,14 +105,14 @@ fn artifact_with_findings(session_id: &str, findings: Vec<Finding>) -> ReviewArt
 #[test]
 fn build_reviewer_tools_returns_empty_when_reviewer_count_is_zero() {
     let cfg = project_config_with_enabled_tools(&["codex", "opencode"]);
-    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, 0);
+    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, None, 0);
     assert!(tools.is_empty());
 }
 
 #[test]
 fn build_reviewer_tools_round_robin_across_enabled_tools() {
     let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
-    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, 5);
+    let tools = build_reviewer_tools(None, ToolName::Codex, Some(&cfg), None, None, 5);
     assert_eq!(
         tools,
         vec![
@@ -128,11 +128,67 @@ fn build_reviewer_tools_round_robin_across_enabled_tools() {
 #[test]
 fn build_reviewer_tools_respects_explicit_tool_override() {
     let cfg = project_config_with_enabled_tools(&["codex", "claude-code", "opencode"]);
-    let tools = build_reviewer_tools(Some(ToolName::Codex), ToolName::Codex, Some(&cfg), None, 3);
+    let tools = build_reviewer_tools(
+        Some(ToolName::Codex),
+        ToolName::Codex,
+        Some(&cfg),
+        None,
+        None,
+        3,
+    );
     assert_eq!(
         tools,
         vec![ToolName::Codex, ToolName::Codex, ToolName::Codex]
     );
+}
+
+#[test]
+fn build_reviewer_tools_uses_tier_pool_when_present() {
+    let tier_tools = [ToolName::GeminiCli, ToolName::Codex, ToolName::ClaudeCode];
+
+    let tools = build_reviewer_tools(
+        None,
+        ToolName::Codex,
+        None,
+        Some(&GlobalConfig::default()),
+        Some(&tier_tools),
+        5,
+    );
+    assert_eq!(
+        tools,
+        vec![
+            ToolName::Codex,
+            ToolName::GeminiCli,
+            ToolName::ClaudeCode,
+            ToolName::Codex,
+            ToolName::GeminiCli
+        ]
+    );
+}
+
+#[test]
+fn validate_multi_reviewer_tier_pool_rejects_single_tool_consensus() {
+    let error =
+        validate_multi_reviewer_tier_pool("tier-review", 3, ToolName::Codex, &[ToolName::Codex])
+            .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("only resolves to one available reviewer tool"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
+fn validate_multi_reviewer_tier_pool_reports_unique_tool_count() {
+    let unique_tools = validate_multi_reviewer_tier_pool(
+        "tier-review",
+        3,
+        ToolName::Codex,
+        &[ToolName::GeminiCli, ToolName::ClaudeCode],
+    )
+    .unwrap();
+    assert_eq!(unique_tools, 3);
 }
 
 #[test]

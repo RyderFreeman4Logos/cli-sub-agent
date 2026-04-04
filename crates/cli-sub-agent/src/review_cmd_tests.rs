@@ -1,5 +1,6 @@
 use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
+use crate::review_consensus::build_reviewer_tools;
 use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
@@ -587,7 +588,8 @@ fn review_cli_builds_multi_reviewer_config_from_args() {
 
     let strategy = parse_consensus_strategy(&args.consensus).unwrap();
     let reviewers = args.reviewers as usize;
-    let reviewer_tools = build_reviewer_tools(args.tool, ToolName::Codex, None, None, reviewers);
+    let reviewer_tools =
+        build_reviewer_tools(args.tool, ToolName::Codex, None, None, None, reviewers);
 
     assert!(reviewers > 1);
     assert_eq!(consensus_strategy_label(strategy), "unanimous");

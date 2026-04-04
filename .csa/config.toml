@@ -19,3 +19,16 @@ timeout_secs = 120
 # With lefthook managing hooks (no core.hooksPath), pipeline_gate.rs cannot
 # auto-detect the pre-commit hook — an explicit gate_command is required.
 gate_command = "lefthook run pre-commit"
+tier = "tier-review"
+
+[debate]
+tier = "tier-review"
+
+[tiers.tier-review]
+description = "Review and debate tier with priority-based fallback"
+strategy = "priority"
+models = [
+  "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+  "codex/openai/o3/medium",
+  "claude-code/anthropic/claude-sonnet-4-20250514/none",
+]

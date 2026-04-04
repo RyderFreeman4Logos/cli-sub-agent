@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
-use crate::debate_cmd_resolve::resolve_debate_tool;
+use crate::debate_cmd_resolve::{resolve_debate_tier_name, resolve_debate_tool};
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
 use csa_config::ExecutionEnvOptions;
@@ -187,6 +187,17 @@ pub(crate) async fn handle_debate(
         args.tier.as_deref(),
         args.force_ignore_tier_setting,
     )?;
+    let resolved_tier_name = if tier_model_spec.is_some() {
+        resolve_debate_tier_name(
+            config.as_ref(),
+            &global_config,
+            args.tier.as_deref(),
+            args.force_override_user_config,
+            args.force_ignore_tier_setting,
+        )?
+    } else {
+        None
+    };
     if debate_mode == DebateMode::SameModelAdversarial {
         warn!(
             tool = %tool.as_str(),
@@ -279,7 +290,7 @@ pub(crate) async fn handle_debate(
             config.as_ref(),
             extra_env,
             Some("debate"),
-            None, // debate does not use tier-based selection
+            resolved_tier_name.as_deref(),
             None, // debate does not override context loading options
             stream_mode,
             idle_timeout_seconds,

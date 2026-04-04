@@ -520,6 +520,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
         None,
         None,
         None, // tier_model_spec
+        None, // tier_name
         None, // thinking
         "review: stale-session-regression".to_string(),
         project_dir.path(),

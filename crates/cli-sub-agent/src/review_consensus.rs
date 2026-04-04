@@ -26,6 +26,7 @@ pub(crate) fn build_reviewer_tools(
     primary_tool: ToolName,
     project_config: Option<&ProjectConfig>,
     global_config: Option<&GlobalConfig>,
+    tier_tools: Option<&[ToolName]>,
     reviewer_count: usize,
 ) -> Vec<ToolName> {
     if reviewer_count == 0 {
@@ -35,7 +36,9 @@ pub(crate) fn build_reviewer_tools(
         return vec![primary_tool; reviewer_count];
     }
 
-    let enabled_tools: Vec<ToolName> = if let Some(cfg) = project_config {
+    let enabled_tools: Vec<ToolName> = if let Some(tools) = tier_tools {
+        tools.to_vec()
+    } else if let Some(cfg) = project_config {
         let tools: Vec<_> = csa_config::global::all_known_tools()
             .iter()
             .filter(|t| cfg.is_tool_auto_selectable(t.as_str()))
@@ -56,16 +59,39 @@ pub(crate) fn build_reviewer_tools(
         csa_config::global::all_known_tools().to_vec()
     };
 
-    let mut pool = vec![primary_tool];
-    for tool in enabled_tools {
-        if !pool.contains(&tool) {
-            pool.push(tool);
-        }
-    }
+    let pool = build_reviewer_pool(primary_tool, &enabled_tools);
 
     (0..reviewer_count)
         .map(|idx| pool[idx % pool.len()])
         .collect()
+}
+
+fn build_reviewer_pool(primary_tool: ToolName, candidate_tools: &[ToolName]) -> Vec<ToolName> {
+    let mut pool = vec![primary_tool];
+    for tool in candidate_tools {
+        if !pool.contains(tool) {
+            pool.push(*tool);
+        }
+    }
+    pool
+}
+
+pub(crate) fn validate_multi_reviewer_tier_pool(
+    tier_name: &str,
+    reviewer_count: usize,
+    primary_tool: ToolName,
+    tier_tools: &[ToolName],
+) -> Result<usize> {
+    let pool = build_reviewer_pool(primary_tool, tier_tools);
+    if reviewer_count > 1 && pool.len() < 2 {
+        anyhow::bail!(
+            "Tier '{tier_name}' only resolves to one available reviewer tool ({}). \
+             Multi-reviewer review would duplicate the same tool. \
+             Install another tool from the tier or use --reviewers 1.",
+            primary_tool.as_str()
+        );
+    }
+    Ok(pool.len())
 }
 
 pub(crate) fn build_multi_reviewer_instruction(

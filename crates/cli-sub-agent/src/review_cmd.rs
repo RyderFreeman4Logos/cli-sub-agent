@@ -6,9 +6,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
-    CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, build_reviewer_tools,
-    consensus_strategy_label, consensus_verdict, parse_consensus_strategy, parse_review_decision,
-    parse_review_verdict, resolve_consensus,
+    CLEAN, HAS_ISSUES, agreement_level, build_multi_reviewer_instruction, consensus_strategy_label,
+    consensus_verdict, parse_consensus_strategy, parse_review_decision, parse_review_verdict,
+    resolve_consensus,
 };
 #[cfg(test)]
 use crate::review_context::discover_review_context_for_branch;
@@ -34,6 +34,9 @@ mod fix;
 #[path = "review_cmd_post_review.rs"]
 mod post_review;
 
+#[path = "review_cmd_reviewers.rs"]
+mod reviewers;
+
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
 use post_review::{build_post_review_output, emit_post_review_output};
@@ -41,9 +44,11 @@ use post_review::{build_post_review_output, emit_post_review_output};
 use resolve::build_review_instruction;
 use resolve::{
     build_review_instruction_for_project, derive_scope, resolve_review_stream_mode,
-    resolve_review_thinking, resolve_review_tool, review_scope_allows_auto_discovery,
-    verify_review_skill_available, write_multi_reviewer_consolidated_artifact,
+    resolve_review_thinking, resolve_review_tier_name, resolve_review_tool,
+    review_scope_allows_auto_discovery, verify_review_skill_available,
+    write_multi_reviewer_consolidated_artifact,
 };
+use reviewers::resolve_multi_reviewer_pool;
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -229,6 +234,17 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         args.tier.as_deref(),
         args.force_ignore_tier_setting,
     )?;
+    let resolved_tier_name = if tier_model_spec.is_some() {
+        resolve_review_tier_name(
+            config.as_ref(),
+            &global_config,
+            args.tier.as_deref(),
+            args.force_override_user_config,
+            args.force_ignore_tier_setting,
+        )?
+    } else {
+        None
+    };
 
     // Resolve model: CLI --model > project config review.model > global config review.model.
     // When tier is also set, build_executor applies model override after tier spec construction.
@@ -272,6 +288,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             args.session.clone(),
             review_model.clone(),
             tier_model_spec.clone(),
+            resolved_tier_name.clone(),
             review_thinking.clone(),
             format!(
                 "review: {}",
@@ -467,13 +484,16 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
     let reviewers = args.reviewers as usize;
     let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
-    let reviewer_tools = build_reviewer_tools(
+    let reviewer_pool = resolve_multi_reviewer_pool(
+        reviewers,
         args.tool,
         tool,
+        resolved_tier_name.as_deref(),
         config.as_ref(),
-        Some(&global_config),
-        reviewers,
-    );
+        &global_config,
+    )?;
+    let reviewer_tools = reviewer_pool.reviewer_tools;
+    let tier_reviewer_specs = reviewer_pool.tier_reviewer_specs;
 
     let mut join_set = JoinSet::new();
     for (reviewer_index, reviewer_tool) in reviewer_tools.into_iter().enumerate() {
@@ -493,15 +513,21 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         let reviewer_force_override = args.force_override_user_config;
         let reviewer_no_fs_sandbox = args.no_fs_sandbox;
         let reviewer_extra_writable = args.extra_writable.clone();
-        // Only pass tier_model_spec to the reviewer whose tool matches the
-        // tier-resolved primary tool.  For other reviewers (selected for
-        // heterogeneity), the model_spec would override their tool via
-        // Executor::from_spec, collapsing cognitive diversity.
-        let reviewer_model_spec = if reviewer_tool == tool {
-            tier_model_spec.clone()
-        } else {
-            None
-        };
+        // Keep every reviewer on the resolved tier when possible by binding
+        // each tool to its tier model spec. Fall back to the primary spec only
+        // when we only have a single tier-resolved reviewer tool.
+        let reviewer_model_spec = tier_reviewer_specs
+            .iter()
+            .find(|resolution| resolution.tool == reviewer_tool)
+            .map(|resolution| resolution.model_spec.clone())
+            .or_else(|| {
+                if reviewer_tool == tool {
+                    tier_model_spec.clone()
+                } else {
+                    None
+                }
+            });
+        let reviewer_tier_name = resolved_tier_name.clone();
         let reviewer_thinking = review_thinking.clone();
         join_set.spawn(async move {
             let session_result = execute_review(
@@ -510,6 +536,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 None,
                 reviewer_model,
                 reviewer_model_spec,
+                reviewer_tier_name,
                 reviewer_thinking,
                 reviewer_description,
                 &reviewer_project_root,
@@ -629,6 +656,7 @@ async fn execute_review(
     session: Option<String>,
     model: Option<String>,
     tier_model_spec: Option<String>,
+    tier_name: Option<String>,
     thinking: Option<String>,
     description: String,
     project_root: &Path,
@@ -703,7 +731,7 @@ async fn execute_review(
         project_config,
         extra_env,
         Some("review"),
-        None,
+        tier_name.as_deref(),
         None,
         stream_mode,
         idle_timeout_seconds,
