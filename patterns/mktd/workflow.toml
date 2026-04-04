@@ -18,6 +18,9 @@ name = "DEBATE_JSON"
 name = "DEBATE_PROMPT"
 
 [[workflow.variables]]
+name = "FINAL_TODO"
+
+[[workflow.variables]]
 name = "FEATURE"
 
 [[workflow.variables]]
@@ -87,6 +90,9 @@ name = "STEP_11_OUTPUT"
 name = "STEP_12_OUTPUT"
 
 [[workflow.variables]]
+name = "STEP_15_OUTPUT"
+
+[[workflow.variables]]
 name = "SUMMARY_LINE"
 
 [[workflow.variables]]
@@ -97,6 +103,12 @@ name = "TODO_PATH"
 
 [[workflow.variables]]
 name = "TODO_TS"
+
+[[workflow.variables]]
+name = "INTENSITY"
+
+[[workflow.variables]]
+name = "INTENSITY_IS_LIGHT"
 
 [[workflow.variables]]
 name = "USER_LANGUAGE"
@@ -201,6 +213,24 @@ if [[ -n "${FEATURE:-}" ]]; then
   exit 0
 fi
 echo "Chinese (Simplified)"
+```'''
+on_fail = "abort"
+
+[[workflow.steps]]
+id = 15
+title = "Intensity Detection"
+tool = "bash"
+prompt = '''
+Detect planning intensity mode. Sets INTENSITY_IS_LIGHT=true when light mode.
+
+```bash
+if [[ "${INTENSITY:-full}" == "light" ]]; then
+  echo "Planning intensity: light (skipping threat model, debate, revision)"
+  echo "CSA_VAR:INTENSITY_IS_LIGHT=true"
+else
+  echo "Planning intensity: full"
+  echo "CSA_VAR:INTENSITY_IS_LIGHT=false"
+fi
 ```'''
 on_fail = "abort"
 
@@ -327,6 +357,7 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 8
 title = "Phase 2.5 — Threat Model"
+condition = "!(${INTENSITY_IS_LIGHT})"
 prompt = """
 Review the draft TODO plan for security and safety concerns.
 
@@ -360,6 +391,7 @@ on_fail = "abort"
 id = 9
 title = "Phase 3 — Adversarial Debate"
 tool = "bash"
+condition = "!(${INTENSITY_IS_LIGHT})"
 prompt = '''
 Run explicit adversarial debate via `csa debate`.
 Capture debate stdout, then normalize into a structured evidence packet
@@ -423,6 +455,7 @@ on_fail = "abort"
 id = 10
 title = "Phase 3.5 — Validate Debate Evidence"
 tool = "bash"
+condition = "!(${INTENSITY_IS_LIGHT})"
 prompt = '''
 Validate that debate output exists and carries required evidence markers.
 
@@ -441,6 +474,7 @@ on_fail = "abort"
 [[workflow.steps]]
 id = 11
 title = "Revise TODO"
+condition = "!(${INTENSITY_IS_LIGHT})"
 prompt = """
 Incorporate debate feedback and threat model findings into the TODO plan.
 Concede valid points and revise accordingly. Defend sound decisions with evidence.
@@ -476,16 +510,24 @@ title = "Save TODO"
 tool = "bash"
 prompt = '''
 Save finalized TODO and `spec.toml` using csa todo for git-tracked lifecycle.
-Uses `${STEP_11_OUTPUT}` (the revised TODO from the revise step) and
-`${STEP_7_OUTPUT}` (the generated spec from Step 7).
+In full mode, uses `${STEP_11_OUTPUT}` (revised TODO). In light mode, falls
+back to `${STEP_6_OUTPUT}` (draft TODO) since threat model/debate/revise are skipped.
+Spec comes from `${STEP_7_OUTPUT}` in both modes.
 Execute ONLY the command block below.
 FORBIDDEN: custom shell snippets, heredoc (`<<EOF`, `cat <<`), branch create/switch,
 and writing intermediate files outside the TODO path.
 
 ```bash
-[[ -n "${STEP_11_OUTPUT:-}" ]] || { echo "STEP_11_OUTPUT is empty — Step 11 (revise) must output the finalized TODO as text" >&2; exit 1; }
-printf '%s\n' "${STEP_11_OUTPUT}" | grep -qE '^- \[ \] .+' || { echo "STEP_11_OUTPUT has no non-empty checkbox tasks" >&2; exit 1; }
-printf '%s\n' "${STEP_11_OUTPUT}" | grep -q 'DONE WHEN:' || { echo "STEP_11_OUTPUT has no DONE WHEN clauses" >&2; exit 1; }
+# Resolve TODO content: revised (full) or draft (light)
+if [[ -n "${STEP_11_OUTPUT:-}" ]]; then
+  FINAL_TODO="${STEP_11_OUTPUT}"
+elif [[ -n "${STEP_6_OUTPUT:-}" ]]; then
+  FINAL_TODO="${STEP_6_OUTPUT}"
+else
+  echo "Neither STEP_11_OUTPUT (revised) nor STEP_6_OUTPUT (draft) is available" >&2; exit 1
+fi
+printf '%s\n' "${FINAL_TODO}" | grep -qE '^- \[ \] .+' || { echo "TODO has no non-empty checkbox tasks" >&2; exit 1; }
+printf '%s\n' "${FINAL_TODO}" | grep -q 'DONE WHEN:' || { echo "TODO has no DONE WHEN clauses" >&2; exit 1; }
 [[ -n "${STEP_7_OUTPUT:-}" ]] || { echo "STEP_7_OUTPUT is empty — Step 7 must output spec.toml content" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^schema_version = 1$' || { echo "STEP_7_OUTPUT missing schema_version = 1" >&2; exit 1; }
 printf '%s\n' "${STEP_7_OUTPUT}" | grep -q '^plan_ulid = "__PLAN_ID__"$' || { echo "STEP_7_OUTPUT missing __PLAN_ID__ placeholder" >&2; exit 1; }
@@ -498,19 +540,19 @@ SUMMARY_LINE=$(printf '%s\n' "${STEP_7_OUTPUT}" | sed -n 's/^summary = "\(.*\)"$
 printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "STEP_7_OUTPUT summary must be one Chinese line" >&2; exit 1; }
 RESOLVED_LANGUAGE="${STEP_2_OUTPUT:-Chinese (Simplified)}"
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
-  TASK_COUNT=$(printf '%s\n' "${STEP_11_OUTPUT}" | grep -cE '^- \[ \] .+')
+  TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
   MIN_HAN="${TASK_COUNT}"
   if [ "${MIN_HAN}" -lt 2 ]; then MIN_HAN=2; fi
   if [ "${MIN_HAN}" -gt 30 ]; then MIN_HAN=30; fi
-  HAN_COUNT_DRAFT=$(printf '%s\n' "${STEP_11_OUTPUT}" | rg -o '[\p{Han}]' | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "STEP_11_OUTPUT language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
+  HAN_COUNT_DRAFT=$(printf '%s\n' "${FINAL_TODO}" | rg -o '[\p{Han}]' | wc -l | tr -d '[:space:]')
+  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "TODO language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
 elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
-  TASK_COUNT=$(printf '%s\n' "${STEP_11_OUTPUT}" | grep -cE '^- \[ \] .+')
+  TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
   MIN_CJK="${TASK_COUNT}"
   if [ "${MIN_CJK}" -lt 2 ]; then MIN_CJK=2; fi
   if [ "${MIN_CJK}" -gt 30 ]; then MIN_CJK=30; fi
-  CJK_COUNT_DRAFT=$(printf '%s\n' "${STEP_11_OUTPUT}" | rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' | wc -l | tr -d '[:space:]')
-  [[ "${CJK_COUNT_DRAFT:-0}" -ge "${MIN_CJK}" ]] || { echo "STEP_11_OUTPUT language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
+  CJK_COUNT_DRAFT=$(printf '%s\n' "${FINAL_TODO}" | rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' | wc -l | tr -d '[:space:]')
+  [[ "${CJK_COUNT_DRAFT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
 fi
 CURRENT_BRANCH=$(git branch --show-current) || { echo "detect branch failed" >&2; exit 1; }
 LANG_ARGS=()
@@ -520,7 +562,7 @@ fi
 TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
 SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
-printf '%s\n' "${STEP_11_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+printf '%s\n' "${FINAL_TODO}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 SPEC_CONTENT="${STEP_7_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_PATH}" || { echo "write spec failed" >&2; exit 1; }
 [[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }

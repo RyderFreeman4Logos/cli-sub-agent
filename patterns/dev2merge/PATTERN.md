@@ -142,7 +142,9 @@ echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 11)" required=true -->'
 Tool: bash
 OnFail: abort
 
-Generate a TODO plan via mktd. Includes debate phase.
+Generate a TODO plan via mktd. Auto-selects intensity based on change size:
+- `light` when code_files ≤ 2 AND total_insertions < 50 (small changes)
+- `full` otherwise (default, includes threat model + debate)
 
 ```bash
 set -euo pipefail
@@ -155,11 +157,24 @@ if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
 else
   MKTD_TOOL_ARGS=()
 fi
+# Auto-select planning intensity based on change size
+LIGHT_THRESHOLD_FILES="${PLANNING_LIGHT_THRESHOLD_FILES:-2}"
+LIGHT_THRESHOLD_LINES="${PLANNING_LIGHT_THRESHOLD_LINES:-50}"
+PLAN_CODE_FILES="$(git diff --name-only "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | grep -cvE '\.(md|txt|lock|toml)$' || true)"
+PLAN_INSERTIONS="$(git diff --stat "${DEFAULT_BRANCH}...HEAD" 2>/dev/null | tail -1 | grep -oE '[0-9]+ insertion' | grep -oE '[0-9]+' || echo 0)"
+if [ "${PLAN_CODE_FILES}" -le "${LIGHT_THRESHOLD_FILES}" ] && [ "${PLAN_INSERTIONS:-0}" -lt "${LIGHT_THRESHOLD_LINES}" ]; then
+  MKTD_INTENSITY="light"
+  echo "Planning intensity: light (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
+else
+  MKTD_INTENSITY="full"
+  echo "Planning intensity: full (${PLAN_CODE_FILES} code files, ${PLAN_INSERTIONS} insertions)"
+fi
 csa plan run patterns/mktd/workflow.toml \
   "${MKTD_TOOL_ARGS[@]}" \
   --var CWD="$(pwd)" \
   --var FEATURE="Plan dev2merge for branch ${CURRENT_BRANCH}. Scope: ${FEATURE_INPUT}." \
-  --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}"
+  --var USER_LANGUAGE="${USER_LANGUAGE_OVERRIDE}" \
+  --var INTENSITY="${MKTD_INTENSITY}"
 LATEST_TS="$(csa todo list --format json | jq -r --arg br "${CURRENT_BRANCH}" '[.[] | select(.branch == $br)] | sort_by(.timestamp) | last | .timestamp // empty')"
 if [ -z "${LATEST_TS}" ]; then
   echo "ERROR: mktd did not produce a TODO for branch ${CURRENT_BRANCH}." >&2

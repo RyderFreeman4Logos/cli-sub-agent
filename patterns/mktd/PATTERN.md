@@ -3,7 +3,7 @@ name = "mktd"
 description = "Make TODO: CSA-powered reconnaissance, adversarial debate, and structured TODO plan generation"
 allowed-tools = "TaskCreate, TaskUpdate, TaskList, TaskGet, Read, Grep, Glob, Bash, Write, Edit"
 tier = "tier-2-standard"
-version = "0.1.0"
+version = "0.2.0"
 ---
 
 # mktd: Make TODO — Debate-Enhanced Planning
@@ -13,6 +13,19 @@ THREAT MODEL (security review), DEBATE (adversarial review), APPROVE (user gate)
 
 Zero main-agent file reads during exploration. CSA sub-agents gather context.
 Mandatory adversarial review catches blind spots.
+
+### Intensity Modes
+
+`INTENSITY` controls which phases run. Default: `full`.
+
+| Mode | Phases | Use Case |
+|------|--------|----------|
+| `full` | RECON → LANGUAGE → DRAFT → SPEC → THREAT MODEL → DEBATE → VALIDATE → REVISE → SAVE → APPROVE | Default: all features, significant changes |
+| `light` | RECON → LANGUAGE → DRAFT → SPEC → SAVE → APPROVE | Small changes (≤2 code files, <50 insertions) — skips threat model, debate, and revision |
+
+Light mode flow: Phase 1 (RECON) → Phase 1.5 (LANGUAGE) → Phase 2 (DRAFT) →
+Phase 2.25 (SPEC) → Phase 4 (SAVE) → Phase 4.5 (APPROVE).
+The SAVE step uses the draft TODO directly instead of the revised version.
 
 ## Step 0: Phase 0.5 — Auto Session Discovery
 
@@ -111,6 +124,24 @@ if [[ -n "${FEATURE:-}" ]]; then
   exit 0
 fi
 echo "Chinese (Simplified)"
+```
+
+## Step 1b: Intensity Detection
+
+Tool: bash
+
+Detect planning intensity mode. Sets `INTENSITY_IS_LIGHT=true` when light mode
+is active, enabling conditional step skipping for threat model, debate,
+validation, and revision phases.
+
+```bash
+if [[ "${INTENSITY:-full}" == "light" ]]; then
+  echo "Planning intensity: light (skipping threat model, debate, revision)"
+  echo "CSA_VAR:INTENSITY_IS_LIGHT=true"
+else
+  echo "Planning intensity: full"
+  echo "CSA_VAR:INTENSITY_IS_LIGHT=false"
+fi
 ```
 
 ## Step 2: Phase 1 — RECON Dimension 1 (Structure)
@@ -274,6 +305,8 @@ The output is captured as `${STEP_6_OUTPUT}` for subsequent steps.
 
 ## Step 7: Phase 2.5 — Threat Model
 
+**Condition**: Skip if `INTENSITY=light`.
+
 Review the draft TODO plan for security and safety concerns.
 
 ### Draft TODO Plan
@@ -302,6 +335,8 @@ These findings will be incorporated into the TODO as [Security] tagged items.
 Print the COMPLETE threat analysis as text to stdout.
 
 ## Step 8: Phase 3 — Adversarial Debate
+
+**Condition**: Skip if `INTENSITY=light`.
 
 Tool: bash
 Tier: tier-2-standard
@@ -364,6 +399,8 @@ fi
 
 ## Step 9: Phase 3.5 — Validate Debate Evidence
 
+**Condition**: Skip if `INTENSITY=light`.
+
 Tool: bash
 
 Validate that debate output exists and carries required evidence markers.
@@ -380,6 +417,8 @@ printf '%s\n' "${STEP_8_OUTPUT}" | grep -q '^OVERALL_ASSESSMENT:' || { echo "ove
 ```
 
 ## Step 10: Revise TODO
+
+**Condition**: Skip if `INTENSITY=light`.
 
 Incorporate debate feedback and threat model findings into the TODO plan.
 Concede valid points and revise accordingly. Defend sound decisions with evidence.
@@ -421,16 +460,24 @@ The output is captured as `${STEP_10_OUTPUT}` for the save step.
 Tool: bash
 
 Save finalized TODO and `spec.toml` using csa todo for git-tracked lifecycle.
-Uses `${STEP_10_OUTPUT}` (the revised TODO from the revise step) and
-`${STEP_6_OUTPUT}` (the generated spec from Step 6).
+In full mode, uses `${STEP_10_OUTPUT}` (revised TODO). In light mode, falls back
+to `${STEP_5_OUTPUT}` (draft TODO) since threat model/debate/revise are skipped.
+Spec comes from `${STEP_6_OUTPUT}` in both modes.
 Execute ONLY the command block below.
 FORBIDDEN: custom shell snippets, heredoc (`<<EOF`, `cat <<`), branch create/switch,
 and writing intermediate files outside the TODO path.
 
 ```bash
-[[ -n "${STEP_10_OUTPUT:-}" ]] || { echo "STEP_10_OUTPUT is empty — Step 10 (revise) must output the finalized TODO as text" >&2; exit 1; }
-printf '%s\n' "${STEP_10_OUTPUT}" | grep -qE '^- \[ \] .+' || { echo "STEP_10_OUTPUT has no non-empty checkbox tasks" >&2; exit 1; }
-printf '%s\n' "${STEP_10_OUTPUT}" | grep -q 'DONE WHEN:' || { echo "STEP_10_OUTPUT has no DONE WHEN clauses" >&2; exit 1; }
+# Resolve TODO content: revised (full) or draft (light)
+if [[ -n "${STEP_10_OUTPUT:-}" ]]; then
+  FINAL_TODO="${STEP_10_OUTPUT}"
+elif [[ -n "${STEP_5_OUTPUT:-}" ]]; then
+  FINAL_TODO="${STEP_5_OUTPUT}"
+else
+  echo "Neither STEP_10_OUTPUT (revised) nor STEP_5_OUTPUT (draft) is available" >&2; exit 1
+fi
+printf '%s\n' "${FINAL_TODO}" | grep -qE '^- \[ \] .+' || { echo "TODO has no non-empty checkbox tasks" >&2; exit 1; }
+printf '%s\n' "${FINAL_TODO}" | grep -q 'DONE WHEN:' || { echo "TODO has no DONE WHEN clauses" >&2; exit 1; }
 [[ -n "${STEP_6_OUTPUT:-}" ]] || { echo "STEP_6_OUTPUT is empty — Step 6 must output spec.toml content" >&2; exit 1; }
 printf '%s\n' "${STEP_6_OUTPUT}" | grep -q '^schema_version = 1$' || { echo "STEP_6_OUTPUT missing schema_version = 1" >&2; exit 1; }
 printf '%s\n' "${STEP_6_OUTPUT}" | grep -q '^plan_ulid = "__PLAN_ID__"$' || { echo "STEP_6_OUTPUT missing __PLAN_ID__ placeholder" >&2; exit 1; }
@@ -443,19 +490,19 @@ SUMMARY_LINE=$(printf '%s\n' "${STEP_6_OUTPUT}" | sed -n 's/^summary = "\(.*\)"$
 printf '%s' "${SUMMARY_LINE}" | rg -q '[\p{Han}]' || { echo "STEP_6_OUTPUT summary must be one Chinese line" >&2; exit 1; }
 RESOLVED_LANGUAGE="${STEP_1_OUTPUT:-Chinese (Simplified)}"
 if printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'chinese'; then
-  TASK_COUNT=$(printf '%s\n' "${STEP_10_OUTPUT}" | grep -cE '^- \[ \] .+')
+  TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
   MIN_HAN="${TASK_COUNT}"
   if [ "${MIN_HAN}" -lt 2 ]; then MIN_HAN=2; fi
   if [ "${MIN_HAN}" -gt 30 ]; then MIN_HAN=30; fi
-  HAN_COUNT_DRAFT=$(printf '%s\n' "${STEP_10_OUTPUT}" | rg -o '[\p{Han}]' | wc -l | tr -d '[:space:]')
-  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "STEP_10_OUTPUT language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
+  HAN_COUNT_DRAFT=$(printf '%s\n' "${FINAL_TODO}" | rg -o '[\p{Han}]' | wc -l | tr -d '[:space:]')
+  [[ "${HAN_COUNT_DRAFT:-0}" -ge "${MIN_HAN}" ]] || { echo "TODO language mismatch: expected Han-script content (Han chars >= ${MIN_HAN})" >&2; exit 1; }
 elif printf '%s' "${RESOLVED_LANGUAGE}" | grep -qi 'han script'; then
-  TASK_COUNT=$(printf '%s\n' "${STEP_10_OUTPUT}" | grep -cE '^- \[ \] .+')
+  TASK_COUNT=$(printf '%s\n' "${FINAL_TODO}" | grep -cE '^- \[ \] .+')
   MIN_CJK="${TASK_COUNT}"
   if [ "${MIN_CJK}" -lt 2 ]; then MIN_CJK=2; fi
   if [ "${MIN_CJK}" -gt 30 ]; then MIN_CJK=30; fi
-  CJK_COUNT_DRAFT=$(printf '%s\n' "${STEP_10_OUTPUT}" | rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' | wc -l | tr -d '[:space:]')
-  [[ "${CJK_COUNT_DRAFT:-0}" -ge "${MIN_CJK}" ]] || { echo "STEP_10_OUTPUT language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
+  CJK_COUNT_DRAFT=$(printf '%s\n' "${FINAL_TODO}" | rg -o '[\p{Han}\p{Hiragana}\p{Katakana}]' | wc -l | tr -d '[:space:]')
+  [[ "${CJK_COUNT_DRAFT:-0}" -ge "${MIN_CJK}" ]] || { echo "TODO language mismatch: expected CJK-script content (CJK chars >= ${MIN_CJK})" >&2; exit 1; }
 fi
 CURRENT_BRANCH=$(git branch --show-current) || { echo "detect branch failed" >&2; exit 1; }
 LANG_ARGS=()
@@ -465,7 +512,7 @@ fi
 TODO_TS=$(csa todo create --branch "${CURRENT_BRANCH}" "${LANG_ARGS[@]}" -- "${FEATURE}") || { echo "csa todo create failed" >&2; exit 1; }
 TODO_PATH=$(csa todo show -t "${TODO_TS}" --path) || { echo "csa todo show failed" >&2; exit 1; }
 SPEC_PATH="$(dirname "${TODO_PATH}")/spec.toml"
-printf '%s\n' "${STEP_10_OUTPUT}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
+printf '%s\n' "${FINAL_TODO}" > "${TODO_PATH}" || { echo "write TODO failed" >&2; exit 1; }
 SPEC_CONTENT="${STEP_6_OUTPUT//__PLAN_ID__/${TODO_TS}}"
 printf '%s\n' "${SPEC_CONTENT}" > "${SPEC_PATH}" || { echo "write spec failed" >&2; exit 1; }
 [[ -s "${TODO_PATH}" ]] || { echo "saved TODO is empty" >&2; exit 1; }
