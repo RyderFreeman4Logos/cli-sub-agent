@@ -423,7 +423,7 @@ async fn run() -> Result<()> {
             daemon_child,
             session_id,
         } => {
-            run_cmd_daemon::check_daemon_flags(
+            let _daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 no_daemon,
                 daemon_child,
@@ -535,7 +535,7 @@ async fn run() -> Result<()> {
             memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
-            run_cmd_daemon::check_daemon_flags(
+            let _daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "review",
                 args.no_daemon,
                 args.daemon_child,
@@ -551,7 +551,7 @@ async fn run() -> Result<()> {
             exit_current_process(exit_code);
         }
         Commands::Debate(args) => {
-            run_cmd_daemon::check_daemon_flags(
+            let _daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "debate",
                 args.no_daemon,
                 args.daemon_child,

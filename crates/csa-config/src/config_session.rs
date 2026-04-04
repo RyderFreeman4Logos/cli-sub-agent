@@ -36,6 +36,12 @@ pub struct SessionConfig {
     /// Maximum spool file size in megabytes before rotation (default 32).
     #[serde(default)]
     pub spool_max_mb: Option<u32>,
+    /// Maximum stderr spool file size in megabytes before rotation (default 50).
+    ///
+    /// stderr is typically more verbose than stdout (tracing output, tee'd lines)
+    /// so the default is larger.  Set to `None` to inherit `spool_max_mb`.
+    #[serde(default)]
+    pub stderr_spool_max_mb: Option<u32>,
     /// Keep rotated spool files for debugging (default true).
     #[serde(default)]
     pub spool_keep_rotated: Option<bool>,
@@ -80,6 +86,7 @@ fn default_daemon_wait_seconds() -> u64 {
 }
 
 const DEFAULT_SPOOL_MAX_MB: u32 = 32;
+const DEFAULT_STDERR_SPOOL_MAX_MB: u32 = 50;
 const DEFAULT_SPOOL_KEEP_ROTATED: bool = true;
 
 impl Default for SessionConfig {
@@ -93,6 +100,7 @@ impl Default for SessionConfig {
             max_seed_sessions: default_max_seed_sessions(),
             require_commit_on_mutation: false,
             spool_max_mb: None,
+            stderr_spool_max_mb: None,
             spool_keep_rotated: None,
             tool_output_compression: false,
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
@@ -111,6 +119,7 @@ impl SessionConfig {
             && self.max_seed_sessions == default_max_seed_sessions()
             && !self.require_commit_on_mutation
             && self.spool_max_mb.is_none()
+            && self.stderr_spool_max_mb.is_none()
             && self.spool_keep_rotated.is_none()
             && !self.tool_output_compression
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
@@ -119,6 +128,11 @@ impl SessionConfig {
 
     pub fn resolved_spool_max_mb(&self) -> u32 {
         self.spool_max_mb.unwrap_or(DEFAULT_SPOOL_MAX_MB)
+    }
+
+    pub fn resolved_stderr_spool_max_mb(&self) -> u32 {
+        self.stderr_spool_max_mb
+            .unwrap_or(DEFAULT_STDERR_SPOOL_MAX_MB)
     }
 
     pub fn resolved_spool_keep_rotated(&self) -> bool {
