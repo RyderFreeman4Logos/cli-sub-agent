@@ -65,6 +65,10 @@ pub use guard::{
     GuardContext, PromptGuardEntry, PromptGuardResult, builtin_prompt_guards, format_guard_output,
     run_prompt_guards,
 };
+pub use merge_guard::{
+    MarkerStatus, default_install_dir, detect_installed_guard, ensure_guard_dir, gh_wrapper_script,
+    inject_merge_guard_env, install_merge_guard, is_merge_guard_enabled, verify_pr_bot_marker,
+};
 pub use policy::FailPolicy;
 pub use runner::{run_hook, run_hook_capturing, run_hooks_for_event};
 pub use waiver::{Waiver, WaiverSet};

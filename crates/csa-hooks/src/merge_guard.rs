@@ -255,6 +255,54 @@ pub fn verify_pr_bot_marker(
     MarkerStatus::Missing
 }
 
+/// Return the raw `gh` wrapper script content.
+///
+/// Useful for the `install-merge-guard` CLI subcommand which writes the
+/// wrapper to a user-chosen directory.
+pub fn gh_wrapper_script() -> &'static str {
+    GH_WRAPPER
+}
+
+/// Default install directory for the standalone merge guard wrapper.
+pub fn default_install_dir() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
+    PathBuf::from(home).join(".local/bin/csa-gh-guard")
+}
+
+/// Install the `gh` merge guard wrapper to the given directory.
+///
+/// Creates the directory if needed, writes the wrapper script, and sets it
+/// executable.  Returns the full path to the installed `gh` wrapper.
+pub fn install_merge_guard(install_dir: &Path) -> Result<PathBuf> {
+    fs::create_dir_all(install_dir)
+        .with_context(|| format!("failed to create install dir: {}", install_dir.display()))?;
+
+    let wrapper_path = install_dir.join("gh");
+    fs::write(&wrapper_path, GH_WRAPPER)
+        .with_context(|| format!("failed to write gh wrapper: {}", wrapper_path.display()))?;
+    #[cfg(unix)]
+    fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755))
+        .with_context(|| format!("failed to chmod gh wrapper: {}", wrapper_path.display()))?;
+
+    debug!(path = %wrapper_path.display(), "merge guard installed");
+    Ok(wrapper_path)
+}
+
+/// Check whether the merge guard wrapper appears in `PATH` ahead of the real `gh`.
+///
+/// Returns `Some(path)` to the guard wrapper if it is the first `gh` found,
+/// `None` otherwise.
+pub fn detect_installed_guard() -> Option<PathBuf> {
+    let first_gh = which::which("gh").ok()?;
+    // Check if the first `gh` in PATH is our wrapper (contains "CSA merge guard").
+    let content = fs::read_to_string(&first_gh).ok()?;
+    if content.contains("CSA merge guard") {
+        Some(first_gh)
+    } else {
+        None
+    }
+}
+
 /// Check if merge guard is enabled in hooks config.
 ///
 /// Returns `true` unless explicitly disabled via `[hooks] merge_guard = false`.

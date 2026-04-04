@@ -18,6 +18,7 @@ mod edit_restriction_guard;
 mod error_hints;
 mod eval_cmd;
 mod gc;
+mod hooks_cmd;
 mod mcp_hub;
 mod mcp_server;
 mod memory_capture;
@@ -786,6 +787,9 @@ async fn run() -> Result<()> {
         }
         Commands::Xurl { cmd } => {
             handle_xurl(cmd)?;
+        }
+        Commands::Hooks { cmd } => {
+            hooks_cmd::handle_hooks(cmd)?;
         }
     }
 
