@@ -7,6 +7,7 @@
 //! - `PreRun`: Before a tool execution starts
 //! - `PostRun`: After a tool execution finishes
 //! - `PostEdit`: After PostRun when `.rs` files changed (observational clippy check)
+//! - `MergeCompleted`: After merge_guard allows a merge to proceed (audit event)
 //!
 //! ## Configuration Priority
 //!
@@ -42,6 +43,7 @@
 //! - `{version}`: TODO plan version number
 //! - `{message}`: Commit message
 
+pub mod audit;
 pub mod config;
 pub mod directive;
 pub mod event;
@@ -53,6 +55,7 @@ pub mod runner;
 pub mod waiver;
 
 // Re-export key types
+pub use audit::{MergeAuditEvent, audit_log_path, emit_merge_completed_event};
 pub use config::{HookConfig, HooksConfig, global_hooks_path, load_hooks_config};
 pub use directive::{
     NextStepDirective, format_next_step_directive, parse_next_step, parse_next_step_directive,

@@ -134,7 +134,13 @@ fi
 MARKER_FILE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}.done"
 
 if [ -f "${MARKER_FILE}" ]; then
-  # Exact SHA marker found — allow merge.
+  # Exact SHA marker found — emit audit event and allow merge.
+  EVENTS_DIR="${HOME}/.local/state/cli-sub-agent/events"
+  mkdir -p "${EVENTS_DIR}" 2>/dev/null || true
+  AUDIT_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")"
+  printf '{"event":"MergeCompleted","pr_number":%s,"head_sha":"%s","marker_path":"%s","timestamp":"%s"}\n' \
+    "${PR_NUMBER}" "${HEAD_SHA}" "${MARKER_FILE}" "${AUDIT_TS}" \
+    >> "${EVENTS_DIR}/merge-guard.jsonl" 2>/dev/null || true
   exec "${REAL_GH}" "$@"
 else
   echo "BLOCKED: pr-bot has not completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}." >&2
