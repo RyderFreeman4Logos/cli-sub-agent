@@ -55,7 +55,7 @@ pub struct ResumeSessionResolution {
 ///
 /// Call this **before** [`create_session`] in production entry points.
 /// Tests can skip this for speed.
-pub fn enforce_project_cooldown(project_path: &Path, cooldown_seconds: u64) -> bool {
+pub async fn enforce_project_cooldown(project_path: &Path, cooldown_seconds: u64) -> bool {
     if cooldown_seconds == 0 {
         return false;
     }
@@ -76,7 +76,7 @@ pub fn enforce_project_cooldown(project_path: &Path, cooldown_seconds: u64) -> b
     let most_recent = sessions.iter().max_by_key(|s| s.last_accessed);
 
     if let Some(recent) = most_recent {
-        crate::cooldown::enforce_cooldown_sync(recent.last_accessed, cooldown_seconds)
+        crate::cooldown::enforce_cooldown(recent.last_accessed, cooldown_seconds).await
     } else {
         false
     }

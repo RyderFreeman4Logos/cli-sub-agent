@@ -54,10 +54,10 @@ pub fn evaluate_cooldown(
     }
 }
 
-/// Sleep for the cooldown period if needed, logging a message.
+/// Await the cooldown period if needed, logging a message.
 ///
-/// Returns `Ok(true)` if a cooldown wait was performed, `Ok(false)` if not.
-pub fn enforce_cooldown_sync(last_session_ended_at: DateTime<Utc>, cooldown_seconds: u64) -> bool {
+/// Returns `true` if a cooldown wait was performed, `false` if not.
+pub async fn enforce_cooldown(last_session_ended_at: DateTime<Utc>, cooldown_seconds: u64) -> bool {
     let now = Utc::now();
     match evaluate_cooldown(last_session_ended_at, now, cooldown_seconds) {
         CooldownAction::Proceed => false,
@@ -67,7 +67,7 @@ pub fn enforce_cooldown_sync(last_session_ended_at: DateTime<Utc>, cooldown_seco
                 "Cooldown: waiting {}s for memory recovery after previous session",
                 duration.as_secs()
             );
-            std::thread::sleep(duration);
+            tokio::time::sleep(duration).await;
             true
         }
     }

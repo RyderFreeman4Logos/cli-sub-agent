@@ -172,6 +172,12 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
     let memory_project_key = resolve_memory_project_key(project_root);
+    // Cooldown runs for ALL launches (new/resume/fork) — protects host from memory pressure.
+    let cooldown_secs = config
+        .map(|c| c.session.cooldown_seconds)
+        .unwrap_or(csa_config::DEFAULT_COOLDOWN_SECS);
+    csa_session::enforce_project_cooldown(project_root, cooldown_secs).await;
+
     let mut resolved_provider_session_id: Option<String> = None;
     let mut session = if let Some(ref session_id) = session_arg {
         let resolution =
@@ -186,12 +192,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         csa_session::load_session(project_root, &resolution.meta_session_id)?
     } else {
-        // Enforce cooldown between consecutive sessions on the same project
-        let cooldown_secs = config
-            .map(|c| c.session.cooldown_seconds)
-            .unwrap_or(csa_config::DEFAULT_COOLDOWN_SECS);
-        csa_session::enforce_project_cooldown(project_root, cooldown_secs);
-
         // Auto-generate description from prompt when not provided
         let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
         let parent_id = match parent_session_source {
