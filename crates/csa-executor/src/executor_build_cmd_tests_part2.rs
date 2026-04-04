@@ -239,6 +239,18 @@ fn test_stripped_env_vars_contains_claudecode() {
 }
 
 #[test]
+fn test_stripped_env_vars_contains_lefthook() {
+    assert!(
+        Executor::STRIPPED_ENV_VARS.contains(&"LEFTHOOK"),
+        "STRIPPED_ENV_VARS must strip LEFTHOOK (hook bypass prevention)"
+    );
+    assert!(
+        Executor::STRIPPED_ENV_VARS.contains(&"LEFTHOOK_SKIP"),
+        "STRIPPED_ENV_VARS must strip LEFTHOOK_SKIP (hook bypass prevention)"
+    );
+}
+
+#[test]
 fn test_build_command_strips_claudecode_env() {
     let exec = Executor::ClaudeCode {
         model_override: None,

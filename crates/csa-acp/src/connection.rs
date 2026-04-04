@@ -94,6 +94,12 @@ impl AcpConnection {
         // fresh invocation still starts on the quota-backed path.
         "GEMINI_API_KEY",
         "GOOGLE_GEMINI_BASE_URL",
+        // Lefthook hook-bypass env vars must never leak into child tool
+        // processes.  If the parent process has these set (e.g. from a
+        // user's shell), the child tool would silently skip pre-commit
+        // hooks, violating AGENTS.md rule 029.
+        "LEFTHOOK",
+        "LEFTHOOK_SKIP",
     ];
 
     /// Internal constructor used by `connection_spawn` after assembling parts.
