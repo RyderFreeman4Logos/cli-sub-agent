@@ -250,7 +250,9 @@ pub(crate) fn resolve_sandbox_options(
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
         .with_tool_defaults(tool_name, &project_root, &session_dir)
-        .with_readonly_project_root(effective_readonly);
+        .with_readonly_project_root(effective_readonly)
+        .with_soft_limit_percent(cfg.resources.soft_limit_percent)
+        .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);
 
     // CSA runtime writable paths: project state root (for fork-call session
     // creation) and global slots (for lock files).  These are always added

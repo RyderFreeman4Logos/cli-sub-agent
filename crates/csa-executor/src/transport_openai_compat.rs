@@ -201,6 +201,7 @@ impl Transport for OpenaiCompatTransport {
                 stderr_output: token_info,
                 summary,
                 exit_code: 0,
+                peak_memory_mb: None,
             },
             provider_session_id: None,
             events: Vec::new(),

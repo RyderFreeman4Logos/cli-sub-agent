@@ -532,6 +532,7 @@ fn test_should_retry_gemini_rate_limited_until_final_attempt() {
         output: String::new(),
         stderr_output: "HTTP 429 Too Many Requests".to_string(),
         exit_code: 1,
+            peak_memory_mb: None,
     };
 
     assert!(
@@ -562,6 +563,7 @@ fn test_should_not_retry_on_success_exit_code() {
         output: "429".to_string(),
         stderr_output: String::new(),
         exit_code: 0,
+            peak_memory_mb: None,
     };
     assert!(
         transport
@@ -581,6 +583,7 @@ fn test_should_retry_on_quota_exhausted_marker() {
         output: String::new(),
         stderr_output: "reason: 'QUOTA_EXHAUSTED'".to_string(),
         exit_code: 1,
+            peak_memory_mb: None,
     };
     assert!(
         transport
@@ -600,6 +603,7 @@ fn test_no_flash_fallback_stops_retry_after_attempt_2() {
         output: String::new(),
         stderr_output: "HTTP 429 Too Many Requests".to_string(),
         exit_code: 1,
+            peak_memory_mb: None,
     };
     let mut env = HashMap::new();
     env.insert("_CSA_NO_FLASH_FALLBACK".to_string(), "1".to_string());

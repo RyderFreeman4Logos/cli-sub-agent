@@ -1,5 +1,6 @@
 use anyhow::{Result, bail};
 use sysinfo::System;
+use tracing::warn;
 
 /// Configuration for resource limits (mirrors csa-config's ResourcesConfig
 /// but duplicated here to avoid circular dependency).
@@ -58,6 +59,43 @@ impl ResourceGuard {
         }
 
         Ok(())
+    }
+
+    /// Warn if configured cgroup limits exceed a percentage of total system RAM.
+    ///
+    /// Emits a `tracing::warn!` if `memory_max_mb + memory_swap_max_mb` exceeds
+    /// `warn_threshold_percent` of total physical RAM.  This is an advisory
+    /// check — it does **not** block execution.
+    pub fn check_health(
+        &mut self,
+        memory_max_mb: Option<u64>,
+        memory_swap_max_mb: Option<u64>,
+        warn_threshold_percent: u8,
+    ) {
+        let configured_mb = memory_max_mb.unwrap_or(0) + memory_swap_max_mb.unwrap_or(0);
+        if configured_mb == 0 {
+            return;
+        }
+
+        self.sys.refresh_memory();
+        let total_ram_mb = self.sys.total_memory() / 1024 / 1024;
+        if total_ram_mb == 0 {
+            return;
+        }
+
+        let threshold_mb = total_ram_mb * u64::from(warn_threshold_percent) / 100;
+
+        if configured_mb > threshold_mb {
+            warn!(
+                configured_mb,
+                total_ram_mb,
+                threshold_percent = warn_threshold_percent,
+                "cgroup memory limits ({configured_mb} MB) exceed \
+                 {warn_threshold_percent}% of system RAM ({total_ram_mb} MB). \
+                 This may cause excessive swapping or OOM kills. \
+                 Reduce resources.memory_max_mb in .csa/config.toml"
+            );
+        }
     }
 }
 

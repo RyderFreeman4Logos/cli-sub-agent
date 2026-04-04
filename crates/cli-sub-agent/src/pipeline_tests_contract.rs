@@ -27,6 +27,7 @@ fn result_toml_path_contract_extracts_embedded_path() {
         stderr_output: String::new(),
         summary: "completed all tasks successfully".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
 
     enforce_result_toml_contract_now(
@@ -61,6 +62,7 @@ fn result_toml_path_contract_accepts_verified_session_result_fallback() {
         stderr_output: String::new(),
         summary: "All tasks completed successfully, see session directory for details".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
 
     enforce_result_toml_contract_now(
@@ -125,6 +127,7 @@ fn result_toml_path_contract_handles_verbose_multiline_output() {
         stderr_output: String::new(),
         summary: long_summary,
         exit_code: 0,
+        peak_memory_mb: None,
     };
 
     enforce_result_toml_contract_now(
@@ -150,6 +153,7 @@ fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_e
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
 
     enforce_result_toml_contract_now(
@@ -179,6 +183,7 @@ fn result_toml_path_contract_fails_when_output_summary_empty_and_no_disk_file() 
         stderr_output: String::new(),
         summary: String::new(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
 
     enforce_result_toml_contract_now(

@@ -123,6 +123,25 @@ impl AcpSandboxHandle {
             _ => None,
         }
     }
+
+    /// Query peak memory usage (in MB) from the cgroup scope.
+    ///
+    /// Must be called **before** the handle is dropped, as the cgroup scope
+    /// is stopped on drop and the metric becomes unavailable.
+    pub fn memory_peak_mb(&self) -> Option<u64> {
+        match self {
+            Self::Cgroup(guard) => guard.memory_peak_mb(),
+            _ => None,
+        }
+    }
+
+    /// Return the scope name if this is a cgroup sandbox.
+    pub fn scope_name(&self) -> Option<&str> {
+        match self {
+            Self::Cgroup(guard) => Some(guard.scope_name()),
+            _ => None,
+        }
+    }
 }
 
 impl AcpConnection {
@@ -654,6 +673,8 @@ mod tests {
             pids_max: None,
             readonly_project_root: false,
             project_root: Some(PathBuf::from("/project")),
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         };
         let args = vec!["--acp".to_string()];
         let request = AcpSpawnRequest {

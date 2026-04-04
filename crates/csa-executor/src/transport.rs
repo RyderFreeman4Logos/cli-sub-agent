@@ -594,6 +594,7 @@ impl AcpTransport {
             output: output.output,
             stderr_output: output.stderr,
             exit_code: output.exit_code,
+            peak_memory_mb: output.peak_memory_mb,
         };
 
         Ok(TransportResult {

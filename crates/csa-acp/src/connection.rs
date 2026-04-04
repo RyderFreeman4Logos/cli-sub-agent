@@ -439,6 +439,9 @@ impl AcpConnection {
         }
     }
 
+    pub fn child_pid(&self) -> Option<u32> {
+        self.child.borrow().id()
+    }
     pub async fn exit_code(&self) -> AcpResult<Option<i32>> {
         let mut child = self.child.borrow_mut();
         let status = child
@@ -446,7 +449,6 @@ impl AcpConnection {
             .map_err(|err| AcpError::ConnectionFailed(err.to_string()))?;
         Ok(status.and_then(|s| s.code()))
     }
-
     pub async fn kill(&self) -> AcpResult<()> {
         let termination_grace_period = self.termination_grace_period;
         let child_pid = {
@@ -486,7 +488,6 @@ impl AcpConnection {
     pub fn stderr(&self) -> String {
         self.stderr_buf.borrow().clone()
     }
-
     fn ensure_process_running(&self) -> AcpResult<()> {
         let mut child = self.child.borrow_mut();
         if let Some(status) = child

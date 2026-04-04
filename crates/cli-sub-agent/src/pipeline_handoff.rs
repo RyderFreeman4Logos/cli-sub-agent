@@ -216,6 +216,7 @@ mod tests {
             output: String::new(),
             stderr_output: String::new(),
             summary: "test completed".to_string(),
+            peak_memory_mb: None,
         };
 
         write_handoff_artifact(&session_dir, &session, &result, "codex", started_at);
@@ -245,6 +246,7 @@ mod tests {
             output: String::new(),
             stderr_output: String::new(),
             summary: String::new(),
+            peak_memory_mb: None,
         };
 
         // Should not panic, just log warning

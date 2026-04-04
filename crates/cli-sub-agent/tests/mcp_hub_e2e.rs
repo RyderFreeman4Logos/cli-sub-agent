@@ -330,10 +330,10 @@ fn http_mcp_post(
         return Ok((val, sid));
     }
     for line in body.lines() {
-        if let Some(data) = line.strip_prefix("data: ") {
-            if let Ok(val) = serde_json::from_str::<Value>(data) {
-                return Ok((val, sid));
-            }
+        if let Some(data) = line.strip_prefix("data: ")
+            && let Ok(val) = serde_json::from_str::<Value>(data)
+        {
+            return Ok((val, sid));
         }
     }
     bail!("no JSON-RPC response found in body: {body}")

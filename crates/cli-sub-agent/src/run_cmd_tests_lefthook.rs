@@ -8,6 +8,7 @@ fn apply_lefthook_bypass_policy_blocks_inline_lefthook_zero() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["LEFTHOOK=0 git commit -m \"unsafe\"".to_string()];
 
@@ -34,6 +35,7 @@ fn apply_lefthook_bypass_policy_blocks_env_lefthook_zero() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["env LEFTHOOK=0 git push".to_string()];
 
@@ -58,6 +60,7 @@ fn apply_lefthook_bypass_policy_blocks_export_lefthook_zero() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["export LEFTHOOK=0".to_string()];
 
@@ -82,6 +85,7 @@ fn apply_lefthook_bypass_policy_blocks_lefthook_skip() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands =
         vec!["LEFTHOOK_SKIP=pre-commit git commit -m \"unsafe\"".to_string()];
@@ -107,6 +111,7 @@ fn apply_lefthook_bypass_policy_blocks_shell_wrapped_lefthook_bypass() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["bash -c \"LEFTHOOK=0 git commit -m unsafe\"".to_string()];
 
@@ -131,6 +136,7 @@ fn apply_lefthook_bypass_policy_blocks_export_in_shell_wrapper() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands =
         vec!["bash -lc \"export LEFTHOOK=0; git commit -m unsafe\"".to_string()];
@@ -156,6 +162,7 @@ fn apply_lefthook_bypass_policy_allows_normal_git_commands() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["git commit -m \"normal commit\"".to_string()];
 
@@ -178,6 +185,7 @@ fn apply_lefthook_bypass_policy_allows_unrelated_env_vars() {
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["GIT_AUTHOR_NAME=bot git commit -m \"safe\"".to_string()];
 
@@ -200,6 +208,7 @@ fn apply_lefthook_bypass_policy_blocks_output_fallback_when_no_execute_events() 
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = Vec::new();
 
@@ -224,6 +233,7 @@ fn apply_lefthook_bypass_policy_skips_output_fallback_when_execute_events_presen
         stderr_output: String::new(),
         summary: "ok".to_string(),
         exit_code: 0,
+        peak_memory_mb: None,
     };
     let executed_shell_commands = vec!["git status".to_string()];
 

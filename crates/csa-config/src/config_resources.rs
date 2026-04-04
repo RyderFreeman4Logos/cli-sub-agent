@@ -50,6 +50,14 @@ pub struct ResourcesConfig {
     /// Maximum number of PIDs for child tool process trees.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pids_max: Option<u32>,
+    /// Soft memory limit as a percentage of `memory_max_mb`.
+    /// When current memory usage exceeds this threshold, the monitor sends
+    /// SIGTERM to the process group.  Default: 80 (%).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub soft_limit_percent: Option<u8>,
+    /// Polling interval for the memory monitor in seconds.  Default: 5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_monitor_interval_seconds: Option<u64>,
 }
 
 fn default_min_mem() -> u64 {
@@ -96,6 +104,8 @@ impl Default for ResourcesConfig {
             memory_swap_max_mb: None,
             node_heap_limit_mb: None,
             pids_max: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         }
     }
 }
@@ -117,5 +127,7 @@ impl ResourcesConfig {
             && self.memory_swap_max_mb.is_none()
             && self.node_heap_limit_mb.is_none()
             && self.pids_max.is_none()
+            && self.soft_limit_percent.is_none()
+            && self.memory_monitor_interval_seconds.is_none()
     }
 }

@@ -226,6 +226,34 @@ pub(super) async fn run_acp_sandboxed(
             .await?
     };
 
+    // Start memory monitor if cgroup + soft limit configured.
+    let memory_monitor = if matches!(
+        isolation_plan.resource,
+        csa_resource::sandbox::ResourceCapability::CgroupV2
+    ) {
+        let scope_name = sandbox_handle.scope_name().map(|s| s.to_string());
+        let child_pid = connection.child_pid();
+        match (scope_name, child_pid, isolation_plan.memory_max_mb) {
+            (Some(scope), Some(pid), Some(max_mb)) if max_mb > 0 => {
+                let soft_pct = isolation_plan.soft_limit_percent.unwrap_or(80);
+                let interval_secs = isolation_plan.memory_monitor_interval_seconds.unwrap_or(5);
+                csa_resource::memory_monitor::start(
+                    csa_resource::memory_monitor::MemoryMonitorConfig {
+                        scope_name: scope,
+                        pgid: pid as i32,
+                        memory_max_bytes: max_mb * 1024 * 1024,
+                        soft_limit_percent: soft_pct,
+                        interval: std::time::Duration::from_secs(interval_secs),
+                        grace_period: termination_grace_period,
+                    },
+                )
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
     let result = connection
         .prompt_with_io(
             &acp_session_id,
@@ -241,12 +269,26 @@ pub(super) async fn run_acp_sandboxed(
         )
         .await;
 
-    // Check for OOM BEFORE the sandbox handle is dropped (which stops the
-    // cgroup scope).  Note: `run_acp_sandboxed` is called inside
-    // `spawn_blocking`, so synchronous systemctl queries are acceptable here.
+    // Stop memory monitor before capturing peak memory.
+    if let Some(monitor) = memory_monitor {
+        monitor.stop().await;
+    }
+
+    // Capture peak memory and check for OOM BEFORE the sandbox handle is
+    // dropped (which stops the cgroup scope).  Note: `run_acp_sandboxed` is
+    // called inside `spawn_blocking`, so synchronous systemctl queries are
+    // acceptable here.
+    let peak_memory_mb = sandbox_handle.memory_peak_mb();
     let oom_diagnosis = sandbox_handle.oom_diagnosis();
     if let Some(ref hint) = oom_diagnosis {
         tracing::error!(tool = tool_name, "{hint}");
+    }
+    if let Some(peak) = peak_memory_mb {
+        tracing::info!(
+            tool = tool_name,
+            peak_memory_mb = peak,
+            "cgroup peak memory recorded"
+        );
     }
 
     let result = result.map_err(|e| {
@@ -302,6 +344,7 @@ pub(super) async fn run_acp_sandboxed(
         session_id: acp_session_id,
         exit_code,
         metadata: result.metadata,
+        peak_memory_mb,
     })
 }
 

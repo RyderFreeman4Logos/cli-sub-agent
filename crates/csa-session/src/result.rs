@@ -100,6 +100,10 @@ pub struct SessionResult {
         deserialize_with = "deserialize_artifacts"
     )]
     pub artifacts: Vec<SessionArtifact>,
+    /// Peak memory usage in MB observed during execution (from cgroup memory.peak).
+    /// `None` when cgroup monitoring is unavailable or the scope was already removed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub peak_memory_mb: Option<u64>,
 }
 
 impl SessionResult {
@@ -132,6 +136,7 @@ mod tests {
             completed_at: now,
             events_count: 4,
             artifacts: vec![SessionArtifact::new("output/diff.patch")],
+            peak_memory_mb: None,
         };
 
         let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
@@ -158,6 +163,7 @@ mod tests {
             completed_at: now,
             events_count: 0,
             artifacts: vec![],
+            peak_memory_mb: None,
         };
 
         let toml_str = toml::to_string_pretty(&result).expect("Serialize should succeed");
@@ -238,6 +244,7 @@ artifacts = ["output/a.txt", "output/b.txt"]
                 SessionArtifact::new("output/a.txt"),
                 SessionArtifact::with_stats("output/acp-events.jsonl", 10, 256),
             ],
+            peak_memory_mb: None,
         };
 
         let contents = toml::to_string_pretty(&result).unwrap();

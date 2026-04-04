@@ -53,6 +53,11 @@ pub struct IsolationPlan {
     pub readonly_project_root: bool,
     /// Project root path, used by bwrap to decide bind mount mode.
     pub project_root: Option<PathBuf>,
+    /// Soft memory limit as a percentage of `memory_max_mb`.
+    /// When set, a background monitor sends SIGTERM when usage exceeds this.
+    pub soft_limit_percent: Option<u8>,
+    /// Polling interval for the memory monitor in seconds.
+    pub memory_monitor_interval_seconds: Option<u64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -85,6 +90,8 @@ pub struct IsolationPlanBuilder {
     pids_max: Option<u32>,
     readonly_project_root: bool,
     project_root: Option<PathBuf>,
+    soft_limit_percent: Option<u8>,
+    memory_monitor_interval_seconds: Option<u64>,
 }
 
 impl IsolationPlanBuilder {
@@ -103,6 +110,8 @@ impl IsolationPlanBuilder {
             pids_max: None,
             readonly_project_root: false,
             project_root: None,
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
         }
     }
 
@@ -153,6 +162,18 @@ impl IsolationPlanBuilder {
     /// Useful for tools that should only read project files, not modify them.
     pub fn with_readonly_project_root(mut self, readonly: bool) -> Self {
         self.readonly_project_root = readonly;
+        self
+    }
+
+    /// Set the soft memory limit percentage for the memory monitor.
+    pub fn with_soft_limit_percent(mut self, percent: Option<u8>) -> Self {
+        self.soft_limit_percent = percent;
+        self
+    }
+
+    /// Set the memory monitor polling interval in seconds.
+    pub fn with_memory_monitor_interval(mut self, seconds: Option<u64>) -> Self {
+        self.memory_monitor_interval_seconds = seconds;
         self
     }
 
@@ -347,6 +368,8 @@ impl IsolationPlanBuilder {
             pids_max: self.pids_max,
             readonly_project_root: self.readonly_project_root,
             project_root: self.project_root,
+            soft_limit_percent: self.soft_limit_percent,
+            memory_monitor_interval_seconds: self.memory_monitor_interval_seconds,
         })
     }
 }
