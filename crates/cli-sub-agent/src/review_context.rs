@@ -118,6 +118,39 @@ fn has_extension(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
+/// Maximum character length for review checklist content.
+/// Files exceeding this are truncated with a warning.
+const REVIEW_CHECKLIST_MAX_CHARS: usize = 4000;
+
+/// Discover project-specific review checklist from `.csa/review-checklist.md`.
+///
+/// Returns `None` if the file does not exist or is empty.
+/// Truncates content with a warning comment if it exceeds [`REVIEW_CHECKLIST_MAX_CHARS`].
+pub(crate) fn discover_review_checklist(project_root: &Path) -> Option<String> {
+    let checklist_path = project_root.join(".csa").join("review-checklist.md");
+    let content = std::fs::read_to_string(&checklist_path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.len() > REVIEW_CHECKLIST_MAX_CHARS {
+        let truncated = &trimmed[..REVIEW_CHECKLIST_MAX_CHARS];
+        // Find last newline to avoid cutting mid-line
+        let cut_point = truncated.rfind('\n').unwrap_or(REVIEW_CHECKLIST_MAX_CHARS);
+        let mut result = trimmed[..cut_point].to_string();
+        result.push_str("\n\n<!-- WARNING: review checklist truncated (exceeded 4000 chars) -->");
+        warn!(
+            path = %checklist_path.display(),
+            original_len = trimmed.len(),
+            "Review checklist truncated to {REVIEW_CHECKLIST_MAX_CHARS} chars"
+        );
+        Some(result)
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 pub(crate) fn render_spec_review_context(spec: &SpecDocument) -> String {
     let mut rendered = String::new();
     rendered.push_str(&format!("Plan ULID: {}\n", spec.plan_ulid));
@@ -293,5 +326,67 @@ mod tests {
             context.kind,
             ResolvedReviewContextKind::SpecToml { .. }
         ));
+    }
+
+    #[test]
+    fn discover_review_checklist_returns_content_when_file_exists() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("review-checklist.md"),
+            "# Checklist\n- [ ] Check item one\n",
+        )
+        .unwrap();
+
+        let checklist = discover_review_checklist(temp.path());
+
+        assert!(checklist.is_some());
+        let content = checklist.unwrap();
+        assert!(content.contains("# Checklist"));
+        assert!(content.contains("Check item one"));
+    }
+
+    #[test]
+    fn discover_review_checklist_returns_none_when_file_missing() {
+        let temp = tempdir().unwrap();
+
+        let checklist = discover_review_checklist(temp.path());
+
+        assert!(checklist.is_none());
+    }
+
+    #[test]
+    fn discover_review_checklist_returns_none_for_empty_file() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(csa_dir.join("review-checklist.md"), "   \n\n  ").unwrap();
+
+        let checklist = discover_review_checklist(temp.path());
+
+        assert!(checklist.is_none());
+    }
+
+    #[test]
+    fn discover_review_checklist_truncates_oversized_content() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+
+        // Generate content exceeding REVIEW_CHECKLIST_MAX_CHARS (4000)
+        let line = "- [ ] Check this important review item number N\n";
+        let repeat_count = (REVIEW_CHECKLIST_MAX_CHARS / line.len()) + 10;
+        let oversized = line.repeat(repeat_count);
+        assert!(oversized.len() > REVIEW_CHECKLIST_MAX_CHARS);
+
+        std::fs::write(csa_dir.join("review-checklist.md"), &oversized).unwrap();
+
+        let checklist = discover_review_checklist(temp.path()).unwrap();
+
+        assert!(checklist.len() < oversized.trim().len());
+        assert!(checklist.contains("WARNING: review checklist truncated"));
+        // Content should be cut at a newline boundary
+        assert!(!checklist.starts_with('\n'));
     }
 }

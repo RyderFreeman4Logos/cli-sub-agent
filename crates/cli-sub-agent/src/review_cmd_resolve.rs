@@ -6,7 +6,8 @@ use tracing::{debug, warn};
 use crate::cli::{ReviewArgs, ReviewMode};
 use crate::review_consensus::{build_consolidated_artifact, write_consolidated_artifact};
 use crate::review_context::{
-    ResolvedReviewContext, ResolvedReviewContextKind, render_spec_review_context,
+    ResolvedReviewContext, ResolvedReviewContextKind, discover_review_checklist,
+    render_spec_review_context,
 };
 use crate::review_routing::{ReviewRoutingMetadata, detect_review_routing_metadata};
 use csa_config::global::{heterogeneous_counterpart, select_heterogeneous_tool};
@@ -450,5 +451,13 @@ pub(crate) fn build_review_instruction_for_project(
         "\n[project_profile: {}]",
         review_routing.project_profile
     ));
+
+    // Inject project-specific review checklist if present
+    if let Some(checklist) = discover_review_checklist(project_root) {
+        instruction.push_str("\n\n<review-checklist>\n");
+        instruction.push_str(&checklist);
+        instruction.push_str("\n</review-checklist>");
+    }
+
     (instruction, review_routing)
 }
