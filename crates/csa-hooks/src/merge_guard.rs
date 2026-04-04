@@ -116,14 +116,26 @@ for arg in "$@"; do
   esac
 done
 
-# Extract PR number from args (supports numeric and URL formats).
+# Extract PR number — only pure numeric arguments accepted (fail-closed).
+# URLs and branch names are rejected to prevent cross-repo bypass.
 PR_NUMBER=""
+SEEN_MERGE=false
 for arg in "$@"; do
   case "$arg" in
-    [0-9]*) PR_NUMBER="$arg"; break ;;
-    https://*/pull/[0-9]*)
-      PR_NUMBER="$(echo "$arg" | grep -oE '/pull/([0-9]+)' | grep -oE '[0-9]+')"
-      [ -n "${PR_NUMBER}" ] && break
+    pr|merge) SEEN_MERGE=true ;;
+    --*|-*) ;; # skip flags
+    *)
+      if [ "${SEEN_MERGE}" = "true" ]; then
+        # First positional after 'pr merge' — must be purely numeric.
+        if echo "$arg" | grep -qxE '[0-9]+'; then
+          PR_NUMBER="$arg"
+        else
+          echo "BLOCKED: merge guard only accepts numeric PR numbers." >&2
+          echo "Use 'gh pr merge <NUMBER>' (e.g., gh pr merge 123)." >&2
+          exit 1
+        fi
+        break
+      fi
       ;;
   esac
 done
@@ -700,14 +712,12 @@ mod tests {
     }
 
     #[test]
-    fn test_wrapper_extracts_pr_from_url() {
+    fn test_wrapper_rejects_url_argument() {
         let tmp = tempfile::tempdir().unwrap();
         let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
 
-        // The URL should be parsed to extract PR number 456.
-        // It will proceed to marker check (which fails), but we verify
-        // it correctly determines the PR number by checking the error message.
-        let (_code, _stdout, stderr) = run_wrapper(
+        // URLs must be rejected (fail-closed) to prevent cross-repo bypass.
+        let (code, _stdout, stderr) = run_wrapper(
             &guard_dir,
             &fake_gh,
             &[
@@ -717,10 +727,28 @@ mod tests {
                 "--squash",
             ],
         );
-        // Should not say "cannot determine PR number" — that means URL parsing worked.
+        assert_eq!(code, 1, "should exit 1 for URL argument");
         assert!(
-            !stderr.contains("cannot determine PR number"),
-            "URL PR number extraction should work: {stderr}"
+            stderr.contains("only accepts numeric PR numbers"),
+            "stderr should reject non-numeric arg: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_rejects_branch_name_argument() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        // Branch names must be rejected (fail-closed).
+        let (code, _stdout, stderr) = run_wrapper(
+            &guard_dir,
+            &fake_gh,
+            &["pr", "merge", "feat/my-branch", "--squash"],
+        );
+        assert_eq!(code, 1, "should exit 1 for branch name argument");
+        assert!(
+            stderr.contains("only accepts numeric PR numbers"),
+            "stderr should reject non-numeric arg: {stderr}"
         );
     }
 
