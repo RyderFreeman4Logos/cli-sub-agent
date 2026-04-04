@@ -18,6 +18,7 @@ mod edit_restriction_guard;
 mod error_hints;
 mod eval_cmd;
 mod gc;
+mod hooks_cmd;
 mod mcp_hub;
 mod mcp_server;
 mod memory_capture;
@@ -38,6 +39,7 @@ mod process_tree;
 mod review_cmd;
 mod review_consensus;
 mod review_context;
+mod review_findings;
 mod review_routing;
 mod run_cmd;
 mod run_cmd_daemon;
@@ -786,6 +788,9 @@ async fn run() -> Result<()> {
         }
         Commands::Xurl { cmd } => {
             handle_xurl(cmd)?;
+        }
+        Commands::Hooks { cmd } => {
+            hooks_cmd::handle_hooks(cmd)?;
         }
     }
 

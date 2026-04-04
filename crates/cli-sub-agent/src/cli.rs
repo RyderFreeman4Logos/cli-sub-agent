@@ -420,6 +420,26 @@ pub enum Commands {
         #[command(subcommand)]
         cmd: XurlCommands,
     },
+
+    /// Manage CSA hooks
+    Hooks {
+        #[command(subcommand)]
+        cmd: HooksCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum HooksCommands {
+    /// Install the merge guard `gh` wrapper to PATH
+    ///
+    /// Writes a `gh` wrapper script that intercepts `gh pr merge` and
+    /// enforces the pr-bot workflow.  The wrapper must appear before the
+    /// real `gh` in PATH.
+    InstallMergeGuard {
+        /// Custom install directory (default: ~/.local/bin/csa-gh-guard)
+        #[arg(long, value_name = "DIR")]
+        path: Option<PathBuf>,
+    },
 }
 
 #[derive(clap::Args)]

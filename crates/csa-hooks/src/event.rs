@@ -11,6 +11,8 @@
 /// - `TodoSave` — fired after plan save + git commit in `todo_cmd::handle_save` (no builtin; git already committed)
 /// - `PostReview` — fired after final `csa review` result; builtin emits a next-step
 ///   directive for passing cumulative review → `pr-bot` chaining
+/// - `MergeCompleted` — fired from `gh` wrapper when merge_guard allows merge;
+///   persisted to JSONL audit log for traceability
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HookEvent {
     /// After a session execution completes (success or failure).
@@ -36,6 +38,19 @@ pub enum HookEvent {
     /// Observational: useful for chaining review → next step in pipelines.
     /// Template vars: `{session_id}`, `{decision}`, `{verdict}`, `{scope}`.
     PostReview,
+    /// After merge_guard allows a `gh pr merge` to proceed.
+    ///
+    /// **Audit-only event**: This event is emitted exclusively from the `gh`
+    /// wrapper shell script (see [`crate::merge_guard::GH_WRAPPER`]), not from
+    /// Rust hook infrastructure.  The shell script writes a JSON line to the
+    /// audit log at `$XDG_STATE_HOME/cli-sub-agent/events/merge-guard.jsonl`.
+    /// There is intentionally no `run_hooks_for_event(MergeCompleted)` call in
+    /// Rust code because the merge guard runs in a PATH-injected shell context
+    /// where the Rust hook system is not available.
+    ///
+    /// Observational audit event persisted to JSONL for traceability.
+    /// Template vars: `{pr_number}`, `{head_sha}`, `{marker_path}`.
+    MergeCompleted,
 }
 
 impl HookEvent {
@@ -56,6 +71,7 @@ impl HookEvent {
             HookEvent::PostRun => "post_run",
             HookEvent::PostEdit => "post_edit",
             HookEvent::PostReview => "post_review",
+            HookEvent::MergeCompleted => "merge_completed",
         }
     }
 
@@ -117,7 +133,8 @@ impl HookEvent {
             HookEvent::TodoCreate
             | HookEvent::TodoSave
             | HookEvent::PreRun
-            | HookEvent::PostRun => None,
+            | HookEvent::PostRun
+            | HookEvent::MergeCompleted => None,
         }
     }
 }
@@ -138,6 +155,7 @@ mod tests {
         assert_eq!(HookEvent::PostRun.as_config_key(), "post_run");
         assert_eq!(HookEvent::PostEdit.as_config_key(), "post_edit");
         assert_eq!(HookEvent::PostReview.as_config_key(), "post_review");
+        assert_eq!(HookEvent::MergeCompleted.as_config_key(), "merge_completed");
     }
 
     #[test]
@@ -153,6 +171,7 @@ mod tests {
         assert!(HookEvent::TodoSave.builtin_command().is_none());
         assert!(HookEvent::PreRun.builtin_command().is_none());
         assert!(HookEvent::PostRun.builtin_command().is_none());
+        assert!(HookEvent::MergeCompleted.builtin_command().is_none());
     }
 
     #[test]
@@ -179,6 +198,7 @@ mod tests {
             HookEvent::PostRun,
             HookEvent::PostEdit,
             HookEvent::PostReview,
+            HookEvent::MergeCompleted,
         ];
 
         let mut seen_keys = std::collections::HashSet::new();
@@ -190,8 +210,8 @@ mod tests {
                 "Duplicate config key: {key} (from {event:?})"
             );
         }
-        // Ensure we covered all 7 variants
-        assert_eq!(seen_keys.len(), 7, "Expected 7 unique config keys");
+        // Ensure we covered all 8 variants
+        assert_eq!(seen_keys.len(), 8, "Expected 8 unique config keys");
     }
 
     #[test]
@@ -229,6 +249,11 @@ mod tests {
         assert!(!HookEvent::PostReview.is_gatekeeping());
     }
 
+    #[test]
+    fn test_is_gatekeeping_merge_completed_false() {
+        assert!(!HookEvent::MergeCompleted.is_gatekeeping());
+    }
+
     /// Verify config keys match the expected snake_case convention.
     #[test]
     fn test_config_keys_are_snake_case() {
@@ -240,6 +265,7 @@ mod tests {
             HookEvent::PostRun,
             HookEvent::PostEdit,
             HookEvent::PostReview,
+            HookEvent::MergeCompleted,
         ];
 
         for event in &all_events {

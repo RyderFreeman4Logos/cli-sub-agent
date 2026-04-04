@@ -48,6 +48,6 @@ fn synthesize_post_review_next_step(decision: ReviewDecision, scope: &str) -> Op
     None
 }
 
-fn review_scope_is_cumulative(scope: &str) -> bool {
+pub(crate) fn review_scope_is_cumulative(scope: &str) -> bool {
     scope.starts_with("base:") || scope.starts_with("range:")
 }

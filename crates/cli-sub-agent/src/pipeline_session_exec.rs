@@ -1,8 +1,10 @@
 //! Session-bound execution pipeline: resolve-or-create session, run tool, post-process results.
 
 use anyhow::{Context, Result};
-use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 use tracing::{debug, info, warn};
 
 use super::prompt_guard::emit_prompt_guard_to_caller;
@@ -350,20 +352,12 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         .get(executor.tool_name())
         .is_none_or(|ts| ts.provider_session_id.is_none());
     if is_first_turn {
-        let context_load_options = context_load_options.cloned().unwrap_or_default();
-        let context_files = csa_executor::load_project_context(
-            Path::new(&session.project_path),
-            &context_load_options,
+        super::design_context::inject_first_turn_context(
+            &session.project_path,
+            project_root,
+            context_load_options,
+            &mut effective_prompt,
         );
-        if !context_files.is_empty() {
-            let context_block = csa_executor::format_context_for_prompt(&context_files);
-            info!(
-                file_count = context_files.len(),
-                bytes = context_block.len(),
-                "Injecting project context into prompt"
-            );
-            effective_prompt = format!("{context_block}{effective_prompt}");
-        }
     }
     // Inject memory after context, before restrictions.
     let is_review_or_debate = matches!(task_type, Some("review" | "debate"));

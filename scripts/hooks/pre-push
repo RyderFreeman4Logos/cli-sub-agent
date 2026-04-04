@@ -75,6 +75,22 @@ fi
 
 if [ -n "${REVIEW_SESSION_HEAD}" ]; then
   echo "pre-push: Review verified for HEAD ${CURRENT_HEAD:0:11}."
+
+  # Check for pr-bot marker on branches with open PRs (WARNING only, never blocks)
+  if command -v gh >/dev/null 2>&1; then
+    PR_NUMBER="$(gh pr list --head "${CURRENT_BRANCH}" --state open --json number -q '.[0].number' 2>/dev/null || true)"
+    if [ -n "${PR_NUMBER}" ]; then
+      REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
+      if [ -z "${REPO_SLUG}" ]; then
+        REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
+      fi
+      MARKER_FILE="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}/${PR_NUMBER}-${CURRENT_HEAD}.done"
+      if [ ! -f "${MARKER_FILE}" ]; then
+        echo -e "\033[33mWARNING: Branch has open PR #${PR_NUMBER} but no pr-bot marker for HEAD ${CURRENT_HEAD:0:11}; run pr-bot before merge\033[0m" >&2
+      fi
+    fi
+  fi
+
   exit 0
 fi
 

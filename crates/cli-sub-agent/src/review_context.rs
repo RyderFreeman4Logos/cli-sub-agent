@@ -118,6 +118,42 @@ fn has_extension(path: &Path, expected: &str) -> bool {
         .is_some_and(|ext| ext.eq_ignore_ascii_case(expected))
 }
 
+/// Maximum character length for review checklist content.
+/// Files exceeding this are truncated with a warning.
+const REVIEW_CHECKLIST_MAX_CHARS: usize = 4000;
+
+/// Discover project-specific review checklist from `.csa/review-checklist.md`.
+///
+/// Returns `None` if the file does not exist or is empty.
+/// Truncates content with a warning comment if it exceeds [`REVIEW_CHECKLIST_MAX_CHARS`].
+pub(crate) fn discover_review_checklist(project_root: &Path) -> Option<String> {
+    let checklist_path = project_root.join(".csa").join("review-checklist.md");
+    let content = std::fs::read_to_string(&checklist_path).ok()?;
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if trimmed.len() > REVIEW_CHECKLIST_MAX_CHARS {
+        // Find last valid char boundary at or before the max length to avoid
+        // panicking on multi-byte UTF-8 characters (e.g. Chinese text).
+        let safe_end = floor_char_boundary(trimmed, REVIEW_CHECKLIST_MAX_CHARS);
+        let truncated = &trimmed[..safe_end];
+        // Find last newline to avoid cutting mid-line
+        let cut_point = truncated.rfind('\n').unwrap_or(safe_end);
+        let mut result = trimmed[..cut_point].to_string();
+        result.push_str("\n\n<!-- WARNING: review checklist truncated (exceeded 4000 chars) -->");
+        warn!(
+            path = %checklist_path.display(),
+            original_len = trimmed.len(),
+            "Review checklist truncated to {REVIEW_CHECKLIST_MAX_CHARS} chars"
+        );
+        Some(result)
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 pub(crate) fn render_spec_review_context(spec: &SpecDocument) -> String {
     let mut rendered = String::new();
     rendered.push_str(&format!("Plan ULID: {}\n", spec.plan_ulid));
@@ -133,6 +169,22 @@ pub(crate) fn render_spec_review_context(spec: &SpecDocument) -> String {
         ));
     }
     rendered
+}
+
+/// Find the last valid UTF-8 char boundary at or before `max_bytes`.
+///
+/// On stable Rust this replaces `str::floor_char_boundary()` (nightly-only).
+/// Prevents panics when truncating strings containing multi-byte characters
+/// (e.g. Chinese text common in this project).
+fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {
+    if max_bytes >= s.len() {
+        return s.len();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 fn criterion_kind_label(kind: CriterionKind) -> &'static str {
@@ -293,5 +345,117 @@ mod tests {
             context.kind,
             ResolvedReviewContextKind::SpecToml { .. }
         ));
+    }
+
+    #[test]
+    fn discover_review_checklist_returns_content_when_file_exists() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("review-checklist.md"),
+            "# Checklist\n- [ ] Check item one\n",
+        )
+        .unwrap();
+
+        let checklist = discover_review_checklist(temp.path());
+
+        assert!(checklist.is_some());
+        let content = checklist.unwrap();
+        assert!(content.contains("# Checklist"));
+        assert!(content.contains("Check item one"));
+    }
+
+    #[test]
+    fn discover_review_checklist_returns_none_when_file_missing() {
+        let temp = tempdir().unwrap();
+
+        let checklist = discover_review_checklist(temp.path());
+
+        assert!(checklist.is_none());
+    }
+
+    #[test]
+    fn discover_review_checklist_returns_none_for_empty_file() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(csa_dir.join("review-checklist.md"), "   \n\n  ").unwrap();
+
+        let checklist = discover_review_checklist(temp.path());
+
+        assert!(checklist.is_none());
+    }
+
+    /// Build a multi-byte UTF-8 string for testing (avoids literal CJK in source).
+    fn multibyte_line() -> String {
+        // U+4F60 U+597D = 2 CJK chars, 6 bytes
+        format!("- [ ] {}{}\n", '\u{4F60}', '\u{597D}')
+    }
+
+    /// Build a short multi-byte string: 4 CJK chars = 12 bytes.
+    fn multibyte_short() -> String {
+        format!("{}{}{}{}", '\u{4F60}', '\u{597D}', '\u{4E16}', '\u{754C}')
+    }
+
+    #[test]
+    fn discover_review_checklist_truncates_multibyte_text_without_panic() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+
+        // Build content with multi-byte chars (3 bytes each in UTF-8) that
+        // exceeds REVIEW_CHECKLIST_MAX_CHARS.  Truncating by byte index without
+        // respecting char boundaries would panic.
+        let line = multibyte_line();
+        let repeat_count = (REVIEW_CHECKLIST_MAX_CHARS / line.len()) + 10;
+        let oversized = line.repeat(repeat_count);
+        assert!(oversized.len() > REVIEW_CHECKLIST_MAX_CHARS);
+
+        std::fs::write(csa_dir.join("review-checklist.md"), &oversized).unwrap();
+
+        // Must not panic
+        let checklist = discover_review_checklist(temp.path()).unwrap();
+        assert!(checklist.contains("WARNING: review checklist truncated"));
+        // Verify the output is valid UTF-8 (String guarantees this, but let's
+        // also confirm it doesn't end mid-character).
+        assert!(checklist.is_char_boundary(checklist.len()));
+    }
+
+    #[test]
+    fn floor_char_boundary_on_ascii() {
+        assert_eq!(super::floor_char_boundary("hello", 3), 3);
+        assert_eq!(super::floor_char_boundary("hello", 10), 5);
+    }
+
+    #[test]
+    fn floor_char_boundary_on_multibyte() {
+        let s = multibyte_short(); // 4 chars x 3 bytes = 12 bytes
+        // Byte 4 is mid-char; should snap back to byte 3.
+        assert_eq!(super::floor_char_boundary(&s, 4), 3);
+        assert_eq!(super::floor_char_boundary(&s, 5), 3);
+        assert_eq!(super::floor_char_boundary(&s, 6), 6);
+    }
+
+    #[test]
+    fn discover_review_checklist_truncates_oversized_content() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+
+        // Generate content exceeding REVIEW_CHECKLIST_MAX_CHARS (4000)
+        let line = "- [ ] Check this important review item number N\n";
+        let repeat_count = (REVIEW_CHECKLIST_MAX_CHARS / line.len()) + 10;
+        let oversized = line.repeat(repeat_count);
+        assert!(oversized.len() > REVIEW_CHECKLIST_MAX_CHARS);
+
+        std::fs::write(csa_dir.join("review-checklist.md"), &oversized).unwrap();
+
+        let checklist = discover_review_checklist(temp.path()).unwrap();
+
+        assert!(checklist.len() < oversized.trim().len());
+        assert!(checklist.contains("WARNING: review checklist truncated"));
+        // Content should be cut at a newline boundary
+        assert!(!checklist.starts_with('\n'));
     }
 }

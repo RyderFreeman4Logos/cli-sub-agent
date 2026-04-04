@@ -39,7 +39,7 @@ mod reviewers;
 
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
-use post_review::{build_post_review_output, emit_post_review_output};
+use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
@@ -383,10 +383,15 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             },
         );
 
+        let is_cumulative_review = review_scope_is_cumulative(&scope);
+
         if !args.fix || verdict == CLEAN {
-            // Fire PostReview hook only for final results (no fix loop pending).
-            // Hook stdout is forwarded so callers can mechanically chain the
-            // next required step without inferring it from prompts or docs.
+            // Accumulate only on FINAL result — prevents double-counting when
+            // --fix resolves the same issues.
+            if verdict != CLEAN && !empty_output && !is_cumulative_review {
+                crate::review_findings::accumulate_findings(&project_root, &sanitized);
+            }
+            // PostReview hook: only for final results (no fix loop pending).
             let post_review_output = build_post_review_output(
                 &crate::pipeline::capture_observational_hook_output(
                     csa_hooks::HookEvent::PostReview,
@@ -470,6 +475,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         );
         if fix_passed {
             emit_post_review_output(&post_review_output);
+        } else if !is_cumulative_review {
+            // Fix exhausted — accumulate original findings for promotion.
+            crate::review_findings::accumulate_findings(&project_root, &sanitized);
         }
 
         return fix_exit_code;

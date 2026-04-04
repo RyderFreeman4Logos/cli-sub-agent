@@ -66,6 +66,10 @@ async fn run_doctor_text() -> Result<()> {
 
     println!("=== Git Hooks ===");
     print_git_hook_status();
+    println!();
+
+    println!("=== Merge Guard ===");
+    print_merge_guard_status();
 
     Ok(())
 }
@@ -159,6 +163,17 @@ async fn run_doctor_json() -> Result<()> {
     let fs_cap = detect_filesystem_capability();
     let fs_sandbox_status = build_filesystem_sandbox_json(fs_cap);
 
+    // Merge guard status
+    let merge_guard_status = match csa_hooks::detect_installed_guard() {
+        Some(path) => serde_json::json!({
+            "installed": true,
+            "path": path.display().to_string(),
+        }),
+        None => serde_json::json!({
+            "installed": false,
+        }),
+    };
+
     let result = serde_json::json!({
         "platform": {
             "os": os,
@@ -175,6 +190,7 @@ async fn run_doctor_json() -> Result<()> {
         },
         "sandbox": sandbox_status,
         "filesystem_sandbox": fs_sandbox_status,
+        "merge_guard": merge_guard_status,
     });
 
     println!("{}", serde_json::to_string_pretty(&result)?);
@@ -476,6 +492,19 @@ fn has_usable_user_namespaces() -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
+}
+
+/// Print merge guard installation status.
+fn print_merge_guard_status() {
+    match csa_hooks::detect_installed_guard() {
+        Some(path) => {
+            println!("merge guard: installed ({})", path.display());
+        }
+        None => {
+            println!("merge guard: not installed");
+            println!("  Hint: csa hooks install-merge-guard");
+        }
+    }
 }
 
 /// Print git hook installation status.
