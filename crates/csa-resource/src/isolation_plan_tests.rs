@@ -513,3 +513,54 @@ fn test_with_tool_defaults_stores_project_root() {
 
     assert_eq!(plan.project_root, Some(project));
 }
+
+#[test]
+fn test_add_dir_or_creatable_parent_existing_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let existing = tmp.path().join("already_here");
+    std::fs::create_dir(&existing).unwrap();
+
+    let mut paths = Vec::new();
+    add_dir_or_creatable_parent(&mut paths, &existing);
+    assert_eq!(paths, vec![existing]);
+}
+
+#[test]
+fn test_add_dir_or_creatable_parent_precreates_missing_dir() {
+    let tmp = tempfile::tempdir().unwrap();
+    let missing = tmp.path().join("cold_start_dir");
+    assert!(!missing.exists(), "precondition: dir must not exist");
+
+    let mut paths = Vec::new();
+    add_dir_or_creatable_parent(&mut paths, &missing);
+
+    // The function should pre-create the directory for bwrap --bind
+    assert!(missing.exists(), "directory should be pre-created");
+    assert_eq!(paths, vec![missing]);
+}
+
+#[test]
+fn test_add_dir_or_creatable_parent_skips_when_parent_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    // Both parent and child are missing
+    let deep = tmp.path().join("no_parent").join("no_child");
+
+    let mut paths = Vec::new();
+    add_dir_or_creatable_parent(&mut paths, &deep);
+
+    assert!(!deep.exists());
+    assert!(
+        paths.is_empty(),
+        "should not add path when parent is missing"
+    );
+}
+
+#[test]
+fn test_add_dir_or_creatable_parent_rejects_sensitive_path() {
+    let sensitive = std::path::Path::new("/etc/cargo_home");
+
+    let mut paths = Vec::new();
+    add_dir_or_creatable_parent(&mut paths, sensitive);
+
+    assert!(paths.is_empty(), "should reject sensitive system path");
+}

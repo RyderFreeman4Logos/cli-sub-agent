@@ -402,8 +402,8 @@ pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
     }
 }
 
-/// Add `dir` to `paths` if it exists, otherwise add it if its parent exists
-/// (so bwrap can create the directory on first use — handles cold starts).
+/// Add `dir` to `paths` if it exists, otherwise pre-create it when its
+/// parent exists (bwrap `--bind` requires the source path to exist).
 ///
 /// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
 /// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
@@ -420,9 +420,17 @@ fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
     if dir.exists() {
         paths.push(dir.to_path_buf());
     } else if dir.parent().is_some_and(|p| p.exists()) {
-        // Parent exists: bwrap/landlock can mount this path and cargo/rustup
-        // will create the directory at first use.
-        paths.push(dir.to_path_buf());
+        // Pre-create the directory so bwrap --bind can mount it.
+        // On cold starts (fresh CARGO_HOME/RUSTUP_HOME) the dir won't
+        // exist yet; bwrap requires the source path to be present.
+        match std::fs::create_dir_all(dir) {
+            Ok(()) => paths.push(dir.to_path_buf()),
+            Err(e) => tracing::warn!(
+                path = %dir.display(),
+                error = %e,
+                "failed to pre-create directory for sandbox writable mount, skipping"
+            ),
+        }
     }
 }
 
