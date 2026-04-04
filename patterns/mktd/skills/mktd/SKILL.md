@@ -59,14 +59,15 @@ breaks prompt-guard propagation.
    - **Dimension 2 (Patterns)**: Find existing similar features or reusable components.
    - **Dimension 3 (Constraints)**: Identify breaking changes, security risks, performance concerns.
    - Main agent MUST NOT use Read/Glob/Grep/Bash for exploration.
-2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> default Chinese (Simplified) when script is mixed/unknown -> fallback Chinese (Simplified) when `${FEATURE}` is empty. This language is captured as `${STEP_50_OUTPUT}`.
-3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_50_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
+2. **Phase 1.5 -- LANGUAGE DETECTION**: Resolve language by priority: `${USER_LANGUAGE}` override -> `${CSA_USER_LANGUAGE}` env -> script-aware detect from `${FEATURE}` -> default Chinese (Simplified) when script is mixed/unknown -> fallback Chinese (Simplified) when `${FEATURE}` is empty. This language is captured as `${STEP_2_OUTPUT}`.
+3. **Phase 2 -- DRAFT**: Synthesize CSA findings into a structured TODO plan with checkbox items, executor tags ([Main], [Sub:developer], [Skill:commit], [CSA:tool]), and descriptions in `${STEP_2_OUTPUT}`. Every task MUST include a mechanically verifiable `DONE WHEN:` line. Technical terms, code snippets, commit scope strings, and executor tags remain in English.
 4. **Phase 2.5 -- THREAT MODEL**: Review each new API surface for security concerns (sensitive data flows, hostile input, information exposure, safe defaults). Append findings as [Security] tagged items.
 5. **Phase 3 -- DEBATE**: Run explicit `csa debate` (uses global `[debate]` config) via bash step, then normalize stdout into an evidence packet with headers: `DEBATE_EVIDENCE`, `VALID_CONCERNS`, `SUGGESTED_CHANGES`, `OVERALL_ASSESSMENT`.
 6. **Phase 3.5 -- DEBATE VALIDATION**: Hard-fail if required evidence headers, mapped verdict (`READY|REVISE`), raw verdict (`APPROVE|REVISE|REJECT|UNKNOWN`), or confidence are missing.
 7. **Phase 3b -- REVISE**: Incorporate debate feedback and threat model findings. Concede valid points, defend sound decisions. Output the complete revised plan as text (stdout).
-8. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch>`, write `${STEP_7_OUTPUT}` to TODO file, then `csa todo save`. Save step MUST validate non-empty checkbox tasks, `DONE WHEN` clauses, and language consistency (Chinese mode requires Chinese content).
-9. **Phase 4b -- APPROVE**: Present to user in `${STEP_50_OUTPUT}` for APPROVE / MODIFY / REJECT.
+8. **Phase 4 -- SAVE**: Save TODO via `csa todo create --branch <branch> --language <resolved-language>`, write `${STEP_11_OUTPUT}` to TODO file, persist `spec.toml` from `${STEP_7_OUTPUT}`, then `csa todo save`. The save step returns the TODO path as `${STEP_12_OUTPUT}` and MUST validate non-empty checkbox tasks, `DONE WHEN` clauses, and language consistency.
+9. **Phase 4.25 -- PERSIST REFERENCES**: Persist RECON findings, threat model, debate evidence, and a consolidated `design.md` reference using `${STEP_12_OUTPUT}` as the saved TODO path anchor.
+10. **Phase 4.5 -- APPROVE**: Present to user in `${STEP_2_OUTPUT}` for APPROVE / MODIFY / REJECT.
 
 ## Example Usage
 
@@ -109,4 +110,5 @@ context via `csa todo ref show <name>` without bloating their context window.
 10. TODO revised to incorporate debate feedback and threat model findings.
 11. TODO saved via `csa todo create` + `csa todo save` with branch and language association.
 12. Save gate validated task completeness (`- [ ] ...`, `DONE WHEN`) and language consistency.
-13. User presented with plan for approval decision in resolved language.
+13. Design document and RECON references attempted via `csa todo ref add` (stored in `~/.local/state/cli-sub-agent/`, not git-tracked).
+14. User presented with plan for approval decision in resolved language.
