@@ -60,17 +60,23 @@ pub(crate) fn is_retryable_acp_crash(error_display: &str) -> bool {
 pub(crate) fn is_oom_error(error_display: &str) -> bool {
     let lowered = error_display.to_lowercase();
 
-    // Signal-based OOM detection: "signal 9 (SIGKILL)" from ProcessExited display
+    // Signal-based OOM detection: "signal 9 (SIGKILL)" from ProcessExited display.
+    // Word-boundary check: ensure the character after the number is NOT a digit,
+    // preventing false matches like "signal 90" matching the pattern for signal 9.
     for &sig in OOM_SIGNALS {
         let pattern = format!("signal {sig}");
-        if lowered.contains(&pattern) {
-            return true;
+        if let Some(idx) = lowered.find(&pattern) {
+            let next_char = lowered.as_bytes().get(idx + pattern.len());
+            if next_char.is_none_or(|&c| !c.is_ascii_digit()) {
+                return true;
+            }
         }
     }
 
     // Explicit OOM hints from sandbox memory monitor
     lowered.contains("oom detected")
         || lowered.contains("out of memory")
+        || lowered.contains("memory.max")
         || lowered.contains("memorymax")
 }
 
@@ -266,6 +272,22 @@ mod tests {
     #[test]
     fn test_out_of_memory_is_not_retryable() {
         let err = "ACP transport failed: out of memory";
+        assert!(!is_retryable_acp_crash(err));
+    }
+
+    #[test]
+    fn test_signal_90_is_not_oom_false_positive() {
+        // "signal 90" should NOT match the OOM pattern for signal 9.
+        let err = "ACP process exited unexpectedly: killed by signal 90";
+        assert!(!is_oom_error(err));
+        // It should be retryable since it's an unexpected exit, not OOM.
+        assert!(is_retryable_acp_crash(err));
+    }
+
+    #[test]
+    fn test_memory_max_exceeded_is_oom() {
+        let err = "cgroup memory.max exceeded, process killed";
+        assert!(is_oom_error(err));
         assert!(!is_retryable_acp_crash(err));
     }
 
