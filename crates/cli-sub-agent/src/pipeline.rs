@@ -30,6 +30,9 @@ pub(crate) mod changed_paths;
 #[path = "pipeline_result_contract.rs"]
 mod result_contract;
 
+#[path = "pipeline_design_context.rs"]
+pub(crate) mod design_context;
+
 #[path = "pipeline_session_exec.rs"]
 mod session_exec;
 

@@ -2,6 +2,7 @@
 
 pub mod agent_backend_adapter;
 pub mod context_loader;
+pub mod design_context;
 pub mod executor;
 pub mod logging;
 pub mod model_spec;
@@ -16,6 +17,7 @@ pub use context_loader::{
     structured_output_instructions, structured_output_instructions_for_fork_call,
 };
 pub use csa_process::ExecutionResult;
+pub use design_context::{extract_design_sections, format_design_context};
 pub use executor::{ExecuteOptions, Executor, SandboxContext};
 pub use logging::create_session_log_writer;
 pub use model_spec::{ModelSpec, ThinkingBudget};
