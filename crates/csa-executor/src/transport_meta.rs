@@ -183,6 +183,11 @@ pub(super) struct AcpSandboxedResult {
     /// Peak memory from cgroup `memory.peak`, available even when the ACP
     /// session fails (OOM, timeout, init error).
     pub peak_memory_mb: Option<u64>,
+    /// True only when `spawn_sandboxed()` itself failed (the process never
+    /// started).  False when the sandboxed process started but then failed
+    /// during execution (OOM, timeout, init error, prompt failure).
+    /// Callers should only fall back to unsandboxed execution when this is true.
+    pub sandbox_spawn_failed: bool,
 }
 
 /// Run an ACP prompt with sandbox isolation.
@@ -237,6 +242,7 @@ pub(super) async fn run_acp_sandboxed(
             return AcpSandboxedResult {
                 result: Err(e),
                 peak_memory_mb: None,
+                sandbox_spawn_failed: true,
             };
         }
     };
@@ -295,6 +301,7 @@ pub(super) async fn run_acp_sandboxed(
                     return AcpSandboxedResult {
                         result: Err(e),
                         peak_memory_mb,
+                        sandbox_spawn_failed: false,
                     };
                 }
             };
@@ -357,6 +364,7 @@ pub(super) async fn run_acp_sandboxed(
     AcpSandboxedResult {
         result,
         peak_memory_mb,
+        sandbox_spawn_failed: false,
     }
 }
 

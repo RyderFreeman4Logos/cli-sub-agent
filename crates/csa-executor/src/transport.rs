@@ -547,7 +547,7 @@ impl AcpTransport {
                             output.peak_memory_mb = output.peak_memory_mb.or(sr.peak_memory_mb);
                             Ok(output)
                         }
-                        Err(e) if sandbox_best_effort => {
+                        Err(e) if sandbox_best_effort && sr.sandbox_spawn_failed => {
                             tracing::warn!(
                                 "ACP sandbox spawn failed in best-effort mode, falling back to unsandboxed: {e}"
                             );

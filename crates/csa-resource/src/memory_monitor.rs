@@ -4,7 +4,6 @@
 //! process group when usage exceeds `soft_limit_percent` of `MemoryMax`.
 //! After a grace period, escalates to SIGKILL.
 
-use std::process::Command;
 use std::time::Duration;
 
 use tokio::sync::watch;
@@ -90,7 +89,7 @@ async fn monitor_loop(
             }
         }
 
-        let current = match query_memory_current(&config.scope_name) {
+        let current = match query_memory_current(&config.scope_name).await {
             Some(bytes) => bytes,
             None => {
                 // Scope might be gone — stop monitoring.
@@ -129,7 +128,7 @@ async fn monitor_loop(
         }
 
         // Re-check: if still over threshold, escalate to SIGKILL.
-        if let Some(still_current) = query_memory_current(&config.scope_name)
+        if let Some(still_current) = query_memory_current(&config.scope_name).await
             && still_current >= threshold_bytes
         {
             warn!(
@@ -144,8 +143,8 @@ async fn monitor_loop(
 }
 
 /// Query `MemoryCurrent` (in bytes) for the given systemd scope.
-fn query_memory_current(scope_name: &str) -> Option<u64> {
-    let output = Command::new("systemctl")
+async fn query_memory_current(scope_name: &str) -> Option<u64> {
+    let output = tokio::process::Command::new("systemctl")
         .args([
             "--user",
             "show",
@@ -156,6 +155,7 @@ fn query_memory_current(scope_name: &str) -> Option<u64> {
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .output()
+        .await
         .ok()?;
 
     if !output.status.success() {
