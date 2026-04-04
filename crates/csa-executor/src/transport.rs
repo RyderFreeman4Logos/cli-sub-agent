@@ -38,6 +38,10 @@ use transport_gemini_helpers::{
 mod transport_gemini_acp_runtime;
 use transport_gemini_acp_runtime::{gemini_runtime_home_from_env, prepare_gemini_acp_runtime};
 
+#[path = "transport_acp_crash_retry.rs"]
+mod transport_acp_crash_retry;
+use transport_acp_crash_retry::execute_with_crash_retry;
+
 #[path = "transport_fork.rs"]
 mod transport_fork;
 pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
@@ -654,22 +658,12 @@ impl Transport for AcpTransport {
     ) -> Result<TransportResult> {
         let is_gemini = self.tool_name == "gemini-cli";
 
-        // Non-gemini tools: single attempt, no retry loop.
+        // Non-gemini tools: single retry on ACP crash (Issue #567).
         if !is_gemini {
-            let resume_session_id = tool_state.and_then(|s| s.provider_session_id.clone());
-            if let Some(ref session_id) = resume_session_id {
-                tracing::debug!(%session_id, "resuming ACP session from tool state");
-            }
-            return self
-                .execute_acp_attempt(
-                    prompt,
-                    session,
-                    extra_env,
-                    &options,
-                    &self.acp_args,
-                    resume_session_id.as_deref(),
-                )
-                .await;
+            return execute_with_crash_retry(
+                self, prompt, tool_state, session, extra_env, &options,
+            )
+            .await;
         }
 
         // Gemini-cli: 3-phase fallback: OAuth(original) → APIKey(original) → APIKey(flash)
