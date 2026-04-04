@@ -89,13 +89,25 @@ pub fn install_stderr_rotation(
     max_bytes: u64,
     keep_rotated: bool,
 ) -> std::io::Result<StderrRotationGuard> {
+    // Save the original fd 2 so we can restore it if thread spawn fails.
+    // SAFETY: dup is POSIX, returns a new fd pointing to the same file.
+    let saved_fd2 = unsafe { libc::dup(2) };
+    if saved_fd2 == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    // Mark saved fd as close-on-exec so it doesn't leak to children.
+    // SAFETY: fcntl on a valid fd we own.
+    unsafe { libc::fcntl(saved_fd2, libc::F_SETFD, libc::FD_CLOEXEC) };
+
     // Create an OS pipe.
     let (read_fd, write_fd) = {
         let mut fds = [0i32; 2];
         // SAFETY: pipe2 is POSIX, O_CLOEXEC prevents fd leak to children.
         let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
         if ret != 0 {
-            return Err(std::io::Error::last_os_error());
+            let err = std::io::Error::last_os_error();
+            unsafe { libc::close(saved_fd2) };
+            return Err(err);
         }
         (fds[0], fds[1])
     };
@@ -104,12 +116,15 @@ pub fn install_stderr_rotation(
     // SAFETY: dup2 is async-signal-safe and replaces fd 2 atomically.
     let ret = unsafe { libc::dup2(write_fd, 2) };
     if ret == -1 {
-        // Clean up pipe fds on failure.
+        let err = std::io::Error::last_os_error();
+        // Clean up pipe fds and restore original fd 2.
         unsafe {
             libc::close(read_fd);
             libc::close(write_fd);
+            libc::dup2(saved_fd2, 2);
+            libc::close(saved_fd2);
         }
-        return Err(std::io::Error::last_os_error());
+        return Err(err);
     }
 
     // Close the original write_fd (fd 2 is now the write end).
@@ -135,7 +150,7 @@ pub fn install_stderr_rotation(
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_clone = shutdown.clone();
 
-    let thread = std::thread::Builder::new()
+    let thread = match std::thread::Builder::new()
         .name("csa-stderr-rotation".to_string())
         .spawn(move || {
             run_stderr_drain(
@@ -145,8 +160,25 @@ pub fn install_stderr_rotation(
                 keep_rotated,
                 shutdown_clone,
             );
-        })
-        .map_err(std::io::Error::other)?;
+        }) {
+        Ok(handle) => handle,
+        Err(e) => {
+            // Thread spawn failed: fd 2 points to pipe with no reader.
+            // Restore original stderr so the process can still write errors.
+            // SAFETY: saved_fd2 is a valid dup of the original fd 2.
+            unsafe {
+                libc::dup2(saved_fd2, 2);
+                libc::close(saved_fd2);
+            }
+            // read_file was moved into the closure which was never spawned;
+            // it will be dropped here, closing the pipe read-end.
+            return Err(std::io::Error::other(e));
+        }
+    };
+
+    // Thread spawned successfully; saved fd is no longer needed.
+    // SAFETY: saved_fd2 is a valid fd we own.
+    unsafe { libc::close(saved_fd2) };
 
     Ok(StderrRotationGuard {
         shutdown,

@@ -193,31 +193,33 @@ impl IsolationPlanBuilder {
             let xdg_state = std::env::var("XDG_STATE_HOME")
                 .map(PathBuf::from)
                 .unwrap_or_else(|_| home.join(".local/state"));
-            self.writable_paths.push(xdg_state);
+            // Only add paths that exist on the filesystem; bwrap --bind fails on
+            // nonexistent paths.
+            if xdg_state.exists() {
+                self.writable_paths.push(xdg_state);
+            }
 
             // mise cache: tools launched via mise shims (rustc, cargo, node) write
             // to ~/.cache/mise during startup and compilation. Without write access,
             // mise-managed toolchains fail with "Read-only file system".
-            self.writable_paths.push(home.join(".cache/mise"));
+            let mise_cache = home.join(".cache/mise");
+            if mise_cache.exists() {
+                self.writable_paths.push(mise_cache);
+            }
 
-            // Tool-specific config/data directories.
-            match tool_name {
-                "claude-code" => {
-                    self.writable_paths.push(home.join(".claude"));
+            // Tool-specific config/data directories (only if they exist).
+            let tool_dirs: &[&str] = match tool_name {
+                "claude-code" => &[".claude"],
+                "codex" => &[".codex"],
+                "gemini-cli" => &[".gemini", ".config/gemini-cli"],
+                "opencode" => &[".config/opencode"],
+                _ => &[],
+            };
+            for rel in tool_dirs {
+                let p = home.join(rel);
+                if p.exists() {
+                    self.writable_paths.push(p);
                 }
-                "codex" => {
-                    self.writable_paths.push(home.join(".codex"));
-                }
-                "gemini-cli" => {
-                    // OAuth tokens, session history, project settings
-                    self.writable_paths.push(home.join(".gemini"));
-                    // XDG config dir (settings.json, etc.)
-                    self.writable_paths.push(home.join(".config/gemini-cli"));
-                }
-                "opencode" => {
-                    self.writable_paths.push(home.join(".config/opencode"));
-                }
-                _ => {}
             }
         }
         self

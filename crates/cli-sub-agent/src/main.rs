@@ -423,7 +423,7 @@ async fn run() -> Result<()> {
             daemon_child,
             session_id,
         } => {
-            let _daemon_guard = run_cmd_daemon::check_daemon_flags(
+            let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "run",
                 no_daemon,
                 daemon_child,
@@ -485,6 +485,8 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
+            // Finalize stderr rotation before process::exit() which skips Drop.
+            daemon_guard.finalize();
             exit_current_process(exit_code);
         }
         Commands::Session { cmd } => {
@@ -535,7 +537,7 @@ async fn run() -> Result<()> {
             memory_cmd::handle_memory_command(command).await?;
         }
         Commands::Review(args) => {
-            let _daemon_guard = run_cmd_daemon::check_daemon_flags(
+            let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "review",
                 args.no_daemon,
                 args.daemon_child,
@@ -548,10 +550,11 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
+            daemon_guard.finalize();
             exit_current_process(exit_code);
         }
         Commands::Debate(args) => {
-            let _daemon_guard = run_cmd_daemon::check_daemon_flags(
+            let mut daemon_guard = run_cmd_daemon::check_daemon_flags(
                 "debate",
                 args.no_daemon,
                 args.daemon_child,
@@ -564,6 +567,7 @@ async fn run() -> Result<()> {
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
+            daemon_guard.finalize();
             exit_current_process(exit_code);
         }
         Commands::Eval {

@@ -22,7 +22,6 @@ impl DaemonChildGuard {
     /// Explicitly shut down the stderr rotation guard before process exit.
     ///
     /// This is a no-op if no stderr rotation was installed.
-    #[allow(dead_code)]
     pub(crate) fn finalize(&mut self) {
         if let Some(guard) = &mut self._stderr_rotation {
             guard.finalize();
