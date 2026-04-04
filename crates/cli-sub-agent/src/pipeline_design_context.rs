@@ -3,7 +3,8 @@
 //! Handles two kinds of context injection on the first turn of a session:
 //! 1. Project context (CLAUDE.md, AGENTS.md) — always injected if available
 //! 2. Design context from TODO plan's `design.md` reference — injected when the
-//!    current branch has a TODO plan with Key Decisions/Constraints/Threats sections
+//!    current branch has a TODO plan with design sections (Key Decisions, Constraints,
+//!    Threats, Codebase Structure, Existing Patterns, Threat Model, Debate Evidence)
 
 use std::path::Path;
 
@@ -58,20 +59,10 @@ fn load_design_context(project_root: &Path) -> Option<String> {
     Some(csa_executor::format_design_context(&branch, &sections))
 }
 
-/// Auto-detect current git branch. Returns `None` on detached HEAD or error.
+/// Auto-detect current branch via VCS abstraction (supports both git and jj).
+///
+/// Returns `None` on detached HEAD or error.
 fn detect_branch(project_root: &Path) -> Option<String> {
-    let output = std::process::Command::new("git")
-        .args(["branch", "--show-current"])
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if branch.is_empty() {
-        None
-    } else {
-        Some(branch)
-    }
+    let backend = csa_session::vcs_backends::create_vcs_backend(project_root);
+    backend.current_branch(project_root).ok().flatten()
 }

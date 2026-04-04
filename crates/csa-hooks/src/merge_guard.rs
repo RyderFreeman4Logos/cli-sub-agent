@@ -135,7 +135,7 @@ MARKER_FILE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}.done"
 
 if [ -f "${MARKER_FILE}" ]; then
   # Exact SHA marker found — emit audit event and allow merge.
-  EVENTS_DIR="${HOME}/.local/state/cli-sub-agent/events"
+  EVENTS_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cli-sub-agent/events"
   mkdir -p "${EVENTS_DIR}" 2>/dev/null || true
   AUDIT_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo "unknown")"
   printf '{"event":"MergeCompleted","pr_number":%s,"head_sha":"%s","marker_path":"%s","timestamp":"%s"}\n' \

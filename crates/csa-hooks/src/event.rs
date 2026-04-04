@@ -39,6 +39,15 @@ pub enum HookEvent {
     /// Template vars: `{session_id}`, `{decision}`, `{verdict}`, `{scope}`.
     PostReview,
     /// After merge_guard allows a `gh pr merge` to proceed.
+    ///
+    /// **Audit-only event**: This event is emitted exclusively from the `gh`
+    /// wrapper shell script (see [`crate::merge_guard::GH_WRAPPER`]), not from
+    /// Rust hook infrastructure.  The shell script writes a JSON line to the
+    /// audit log at `$XDG_STATE_HOME/cli-sub-agent/events/merge-guard.jsonl`.
+    /// There is intentionally no `run_hooks_for_event(MergeCompleted)` call in
+    /// Rust code because the merge guard runs in a PATH-injected shell context
+    /// where the Rust hook system is not available.
+    ///
     /// Observational audit event persisted to JSONL for traceability.
     /// Template vars: `{pr_number}`, `{head_sha}`, `{marker_path}`.
     MergeCompleted,

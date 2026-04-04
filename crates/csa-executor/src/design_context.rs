@@ -7,7 +7,21 @@
 const MAX_DESIGN_CONTEXT_CHARS: usize = 6000;
 
 /// Section headings to extract from design.md (case-insensitive match).
-const DESIGN_SECTIONS: &[&str] = &["Key Decisions", "Constraints", "Threats"];
+///
+/// Includes both the original summary headings and the headings that mktd's
+/// `design.md` reference actually produces.  The matching logic uses substring
+/// containment, so "Constraints & Risks" matches the "constraints" keyword.
+const DESIGN_SECTIONS: &[&str] = &[
+    // Original summary headings
+    "Key Decisions",
+    "Constraints",
+    "Threats",
+    // mktd actual design.md headings
+    "Codebase Structure",
+    "Existing Patterns",
+    "Threat Model",
+    "Debate Evidence",
+];
 
 /// Extract relevant sections from a design document's markdown content.
 ///
@@ -279,5 +293,68 @@ Unrelated.
         assert!(parse_heading("#NoSpace").is_none());
         assert!(parse_heading("").is_none());
         assert!(parse_heading("####### Seven levels").is_none());
+    }
+
+    #[test]
+    fn test_extract_design_sections_mktd_headings() {
+        let content = "\
+# Design Context
+
+## Codebase Structure
+- src/lib.rs: main entry
+- src/config.rs: configuration
+
+## Existing Patterns
+- Builder pattern for config
+- RAII guards for cleanup
+
+## Constraints & Risks
+- Must not break existing API
+- Token budget limited
+
+## Threat Model
+- Untrusted input from user prompts
+- Race condition in concurrent sessions
+
+## Debate Evidence
+- Consensus: use Arc over Rc
+- Rejected: global singleton approach
+
+## Implementation Plan
+Should not appear in output.
+";
+        let result = extract_design_sections(content, None).unwrap();
+        assert!(result.contains("## Codebase Structure"));
+        assert!(result.contains("src/lib.rs"));
+        assert!(result.contains("## Existing Patterns"));
+        assert!(result.contains("Builder pattern"));
+        // "Constraints & Risks" matches the "constraints" keyword
+        assert!(result.contains("Constraints & Risks"));
+        assert!(result.contains("Must not break"));
+        assert!(result.contains("## Threat Model"));
+        assert!(result.contains("Untrusted input"));
+        assert!(result.contains("## Debate Evidence"));
+        assert!(result.contains("Consensus"));
+        // Should NOT include non-target sections.
+        assert!(!result.contains("## Implementation Plan"));
+        assert!(!result.contains("Should not appear"));
+    }
+
+    #[test]
+    fn test_extract_design_sections_mixed_original_and_mktd() {
+        let content = "\
+## Key Decisions
+- Use thiserror for library errors
+
+## Existing Patterns
+- Convention: pub(crate) by default
+
+## Threats
+- DoS via large input
+";
+        let result = extract_design_sections(content, None).unwrap();
+        assert!(result.contains("## Key Decisions"));
+        assert!(result.contains("## Existing Patterns"));
+        assert!(result.contains("## Threats"));
     }
 }
