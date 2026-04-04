@@ -214,11 +214,9 @@ fn format_session_tree(
 mod tests {
     use super::*;
     use crate::manager::create_session_in;
+    use crate::test_env::TEST_ENV_LOCK;
     use std::fs;
-    use std::sync::{LazyLock, Mutex};
     use tempfile::tempdir;
-
-    static GEN_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
     /// Environment variables to clear during genealogy tests so that the
     /// daemon context inherited from the outer CSA session does not collide
@@ -237,13 +235,13 @@ mod tests {
 
     impl ScopedXdgOverride {
         fn new(tmp: &tempfile::TempDir) -> Self {
-            let lock = GEN_ENV_LOCK.lock().expect("env lock poisoned");
+            let lock = TEST_ENV_LOCK.lock().expect("env lock poisoned");
             let original_xdg = std::env::var("XDG_STATE_HOME").ok();
             let original_daemon: Vec<(&str, Option<String>)> = DAEMON_ENV_VARS
                 .iter()
                 .map(|k| (*k, std::env::var(k).ok()))
                 .collect();
-            // SAFETY: test-scoped env mutation protected by GEN_ENV_LOCK.
+            // SAFETY: test-scoped env mutation protected by TEST_ENV_LOCK.
             unsafe {
                 std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap());
                 for key in DAEMON_ENV_VARS {
