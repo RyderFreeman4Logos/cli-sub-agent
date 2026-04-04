@@ -29,14 +29,25 @@ pub struct MemoryMonitorConfig {
 /// Handle to a running memory monitor.  Drop or call [`stop`] to cancel.
 pub struct MemoryMonitorHandle {
     cancel_tx: watch::Sender<bool>,
-    join: tokio::task::JoinHandle<()>,
+    join: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl MemoryMonitorHandle {
     /// Stop the monitor and wait for the background task to finish.
-    pub async fn stop(self) {
+    pub async fn stop(mut self) {
         let _ = self.cancel_tx.send(true);
-        let _ = self.join.await;
+        if let Some(join) = self.join.take() {
+            let _ = join.await;
+        }
+    }
+}
+
+impl Drop for MemoryMonitorHandle {
+    fn drop(&mut self) {
+        // Send the cancel signal so the monitor loop exits even if the caller
+        // forgot to call stop() (e.g. early `?` return).  The send may fail
+        // if stop() was already called — that is fine.
+        let _ = self.cancel_tx.send(true);
     }
 }
 
@@ -70,7 +81,10 @@ pub fn start(mut config: MemoryMonitorConfig) -> Option<MemoryMonitorHandle> {
 
     let (cancel_tx, cancel_rx) = watch::channel(false);
     let join = tokio::spawn(monitor_loop(config, threshold_bytes, cancel_rx));
-    Some(MemoryMonitorHandle { cancel_tx, join })
+    Some(MemoryMonitorHandle {
+        cancel_tx,
+        join: Some(join),
+    })
 }
 
 async fn monitor_loop(
@@ -81,8 +95,10 @@ async fn monitor_loop(
     loop {
         tokio::select! {
             _ = tokio::time::sleep(config.interval) => {}
-            _ = cancel_rx.changed() => {
-                if *cancel_rx.borrow() {
+            result = cancel_rx.changed() => {
+                // Both Ok (value sent) and Err (channel closed, e.g. sender
+                // dropped without explicit stop()) mean we should exit.
+                if result.is_err() || *cancel_rx.borrow() {
                     debug!(scope = %config.scope_name, "memory monitor cancelled");
                     return;
                 }
@@ -120,8 +136,8 @@ async fn monitor_loop(
         // Wait grace period, then check again.
         tokio::select! {
             _ = tokio::time::sleep(config.grace_period) => {}
-            _ = cancel_rx.changed() => {
-                if *cancel_rx.borrow() {
+            result = cancel_rx.changed() => {
+                if result.is_err() || *cancel_rx.borrow() {
                     return;
                 }
             }

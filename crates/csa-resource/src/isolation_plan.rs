@@ -404,7 +404,19 @@ pub fn validate_writable_paths(paths: &[PathBuf], project_root: &Path) -> anyhow
 
 /// Add `dir` to `paths` if it exists, otherwise add it if its parent exists
 /// (so bwrap can create the directory on first use — handles cold starts).
+///
+/// Rejects paths under sensitive system directories (`/etc`, `/var/lib`,
+/// `/boot`, `/sbin`, etc.) to prevent env vars like `CARGO_HOME` from
+/// escaping the sandbox boundary.
 fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
+    if is_sensitive_system_path(dir) {
+        tracing::warn!(
+            path = %dir.display(),
+            "rejecting writable path under sensitive system directory"
+        );
+        return;
+    }
+
     if dir.exists() {
         paths.push(dir.to_path_buf());
     } else if dir.parent().is_some_and(|p| p.exists()) {
@@ -412,6 +424,25 @@ fn add_dir_or_creatable_parent(paths: &mut Vec<PathBuf>, dir: &Path) {
         // will create the directory at first use.
         paths.push(dir.to_path_buf());
     }
+}
+
+/// Reject paths under sensitive system directories that should never be
+/// writable inside a sandbox.  Allows legitimate paths like home dirs,
+/// `/tmp`, `/usr/local/share/mise`, etc.
+fn is_sensitive_system_path(path: &Path) -> bool {
+    /// Prefixes that indicate sensitive system directories.
+    const SENSITIVE_PREFIXES: &[&str] = &[
+        "/etc", "/var/lib", "/var/log", "/var/run", "/boot", "/sbin", "/bin", "/lib", "/lib64",
+        "/sys", "/proc", "/dev", "/run",
+    ];
+
+    for prefix in SENSITIVE_PREFIXES {
+        if path.starts_with(prefix) {
+            return true;
+        }
+    }
+    // Reject bare root path
+    path == Path::new("/")
 }
 
 /// Portable home-directory lookup (avoids pulling in the `dirs` crate).

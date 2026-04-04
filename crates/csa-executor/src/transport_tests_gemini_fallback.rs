@@ -253,6 +253,10 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
         thinking_budget: None,
     });
     let session = build_test_meta_session(temp.path().to_str().expect("utf8 temp path"));
+    // NOTE: resource=None means the cgroup spawn path is not exercised here;
+    // real cgroup spawn requires systemd user scope access which is not
+    // available in most CI environments.  The early return guard above
+    // already skips this test when CgroupV2 is not detected.
     let sandbox = SandboxTransportConfig {
         isolation_plan: csa_resource::isolation_plan::IsolationPlan {
             resource: csa_resource::sandbox::ResourceCapability::None,
