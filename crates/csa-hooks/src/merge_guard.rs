@@ -104,7 +104,7 @@ if [ -z "${PR_NUMBER}" ]; then
   exit 1
 fi
 
-# Check marker.
+# Check marker — exact SHA match required.
 REPO_SLUG="$("${REAL_GH}" repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
 if [ -z "${REPO_SLUG}" ]; then
   REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
@@ -112,12 +112,25 @@ fi
 
 MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
 
-if ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
-  # Marker found — allow merge.
+# Get the current head SHA of the PR for exact marker matching.
+HEAD_SHA="$("${REAL_GH}" pr view "${PR_NUMBER}" --json headRefOid -q '.headRefOid' 2>/dev/null)" || true
+if [ -z "${HEAD_SHA}" ]; then
+  echo "BLOCKED: CSA merge guard cannot determine PR head SHA." >&2
+  echo "Ensure 'gh' is authenticated and the PR exists." >&2
+  exit 1
+fi
+
+MARKER_FILE="${MARKER_DIR}/${PR_NUMBER}-${HEAD_SHA}.done"
+
+if [ -f "${MARKER_FILE}" ]; then
+  # Exact SHA marker found — allow merge.
   exec "${REAL_GH}" "$@"
 else
-  echo "BLOCKED: pr-bot has not completed for PR #${PR_NUMBER}." >&2
+  echo "BLOCKED: pr-bot has not completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA}." >&2
   echo "Run /pr-bot first, or add --force-skip-pr-bot to bypass." >&2
+  if ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
+    echo "NOTE: Stale markers exist for older commits. A new review is needed." >&2
+  fi
   if [ -d "${MARKER_DIR}" ]; then
     echo "Marker directory: ${MARKER_DIR}" >&2
   fi
@@ -182,6 +195,53 @@ pub fn inject_merge_guard_env(env: &mut HashMap<String, String>) {
         "PATH".to_string(),
         format!("{guard_dir_str}:{current_path}"),
     );
+}
+
+/// Result of verifying a pr-bot marker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MarkerStatus {
+    /// Exact SHA marker found — merge allowed.
+    Verified,
+    /// No marker for current SHA, but stale markers exist for older commits.
+    StaleMarkerExists,
+    /// No marker at all for this PR.
+    Missing,
+}
+
+/// Verify that a pr-bot completion marker exists for the exact PR + HEAD SHA.
+///
+/// This is the Rust-side equivalent of the shell check in the `gh` wrapper.
+/// The `head_sha` parameter makes this testable without calling `gh`.
+///
+/// Marker path: `{marker_base_dir}/{repo_slug}/{pr_number}-{head_sha}.done`
+pub fn verify_pr_bot_marker(
+    marker_base_dir: &Path,
+    repo_slug: &str,
+    pr_number: u64,
+    head_sha: &str,
+) -> MarkerStatus {
+    let marker_dir = marker_base_dir.join(repo_slug);
+    let exact_marker = marker_dir.join(format!("{pr_number}-{head_sha}.done"));
+
+    if exact_marker.is_file() {
+        return MarkerStatus::Verified;
+    }
+
+    // Check for stale markers from previous commits.
+    let pattern = format!("{pr_number}-");
+    if marker_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&marker_dir)
+    {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy();
+            if name_str.starts_with(&pattern) && name_str.ends_with(".done") {
+                return MarkerStatus::StaleMarkerExists;
+            }
+        }
+    }
+
+    MarkerStatus::Missing
 }
 
 /// Check if merge guard is enabled in hooks config.
@@ -329,5 +389,89 @@ mod tests {
         writeln!(f, "merge_guard = true").unwrap();
         f.flush().unwrap();
         assert!(is_merge_guard_enabled(Some(f.path())));
+    }
+
+    // --- verify_pr_bot_marker tests ---
+
+    /// Helper: create a marker file in the temp directory.
+    fn create_marker(base: &Path, repo: &str, filename: &str) {
+        let dir = base.join(repo);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join(filename), "").unwrap();
+    }
+
+    #[test]
+    fn test_verify_marker_exact_sha_match() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        create_marker(base, "owner_repo", "42-abc123def.done");
+
+        assert_eq!(
+            verify_pr_bot_marker(base, "owner_repo", 42, "abc123def"),
+            MarkerStatus::Verified
+        );
+    }
+
+    #[test]
+    fn test_verify_marker_wrong_sha_with_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // Old marker exists for a previous SHA.
+        create_marker(base, "owner_repo", "42-oldsha999.done");
+
+        assert_eq!(
+            verify_pr_bot_marker(base, "owner_repo", 42, "newsha000"),
+            MarkerStatus::StaleMarkerExists
+        );
+    }
+
+    #[test]
+    fn test_verify_marker_missing_no_markers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // No marker directory at all.
+        assert_eq!(
+            verify_pr_bot_marker(base, "owner_repo", 42, "abc123def"),
+            MarkerStatus::Missing
+        );
+    }
+
+    #[test]
+    fn test_verify_marker_missing_dir_exists_but_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        fs::create_dir_all(base.join("owner_repo")).unwrap();
+
+        assert_eq!(
+            verify_pr_bot_marker(base, "owner_repo", 42, "abc123def"),
+            MarkerStatus::Missing
+        );
+    }
+
+    #[test]
+    fn test_verify_marker_different_pr_not_matched() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // Marker for PR 99, not PR 42.
+        create_marker(base, "owner_repo", "99-abc123def.done");
+
+        assert_eq!(
+            verify_pr_bot_marker(base, "owner_repo", 42, "abc123def"),
+            MarkerStatus::Missing
+        );
+    }
+
+    #[test]
+    fn test_verify_marker_exact_takes_precedence_over_stale() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path();
+        // Both exact and stale markers exist.
+        create_marker(base, "owner_repo", "42-oldsha999.done");
+        create_marker(base, "owner_repo", "42-abc123def.done");
+
+        assert_eq!(
+            verify_pr_bot_marker(base, "owner_repo", 42, "abc123def"),
+            MarkerStatus::Verified
+        );
     }
 }
