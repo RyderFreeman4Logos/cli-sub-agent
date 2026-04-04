@@ -99,6 +99,22 @@ fn validate_resources(config: &ProjectConfig) -> Result<()> {
                  Tool processes need at least 10 PIDs for process trees."
         );
     }
+    if let Some(percent) = config.resources.soft_limit_percent
+        && (percent == 0 || percent > 100)
+    {
+        bail!(
+            "resources.soft_limit_percent must be 1-100 (got {percent}). \
+             0 silently disables the memory monitor."
+        );
+    }
+    if let Some(interval) = config.resources.memory_monitor_interval_seconds
+        && interval == 0
+    {
+        bail!(
+            "resources.memory_monitor_interval_seconds must be >= 1 (got 0). \
+             Zero interval causes a busy-polling loop."
+        );
+    }
     // Required enforcement mode demands an explicit memory limit.
     if matches!(
         config.resources.enforcement_mode,

@@ -45,12 +45,17 @@ impl MemoryMonitorHandle {
 ///
 /// Returns `None` if `memory_max_bytes` is 0 or `soft_limit_percent` is 0/100+
 /// (i.e. the configuration is effectively "no monitoring").
-pub fn start(config: MemoryMonitorConfig) -> Option<MemoryMonitorHandle> {
+pub fn start(mut config: MemoryMonitorConfig) -> Option<MemoryMonitorHandle> {
     if config.memory_max_bytes == 0
         || config.soft_limit_percent == 0
         || config.soft_limit_percent > 100
     {
         return None;
+    }
+
+    // Defense in depth: clamp zero interval to 1 second to prevent busy-polling.
+    if config.interval.is_zero() {
+        config.interval = Duration::from_secs(1);
     }
 
     let threshold_bytes = config.memory_max_bytes * u64::from(config.soft_limit_percent) / 100;

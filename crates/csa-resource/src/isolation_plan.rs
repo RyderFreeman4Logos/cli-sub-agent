@@ -228,32 +228,24 @@ impl IsolationPlanBuilder {
                 self.writable_paths.push(mise_cache);
             }
 
-            // Cargo registry and git checkout caches: cargo needs write access to
-            // download and cache crate sources. Without this, `cargo build` inside
-            // bwrap fails with "Read-only file system" when resolving dependencies.
-            let cargo_registry = home.join(".cargo/registry");
-            if cargo_registry.exists() {
-                self.writable_paths.push(cargo_registry);
-            }
-            let cargo_git = home.join(".cargo/git");
-            if cargo_git.exists() {
-                self.writable_paths.push(cargo_git);
-            }
-
-            // When CARGO_HOME is set to a non-default location, its registry/ and
-            // git/ subdirectories also need write access.
-            if let Ok(cargo_home) = std::env::var("CARGO_HOME") {
-                let cargo_home = PathBuf::from(cargo_home);
-                if cargo_home != home.join(".cargo") {
-                    let ch_registry = cargo_home.join("registry");
-                    if ch_registry.exists() {
-                        self.writable_paths.push(ch_registry);
-                    }
-                    let ch_git = cargo_home.join("git");
-                    if ch_git.exists() {
-                        self.writable_paths.push(ch_git);
-                    }
+            // Cargo home directory: cargo needs write access to registry/, git/,
+            // and .package-cache (lock file). Adding the parent dir avoids
+            // cold-start failures where subdirs don't exist yet — cargo will
+            // create them at first use.  bwrap handles nonexistent subdirs
+            // correctly when the parent is mounted writable.
+            let default_cargo_home = home.join(".cargo");
+            if let Ok(cargo_home_env) = std::env::var("CARGO_HOME") {
+                let cargo_home = PathBuf::from(cargo_home_env);
+                let is_default = cargo_home == default_cargo_home;
+                if cargo_home.exists() {
+                    self.writable_paths.push(cargo_home);
                 }
+                // Also add default if it exists and differs from CARGO_HOME
+                if !is_default && default_cargo_home.exists() {
+                    self.writable_paths.push(default_cargo_home);
+                }
+            } else if default_cargo_home.exists() {
+                self.writable_paths.push(default_cargo_home);
             }
 
             // RUSTUP_HOME: rustup needs write access for toolchain management
@@ -271,16 +263,11 @@ impl IsolationPlanBuilder {
                 }
             }
 
-            // mise-managed Rust toolchain installs: mise installs Rust toolchains
-            // under these paths. Cargo/rustc may write to them during compilation.
-            for mise_rust in &[
-                PathBuf::from("/usr/local/share/mise/installs/rust"),
-                home.join(".local/share/mise/installs/rust"),
-            ] {
-                if mise_rust.exists() {
-                    self.writable_paths.push(mise_rust.clone());
-                }
-            }
+            // NOTE: mise-managed Rust toolchain paths are intentionally NOT added
+            // as writable. Making the entire install dir writable (rustc, stdlib)
+            // is an isolation regression. The cargo registry/git cache dirs are
+            // already covered by the CARGO_HOME logic above — when mise sets
+            // CARGO_HOME into the toolchain dir, those subdirs get write access.
 
             // Tool-specific config/data directories (only if they exist).
             let tool_dirs: &[&str] = match tool_name {

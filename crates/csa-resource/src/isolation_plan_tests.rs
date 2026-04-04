@@ -110,19 +110,12 @@ fn test_tool_defaults_claude_code() {
             "all tools should include ~/.cache/mise for mise-managed toolchains"
         );
 
-        // Cargo registry and git paths (if they exist on this system)
-        let cargo_registry = home.join(".cargo/registry");
-        if cargo_registry.exists() {
+        // Cargo home dir (if it exists on this system)
+        let cargo_home = home.join(".cargo");
+        if cargo_home.exists() {
             assert!(
-                plan.writable_paths.contains(&cargo_registry),
-                "all tools should include ~/.cargo/registry for dependency downloads"
-            );
-        }
-        let cargo_git = home.join(".cargo/git");
-        if cargo_git.exists() {
-            assert!(
-                plan.writable_paths.contains(&cargo_git),
-                "all tools should include ~/.cargo/git for git dependency checkouts"
+                plan.writable_paths.contains(&cargo_home),
+                "all tools should include ~/.cargo for cargo registry/git/lock"
             );
         }
     }
@@ -142,19 +135,12 @@ fn test_cargo_and_rustup_paths_presence_matches_filesystem() {
         .expect("should succeed");
 
     if let Some(home) = home_dir() {
-        // Cargo registry
-        let cargo_registry = home.join(".cargo/registry");
+        // Cargo home dir — added as parent instead of individual subdirs
+        let cargo_home = home.join(".cargo");
         assert_eq!(
-            plan.writable_paths.contains(&cargo_registry),
-            cargo_registry.exists(),
-            "cargo registry inclusion should match filesystem existence"
-        );
-        // Cargo git
-        let cargo_git = home.join(".cargo/git");
-        assert_eq!(
-            plan.writable_paths.contains(&cargo_git),
-            cargo_git.exists(),
-            "cargo git inclusion should match filesystem existence"
+            plan.writable_paths.contains(&cargo_home),
+            cargo_home.exists(),
+            "cargo home inclusion should match filesystem existence"
         );
         // Default rustup (when RUSTUP_HOME is not set)
         if std::env::var("RUSTUP_HOME").is_err() {
