@@ -219,13 +219,41 @@ mod tests {
     /// Process-wide lock for tests that mutate `XDG_STATE_HOME`.
     static GUARD_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
+    /// RAII guard that sets `XDG_STATE_HOME` to a temp path and restores
+    /// the original value on drop — even if the test panics.
+    struct ScopedXdgOverride {
+        orig: Option<String>,
+        _lock: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl ScopedXdgOverride {
+        fn new(tmp: &tempfile::TempDir) -> Self {
+            let lock = GUARD_ENV_LOCK.lock().expect("env lock poisoned");
+            let orig = std::env::var("XDG_STATE_HOME").ok();
+            // SAFETY: test-scoped env mutation protected by GUARD_ENV_LOCK.
+            unsafe {
+                std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap());
+            }
+            Self { orig, _lock: lock }
+        }
+    }
+
+    impl Drop for ScopedXdgOverride {
+        fn drop(&mut self) {
+            // SAFETY: restoration of test-scoped env mutation (lock still held).
+            unsafe {
+                match &self.orig {
+                    Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+                    None => std::env::remove_var("XDG_STATE_HOME"),
+                }
+            }
+        }
+    }
+
     #[test]
     fn test_ensure_guard_dir_creates_wrapper() {
-        let _lock = GUARD_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::var("XDG_STATE_HOME").ok();
-        // SAFETY: test-scoped env mutation protected by GUARD_ENV_LOCK.
-        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap()) };
+        let _xdg = ScopedXdgOverride::new(&tmp);
 
         let dir = ensure_guard_dir().unwrap();
         let wrapper = dir.join("gh");
@@ -234,23 +262,12 @@ mod tests {
             wrapper.metadata().unwrap().permissions().mode() & 0o111 != 0,
             "gh wrapper should be executable"
         );
-
-        // SAFETY: restoration of test-scoped env mutation.
-        unsafe {
-            match orig {
-                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
-        }
     }
 
     #[test]
     fn test_inject_merge_guard_env_sets_path() {
-        let _lock = GUARD_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::var("XDG_STATE_HOME").ok();
-        // SAFETY: test-scoped env mutation protected by GUARD_ENV_LOCK.
-        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap()) };
+        let _xdg = ScopedXdgOverride::new(&tmp);
 
         let mut env = HashMap::new();
         env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
@@ -265,23 +282,12 @@ mod tests {
             path.ends_with("/usr/bin:/bin"),
             "original PATH should be preserved: {path}"
         );
-
-        // SAFETY: restoration of test-scoped env mutation.
-        unsafe {
-            match orig {
-                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
-        }
     }
 
     #[test]
     fn test_inject_merge_guard_env_sets_real_gh() {
-        let _lock = GUARD_ENV_LOCK.lock().expect("env lock poisoned");
         let tmp = tempfile::tempdir().unwrap();
-        let orig = std::env::var("XDG_STATE_HOME").ok();
-        // SAFETY: test-scoped env mutation protected by GUARD_ENV_LOCK.
-        unsafe { std::env::set_var("XDG_STATE_HOME", tmp.path().join("state").to_str().unwrap()) };
+        let _xdg = ScopedXdgOverride::new(&tmp);
 
         let mut env = HashMap::new();
         inject_merge_guard_env(&mut env);
@@ -293,14 +299,6 @@ mod tests {
                 env.contains_key("CSA_REAL_GH"),
                 "CSA_REAL_GH should be set when gh is installed"
             );
-        }
-
-        // SAFETY: restoration of test-scoped env mutation.
-        unsafe {
-            match orig {
-                Some(v) => std::env::set_var("XDG_STATE_HOME", v),
-                None => std::env::remove_var("XDG_STATE_HOME"),
-            }
         }
     }
 
