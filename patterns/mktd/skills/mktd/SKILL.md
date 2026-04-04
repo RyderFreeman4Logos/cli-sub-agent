@@ -109,4 +109,5 @@ context via `csa todo ref show <name>` without bloating their context window.
 10. TODO revised to incorporate debate feedback and threat model findings.
 11. TODO saved via `csa todo create` + `csa todo save` with branch and language association.
 12. Save gate validated task completeness (`- [ ] ...`, `DONE WHEN`) and language consistency.
-13. User presented with plan for approval decision in resolved language.
+13. Design document and RECON references persisted via `csa todo ref add` (stored in `~/.local/state/cli-sub-agent/`, not git-tracked).
+14. User presented with plan for approval decision in resolved language.
