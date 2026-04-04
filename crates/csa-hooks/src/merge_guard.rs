@@ -72,6 +72,17 @@ if [ "${IS_MERGE}" != "true" ]; then
   exec "${REAL_GH}" "$@"
 fi
 
+# Block --auto / --enable-auto-merge unconditionally (even with --force-skip-pr-bot).
+# Auto-merge bypasses the entire pr-bot workflow and is never safe.
+for arg in "$@"; do
+  case "$arg" in
+    --auto|--enable-auto-merge)
+      echo "BLOCKED: auto-merge is prohibited; use pr-bot workflow for merge." >&2
+      exit 1
+      ;;
+  esac
+done
+
 # Check for bypass flag.
 for arg in "$@"; do
   if [ "$arg" = "--force-skip-pr-bot" ]; then
@@ -445,6 +456,125 @@ mod tests {
         assert_eq!(
             verify_pr_bot_marker(base, "owner_repo", 42, "abc123def"),
             MarkerStatus::Missing
+        );
+    }
+
+    // --- GH wrapper auto-merge block tests ---
+    //
+    // These tests execute the wrapper script with a fake `gh` binary to verify
+    // that `--auto` / `--enable-auto-merge` are unconditionally blocked.
+
+    /// Create a minimal test environment with a fake `gh` and the wrapper script.
+    /// Returns (guard_dir, fake_gh_path).
+    fn setup_wrapper_env(tmp: &Path) -> (PathBuf, PathBuf) {
+        let guard_dir = tmp.join("guard");
+        fs::create_dir_all(&guard_dir).unwrap();
+
+        // Write the wrapper script.
+        let wrapper_path = guard_dir.join("gh");
+        fs::write(&wrapper_path, GH_WRAPPER).unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&wrapper_path, fs::Permissions::from_mode(0o755)).unwrap();
+
+        // Create a fake `gh` that just prints "REAL_GH_CALLED" and exits 0.
+        let fake_gh = tmp.join("fake_gh");
+        fs::write(&fake_gh, "#!/bin/bash\necho REAL_GH_CALLED\n").unwrap();
+        #[cfg(unix)]
+        fs::set_permissions(&fake_gh, fs::Permissions::from_mode(0o755)).unwrap();
+
+        (guard_dir, fake_gh)
+    }
+
+    /// Run the wrapper with given args and return (exit_code, stdout, stderr).
+    fn run_wrapper(guard_dir: &Path, fake_gh: &Path, args: &[&str]) -> (i32, String, String) {
+        let wrapper = guard_dir.join("gh");
+        let output = std::process::Command::new("bash")
+            .arg(&wrapper)
+            .args(args)
+            .env("CSA_REAL_GH", fake_gh.to_str().unwrap())
+            .output()
+            .expect("failed to run wrapper");
+        (
+            output.status.code().unwrap_or(-1),
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        )
+    }
+
+    #[test]
+    fn test_wrapper_blocks_auto_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        let (code, _stdout, stderr) =
+            run_wrapper(&guard_dir, &fake_gh, &["pr", "merge", "123", "--auto"]);
+        assert_eq!(code, 1, "should exit 1 for --auto");
+        assert!(
+            stderr.contains("auto-merge is prohibited"),
+            "stderr should contain prohibition message: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_blocks_enable_auto_merge_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        let (code, _stdout, stderr) = run_wrapper(
+            &guard_dir,
+            &fake_gh,
+            &["pr", "merge", "123", "--enable-auto-merge"],
+        );
+        assert_eq!(code, 1, "should exit 1 for --enable-auto-merge");
+        assert!(
+            stderr.contains("auto-merge is prohibited"),
+            "stderr should contain prohibition message: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_auto_flag_not_bypassed_by_force_skip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        let (code, _stdout, stderr) = run_wrapper(
+            &guard_dir,
+            &fake_gh,
+            &["pr", "merge", "123", "--auto", "--force-skip-pr-bot"],
+        );
+        assert_eq!(code, 1, "should exit 1 even with --force-skip-pr-bot");
+        assert!(
+            stderr.contains("auto-merge is prohibited"),
+            "--force-skip-pr-bot must NOT bypass --auto block: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_non_merge_command_passes_through() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        let (code, stdout, _stderr) = run_wrapper(&guard_dir, &fake_gh, &["pr", "view", "123"]);
+        assert_eq!(code, 0, "non-merge commands should pass through");
+        assert!(
+            stdout.contains("REAL_GH_CALLED"),
+            "should forward to real gh: {stdout}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_squash_merge_not_blocked_by_auto_check() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        // --squash without --auto should NOT be blocked by the auto-merge check.
+        // It will proceed to the marker check (which will fail since there's no
+        // marker), but the important thing is it's NOT blocked by the auto check.
+        let (_code, _stdout, stderr) =
+            run_wrapper(&guard_dir, &fake_gh, &["pr", "merge", "123", "--squash"]);
+        assert!(
+            !stderr.contains("auto-merge is prohibited"),
+            "--squash should NOT trigger auto-merge block: {stderr}"
         );
     }
 
