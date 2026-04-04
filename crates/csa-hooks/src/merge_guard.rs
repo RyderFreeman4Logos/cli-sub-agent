@@ -106,11 +106,25 @@ for arg in "$@"; do
   fi
 done
 
-# Extract PR number from args.
+# Block -R/--repo (cross-repo merges bypass local guard context).
+for arg in "$@"; do
+  case "$arg" in
+    -R|--repo)
+      echo "BLOCKED: cross-repo merge (-R/--repo) is not supported by CSA merge guard." >&2
+      exit 1
+      ;;
+  esac
+done
+
+# Extract PR number from args (supports numeric and URL formats).
 PR_NUMBER=""
 for arg in "$@"; do
   case "$arg" in
     [0-9]*) PR_NUMBER="$arg"; break ;;
+    https://*/pull/[0-9]*)
+      PR_NUMBER="$(echo "$arg" | grep -oE '/pull/([0-9]+)' | grep -oE '[0-9]+')"
+      [ -n "${PR_NUMBER}" ] && break
+      ;;
   esac
 done
 
@@ -648,6 +662,65 @@ mod tests {
         assert!(
             !stderr.contains("auto-merge is prohibited"),
             "--squash should NOT trigger auto-merge block: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_blocks_cross_repo_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        let (code, _stdout, stderr) = run_wrapper(
+            &guard_dir,
+            &fake_gh,
+            &["pr", "merge", "123", "-R", "other/repo"],
+        );
+        assert_eq!(code, 1, "should exit 1 for -R flag");
+        assert!(
+            stderr.contains("cross-repo merge"),
+            "stderr should mention cross-repo: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_blocks_repo_long_flag() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        let (code, _stdout, stderr) = run_wrapper(
+            &guard_dir,
+            &fake_gh,
+            &["pr", "merge", "123", "--repo", "other/repo"],
+        );
+        assert_eq!(code, 1, "should exit 1 for --repo flag");
+        assert!(
+            stderr.contains("cross-repo merge"),
+            "stderr should mention cross-repo: {stderr}"
+        );
+    }
+
+    #[test]
+    fn test_wrapper_extracts_pr_from_url() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+        // The URL should be parsed to extract PR number 456.
+        // It will proceed to marker check (which fails), but we verify
+        // it correctly determines the PR number by checking the error message.
+        let (_code, _stdout, stderr) = run_wrapper(
+            &guard_dir,
+            &fake_gh,
+            &[
+                "pr",
+                "merge",
+                "https://github.com/owner/repo/pull/456",
+                "--squash",
+            ],
+        );
+        // Should not say "cannot determine PR number" — that means URL parsing worked.
+        assert!(
+            !stderr.contains("cannot determine PR number"),
+            "URL PR number extraction should work: {stderr}"
         );
     }
 

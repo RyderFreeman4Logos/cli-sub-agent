@@ -97,8 +97,26 @@ pub fn extract_design_sections(content: &str, max_chars: Option<usize>) -> Optio
 }
 
 /// Wrap extracted design sections in `<design-context>` tags for prompt injection.
+///
+/// The branch name is XML-escaped to prevent tag injection from unusual branch names.
 pub fn format_design_context(branch: &str, sections: &str) -> String {
-    format!("<design-context branch=\"{branch}\">\n{sections}\n</design-context>\n\n")
+    let escaped = escape_xml_attr(branch);
+    format!("<design-context branch=\"{escaped}\">\n{sections}\n</design-context>\n\n")
+}
+
+/// Escape special XML characters in an attribute value.
+fn escape_xml_attr(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(ch),
+        }
+    }
+    out
 }
 
 /// Find the last valid UTF-8 char boundary at or before `max_bytes`.
@@ -338,6 +356,23 @@ Should not appear in output.
         // Should NOT include non-target sections.
         assert!(!result.contains("## Implementation Plan"));
         assert!(!result.contains("Should not appear"));
+    }
+
+    #[test]
+    fn test_format_design_context_escapes_branch_name() {
+        let output = format_design_context("feat/<script>\"inject&", "body");
+        assert!(output.contains("branch=\"feat/&lt;script&gt;&quot;inject&amp;\""));
+        assert!(!output.contains("<script>"));
+    }
+
+    #[test]
+    fn test_escape_xml_attr_no_special_chars() {
+        assert_eq!(escape_xml_attr("feat/my-branch"), "feat/my-branch");
+    }
+
+    #[test]
+    fn test_escape_xml_attr_all_special_chars() {
+        assert_eq!(escape_xml_attr("a&b\"c<d>e"), "a&amp;b&quot;c&lt;d&gt;e");
     }
 
     #[test]

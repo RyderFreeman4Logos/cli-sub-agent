@@ -36,6 +36,9 @@ pub(crate) fn inject_first_turn_context(
     // Design context from TODO plan's design.md reference.
     if let Some(dc) = load_design_context(project_root) {
         info!(bytes = dc.len(), "Injecting design context into prompt");
+        if !prompt.ends_with('\n') {
+            prompt.push('\n');
+        }
         prompt.push_str(&dc);
     }
 }
