@@ -383,19 +383,15 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             },
         );
 
-        // Accumulate findings from failed reviews for dedup and eventual
-        // promotion to the project review checklist.
-        // Skip during cumulative reviews (range: and base: scopes) to keep the
-        // working tree clean — cumulative reviews should not write to .csa/ files.
         let is_cumulative_review = review_scope_is_cumulative(&scope);
-        if verdict != CLEAN && !empty_output && !is_cumulative_review {
-            crate::review_findings::accumulate_findings(&project_root, &sanitized);
-        }
 
         if !args.fix || verdict == CLEAN {
-            // Fire PostReview hook only for final results (no fix loop pending).
-            // Hook stdout is forwarded so callers can mechanically chain the
-            // next required step without inferring it from prompts or docs.
+            // Accumulate only on FINAL result — prevents double-counting when
+            // --fix resolves the same issues.
+            if verdict != CLEAN && !empty_output && !is_cumulative_review {
+                crate::review_findings::accumulate_findings(&project_root, &sanitized);
+            }
+            // PostReview hook: only for final results (no fix loop pending).
             let post_review_output = build_post_review_output(
                 &crate::pipeline::capture_observational_hook_output(
                     csa_hooks::HookEvent::PostReview,
@@ -479,6 +475,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         );
         if fix_passed {
             emit_post_review_output(&post_review_output);
+        } else if !is_cumulative_review {
+            // Fix exhausted — accumulate original findings for promotion.
+            crate::review_findings::accumulate_findings(&project_root, &sanitized);
         }
 
         return fix_exit_code;

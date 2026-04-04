@@ -9,13 +9,16 @@
 //! so it cannot be bypassed by the LLM rationalizing "this is simple enough
 //! to merge directly".
 //!
-//! ## Configuration
+//! ## Activation
 //!
-//! ```toml
-//! # .csa/config.toml or ~/.config/cli-sub-agent/config.toml
-//! [hooks]
-//! merge_guard = true   # default: true
-//! ```
+//! The merge guard is always active in CSA subprocess environments.
+//! `inject_merge_guard_env` unconditionally prepends the wrapper to `PATH`
+//! for every tool subprocess, ensuring deterministic enforcement regardless
+//! of configuration.
+//!
+//! The `is_merge_guard_enabled` helper is available for callers that need
+//! an opt-out check (e.g. `csa hooks install`), but the subprocess injection
+//! path does not consult it.
 //!
 //! ## Bypass
 //!
