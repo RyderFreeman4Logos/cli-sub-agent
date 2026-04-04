@@ -303,8 +303,8 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     }
     if let (Some(guard), Some(cfg)) = (&mut resource_guard, config) {
         guard.check_health(
-            cfg.resources.memory_max_mb,
-            cfg.resources.memory_swap_max_mb,
+            cfg.sandbox_memory_max_mb(executor.tool_name()),
+            cfg.sandbox_memory_swap_max_mb(executor.tool_name()),
             60,
         );
     }

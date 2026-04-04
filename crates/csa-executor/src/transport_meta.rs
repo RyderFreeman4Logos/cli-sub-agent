@@ -200,6 +200,15 @@ pub(super) async fn run_acp_sandboxed(
     )
     .await?;
 
+    // Start memory monitor immediately after spawn, before initialize()/session
+    // setup, so cold-start memory usage is also tracked.
+    let memory_monitor = sandbox_handle
+        .scope_name()
+        .zip(connection.child_pid())
+        .and_then(|(scope, pid)| {
+            start_memory_monitor(scope, pid, isolation_plan, termination_grace_period)
+        });
+
     connection.initialize().await?;
 
     let acp_session_id = if let Some(resume_id) = resume_session_id {
@@ -224,34 +233,6 @@ pub(super) async fn run_acp_sandboxed(
         connection
             .new_session(system_prompt, Some(working_dir), meta.clone())
             .await?
-    };
-
-    // Start memory monitor if cgroup + soft limit configured.
-    let memory_monitor = if matches!(
-        isolation_plan.resource,
-        csa_resource::sandbox::ResourceCapability::CgroupV2
-    ) {
-        let scope_name = sandbox_handle.scope_name().map(|s| s.to_string());
-        let child_pid = connection.child_pid();
-        match (scope_name, child_pid, isolation_plan.memory_max_mb) {
-            (Some(scope), Some(pid), Some(max_mb)) if max_mb > 0 => {
-                let soft_pct = isolation_plan.soft_limit_percent.unwrap_or(80);
-                let interval_secs = isolation_plan.memory_monitor_interval_seconds.unwrap_or(5);
-                csa_resource::memory_monitor::start(
-                    csa_resource::memory_monitor::MemoryMonitorConfig {
-                        scope_name: scope,
-                        pgid: pid as i32,
-                        memory_max_bytes: max_mb * 1024 * 1024,
-                        soft_limit_percent: soft_pct,
-                        interval: std::time::Duration::from_secs(interval_secs),
-                        grace_period: termination_grace_period,
-                    },
-                )
-            }
-            _ => None,
-        }
-    } else {
-        None
     };
 
     let result = connection
@@ -379,4 +360,30 @@ fn last_non_empty_line(output: &str) -> &str {
 
 fn truncate_line(line: &str, max_chars: usize) -> String {
     line.chars().take(max_chars).collect()
+}
+
+/// Start a memory monitor given cgroup scope details and isolation plan parameters.
+///
+/// Shared by both ACP and legacy transport paths.  Returns `None` when
+/// monitoring is not applicable (no cgroup, zero max, etc.).
+pub(super) fn start_memory_monitor(
+    scope_name: &str,
+    pid: u32,
+    isolation_plan: &IsolationPlan,
+    grace_period: std::time::Duration,
+) -> Option<csa_resource::memory_monitor::MemoryMonitorHandle> {
+    let max_mb = isolation_plan.memory_max_mb.unwrap_or(0);
+    if pid == 0 || max_mb == 0 {
+        return None;
+    }
+    let soft_pct = isolation_plan.soft_limit_percent.unwrap_or(80);
+    let interval_secs = isolation_plan.memory_monitor_interval_seconds.unwrap_or(5);
+    csa_resource::memory_monitor::start(csa_resource::memory_monitor::MemoryMonitorConfig {
+        scope_name: scope_name.to_string(),
+        pgid: pid as i32,
+        memory_max_bytes: max_mb * 1024 * 1024,
+        soft_limit_percent: soft_pct,
+        interval: std::time::Duration::from_secs(interval_secs),
+        grace_period,
+    })
 }

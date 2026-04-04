@@ -200,7 +200,7 @@ impl LegacyTransport {
             spool_max_bytes: options.output_spool_max_bytes,
             keep_rotated_spool: options.output_spool_keep_rotated,
         };
-        let (child, _sandbox_handle) = match spawn_tool_sandboxed(
+        let (child, sandbox_handle) = match spawn_tool_sandboxed(
             cmd,
             stdin_data.clone(),
             spawn_options,
@@ -225,7 +225,21 @@ impl LegacyTransport {
             Err(e) => return Err(e),
         };
 
-        let execution = wait_and_capture_with_idle_timeout(
+        // Start memory monitor for legacy transport (mirrors ACP path).
+        let memory_monitor = if let csa_process::SandboxHandle::Cgroup(ref guard) = sandbox_handle {
+            isolation_plan.and_then(|plan| {
+                transport_meta::start_memory_monitor(
+                    guard.scope_name(),
+                    child.id().unwrap_or(0),
+                    plan,
+                    std::time::Duration::from_secs(options.termination_grace_period_seconds),
+                )
+            })
+        } else {
+            None
+        };
+
+        let mut execution = wait_and_capture_with_idle_timeout(
             child,
             options.stream_mode,
             std::time::Duration::from_secs(options.idle_timeout_seconds),
@@ -239,7 +253,23 @@ impl LegacyTransport {
         )
         .await?;
 
-        // _sandbox_handle is kept alive until here, then dropped (cleanup).
+        // Stop memory monitor before reading peak memory.
+        if let Some(monitor) = memory_monitor {
+            monitor.stop().await;
+        }
+
+        // Read peak memory from cgroup before sandbox_handle is dropped.
+        if let csa_process::SandboxHandle::Cgroup(ref guard) = sandbox_handle {
+            execution.peak_memory_mb = guard.memory_peak_mb();
+            if let Some(peak) = execution.peak_memory_mb {
+                tracing::info!(
+                    tool = tool_name,
+                    peak_memory_mb = peak,
+                    "legacy transport: cgroup peak memory recorded"
+                );
+            }
+        }
+        // sandbox_handle is dropped here, cleaning up cgroup scope if applicable.
 
         Ok(TransportResult {
             execution,
