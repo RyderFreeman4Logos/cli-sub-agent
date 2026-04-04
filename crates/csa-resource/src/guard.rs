@@ -35,8 +35,9 @@ impl ResourceGuard {
 
     /// Check if enough resources are available to launch a tool.
     ///
-    /// Simple threshold: available_memory + available_swap >= reserve_mb.
-    /// No per-tool P95 estimation — just a flat reserve check.
+    /// Two-tier threshold:
+    /// - **Hard block**: available < reserve_mb → refuse to launch.
+    /// - **Warning**: available < 150% of reserve_mb → warn but allow.
     pub fn check_availability(&mut self, tool_name: &str) -> Result<()> {
         self.sys.refresh_memory();
 
@@ -48,17 +49,13 @@ impl ResourceGuard {
         let available_swap = available_swap_bytes / 1024 / 1024;
         let available_total = available_total_bytes / 1024 / 1024;
 
-        let reserve = self.limits.min_free_memory_mb;
-
-        if available_total < reserve {
-            bail!(
-                "OOM Risk Prevention: Not enough memory to launch '{tool_name}'.\n\
-                Available: {available_total} MB (physical {available_phys} + swap {available_swap}), Reserve: {reserve} MB\n\
-                (Try closing other apps or wait for running agents to finish)",
-            );
-        }
-
-        Ok(())
+        evaluate_memory_availability(
+            tool_name,
+            available_total,
+            available_phys,
+            available_swap,
+            self.limits.min_free_memory_mb,
+        )
     }
 
     /// Warn if configured cgroup limits exceed a percentage of total system RAM.
@@ -99,6 +96,46 @@ impl ResourceGuard {
     }
 }
 
+/// Multiplier for the warning threshold (150% of reserve).
+const WARNING_MULTIPLIER_NUM: u64 = 3;
+const WARNING_MULTIPLIER_DEN: u64 = 2;
+
+/// Pure evaluation of memory availability against reserve.
+///
+/// - Hard block when `available_total_mb < reserve_mb`.
+/// - Warning when `available_total_mb < reserve_mb * 150%`.
+/// - Silent pass otherwise.
+fn evaluate_memory_availability(
+    tool_name: &str,
+    available_total_mb: u64,
+    available_phys_mb: u64,
+    available_swap_mb: u64,
+    reserve_mb: u64,
+) -> Result<()> {
+    if available_total_mb < reserve_mb {
+        bail!(
+            "Insufficient system memory: available {available_total_mb}MB \
+             (physical {available_phys_mb} + swap {available_swap_mb}) \
+             but session requires {reserve_mb}MB. \
+             Free memory or reduce [resources] memory_mb in config."
+        );
+    }
+
+    let warn_threshold = reserve_mb.saturating_mul(WARNING_MULTIPLIER_NUM) / WARNING_MULTIPLIER_DEN;
+    if available_total_mb < warn_threshold {
+        warn!(
+            available_mb = available_total_mb,
+            reserve_mb,
+            warn_threshold_mb = warn_threshold,
+            "Low memory: {available_total_mb}MB available for '{tool_name}' \
+             (reserve {reserve_mb}MB, warning threshold {warn_threshold}MB). \
+             Session will proceed but may hit OOM pressure."
+        );
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -131,8 +168,8 @@ mod tests {
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
-            err_msg.contains("OOM Risk Prevention"),
-            "Expected OOM error, got: {err_msg}"
+            err_msg.contains("Insufficient system memory"),
+            "Expected memory error, got: {err_msg}"
         );
     }
 
@@ -169,5 +206,53 @@ mod tests {
         // The check should pass because combined >= 1 MB
         let result = guard.check_availability("swap_tool");
         assert!(result.is_ok(), "combined {combined} MB should be >= 1 MB");
+    }
+
+    // --- Pure function tests (deterministic, no sysinfo dependency) ---
+
+    #[test]
+    fn test_evaluate_hard_block_when_available_below_reserve() {
+        let result = evaluate_memory_availability("test_tool", 3000, 2000, 1000, 4096);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(
+            msg.contains("Insufficient system memory"),
+            "Expected hard block, got: {msg}"
+        );
+        assert!(msg.contains("3000MB"), "Should show available: {msg}");
+        assert!(msg.contains("4096MB"), "Should show reserve: {msg}");
+    }
+
+    #[test]
+    fn test_evaluate_warning_when_available_between_100_and_150_percent() {
+        // reserve=4096, 150% = 6144. available=5000 is between 4096..6144.
+        let result = evaluate_memory_availability("test_tool", 5000, 4000, 1000, 4096);
+        // Should succeed (warning only, no error).
+        assert!(result.is_ok(), "Should warn but not block: {result:?}");
+    }
+
+    #[test]
+    fn test_evaluate_no_warning_when_available_above_150_percent() {
+        // reserve=4096, 150% = 6144. available=7000 is above 6144.
+        let result = evaluate_memory_availability("test_tool", 7000, 6000, 1000, 4096);
+        assert!(result.is_ok(), "Should pass without warning: {result:?}");
+    }
+
+    #[test]
+    fn test_evaluate_exact_boundary_at_reserve() {
+        // Exactly at reserve — should pass (not strictly less than).
+        let result = evaluate_memory_availability("test_tool", 4096, 3000, 1096, 4096);
+        assert!(result.is_ok(), "Exact reserve should pass: {result:?}");
+    }
+
+    #[test]
+    fn test_evaluate_exact_boundary_at_warning_threshold() {
+        // reserve=4096, 150% = 6144. available=6144 is exactly at warning threshold.
+        let result = evaluate_memory_availability("test_tool", 6144, 5000, 1144, 4096);
+        // 6144 is NOT < 6144, so no warning.
+        assert!(
+            result.is_ok(),
+            "Exact warning threshold should pass: {result:?}"
+        );
     }
 }
