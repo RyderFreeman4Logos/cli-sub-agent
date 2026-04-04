@@ -39,6 +39,7 @@ mod process_tree;
 mod review_cmd;
 mod review_consensus;
 mod review_context;
+mod review_findings;
 mod review_routing;
 mod run_cmd;
 mod run_cmd_daemon;

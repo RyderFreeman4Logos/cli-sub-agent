@@ -383,6 +383,12 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             },
         );
 
+        // Accumulate findings from failed reviews for dedup and eventual
+        // promotion to the project review checklist.
+        if verdict != CLEAN && !empty_output {
+            crate::review_findings::accumulate_findings(&project_root, &result.execution.output);
+        }
+
         if !args.fix || verdict == CLEAN {
             // Fire PostReview hook only for final results (no fix loop pending).
             // Hook stdout is forwarded so callers can mechanically chain the
