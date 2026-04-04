@@ -226,12 +226,12 @@ fn memory_max_lightweight_gets_none() {
 }
 
 #[test]
-fn memory_max_codex_gets_heavyweight_default() {
+fn memory_max_codex_gets_elevated_default() {
     let cfg = empty_config();
     assert_eq!(
         cfg.sandbox_memory_max_mb("codex"),
-        Some(4096),
-        "codex (Heavyweight) should get 4096 MB default"
+        Some(12288),
+        "codex should get 12288 MB default (Node.js + Rust compilation headroom)"
     );
 }
 
@@ -673,8 +673,8 @@ fn default_sandbox_for_tool_codex() {
     );
     assert_eq!(
         opts.memory_max_mb,
-        Some(4096),
-        "codex (Heavyweight) must get default memory limit"
+        Some(12288),
+        "codex must get elevated memory limit (Node.js + Rust compilation)"
     );
     assert_eq!(
         opts.memory_swap_max_mb,

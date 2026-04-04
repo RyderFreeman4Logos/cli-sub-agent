@@ -14,6 +14,8 @@ mod output_helpers;
 #[path = "lib_subprocess_helpers.rs"]
 mod subprocess_helpers;
 mod tool_liveness;
+#[cfg(unix)]
+pub use daemon_stderr::DEFAULT_STDERR_SPOOL_MAX_BYTES;
 pub use output_helpers::{
     CompressDecision, DEFAULT_SPOOL_KEEP_ROTATED, DEFAULT_SPOOL_MAX_BYTES, SpoolRotator,
     sanitize_spool_plan, should_compress_output,
@@ -36,6 +38,8 @@ pub use tool_liveness::{DEFAULT_LIVENESS_DEAD_SECS, ToolLiveness};
 
 #[cfg(unix)]
 pub mod daemon;
+#[cfg(unix)]
+pub mod daemon_stderr;
 
 #[cfg(feature = "codex-pty-fork")]
 pub mod pty_fork;
