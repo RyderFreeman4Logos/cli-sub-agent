@@ -145,10 +145,10 @@ for arg in "$@"; do
   case "$arg" in
     pr|merge) SEEN_MERGE=true ;;
     # Flags whose NEXT token is a value (not a PR number).
-    -t|--subject|-b|--body|-F|--body-file|--merge-method|--match-head-commit|-H|--head)
+    -t|--subject|-b|--body|-F|--body-file|--merge-method|--match-head-commit|-H|--head|-A|--author-email)
       SKIP_NEXT=true ;;
     # Equals-form: value is embedded, just skip the whole token.
-    --subject=*|--body=*|--body-file=*|--merge-method=*|--match-head-commit=*|--head=*)
+    --subject=*|--body=*|--body-file=*|--merge-method=*|--match-head-commit=*|--head=*|--author-email=*)
       ;;
     --*|-*) ;; # other flags (no value)
     *)

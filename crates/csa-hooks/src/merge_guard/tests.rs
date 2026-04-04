@@ -562,3 +562,55 @@ fn test_wrapper_numeric_flag_value_not_treated_as_pr_number() {
         "-t 123: should fail to determine PR number: {stderr}"
     );
 }
+
+#[test]
+fn test_wrapper_author_email_flag_not_blocking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+    // `gh pr merge --author-email foo@example.com 789`
+    // "foo@example.com" should NOT be treated as a non-numeric positional.
+    let (_code, _stdout, stderr) = run_wrapper(
+        &guard_dir,
+        &fake_gh,
+        &["pr", "merge", "--author-email", "foo@example.com", "789"],
+    );
+    assert!(
+        !stderr.contains("only accepts numeric PR numbers"),
+        "--author-email value should not trigger rejection: {stderr}"
+    );
+}
+
+#[test]
+fn test_wrapper_author_email_equals_form_not_blocking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+    // `gh pr merge --author-email=foo@example.com 789`
+    let (_code, _stdout, stderr) = run_wrapper(
+        &guard_dir,
+        &fake_gh,
+        &["pr", "merge", "--author-email=foo@example.com", "789"],
+    );
+    assert!(
+        !stderr.contains("only accepts numeric PR numbers"),
+        "--author-email=value should not trigger rejection: {stderr}"
+    );
+}
+
+#[test]
+fn test_wrapper_author_email_short_flag_not_blocking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (guard_dir, fake_gh) = setup_wrapper_env(tmp.path());
+
+    // `gh pr merge -A foo@example.com 789`
+    let (_code, _stdout, stderr) = run_wrapper(
+        &guard_dir,
+        &fake_gh,
+        &["pr", "merge", "-A", "foo@example.com", "789"],
+    );
+    assert!(
+        !stderr.contains("only accepts numeric PR numbers"),
+        "-A value should not trigger rejection: {stderr}"
+    );
+}
