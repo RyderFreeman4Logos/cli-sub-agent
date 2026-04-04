@@ -378,3 +378,78 @@ fn test_keyword_overlap_empty_sets() {
     assert!(!keyword_overlap_exceeds(&empty, &non_empty));
     assert!(!keyword_overlap_exceeds(&non_empty, &empty));
 }
+
+// ── UTF-8 safety ──────────────────────────────────────────────────────────
+
+/// Build a long multi-byte string (CJK chars, 3 bytes each) using Unicode escapes.
+fn long_multibyte_string() -> String {
+    // 40 CJK chars = 120 bytes, well over max_len=30
+    std::iter::repeat_n('\u{9519}', 40).collect()
+}
+
+/// Build a short multi-byte string: 4 CJK chars = 12 bytes.
+fn short_multibyte_string() -> String {
+    format!("{}{}{}{}", '\u{4F60}', '\u{597D}', '\u{4E16}', '\u{754C}')
+}
+
+#[test]
+fn test_truncate_finding_multibyte_text_no_panic() {
+    // Each CJK char is 3 bytes.  A max_len that falls mid-character
+    // must not panic.
+    let text = long_multibyte_string();
+    let result = truncate_finding(&text, 30);
+    // Should not panic, and result should be valid UTF-8
+    assert!(result.ends_with("..."));
+}
+
+#[test]
+fn test_floor_char_boundary_mid_character() {
+    let s = short_multibyte_string(); // 12 bytes
+    assert_eq!(floor_char_boundary(&s, 4), 3);
+    assert_eq!(floor_char_boundary(&s, 5), 3);
+    assert_eq!(floor_char_boundary(&s, 6), 6);
+    assert_eq!(floor_char_boundary(&s, 0), 0);
+    assert_eq!(floor_char_boundary(&s, 12), 12);
+    assert_eq!(floor_char_boundary(&s, 100), 12);
+}
+
+// ── Deduplicate incoming findings ─────────────────────────────────────────
+
+#[test]
+fn test_append_candidates_deduplicates_within_single_call() {
+    let temp = tempdir().unwrap();
+    let candidates_path = temp.path().join(".csa").join("candidates.md");
+
+    // Three duplicates of the same finding in one call should only
+    // increment count by 1, not 3.
+    let findings = vec![
+        "Missing error context in anyhow chains throughout module".to_string(),
+        "Missing error context in anyhow chain propagation code".to_string(),
+        "Missing error context in anyhow error chains for debugging".to_string(),
+    ];
+
+    append_candidates(&findings, &candidates_path).unwrap();
+
+    let content = std::fs::read_to_string(&candidates_path).unwrap();
+    // Should have count:1, not count:3
+    assert!(content.contains("[count:1]"));
+    assert!(!content.contains("[count:2]"));
+    assert!(!content.contains("[count:3]"));
+}
+
+#[test]
+fn test_append_candidates_distinct_findings_not_deduped() {
+    let temp = tempdir().unwrap();
+    let candidates_path = temp.path().join(".csa").join("candidates.md");
+
+    let findings = vec![
+        "Missing error context in anyhow chains throughout module".to_string(),
+        "Subprocess lifecycle missing RAII cleanup guard pattern".to_string(),
+    ];
+
+    append_candidates(&findings, &candidates_path).unwrap();
+
+    let content = std::fs::read_to_string(&candidates_path).unwrap();
+    // Both should be separate entries with count:1
+    assert_eq!(content.matches("[count:1]").count(), 2);
+}

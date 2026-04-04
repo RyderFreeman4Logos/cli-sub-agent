@@ -102,13 +102,29 @@ fn truncate_finding(text: &str, max_len: usize) -> String {
     if text.len() <= max_len {
         text.to_string()
     } else {
-        let mut end = max_len;
+        // Find last valid char boundary to avoid panics on multi-byte UTF-8.
+        let safe_end = floor_char_boundary(text, max_len);
+        let mut end = safe_end;
         // Try to cut at a word boundary
-        if let Some(space_pos) = text[..max_len].rfind(' ') {
+        if let Some(space_pos) = text[..safe_end].rfind(' ') {
             end = space_pos;
         }
         format!("{}...", &text[..end])
     }
+}
+
+/// Find the last valid UTF-8 char boundary at or before `max_bytes`.
+///
+/// Prevents panics when truncating strings containing multi-byte characters.
+fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {
+    if max_bytes >= s.len() {
+        return s.len();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 // ── Deduplication ───────────────────────────────────────────────────────────
@@ -199,14 +215,24 @@ struct CandidateEntry {
 
 /// Append new findings to the candidates file, incrementing counts for
 /// fuzzy-matched existing candidates.
+///
+/// Deduplicates `new_findings` first so that each unique finding increments
+/// a candidate's count by at most 1 per call. This ensures the promotion
+/// threshold reflects independent review sessions, not repeated mentions
+/// within a single review output.
 pub(crate) fn append_candidates(new_findings: &[String], candidates_path: &Path) -> Result<()> {
     if new_findings.is_empty() {
         return Ok(());
     }
 
+    // Deduplicate incoming findings: each unique finding increments at most
+    // once per call, so 3 *calls* (reviews) are needed for promotion, not
+    // 3 duplicate mentions in one output.
+    let unique_findings = dedupe_incoming_findings(new_findings);
+
     let mut candidates = load_candidates(candidates_path);
 
-    for finding in new_findings {
+    for finding in &unique_findings {
         if let Some(existing) = candidates
             .iter_mut()
             .find(|c| keyword_overlap_exceeds(&keywords(&c.text), &keywords(finding)))
@@ -228,6 +254,21 @@ pub(crate) fn append_candidates(new_findings: &[String], candidates_path: &Path)
     }
 
     write_candidates(&candidates, candidates_path)
+}
+
+/// Remove duplicate findings within a single batch using the same fuzzy
+/// keyword-overlap matching used elsewhere.  Keeps the first occurrence.
+fn dedupe_incoming_findings(findings: &[String]) -> Vec<String> {
+    let mut unique: Vec<String> = Vec::with_capacity(findings.len());
+    for finding in findings {
+        let dominated = unique
+            .iter()
+            .any(|existing| keyword_overlap_exceeds(&keywords(existing), &keywords(finding)));
+        if !dominated {
+            unique.push(finding.clone());
+        }
+    }
+    unique
 }
 
 /// Promote candidates that have reached the threshold count to the main

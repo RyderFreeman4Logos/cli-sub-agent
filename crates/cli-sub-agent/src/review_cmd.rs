@@ -385,7 +385,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
 
         // Accumulate findings from failed reviews for dedup and eventual
         // promotion to the project review checklist.
-        if verdict != CLEAN && !empty_output {
+        // Skip during range reviews (cumulative PR review) to keep the working
+        // tree clean — range reviews should not write to .csa/ files.
+        let is_range_review = scope.starts_with("range:");
+        if verdict != CLEAN && !empty_output && !is_range_review {
             crate::review_findings::accumulate_findings(&project_root, &result.execution.output);
         }
 

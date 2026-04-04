@@ -65,10 +65,12 @@ pub fn extract_design_sections(content: &str, max_chars: Option<usize>) -> Optio
     }
 
     // Truncate to character budget, breaking at last newline within limit.
+    // Use char-boundary-safe truncation to avoid panics on multi-byte UTF-8.
     let output = if trimmed.len() <= limit {
         trimmed.to_string()
     } else {
-        let truncated = &trimmed[..limit];
+        let safe_end = floor_char_boundary(trimmed, limit);
+        let truncated = &trimmed[..safe_end];
         // Find last newline to avoid cutting mid-line.
         if let Some(pos) = truncated.rfind('\n') {
             format!("{}\n[...truncated]", &truncated[..pos])
@@ -83,6 +85,20 @@ pub fn extract_design_sections(content: &str, max_chars: Option<usize>) -> Optio
 /// Wrap extracted design sections in `<design-context>` tags for prompt injection.
 pub fn format_design_context(branch: &str, sections: &str) -> String {
     format!("<design-context branch=\"{branch}\">\n{sections}\n</design-context>\n\n")
+}
+
+/// Find the last valid UTF-8 char boundary at or before `max_bytes`.
+///
+/// Prevents panics when truncating strings containing multi-byte characters.
+fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {
+    if max_bytes >= s.len() {
+        return s.len();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 /// Parse a markdown heading line, returning (level, title text).
@@ -218,6 +234,35 @@ Unrelated.
         assert!(output.contains("<design-context branch=\"feat/my-feature\">"));
         assert!(output.contains("## Key Decisions"));
         assert!(output.contains("</design-context>"));
+    }
+
+    /// Build a multi-byte decision line using Unicode escapes (avoids literal CJK).
+    fn multibyte_decision_line(i: usize) -> String {
+        // U+6D4B U+8BD5 = 2 CJK chars meaning "test"
+        format!("- {}{} item {i}\n", '\u{6D4B}', '\u{8BD5}')
+    }
+
+    #[test]
+    fn test_extract_design_sections_truncates_multibyte_without_panic() {
+        // Multi-byte chars are 3 bytes each; truncating at an arbitrary byte
+        // offset without char-boundary awareness would panic.
+        let mut content = String::from("## Key Decisions\n");
+        for i in 0..300 {
+            content.push_str(&multibyte_decision_line(i));
+        }
+        let result = extract_design_sections(&content, Some(200)).unwrap();
+        assert!(result.contains("[...truncated]"));
+        // Valid UTF-8 guaranteed by String, but verify no mid-char cut.
+        assert!(result.is_char_boundary(result.len()));
+    }
+
+    #[test]
+    fn test_floor_char_boundary_multibyte() {
+        // 4 CJK chars x 3 bytes = 12 bytes total
+        let s = format!("{}{}{}{}", '\u{4F60}', '\u{597D}', '\u{4E16}', '\u{754C}');
+        assert_eq!(floor_char_boundary(&s, 4), 3);
+        assert_eq!(floor_char_boundary(&s, 6), 6);
+        assert_eq!(floor_char_boundary(&s, 100), s.len());
     }
 
     #[test]

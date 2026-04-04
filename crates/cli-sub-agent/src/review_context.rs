@@ -135,9 +135,12 @@ pub(crate) fn discover_review_checklist(project_root: &Path) -> Option<String> {
     }
 
     if trimmed.len() > REVIEW_CHECKLIST_MAX_CHARS {
-        let truncated = &trimmed[..REVIEW_CHECKLIST_MAX_CHARS];
+        // Find last valid char boundary at or before the max length to avoid
+        // panicking on multi-byte UTF-8 characters (e.g. Chinese text).
+        let safe_end = floor_char_boundary(trimmed, REVIEW_CHECKLIST_MAX_CHARS);
+        let truncated = &trimmed[..safe_end];
         // Find last newline to avoid cutting mid-line
-        let cut_point = truncated.rfind('\n').unwrap_or(REVIEW_CHECKLIST_MAX_CHARS);
+        let cut_point = truncated.rfind('\n').unwrap_or(safe_end);
         let mut result = trimmed[..cut_point].to_string();
         result.push_str("\n\n<!-- WARNING: review checklist truncated (exceeded 4000 chars) -->");
         warn!(
@@ -166,6 +169,22 @@ pub(crate) fn render_spec_review_context(spec: &SpecDocument) -> String {
         ));
     }
     rendered
+}
+
+/// Find the last valid UTF-8 char boundary at or before `max_bytes`.
+///
+/// On stable Rust this replaces `str::floor_char_boundary()` (nightly-only).
+/// Prevents panics when truncating strings containing multi-byte characters
+/// (e.g. Chinese text common in this project).
+fn floor_char_boundary(s: &str, max_bytes: usize) -> usize {
+    if max_bytes >= s.len() {
+        return s.len();
+    }
+    let mut end = max_bytes;
+    while !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    end
 }
 
 fn criterion_kind_label(kind: CriterionKind) -> &'static str {
@@ -366,6 +385,56 @@ mod tests {
         let checklist = discover_review_checklist(temp.path());
 
         assert!(checklist.is_none());
+    }
+
+    /// Build a multi-byte UTF-8 string for testing (avoids literal CJK in source).
+    fn multibyte_line() -> String {
+        // U+4F60 U+597D = 2 CJK chars, 6 bytes
+        format!("- [ ] {}{}\n", '\u{4F60}', '\u{597D}')
+    }
+
+    /// Build a short multi-byte string: 4 CJK chars = 12 bytes.
+    fn multibyte_short() -> String {
+        format!("{}{}{}{}", '\u{4F60}', '\u{597D}', '\u{4E16}', '\u{754C}')
+    }
+
+    #[test]
+    fn discover_review_checklist_truncates_multibyte_text_without_panic() {
+        let temp = tempdir().unwrap();
+        let csa_dir = temp.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+
+        // Build content with multi-byte chars (3 bytes each in UTF-8) that
+        // exceeds REVIEW_CHECKLIST_MAX_CHARS.  Truncating by byte index without
+        // respecting char boundaries would panic.
+        let line = multibyte_line();
+        let repeat_count = (REVIEW_CHECKLIST_MAX_CHARS / line.len()) + 10;
+        let oversized = line.repeat(repeat_count);
+        assert!(oversized.len() > REVIEW_CHECKLIST_MAX_CHARS);
+
+        std::fs::write(csa_dir.join("review-checklist.md"), &oversized).unwrap();
+
+        // Must not panic
+        let checklist = discover_review_checklist(temp.path()).unwrap();
+        assert!(checklist.contains("WARNING: review checklist truncated"));
+        // Verify the output is valid UTF-8 (String guarantees this, but let's
+        // also confirm it doesn't end mid-character).
+        assert!(checklist.is_char_boundary(checklist.len()));
+    }
+
+    #[test]
+    fn floor_char_boundary_on_ascii() {
+        assert_eq!(super::floor_char_boundary("hello", 3), 3);
+        assert_eq!(super::floor_char_boundary("hello", 10), 5);
+    }
+
+    #[test]
+    fn floor_char_boundary_on_multibyte() {
+        let s = multibyte_short(); // 4 chars x 3 bytes = 12 bytes
+        // Byte 4 is mid-char; should snap back to byte 3.
+        assert_eq!(super::floor_char_boundary(&s, 4), 3);
+        assert_eq!(super::floor_char_boundary(&s, 5), 3);
+        assert_eq!(super::floor_char_boundary(&s, 6), 6);
     }
 
     #[test]
