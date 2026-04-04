@@ -51,12 +51,23 @@ fn profile_defaults(profile: ToolResourceProfile) -> ProfileDefaults {
 }
 
 fn default_memory_max_mb_for_tool(tool: &str) -> Option<u64> {
-    if tool == "gemini-cli" {
-        // Gemini CLI workloads are highly variable. A hard 2GB default often
-        // fails in real projects before useful output is produced.
-        return None;
+    match tool {
+        "gemini-cli" => {
+            // Gemini CLI workloads are highly variable. A hard 2GB default often
+            // fails in real projects before useful output is produced.
+            None
+        }
+        "codex" => {
+            // Codex uses codex-acp (Node.js) as backend which alone can consume
+            // 5+ GB. When the tool also drives Rust compilation (cargo, rustc,
+            // proc-macro expansion), 4096 MB is insufficient and 8192 MB still
+            // OOMs in large workspaces. 12288 MB (12 GB) provides headroom for
+            // Node.js runtime + full Rust compilation toolchain.
+            // See: GitHub issue #555.
+            Some(12288)
+        }
+        _ => profile_defaults(default_profile(tool)).memory_max_mb,
     }
-    profile_defaults(default_profile(tool)).memory_max_mb
 }
 
 fn default_memory_swap_max_mb_for_tool(tool: &str) -> Option<u64> {

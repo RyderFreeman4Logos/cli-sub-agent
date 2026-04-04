@@ -158,8 +158,9 @@ impl IsolationPlanBuilder {
 
     /// Apply per-tool default paths and environment overrides.
     ///
-    /// Always adds `project_root` and `session_dir`.  Tool-specific config
-    /// directories are appended based on `tool_name`.
+    /// Always adds `project_root`, `session_dir`, and common writable paths
+    /// that all tools need (XDG state dir, mise cache, TMPDIR).  Tool-specific
+    /// config directories are appended based on `tool_name`.
     ///
     /// When `project_root` is inside a git submodule (`.git` is a file, not a
     /// directory), the superproject root is discovered by walking ancestors and
@@ -185,6 +186,21 @@ impl IsolationPlanBuilder {
         }
 
         if let Some(home) = home_dir() {
+            // Common writable paths needed by all tools:
+            // - XDG_STATE_HOME (~/.local/state): cargo compilation writes proc-macro
+            //   artifacts here; without write access tools get "Read-only file system
+            //   (os error 30)" on Rust compilation.
+            let xdg_state = std::env::var("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join(".local/state"));
+            self.writable_paths.push(xdg_state);
+
+            // mise cache: tools launched via mise shims (rustc, cargo, node) write
+            // to ~/.cache/mise during startup and compilation. Without write access,
+            // mise-managed toolchains fail with "Read-only file system".
+            self.writable_paths.push(home.join(".cache/mise"));
+
+            // Tool-specific config/data directories.
             match tool_name {
                 "claude-code" => {
                     self.writable_paths.push(home.join(".claude"));
@@ -197,8 +213,6 @@ impl IsolationPlanBuilder {
                     self.writable_paths.push(home.join(".gemini"));
                     // XDG config dir (settings.json, etc.)
                     self.writable_paths.push(home.join(".config/gemini-cli"));
-                    // mise shims may need a writable cache during Gemini startup.
-                    self.writable_paths.push(home.join(".cache/mise"));
                 }
                 "opencode" => {
                     self.writable_paths.push(home.join(".config/opencode"));
@@ -455,6 +469,18 @@ mod tests {
                 plan.writable_paths.contains(&home.join(".claude")),
                 "claude-code defaults should include ~/.claude"
             );
+            // Common paths: XDG_STATE_HOME and mise cache
+            let xdg_state = std::env::var("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join(".local/state"));
+            assert!(
+                plan.writable_paths.contains(&xdg_state),
+                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
+            );
+            assert!(
+                plan.writable_paths.contains(&home.join(".cache/mise")),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
+            );
         }
     }
 
@@ -511,16 +537,13 @@ mod tests {
             .build()
             .expect("should succeed");
 
-        // Only project + session + ~/.claude should be present (no superproject)
-        let non_tool_paths: Vec<_> = plan
-            .writable_paths
-            .iter()
-            .filter(|p| *p == &project || *p == &session)
-            .collect();
-        assert_eq!(
-            non_tool_paths.len(),
-            2,
-            "should only have project + session as base writable paths"
+        // project + session should be present (no superproject)
+        assert!(plan.writable_paths.contains(&project));
+        assert!(plan.writable_paths.contains(&session));
+        // Superproject should NOT be present
+        assert!(
+            !plan.writable_paths.contains(&tmp.path().to_path_buf()),
+            "non-submodule should not add superproject root"
         );
     }
 
@@ -559,6 +582,18 @@ mod tests {
                 plan.writable_paths.contains(&home.join(".codex")),
                 "codex defaults should include ~/.codex"
             );
+            // Common paths: XDG_STATE_HOME and mise cache
+            let xdg_state = std::env::var("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join(".local/state"));
+            assert!(
+                plan.writable_paths.contains(&xdg_state),
+                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
+            );
+            assert!(
+                plan.writable_paths.contains(&home.join(".cache/mise")),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
+            );
         }
     }
 
@@ -586,9 +621,10 @@ mod tests {
                     .contains(&home.join(".config/gemini-cli")),
                 "gemini-cli defaults should include ~/.config/gemini-cli"
             );
+            // mise cache is now a common path for all tools
             assert!(
                 plan.writable_paths.contains(&home.join(".cache/mise")),
-                "gemini-cli defaults should include ~/.cache/mise for mise-managed shims"
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
             );
         }
     }
@@ -611,6 +647,18 @@ mod tests {
             assert!(
                 plan.writable_paths.contains(&home.join(".config/opencode")),
                 "opencode defaults should include ~/.config/opencode"
+            );
+            // Common paths: XDG_STATE_HOME and mise cache
+            let xdg_state = std::env::var("XDG_STATE_HOME")
+                .map(PathBuf::from)
+                .unwrap_or_else(|_| home.join(".local/state"));
+            assert!(
+                plan.writable_paths.contains(&xdg_state),
+                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
+            );
+            assert!(
+                plan.writable_paths.contains(&home.join(".cache/mise")),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
             );
         }
     }
