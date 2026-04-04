@@ -131,7 +131,10 @@ impl SessionConfig {
     }
 
     pub fn resolved_stderr_spool_max_mb(&self) -> u32 {
+        // Fallback chain: stderr_spool_max_mb → spool_max_mb → 50 MiB default.
+        // This matches the field comment ("None means inherit spool_max_mb").
         self.stderr_spool_max_mb
+            .or(self.spool_max_mb)
             .unwrap_or(DEFAULT_STDERR_SPOOL_MAX_MB)
     }
 

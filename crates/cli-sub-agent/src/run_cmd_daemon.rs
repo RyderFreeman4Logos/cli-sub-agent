@@ -10,9 +10,24 @@ use anyhow::Result;
 /// Holds the stderr rotation guard (if installed) so that stderr.log rotation
 /// remains active for the entire daemon child lifetime.  Must be kept alive
 /// until the process exits.
+///
+/// Call [`finalize`](Self::finalize) explicitly before any `process::exit()`
+/// since `exit()` skips Drop destructors.
 pub(crate) struct DaemonChildGuard {
     /// Kept alive to maintain stderr rotation; dropped on process exit.
     _stderr_rotation: Option<csa_process::daemon_stderr::StderrRotationGuard>,
+}
+
+impl DaemonChildGuard {
+    /// Explicitly shut down the stderr rotation guard before process exit.
+    ///
+    /// This is a no-op if no stderr rotation was installed.
+    #[allow(dead_code)]
+    pub(crate) fn finalize(&mut self) {
+        if let Some(guard) = &mut self._stderr_rotation {
+            guard.finalize();
+        }
+    }
 }
 
 /// Check daemon flags and either spawn+exit or propagate session ID.

@@ -28,19 +28,49 @@ pub const DEFAULT_STDERR_SPOOL_MAX_BYTES: u64 = 50 * 1024 * 1024;
 /// When dropped, signals the background reader thread to stop and waits for it
 /// to finish.  This ensures the final stderr.log rotation/flush occurs before
 /// the daemon process exits.
+///
+/// Call [`finalize`](Self::finalize) explicitly before `process::exit()` since
+/// `exit()` skips Drop.
 pub struct StderrRotationGuard {
     shutdown: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
+    /// The raw fd for the pipe write-end (i.e. fd 2 after dup2).  Stored so
+    /// we can close it to unblock the reader thread during shutdown.
+    write_fd: i32,
+}
+
+impl StderrRotationGuard {
+    /// Explicitly shut down the stderr rotation, flush the spool, and join the
+    /// background thread.  Call this before `process::exit()` which skips Drop.
+    ///
+    /// After this call the guard is inert — a subsequent Drop is a no-op.
+    pub fn finalize(&mut self) {
+        self.shutdown_inner();
+    }
+
+    fn shutdown_inner(&mut self) {
+        self.shutdown.store(true, Ordering::Release);
+
+        // Close the write end of the pipe so the reader thread's `read()`
+        // returns EOF and exits promptly, rather than blocking indefinitely.
+        if self.write_fd >= 0 {
+            // SAFETY: write_fd is the pipe write-end (fd 2) that we own.
+            // Closing it unblocks the reader thread.  After this, any
+            // further writes to fd 2 will get EBADF, which is acceptable
+            // during shutdown.
+            unsafe { libc::close(self.write_fd) };
+            self.write_fd = -1;
+        }
+
+        if let Some(handle) = self.thread.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 impl Drop for StderrRotationGuard {
     fn drop(&mut self) {
-        self.shutdown.store(true, Ordering::Release);
-        if let Some(handle) = self.thread.take() {
-            // The thread will exit once the pipe write-end (fd 2) is closed by
-            // process exit, or when the shutdown flag is observed between reads.
-            let _ = handle.join();
-        }
+        self.shutdown_inner();
     }
 }
 
@@ -121,6 +151,7 @@ pub fn install_stderr_rotation(
     Ok(StderrRotationGuard {
         shutdown,
         thread: Some(thread),
+        write_fd: 2,
     })
 }
 
