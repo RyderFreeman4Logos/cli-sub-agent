@@ -64,6 +64,11 @@ pub struct SessionConfig {
     /// The caller is expected to re-invoke `csa session wait` in a loop.
     #[serde(default = "default_daemon_wait_seconds")]
     pub daemon_wait_seconds: u64,
+    /// Minimum delay (seconds) between consecutive session launches on the
+    /// same project. Prevents compounding memory pressure from rapid sequential
+    /// sessions. Set to 0 to disable.
+    #[serde(default = "default_cooldown_seconds")]
+    pub cooldown_seconds: u64,
 }
 
 fn default_seed_max_age_secs() -> u64 {
@@ -83,6 +88,13 @@ pub const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
 
 fn default_daemon_wait_seconds() -> u64 {
     DEFAULT_DAEMON_WAIT_SECS
+}
+
+/// Default cooldown between consecutive sessions: 10 seconds.
+pub const DEFAULT_COOLDOWN_SECS: u64 = 10;
+
+fn default_cooldown_seconds() -> u64 {
+    DEFAULT_COOLDOWN_SECS
 }
 
 const DEFAULT_SPOOL_MAX_MB: u32 = 32;
@@ -105,6 +117,7 @@ impl Default for SessionConfig {
             tool_output_compression: false,
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
             daemon_wait_seconds: default_daemon_wait_seconds(),
+            cooldown_seconds: default_cooldown_seconds(),
         }
     }
 }
@@ -124,6 +137,7 @@ impl SessionConfig {
             && !self.tool_output_compression
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
             && self.daemon_wait_seconds == default_daemon_wait_seconds()
+            && self.cooldown_seconds == default_cooldown_seconds()
     }
 
     pub fn resolved_spool_max_mb(&self) -> u32 {

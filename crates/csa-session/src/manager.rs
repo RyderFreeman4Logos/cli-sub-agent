@@ -47,6 +47,42 @@ pub struct ResumeSessionResolution {
     pub provider_session_id: Option<String>,
 }
 
+/// Enforce a cooldown period before launching a new session on this project.
+///
+/// Finds the most recently accessed session for `project_path` and, if it
+/// exited within `cooldown_seconds` ago, sleeps for the remaining time.
+/// Returns `true` if a cooldown wait was performed.
+///
+/// Call this **before** [`create_session`] in production entry points.
+/// Tests can skip this for speed.
+pub fn enforce_project_cooldown(project_path: &Path, cooldown_seconds: u64) -> bool {
+    if cooldown_seconds == 0 {
+        return false;
+    }
+
+    let base_dir = match resolve_read_base_dir(project_path, None) {
+        Ok(d) => d,
+        Err(_) => return false, // No sessions dir yet — nothing to cool down from
+    };
+
+    let sessions = match list_all_sessions_in(&base_dir) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+
+    // Find the most recently accessed Retired session for this project.
+    let most_recent = sessions
+        .iter()
+        .filter(|s| s.phase == SessionPhase::Retired)
+        .max_by_key(|s| s.last_accessed);
+
+    if let Some(recent) = most_recent {
+        crate::cooldown::enforce_cooldown_sync(recent.last_accessed, cooldown_seconds)
+    } else {
+        false
+    }
+}
+
 /// Create a new session
 ///
 /// If `parent_id` is provided, this session will be a child of that parent.
