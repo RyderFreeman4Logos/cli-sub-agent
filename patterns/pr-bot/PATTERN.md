@@ -287,14 +287,21 @@ echo "CSA_VAR:CLOUD_BOT_POLL_MAX_SECONDS=$CLOUD_BOT_POLL_MAX_SECONDS"
 # idle-timeout must exceed poll max so the agent isn't killed mid-poll.
 # max-timeout adds headroom for agent startup + prompt processing.
 # Enforce the 1800s minimum timeout policy.
-POLL_IDLE_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + 50))
-POLL_MAX_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + 1200))
-if (( POLL_MAX_TIMEOUT < 1800 )); then POLL_MAX_TIMEOUT=1800; fi
-# POST_REBASE_TIMEOUT covers up to 3 rounds of (quiet wait + poll + fix work).
-# Each round: wait + poll + 900s budget for fix/commit/push/re-trigger.
-ROUND_BUDGET_SECONDS=$((CLOUD_BOT_WAIT_SECONDS + CLOUD_BOT_POLL_MAX_SECONDS + 900))
-POST_REBASE_TIMEOUT=$((3 * ROUND_BUDGET_SECONDS))
-if (( POST_REBASE_TIMEOUT < 1800 )); then POST_REBASE_TIMEOUT=1800; fi
+# Timeout calculation constants (seconds)
+readonly POLL_IDLE_BUFFER_SECS=50         # grace above poll max before idle kill
+readonly POLL_MAX_HEADROOM_SECS=1200      # grace above poll max before hard timeout
+readonly MIN_TIMEOUT_SECS=1800            # minimum per CLAUDE.md timeout policy
+readonly POST_REBASE_FIX_BUDGET_SECS=900  # fix/commit/push/re-trigger per round
+readonly POST_REBASE_ROUNDS=3             # pr-bot typical rounds
+
+POLL_IDLE_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + POLL_IDLE_BUFFER_SECS))
+POLL_MAX_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + POLL_MAX_HEADROOM_SECS))
+if (( POLL_MAX_TIMEOUT < MIN_TIMEOUT_SECS )); then POLL_MAX_TIMEOUT=$MIN_TIMEOUT_SECS; fi
+# POST_REBASE_TIMEOUT covers up to POST_REBASE_ROUNDS rounds of (quiet wait + poll + fix work).
+# Each round: wait + poll + POST_REBASE_FIX_BUDGET_SECS budget for fix/commit/push/re-trigger.
+ROUND_BUDGET_SECONDS=$((CLOUD_BOT_WAIT_SECONDS + CLOUD_BOT_POLL_MAX_SECONDS + POST_REBASE_FIX_BUDGET_SECS))
+POST_REBASE_TIMEOUT=$((POST_REBASE_ROUNDS * ROUND_BUDGET_SECONDS))
+if (( POST_REBASE_TIMEOUT < MIN_TIMEOUT_SECS )); then POST_REBASE_TIMEOUT=$MIN_TIMEOUT_SECS; fi
 echo "CSA_VAR:POLL_IDLE_TIMEOUT=$POLL_IDLE_TIMEOUT"
 echo "CSA_VAR:POLL_MAX_TIMEOUT=$POLL_MAX_TIMEOUT"
 echo "CSA_VAR:POST_REBASE_TIMEOUT=$POST_REBASE_TIMEOUT"
@@ -1107,6 +1114,9 @@ else
     set -e
     REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
     # --- Setup message check (runs before any fallback to catch config issues) ---
+    # NOTE: Similar to _check_setup_message_step5 in Step 5, but with different
+    # semantics: Step 5 soft-detects (sets BOT_NEEDS_SETUP, returns 0/1);
+    # this version hard-fails (exit 1) because post-fix is too late to recover.
     _check_setup_message() {
       set +e
       local setup_body
