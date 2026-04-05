@@ -148,18 +148,11 @@ pub fn install_stderr_rotation(
 
     let stderr_path = stderr_path.to_path_buf();
     let shutdown = Arc::new(AtomicBool::new(false));
-    let shutdown_clone = shutdown.clone();
 
     let thread = match std::thread::Builder::new()
         .name("csa-stderr-rotation".to_string())
         .spawn(move || {
-            run_stderr_drain(
-                read_file,
-                &stderr_path,
-                max_bytes,
-                keep_rotated,
-                shutdown_clone,
-            );
+            run_stderr_drain(read_file, &stderr_path, max_bytes, keep_rotated);
         }) {
         Ok(handle) => handle,
         Err(e) => {
@@ -193,7 +186,6 @@ fn run_stderr_drain(
     stderr_path: &Path,
     max_bytes: u64,
     keep_rotated: bool,
-    shutdown: Arc<AtomicBool>,
 ) {
     let mut rotator = match SpoolRotator::open(stderr_path, max_bytes, keep_rotated) {
         Ok(r) => r,
@@ -210,10 +202,11 @@ fn run_stderr_drain(
 
     let mut buf = [0u8; 8192];
     loop {
-        if shutdown.load(Ordering::Acquire) {
-            break;
-        }
-
+        // NOTE: No shutdown atomic check here — we rely on EOF from the closed
+        // write-end as the sole termination signal.  Checking `shutdown` before
+        // `read()` caused a race where finalize() set the flag AND closed the
+        // write-end, but the reader saw the flag first and exited *before*
+        // draining remaining bytes from the pipe buffer.  See issue #571.
         match pipe.read(&mut buf) {
             Ok(0) => break, // EOF — write-end closed (process exiting)
             Ok(n) => {
@@ -273,12 +266,10 @@ mod tests {
         let stderr_path = tmp.path().join("stderr.log");
 
         let (read_file, mut write_file) = make_pipe();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = shutdown.clone();
 
         let path_clone = stderr_path.clone();
         let handle = std::thread::spawn(move || {
-            run_stderr_drain(read_file, &path_clone, 1024 * 1024, true, shutdown_clone);
+            run_stderr_drain(read_file, &path_clone, 1024 * 1024, true);
         });
 
         // Write data to the pipe write-end.
@@ -320,13 +311,11 @@ mod tests {
         let rotated_path = tmp.path().join("stderr.log.rotated");
 
         let (read_file, mut write_file) = make_pipe();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = shutdown.clone();
 
         let max_bytes = 256u64;
         let path_clone = stderr_path.clone();
         let handle = std::thread::spawn(move || {
-            run_stderr_drain(read_file, &path_clone, max_bytes, true, shutdown_clone);
+            run_stderr_drain(read_file, &path_clone, max_bytes, true);
         });
 
         // Write in separate batches with pauses so the drain thread processes
@@ -378,13 +367,11 @@ mod tests {
         let rotated_path = tmp.path().join("stderr.log.rotated");
 
         let (read_file, mut write_file) = make_pipe();
-        let shutdown = Arc::new(AtomicBool::new(false));
-        let shutdown_clone = shutdown.clone();
 
         let max_bytes = 128u64;
         let path_clone = stderr_path.clone();
         let handle = std::thread::spawn(move || {
-            run_stderr_drain(read_file, &path_clone, max_bytes, false, shutdown_clone);
+            run_stderr_drain(read_file, &path_clone, max_bytes, false);
         });
 
         // Write in batches to ensure multiple read() calls in drain thread.
@@ -404,6 +391,54 @@ mod tests {
         assert!(
             !rotated_path.exists(),
             "stderr.log.rotated should be removed when keep_rotated=false"
+        );
+    }
+
+    /// Regression test for issue #571: pipe data must be fully drained even
+    /// when `StderrRotationGuard::finalize()` is called before the reader
+    /// thread has consumed all buffered data.
+    ///
+    /// Before the fix, the reader loop checked `shutdown.load()` *before*
+    /// `pipe.read()`, so it could exit the loop with unread data in the pipe
+    /// buffer.  After the fix, EOF from the closed write-end is the only
+    /// termination condition, guaranteeing full drainage.
+    #[test]
+    fn test_drain_after_finalize() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let stderr_path = tmp.path().join("stderr.log");
+
+        // We test via the public install API by creating a *separate* pipe
+        // pair (not modifying fd 2 of this test process) and driving the
+        // drain function directly.
+        let (read_file, mut write_file) = make_pipe();
+
+        let path_clone = stderr_path.clone();
+        let handle = std::thread::spawn(move || {
+            run_stderr_drain(read_file, &path_clone, 1024 * 1024, true);
+        });
+
+        // Write a moderate amount of data — enough to sit in the pipe buffer.
+        let payload = "drain-test-line\n".repeat(200);
+        write_file
+            .write_all(payload.as_bytes())
+            .expect("write to pipe");
+
+        // Simulate what finalize() does: close the write-end while there may
+        // still be unread data in the pipe buffer.  The reader should drain
+        // everything before exiting.
+        drop(write_file);
+
+        handle.join().expect("drain thread panicked");
+
+        let content = std::fs::read_to_string(&stderr_path).expect("read stderr.log");
+        let line_count = content.lines().count();
+        assert_eq!(
+            line_count, 200,
+            "all 200 lines must be drained to stderr.log after write-end close, got {line_count}"
+        );
+        assert!(
+            content.contains("drain-test-line"),
+            "stderr.log must contain the test payload, got: {content:?}"
         );
     }
 }

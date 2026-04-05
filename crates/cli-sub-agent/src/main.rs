@@ -78,73 +78,46 @@ use cli::{
     validate_command_args,
 };
 use csa_core::types::OutputFormat;
+use sa_mode::apply_sa_mode_prompt_guard;
 
 mod migrate_cmd;
+mod sa_mode;
 
-const SA_MODE_REQUIRED_ERROR_PREFIX: &str = "--sa-mode true|false is required for root callers on execution commands.\n\
-     Hint: add --sa-mode false for interactive use, or --sa-mode true for autonomous workflows";
-const CSA_INTERNAL_INVOCATION_ENV: &str = "CSA_INTERNAL_INVOCATION";
+// Re-export for tests that reference `crate::validate_sa_mode`.
+#[cfg(test)]
+pub(crate) use sa_mode::validate_sa_mode;
+
+/// Report a daemon command error to stderr while the daemon guard still holds
+/// fd 2 open, then return an exit code.
+///
+/// Without this, `?`-propagated errors would drop the guard (closing fd 2)
+/// *before* `main()` could print the error via `eprintln!`, causing EBADF →
+/// double-panic → process abort (issue #574).
+fn report_daemon_error_or_exit_code(
+    result: Result<i32>,
+    daemon_guard: &mut run_cmd_daemon::DaemonChildGuard,
+) -> i32 {
+    match result {
+        Ok(code) => code,
+        Err(err) => {
+            // fd 2 is still the pipe write-end (guard is alive), so eprintln! works.
+            eprintln!("Error: {err}");
+            if let Some(hint) = error_hints::suggest_fix(&err) {
+                eprintln!();
+                eprintln!("{hint}");
+            }
+            // Finalize the guard explicitly so stderr.log captures the error above.
+            daemon_guard.finalize();
+            exit_current_process(1);
+        }
+    }
+}
 
 fn exit_current_process(exit_code: i32) -> ! {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     crate::session_cmds_daemon::persist_daemon_completion_from_env(exit_code);
     std::process::exit(exit_code);
-}
-
-fn command_name_for_sa_mode(command: &Commands) -> Option<&'static str> {
-    match command {
-        Commands::Run { .. } => Some("run"),
-        Commands::Review(_) => Some("review"),
-        Commands::Debate(_) => Some("debate"),
-        Commands::Batch { .. } => Some("batch"),
-        Commands::Plan {
-            cmd: PlanCommands::Run { .. },
-        } => Some("plan run"),
-        Commands::ClaudeSubAgent(_) => Some("claude-sub-agent"),
-        _ => None,
-    }
-}
-
-fn command_sa_mode_arg(command: &Commands) -> Option<Option<bool>> {
-    match command {
-        Commands::Run { sa_mode, .. } => Some(*sa_mode),
-        Commands::Review(args) => Some(args.sa_mode),
-        Commands::Debate(args) => Some(args.sa_mode),
-        Commands::Batch { sa_mode, .. } => Some(*sa_mode),
-        Commands::Plan {
-            cmd: PlanCommands::Run { sa_mode, .. },
-        } => Some(*sa_mode),
-        Commands::ClaudeSubAgent(args) => Some(args.sa_mode),
-        _ => None,
-    }
-}
-
-fn is_internal_sa_invocation(current_depth: u32) -> bool {
-    if current_depth == 0 {
-        return false;
-    }
-
-    std::env::var(CSA_INTERNAL_INVOCATION_ENV)
-        .ok()
-        .map(|raw| {
-            let normalized = raw.trim().to_ascii_lowercase();
-            matches!(normalized.as_str(), "1" | "true" | "yes" | "on")
-        })
-        .unwrap_or(false)
-}
-
-pub(crate) fn validate_sa_mode(command: &Commands, current_depth: u32) -> anyhow::Result<bool> {
-    let Some(sa_mode_arg) = command_sa_mode_arg(command) else {
-        return Ok(false);
-    };
-
-    if sa_mode_arg.is_none() && !is_internal_sa_invocation(current_depth) {
-        let command_name = command_name_for_sa_mode(command).unwrap_or("execution command");
-        anyhow::bail!("{SA_MODE_REQUIRED_ERROR_PREFIX}: command `{command_name}`");
-    }
-
-    Ok(sa_mode_arg.unwrap_or(false))
 }
 
 /// Resolve the effective minimum timeout from project and global configs.
@@ -187,43 +160,6 @@ fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
             | Commands::ClaudeSubAgent(_)
             | Commands::McpServer
     )
-}
-
-/// Apply SA mode prompt guard and emit caller-side constraint if active.
-///
-/// Returns `true` when SA mode is effectively enabled for this invocation.
-/// When SA mode is active at root depth, a structured guard block is emitted
-/// to stdout so the calling agent sees the Layer 0 Manager constraints.
-fn apply_sa_mode_prompt_guard(
-    command: &Commands,
-    current_depth: u32,
-    output_format: OutputFormat,
-) -> anyhow::Result<bool> {
-    if command_sa_mode_arg(command).is_none() {
-        return Ok(false);
-    }
-
-    let sa_mode_enabled = validate_sa_mode(command, current_depth)?;
-    let value = if sa_mode_enabled { "true" } else { "false" };
-
-    // SAFETY: process-level env updated once during startup before async work begins.
-    unsafe {
-        std::env::set_var(
-            crate::pipeline::prompt_guard::PROMPT_GUARD_CALLER_INJECTION_ENV,
-            value,
-        )
-    };
-
-    // Emit SA mode caller guard to stdout (pre-session constraint).
-    // Only for Text output — JSON mode must not be corrupted by guard XML.
-    let text_mode = matches!(output_format, OutputFormat::Text);
-    crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
-        sa_mode_enabled,
-        current_depth,
-        text_mode,
-    );
-
-    Ok(sa_mode_enabled)
 }
 
 #[tokio::main]
@@ -444,7 +380,7 @@ async fn run() -> Result<()> {
                 csa_process::StreamMode::BufferOnly
             };
 
-            let exit_code = run_cmd::handle_run(
+            let result = run_cmd::handle_run(
                 tool,
                 skill,
                 prompt,
@@ -480,14 +416,16 @@ async fn run() -> Result<()> {
                 no_fs_sandbox,
                 extra_writable,
             )
-            .await?;
+            .await;
+            // Report errors while fd 2 is still open (guard holds stderr rotation).
+            // Dropping the guard closes fd 2, so eprintln! must happen first.
+            let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             // Post-session SA mode reminder so caller sees constraint before next action.
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
                 matches!(output_format, OutputFormat::Text),
             );
-            // Finalize stderr rotation before process::exit() which skips Drop.
             daemon_guard.finalize();
             exit_current_process(exit_code);
         }
@@ -546,7 +484,8 @@ async fn run() -> Result<()> {
                 &args.session_id,
                 args.cd.as_deref(),
             )?;
-            let exit_code = review_cmd::handle_review(args, current_depth).await?;
+            let result = review_cmd::handle_review(args, current_depth).await;
+            let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
@@ -563,7 +502,8 @@ async fn run() -> Result<()> {
                 &args.session_id,
                 args.cd.as_deref(),
             )?;
-            let exit_code = debate_cmd::handle_debate(args, current_depth, output_format).await?;
+            let result = debate_cmd::handle_debate(args, current_depth, output_format).await;
+            let exit_code = report_daemon_error_or_exit_code(result, &mut daemon_guard);
             crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                 sa_mode_active,
                 current_depth,
