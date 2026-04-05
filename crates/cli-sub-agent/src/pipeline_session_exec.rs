@@ -173,10 +173,9 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     }
     let memory_project_key = resolve_memory_project_key(project_root);
 
-    let cd = config
-        .map(|c| c.session.cooldown_seconds)
-        .unwrap_or(csa_config::DEFAULT_COOLDOWN_SECS);
-    if let Some(wait) = compute_cooldown_wait(project_root, cd, &session_arg, &parent) {
+    let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
+    let depth = crate::pipeline_env::current_csa_depth();
+    if let Some(wait) = compute_cooldown_wait(project_root, cd, &session_arg, &parent, depth) {
         info!("Cooldown: sleeping {wait:?} before new session");
         tokio::time::sleep(wait).await;
     }

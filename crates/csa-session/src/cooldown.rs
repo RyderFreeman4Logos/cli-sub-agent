@@ -141,29 +141,36 @@ pub fn write_cooldown_marker(
 // High-level enforcement helper
 // ---------------------------------------------------------------------------
 
+/// Returns the sessions directory for a project: `{base}/{project_key}/sessions/`.
+///
+/// This is the directory where per-session subdirectories live and where the
+/// cooldown marker is persisted. Using this function (instead of
+/// [`crate::get_session_root`]) ensures readers and writers agree on the path.
+pub fn sessions_dir_for_project(project_root: &Path) -> Result<std::path::PathBuf> {
+    let root = crate::get_session_root(project_root)?;
+    Ok(root.join("sessions"))
+}
+
 /// Compute cooldown wait duration, accounting for skip conditions.
 ///
 /// Returns `None` (proceed) when: `cooldown_seconds == 0`, resume
-/// (`session_arg` set), fork (`parent` set), `CSA_DEPTH > 0`, or marker
+/// (`session_arg` set), fork (`parent` set), `csa_depth > 0`, or marker
 /// I/O fails.  Caller is responsible for actually sleeping.
 pub fn compute_cooldown_wait(
     project_root: &Path,
     cooldown_seconds: u64,
     session_arg: &Option<String>,
     parent: &Option<String>,
+    csa_depth: u32,
 ) -> Option<Duration> {
     if cooldown_seconds == 0 || session_arg.is_some() || parent.is_some() {
         return None;
     }
-    let depth: u32 = std::env::var("CSA_DEPTH")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    if depth > 0 {
+    if csa_depth > 0 {
         return None;
     }
-    let root = crate::get_session_root(project_root).ok()?;
-    let last = read_cooldown_marker(&root).map(|m| m.completed_at);
+    let sessions_dir = sessions_dir_for_project(project_root).ok()?;
+    let last = read_cooldown_marker(&sessions_dir).map(|m| m.completed_at);
     match evaluate_cooldown(last, cooldown_seconds, Utc::now()) {
         CooldownAction::Proceed => None,
         CooldownAction::Wait(d) => Some(d),
@@ -451,5 +458,38 @@ mod tests {
         let marker = read_cooldown_marker(dir.path()).expect("final marker should exist");
         assert_eq!(marker.session_id, "SESSION_09");
         assert_eq!(marker.completed_at, ts(1_700_000_900));
+    }
+
+    // -- path consistency regression test ------------------------------------
+
+    /// Regression test for the P1 path mismatch bug: writers persist the marker
+    /// into `{sessions_dir}/cooldown-marker.toml` (via `session_dir.parent()`),
+    /// but the reader (`compute_cooldown_wait`) previously read from
+    /// `get_session_root()` which is one level above `sessions/`.
+    ///
+    /// This test writes via `write_cooldown_marker_from_session_dir` (the
+    /// runtime writer) and reads via `read_cooldown_marker(&sessions_dir)`
+    /// (the path `compute_cooldown_wait` now uses after the fix) to verify
+    /// they agree on the same directory.
+    #[test]
+    fn test_marker_read_write_path_consistency() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sessions_dir = tmp.path().join("sessions");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        let session_dir = sessions_dir.join("01TEST");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        // Write via the session-dir-based helper (matches runtime behavior)
+        let now = chrono::Utc::now();
+        write_cooldown_marker_from_session_dir(&session_dir, "01TEST", now);
+
+        // Read via the same path compute_cooldown_wait uses
+        let marker = read_cooldown_marker(&sessions_dir);
+        assert!(
+            marker.is_some(),
+            "marker must be readable from the path writers use"
+        );
+        assert_eq!(marker.unwrap().session_id, "01TEST");
     }
 }

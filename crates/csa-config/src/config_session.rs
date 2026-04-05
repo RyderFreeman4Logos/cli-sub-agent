@@ -144,6 +144,11 @@ impl SessionConfig {
             && self.cooldown_seconds == default_cooldown_secs()
     }
 
+    /// Resolve cooldown duration (0 = disabled).
+    pub fn cooldown_duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.cooldown_seconds)
+    }
+
     pub fn resolved_spool_max_mb(&self) -> u32 {
         self.spool_max_mb.unwrap_or(DEFAULT_SPOOL_MAX_MB)
     }
