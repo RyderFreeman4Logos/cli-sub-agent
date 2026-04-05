@@ -259,6 +259,9 @@ if [ -z "${CLOUD_BOT_RETRIGGER_CMD_RAW}" ]; then
 else
   CLOUD_BOT_RETRIGGER_CMD="${CLOUD_BOT_RETRIGGER_CMD_RAW}"
 fi
+# Configurable wait/poll timeouts for cloud bot response.
+CLOUD_BOT_WAIT_SECONDS=$(csa config get pr_review.cloud_bot_wait_seconds --default 250)
+CLOUD_BOT_POLL_MAX_SECONDS=$(csa config get pr_review.cloud_bot_poll_max_seconds --default 600)
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
@@ -278,6 +281,30 @@ echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
 echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
 echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
 echo "CSA_VAR:CLOUD_BOT_RETRIGGER_CMD=$CLOUD_BOT_RETRIGGER_CMD"
+echo "CSA_VAR:CLOUD_BOT_WAIT_SECONDS=$CLOUD_BOT_WAIT_SECONDS"
+echo "CSA_VAR:CLOUD_BOT_POLL_MAX_SECONDS=$CLOUD_BOT_POLL_MAX_SECONDS"
+# Centralized timeout computation — reused by Step 5, Step 10b, Step 10.5.
+# idle-timeout must exceed poll max so the agent isn't killed mid-poll.
+# max-timeout adds headroom for agent startup + prompt processing.
+# Enforce the 1800s minimum timeout policy.
+# Timeout calculation constants (seconds)
+readonly POLL_IDLE_BUFFER_SECS=50         # grace above poll max before idle kill
+readonly POLL_MAX_HEADROOM_SECS=1200      # grace above poll max before hard timeout
+readonly MIN_TIMEOUT_SECS=1800            # minimum per CLAUDE.md timeout policy
+readonly POST_REBASE_FIX_BUDGET_SECS=900  # fix/commit/push/re-trigger per round
+readonly POST_REBASE_ROUNDS=3             # pr-bot typical rounds
+
+POLL_IDLE_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + POLL_IDLE_BUFFER_SECS))
+POLL_MAX_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + POLL_MAX_HEADROOM_SECS))
+if (( POLL_MAX_TIMEOUT < MIN_TIMEOUT_SECS )); then POLL_MAX_TIMEOUT=$MIN_TIMEOUT_SECS; fi
+# POST_REBASE_TIMEOUT covers up to POST_REBASE_ROUNDS rounds of (quiet wait + poll + fix work).
+# Each round: wait + poll + POST_REBASE_FIX_BUDGET_SECS budget for fix/commit/push/re-trigger.
+ROUND_BUDGET_SECONDS=$((CLOUD_BOT_WAIT_SECONDS + CLOUD_BOT_POLL_MAX_SECONDS + POST_REBASE_FIX_BUDGET_SECS))
+POST_REBASE_TIMEOUT=$((POST_REBASE_ROUNDS * ROUND_BUDGET_SECONDS))
+if (( POST_REBASE_TIMEOUT < MIN_TIMEOUT_SECS )); then POST_REBASE_TIMEOUT=$MIN_TIMEOUT_SECS; fi
+echo "CSA_VAR:POLL_IDLE_TIMEOUT=$POLL_IDLE_TIMEOUT"
+echo "CSA_VAR:POLL_MAX_TIMEOUT=$POLL_MAX_TIMEOUT"
+echo "CSA_VAR:POST_REBASE_TIMEOUT=$POST_REBASE_TIMEOUT"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```
@@ -309,7 +336,7 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
 
-Wait 250 seconds, then delegate 10-minute polling to CSA. Total wait: ~14 minutes.
+Wait `cloud_bot_wait_seconds` (default 250s), then delegate `cloud_bot_poll_max_seconds` (default 600s) polling to CSA.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
@@ -350,16 +377,17 @@ else
   WAIT_BASE_TS="$(date -u -d '10 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-10M +%Y-%m-%dT%H:%M:%SZ)"
 fi
 
-# --- Initial quiet wait (~4 min) — bot responses rarely arrive faster ---
-echo "Waiting ~4 minutes before polling (bot responses rarely arrive faster)..."
-sleep 250
+# --- Initial quiet wait — bot responses rarely arrive faster ---
+echo "Waiting ${CLOUD_BOT_WAIT_SECONDS}s before polling (bot responses rarely arrive faster)..."
+sleep "${CLOUD_BOT_WAIT_SECONDS}"
 
-# --- Delegate remaining polling to CSA-managed step (max 10 min) ---
+# --- Delegate remaining polling to CSA-managed step ---
 BOT_UNAVAILABLE=true
 FALLBACK_REVIEW_HAS_ISSUES=false
 BOT_HAS_ISSUES=false
+# POLL_IDLE_TIMEOUT and POLL_MAX_TIMEOUT are pre-computed in Step 4a.
 set +e
-WAIT_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout 1800 --idle-timeout 650 "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait 10 minutes (5-minute quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
+WAIT_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait ${CLOUD_BOT_POLL_MAX_SECONDS} seconds (quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
 DAEMON_RC=$?
 set -e
 if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
@@ -493,7 +521,7 @@ fi
 
 if [ "${BOT_UNAVAILABLE}" = "true" ]; then
   echo "" >&2
-  echo "ERROR: Cloud bot (${CLOUD_BOT_NAME}) did not respond within the polling window (~15 min)." >&2
+  echo "ERROR: Cloud bot (${CLOUD_BOT_NAME}) did not respond within the polling window (${CLOUD_BOT_WAIT_SECONDS}s wait + ${CLOUD_BOT_POLL_MAX_SECONDS}s poll)." >&2
   echo "" >&2
   echo "Options:" >&2
   echo "  1. Wait and re-run: csa plan run patterns/pr-bot/workflow.toml" >&2
@@ -545,7 +573,7 @@ timeout branch. Steps 7-10 are structurally inside the `BOT_UNAVAILABLE=false`
 branch and are NOT reachable from here.
 
 Delegate this cycle to CSA as a single operation and enforce hard bounds:
-- CSA daemon + session wait (hardcoded 250s timeout)
+- CSA daemon + session wait (configurable via `cloud_bot_wait_seconds`, default 250s)
 - no `|| true` silent downgrade
 - success requires marker `FALLBACK_FIX=clean`
 - on success, orchestrator explicitly sets `FALLBACK_REVIEW_HAS_ISSUES=false`
@@ -1009,6 +1037,166 @@ The gate:
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
+Tool: bash
+OnFail: abort
+Condition: !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
+
+Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
+then up to `cloud_bot_poll_max_seconds` of polling.
+
+```bash
+set -euo pipefail
+CURRENT_SHA="$(git rev-parse HEAD)"
+RETRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# --- Re-trigger bot review (ALWAYS explicit — bots don't auto-review on force-push) ---
+RETRIGGER_BODY="${CLOUD_BOT_RETRIGGER_CMD}
+
+<!-- csa-retrigger:post-fix:${CURRENT_SHA}:${RETRIGGER_TS} -->"
+gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${RETRIGGER_BODY}"
+echo "Re-triggered review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${CURRENT_SHA} at ${RETRIGGER_TS}"
+
+# --- Initial quiet wait — bot responses rarely arrive faster ---
+echo "Waiting ${CLOUD_BOT_WAIT_SECONDS}s before polling post-fix review (bot responses rarely arrive faster)..."
+sleep "${CLOUD_BOT_WAIT_SECONDS}"
+
+# --- Delegate remaining polling to CSA via daemon+wait ---
+BOT_CLEAN=false
+# POLL_IDLE_TIMEOUT and POLL_MAX_TIMEOUT are pre-computed in Step 4a.
+set +e
+WAIT_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} \
+  "Bounded post-fix re-review gate. Do NOT invoke pr-bot skill or any full PR workflow. \
+  Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. \
+  Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after \
+  ${RETRIGGER_TS} and user.login matching the bot. Also check issue comments for bot activity. \
+  Max wait ${CLOUD_BOT_POLL_MAX_SECONDS} seconds (quiet wait already elapsed before this step). Do not edit code. \
+  Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
+DAEMON_RC=$?
+set -e
+if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
+  echo "" >&2
+  echo "ERROR: Failed to launch daemon for post-fix re-review gate (rc=${DAEMON_RC})." >&2
+  echo "ABORTING: Will not merge without cloud bot confirmation after fixes." >&2
+  echo "Re-run pr-bot to start a new review cycle." >&2
+  exit 1
+fi
+set +e
+WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
+WAIT_RC=$?
+set -e
+
+if [ "${WAIT_RC}" -ne 0 ]; then
+  echo "" >&2
+  echo "ERROR: Post-fix cloud bot (${CLOUD_BOT_NAME}) did not respond within re-review polling window (rc=${WAIT_RC})." >&2
+  echo "ABORTING: Will not merge without cloud bot confirmation after fixes." >&2
+  echo "Re-run pr-bot to start a new review cycle." >&2
+  exit 1
+else
+  WAIT_MARKER="$(
+    printf '%s\n' "${WAIT_RESULT}" \
+      | grep -E '^[[:space:]]*BOT_REPLY=(received|timeout)[[:space:]]*$' \
+      | tail -n 1 \
+      | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+      || true
+  )"
+  if [ "${WAIT_MARKER}" = "BOT_REPLY=received" ]; then
+    BOT_SETTLE_SECS="${BOT_SETTLE_SECS:-20}"
+    sleep "${BOT_SETTLE_SECS}"
+
+    # --- Positive signal check (#505): verify a review EVENT exists ---
+    set +e
+    REVIEW_EVENT_RAW="$(
+      gh api --paginate "repos/${REPO}/pulls/${PR_NUM}/reviews?per_page=100" \
+        --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.submitted_at > "'"${RETRIGGER_TS}"'") | select(.commit_id == "'"${CURRENT_SHA}"'" or .commit_id == null)] | length' \
+        2>/dev/null
+    )"
+    REVIEW_EVENT_RC=$?
+    set -e
+    REVIEW_EVENT_COUNT="$(echo "${REVIEW_EVENT_RAW}" | awk '{s+=$1} END {print s+0}')"
+    # --- Setup message check (runs before any fallback to catch config issues) ---
+    # NOTE: Similar to _check_setup_message_step5 in Step 5, but with different
+    # semantics: Step 5 soft-detects (sets BOT_NEEDS_SETUP, returns 0/1);
+    # this version hard-fails (exit 1) because post-fix is too late to recover.
+    _check_setup_message() {
+      set +e
+      local setup_body
+      setup_body="$(
+        gh api "repos/${REPO}/issues/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${RETRIGGER_TS}"'")] | .[0].body // ""' \
+          2>/dev/null
+      )"
+      set -e
+      if [ -n "${setup_body}" ] && echo "${setup_body}" | grep -qEi 'configur|set.?up.*(environment|repo)|environment.*(set.?up|configur|need)|unable.to.(review|access)|cannot.*(complete|access|review)|not.*configured|permission|credential'; then
+        echo "ERROR: Cloud bot responded with a setup/configuration message instead of a code review." >&2
+        echo "Bot response (truncated): $(echo "${setup_body}" | head -c 500)" >&2
+        echo "ACTION REQUIRED: Configure the cloud bot, then re-run pr-bot." >&2
+        exit 1
+      fi
+    }
+
+    if [ "${REVIEW_EVENT_RC}" -ne 0 ]; then
+      echo "WARN: Failed to query review events (rc=${REVIEW_EVENT_RC})." >&2
+      _check_setup_message
+      REVIEW_API_FAILED=true
+    fi
+    # --- Check inline comments for actionable findings ---
+    if [ "${BOT_CLEAN}" != "true" ]; then
+      set +e
+      ACTIONABLE_COUNT="$(
+        gh api "repos/${REPO}/pulls/${PR_NUM}/comments?per_page=100" \
+          --jq '[.[] | select(.user.login == "'"${CLOUD_BOT_LOGIN}"'") | select(.created_at > "'"${RETRIGGER_TS}"'") | select((.body | test("P0|P1|P2"))) ] | length' \
+          2>/dev/null
+      )"
+      ACTIONABLE_RC=$?
+      set -e
+      if [ "${ACTIONABLE_RC}" -ne 0 ]; then
+        echo "ERROR: Failed to query post-fix bot comments (rc=${ACTIONABLE_RC})." >&2
+        exit 1
+      fi
+      case "${ACTIONABLE_COUNT:-}" in
+        ''|*[!0-9]*)
+          echo "ERROR: Invalid actionable comment count from GitHub API: '${ACTIONABLE_COUNT}'." >&2
+          exit 1
+          ;;
+      esac
+      if [ "${ACTIONABLE_COUNT}" -gt 0 ]; then
+        echo "ERROR: Post-fix re-review found ${ACTIONABLE_COUNT} new actionable finding(s). Cannot merge." >&2
+        echo "Re-run pr-bot to start a new fix cycle."
+        exit 1
+      elif [ "${REVIEW_EVENT_COUNT:-0}" -eq 0 ] || [ "${REVIEW_API_FAILED:-false}" = "true" ]; then
+        echo "WARN: No positive signal (review event or inline comments) for HEAD ${CURRENT_SHA} after ${RETRIGGER_TS}." >&2
+        _check_setup_message
+        echo "Falling back to local review." >&2
+        SID=$(csa review --sa-mode true --range main...HEAD)
+        if ! bash scripts/csa/session-wait-until-done.sh "$SID"; then
+          echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+          exit 1
+        fi
+      fi
+    fi
+    BOT_CLEAN=true
+  else
+    echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
+    SID=$(csa review --sa-mode true --range main...HEAD)
+    if ! bash scripts/csa/session-wait-until-done.sh "$SID"; then
+      echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
+      exit 1
+    fi
+    BOT_CLEAN=true
+  fi
+fi
+
+if [ "${BOT_CLEAN}" != "true" ]; then
+  echo "ERROR: Post-fix re-review gate failed unexpectedly." >&2
+  exit 1
+fi
+
+# Clear BOT_HAS_ISSUES so merge steps can proceed
+BOT_HAS_ISSUES=false
+echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
+echo "Post-fix re-review gate PASSED. Merge is now allowed."
+```
+
 ## ELSE
 
 ## Step 10a: Bot Review Clean
@@ -1033,9 +1221,9 @@ wait/fix/review loop to a single CSA-managed step.
 
 **Post-rebase review gate** (BLOCKING):
 - CSA delegated step handles both paths:
-  - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same 15-minute wait policy for each trigger (5-minute quiet wait + 10-minute polling).
+  - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same configurable wait policy for each trigger (`cloud_bot_wait_seconds` quiet wait + `cloud_bot_poll_max_seconds` polling).
   - Bot times out → CSA runs fallback `csa review --range main...HEAD` and bounded fix/review retries (max 3 rounds).
-- CSA daemon + session wait (hardcoded 250s timeout) enforces the hard timeout.
+- CSA daemon + session wait (configurable via `cloud_bot_wait_seconds`, default 250s) enforces the hard timeout.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
@@ -1083,8 +1271,9 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
   echo "Triggered post-rebase review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${REBASE_CURRENT_SHA}."
 
+  # POST_REBASE_TIMEOUT is pre-computed in Step 4a.
   set +e
-  GATE_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout 5400 --idle-timeout 5400 "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each cloud bot trigger, wait 5 minutes quietly, then poll up to 10 minutes for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same 15-minute wait policy (max 3 rounds). If bot times out, abort and report to user; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
+  GATE_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout ${POST_REBASE_TIMEOUT} --idle-timeout ${POST_REBASE_TIMEOUT} "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each cloud bot trigger, wait ${CLOUD_BOT_WAIT_SECONDS} seconds quietly, then poll up to ${CLOUD_BOT_POLL_MAX_SECONDS} seconds for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same wait policy (max 3 rounds). If bot times out, abort and report to user; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
   DAEMON_RC=$?
   set -e
   if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${GATE_SID}" ]; then
