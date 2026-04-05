@@ -134,6 +134,12 @@ pub(crate) async fn process_execution_result(
     if let Err(e) = save_result(ctx.project_root, &session.meta_session_id, &session_result) {
         warn!("Failed to save session result: {}", e);
     }
+    // Best-effort cooldown marker (ctx already holds session_dir)
+    csa_session::write_cooldown_marker_from_session_dir(
+        &ctx.session_dir,
+        &session.meta_session_id,
+        session_result.completed_at,
+    );
 
     // Save session
     save_session(session)?;
@@ -361,6 +367,12 @@ pub(crate) fn ensure_terminal_result_on_post_exec_error(
         );
         return;
     }
+    // Best-effort cooldown marker
+    csa_session::write_cooldown_marker_for_project(
+        project_root,
+        &session.meta_session_id,
+        completed_at,
+    );
 
     session.termination_reason = Some("post_exec_error".to_string());
     session.last_accessed = completed_at;

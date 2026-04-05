@@ -93,4 +93,6 @@ pub(crate) fn write_pre_exec_error_result(
     if let Err(e) = save_result(project_root, session_id, &result) {
         warn!("Failed to save pre-execution error result: {}", e);
     }
+    // Best-effort cooldown marker
+    csa_session::write_cooldown_marker_for_project(project_root, session_id, now);
 }

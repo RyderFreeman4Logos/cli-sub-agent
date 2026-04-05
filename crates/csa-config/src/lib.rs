@@ -24,9 +24,9 @@ pub mod weave_lock;
 
 pub use acp::AcpConfig;
 pub use config::{
-    DEFAULT_DAEMON_WAIT_SECS, EnforcementMode, ExecutionConfig, HooksSection, ProjectConfig,
-    ProjectMeta, SessionConfig, TierConfig, TierStrategy, ToolConfig, ToolFilesystemSandboxConfig,
-    ToolResourceProfile, ToolRestrictions,
+    DEFAULT_COOLDOWN_SECS, DEFAULT_DAEMON_WAIT_SECS, EnforcementMode, ExecutionConfig,
+    HooksSection, ProjectConfig, ProjectMeta, SessionConfig, TierConfig, TierStrategy, ToolConfig,
+    ToolFilesystemSandboxConfig, ToolResourceProfile, ToolRestrictions,
 };
 pub use config_filesystem_sandbox::FilesystemSandboxConfig;
 pub use config_resources::ResourcesConfig;

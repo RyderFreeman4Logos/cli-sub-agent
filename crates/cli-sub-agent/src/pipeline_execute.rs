@@ -179,6 +179,12 @@ pub(crate) async fn execute_transport_with_signal(
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
                 warn!("Failed to save transport error result: {}", save_err);
             }
+            // Best-effort cooldown marker
+            csa_session::write_cooldown_marker_for_project(
+                project_root,
+                &session.meta_session_id,
+                completed_at,
+            );
             if let Some(cg) = cleanup_guard {
                 cg.defuse();
             }
@@ -219,6 +225,12 @@ fn record_session_termination(
             termination_reason, e
         );
     }
+    // Best-effort cooldown marker
+    csa_session::write_cooldown_marker_for_project(
+        project_root,
+        &session.meta_session_id,
+        completed_at,
+    );
     if let Err(e) = save_session(&updated_session) {
         warn!(
             "Failed to save session state after {}: {}",

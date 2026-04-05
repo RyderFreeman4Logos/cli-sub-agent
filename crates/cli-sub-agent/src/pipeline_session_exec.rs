@@ -27,7 +27,7 @@ use csa_hooks::{
 use csa_lock::acquire_lock;
 use csa_process::ExecutionResult;
 use csa_resource::{ResourceGuard, ResourceLimits};
-use csa_session::{ToolState, create_session, get_session_dir};
+use csa_session::{ToolState, compute_cooldown_wait, create_session, get_session_dir};
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
@@ -173,6 +173,13 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     }
     let memory_project_key = resolve_memory_project_key(project_root);
 
+    let cd = crate::pipeline_env::resolve_cooldown_seconds(config);
+    let depth = crate::pipeline_env::current_csa_depth();
+    if let Some(wait) = compute_cooldown_wait(project_root, cd, &session_arg, &parent, depth) {
+        info!("Cooldown: sleeping {wait:?} before new session");
+        tokio::time::sleep(wait).await;
+    }
+
     let mut resolved_provider_session_id: Option<String> = None;
     let mut session = if let Some(ref session_id) = session_arg {
         let resolution =
@@ -279,15 +286,11 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
     };
 
-    // Resource guard
-    let mut resource_guard = if let Some(cfg) = config {
-        let limits = ResourceLimits {
+    let mut resource_guard = config.map(|cfg| {
+        ResourceGuard::new(ResourceLimits {
             min_free_memory_mb: cfg.resources.min_free_memory_mb,
-        };
-        Some(ResourceGuard::new(limits))
-    } else {
-        None
-    };
+        })
+    });
 
     // Check resource availability
     if let Some(ref mut guard) = resource_guard

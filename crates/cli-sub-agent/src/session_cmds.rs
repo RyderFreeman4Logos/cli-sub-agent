@@ -81,6 +81,12 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
         .map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
     fs::write(&result_path, result_contents)
         .map_err(|err| anyhow!("Failed to write synthetic result for {session_id}: {err}"))?;
+    // Best-effort cooldown marker
+    csa_session::write_cooldown_marker_from_session_dir(
+        &session_dir,
+        session_id,
+        fallback.completed_at,
+    );
     session.termination_reason = Some("orphaned_process".to_string());
     // Transition to Retired so the session no longer blocks new launches (#540).
     let _ = session.apply_phase_event(csa_session::PhaseEvent::Retired);
