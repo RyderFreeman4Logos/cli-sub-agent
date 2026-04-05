@@ -172,6 +172,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         return Err(csa_core::error::AppError::ParentSessionViolation.into());
     }
     let memory_project_key = resolve_memory_project_key(project_root);
+
     let mut resolved_provider_session_id: Option<String> = None;
     let mut session = if let Some(ref session_id) = session_arg {
         let resolution =
