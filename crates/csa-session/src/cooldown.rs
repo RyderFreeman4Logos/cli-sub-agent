@@ -174,6 +174,26 @@ pub fn compute_cooldown_wait(
 // Convenience helpers
 // ---------------------------------------------------------------------------
 
+/// Best-effort marker write using `project_root` and `session_id`.
+///
+/// Resolves the sessions directory via [`crate::get_session_dir`], derives
+/// the parent, and writes the marker.  All errors (resolution, I/O) are
+/// logged via `tracing::warn` but never propagated.
+pub fn write_cooldown_marker_for_project(
+    project_root: &Path,
+    session_id: &str,
+    completed_at: DateTime<Utc>,
+) {
+    let session_dir = match crate::get_session_dir(project_root, session_id) {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("cooldown marker: cannot resolve session dir: {e}");
+            return;
+        }
+    };
+    write_cooldown_marker_from_session_dir(&session_dir, session_id, completed_at);
+}
+
 /// Best-effort marker write using a session directory (resolves parent).
 ///
 /// Silently swallows all errors (missing parent dir, I/O failures).

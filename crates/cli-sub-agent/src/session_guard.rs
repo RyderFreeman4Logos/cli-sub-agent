@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use csa_session::{SessionResult, get_session_dir, save_result};
+use csa_session::{SessionResult, save_result};
 
 /// RAII guard that cleans up a newly created session directory on failure.
 ///
@@ -94,7 +94,5 @@ pub(crate) fn write_pre_exec_error_result(
         warn!("Failed to save pre-execution error result: {}", e);
     }
     // Best-effort cooldown marker
-    if let Ok(sd) = get_session_dir(project_root, session_id) {
-        csa_session::write_cooldown_marker_from_session_dir(&sd, session_id, now);
-    }
+    csa_session::write_cooldown_marker_for_project(project_root, session_id, now);
 }

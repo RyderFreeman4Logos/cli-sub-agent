@@ -41,7 +41,8 @@ pub(crate) mod test_env {
 // Re-export cooldown types
 pub use cooldown::{
     CooldownAction, CooldownMarker, compute_cooldown_wait, evaluate_cooldown, read_cooldown_marker,
-    write_cooldown_marker, write_cooldown_marker_from_session_dir,
+    write_cooldown_marker, write_cooldown_marker_for_project,
+    write_cooldown_marker_from_session_dir,
 };
 
 // Re-export key types

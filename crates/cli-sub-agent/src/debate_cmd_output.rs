@@ -124,9 +124,7 @@ pub(crate) fn append_debate_artifacts_to_result(
     csa_session::save_result(project_root, session_id, &result)
         .with_context(|| format!("Failed to update result.toml for debate session {session_id}"))?;
     // Best-effort cooldown marker
-    if let Ok(sd) = csa_session::get_session_dir(project_root, session_id) {
-        csa_session::write_cooldown_marker_from_session_dir(&sd, session_id, result.completed_at);
-    }
+    csa_session::write_cooldown_marker_for_project(project_root, session_id, result.completed_at);
     Ok(())
 }
 
