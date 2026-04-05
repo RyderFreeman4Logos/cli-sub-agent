@@ -98,6 +98,14 @@ pub fn read_cooldown_marker(project_sessions_dir: &Path) -> Option<CooldownMarke
 /// Write (or overwrite) the cooldown marker atomically.
 ///
 /// Uses write-to-tmp + rename to avoid partial reads.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The parent directory cannot be created.
+/// - The marker fails to serialize to TOML.
+/// - The temporary file cannot be written.
+/// - The atomic rename from the temp file to the final path fails.
 pub fn write_cooldown_marker(
     project_sessions_dir: &Path,
     session_id: &str,
