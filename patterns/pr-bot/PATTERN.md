@@ -281,6 +281,8 @@ echo "CSA_VAR:CLOUD_BOT_NAME=$CLOUD_BOT_NAME"
 echo "CSA_VAR:CLOUD_BOT_TRIGGER=$CLOUD_BOT_TRIGGER"
 echo "CSA_VAR:CLOUD_BOT_LOGIN=$CLOUD_BOT_LOGIN"
 echo "CSA_VAR:CLOUD_BOT_RETRIGGER_CMD=$CLOUD_BOT_RETRIGGER_CMD"
+echo "CSA_VAR:CLOUD_BOT_WAIT_SECONDS=$CLOUD_BOT_WAIT_SECONDS"
+echo "CSA_VAR:CLOUD_BOT_POLL_MAX_SECONDS=$CLOUD_BOT_POLL_MAX_SECONDS"
 echo "CSA_VAR:BOT_UNAVAILABLE=$BOT_UNAVAILABLE"
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```
@@ -367,7 +369,7 @@ BOT_HAS_ISSUES=false
 # Enforce the 1800s minimum timeout policy.
 POLL_IDLE_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + 50))
 POLL_MAX_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + 1200))
-if [ "${POLL_MAX_TIMEOUT}" -lt 1800 ]; then POLL_MAX_TIMEOUT=1800; fi
+if (( POLL_MAX_TIMEOUT < 1800 )); then POLL_MAX_TIMEOUT=1800; fi
 set +e
 WAIT_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} "Bounded wait task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Wait for @${CLOUD_BOT_NAME} review on HEAD ${CURRENT_SHA}. Check for a review EVENT via 'gh api repos/${REPO}/pulls/${PR_NUM}/reviews' with submitted_at after ${WAIT_BASE_TS} and user.login matching the bot. Also check issue comments for bot activity. Max wait ${CLOUD_BOT_POLL_MAX_SECONDS} seconds (quiet wait already elapsed before this step). Do not edit code. Return exactly one marker line: BOT_REPLY=received or BOT_REPLY=timeout.")"
 DAEMON_RC=$?
@@ -1047,7 +1049,7 @@ BOT_CLEAN=false
 # Compute timeouts dynamically from configurable poll duration (same formula as Step 5).
 POLL_IDLE_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + 50))
 POLL_MAX_TIMEOUT=$((CLOUD_BOT_POLL_MAX_SECONDS + 1200))
-if [ "${POLL_MAX_TIMEOUT}" -lt 1800 ]; then POLL_MAX_TIMEOUT=1800; fi
+if (( POLL_MAX_TIMEOUT < 1800 )); then POLL_MAX_TIMEOUT=1800; fi
 set +e
 WAIT_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout ${POLL_MAX_TIMEOUT} --idle-timeout ${POLL_IDLE_TIMEOUT} \
   "Bounded post-fix re-review gate. Do NOT invoke pr-bot skill or any full PR workflow. \
@@ -1253,9 +1255,10 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   gh pr comment "${PR_NUM}" --repo "${REPO}" --body "${REBASE_TRIGGER_BODY}"
   echo "Triggered post-rebase review via '${CLOUD_BOT_RETRIGGER_CMD}' for HEAD ${REBASE_CURRENT_SHA}."
 
-  # Compute timeout to cover up to 3 rounds of (quiet wait + poll), with 1800s minimum.
-  POST_REBASE_TIMEOUT=$(( 3 * (CLOUD_BOT_WAIT_SECONDS + CLOUD_BOT_POLL_MAX_SECONDS) ))
-  if [ "${POST_REBASE_TIMEOUT}" -lt 1800 ]; then POST_REBASE_TIMEOUT=1800; fi
+  # Compute timeout to cover up to 3 rounds of (quiet wait + poll + fix work), with 1800s minimum.
+  # Each round: wait + poll + 900s budget for fix/commit/push/re-trigger.
+  POST_REBASE_TIMEOUT=$(( 3 * (CLOUD_BOT_WAIT_SECONDS + CLOUD_BOT_POLL_MAX_SECONDS + 900) ))
+  if (( POST_REBASE_TIMEOUT < 1800 )); then POST_REBASE_TIMEOUT=1800; fi
   set +e
   GATE_SID="$(csa run --sa-mode true --force-ignore-tier-setting --tool auto --timeout ${POST_REBASE_TIMEOUT} --idle-timeout ${POST_REBASE_TIMEOUT} "Bounded post-rebase gate task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO} (branch ${WORKFLOW_BRANCH}). Complete the post-rebase review gate end-to-end. For each cloud bot trigger, wait ${CLOUD_BOT_WAIT_SECONDS} seconds quietly, then poll up to ${CLOUD_BOT_POLL_MAX_SECONDS} seconds for a response. If response contains P0/P1/P2 findings, iteratively fix/commit/push/re-trigger and re-check with the same wait policy (max 3 rounds). If bot times out, abort and report to user; return exactly one marker line REBASE_GATE=PASS when clean, otherwise REBASE_GATE=FAIL and exit non-zero.")"
   DAEMON_RC=$?
