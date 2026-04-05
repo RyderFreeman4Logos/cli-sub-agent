@@ -4,6 +4,7 @@
 //! cooldown period between completions. The marker file is written on session
 //! completion and checked on session creation.
 
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
@@ -97,15 +98,18 @@ pub fn read_cooldown_marker(project_sessions_dir: &Path) -> Option<CooldownMarke
 
 /// Write (or overwrite) the cooldown marker atomically.
 ///
-/// Uses write-to-tmp + rename to avoid partial reads.
+/// Uses [`tempfile::NamedTempFile`] + [`persist`](tempfile::NamedTempFile::persist)
+/// for atomic writes. The temp file is automatically cleaned up on `Drop` if
+/// `persist` is never reached (e.g. write failure), preventing orphaned `.tmp`
+/// files on error paths.
 ///
 /// # Errors
 ///
 /// Returns an error if:
 /// - The parent directory cannot be created.
 /// - The marker fails to serialize to TOML.
-/// - The temporary file cannot be written.
-/// - The atomic rename from the temp file to the final path fails.
+/// - The temporary file cannot be created or written.
+/// - The atomic persist (rename) to the final path fails.
 pub fn write_cooldown_marker(
     project_sessions_dir: &Path,
     session_id: &str,
@@ -121,14 +125,14 @@ pub fn write_cooldown_marker(
 
     let content = toml::to_string_pretty(&marker).context("serializing cooldown marker to TOML")?;
 
+    let mut tmp = tempfile::NamedTempFile::new_in(project_sessions_dir)
+        .with_context(|| format!("creating temp file in {}", project_sessions_dir.display()))?;
+    tmp.write_all(content.as_bytes())
+        .with_context(|| "writing cooldown marker to temp file")?;
+
     let final_path = project_sessions_dir.join(MARKER_FILENAME);
-    let tmp_path = project_sessions_dir.join(format!("{MARKER_FILENAME}.tmp"));
-
-    std::fs::write(&tmp_path, content.as_bytes())
-        .with_context(|| format!("writing temp marker {}", tmp_path.display()))?;
-
-    std::fs::rename(&tmp_path, &final_path)
-        .with_context(|| format!("renaming {} → {}", tmp_path.display(), final_path.display()))?;
+    tmp.persist(&final_path)
+        .with_context(|| format!("persisting cooldown marker to {}", final_path.display()))?;
 
     Ok(())
 }
