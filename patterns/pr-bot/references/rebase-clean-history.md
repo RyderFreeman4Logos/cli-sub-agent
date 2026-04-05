@@ -83,7 +83,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 7. Poll for bot response (reuse Step 5 polling logic)
   REBASE_BOT_OK=false
   POLL_INTERVAL=30
-  MAX_WAIT=600
+  MAX_WAIT=250
   WAITED=0
   while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
     sleep "${POLL_INTERVAL}"

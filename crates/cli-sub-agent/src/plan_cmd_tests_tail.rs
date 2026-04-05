@@ -213,7 +213,7 @@ cp "${body_file}" "${capture}"
     capture_path
 }
 
-fn step_19_env(
+fn step_15_env(
     bin_dir: &Path,
     capture_path: &Path,
     step_10_output: &str,
@@ -272,10 +272,10 @@ PR_COMMENT_END
 
 #[tokio::test]
 async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
-    let step = load_pr_bot_step(19);
+    let step = load_pr_bot_step(15);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
-    let vars = step_19_env(tmp.path(), &capture_path, dismissed_debate_output());
+    let vars = step_15_env(tmp.path(), &capture_path, dismissed_debate_output());
 
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
@@ -302,10 +302,10 @@ async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
 
 #[tokio::test]
 async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() {
-    let step = load_pr_bot_step(19);
+    let step = load_pr_bot_step(15);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
-    let vars = step_19_env(tmp.path(), &capture_path, confirmed_debate_output());
+    let vars = step_15_env(tmp.path(), &capture_path, confirmed_debate_output());
 
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
@@ -336,7 +336,7 @@ async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() 
 
 #[tokio::test]
 async fn execute_step_bash_fails_closed_on_malformed_dismissed_output() {
-    let step = load_pr_bot_step(19);
+    let step = load_pr_bot_step(15);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let malformed_output = r#"VERDICT: DISMISSED
@@ -361,7 +361,7 @@ Abort rather than post an ambiguous comment.
 
 CSA session ID: 01TESTDEBATESESSIONID
 "#;
-    let vars = step_19_env(tmp.path(), &capture_path, malformed_output);
+    let vars = step_15_env(tmp.path(), &capture_path, malformed_output);
 
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
@@ -374,7 +374,7 @@ CSA session ID: 01TESTDEBATESESSIONID
 
 #[tokio::test]
 async fn execute_step_bash_fails_closed_on_duplicate_verdict_markers() {
-    let step = load_pr_bot_step(19);
+    let step = load_pr_bot_step(15);
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let duplicate_verdict_output = r#"VERDICT: DISMISSED
@@ -402,7 +402,7 @@ Abort rather than posting an ambiguous dismissal.
 CSA session ID: 01TESTDEBATESESSIONID
 PR_COMMENT_END
 "#;
-    let vars = step_19_env(tmp.path(), &capture_path, duplicate_verdict_output);
+    let vars = step_15_env(tmp.path(), &capture_path, duplicate_verdict_output);
 
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
