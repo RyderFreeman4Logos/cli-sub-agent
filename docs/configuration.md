@@ -261,7 +261,7 @@ default = "primary"
 
 | Problem | Solution |
 |---------|----------|
-| "OOM Risk Prevention" error | Reduce `min_free_memory_mb` or wait for agents to finish |
+| "Insufficient system memory" error | Reduce `min_free_memory_mb` or wait for agents to finish |
 | "Tool 'codex' is not enabled" | Set `tools.codex.enabled = true` or remove section |
 | "No enabled tools found in tier" | Ensure at least one tool in the tier's models is enabled |
 | Tier resolution always falls back | Check that `tier_mapping.default` exists |

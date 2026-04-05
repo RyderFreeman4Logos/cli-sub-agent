@@ -52,7 +52,7 @@ pub struct ResourcesConfig {
     pub pids_max: Option<u32>,
     /// Soft memory limit as a percentage of `memory_max_mb`.
     /// When current memory usage exceeds this threshold, the monitor sends
-    /// SIGTERM to the process group.  Default: 65 (%).
+    /// SIGTERM to the process group.  Default: 70 (%).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub soft_limit_percent: Option<u8>,
     /// Polling interval for the memory monitor in seconds.  Default: 5.

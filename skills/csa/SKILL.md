@@ -183,7 +183,7 @@ If you see "Max recursion depth exceeded":
 - Stop recursing and execute the task directly.
 
 ### OOM Prevention
-If you see "OOM Risk Prevention":
+If you see "Insufficient system memory":
 - Wait for running agents to finish, or close other applications.
 - The resource guard uses P95 historical memory estimates to prevent OOM.
 
