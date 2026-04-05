@@ -21,6 +21,12 @@ pub(crate) fn refresh_and_repair_result(
 
     if enrich_result_from_session_dir(project_root, session_id, &session_dir, &mut result)? {
         csa_session::save_result(project_root, session_id, &result)?;
+        // Best-effort cooldown marker
+        csa_session::write_cooldown_marker_from_session_dir(
+            &session_dir,
+            session_id,
+            result.completed_at,
+        );
     }
 
     Ok(Some(result))
@@ -60,6 +66,14 @@ pub(crate) fn refresh_and_repair_result_from_dir(
     if changed {
         // Write repaired result back (best-effort for cross-project sessions).
         let _ = fs::write(&result_path, toml::to_string_pretty(&result)?);
+        // Best-effort cooldown marker (cross-project: derive session_id from dir name).
+        if let Some(sid) = session_dir.file_name().and_then(|n| n.to_str()) {
+            csa_session::write_cooldown_marker_from_session_dir(
+                session_dir,
+                sid,
+                result.completed_at,
+            );
+        }
     }
 
     Ok(Some(result))

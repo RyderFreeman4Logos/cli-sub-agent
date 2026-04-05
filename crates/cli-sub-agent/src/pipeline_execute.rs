@@ -7,7 +7,9 @@ use std::time::Duration;
 use tracing::warn;
 
 use csa_executor::{ExecuteOptions, Executor, PeakMemoryContext, SessionConfig, TransportResult};
-use csa_session::{MetaSessionState, SessionResult, ToolState, save_result, save_session};
+use csa_session::{
+    MetaSessionState, SessionResult, ToolState, get_session_dir, save_result, save_session,
+};
 
 use crate::session_guard::SessionCleanupGuard;
 
@@ -179,6 +181,14 @@ pub(crate) async fn execute_transport_with_signal(
             if let Err(save_err) = save_result(project_root, &session.meta_session_id, &result) {
                 warn!("Failed to save transport error result: {}", save_err);
             }
+            // Best-effort cooldown marker
+            if let Ok(sd) = get_session_dir(project_root, &session.meta_session_id) {
+                csa_session::write_cooldown_marker_from_session_dir(
+                    &sd,
+                    &session.meta_session_id,
+                    completed_at,
+                );
+            }
             if let Some(cg) = cleanup_guard {
                 cg.defuse();
             }
@@ -217,6 +227,14 @@ fn record_session_termination(
         warn!(
             "Failed to save session result after {}: {}",
             termination_reason, e
+        );
+    }
+    // Best-effort cooldown marker
+    if let Ok(sd) = get_session_dir(project_root, &session.meta_session_id) {
+        csa_session::write_cooldown_marker_from_session_dir(
+            &sd,
+            &session.meta_session_id,
+            completed_at,
         );
     }
     if let Err(e) = save_session(&updated_session) {

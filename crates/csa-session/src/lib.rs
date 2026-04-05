@@ -2,6 +2,7 @@
 
 pub mod adjudication;
 pub mod checkpoint;
+pub mod cooldown;
 pub mod event_writer;
 pub mod finding_id;
 pub mod genealogy;
@@ -36,6 +37,12 @@ pub(crate) mod test_env {
 
     pub static TEST_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 }
+
+// Re-export cooldown types
+pub use cooldown::{
+    CooldownAction, CooldownMarker, compute_cooldown_wait, evaluate_cooldown, read_cooldown_marker,
+    write_cooldown_marker, write_cooldown_marker_from_session_dir,
+};
 
 // Re-export key types
 pub use adjudication::{AdjudicationRecord, AdjudicationSet, Verdict};

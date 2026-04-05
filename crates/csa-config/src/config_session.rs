@@ -64,6 +64,12 @@ pub struct SessionConfig {
     /// The caller is expected to re-invoke `csa session wait` in a loop.
     #[serde(default = "default_daemon_wait_seconds")]
     pub daemon_wait_seconds: u64,
+    /// Cooldown period (seconds) between consecutive session launches.
+    ///
+    /// Prevents rapid-fire session creation that can exhaust API quotas or
+    /// trigger provider rate limits. Set to `0` to disable cooldown entirely.
+    #[serde(default = "default_cooldown_secs")]
+    pub cooldown_seconds: u64,
 }
 
 fn default_seed_max_age_secs() -> u64 {
@@ -81,8 +87,18 @@ fn default_tool_output_threshold_bytes() -> u64 {
 /// Default daemon wait timeout: 250s for KV cache warmth.
 pub const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
 
+/// Default cooldown between consecutive session launches (seconds).
+///
+/// Prevents rapid-fire session creation that can exhaust API quotas or
+/// trigger provider rate limits. Set to `0` to disable cooldown entirely.
+pub const DEFAULT_COOLDOWN_SECS: u64 = 10;
+
 fn default_daemon_wait_seconds() -> u64 {
     DEFAULT_DAEMON_WAIT_SECS
+}
+
+fn default_cooldown_secs() -> u64 {
+    DEFAULT_COOLDOWN_SECS
 }
 
 const DEFAULT_SPOOL_MAX_MB: u32 = 32;
@@ -105,6 +121,7 @@ impl Default for SessionConfig {
             tool_output_compression: false,
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
             daemon_wait_seconds: default_daemon_wait_seconds(),
+            cooldown_seconds: default_cooldown_secs(),
         }
     }
 }
@@ -124,6 +141,7 @@ impl SessionConfig {
             && !self.tool_output_compression
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
             && self.daemon_wait_seconds == default_daemon_wait_seconds()
+            && self.cooldown_seconds == default_cooldown_secs()
     }
 
     pub fn resolved_spool_max_mb(&self) -> u32 {
