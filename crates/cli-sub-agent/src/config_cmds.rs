@@ -248,6 +248,8 @@ max_recursion_depth = 5
 # cloud_bot_retrigger_command = ""           # Command to re-trigger review after force-push
 #                                            # Default: "/gemini review" for gemini-code-assist,
 #                                            #          "@<name> review" for others
+# cloud_bot_wait_seconds = 250               # Quiet wait before polling (default: 250)
+# cloud_bot_poll_max_seconds = 600           # Max poll duration after quiet wait (default: 600)
 # merge_strategy = "merge"                   # "merge" | "rebase" | "squash" (default: "merge")
 # delete_branch = false                      # Delete remote branch after merge (default: false)
 
