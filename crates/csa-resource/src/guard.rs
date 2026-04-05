@@ -117,7 +117,7 @@ fn evaluate_memory_availability(
             "Insufficient system memory: available {available_total_mb}MB \
              (physical {available_phys_mb} + swap {available_swap_mb}) \
              but session requires {reserve_mb}MB. \
-             Free memory or reduce [resources] memory_max_mb in config."
+             Free system memory or reduce [resources] min_free_memory_mb in .csa/config.toml."
         );
     }
 

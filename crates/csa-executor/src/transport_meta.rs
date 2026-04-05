@@ -16,10 +16,12 @@ use super::AcpTransport;
 const SUMMARY_MAX_CHARS: usize = 200;
 
 /// Default soft memory limit as a percentage of MemoryMax.
-/// Lowered from 80% to 65% in #568 to provide more headroom before the
+/// Lowered from 80% to 70% in #568 to provide more headroom before the
 /// memory monitor fires SIGTERM, reducing near-system-crash scenarios on
-/// memory-constrained hosts.
-const DEFAULT_SOFT_LIMIT_PERCENT: u8 = 65;
+/// memory-constrained hosts.  Raised from 65% to 70% after R5 review
+/// found that 65% of codex's 12288MB limit (7987MB) was below the old
+/// 8192MB hard cap, effectively negating the #555 increase.
+const DEFAULT_SOFT_LIMIT_PERCENT: u8 = 70;
 
 impl AcpTransport {
     pub(crate) fn build_system_prompt(session_config: Option<&SessionConfig>) -> Option<String> {
