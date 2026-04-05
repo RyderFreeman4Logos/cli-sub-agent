@@ -185,8 +185,7 @@ fn default_recursion_depth() -> u32 {
 }
 
 pub use super::config_session::{
-    DEFAULT_COOLDOWN_SECS, DEFAULT_DAEMON_WAIT_SECS, ExecutionConfig, HooksSection, SessionConfig,
-    VcsConfig,
+    DEFAULT_DAEMON_WAIT_SECS, ExecutionConfig, HooksSection, SessionConfig, VcsConfig,
 };
 pub use super::config_tool::{ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions};
 

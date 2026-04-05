@@ -930,7 +930,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "tempfile",
- "tokio",
  "toml 1.0.7+spec-1.1.0",
  "tracing",
  "ulid",

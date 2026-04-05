@@ -2,7 +2,6 @@
 
 pub mod adjudication;
 pub mod checkpoint;
-pub mod cooldown;
 pub mod event_writer;
 pub mod finding_id;
 pub mod genealogy;
@@ -67,12 +66,12 @@ pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 // Re-export manager functions
 pub use manager::{
     complete_session, create_session, delete_session, delete_session_from_root, detect_git_head,
-    enforce_project_cooldown, find_sessions, get_session_dir, get_session_dir_global,
-    get_session_root, list_all_project_session_roots, list_all_sessions,
-    list_all_sessions_all_projects, list_artifacts, list_sessions, list_sessions_from_root,
-    list_sessions_from_root_readonly, load_metadata, load_result, load_session,
-    load_session_global_exact, resolve_fork_source, resolve_resume_session, save_result,
-    save_session, save_session_in, update_last_accessed, validate_tool_access,
+    find_sessions, get_session_dir, get_session_dir_global, get_session_root,
+    list_all_project_session_roots, list_all_sessions, list_all_sessions_all_projects,
+    list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,
+    load_metadata, load_result, load_session, load_session_global_exact, resolve_fork_source,
+    resolve_resume_session, save_result, save_session, save_session_in, update_last_accessed,
+    validate_tool_access,
 };
 
 pub use manager::ResumeSessionResolution;

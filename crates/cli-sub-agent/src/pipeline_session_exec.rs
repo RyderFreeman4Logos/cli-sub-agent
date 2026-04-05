@@ -187,11 +187,6 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         }
         csa_session::load_session(project_root, &resolution.meta_session_id)?
     } else {
-        // Cooldown only for new sessions — resume/fork reuse existing processes.
-        let cooldown_secs = config
-            .map(|c| c.session.cooldown_seconds)
-            .unwrap_or(csa_config::DEFAULT_COOLDOWN_SECS);
-        csa_session::enforce_project_cooldown(project_root, cooldown_secs).await;
         // Auto-generate description from prompt when not provided
         let effective_description = description.or_else(|| Some(truncate_prompt(prompt, 80)));
         let parent_id = match parent_session_source {
