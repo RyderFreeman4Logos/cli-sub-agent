@@ -3,6 +3,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use tracing::{error, info, warn};
 
 use csa_config::ProjectConfig;
@@ -48,6 +49,7 @@ impl StepTarget {
 }
 
 /// Result of executing a single step.
+#[derive(Serialize, Deserialize)]
 pub(crate) struct StepResult {
     pub(crate) step_id: usize,
     pub(crate) title: String,
@@ -71,21 +73,34 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) journal: &'a mut PlanRunJournal,
     pub(super) journal_path: Option<&'a Path>,
     pub(super) resume_completed_steps: &'a HashSet<usize>,
+    pub(super) chunked: bool,
 }
 
 fn shell_escape_for_command(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn format_plan_resume_command(project_root: &Path, workflow_path: &Path) -> String {
-    let display_path = workflow_path
-        .strip_prefix(project_root)
-        .unwrap_or(workflow_path);
-    let display = display_path.to_string_lossy();
-    format!(
-        "csa plan run --sa-mode true {}",
-        shell_escape_for_command(&display)
-    )
+fn format_plan_resume_command(
+    project_root: &Path,
+    workflow_path: &Path,
+    journal_path: Option<&Path>,
+) -> String {
+    if let Some(jp) = journal_path {
+        let display = jp.to_string_lossy();
+        format!(
+            "csa plan run --sa-mode true --resume {}",
+            shell_escape_for_command(&display)
+        )
+    } else {
+        let display_path = workflow_path
+            .strip_prefix(project_root)
+            .unwrap_or(workflow_path);
+        let display = display_path.to_string_lossy();
+        format!(
+            "csa plan run --sa-mode true {}",
+            shell_escape_for_command(&display)
+        )
+    }
 }
 
 /// Resolve a step's execution target from its annotations and config.
@@ -209,6 +224,7 @@ pub(crate) async fn execute_plan(
         journal: &mut journal,
         journal_path: None,
         resume_completed_steps: &completed,
+        chunked: false,
     };
     execute_plan_with_journal(plan, variables, &mut run_ctx).await
 }
@@ -276,7 +292,10 @@ pub(super) async fn execute_plan_with_journal(
         for (key, value) in assignment_markers {
             vars.insert(key, value);
         }
-        if !is_failure && !result.skipped {
+        if !is_failure {
+            // Record both successfully executed and skipped steps as completed
+            // so that --resume does not re-evaluate them (avoiding infinite loops
+            // when a condition-false step is skipped in chunked mode).
             completed_steps.insert(step.id);
         }
         run_ctx.journal.vars = vars.clone();
@@ -289,6 +308,17 @@ pub(super) async fn execute_plan_with_journal(
             persist_plan_journal(path, run_ctx.journal)?;
         }
 
+        // Chunked mode: emit the single StepResult as JSON to stdout and stop.
+        // Skipped steps (condition-false) do not count as "executed" — continue
+        // to the next step so the caller gets a real execution per chunk.
+        if run_ctx.chunked && !result.skipped {
+            let json =
+                serde_json::to_string(&result).expect("StepResult serialization should never fail");
+            println!("{json}");
+            results.push(result);
+            break;
+        }
+
         // Emit CSA:NEXT_STEP directive for pipeline chaining.
         // On success: point to the next step in the plan.
         // On failure: no directive (pipeline stops on abort).
@@ -296,7 +326,11 @@ pub(super) async fn execute_plan_with_journal(
             && !result.skipped
             && let Some(next_step) = find_next_step(step, &plan.steps)
         {
-            let cmd = format_plan_resume_command(run_ctx.project_root, run_ctx.workflow_path);
+            let cmd = format_plan_resume_command(
+                run_ctx.project_root,
+                run_ctx.workflow_path,
+                run_ctx.journal_path,
+            );
             let required = matches!(next_step.on_fail, FailAction::Abort);
             eprintln!("{}", format_next_step_directive(&cmd, required));
         }
@@ -673,12 +707,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn format_plan_resume_command_uses_project_relative_path() {
+    fn format_plan_resume_command_uses_journal_path_when_available() {
+        let project_root = Path::new("/tmp/workspace");
+        let workflow_path = Path::new("/tmp/workspace/patterns/dev2merge/workflow.toml");
+        let journal_path = Path::new("/tmp/workspace/.csa/state/plan/dev2merge.journal.json");
+
+        assert_eq!(
+            format_plan_resume_command(project_root, workflow_path, Some(journal_path)),
+            "csa plan run --sa-mode true --resume '/tmp/workspace/.csa/state/plan/dev2merge.journal.json'"
+        );
+    }
+
+    #[test]
+    fn format_plan_resume_command_falls_back_to_workflow_path() {
         let project_root = Path::new("/tmp/workspace");
         let workflow_path = Path::new("/tmp/workspace/patterns/dev2merge/workflow.toml");
 
         assert_eq!(
-            format_plan_resume_command(project_root, workflow_path),
+            format_plan_resume_command(project_root, workflow_path, None),
             "csa plan run --sa-mode true 'patterns/dev2merge/workflow.toml'"
         );
     }
@@ -689,8 +735,20 @@ mod tests {
         let workflow_path = Path::new("/tmp/workspace/patterns/weird name's/workflow.toml");
 
         assert_eq!(
-            format_plan_resume_command(project_root, workflow_path),
+            format_plan_resume_command(project_root, workflow_path, None),
             "csa plan run --sa-mode true 'patterns/weird name'\\''s/workflow.toml'"
+        );
+    }
+
+    #[test]
+    fn format_plan_resume_command_escapes_journal_path_special_characters() {
+        let project_root = Path::new("/tmp/workspace");
+        let workflow_path = Path::new("/tmp/workspace/workflow.toml");
+        let journal_path = Path::new("/tmp/workspace/.csa/state/plan/weird name's.journal.json");
+
+        assert_eq!(
+            format_plan_resume_command(project_root, workflow_path, Some(journal_path)),
+            "csa plan run --sa-mode true --resume '/tmp/workspace/.csa/state/plan/weird name'\\''s.journal.json'"
         );
     }
 }

@@ -771,6 +771,14 @@ pub enum PlanCommands {
         #[arg(long)]
         dry_run: bool,
 
+        /// Execute only one step then return (caller polls with --resume)
+        #[arg(long)]
+        chunked: bool,
+
+        /// Resume from a journal state file (path to journal JSON file)
+        #[arg(long, conflicts_with = "file", conflicts_with = "pattern")]
+        resume: Option<String>,
+
         /// Working directory
         #[arg(long)]
         cd: Option<String>,

@@ -52,6 +52,7 @@ fn load_plan_resume_context_reads_running_journal() {
         &journal_path,
         &cli_vars,
         &repo_fingerprint,
+        false,
     )
     .unwrap();
 
@@ -106,6 +107,7 @@ fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
         &journal_path,
         &cli_vars,
         &repo_fingerprint,
+        false,
     )
     .unwrap();
 

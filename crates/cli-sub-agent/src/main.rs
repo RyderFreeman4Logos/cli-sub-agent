@@ -696,10 +696,22 @@ async fn run() -> Result<()> {
                 vars,
                 tool,
                 dry_run,
+                chunked,
+                resume,
                 cd,
             } => {
-                plan_cmd::handle_plan_run(file, pattern, vars, tool, dry_run, cd, current_depth)
-                    .await?;
+                plan_cmd::handle_plan_run(plan_cmd::PlanRunArgs {
+                    file,
+                    pattern,
+                    vars,
+                    tool_override: tool,
+                    dry_run,
+                    chunked,
+                    resume,
+                    cd,
+                    current_depth,
+                })
+                .await?;
                 crate::pipeline::prompt_guard::emit_sa_mode_caller_guard(
                     sa_mode_active,
                     current_depth,
