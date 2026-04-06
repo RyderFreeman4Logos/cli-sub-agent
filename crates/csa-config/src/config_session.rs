@@ -70,6 +70,13 @@ pub struct SessionConfig {
     /// trigger provider rate limits. Set to `0` to disable cooldown entirely.
     #[serde(default = "default_cooldown_secs")]
     pub cooldown_seconds: u64,
+    /// Timeout (seconds) for joining the stderr drain thread during daemon shutdown.
+    ///
+    /// If a child process inherits the daemon's stderr pipe and outlives the daemon,
+    /// the drain thread blocks on `read(pipe)` indefinitely.  This timeout prevents
+    /// daemon shutdown from hanging.  Default: 5 seconds.
+    #[serde(default = "default_stderr_drain_timeout_secs")]
+    pub stderr_drain_timeout_secs: u64,
 }
 
 fn default_seed_max_age_secs() -> u64 {
@@ -101,6 +108,13 @@ fn default_cooldown_secs() -> u64 {
     DEFAULT_COOLDOWN_SECS
 }
 
+/// Default drain thread join timeout: 5 seconds.
+pub const DEFAULT_STDERR_DRAIN_TIMEOUT_SECS: u64 = 5;
+
+fn default_stderr_drain_timeout_secs() -> u64 {
+    DEFAULT_STDERR_DRAIN_TIMEOUT_SECS
+}
+
 const DEFAULT_SPOOL_MAX_MB: u32 = 32;
 const DEFAULT_STDERR_SPOOL_MAX_MB: u32 = 50;
 const DEFAULT_SPOOL_KEEP_ROTATED: bool = true;
@@ -122,6 +136,7 @@ impl Default for SessionConfig {
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
             daemon_wait_seconds: default_daemon_wait_seconds(),
             cooldown_seconds: default_cooldown_secs(),
+            stderr_drain_timeout_secs: default_stderr_drain_timeout_secs(),
         }
     }
 }
@@ -142,6 +157,7 @@ impl SessionConfig {
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
             && self.daemon_wait_seconds == default_daemon_wait_seconds()
             && self.cooldown_seconds == default_cooldown_secs()
+            && self.stderr_drain_timeout_secs == default_stderr_drain_timeout_secs()
     }
 
     /// Resolve cooldown duration (0 = disabled).
@@ -159,6 +175,10 @@ impl SessionConfig {
         self.stderr_spool_max_mb
             .or(self.spool_max_mb)
             .unwrap_or(DEFAULT_STDERR_SPOOL_MAX_MB)
+    }
+
+    pub fn resolved_stderr_drain_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.stderr_drain_timeout_secs)
     }
 
     pub fn resolved_spool_keep_rotated(&self) -> bool {
