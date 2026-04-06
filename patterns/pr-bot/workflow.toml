@@ -825,7 +825,7 @@ echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = '${CLOUD_BOT} != "false"'
+condition = '${CLOUD_BOT}'
 
 [[workflow.steps]]
 id = 8
@@ -844,7 +844,7 @@ user must:
 1. Configure the cloud bot (follow the bot's instructions)
 2. Re-run `pr-bot` after configuration is complete"""
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && (${BOT_NEEDS_SETUP})'
+condition = '(${CLOUD_BOT}) && (${BOT_NEEDS_SETUP})'
 
 [[workflow.steps]]
 id = 9
@@ -903,7 +903,7 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && (${BOT_UNAVAILABLE})'
+condition = '(${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && (${FALLBACK_REVIEW_HAS_ISSUES})'
 
 [[workflow.steps]]
 id = 10
@@ -965,7 +965,7 @@ git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && (${BOT_UNAVAILABLE})'
+condition = '(${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && (!(${FALLBACK_REVIEW_HAS_ISSUES}))'
 
 [[workflow.steps]]
 id = 11
@@ -1014,7 +1014,7 @@ echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=true"
 echo "CSA_VAR:COMMENT_IS_STALE=false"
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
 
 [[workflow.steps]]
 id = 12
@@ -1041,7 +1041,7 @@ fi
 echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
 ```"""
 on_fail = "skip"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
 
 [[workflow.steps]]
 id = 13
@@ -1055,7 +1055,7 @@ prompt = """
 Tool: csa
 Tier: tier-4-critical"""
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
 
 [[workflow.steps]]
 id = 14
@@ -1063,7 +1063,7 @@ title = "Include debate"
 tool = "weave"
 prompt = "debate"
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
 
 [[workflow.steps]]
 id = 15
@@ -1155,7 +1155,7 @@ case "${VERDICT}" in
 esac
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
 
 [[workflow.steps]]
 id = 16
@@ -1174,7 +1174,7 @@ non-false-positive). Fetch the comment body via
 `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`, apply the fix,
 and commit it."""
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))'
 
 [[workflow.steps]]
 id = 17
@@ -1302,7 +1302,7 @@ echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 
 Loop back to Step 5 (delegated wait gate)."""
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
 
 [[workflow.steps]]
 id = 18
@@ -1489,14 +1489,14 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
 
 [[workflow.steps]]
 id = 19
 title = "Step 10a: Bot Review Clean"
 prompt = "No issues found by bot. Proceed to merge."
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))'
 
 [[workflow.steps]]
 id = 20
@@ -1656,7 +1656,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT} != "false") && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))'
+condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))) && (${REBASE_ENABLED})'
 
 [[workflow.steps]]
 id = 21

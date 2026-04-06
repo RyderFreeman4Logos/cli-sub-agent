@@ -316,7 +316,7 @@ If `CLOUD_BOT` is `false`:
   - Otherwise run full `csa review --branch main`.
 - Route to Step 6a (Merge Without Bot) after supplementary local review gate passes.
 
-## IF ${CLOUD_BOT} != "false"
+## IF ${CLOUD_BOT}
 
 ## Step 5: Trigger Cloud Bot Review and Delegate Waiting
 
@@ -1366,7 +1366,7 @@ fi
 ## ENDIF
 
 ## ENDIF
-<!-- End of CLOUD_BOT != "false" block -->
+<!-- End of CLOUD_BOT block -->
 
 ## IF !(${BOT_UNAVAILABLE})
 
