@@ -182,6 +182,7 @@ fn load_plan_resume_context(
     journal_path: &Path,
     cli_vars: &HashMap<String, String>,
     repo_fingerprint: &RepoFingerprint,
+    explicit_resume: bool,
 ) -> Result<PlanResumeContext> {
     let mut initial_vars = cli_vars.clone();
     if !journal_path.exists() {
@@ -221,27 +222,34 @@ fn load_plan_resume_context(
         });
     }
 
-    let fingerprint_matches = match (
-        journal.repo_head.as_ref(),
-        journal.repo_dirty,
-        repo_fingerprint.head.as_ref(),
-        repo_fingerprint.dirty,
-    ) {
-        (Some(saved_head), Some(saved_dirty), Some(current_head), Some(current_dirty)) => {
-            saved_head == current_head && saved_dirty == current_dirty
+    if !explicit_resume {
+        let fingerprint_matches = match (
+            journal.repo_head.as_ref(),
+            journal.repo_dirty,
+            repo_fingerprint.head.as_ref(),
+            repo_fingerprint.dirty,
+        ) {
+            (Some(saved_head), Some(saved_dirty), Some(current_head), Some(current_dirty)) => {
+                saved_head == current_head && saved_dirty == current_dirty
+            }
+            _ => false,
+        };
+        if !fingerprint_matches {
+            warn!(
+                path = %journal_path.display(),
+                "Ignoring plan journal because repository state changed (or fingerprint unavailable)"
+            );
+            return Ok(PlanResumeContext {
+                initial_vars,
+                completed_steps: HashSet::new(),
+                resumed: false,
+            });
         }
-        _ => false,
-    };
-    if !fingerprint_matches {
-        warn!(
+    } else {
+        info!(
             path = %journal_path.display(),
-            "Ignoring plan journal because repository state changed (or fingerprint unavailable)"
+            "Explicit --resume: bypassing repository fingerprint check"
         );
-        return Ok(PlanResumeContext {
-            initial_vars,
-            completed_steps: HashSet::new(),
-            resumed: false,
-        });
     }
 
     for (key, value) in journal.vars {
@@ -339,16 +347,33 @@ fn resolve_workflow_path(
     }
 }
 
+/// CLI arguments for `csa plan run`.
+pub(crate) struct PlanRunArgs {
+    pub file: Option<String>,
+    pub pattern: Option<String>,
+    pub vars: Vec<String>,
+    pub tool_override: Option<ToolName>,
+    pub dry_run: bool,
+    pub chunked: bool,
+    pub resume: Option<String>,
+    pub cd: Option<String>,
+    pub current_depth: u32,
+}
+
 /// Handle `csa plan run <file>` or `csa plan run --pattern <name>`.
-pub(crate) async fn handle_plan_run(
-    file: Option<String>,
-    pattern: Option<String>,
-    vars: Vec<String>,
-    tool_override: Option<ToolName>,
-    dry_run: bool,
-    cd: Option<String>,
-    current_depth: u32,
-) -> Result<()> {
+pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
+    let PlanRunArgs {
+        file,
+        pattern,
+        vars,
+        tool_override,
+        dry_run,
+        chunked,
+        resume,
+        cd,
+        current_depth,
+    } = args;
+
     // 1. Determine project root
     let project_root = determine_project_root(cd.as_deref())?;
     let effective_repo =
@@ -371,15 +396,64 @@ pub(crate) async fn handle_plan_run(
         bail!("Max recursion depth ({max_depth}) exceeded. Current: {current_depth}");
     }
 
-    // 4. Load and parse workflow TOML (resolve by file path or pattern name)
-    let workflow_path = resolve_workflow_path(&file, &pattern, &project_root)?;
-    let display_name = pattern
-        .as_deref()
-        .unwrap_or_else(|| file.as_deref().unwrap_or("(unknown)"));
-    let content = std::fs::read_to_string(&workflow_path)
-        .with_context(|| format!("Failed to read workflow file: {display_name}"))?;
-    let plan = plan_from_toml(&content)
-        .with_context(|| format!("Failed to parse workflow file: {display_name}"))?;
+    // 4. Load workflow: either from --resume journal or from file/pattern
+    let (workflow_path, plan, journal_path, explicit_resume) = if let Some(ref resume_path) = resume
+    {
+        // --resume: load journal state and extract workflow path from it
+        let resume_file = PathBuf::from(resume_path);
+        if !resume_file.exists() {
+            bail!("Resume journal file not found: {}", resume_file.display());
+        }
+        let bytes = std::fs::read(&resume_file)
+            .with_context(|| format!("Failed to read resume journal: {}", resume_file.display()))?;
+        let journal: PlanRunJournal = serde_json::from_slice(&bytes).with_context(|| {
+            format!("Failed to parse resume journal: {}", resume_file.display())
+        })?;
+        if journal.schema_version != PLAN_JOURNAL_SCHEMA_VERSION {
+            bail!(
+                "Resume journal has unsupported schema version {} (expected {})",
+                journal.schema_version,
+                PLAN_JOURNAL_SCHEMA_VERSION
+            );
+        }
+        let wf_path = PathBuf::from(&journal.workflow_path);
+        if !wf_path.exists() {
+            bail!(
+                "Workflow file from resume journal not found: {}",
+                wf_path.display()
+            );
+        }
+        let content = std::fs::read_to_string(&wf_path).with_context(|| {
+            format!(
+                "Failed to read workflow file from resume journal: {}",
+                wf_path.display()
+            )
+        })?;
+        let loaded_plan = plan_from_toml(&content).with_context(|| {
+            format!(
+                "Failed to parse workflow file from resume journal: {}",
+                wf_path.display()
+            )
+        })?;
+        eprintln!(
+            "csa plan: --resume from journal {} (workflow: {})",
+            resume_file.display(),
+            wf_path.display()
+        );
+        (wf_path, loaded_plan, resume_file, true)
+    } else {
+        // Normal flow: resolve by file path or pattern name
+        let wf_path = resolve_workflow_path(&file, &pattern, &project_root)?;
+        let display_name = pattern
+            .as_deref()
+            .unwrap_or_else(|| file.as_deref().unwrap_or("(unknown)"));
+        let content = std::fs::read_to_string(&wf_path)
+            .with_context(|| format!("Failed to read workflow file: {display_name}"))?;
+        let loaded_plan = plan_from_toml(&content)
+            .with_context(|| format!("Failed to parse workflow file: {display_name}"))?;
+        let jp = plan_journal_path(&project_root, &loaded_plan.name);
+        (wf_path, loaded_plan, jp, false)
+    };
 
     // 5. Parse --var KEY=VALUE into HashMap
     let cli_variables = parse_variables(&vars, &plan)?;
@@ -390,7 +464,6 @@ pub(crate) async fn handle_plan_run(
         return Ok(());
     }
 
-    let journal_path = plan_journal_path(&project_root, &plan.name);
     let current_repo_fingerprint = detect_repo_fingerprint(&project_root);
     let resume_context = load_plan_resume_context(
         &plan,
@@ -398,6 +471,7 @@ pub(crate) async fn handle_plan_run(
         &journal_path,
         &cli_variables,
         &current_repo_fingerprint,
+        explicit_resume,
     )?;
     if resume_context.resumed {
         let next_step = plan
@@ -443,10 +517,29 @@ pub(crate) async fn handle_plan_run(
         journal: &mut journal,
         journal_path: Some(&journal_path),
         resume_completed_steps: &resume_context.completed_steps,
+        chunked,
     };
 
     let results =
         execute_plan_with_journal(&plan, &resume_context.initial_vars, &mut run_ctx).await?;
+
+    // In chunked mode, stdout must be clean JSON only — skip summary and
+    // final status updates (journal was already saved after the single step).
+    if chunked {
+        // Propagate step failure as process exit code.
+        if let Some(r) = results.last()
+            && r.exit_code != 0
+            && !r.skipped
+        {
+            bail!(
+                "Step {} ('{}') failed with exit code {}",
+                r.step_id,
+                r.title,
+                r.exit_code
+            );
+        }
+        return Ok(());
+    }
 
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
@@ -552,6 +645,10 @@ mod tests;
 #[cfg(test)]
 #[path = "plan_cmd_tests_tail.rs"]
 mod tests_tail;
+
+#[cfg(test)]
+#[path = "plan_cmd_tests_chunked.rs"]
+mod tests_chunked;
 
 #[cfg(test)]
 #[path = "plan_cmd_override_tests.rs"]
