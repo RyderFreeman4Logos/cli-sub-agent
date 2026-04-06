@@ -501,7 +501,7 @@ on_fail = "abort"
 id = 14
 title = "Post-Merge Local Sync"
 tool = "bash"
-prompt = """
+prompt = '''
 Verify pr-bot completion marker exists (deterministic gate — cannot be bypassed
 by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
@@ -560,5 +560,5 @@ if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
   exit 1
 fi
 echo "Local main synced to ${LOCAL_SHA}."
-```"""
+```'''
 on_fail = "abort"

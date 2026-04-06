@@ -14,6 +14,7 @@ use std::os::unix::io::FromRawFd;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use super::output_helpers::SpoolRotator;
 
@@ -22,6 +23,13 @@ use super::output_helpers::SpoolRotator;
 /// stderr is typically more verbose than stdout (tracing output, tee'd lines),
 /// so the default is larger than `DEFAULT_SPOOL_MAX_BYTES` (32 MiB).
 pub const DEFAULT_STDERR_SPOOL_MAX_BYTES: u64 = 50 * 1024 * 1024;
+
+/// Default timeout for joining the stderr drain thread during shutdown (seconds).
+///
+/// If a child process inherits fd 2 and outlives the daemon, the drain thread's
+/// `read(pipe)` blocks indefinitely.  This timeout prevents daemon shutdown from
+/// hanging in that scenario.
+pub const DEFAULT_DRAIN_TIMEOUT_SECS: u64 = 5;
 
 /// Guard returned by [`install_stderr_rotation`].
 ///
@@ -37,6 +45,10 @@ pub struct StderrRotationGuard {
     /// The raw fd for the pipe write-end (i.e. fd 2 after dup2).  Stored so
     /// we can close it to unblock the reader thread during shutdown.
     write_fd: i32,
+    /// Channel receiver for drain-thread completion signal.
+    done_rx: Option<std::sync::mpsc::Receiver<()>>,
+    /// Maximum time to wait for the drain thread to finish during shutdown.
+    drain_timeout: Duration,
 }
 
 impl StderrRotationGuard {
@@ -63,7 +75,24 @@ impl StderrRotationGuard {
         }
 
         if let Some(handle) = self.thread.take() {
-            let _ = handle.join();
+            // Wait for the drain thread to signal completion, with a timeout
+            // to prevent hanging if a child process inherited the pipe fd.
+            let completed = self
+                .done_rx
+                .as_ref()
+                .map(|rx| rx.recv_timeout(self.drain_timeout).is_ok())
+                .unwrap_or(false);
+
+            if completed {
+                // Thread signaled done — join should return immediately.
+                let _ = handle.join();
+            } else {
+                tracing::warn!(
+                    timeout_secs = self.drain_timeout.as_secs(),
+                    "stderr drain thread did not finish within timeout; abandoning thread"
+                );
+                // Intentionally leak the JoinHandle — OS cleans up on process exit.
+            }
         }
     }
 }
@@ -88,6 +117,7 @@ pub fn install_stderr_rotation(
     stderr_path: &Path,
     max_bytes: u64,
     keep_rotated: bool,
+    drain_timeout: Duration,
 ) -> std::io::Result<StderrRotationGuard> {
     // Save the original fd 2 so we can restore it if thread spawn fails.
     // SAFETY: dup is POSIX, returns a new fd pointing to the same file.
@@ -148,11 +178,13 @@ pub fn install_stderr_rotation(
 
     let stderr_path = stderr_path.to_path_buf();
     let shutdown = Arc::new(AtomicBool::new(false));
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
 
     let thread = match std::thread::Builder::new()
         .name("csa-stderr-rotation".to_string())
         .spawn(move || {
             run_stderr_drain(read_file, &stderr_path, max_bytes, keep_rotated);
+            let _ = done_tx.send(());
         }) {
         Ok(handle) => handle,
         Err(e) => {
@@ -177,6 +209,8 @@ pub fn install_stderr_rotation(
         shutdown,
         thread: Some(thread),
         write_fd: 2,
+        done_rx: Some(done_rx),
+        drain_timeout,
     })
 }
 
@@ -392,6 +426,53 @@ mod tests {
             !rotated_path.exists(),
             "stderr.log.rotated should be removed when keep_rotated=false"
         );
+    }
+
+    /// Test that `shutdown_inner` completes within the drain timeout even when
+    /// the pipe write-end is kept open (simulating a child process that inherited
+    /// fd 2 and outlives the daemon).
+    #[test]
+    fn test_drain_timeout_when_pipe_held_open() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let stderr_path = tmp.path().join("stderr.log");
+
+        let (read_file, write_file) = make_pipe();
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+
+        let path_clone = stderr_path.clone();
+        let handle = std::thread::spawn(move || {
+            run_stderr_drain(read_file, &path_clone, 1024 * 1024, true);
+            let _ = done_tx.send(());
+        });
+
+        // Deliberately keep write_file alive — the drain thread will block on
+        // read() because the pipe never reaches EOF.
+        let timeout = Duration::from_secs(2);
+        let mut guard = StderrRotationGuard {
+            shutdown: Arc::new(AtomicBool::new(false)),
+            thread: Some(handle),
+            write_fd: -1, // We don't own fd 2 in this test.
+            done_rx: Some(done_rx),
+            drain_timeout: timeout,
+        };
+
+        let start = std::time::Instant::now();
+        guard.shutdown_inner();
+        let elapsed = start.elapsed();
+
+        // shutdown_inner should return after ~timeout, not hang indefinitely.
+        assert!(
+            elapsed < timeout + Duration::from_secs(2),
+            "shutdown_inner should return within timeout + slack, took {elapsed:?}"
+        );
+        assert!(
+            elapsed >= timeout - Duration::from_millis(100),
+            "shutdown_inner should wait at least ~timeout before abandoning, took {elapsed:?}"
+        );
+
+        // Clean up: drop write_file to unblock the drain thread, then let it
+        // exit naturally so we don't leak the thread for the test runner.
+        drop(write_file);
     }
 
     /// Regression test for issue #571: pipe data must be fully drained even

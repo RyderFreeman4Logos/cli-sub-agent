@@ -74,10 +74,14 @@ fn install_daemon_stderr_rotation(
     let stderr_path = session_dir.join("stderr.log");
 
     // Resolve config for spool limits (best effort — fall back to defaults).
-    let (max_bytes, keep_rotated) = resolve_stderr_spool_config(&project_root);
+    let (max_bytes, keep_rotated, drain_timeout) = resolve_stderr_spool_config(&project_root);
 
-    match csa_process::daemon_stderr::install_stderr_rotation(&stderr_path, max_bytes, keep_rotated)
-    {
+    match csa_process::daemon_stderr::install_stderr_rotation(
+        &stderr_path,
+        max_bytes,
+        keep_rotated,
+        drain_timeout,
+    ) {
         Ok(guard) => Some(guard),
         Err(e) => {
             // Best effort: log to the original stderr.log before fd replacement.
@@ -87,19 +91,21 @@ fn install_daemon_stderr_rotation(
     }
 }
 
-fn resolve_stderr_spool_config(project_root: &std::path::Path) -> (u64, bool) {
+fn resolve_stderr_spool_config(project_root: &std::path::Path) -> (u64, bool, std::time::Duration) {
     let project_cfg = csa_config::ProjectConfig::load(project_root).ok().flatten();
 
     if let Some(cfg) = project_cfg {
         let max_mb = cfg.session.resolved_stderr_spool_max_mb();
         let max_bytes = u64::from(max_mb).saturating_mul(1024 * 1024);
         let keep = cfg.session.resolved_spool_keep_rotated();
-        return (max_bytes, keep);
+        let drain_timeout = cfg.session.resolved_stderr_drain_timeout();
+        return (max_bytes, keep, drain_timeout);
     }
 
     (
         csa_process::daemon_stderr::DEFAULT_STDERR_SPOOL_MAX_BYTES,
         csa_process::DEFAULT_SPOOL_KEEP_ROTATED,
+        std::time::Duration::from_secs(csa_process::daemon_stderr::DEFAULT_DRAIN_TIMEOUT_SECS),
     )
 }
 

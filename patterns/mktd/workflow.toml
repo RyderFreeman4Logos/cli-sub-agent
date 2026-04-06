@@ -602,7 +602,7 @@ csa todo ref add -t "${TODO_TS}" --content "${DESIGN_DOC}" design.md 2>/dev/null
 csa todo ref show -t "${TODO_TS}" design.md >/dev/null 2>&1 || { echo 'WARNING: design.md ref was not persisted' >&2; }
 csa todo ref list -t "${TODO_TS}" 2>/dev/null || echo "(no refs persisted)"
 ```'''
-on_fail = "continue"
+on_fail = "skip"
 
 [[workflow.steps]]
 id = 14
