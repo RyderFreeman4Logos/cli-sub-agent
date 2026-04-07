@@ -43,6 +43,35 @@ impl ModelSpec {
 }
 
 impl ThinkingBudget {
+    /// Try to split a trailing `/thinking_budget` suffix from a model string.
+    ///
+    /// Returns `(model, Some(budget))` if the last `/`-separated segment is a valid
+    /// thinking budget keyword (not numeric — avoids ambiguity with version numbers).
+    /// Otherwise returns `(original, None)`.
+    ///
+    /// Examples:
+    /// - `"google/gemini-3.1-pro-preview/xhigh"` → `("google/gemini-3.1-pro-preview", Some(Xhigh))`
+    /// - `"gemini-3.1-pro-preview/high"` → `("gemini-3.1-pro-preview", Some(High))`
+    /// - `"google/gemini-3.1-pro-preview"` → `("google/gemini-3.1-pro-preview", None)`
+    /// - `"gemini-3.1-pro-preview"` → `("gemini-3.1-pro-preview", None)`
+    pub fn try_split_from_model(model: &str) -> (&str, Option<Self>) {
+        if let Some(pos) = model.rfind('/') {
+            let suffix = &model[pos + 1..];
+            // Only match named keywords, not numeric — numbers in model names are common
+            // (e.g., "gpt-5.4" or version suffixes) and would cause false positives.
+            match suffix.to_lowercase().as_str() {
+                "default" | "low" | "medium" | "med" | "high" | "xhigh" | "extra-high" => {
+                    // Safe to unwrap: we matched a known keyword above.
+                    let budget = Self::parse(suffix).expect("matched keyword must parse");
+                    (&model[..pos], Some(budget))
+                }
+                _ => (model, None),
+            }
+        } else {
+            (model, None)
+        }
+    }
+
     /// Parse thinking budget from string.
     ///
     /// Accepts: default, low, medium/med, high, xhigh/extra-high, or a numeric value.
@@ -230,5 +259,50 @@ mod tests {
         assert_eq!(ThinkingBudget::High.codex_effort(), "high");
         assert_eq!(ThinkingBudget::Xhigh.codex_effort(), "xhigh");
         assert_eq!(ThinkingBudget::Custom(10000).codex_effort(), "high"); // fallback to high
+    }
+
+    #[test]
+    fn try_split_provider_model_thinking() {
+        let (model, budget) =
+            ThinkingBudget::try_split_from_model("google/gemini-3.1-pro-preview/xhigh");
+        assert_eq!(model, "google/gemini-3.1-pro-preview");
+        assert!(matches!(budget, Some(ThinkingBudget::Xhigh)));
+    }
+
+    #[test]
+    fn try_split_model_thinking() {
+        let (model, budget) = ThinkingBudget::try_split_from_model("gemini-3.1-pro-preview/high");
+        assert_eq!(model, "gemini-3.1-pro-preview");
+        assert!(matches!(budget, Some(ThinkingBudget::High)));
+    }
+
+    #[test]
+    fn try_split_no_thinking_suffix() {
+        let (model, budget) = ThinkingBudget::try_split_from_model("google/gemini-3.1-pro-preview");
+        assert_eq!(model, "google/gemini-3.1-pro-preview");
+        assert!(budget.is_none());
+    }
+
+    #[test]
+    fn try_split_plain_model() {
+        let (model, budget) = ThinkingBudget::try_split_from_model("gemini-3.1-pro-preview");
+        assert_eq!(model, "gemini-3.1-pro-preview");
+        assert!(budget.is_none());
+    }
+
+    #[test]
+    fn try_split_numeric_suffix_not_split() {
+        // Numeric suffixes should NOT be treated as thinking budgets —
+        // too ambiguous with model version numbers.
+        let (model, budget) = ThinkingBudget::try_split_from_model("gpt-5.4/1000");
+        assert_eq!(model, "gpt-5.4/1000");
+        assert!(budget.is_none());
+    }
+
+    #[test]
+    fn try_split_case_insensitive() {
+        let (model, budget) = ThinkingBudget::try_split_from_model("some-model/XHIGH");
+        assert_eq!(model, "some-model");
+        assert!(matches!(budget, Some(ThinkingBudget::Xhigh)));
     }
 }

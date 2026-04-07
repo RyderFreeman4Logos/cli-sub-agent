@@ -1,6 +1,7 @@
 use super::{build_executor, infer_task_edit_requirement, resolve_tool, truncate_prompt};
 use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::types::ToolName;
+use csa_executor::{Executor, ThinkingBudget};
 use std::collections::HashMap;
 
 #[test]
@@ -98,6 +99,87 @@ fn build_executor_model_and_thinking_coexist() {
         "model missing: {debug}"
     );
     assert!(debug.contains("Low"), "thinking budget missing: {debug}");
+}
+
+#[test]
+fn build_executor_model_with_thinking_suffix() {
+    let result = build_executor(
+        &ToolName::GeminiCli,
+        None,
+        Some("google/gemini-3.1-pro-preview/xhigh"),
+        None,
+        None,
+        false,
+    );
+    assert!(result.is_ok(), "executor should be created: {result:?}");
+
+    match result.unwrap() {
+        Executor::GeminiCli {
+            model_override,
+            thinking_budget,
+        } => {
+            assert_eq!(
+                model_override.as_deref(),
+                Some("google/gemini-3.1-pro-preview")
+            );
+            assert!(matches!(thinking_budget, Some(ThinkingBudget::Xhigh)));
+        }
+        other => panic!("expected GeminiCli executor, got: {other:?}"),
+    }
+}
+
+#[test]
+fn build_executor_model_thinking_suffix_overridden_by_explicit_thinking() {
+    let result = build_executor(
+        &ToolName::GeminiCli,
+        None,
+        Some("google/gemini-3.1-pro-preview/xhigh"),
+        Some("low"),
+        None,
+        false,
+    );
+    assert!(result.is_ok(), "executor should be created: {result:?}");
+
+    match result.unwrap() {
+        Executor::GeminiCli {
+            model_override,
+            thinking_budget,
+        } => {
+            assert_eq!(
+                model_override.as_deref(),
+                Some("google/gemini-3.1-pro-preview")
+            );
+            assert!(matches!(thinking_budget, Some(ThinkingBudget::Low)));
+        }
+        other => panic!("expected GeminiCli executor, got: {other:?}"),
+    }
+}
+
+#[test]
+fn build_executor_model_spec_override_with_thinking_suffix() {
+    let result = build_executor(
+        &ToolName::GeminiCli,
+        Some("gemini-cli/google/default/high"),
+        Some("google/gemini-3.1-pro-preview/xhigh"),
+        None,
+        None,
+        false,
+    );
+    assert!(result.is_ok(), "executor should be created: {result:?}");
+
+    match result.unwrap() {
+        Executor::GeminiCli {
+            model_override,
+            thinking_budget,
+        } => {
+            assert_eq!(
+                model_override.as_deref(),
+                Some("google/gemini-3.1-pro-preview")
+            );
+            assert!(matches!(thinking_budget, Some(ThinkingBudget::Xhigh)));
+        }
+        other => panic!("expected GeminiCli executor, got: {other:?}"),
+    }
 }
 
 #[test]
