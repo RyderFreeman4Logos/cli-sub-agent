@@ -260,7 +260,18 @@ pub(crate) fn build_executor(
         Executor::from_spec(&parsed)?
     } else {
         let tool_name = tool.as_str();
-        let final_model = model.map(|s| s.to_string()).or_else(|| {
+
+        // Smart-parse --model: split trailing thinking suffix (e.g. "/xhigh")
+        // when --thinking is not explicitly provided.
+        let (parsed_model, model_thinking) = match model {
+            Some(m) => {
+                let (clean, budget) = ThinkingBudget::try_split_from_model(m);
+                (Some(clean.to_string()), budget)
+            }
+            None => (None, None),
+        };
+
+        let final_model = parsed_model.or_else(|| {
             apply_tool_defaults.then(|| {
                 config.and_then(|cfg| {
                     cfg.tool_default_model(tool_name)
@@ -268,11 +279,17 @@ pub(crate) fn build_executor(
                 })
             })?
         });
+
+        // Explicit --thinking > thinking parsed from --model suffix > config default
         let effective_thinking = thinking.or_else(|| {
             apply_tool_defaults
                 .then(|| config.and_then(|cfg| cfg.tool_default_thinking(tool_name)))?
         });
-        let budget = effective_thinking.map(ThinkingBudget::parse).transpose()?;
+        let budget = if let Some(t) = effective_thinking {
+            Some(ThinkingBudget::parse(t)?)
+        } else {
+            model_thinking
+        };
 
         Executor::from_tool_name(tool, final_model, budget)
     };
@@ -281,7 +298,15 @@ pub(crate) fn build_executor(
     // Explicit arguments must override them (CLI/config > tier spec).
     if model_spec.is_some() {
         if let Some(explicit_model) = model {
-            executor.override_model(explicit_model.to_string());
+            // Also smart-parse model override for thinking suffix.
+            let (clean, suffix_budget) = ThinkingBudget::try_split_from_model(explicit_model);
+            executor.override_model(clean.to_string());
+            // Explicit --thinking takes precedence over suffix in override too.
+            if thinking.is_none()
+                && let Some(budget) = suffix_budget
+            {
+                executor.override_thinking_budget(budget);
+            }
         }
         if let Some(explicit_thinking) = thinking {
             let budget = ThinkingBudget::parse(explicit_thinking)?;
