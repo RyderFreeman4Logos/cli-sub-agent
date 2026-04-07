@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
-use csa_session::{SessionResult, save_result};
+use csa_session::{SessionResult, create_session, save_result, save_session};
 
 /// RAII guard that cleans up a newly created session directory on failure.
 ///
@@ -95,4 +95,82 @@ pub(crate) fn write_pre_exec_error_result(
     }
     // Best-effort cooldown marker
     csa_session::write_cooldown_marker_for_project(project_root, session_id, now);
+}
+
+fn create_pre_exec_failure_session(
+    project_root: &Path,
+    description: Option<&str>,
+    parent: Option<&str>,
+    tool_name: Option<&str>,
+    task_type: Option<&str>,
+    tier_name: Option<&str>,
+) -> anyhow::Result<String> {
+    let mut session = create_session(project_root, description, parent, tool_name)?;
+    session.task_context.task_type = task_type.map(str::to_string);
+    session.task_context.tier_name = tier_name.map(str::to_string);
+    let session_id = session.meta_session_id.clone();
+    if let Err(err) = save_session(&session) {
+        warn!(
+            session_id = %session_id,
+            error = %err,
+            "Failed to persist task context for pre-exec failure session"
+        );
+    }
+    Ok(session_id)
+}
+
+pub(crate) struct PreExecErrorCtx<'ctx> {
+    pub(crate) project_root: &'ctx Path,
+    pub(crate) session_id: Option<&'ctx str>,
+    pub(crate) description: Option<&'ctx str>,
+    pub(crate) parent: Option<&'ctx str>,
+    pub(crate) tool_name: Option<&'ctx str>,
+    pub(crate) task_type: Option<&'ctx str>,
+    pub(crate) tier_name: Option<&'ctx str>,
+    pub(crate) error: anyhow::Error,
+}
+
+/// Persist a structured pre-exec failure result, creating a session when needed.
+///
+/// Returns the original error annotated with `meta_session_id=...` when a session
+/// is available so downstream error handlers can still recover the session ID.
+pub(crate) fn persist_pre_exec_error_result(ctx: PreExecErrorCtx<'_>) -> anyhow::Error {
+    let PreExecErrorCtx {
+        project_root,
+        session_id,
+        description,
+        parent,
+        tool_name,
+        task_type,
+        tier_name,
+        error,
+    } = ctx;
+    let recorded_session_id = match session_id {
+        Some(existing) => Some(existing.to_string()),
+        None => match create_pre_exec_failure_session(
+            project_root,
+            description,
+            parent,
+            tool_name,
+            task_type,
+            tier_name,
+        ) {
+            Ok(created) => Some(created),
+            Err(create_err) => {
+                warn!(
+                    error = %create_err,
+                    task_type = task_type.unwrap_or("unknown"),
+                    "Failed to create session for pre-exec error result"
+                );
+                None
+            }
+        },
+    };
+
+    if let Some(ref sid) = recorded_session_id {
+        write_pre_exec_error_result(project_root, sid, tool_name.unwrap_or("unknown"), &error);
+        error.context(format!("meta_session_id={sid}"))
+    } else {
+        error
+    }
 }

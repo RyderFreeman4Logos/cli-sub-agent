@@ -173,11 +173,15 @@ pub(crate) async fn handle_debate(
 
     // 4. Build debate instruction (parameter passing — tool loads debate skill)
     let prompt = build_debate_instruction(&question, args.session.is_some(), args.rounds);
+    let debate_description = format!(
+        "debate: {}",
+        crate::run_helpers::truncate_prompt(&question, 80)
+    );
 
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, debate_mode, tier_model_spec) = resolve_debate_tool(
+    let (tool, debate_mode, tier_model_spec) = match resolve_debate_tool(
         args.tool,
         config.as_ref(),
         &global_config,
@@ -186,7 +190,23 @@ pub(crate) async fn handle_debate(
         args.force_override_user_config,
         args.tier.as_deref(),
         args.force_ignore_tier_setting,
-    )?;
+    ) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            return Err(crate::session_guard::persist_pre_exec_error_result(
+                crate::session_guard::PreExecErrorCtx {
+                    project_root: &project_root,
+                    session_id: args.session.as_deref(),
+                    description: Some(debate_description.as_str()),
+                    parent: None,
+                    tool_name: args.tool.map(|tool| tool.as_str()),
+                    task_type: Some("debate"),
+                    tier_name: args.tier.as_deref(),
+                    error: err,
+                },
+            ));
+        }
+    };
     let resolved_tier_name = if tier_model_spec.is_some() {
         resolve_debate_tier_name(
             config.as_ref(),
@@ -263,10 +283,6 @@ pub(crate) async fn handle_debate(
     let _slot_guard = crate::pipeline::acquire_slot(&executor, &global_config)?;
 
     // 9. Execute with session (with optional absolute timeout + transient retry)
-    let description = format!(
-        "debate: {}",
-        crate::run_helpers::truncate_prompt(&question, 80)
-    );
     let timeout_seconds =
         resolve_debate_timeout_seconds(args.timeout, Some(global_config.debate.timeout_seconds));
     let wall_clock_start = Instant::now();
@@ -284,7 +300,7 @@ pub(crate) async fn handle_debate(
             &prompt,
             output_format,
             resume_session.clone(),
-            Some(description.clone()),
+            Some(debate_description.clone()),
             None,
             &project_root,
             config.as_ref(),

@@ -180,6 +180,10 @@ pub(crate) async fn handle_run(
     if let Some(c) = config.as_ref() {
         merged_aliases.extend(c.tool_aliases.iter().map(|(k, v)| (k.clone(), v.clone())));
     }
+    let explicit_tool_name = match skill_res.tool.as_ref() {
+        Some(ToolArg::Specific(tool)) => Some(tool.as_str()),
+        _ => None,
+    };
 
     // Enforce tier routing: when tiers are configured, explicit --tool (any
     // value, including "auto") is blocked unless --tier is also specified or
@@ -193,12 +197,39 @@ pub(crate) async fn handle_run(
     {
         let cfg = config.as_ref().unwrap();
         let tier_list: Vec<&str> = cfg.tiers.keys().map(|s| s.as_str()).collect();
-        anyhow::bail!(
+        let err = anyhow::anyhow!(
             "Direct --tool is blocked when tiers are configured.\n\
-             Use --tier <name> to select a tier, or --force-ignore-tier-setting to bypass.\n\
+             Use --tier <name> to specify which tier's model/thinking config to use, or \
+             --force-ignore-tier-setting to bypass.\n\
              Available tiers: {}",
             tier_list.join(", ")
         );
+        let fallback_description = crate::run_helpers::truncate_prompt(&prompt_text, 80);
+        let pre_exec_description = description
+            .as_deref()
+            .or(skill_session_tag.as_deref())
+            .or(Some(fallback_description.as_str()));
+        let pre_exec_parent = if is_fork {
+            session_arg.as_deref().or(parent.as_deref())
+        } else {
+            parent.as_deref()
+        };
+        return Err(crate::session_guard::persist_pre_exec_error_result(
+            crate::session_guard::PreExecErrorCtx {
+                project_root: &project_root,
+                session_id: if is_fork {
+                    None
+                } else {
+                    session_arg.as_deref()
+                },
+                description: pre_exec_description,
+                parent: pre_exec_parent,
+                tool_name: explicit_tool_name,
+                task_type: Some("run"),
+                tier_name: tier.as_deref(),
+                error: err,
+            },
+        ));
     }
 
     let strategy = skill_res

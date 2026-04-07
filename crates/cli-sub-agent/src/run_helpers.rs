@@ -57,7 +57,8 @@ pub(crate) fn resolve_tool_and_model(
         let alias_hint = cfg.format_tier_aliases();
         anyhow::bail!(
             "Direct --tool/--model/--model-spec/--thinking is restricted when tiers are configured.\n\
-             Use --tier <name> or add --force-ignore-tier-setting to override.\n\
+             Use --tier <name> to specify which tier's model/thinking config to use, \
+             or add --force-ignore-tier-setting to override.\n\
              Available tiers: [{tier_list}]{alias_hint}\n\
              Hint: omit --tool entirely to use auto-selection, or use --tool auto"
         );
@@ -106,28 +107,43 @@ pub(crate) fn resolve_tool_and_model(
         );
     }
 
-    // Case 0: --tier provided → resolve tool/model from tier definition
+    // Case 0: --tier provided → resolve tool/model from tier definition.
+    // A user-explicit `--tool` acts as a filter inside the selected tier.
     if let Some(ref canonical_name) = canonical_tier
         && let Some(cfg) = config
     {
-        if let Some(resolution) = resolve_tool_from_tier(canonical_name, cfg, None, None, &[]) {
-            // Flow resolved tool through existing enforcement checks
-            cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
-            if !force {
-                cfg.enforce_tier_whitelist(resolution.tool.as_str(), Some(&resolution.model_spec))?;
-            }
-            let resolved_model = model.map(|m| {
-                config
-                    .map(|cfg| cfg.resolve_alias(m))
-                    .unwrap_or_else(|| m.to_string())
-            });
-            return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
+        let resolution = if let Some(requested_tool) = tool.filter(|_| !tool_is_auto_resolved) {
+            resolve_requested_tool_from_tier(
+                canonical_name,
+                cfg,
+                None,
+                requested_tool,
+                force_override_user_config,
+                &[],
+            )?
+        } else if let Some(resolution) =
+            resolve_tool_from_tier(canonical_name, cfg, None, None, &[])
+        {
+            resolution
+        } else {
+            anyhow::bail!(
+                "No available tool found in tier '{}'. Check that at least one tool \
+                     in the tier is enabled and installed.",
+                canonical_name
+            );
+        };
+
+        // Flow resolved tool through existing enforcement checks.
+        cfg.enforce_tool_enabled(resolution.tool.as_str(), force_override_user_config)?;
+        if !force {
+            cfg.enforce_tier_whitelist(resolution.tool.as_str(), Some(&resolution.model_spec))?;
         }
-        anyhow::bail!(
-            "No available tool found in tier '{}'. Check that at least one tool \
-                 in the tier is enabled and installed.",
-            canonical_name
-        );
+        let resolved_model = model.map(|m| {
+            config
+                .map(|cfg| cfg.resolve_alias(m))
+                .unwrap_or_else(|| m.to_string())
+        });
+        return Ok((resolution.tool, Some(resolution.model_spec), resolved_model));
     }
 
     // Case 1: model_spec provided → parse it to get tool
@@ -514,6 +530,53 @@ pub(crate) fn collect_available_tier_models(
             })
         })
         .collect()
+}
+
+/// Resolve a user-requested tool from a tier, preserving tier ordering while
+/// failing clearly when the tool is absent from that tier.
+pub(crate) fn resolve_requested_tool_from_tier(
+    tier_name: &str,
+    config: &ProjectConfig,
+    parent_tool: Option<&str>,
+    requested_tool: ToolName,
+    force_override_user_config: bool,
+    skip_specs: &[String],
+) -> Result<TierToolResolution> {
+    let requested_tool_name = requested_tool.as_str();
+    let Some(tier) = config.tiers.get(tier_name) else {
+        anyhow::bail!("Tier '{}' not found.", tier_name);
+    };
+
+    let tool_in_tier = tier.models.iter().any(|spec| {
+        !skip_specs.iter().any(|skip| skip == spec)
+            && spec
+                .split('/')
+                .next()
+                .is_some_and(|tool_name| tool_name == requested_tool_name)
+    });
+    if !tool_in_tier {
+        anyhow::bail!(
+            "Requested tool '{}' is not available in tier '{}'.",
+            requested_tool_name,
+            tier_name
+        );
+    }
+
+    config.enforce_tool_enabled(requested_tool_name, force_override_user_config)?;
+
+    let whitelist = [requested_tool_name.to_string()];
+    if let Some(resolution) =
+        resolve_tool_from_tier(tier_name, config, parent_tool, Some(&whitelist), skip_specs)
+    {
+        return Ok(resolution);
+    }
+
+    anyhow::bail!(
+        "Requested tool '{}' is configured in tier '{}' but is not currently available. \
+         Ensure it is installed and enabled.",
+        requested_tool_name,
+        tier_name
+    );
 }
 
 /// Resolve a tool from a named tier's models list with heterogeneous preference.

@@ -1,8 +1,6 @@
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, Result};
 use tokio::task::JoinSet;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::cli::ReviewArgs;
 use crate::review_consensus::{
@@ -15,10 +13,14 @@ use crate::review_context::discover_review_context_for_branch;
 use crate::review_context::resolve_review_context;
 #[cfg(test)]
 use crate::review_context::{ResolvedReviewContext, ResolvedReviewContextKind};
-use crate::review_routing::{ReviewRoutingMetadata, persist_review_routing_artifact};
-use csa_config::{ExecutionEnvOptions, GlobalConfig, ProjectConfig};
+#[cfg(test)]
+use crate::review_routing::ReviewRoutingMetadata;
+#[cfg(test)]
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
-use csa_core::types::{OutputFormat, ReviewDecision, ToolName};
+use csa_core::types::ReviewDecision;
+#[cfg(test)]
+use csa_core::types::ToolName;
 use csa_session::state::ReviewSessionMeta;
 
 #[path = "review_cmd_output.rs"]
@@ -37,8 +39,12 @@ mod post_review;
 #[path = "review_cmd_reviewers.rs"]
 mod reviewers;
 
+#[path = "review_cmd_execute.rs"]
+mod execute;
+
 #[path = "review_cmd_resolve.rs"]
 mod resolve;
+use execute::{compute_diff_fingerprint, execute_review};
 use post_review::{build_post_review_output, emit_post_review_output, review_scope_is_cumulative};
 #[cfg(test)]
 use resolve::build_review_instruction;
@@ -203,6 +209,10 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         has_context = context.is_some(),
         "Review parameters"
     );
+    let review_description = format!(
+        "review: {}",
+        crate::run_helpers::truncate_prompt(&scope, 80)
+    );
 
     // 4. Build review instruction (no diff content — tool loads skill and fetches diff itself)
     let (mut prompt, review_routing) = build_review_instruction_for_project(
@@ -224,7 +234,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, tier_model_spec) = resolve_review_tool(
+    let (tool, tier_model_spec) = match resolve_review_tool(
         args.tool,
         config.as_ref(),
         &global_config,
@@ -233,7 +243,23 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         args.force_override_user_config,
         args.tier.as_deref(),
         args.force_ignore_tier_setting,
-    )?;
+    ) {
+        Ok(resolved) => resolved,
+        Err(err) => {
+            return Err(crate::session_guard::persist_pre_exec_error_result(
+                crate::session_guard::PreExecErrorCtx {
+                    project_root: &project_root,
+                    session_id: args.session.as_deref(),
+                    description: Some(review_description.as_str()),
+                    parent: None,
+                    tool_name: args.tool.map(|tool| tool.as_str()),
+                    task_type: Some("review"),
+                    tier_name: args.tier.as_deref(),
+                    error: err,
+                },
+            ));
+        }
+    };
     let resolved_tier_name = if tier_model_spec.is_some() {
         resolve_review_tier_name(
             config.as_ref(),
@@ -290,10 +316,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             tier_model_spec.clone(),
             resolved_tier_name.clone(),
             review_thinking.clone(),
-            format!(
-                "review: {}",
-                crate::run_helpers::truncate_prompt(&scope, 80)
-            ),
+            review_description.clone(),
             &project_root,
             config.as_ref(),
             &global_config,
@@ -655,140 +678,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     }
 
     Ok(if final_verdict == CLEAN { 0 } else { 1 })
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn execute_review(
-    tool: ToolName,
-    prompt: String,
-    session: Option<String>,
-    model: Option<String>,
-    tier_model_spec: Option<String>,
-    tier_name: Option<String>,
-    thinking: Option<String>,
-    description: String,
-    project_root: &Path,
-    project_config: Option<&ProjectConfig>,
-    global_config: &GlobalConfig,
-    review_routing: ReviewRoutingMetadata,
-    stream_mode: csa_process::StreamMode,
-    idle_timeout_seconds: u64,
-    initial_response_timeout_seconds: Option<u64>,
-    force_override_user_config: bool,
-    no_fs_sandbox: bool,
-    readonly_project_root: bool,
-    extra_writable: &[PathBuf],
-) -> Result<crate::pipeline::SessionExecutionResult> {
-    let enforce_tier = tier_model_spec.is_some();
-    let executor = crate::pipeline::build_and_validate_executor(
-        &tool,
-        tier_model_spec.as_deref(),
-        model.as_deref(),
-        thinking.as_deref(),
-        crate::pipeline::ConfigRefs {
-            project: project_config,
-            global: Some(global_config),
-        },
-        enforce_tier,
-        force_override_user_config,
-        false, // review must not inherit `csa run` per-tool defaults
-    )
-    .await?;
-
-    let can_edit =
-        project_config.is_none_or(|cfg| cfg.can_tool_edit_existing(executor.tool_name()));
-    let can_write_new =
-        project_config.is_none_or(|cfg| cfg.can_tool_write_new(executor.tool_name()));
-    let effective_prompt = if !can_edit || !can_write_new {
-        info!(
-            tool = %executor.tool_name(),
-            can_edit,
-            can_write_new,
-            "Applying filesystem restrictions via prompt injection"
-        );
-        executor.apply_restrictions(&prompt, can_edit, can_write_new)
-    } else {
-        prompt
-    };
-
-    let extra_env_owned = global_config.build_execution_env(
-        executor.tool_name(),
-        ExecutionEnvOptions::with_no_flash_fallback(),
-    );
-    let extra_env = extra_env_owned.as_ref();
-    let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
-
-    if session.is_none()
-        && let Ok(inherited_session_id) = std::env::var("CSA_SESSION_ID")
-    {
-        warn!(
-            inherited_session_id = %inherited_session_id,
-            "Ignoring inherited CSA_SESSION_ID for `csa review`; pass --session to resume explicitly"
-        );
-    }
-
-    let execution = crate::pipeline::execute_with_session_and_meta_with_parent_source(
-        &executor,
-        &tool,
-        &effective_prompt,
-        OutputFormat::Json,
-        session,
-        Some(description),
-        None,
-        project_root,
-        project_config,
-        extra_env,
-        Some("review"),
-        tier_name.as_deref(),
-        None,
-        stream_mode,
-        idle_timeout_seconds,
-        initial_response_timeout_seconds,
-        None,
-        None,
-        Some(global_config),
-        crate::pipeline::ParentSessionSource::ExplicitOnly,
-        no_fs_sandbox,
-        readonly_project_root,
-        extra_writable,
-    )
-    .await?;
-
-    persist_review_routing_artifact(project_root, &execution.meta_session_id, &review_routing);
-
-    Ok(execution)
-}
-
-/// Compute a SHA-256 content hash of the diff being reviewed.
-///
-/// The fingerprint enables diff-level deduplication: if two review
-/// invocations produce the same diff content (e.g., revert-then-revert),
-/// the second can reuse the first review's result.
-fn compute_diff_fingerprint(project_root: &Path, scope: &str) -> Option<String> {
-    use sha2::{Digest, Sha256};
-
-    let diff_args: Vec<&str> = if scope == "uncommitted" {
-        vec!["diff", "HEAD"]
-    } else if let Some(range) = scope.strip_prefix("range:") {
-        vec!["diff", range]
-    } else if let Some(base) = scope.strip_prefix("base:") {
-        vec!["diff", base]
-    } else {
-        return None;
-    };
-
-    let output = std::process::Command::new("git")
-        .args(&diff_args)
-        .current_dir(project_root)
-        .output()
-        .ok()?;
-
-    if !output.status.success() || output.stdout.is_empty() {
-        return None;
-    }
-
-    let digest = Sha256::digest(&output.stdout);
-    Some(format!("sha256:{digest:x}"))
 }
 
 #[cfg(test)]
