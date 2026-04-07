@@ -99,18 +99,11 @@ pub(crate) fn resolve_review_tool(
         let alias_hint = cfg.format_tier_aliases();
         anyhow::bail!(
             "Direct --tool is restricted when tiers are configured. \
-             Use --tier <name> or add --force-ignore-tier-setting to override. \
+             Use --tier <name> to specify which tier's model/thinking config to use, \
+             or add --force-ignore-tier-setting to override. \
              Available tiers: [{}]{alias_hint}",
             available.join(", ")
         );
-    }
-
-    // CLI --tool override wins (when not blocked by tier enforcement above)
-    if let Some(tool) = arg_tool {
-        if let Some(cfg) = project_config {
-            cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
-        }
-        return Ok((tool, None));
     }
 
     let tier_name = resolve_review_tier_name(
@@ -120,6 +113,27 @@ pub(crate) fn resolve_review_tool(
         force_override_user_config,
         force_ignore_tier_setting,
     )?;
+
+    if let Some(tool) = arg_tool {
+        if let Some(ref tier) = tier_name
+            && let Some(cfg) = project_config
+        {
+            let resolution = crate::run_helpers::resolve_requested_tool_from_tier(
+                tier,
+                cfg,
+                parent_tool,
+                tool,
+                force_override_user_config,
+                &[],
+            )?;
+            return Ok((resolution.tool, Some(resolution.model_spec)));
+        }
+
+        if let Some(cfg) = project_config {
+            cfg.enforce_tool_enabled(tool.as_str(), force_override_user_config)?;
+        }
+        return Ok((tool, None));
+    }
 
     // Compute effective whitelist from tool selection (project > global)
     let effective_whitelist = project_config

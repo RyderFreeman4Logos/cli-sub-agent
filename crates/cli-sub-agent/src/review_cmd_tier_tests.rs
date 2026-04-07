@@ -121,6 +121,66 @@ fn test_review_allows_tier_flag() {
 }
 
 #[test]
+fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_tier(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+            "claude-code/anthropic/sonnet-4.6/xhigh",
+        ],
+        &["gemini-cli", "codex", "claude-code"],
+    );
+    let result = resolve_review_tool(
+        Some(ToolName::Codex),
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    );
+
+    assert!(
+        result.is_ok(),
+        "tool+tier should resolve requested review tool: {}",
+        result.unwrap_err()
+    );
+    let (tool, model_spec) = result.unwrap();
+    assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
+}
+
+#[test]
+fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_tier(
+        "quality",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli", "codex"],
+    );
+    let result = resolve_review_tool(
+        Some(ToolName::Codex),
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    );
+
+    let err = result.expect_err("missing tool in review tier must error");
+    assert!(
+        err.to_string()
+            .contains("Requested tool 'codex' is not available in tier 'quality'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn test_review_force_ignore_tier_allows_direct_tool() {
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(

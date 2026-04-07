@@ -783,6 +783,9 @@ fn apply_no_verify_commit_policy_sets_failure_when_forbidden_flag_detected() {
     assert!(result.stderr_output.contains("git commit --no-verify"));
 }
 
+#[path = "run_cmd_tier_tests.rs"]
+mod tier_tests;
+
 #[path = "run_cmd_tests_tail.rs"]
 mod tail_tests;
 

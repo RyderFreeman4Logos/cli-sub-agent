@@ -529,19 +529,17 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
     );
 }
 
-/// --tier with --tool simultaneously: --tier takes precedence when tiers are configured
-/// (direct tool is blocked), but both --tier and --tool together where --tier resolves first.
 #[test]
-fn resolve_tool_and_model_tier_with_tool_blocked_without_force() {
+fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
     let cfg = config_with_tier(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/high",
+            "claude-code/anthropic/sonnet-4.6/xhigh",
+        ],
+        &["gemini-cli", "codex", "claude-code"],
     );
-    // --tier quality --tool codex (without --force-ignore-tier-setting)
-    // Since tiers are configured and tool is Some, the enforcement blocks it.
-    // But --tier is also provided... The enforcement check uses tier.is_none(),
-    // so when --tier IS provided, the direct-tool block does NOT trigger.
     let result = super::resolve_tool_and_model(
         Some(ToolName::Codex),
         None,
@@ -555,15 +553,79 @@ fn resolve_tool_and_model_tier_with_tool_blocked_without_force() {
         false,
         false, // tool_is_auto_resolved
     );
-    // --tier is present, so enforcement skips (tier.is_none() == false).
-    // The --tier branch resolves tool from tier, ignoring the --tool arg.
     assert!(
         result.is_ok(),
-        "tier+tool should resolve via tier: {}",
+        "tier+tool should resolve requested tool from tier: {}",
         result.unwrap_err()
     );
-    let (tool, _, _) = result.unwrap();
-    assert_eq!(tool, ToolName::GeminiCli, "tier should win over --tool");
+    let (tool, model_spec, _) = result.unwrap();
+    assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
+}
+
+#[test]
+fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
+    let cfg = config_with_tier(
+        "quality",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli", "codex"],
+    );
+
+    let result = super::resolve_tool_and_model(
+        Some(ToolName::Codex),
+        None,
+        None,
+        Some(&cfg),
+        std::path::Path::new("/tmp"),
+        false,
+        false,
+        false,
+        Some("quality"),
+        false,
+        false,
+    );
+
+    let err = result.expect_err("missing tool in tier must error");
+    assert!(
+        err.to_string()
+            .contains("Requested tool 'codex' is not available in tier 'quality'"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn resolve_tool_and_model_tier_ignores_auto_resolved_tool_hint() {
+    let cfg = config_with_tier(
+        "quality",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli", "codex"],
+    );
+
+    let result = super::resolve_tool_and_model(
+        Some(ToolName::Codex),
+        None,
+        None,
+        Some(&cfg),
+        std::path::Path::new("/tmp"),
+        false,
+        false,
+        false,
+        Some("quality"),
+        false,
+        true, // tool_is_auto_resolved
+    );
+
+    assert!(
+        result.is_ok(),
+        "auto-resolved tool hint should not constrain tier: {}",
+        result.unwrap_err()
+    );
+    let (tool, model_spec, _) = result.unwrap();
+    assert_eq!(tool, ToolName::GeminiCli);
+    assert_eq!(
+        model_spec.as_deref(),
+        Some("gemini-cli/google/default/xhigh")
+    );
 }
 
 #[test]

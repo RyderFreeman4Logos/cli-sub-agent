@@ -1,5 +1,7 @@
 use super::*;
+use crate::test_session_sandbox::ScopedSessionSandbox;
 use csa_config::{ProjectProfile, ToolRestrictions};
+use std::path::Path;
 use tempfile::tempdir;
 
 // --- is_worktree_submodule tests ---
@@ -495,7 +497,6 @@ fn verify_review_skill_allow_fallback_without_skill() {
 #[cfg(unix)]
 #[tokio::test]
 async fn execute_review_ignores_inherited_csa_session_id_without_explicit_session() {
-    use crate::test_session_sandbox::ScopedSessionSandbox;
     use std::os::unix::fs::PermissionsExt;
 
     let project_dir = tempdir().unwrap();
@@ -542,6 +543,79 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
 
     let execution = result.expect("review should ignore inherited stale CSA_SESSION_ID");
     assert_eq!(execution.execution.exit_code, 0);
+}
+
+fn write_review_project_config(project_root: &Path, config: &ProjectConfig) {
+    let config_path = ProjectConfig::config_path(project_root);
+    std::fs::create_dir_all(config_path.parent().unwrap()).unwrap();
+    std::fs::write(config_path, toml::to_string_pretty(config).unwrap()).unwrap();
+}
+
+fn install_pattern(project_root: &Path, name: &str) {
+    let skill_dir = project_root
+        .join(".csa")
+        .join("patterns")
+        .join(name)
+        .join("skills")
+        .join(name);
+    std::fs::create_dir_all(&skill_dir).unwrap();
+    std::fs::write(skill_dir.join("SKILL.md"), "# test pattern\n").unwrap();
+}
+
+#[tokio::test]
+async fn handle_review_persists_result_for_direct_tool_tier_rejection() {
+    let project_dir = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+    let mut config = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
+    config.tiers.insert(
+        "default".to_string(),
+        csa_config::config::TierConfig {
+            description: "Test tier".to_string(),
+            models: vec!["gemini-cli/google/default/xhigh".to_string()],
+            strategy: csa_config::TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    write_review_project_config(project_dir.path(), &config);
+    install_pattern(project_dir.path(), "csa-review");
+
+    let cd = project_dir.path().display().to_string();
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--cd",
+        &cd,
+        "--files",
+        "src/lib.rs",
+        "--tool",
+        "codex",
+    ]);
+
+    let err = handle_review(args, 0)
+        .await
+        .expect_err("direct --tool tier rejection must fail");
+    assert!(
+        err.chain().any(|cause| cause
+            .to_string()
+            .contains("restricted when tiers are configured")),
+        "unexpected error chain: {err:#}"
+    );
+
+    let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();
+    assert_eq!(sessions.len(), 1, "expected one failed review session");
+
+    let result = csa_session::load_result(project_dir.path(), &sessions[0].meta_session_id)
+        .unwrap()
+        .expect("result.toml must be written for review tier rejection");
+    assert_eq!(result.status, "failure");
+    assert_eq!(result.exit_code, 1);
+    assert!(result.summary.contains("pre-exec:"));
+    assert!(
+        result
+            .summary
+            .contains("restricted when tiers are configured")
+    );
 }
 
 // --- fix loop restriction gate tests ---
