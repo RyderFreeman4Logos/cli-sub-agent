@@ -7,4 +7,3 @@ Common pitfalls and patterns to verify during code review:
 - [ ] Error paths clean up resources (temp files, locks, cgroup scopes)
 - [ ] New public APIs have `/// # Errors` documentation
 - [ ] Config structs with `serde(default)` implement `is_default()` check
-- [ ] Shell wrapper scripts handle missing commands gracefully (command -v check)
