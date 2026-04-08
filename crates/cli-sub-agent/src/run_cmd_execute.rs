@@ -395,6 +395,7 @@ pub(crate) async fn handle_run(
         thinking: thinking.as_deref(),
         force,
         force_override_user_config,
+        force_ignore_tier_setting,
         no_failover,
         wait,
         idle_timeout_seconds,

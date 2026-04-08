@@ -4,6 +4,54 @@ use csa_config::global::GlobalToolConfig;
 use csa_config::{ProjectMeta, ResourcesConfig};
 use std::collections::HashMap;
 
+fn config_with_single_tier_model(
+    tier_name: &str,
+    tool_name: &str,
+    model_spec: &str,
+) -> ProjectConfig {
+    let mut tools = HashMap::new();
+    tools.insert(
+        tool_name.to_string(),
+        ToolConfig {
+            enabled: true,
+            ..Default::default()
+        },
+    );
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        tier_name.to_string(),
+        csa_config::config::TierConfig {
+            description: "test".to_string(),
+            models: vec![model_spec.to_string()],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    }
+}
+
 /// When project config has `thinking_lock` for a tool, the CLI `--thinking`
 /// value must be overridden. Verify via Executor's Debug representation.
 #[tokio::test]
@@ -196,6 +244,70 @@ async fn no_thinking_lock_passes_cli_thinking_through() {
         assert!(
             debug.contains("Medium"),
             "without thinking_lock, CLI --thinking should pass through, got: {debug}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn model_thinking_suffix_is_stripped_before_tier_validation() {
+    let cfg = config_with_single_tier_model(
+        "tier-4-critical",
+        "gemini-cli",
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+    );
+
+    let result = build_and_validate_executor(
+        &ToolName::GeminiCli,
+        None,
+        Some("google/gemini-3.1-pro-preview/xhigh"),
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+        },
+        true,
+        false,
+        false,
+    )
+    .await;
+
+    if let Err(err) = result {
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("not configured in any tier"),
+            "thinking suffix should be stripped before tier validation: {msg}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn force_ignore_tier_setting_skips_execution_boundary_model_check() {
+    let cfg = config_with_single_tier_model(
+        "tier-4-critical",
+        "gemini-cli",
+        "gemini-cli/google/gemini-3.1-pro-preview/xhigh",
+    );
+
+    let result = build_and_validate_executor(
+        &ToolName::GeminiCli,
+        None,
+        Some("google/gemini-2.5-pro/xhigh"),
+        None,
+        ConfigRefs {
+            project: Some(&cfg),
+            global: None,
+        },
+        false, // `--force-ignore-tier-setting` disables defense-in-depth tier enforcement
+        false,
+        false,
+    )
+    .await;
+
+    if let Err(err) = result {
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("not configured in any tier"),
+            "force-ignore-tier-setting should bypass execution-boundary tier validation: {msg}"
         );
     }
 }

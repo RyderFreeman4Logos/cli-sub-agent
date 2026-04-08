@@ -283,12 +283,17 @@ pub(super) async fn run_acp_sandboxed(
     )
     .await;
 
+    let exit_signal = match &inner_result {
+        Err(csa_acp::AcpError::ProcessExited { signal, .. }) => *signal,
+        _ => None,
+    };
+
     // Capture peak memory and check for OOM BEFORE the sandbox handle is
     // dropped (which stops the cgroup scope).  Note: `run_acp_sandboxed` is
     // called inside `spawn_blocking`, so synchronous systemctl queries are
     // acceptable here.
     let peak_memory_mb = sandbox_handle.memory_peak_mb();
-    let oom_diagnosis = sandbox_handle.oom_diagnosis();
+    let oom_diagnosis = sandbox_handle.oom_diagnosis_with_signal(exit_signal);
     if let Some(ref hint) = oom_diagnosis {
         tracing::error!(tool = tool_name, "{hint}");
     }

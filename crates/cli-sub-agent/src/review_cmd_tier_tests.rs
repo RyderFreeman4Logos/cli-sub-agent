@@ -208,6 +208,41 @@ fn test_review_force_ignore_tier_allows_direct_tool() {
 }
 
 #[test]
+fn test_review_tool_plus_tier_and_force_ignore_errors_on_conflict() {
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_tier(
+        "quality",
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "codex/openai/gpt-5.4/xhigh",
+        ],
+        &["gemini-cli", "codex"],
+    );
+    let result = resolve_review_tool(
+        Some(ToolName::Codex),
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        true,
+    );
+
+    let err = result.expect_err("tool+tier+force-ignore must reject contradictory routing");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Conflicting routing flags"),
+        "unexpected error: {msg}"
+    );
+    assert!(msg.contains("--tier"), "unexpected error: {msg}");
+    assert!(
+        msg.contains("--force-ignore-tier-setting"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
 fn test_review_no_tiers_allows_direct_tool() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["codex"]);

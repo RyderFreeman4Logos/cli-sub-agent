@@ -27,11 +27,12 @@ pub(super) async fn execute_review(
     idle_timeout_seconds: u64,
     initial_response_timeout_seconds: Option<u64>,
     force_override_user_config: bool,
+    force_ignore_tier_setting: bool,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
 ) -> Result<crate::pipeline::SessionExecutionResult> {
-    let enforce_tier = tier_model_spec.is_some();
+    let enforce_tier = tier_model_spec.is_some() && !force_ignore_tier_setting;
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),

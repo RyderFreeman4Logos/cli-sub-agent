@@ -475,7 +475,10 @@ async fn execute_task(
                 error: Some(format!("{e}")),
             };
         }
-        if let Err(e) = cfg.enforce_tier_model_name(tool_name.as_str(), task.model.as_deref()) {
+        if let Err(e) = cfg.enforce_tier_model_name(
+            tool_name.as_str(),
+            crate::run_helpers::model_name_for_tier_validation(task.model.as_deref()),
+        ) {
             error!("{} - {}", task_label, e);
             return TaskResult {
                 name: task.name.clone(),
