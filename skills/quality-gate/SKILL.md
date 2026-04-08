@@ -22,8 +22,7 @@ Gates enforce code quality deterministically — through tooling, not instructio
 1. **Deterministic over instructional** — enforce via exit codes, not README prose
 2. **Fail-closed** — unknown state = blocked; only explicit pass allows through
 3. **Layer defense** — pre-commit catches early, pre-push catches drift, pre-merge catches bypass
-4. **Graceful degradation** — missing optional tools produce warnings, not failures
-5. **Sandbox-aware** — skip gates that can't run in CI/sandbox (check writable paths, tool availability)
+4. **Sandbox-aware** — skip gates that can't run in CI/sandbox (check writable paths)
 
 ## Gate Architecture (4 Layers)
 
@@ -138,7 +137,7 @@ For each missing gate, decide:
 
 1. **Hard vs soft fail**: Pre-commit checks are hard (exit 1). Advisories are soft (echo warning).
 2. **Auto-fix capability**: Formatters can auto-fix + auto-stage. Linters generally cannot.
-3. **Skip conditions**: When should the gate be skipped? (CI env, sandbox, missing tools)
+3. **Skip conditions**: When should the gate be skipped? (CI env, sandbox)
 4. **Performance budget**: Pre-commit should complete in < 60s for good DX. Move slow checks to pre-push.
 
 ### Phase 3 — IMPLEMENT (Create Infrastructure)
@@ -238,12 +237,6 @@ set -euo pipefail
 # Skip inside sandbox/CI environments
 if [ -n "${CSA_SESSION_ID:-}" ]; then
     echo "[<hook>] Inside sandbox -- skipping."
-    exit 0
-fi
-
-# Skip if required tool is missing (graceful degradation)
-if ! command -v <tool> >/dev/null 2>&1; then
-    echo "WARNING: [<hook>] <tool> not found -- skipping." >&2
     exit 0
 fi
 

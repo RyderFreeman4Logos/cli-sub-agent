@@ -53,7 +53,6 @@ factual accuracy.
 
 - Must be in a Cargo workspace with multiple crates
 - `scripts/crate-topo.sh` must exist (generates topological crate order)
-- `jq` must be installed (for cargo metadata parsing)
 
 ### Quick Start
 
