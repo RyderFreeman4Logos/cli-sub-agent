@@ -30,7 +30,7 @@ jobs:
       - name: Install cargo tools
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-deny,cargo-nextest
+          tool: cargo-deny,cargo-nextest,just
 
       - name: Install system dependencies
         run: |

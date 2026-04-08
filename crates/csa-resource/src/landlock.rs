@@ -14,15 +14,24 @@
 
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
 use landlock::{
     ABI, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, RestrictionStatus,
     Ruleset, RulesetAttr, RulesetCreatedAttr, RulesetStatus,
 };
+#[cfg(target_os = "linux")]
 use tracing::{debug, warn};
 
 /// Target ABI version.  V3 (Linux 6.2) adds `Truncate`; we request it but
 /// `BestEffort` silently drops unsupported rights on older kernels.
+#[cfg(target_os = "linux")]
 const TARGET_ABI: ABI = ABI::V3;
+
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ABI {
+    Unsupported,
+}
 
 /// Apply Landlock filesystem rules to the current thread.
 ///
@@ -38,15 +47,22 @@ const TARGET_ABI: ABI = ABI::V3;
 ///
 /// Returns an error only on unexpected system failures (e.g. invalid fd).
 /// Kernel-level lack of support is *not* an error in BestEffort mode.
+#[cfg(target_os = "linux")]
 pub fn apply_landlock_rules(writable_paths: &[PathBuf]) -> anyhow::Result<()> {
     let status = build_and_restrict(writable_paths)?;
     report_status(&status);
     Ok(())
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn apply_landlock_rules(_writable_paths: &[PathBuf]) -> anyhow::Result<()> {
+    Ok(())
+}
+
 /// Detect the highest Landlock ABI version supported by the running kernel.
 ///
 /// Returns [`ABI::Unsupported`] when the kernel has no Landlock support.
+#[cfg(target_os = "linux")]
 pub fn detect_abi() -> ABI {
     // Creating a default Ruleset probes the kernel; we inspect the
     // resulting status after a minimal restrict_self() to determine
@@ -64,11 +80,17 @@ pub fn detect_abi() -> ABI {
     probe_abi_version()
 }
 
+#[cfg(not(target_os = "linux"))]
+pub fn detect_abi() -> ABI {
+    ABI::Unsupported
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 /// Build the ruleset and restrict the current thread.
+#[cfg(target_os = "linux")]
 fn build_and_restrict(writable_paths: &[PathBuf]) -> anyhow::Result<RestrictionStatus> {
     let access_all = AccessFs::from_all(TARGET_ABI);
     let access_read = AccessFs::from_read(TARGET_ABI);
@@ -105,6 +127,7 @@ fn build_and_restrict(writable_paths: &[PathBuf]) -> anyhow::Result<RestrictionS
 }
 
 /// Log the restriction outcome for diagnostics.
+#[cfg(target_os = "linux")]
 fn report_status(status: &RestrictionStatus) {
     match status.ruleset {
         RulesetStatus::FullyEnforced => {
@@ -123,6 +146,7 @@ fn report_status(status: &RestrictionStatus) {
 ///
 /// Checks the sysfs entry first, then uses `landlock_create_ruleset`
 /// version probing through the crate's `Ruleset` builder.
+#[cfg(target_os = "linux")]
 fn probe_abi_version() -> ABI {
     use std::path::Path;
 
@@ -160,6 +184,14 @@ fn probe_abi_version() -> ABI {
 mod tests {
     use super::*;
 
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn test_non_linux_landlock_is_noop() {
+        assert_eq!(detect_abi(), ABI::Unsupported);
+        apply_landlock_rules(&[]).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_landlock_rules_basic() {
         // Verify the rule builder does not panic, even when the kernel
@@ -179,6 +211,7 @@ mod tests {
         assert!(result.is_ok(), "BestEffort rule build failed: {result:?}");
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_landlock_abi_detection() {
         let abi = detect_abi();
@@ -200,6 +233,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_landlock_best_effort_fallback() {
         // On kernels without Landlock, BestEffort must succeed silently.
@@ -226,6 +260,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn test_landlock_missing_writable_path_skipped() {
         // A non-existent writable path should be silently skipped in

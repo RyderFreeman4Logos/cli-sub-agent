@@ -264,7 +264,7 @@ pub fn stderr_log_size(stderr_path: &Path) -> Option<u64> {
 fn create_cloexec_pipe() -> std::io::Result<(i32, i32)> {
     let mut fds = [0i32; 2];
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
     {
         // SAFETY: `fds` points to storage for two file descriptors and
         // `O_CLOEXEC` prevents descriptor leaks across exec.
@@ -275,7 +275,7 @@ fn create_cloexec_pipe() -> std::io::Result<(i32, i32)> {
         Ok((fds[0], fds[1]))
     }
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
     {
         // SAFETY: `fds` points to storage for two file descriptors.
         let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
@@ -284,7 +284,17 @@ fn create_cloexec_pipe() -> std::io::Result<(i32, i32)> {
         }
         for &fd in &fds {
             // SAFETY: each fd was just created by `pipe` and is owned here.
-            let ret = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+            let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
+            if flags == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                }
+                return Err(err);
+            }
+            // SAFETY: each fd was just created by `pipe` and is owned here.
+            let ret = unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) };
             if ret == -1 {
                 let err = std::io::Error::last_os_error();
                 unsafe {
