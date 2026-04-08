@@ -73,8 +73,8 @@ mod test_env_lock;
 mod test_session_sandbox;
 
 use cli::{
-    Cli, Commands, ConfigCommands, McpHubCommands, PlanCommands, SetupCommands, SkillCommands,
-    TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
+    Cli, Commands, ConfigCommands, DoctorSubcommand, McpHubCommands, PlanCommands, SetupCommands,
+    SkillCommands, TiersCommands, TodoCommands, TodoRefCommands, handle_tokuin, handle_xurl,
     validate_command_args,
 };
 use csa_core::types::OutputFormat;
@@ -520,9 +520,12 @@ async fn run() -> Result<()> {
         } => {
             eval_cmd::handle_eval(project, days, json)?;
         }
-        Commands::Doctor => {
-            doctor::run_doctor(output_format).await?;
-        }
+        Commands::Doctor { subcommand } => match subcommand {
+            None => doctor::run_doctor(output_format).await?,
+            Some(DoctorSubcommand::Routing { operation, tier }) => {
+                doctor::run_doctor_routing(output_format, operation, tier).await?
+            }
+        },
         Commands::Batch {
             file,
             sa_mode: _,

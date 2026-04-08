@@ -10,6 +10,10 @@ use std::env;
 use std::process::Command;
 use sysinfo::System;
 
+#[path = "doctor_routing.rs"]
+mod doctor_routing;
+pub use doctor_routing::run_doctor_routing;
+
 /// Tool availability status.
 #[derive(Debug)]
 struct ToolStatus {
