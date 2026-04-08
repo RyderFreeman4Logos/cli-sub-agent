@@ -147,6 +147,66 @@ pub(crate) enum RateLimitAction {
     },
 }
 
+#[derive(Clone, Copy)]
+enum TransportErrorFailoverKind {
+    RateLimit,
+    AcpCrashRetryExhausted,
+    GeminiRetryChainExhausted,
+}
+
+struct TransportErrorFailoverSignal {
+    kind: TransportErrorFailoverKind,
+    matched_pattern: String,
+}
+
+fn detect_transport_error_failover_signal(
+    tool_name_str: &str,
+    error_message: &str,
+    current_model_spec: Option<&str>,
+) -> Option<TransportErrorFailoverSignal> {
+    let error_lower = error_message.to_ascii_lowercase();
+
+    if error_lower.contains("acp crash retry exhausted")
+        || error_lower.contains("crash retry exhausted")
+    {
+        let matched_pattern = if error_lower.contains("acp crash retry exhausted") {
+            "acp crash retry exhausted"
+        } else {
+            "crash retry exhausted"
+        };
+        return Some(TransportErrorFailoverSignal {
+            kind: TransportErrorFailoverKind::AcpCrashRetryExhausted,
+            matched_pattern: matched_pattern.to_string(),
+        });
+    }
+
+    if error_lower.contains("gemini acp retry chain exhausted")
+        || error_lower.contains("retry chain exhausted")
+    {
+        let matched_pattern = if error_lower.contains("gemini acp retry chain exhausted") {
+            "gemini acp retry chain exhausted"
+        } else {
+            "retry chain exhausted"
+        };
+        return Some(TransportErrorFailoverSignal {
+            kind: TransportErrorFailoverKind::GeminiRetryChainExhausted,
+            matched_pattern: matched_pattern.to_string(),
+        });
+    }
+
+    csa_scheduler::detect_rate_limit(
+        tool_name_str,
+        error_message,
+        "",
+        1, // synthetic non-zero exit code
+        current_model_spec,
+    )
+    .map(|rate_limit| TransportErrorFailoverSignal {
+        kind: TransportErrorFailoverKind::RateLimit,
+        matched_pattern: rate_limit.matched_pattern,
+    })
+}
+
 /// Check for 429 rate-limit signals and decide whether to failover.
 ///
 /// Returns `RateLimitAction` to drive `continue`/`break` in the caller loop.
@@ -291,25 +351,38 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     config: Option<&ProjectConfig>,
     current_model_spec: Option<&str>,
 ) -> Result<RateLimitAction> {
-    // Reuse detect_rate_limit by treating the error message as stderr.
-    let rate_limit = match csa_scheduler::detect_rate_limit(
+    let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
         error_message,
-        "",
-        1, // synthetic non-zero exit code
         current_model_spec,
     ) {
-        Some(rl) => rl,
+        Some(signal) => signal,
         None => return Ok(RateLimitAction::NoRateLimit),
     };
 
-    info!(
-        tool = %tool_name_str,
-        pattern = %rate_limit.matched_pattern,
-        attempt = attempts,
-        max = max_failover_attempts,
-        "Rate limit detected in transport error, attempting failover"
-    );
+    match failover_signal.kind {
+        TransportErrorFailoverKind::RateLimit => info!(
+            tool = %tool_name_str,
+            pattern = %failover_signal.matched_pattern,
+            attempt = attempts,
+            max = max_failover_attempts,
+            "Rate limit detected in transport error, attempting failover"
+        ),
+        TransportErrorFailoverKind::AcpCrashRetryExhausted => warn!(
+            tool = %tool_name_str,
+            pattern = %failover_signal.matched_pattern,
+            attempt = attempts,
+            max = max_failover_attempts,
+            "[csa-failover] ACP crash retry exhaustion detected in transport error; attempting tier failover"
+        ),
+        TransportErrorFailoverKind::GeminiRetryChainExhausted => warn!(
+            tool = %tool_name_str,
+            pattern = %failover_signal.matched_pattern,
+            attempt = attempts,
+            max = max_failover_attempts,
+            "[csa-failover] Gemini retry chain exhaustion detected in transport error; attempting tier failover"
+        ),
+    }
 
     if attempts >= max_failover_attempts {
         warn!(
@@ -353,7 +426,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         tried_tools,
         tried_specs,
         cfg,
-        &rate_limit.matched_pattern,
+        &failover_signal.matched_pattern,
     );
 
     match action {

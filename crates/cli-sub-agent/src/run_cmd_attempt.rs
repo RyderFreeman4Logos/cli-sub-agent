@@ -565,11 +565,13 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     );
                     continue;
                 }
-                // ACP errors (e.g. codex "usage_limit_exceeded") bypass Ok-path
-                // rate-limit detection.  Check error text for quota signals.
+                // ACP transport errors can bury the root cause under anyhow
+                // context layers. Preserve the full chain so quota/crash
+                // markers survive error-path failover detection.
+                let full_error_chain = format!("{e:#}");
                 match evaluate_error_rate_limit_failover(
                     tool_name_str,
-                    &e.to_string(),
+                    &full_error_chain,
                     attempts,
                     max_failover_attempts,
                     &mut tried_tools,
