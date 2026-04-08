@@ -130,16 +130,12 @@ pub fn install_stderr_rotation(
     unsafe { libc::fcntl(saved_fd2, libc::F_SETFD, libc::FD_CLOEXEC) };
 
     // Create an OS pipe.
-    let (read_fd, write_fd) = {
-        let mut fds = [0i32; 2];
-        // SAFETY: pipe2 is POSIX, O_CLOEXEC prevents fd leak to children.
-        let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-        if ret != 0 {
-            let err = std::io::Error::last_os_error();
+    let (read_fd, write_fd) = match create_cloexec_pipe() {
+        Ok(fds) => fds,
+        Err(err) => {
             unsafe { libc::close(saved_fd2) };
             return Err(err);
         }
-        (fds[0], fds[1])
     };
 
     // Redirect fd 2 (stderr) to the pipe write-end.
@@ -265,6 +261,43 @@ pub fn stderr_log_size(stderr_path: &Path) -> Option<u64> {
     std::fs::metadata(stderr_path).ok().map(|m| m.len())
 }
 
+fn create_cloexec_pipe() -> std::io::Result<(i32, i32)> {
+    let mut fds = [0i32; 2];
+
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: `fds` points to storage for two file descriptors and
+        // `O_CLOEXEC` prevents descriptor leaks across exec.
+        let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        Ok((fds[0], fds[1]))
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        // SAFETY: `fds` points to storage for two file descriptors.
+        let ret = unsafe { libc::pipe(fds.as_mut_ptr()) };
+        if ret != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        for &fd in &fds {
+            // SAFETY: each fd was just created by `pipe` and is owned here.
+            let ret = unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+            if ret == -1 {
+                let err = std::io::Error::last_os_error();
+                unsafe {
+                    libc::close(fds[0]);
+                    libc::close(fds[1]);
+                }
+                return Err(err);
+            }
+        }
+        Ok((fds[0], fds[1]))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,15 +309,12 @@ mod tests {
     /// Uses `O_CLOEXEC` to prevent fd leak.  Both ends are wrapped in
     /// `std::fs::File` so they are closed on drop.
     fn make_pipe() -> (std::fs::File, std::fs::File) {
-        let mut fds = [0i32; 2];
-        // SAFETY: pipe2 is POSIX.
-        let ret = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) };
-        assert_eq!(ret, 0, "pipe2 failed");
+        let (read_fd, write_fd) = create_cloexec_pipe().expect("create cloexec pipe");
         // SAFETY: fds are valid, we own them.
         unsafe {
             (
-                std::fs::File::from_raw_fd(fds[0]),
-                std::fs::File::from_raw_fd(fds[1]),
+                std::fs::File::from_raw_fd(read_fd),
+                std::fs::File::from_raw_fd(write_fd),
             )
         }
     }

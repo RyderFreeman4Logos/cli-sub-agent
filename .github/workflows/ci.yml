@@ -18,7 +18,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
-        uses: taiki-e/install-action@ba41dd491d91278bf5d2280486932414ba6d4991
+        uses: taiki-e/install-action@v2
       - name: Check workspace
         run: cargo check --workspace --all-features
       - name: Check dependencies
@@ -150,7 +150,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install nextest
-        uses: taiki-e/install-action@f1d55f103dfbf9be3d3cf757ce9e198778ba8687
+        uses: taiki-e/install-action@v2
       - name: Run workspace tests
         run: cargo nextest run --workspace --all-features
       - name: Run cli-sub-agent e2e tests
