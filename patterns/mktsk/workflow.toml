@@ -129,7 +129,6 @@ if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
 fi
 
 # Version bump check
-if command -v just >/dev/null 2>&1; then
   if ! just check-version-bumped 2>/dev/null; then
     just bump-patch
     cargo run -p weave -- lock 2>/dev/null || true
@@ -137,7 +136,6 @@ if command -v just >/dev/null 2>&1; then
     VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
     git commit -m "chore(release): bump workspace version to ${VERSION}"
   fi
-fi
 
 # Pre-PR cumulative review (hard gate — must pass before push)
 SID=$(csa review --sa-mode true --range main...HEAD)

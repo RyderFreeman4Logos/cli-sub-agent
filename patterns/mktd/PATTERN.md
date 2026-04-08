@@ -39,7 +39,6 @@ Rules:
 - If not found (or not in git/detached HEAD), output empty string
 
 ```bash
-command -v python3 >/dev/null 2>&1 || { echo ""; exit 0; }
 python3 - <<'PY'
 import json
 import subprocess

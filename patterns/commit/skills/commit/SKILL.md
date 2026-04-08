@@ -74,7 +74,7 @@ breaks prompt-guard propagation.
 4. **Security scan**: Grep staged files for hardcoded secrets (API_KEY, SECRET, PASSWORD, PRIVATE_KEY).
 5. **Security audit**: Invoke the `security-audit` pattern via CSA -- three-phase audit (test completeness, vulnerability scan, code quality).
 6. **Pre-commit review**: Invoke the `ai-reviewed-commit` pattern via CSA -- authorship-aware review (debate for self-authored, `csa review --diff --allow-fallback` for others). Fix-and-retry up to 3 rounds.
-7. **Generate commit message**: Delegate to CSA at `tier-1-quick` (tool and thinking budget come from config). If a review session already ran in this workflow, prefer resuming it with `--session <review-session-id>` (reuses cached context, near-zero new tokens). When resuming, keep the same tool (sessions are tool-locked).
+7. **Generate commit message**: Delegate to CSA at `tier-1-quick` (tool and thinking budget come from config). The commit body MUST include the AI Reviewer Metadata block from `Commit Message Format (AI Era)`. If a review session already ran in this workflow, prefer resuming it with `--session <review-session-id>` (reuses cached context, near-zero new tokens). When resuming, keep the same tool (sessions are tool-locked).
 8. **Commit**: `git commit -m "${COMMIT_MSG}"`.
 9. **Auto PR** (standalone by default): Push branch, create PR targeting main, invoke `/pr-bot`.
    Runs automatically when commit is standalone. Skipped when parent workflow
@@ -89,6 +89,21 @@ breaks prompt-guard propagation.
 | Pre-PR cumulative | `csa review --range main...HEAD` | Full feature branch | Before `git push` (inside `/pr-bot` Step 2) |
 
 Both layers are mandatory. The per-commit review catches issues in each individual change; the cumulative review catches cross-commit issues and ensures the full branch is coherent.
+
+## Commit Message Format (AI Era)
+
+All commits created by this workflow must use:
+
+```text
+<type>(<scope>): <subject>
+
+<Description of what changed>
+
+### AI Reviewer Metadata
+- **Design Intent**: <Why this change was made, what problem it solves. Context not obvious from the diff.>
+- **Key Decisions**: <Significant architectural or implementation choices made during the task.>
+- **Reviewer Guidance**: <Areas needing careful review, edge cases handled, potential risks.>
+```
 
 ## Example Usage
 
@@ -111,6 +126,6 @@ Both layers are mandatory. The per-commit review catches issues in each individu
 4. Security scan found no hardcoded secrets.
 5. Security audit returned PASS or PASS_DEFERRED.
 6. Pre-commit review completed with zero unresolved P0/P1 issues.
-7. Commit created with Conventional Commits format.
+7. Commit created with Conventional Commits format AND includes AI Reviewer Metadata block.
 8. `git status` shows clean working tree.
 9. PR created and `/pr-bot` invoked (skipped when `CSA_SKIP_PUBLISH=true`).

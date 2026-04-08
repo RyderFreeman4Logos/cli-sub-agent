@@ -216,16 +216,55 @@ Run `review-loop` pattern on staged changes before final commit.
 Tool: bash
 OnFail: abort
 
-Generate a deterministic Conventional Commits subject/body split from staged files.
-Avoid model-dependent loops in commit-message generation.
+Generate a Conventional Commits subject/body split from staged files. The body
+MUST contain a short description of what changed followed by the AI Reviewer
+Metadata block. Generate the metadata from the actual staged changes, design
+decisions made during implementation, and reviewer guidance needed for careful
+inspection. Prefer a richer `${COMMIT_BODY}` supplied by an upstream AI step
+when available; otherwise fall back to the helper script.
 
 ```bash
 set -euo pipefail
 COMMIT_SUBJECT_LOCAL="$(scripts/gen_commit_msg.sh --subject "${SCOPE:-}")"
-COMMIT_BODY_LOCAL="$(scripts/gen_commit_msg.sh --body "${SCOPE:-}")"
+COMMIT_BODY_RAW="${COMMIT_BODY:-}"
+
+if [ -n "${COMMIT_BODY_RAW}" ] && [ "${COMMIT_BODY_RAW}" != '""' ]; then
+  if ! COMMIT_BODY_LOCAL="$(printf '%s' "${COMMIT_BODY_RAW}" | jq -er . 2>/dev/null)"; then
+    COMMIT_BODY_LOCAL="${COMMIT_BODY_RAW}"
+  fi
+else
+  COMMIT_BODY_LOCAL="$(scripts/gen_commit_msg.sh --body "${SCOPE:-}")"
+fi
 
 if [ -z "${COMMIT_SUBJECT_LOCAL}" ]; then
   echo "ERROR: Commit subject is empty." >&2
+  exit 1
+fi
+
+if [ -z "$(printf '%s' "${COMMIT_BODY_LOCAL}" | tr -d '[:space:]')" ]; then
+  echo "ERROR: Commit body is empty. AI-era commit format requires a summary and metadata block." >&2
+  exit 1
+fi
+
+for required_line in \
+  '### AI Reviewer Metadata' \
+  '- **Design Intent**:' \
+  '- **Key Decisions**:' \
+  '- **Reviewer Guidance**:'
+do
+  if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- "${required_line}"; then
+    echo "ERROR: Commit body is missing required AI reviewer metadata line: ${required_line}" >&2
+    exit 1
+  fi
+done
+
+if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | awk '
+  BEGIN { found = 0; has_summary = 0 }
+  /^### AI Reviewer Metadata$/ { found = 1; next }
+  !found && $0 ~ /[^[:space:]]/ { has_summary = 1 }
+  END { exit !(found && has_summary) }
+'; then
+  echo "ERROR: Commit body must include a descriptive summary before the AI Reviewer Metadata block." >&2
   exit 1
 fi
 
