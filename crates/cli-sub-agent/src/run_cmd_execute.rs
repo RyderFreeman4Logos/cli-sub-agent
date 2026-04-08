@@ -273,6 +273,7 @@ pub(crate) async fn handle_run(
     let heterogeneous_runtime_fallback_candidates = strategy_result.runtime_fallback_candidates;
     let resolved_model_spec = strategy_result.model_spec;
     let resolved_model = strategy_result.model;
+    let strategy_resolved_tier_name = strategy_result.resolved_tier_name;
     let resolved_tool = strategy_result.tool;
 
     if session_arg.is_none()
@@ -357,7 +358,7 @@ pub(crate) async fn handle_run(
         }
     }
 
-    let resolved_tier_name: Option<String> =
+    let resolved_tier_name: Option<String> = strategy_resolved_tier_name.or_else(|| {
         skill_agent.and_then(|a| a.tier.clone()).or_else(|| {
             config.as_ref().and_then(|cfg| {
                 cfg.tier_mapping.get("default").cloned().or_else(|| {
@@ -368,7 +369,8 @@ pub(crate) async fn handle_run(
                     }
                 })
             })
-        });
+        })
+    });
     let context_load_options = skill_agent
         .and_then(|agent| pipeline::context_load_options_with_skips(&agent.skip_context));
     let memory_injection = pipeline::MemoryInjectionOptions {
