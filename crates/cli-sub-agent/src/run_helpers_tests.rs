@@ -75,6 +75,24 @@ fn infer_edit_requirement_detects_implementation_intent() {
 }
 
 #[test]
+fn infer_edit_requirement_detects_commit_intent() {
+    let result = infer_task_edit_requirement("Commit the current changes");
+    assert_eq!(result, Some(true));
+}
+
+#[test]
+fn infer_edit_requirement_detects_fix_variants() {
+    let result = infer_task_edit_requirement("Fixes the retry buffer");
+    assert_eq!(result, Some(true));
+}
+
+#[test]
+fn infer_edit_requirement_detects_merge_intent() {
+    let result = infer_task_edit_requirement("Merge review fixes");
+    assert_eq!(result, Some(true));
+}
+
+#[test]
 fn infer_edit_requirement_read_only_overrides_edit_words() {
     let result = infer_task_edit_requirement("Do not edit files, only review this patch");
     assert_eq!(result, Some(false));
