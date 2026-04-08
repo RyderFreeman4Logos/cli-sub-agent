@@ -515,7 +515,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 
 [[package]]
 name = "cli-sub-agent"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -704,7 +704,7 @@ dependencies = [
 
 [[package]]
 name = "csa-acp"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "agent-client-protocol",
  "anyhow",
@@ -724,7 +724,7 @@ dependencies = [
 
 [[package]]
 name = "csa-config"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "csa-core"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "agent-teams",
  "chrono",
@@ -755,7 +755,7 @@ dependencies = [
 
 [[package]]
 name = "csa-eval"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -769,7 +769,7 @@ dependencies = [
 
 [[package]]
 name = "csa-executor"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "agent-teams",
  "anyhow",
@@ -795,7 +795,7 @@ dependencies = [
 
 [[package]]
 name = "csa-hooks"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -812,7 +812,7 @@ dependencies = [
 
 [[package]]
 name = "csa-lock"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -824,7 +824,7 @@ dependencies = [
 
 [[package]]
 name = "csa-mcp-hub"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "axum",
@@ -846,7 +846,7 @@ dependencies = [
 
 [[package]]
 name = "csa-memory"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -864,7 +864,7 @@ dependencies = [
 
 [[package]]
 name = "csa-process"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -882,7 +882,7 @@ dependencies = [
 
 [[package]]
 name = "csa-resource"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "csa-core",
@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "csa-scheduler"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -916,7 +916,7 @@ dependencies = [
 
 [[package]]
 name = "csa-session"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -937,7 +937,7 @@ dependencies = [
 
 [[package]]
 name = "csa-todo"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "chrono",
@@ -3894,7 +3894,7 @@ dependencies = [
  "serde",
  "serde_spanned 0.6.9",
  "toml_datetime 0.6.11",
- "toml_edit",
+ "toml_edit 0.22.27",
 ]
 
 [[package]]
@@ -3966,6 +3966,19 @@ dependencies = [
  "toml_datetime 0.6.11",
  "toml_write",
  "winnow 0.7.15",
+]
+
+[[package]]
+name = "toml_edit"
+version = "0.25.5+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ca1a40644a28bce036923f6a431df0b34236949d111cc07cb6dca830c9ef2e1"
+dependencies = [
+ "indexmap",
+ "toml_datetime 1.0.1+spec-1.1.0",
+ "toml_parser",
+ "toml_writer",
+ "winnow 1.0.0",
 ]
 
 [[package]]
@@ -4367,7 +4380,7 @@ dependencies = [
 
 [[package]]
 name = "weave"
-version = "0.1.236"
+version = "0.1.237"
 dependencies = [
  "anyhow",
  "clap",
@@ -4379,6 +4392,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "toml 1.0.7+spec-1.1.0",
+ "toml_edit 0.25.5+spec-1.1.0",
  "tracing",
  "tracing-subscriber",
  "which 8.0.2",
@@ -4915,6 +4929,9 @@ name = "winnow"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a90e88e4667264a994d34e6d1ab2d26d398dcdca8b7f52bec8668957517fc7d8"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winreg"

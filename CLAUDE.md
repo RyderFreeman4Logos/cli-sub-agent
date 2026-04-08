@@ -27,6 +27,10 @@ High-frequency command groups:
 
 - **Minimum Timeout**: The absolute wall-clock timeout (`--timeout`) MUST be at least 1800 seconds (30 minutes). Short timeouts waste tokens because the agent starts working but gets killed before producing output. This is enforced at the CLI level.
 
+### Session Wait
+
+- **NEVER** call multiple `csa session wait` in parallel Bash tool calls. Claude Code cancels sibling parallel calls when one times out (250s KV cache warming), wasting tokens and aggravating context rot. Always wait for sessions **sequentially**, generating tokens between each wait to keep the KV cache warm.
+
 ### CSA Run
 
 ```bash
