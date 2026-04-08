@@ -23,20 +23,38 @@ fn install_pattern(project_root: &Path, name: &str) {
 // --- resolve_debate_thinking tests ---
 
 #[test]
+fn resolve_debate_model_prefers_cli_over_config() {
+    let model = resolve_debate_model(Some("gpt-5"), Some("gemini-2.5"), false);
+    assert_eq!(model.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn resolve_debate_model_ignores_config_when_tier_active() {
+    let model = resolve_debate_model(None, Some("gemini-2.5"), true);
+    assert_eq!(model, None);
+}
+
+#[test]
 fn resolve_debate_thinking_prefers_cli_over_config() {
-    let thinking = resolve_debate_thinking(Some("low"), Some("high"));
+    let thinking = resolve_debate_thinking(Some("low"), Some("high"), false);
     assert_eq!(thinking.as_deref(), Some("low"));
 }
 
 #[test]
 fn resolve_debate_thinking_uses_config_when_cli_missing() {
-    let thinking = resolve_debate_thinking(None, Some("medium"));
+    let thinking = resolve_debate_thinking(None, Some("medium"), false);
     assert_eq!(thinking.as_deref(), Some("medium"));
 }
 
 #[test]
 fn resolve_debate_thinking_defaults_none_for_backward_compatibility() {
-    let thinking = resolve_debate_thinking(None, None);
+    let thinking = resolve_debate_thinking(None, None, false);
+    assert_eq!(thinking, None);
+}
+
+#[test]
+fn resolve_debate_thinking_ignores_config_when_tier_active() {
+    let thinking = resolve_debate_thinking(None, Some("medium"), true);
     assert_eq!(thinking, None);
 }
 

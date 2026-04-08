@@ -90,12 +90,15 @@ pub enum Commands {
         #[arg(long)]
         tool: Option<ToolArg>,
 
+        /// Intent-based auto-routing through `[tier_mapping]` or a tier selector while keeping tool choice automatic.
+        #[arg(long, value_name = "INTENT", conflicts_with = "tier")]
+        auto_route: Option<String>,
+
         /// Run a named skill as a sub-agent (resolves SKILL.md + .skill.toml)
         #[arg(long)]
         skill: Option<String>,
-        /// Autonomous mode flag (REQUIRED for root callers). Enables prompt-guard
-        /// safety mechanisms. Auto-detected for CSA-spawned children (CSA_DEPTH +
-        /// CSA_INTERNAL_INVOCATION).
+        /// Autonomous mode flag (REQUIRED for root callers). Enables prompt-guard safety mechanisms.
+        /// Auto-detected for CSA-spawned children (`CSA_DEPTH` + `CSA_INTERNAL_INVOCATION`).
         #[arg(long, value_name = "BOOL")]
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted

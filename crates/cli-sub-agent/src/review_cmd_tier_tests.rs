@@ -1,5 +1,5 @@
 use super::*;
-use csa_config::ToolConfig;
+use csa_config::{ReviewConfig, ToolConfig, ToolSelection};
 use std::collections::HashMap;
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
@@ -56,6 +56,20 @@ fn review_config_with_tier(
             max_turns: None,
         },
     );
+    cfg
+}
+
+fn review_config_with_whitelist(
+    tier_name: &str,
+    models: Vec<&str>,
+    enabled_tools: &[&str],
+    whitelist: &[&str],
+) -> ProjectConfig {
+    let mut cfg = review_config_with_tier(tier_name, models, enabled_tools);
+    cfg.review = Some(ReviewConfig {
+        tool: ToolSelection::Whitelist(whitelist.iter().map(|tool| (*tool).to_string()).collect()),
+        ..Default::default()
+    });
     cfg
 }
 
@@ -177,6 +191,38 @@ fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
         err.to_string()
             .contains("Tool 'codex' is not available in tier 'quality'"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_review_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
+    let global = GlobalConfig::default();
+    let cfg = review_config_with_whitelist(
+        "quality",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli", "codex"],
+        &["codex"],
+    );
+    let result = resolve_review_tool(
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    );
+
+    let err = result.expect_err("whitelist mismatch must hard-fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("[review].tool whitelist"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("active review tier remains authoritative"),
+        "{msg}"
     );
 }
 

@@ -29,6 +29,7 @@ use super::resume::{
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
     tool: Option<csa_core::types::ToolArg>,
+    auto_route: Option<String>,
     skill: Option<String>,
     prompt: Option<String>,
     prompt_file: Option<PathBuf>,
@@ -145,6 +146,7 @@ pub(crate) async fn handle_run(
     else {
         return Ok(1);
     };
+    let effective_tier = tier.or(auto_route.clone());
 
     // Track whether user explicitly provided --tool on the CLI (before skill
     // resolution may override it).  This drives tier enforcement: explicit
@@ -191,7 +193,7 @@ pub(crate) async fn handle_run(
     let tiers_configured = config.as_ref().is_some_and(|c| !c.tiers.is_empty());
     if user_explicit_tool
         && tiers_configured
-        && tier.is_none()
+        && effective_tier.is_none()
         && !force_ignore_tier_setting
         && !force
     {
@@ -199,7 +201,7 @@ pub(crate) async fn handle_run(
         let tier_list: Vec<&str> = cfg.tiers.keys().map(|s| s.as_str()).collect();
         let err = anyhow::anyhow!(
             "Direct --tool is blocked when tiers are configured.\n\
-             Use --tier <name> to specify which tier's model/thinking config to use, or \
+             Use --tier <name> or --auto-route <intent> to select tier-based routing, or \
              --force-ignore-tier-setting to bypass.\n\
              Available tiers: {}",
             tier_list.join(", ")
@@ -226,7 +228,7 @@ pub(crate) async fn handle_run(
                 parent: pre_exec_parent,
                 tool_name: explicit_tool_name,
                 task_type: Some("run"),
-                tier_name: tier.as_deref(),
+                tier_name: effective_tier.as_deref(),
                 error: err,
             },
         ));
@@ -267,7 +269,7 @@ pub(crate) async fn handle_run(
         force,
         force_override_user_config,
         needs_edit,
-        tier.as_deref(),
+        effective_tier.as_deref(),
         force_ignore_tier_setting,
     )?;
     let heterogeneous_runtime_fallback_candidates = strategy_result.runtime_fallback_candidates;

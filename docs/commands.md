@@ -15,6 +15,7 @@ csa run --sa-mode false [OPTIONS] [PROMPT]
 |------|-------------|
 | `--sa-mode <BOOL>` | Root callers must pass `true` or `false`; internal recursive calls default to `false` |
 | `--tool <TOOL>` | Tool selection: `auto` (default), `any-available`, or specific name |
+| `--auto-route <INTENT>` | Resolve routing intent through `[tier_mapping]` or a tier selector while keeping tool choice automatic |
 | `--skill <NAME>` | Run a named skill as a sub-agent |
 | `--session <ID>` | Resume existing session (ULID or prefix) |
 | `--last` | Resume the most recent session |
@@ -39,6 +40,7 @@ If `PROMPT` is omitted, reads from stdin.
 ```bash
 csa run --sa-mode false "fix the login bug"
 csa run --sa-mode false --tool codex --thinking high "refactor error handling"
+csa run --sa-mode false --auto-route analysis "trace the auth flow"
 csa run --sa-mode false --model-spec "codex/openai/gpt-5.3-codex/xhigh" "complex task"
 csa run --sa-mode false --last "continue where I left off"
 echo "analyze this" | csa run --sa-mode false --tool gemini-cli

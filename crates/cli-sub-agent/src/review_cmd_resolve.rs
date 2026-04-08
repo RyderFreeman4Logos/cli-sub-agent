@@ -149,27 +149,62 @@ pub(crate) fn resolve_review_tool(
     let whitelist = effective_whitelist.whitelist();
 
     if let Some(ref tier) = tier_name {
-        if let Some(cfg) = project_config
-            && let Some(resolution) =
-                crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
+        let cfg = project_config.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Review tier '{}' is configured, but no tier definitions are available. \
+                 Run `csa init --full` or define [tiers.*] in config.",
+                tier
+            )
+        })?;
+
+        let tier_tools = cfg.list_tools_in_tier(tier);
+        if let Some(wl) = whitelist {
+            let matching_tools: Vec<&str> = tier_tools
+                .iter()
+                .filter(|(tool_name, _)| wl.iter().any(|allowed| allowed == tool_name))
+                .map(|(tool_name, _)| tool_name.as_str())
+                .collect();
+            if matching_tools.is_empty() {
+                let tier_tool_names: Vec<&str> = tier_tools
+                    .iter()
+                    .map(|(tool_name, _)| tool_name.as_str())
+                    .collect();
+                anyhow::bail!(
+                    "Tier '{}' has no tools matching [review].tool whitelist [{}]. \
+                     The active review tier remains authoritative.\n\
+                     Tier tools: [{}].\n\
+                     Update [review].tool or choose a different tier.",
+                    tier,
+                    wl.join(", "),
+                    tier_tool_names.join(", ")
+                );
+            }
+        }
+
+        if let Some(resolution) =
+            crate::run_helpers::resolve_tool_from_tier(tier, cfg, parent_tool, whitelist, &[])
         {
             return Ok((resolution.tool, Some(resolution.model_spec)));
         }
-        // Tier set but no available tool found — fall through to tool-based resolution.
-        // When a whitelist is active, this likely means tier and whitelist have no intersection.
-        if whitelist.is_some() {
-            warn!(
-                tier = %tier,
-                "Tier '{}' has no tools matching [review].tool whitelist — \
-                 falling through to whitelist-based auto-selection (tier constraint bypassed)",
-                tier
-            );
-        } else {
-            debug!(
-                tier = %tier,
-                "Tier set but no available tool found, falling through to tool-based resolution"
-            );
-        }
+
+        let filtered_tools =
+            crate::run_helpers::collect_available_tier_models(tier, cfg, whitelist, &[]);
+        let configured_tools: Vec<&str> = tier_tools
+            .iter()
+            .map(|(tool_name, _)| tool_name.as_str())
+            .collect();
+        let available_tools: Vec<&str> = filtered_tools
+            .iter()
+            .map(|resolution| resolution.tool.as_str())
+            .collect();
+        anyhow::bail!(
+            "Tier '{}' resolved for review, but none of its tools are currently available.\n\
+             Configured tier tools: [{}].\n\
+             Available tier tools after enablement/install checks: [{}].",
+            tier,
+            configured_tools.join(", "),
+            available_tools.join(", ")
+        );
     }
 
     if let Some(project_review) = project_config.and_then(|cfg| cfg.review.as_ref()) {
@@ -240,14 +275,31 @@ pub(crate) fn resolve_review_tier_name(
         .map(|s| s.to_string()))
 }
 
-/// Resolve review thinking: CLI > config review.thinking.
+pub(crate) fn resolve_review_model(
+    cli_model: Option<&str>,
+    config_model: Option<&str>,
+    tier_active: bool,
+) -> Option<String> {
+    cli_model.map(str::to_string).or_else(|| {
+        (!tier_active)
+            .then_some(config_model)
+            .flatten()
+            .map(str::to_string)
+    })
+}
+
+/// Resolve review thinking: CLI > config review.thinking when no tier is active.
 pub(crate) fn resolve_review_thinking(
     cli_thinking: Option<&str>,
     config_thinking: Option<&str>,
+    tier_active: bool,
 ) -> Option<String> {
-    cli_thinking
-        .map(str::to_string)
-        .or_else(|| config_thinking.map(str::to_string))
+    cli_thinking.map(str::to_string).or_else(|| {
+        (!tier_active)
+            .then_some(config_thinking)
+            .flatten()
+            .map(str::to_string)
+    })
 }
 
 fn resolve_review_tool_from_selection(

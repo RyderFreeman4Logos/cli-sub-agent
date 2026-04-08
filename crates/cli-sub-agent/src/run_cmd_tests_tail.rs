@@ -2,6 +2,31 @@ use super::*;
 use csa_core::types::OutputFormat;
 
 #[test]
+fn test_cli_auto_route_parses() {
+    let cli = try_parse_cli(&["csa", "run", "--auto-route", "code", "prompt"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run { auto_route, .. } => {
+            assert_eq!(auto_route.as_deref(), Some("code"));
+        }
+        _ => panic!("expected Run command"),
+    }
+}
+
+#[test]
+fn test_cli_auto_route_conflicts_with_tier() {
+    let result = try_parse_cli(&[
+        "csa",
+        "run",
+        "--auto-route",
+        "code",
+        "--tier",
+        "tier-2-standard",
+        "prompt",
+    ]);
+    assert!(result.is_err(), "auto-route and tier should conflict");
+}
+
+#[test]
 fn apply_no_verify_commit_policy_allows_explicit_override_marker() {
     let mut result = ExecutionResult {
         output: "git commit -n -m \"feat: intentional\"\n".to_string(),

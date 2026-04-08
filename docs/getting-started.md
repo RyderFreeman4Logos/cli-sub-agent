@@ -108,6 +108,9 @@ For global settings (API keys, concurrency limits), edit
 # Auto-select tool from tier config
 csa run --sa-mode false "analyze the authentication flow"
 
+# Auto-route by intent via [tier_mapping]
+csa run --sa-mode false --auto-route analysis "trace the authentication flow"
+
 # Specify a tool
 csa run --sa-mode false --tool codex "implement user auth module"
 
