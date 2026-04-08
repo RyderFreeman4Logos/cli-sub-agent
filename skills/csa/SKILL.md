@@ -53,6 +53,26 @@ csa run --sa-mode true --tool codex "Implement feature X"
 - **Model Spec**: Unified format `tool/provider/model/thinking_budget`.
 - **Resource Guard**: Pre-flight memory check prevents OOM when launching tools.
 
+## Review/Debate Discipline (MANDATORY)
+
+When the task is specifically review or debate:
+
+1. Use the built-in subcommand that matches the intent.
+   - Review task -> `csa review`
+   - Debate task -> `csa debate`
+2. Do **NOT** replace `csa review` / `csa debate` with a hand-written `csa run`
+   prompt unless the built-in command is blocked by a concrete, documented error.
+3. In slow Rust repositories, one healthy review/debate session taking 30-60
+   minutes is normal.
+4. Sparse early output or a `csa session wait` timeout is **not** evidence of
+   failure by itself.
+5. If the session is still healthy, keep waiting on the **same session id**.
+   Do **NOT** launch narrowed or duplicate review/debate sessions for the same
+   scope.
+6. Fallback to a second session only when there is strong evidence of failure:
+   explicit crash/error, persistent liveness failure, or explicit user
+   instruction.
+
 ## --sa-mode (REQUIRED for Root Callers)
 
 Execution commands (`run`, `review`, `debate`, `batch`, `plan run`, `claude-sub-agent`)

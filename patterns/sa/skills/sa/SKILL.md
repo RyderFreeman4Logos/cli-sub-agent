@@ -119,6 +119,23 @@ Employees are professionals with subjective agency.
 - Employee may delegate to lower tiers as needed.
 - If requirements are ambiguous, employee returns `status = "needs_clarification"` with concrete questions.
 
+### Review/Debate Dispatch Discipline (MANDATORY)
+
+For review tasks, Layer 0 MUST dispatch `csa review`. For debate tasks, Layer 0
+MUST dispatch `csa debate`.
+
+Layer 0 MUST NOT hand-write a `csa run` prompt that approximates review/debate
+unless the built-in command is blocked by a concrete, documented error.
+
+In slow Rust repositories, a healthy review/debate session can take 30-60
+minutes. Sparse early output or `csa session wait` timing out is not failure by
+itself.
+
+While the original session is healthy, Layer 0 MUST keep waiting on the same
+session id. It MUST NOT launch a second review/debate flow for the same scope
+unless there is strong evidence of failure: explicit crash/error, persistent
+liveness failure, or direct user instruction.
+
 ### Exploration Tool Preference (MANDATORY)
 
 For codebase exploration (searching code, reading multiple files, understanding architecture),
@@ -313,6 +330,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
+# If `csa session wait` times out or output is sparse, keep waiting on this
+# SAME SID while the session is healthy. Do not launch a duplicate planning run.
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
 csa session wait --session "$SID"
 ```
@@ -391,6 +410,9 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
+# If verification relies on `csa review` / `csa debate`, wait on the SAME
+# session while it is healthy. Do not launch duplicate review/debate runs for
+# the same scope because `csa session wait` timed out once.
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
 csa session wait --session "$SID"
 ```

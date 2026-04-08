@@ -66,6 +66,26 @@ When operating under SA mode (e.g., dispatched by `/sa` or any autonomous workfl
 **ALL `csa` invocations MUST include `--sa-mode true`**. This includes `csa run`,
 `csa review`, `csa debate`, and any other execution commands.
 
+### Review/Debate Waiting Discipline (MANDATORY)
+
+When a pipeline step requires review or debate, use the built-in command for the
+matching intent:
+
+- Review step -> `csa review`
+- Debate step -> `csa debate`
+
+Do NOT replace these with a hand-written `csa run` prompt unless the built-in
+command is blocked by a concrete, documented error.
+
+In slow Rust repositories, one healthy review/debate session taking 30-60
+minutes is normal. Sparse early output or a `csa session wait` timeout is not
+failure by itself.
+
+If the original session is still healthy, keep waiting on the same session id.
+Do NOT launch narrowed or duplicate review/debate sessions for the same scope
+unless there is explicit crash/error evidence, persistent liveness failure, or
+direct user instruction.
+
 ### Pipeline Steps
 
 The workflow is compiled from the companion `../../PATTERN.md` file (relative to this `SKILL.md`) into `workflow.toml`.

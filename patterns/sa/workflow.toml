@@ -119,6 +119,9 @@ Layer 1 (claude-code) will:
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
 4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
+5. Treat `csa session wait` timeout or sparse early output as a wait-state, not
+   failure. In slow Rust repos, 30-60 minutes can be normal. Re-wait on the
+   same session instead of launching duplicate planning/review/debate sessions.
 
 ```bash
 SID=$(csa run --prompt-file "${PROMPT_FILE}")
@@ -175,6 +178,13 @@ After the review passes, commit the block. Do NOT accumulate all changes for
 one cumulative review at the end. Small-scope reviews catch issues when
 context is focused, avoiding large diffs where reviewers can only surface
 2 findings per round.
+
+**Patience rule (MANDATORY)**: If Layer 1 launches `csa review` or `csa debate`
+and `csa session wait` later times out or produces sparse early output, treat
+that as a wait-state rather than an automatic failure. Continue waiting on the
+same session id. Do NOT launch duplicate review/debate sessions for the same
+scope unless there is explicit crash/error evidence, persistent liveness
+failure, or user instruction.
 
 COMMIT HOOK POLICY (MANDATORY): NEVER use `git commit --no-verify` or
 `git commit -n` unless the prompt explicitly includes
