@@ -114,8 +114,44 @@ pub(crate) struct StrategyResolution {
     pub(crate) tool: ToolName,
     pub(crate) model_spec: Option<String>,
     pub(crate) model: Option<String>,
+    /// Canonical tier name used for the initial selection, when routing resolved via a tier.
+    pub(crate) resolved_tier_name: Option<String>,
     /// Remaining heterogeneous candidates for runtime fallback (HeterogeneousPreferred only).
     pub(crate) runtime_fallback_candidates: Vec<ToolName>,
+}
+
+fn resolve_default_tier_name(config: Option<&ProjectConfig>) -> Option<String> {
+    let cfg = config?;
+    cfg.tier_mapping.get("default").cloned().or_else(|| {
+        if cfg.tiers.contains_key("tier3") {
+            Some("tier3".to_string())
+        } else {
+            cfg.tiers
+                .keys()
+                .find(|name| name.starts_with("tier-3-") || name.starts_with("tier3"))
+                .cloned()
+        }
+    })
+}
+
+fn resolve_strategy_tier_name(
+    config: Option<&ProjectConfig>,
+    model_spec: Option<&str>,
+    tier: Option<&str>,
+    force: bool,
+    selection_without_explicit_tool: bool,
+) -> Option<String> {
+    if let Some(tier_name) = tier {
+        return config
+            .and_then(|cfg| cfg.resolve_tier_selector(tier_name))
+            .or_else(|| Some(tier_name.to_string()));
+    }
+
+    if selection_without_explicit_tool && model_spec.is_none() && !force {
+        return resolve_default_tier_name(config);
+    }
+
+    None
 }
 
 /// Resolve the initial tool based on the `ToolSelectionStrategy`.
@@ -156,6 +192,9 @@ pub(crate) fn resolve_tool_by_strategy(
                 tool,
                 model_spec: ms,
                 model: m,
+                resolved_tier_name: resolve_strategy_tier_name(
+                    config, model_spec, tier, force, false,
+                ),
                 runtime_fallback_candidates: Vec::new(),
             })
         }
@@ -177,6 +216,9 @@ pub(crate) fn resolve_tool_by_strategy(
                 tool,
                 model_spec: ms,
                 model: m,
+                resolved_tier_name: resolve_strategy_tier_name(
+                    config, model_spec, tier, force, true,
+                ),
                 runtime_fallback_candidates: Vec::new(),
             })
         }
@@ -209,6 +251,9 @@ pub(crate) fn resolve_tool_by_strategy(
                 tool: res.0,
                 model_spec: res.1,
                 model: res.2,
+                resolved_tier_name: resolve_strategy_tier_name(
+                    config, model_spec, tier, force, false,
+                ),
                 runtime_fallback_candidates: Vec::new(),
             })
         }
@@ -275,6 +320,9 @@ fn resolve_heterogeneous_preferred(
                     tool: t,
                     model_spec: ms,
                     model: m,
+                    resolved_tier_name: resolve_strategy_tier_name(
+                        config, model_spec, tier, force, false,
+                    ),
                     runtime_fallback_candidates: fallback,
                 })
             }
@@ -301,6 +349,9 @@ fn resolve_heterogeneous_preferred(
                     tool: t,
                     model_spec: ms,
                     model: m,
+                    resolved_tier_name: resolve_strategy_tier_name(
+                        config, model_spec, tier, force, true,
+                    ),
                     runtime_fallback_candidates: Vec::new(),
                 })
             }
@@ -326,6 +377,7 @@ fn resolve_heterogeneous_preferred(
             tool: t,
             model_spec: ms,
             model: m,
+            resolved_tier_name: resolve_strategy_tier_name(config, model_spec, tier, force, true),
             runtime_fallback_candidates: Vec::new(),
         })
     }
@@ -533,8 +585,76 @@ pub(crate) fn resolve_return_target_session_id(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
     use std::fs;
     use tempfile::TempDir;
+
+    use csa_config::{
+        GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, TierStrategy, ToolConfig,
+    };
+    use csa_core::types::ToolSelectionStrategy;
+
+    fn config_with_openai_compat_tiers(
+        tiers: &[(&str, Vec<&str>)],
+        tier_mapping: &[(&str, &str)],
+    ) -> ProjectConfig {
+        let mut tools = HashMap::new();
+        for tool in csa_config::global::all_known_tools() {
+            let name = tool.as_str();
+            tools.insert(
+                name.to_string(),
+                ToolConfig {
+                    enabled: name == "openai-compat",
+                    ..Default::default()
+                },
+            );
+        }
+
+        let tiers = tiers
+            .iter()
+            .map(|(name, models)| {
+                (
+                    (*name).to_string(),
+                    csa_config::config::TierConfig {
+                        description: "Test tier".to_string(),
+                        models: models.iter().map(|model| (*model).to_string()).collect(),
+                        strategy: TierStrategy::default(),
+                        token_budget: None,
+                        max_turns: None,
+                    },
+                )
+            })
+            .collect();
+        let tier_mapping = tier_mapping
+            .iter()
+            .map(|(selector, tier_name)| ((*selector).to_string(), (*tier_name).to_string()))
+            .collect();
+
+        ProjectConfig {
+            schema_version: csa_config::config::CURRENT_SCHEMA_VERSION,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: chrono::Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: ResourcesConfig::default(),
+            acp: Default::default(),
+            tools,
+            review: None,
+            debate: None,
+            tiers,
+            tier_mapping,
+            aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+            memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+        }
+    }
 
     #[test]
     fn resolve_skill_and_prompt_injects_workspace_scope_guard() {
@@ -566,5 +686,69 @@ mod tests {
         );
         assert!(resolved.prompt_text.contains("demo skill body"));
         assert!(resolved.prompt_text.contains("user task"));
+    }
+
+    #[test]
+    fn resolve_tool_by_strategy_records_canonical_cli_tier_name() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = config_with_openai_compat_tiers(
+            &[(
+                "tier-2-standard",
+                vec!["openai-compat/openai/gpt-5-codex/high"],
+            )],
+            &[("fast", "tier-2-standard")],
+        );
+
+        let resolution = resolve_tool_by_strategy(
+            &ToolSelectionStrategy::AnyAvailable,
+            None,
+            None,
+            Some(&config),
+            &GlobalConfig::default(),
+            tmp.path(),
+            false,
+            false,
+            false,
+            Some("fast"),
+            false,
+        )
+        .expect("resolve tool by CLI tier");
+
+        assert_eq!(
+            resolution.resolved_tier_name.as_deref(),
+            Some("tier-2-standard")
+        );
+    }
+
+    #[test]
+    fn resolve_tool_by_strategy_records_config_default_tier_name() {
+        let tmp = TempDir::new().expect("tempdir");
+        let config = config_with_openai_compat_tiers(
+            &[(
+                "tier-3-complex",
+                vec!["openai-compat/openai/gpt-5-codex/high"],
+            )],
+            &[("default", "tier-3-complex")],
+        );
+
+        let resolution = resolve_tool_by_strategy(
+            &ToolSelectionStrategy::AnyAvailable,
+            None,
+            None,
+            Some(&config),
+            &GlobalConfig::default(),
+            tmp.path(),
+            false,
+            false,
+            false,
+            None,
+            false,
+        )
+        .expect("resolve tool by config default tier");
+
+        assert_eq!(
+            resolution.resolved_tier_name.as_deref(),
+            Some("tier-3-complex")
+        );
     }
 }
