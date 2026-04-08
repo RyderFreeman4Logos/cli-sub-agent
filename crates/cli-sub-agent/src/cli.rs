@@ -80,7 +80,9 @@ fn validate_return_to(value: &str) -> std::result::Result<String, String> {
 pub enum Commands {
     /// Execute a task using a specific AI tool
     Run {
-        /// Tool selection: auto (default), any-available, or specific tool name
+        /// Tool selection: auto (default), any-available, or specific tool name.
+        /// Combine with --tier to use that tier's model/thinking for the selected tool.
+        /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
         #[arg(long)]
         tool: Option<ToolArg>,
 
@@ -212,11 +214,13 @@ pub enum Commands {
         #[arg(long, value_name = "PATH")]
         spec: Option<String>,
 
-        /// Tier name, alias, or unambiguous prefix for tool/model routing
+        /// Tier name, alias, or unambiguous prefix for tool/model routing.
+        /// With --tool, resolves that tool's model/thinking from the selected tier.
         #[arg(long)]
         tier: Option<String>,
 
-        /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+        /// Bypass tier routing for direct --tool/--model overrides.
+        /// Use without --tier; --tool + --tier + --force-ignore-tier-setting is an error.
         #[arg(long, alias = "force-tier")]
         force_ignore_tier_setting: bool,
 

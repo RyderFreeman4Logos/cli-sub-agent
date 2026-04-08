@@ -246,7 +246,7 @@ pub(crate) async fn handle_debate(
     );
 
     // 6. Build executor and validate tool
-    let enforce_tier = tier_model_spec.is_some();
+    let enforce_tier = tier_model_spec.is_some() && !args.force_ignore_tier_setting;
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),

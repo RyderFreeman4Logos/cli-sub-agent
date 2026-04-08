@@ -58,6 +58,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) thinking: Option<&'a str>,
     pub(crate) force: bool,
     pub(crate) force_override_user_config: bool,
+    pub(crate) force_ignore_tier_setting: bool,
     pub(crate) no_failover: bool,
     pub(crate) wait: bool,
     pub(crate) idle_timeout_seconds: u64,
@@ -142,7 +143,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 project: request.config,
                 global: Some(request.global_config),
             },
-            !request.force,
+            !request.force && !request.force_ignore_tier_setting,
             request.force_override_user_config,
             matches!(request.strategy, ToolSelectionStrategy::Explicit(_)),
         )

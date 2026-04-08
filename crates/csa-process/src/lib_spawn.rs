@@ -351,7 +351,7 @@ async fn spawn_with_cgroup(
     }
 
     let child = spawn_tool_with_options(tokio_cmd, stdin_data, spawn_options).await?;
-    let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id);
+    let guard = csa_resource::cgroup::CgroupScopeGuard::new(tool_name, session_id, &cgroup_config);
 
     debug!(
         scope = %guard.scope_name(),

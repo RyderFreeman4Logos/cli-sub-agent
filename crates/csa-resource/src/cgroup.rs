@@ -53,6 +53,8 @@ pub struct SandboxConfig {
 
 /// Maximum length for a systemd unit name (bytes).
 const MAX_SCOPE_NAME_LEN: usize = 256;
+/// SIGKILL is the only signal we currently treat as an OOM fallback hint.
+const SIGKILL: i32 = 9;
 
 /// Build a deterministic scope unit name from tool name and session id.
 ///
@@ -152,6 +154,26 @@ pub fn create_scope_command_with_env(
 /// returned by [`create_scope_command`].
 pub struct CgroupScopeGuard {
     scope_name: String,
+    configured_memory_max_mb: u64,
+    configured_memory_swap_max_mb: Option<u64>,
+    collect_mode_persists_failures: bool,
+}
+
+#[derive(Debug, Default)]
+struct ScopeProperties {
+    result: Option<String>,
+    memory_peak_bytes: Option<u64>,
+    memory_max_bytes: Option<u64>,
+    memory_swap_max_bytes: Option<u64>,
+}
+
+impl ScopeProperties {
+    fn is_empty(&self) -> bool {
+        self.result.is_none()
+            && self.memory_peak_bytes.is_none()
+            && self.memory_max_bytes.is_none()
+            && self.memory_swap_max_bytes.is_none()
+    }
 }
 
 impl CgroupScopeGuard {
@@ -159,10 +181,15 @@ impl CgroupScopeGuard {
     ///
     /// Call this *after* successfully spawning the child process inside the
     /// scope (i.e. after `cmd.spawn()` succeeds).
-    pub fn new(tool_name: &str, session_id: &str) -> Self {
+    pub fn new(tool_name: &str, session_id: &str, config: &SandboxConfig) -> Self {
         let scope_name = scope_unit_name(tool_name, session_id);
         debug!(scope = %scope_name, "cgroup scope guard created");
-        Self { scope_name }
+        Self {
+            scope_name,
+            configured_memory_max_mb: config.memory_max_mb,
+            configured_memory_swap_max_mb: config.memory_swap_max_mb,
+            collect_mode_persists_failures: true,
+        }
     }
 
     /// The systemd unit name this guard will clean up.
@@ -177,30 +204,21 @@ impl CgroupScopeGuard {
     /// memory limit enforcement.  Must be called **before** [`Self::stop`]
     /// or [`Drop`], as the property is unavailable after the scope is gone.
     ///
-    /// Returns `false` if the scope has already been cleaned up or the
-    /// query fails (best-effort diagnostic).
+    /// Returns `false` if the scope has already been cleaned up, unless the
+    /// caller separately observed `SIGKILL` and uses
+    /// [`Self::check_oom_killed_with_signal`].
     pub fn check_oom_killed(&self) -> bool {
-        let output = Command::new("systemctl")
-            .args([
-                "--user",
-                "show",
-                &self.scope_name,
-                "--property=Result",
-                "--value",
-            ])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output();
+        self.check_oom_killed_with_signal(None)
+    }
 
-        match output {
-            Ok(out) if out.status.success() => {
-                let result = String::from_utf8_lossy(&out.stdout);
-                let trimmed = result.trim();
-                // systemd reports "oom-kill" when the scope was killed by the
-                // cgroup OOM handler.
-                trimmed == "oom-kill"
-            }
-            _ => false,
+    /// Check whether this scope was OOM-killed, falling back to SIGKILL when
+    /// systemd already garbage-collected the failed scope state.
+    pub fn check_oom_killed_with_signal(&self, exit_signal: Option<i32>) -> bool {
+        match self.query_scope_properties() {
+            Some(properties) if properties.result.as_deref() == Some("oom-kill") => true,
+            Some(properties) if properties.is_empty() => self.should_assume_oom(exit_signal),
+            Some(_) => false,
+            None => self.should_assume_oom(exit_signal),
         }
     }
 
@@ -209,7 +227,9 @@ impl CgroupScopeGuard {
     /// Uses `systemctl --user show <scope> --property=MemoryPeak`.
     /// Returns `None` if the scope is gone or the query fails.
     pub fn memory_peak_mb(&self) -> Option<u64> {
-        self.query_memory_property("MemoryPeak")
+        self.query_scope_properties()
+            .and_then(|properties| properties.memory_peak_bytes)
+            .map(bytes_to_mb)
     }
 
     /// Query current memory usage in bytes for this scope.
@@ -248,7 +268,9 @@ impl CgroupScopeGuard {
     /// Returns `None` if the scope is gone, the query fails, or the
     /// property is `infinity` (no limit set).
     pub fn memory_max_mb(&self) -> Option<u64> {
-        self.query_memory_property("MemoryMax")
+        self.query_scope_properties()
+            .and_then(|properties| properties.memory_max_bytes)
+            .map(bytes_to_mb)
     }
 
     /// Produce a diagnostic hint string when OOM is detected.
@@ -256,15 +278,42 @@ impl CgroupScopeGuard {
     /// Consolidates all systemd queries into a single `systemctl show`
     /// call to minimize subprocess overhead.  Returns `Some(hint)` with
     /// peak/limit info and config advice if OOM was triggered, `None`
-    /// otherwise.
+    /// otherwise. When the failed scope has already been GC'd, use
+    /// [`Self::oom_diagnosis_with_signal`] to fall back to SIGKILL inference.
     pub fn oom_diagnosis(&self) -> Option<String> {
-        // Fetch Result, MemoryPeak, MemoryMax in one systemctl call.
+        self.oom_diagnosis_with_signal(None)
+    }
+
+    /// Produce an actionable OOM diagnosis, falling back to SIGKILL when the
+    /// failed scope has already been GC'd by systemd.
+    pub fn oom_diagnosis_with_signal(&self, exit_signal: Option<i32>) -> Option<String> {
+        match self.query_scope_properties() {
+            Some(properties) if properties.result.as_deref() == Some("oom-kill") => {
+                Some(self.format_oom_diagnosis(
+                    properties.memory_peak_bytes,
+                    properties.memory_max_bytes,
+                    properties.memory_swap_max_bytes,
+                    false,
+                ))
+            }
+            Some(properties) if properties.is_empty() && self.should_assume_oom(exit_signal) => {
+                Some(self.format_oom_diagnosis(None, None, None, true))
+            }
+            Some(_) => None,
+            None if self.should_assume_oom(exit_signal) => {
+                Some(self.format_oom_diagnosis(None, None, None, true))
+            }
+            None => None,
+        }
+    }
+
+    fn query_scope_properties(&self) -> Option<ScopeProperties> {
         let output = Command::new("systemctl")
             .args([
                 "--user",
                 "show",
                 &self.scope_name,
-                "--property=Result,MemoryPeak,MemoryMax",
+                "--property=Result,MemoryPeak,MemoryMax,MemorySwapMax",
             ])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -276,78 +325,67 @@ impl CgroupScopeGuard {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut result_val = "";
-        let mut peak_bytes: Option<u64> = None;
-        let mut max_bytes: Option<u64> = None;
-
+        let mut properties = ScopeProperties::default();
         for line in stdout.lines() {
-            if let Some(v) = line.strip_prefix("Result=") {
-                result_val = v.trim();
-            } else if let Some(v) = line.strip_prefix("MemoryPeak=") {
-                let v = v.trim();
-                if v != "infinity" && !v.is_empty() {
-                    peak_bytes = v.parse().ok();
+            if let Some(value) = line.strip_prefix("Result=") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    properties.result = Some(value.to_string());
                 }
-            } else if let Some(v) = line.strip_prefix("MemoryMax=") {
-                let v = v.trim();
-                if v != "infinity" && !v.is_empty() {
-                    max_bytes = v.parse().ok();
-                }
+            } else if let Some(value) = line.strip_prefix("MemoryPeak=") {
+                properties.memory_peak_bytes = parse_memory_property(value);
+            } else if let Some(value) = line.strip_prefix("MemoryMax=") {
+                properties.memory_max_bytes = parse_memory_property(value);
+            } else if let Some(value) = line.strip_prefix("MemorySwapMax=") {
+                properties.memory_swap_max_bytes = parse_memory_property(value);
             }
         }
+        Some(properties)
+    }
 
-        if result_val != "oom-kill" {
-            return None;
-        }
+    fn should_assume_oom(&self, exit_signal: Option<i32>) -> bool {
+        exit_signal == Some(SIGKILL) && self.configured_memory_max_mb > 0
+    }
 
+    fn format_oom_diagnosis(
+        &self,
+        peak_bytes: Option<u64>,
+        memory_max_bytes: Option<u64>,
+        memory_swap_max_bytes: Option<u64>,
+        inferred_from_sigkill: bool,
+    ) -> String {
         let peak = peak_bytes
-            .map(|b| format!("peak: {}MB", b / 1024 / 1024))
+            .map(|bytes| format!("peak: {}MB", bytes_to_mb(bytes)))
             .unwrap_or_else(|| "peak: unknown".to_string());
-        let limit = max_bytes
-            .map(|b| format!("limit: {}MB", b / 1024 / 1024))
-            .unwrap_or_else(|| "limit: unknown".to_string());
-        Some(format!(
-            "process was OOM-killed ({peak}, {limit}). \
+        let limit_mb = memory_max_bytes
+            .map(bytes_to_mb)
+            .unwrap_or(self.configured_memory_max_mb);
+        let swap_mb = memory_swap_max_bytes
+            .map(bytes_to_mb)
+            .or(self.configured_memory_swap_max_mb);
+        let mut message = format!(
+            "process was {} ({peak}, limit: {limit_mb}MB, {}). \
              Increase resources.memory_max_mb or tools.<tool>.memory_max_mb \
-             in .csa/config.toml"
-        ))
+             in .csa/config.toml",
+            if inferred_from_sigkill {
+                "likely OOM-killed after scope cleanup"
+            } else {
+                "OOM-killed"
+            },
+            format_swap_limit(swap_mb),
+        );
+        if swap_mb == Some(0) {
+            message.push_str(
+                " Swap is disabled; consider increasing resources.memory_swap_max_mb \
+                 or tools.<tool>.memory_swap_max_mb.",
+            );
+        }
+        message
     }
 
-    /// Query a memory property from systemd (bytes) and convert to MB.
-    fn query_memory_property(&self, property: &str) -> Option<u64> {
-        let output = Command::new("systemctl")
-            .args([
-                "--user",
-                "show",
-                &self.scope_name,
-                &format!("--property={property}"),
-                "--value",
-            ])
-            .stdin(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .output()
-            .ok()?;
-
-        if !output.status.success() {
-            return None;
-        }
-
-        let value = String::from_utf8_lossy(&output.stdout);
-        let trimmed = value.trim();
-        // "infinity" means no limit set — return None.
-        if trimmed == "infinity" || trimmed.is_empty() {
-            return None;
-        }
-        // systemd reports memory properties in bytes.
-        trimmed.parse::<u64>().ok().map(|bytes| bytes / 1024 / 1024)
-    }
-
-    /// Explicitly stop the scope.  Consumes the guard, preventing the
-    /// [`Drop`] impl from running a second stop.
+    /// Explicitly stop the scope, using the same cleanup path as [`Drop`].
     pub fn stop(self) {
-        self.stop_scope();
-        // Prevent Drop from running again by consuming self (Drop still
-        // runs, but `stop_scope` is idempotent for systemd).
+        drop(self);
     }
 
     /// Best-effort `systemctl --user stop`.
@@ -381,11 +419,65 @@ impl CgroupScopeGuard {
             }
         }
     }
+
+    fn reset_failed_scope(&self) {
+        if !self.collect_mode_persists_failures {
+            return;
+        }
+
+        debug!(scope = %self.scope_name, "resetting failed cgroup scope");
+        let result = Command::new("systemctl")
+            .args(["--user", "reset-failed", &self.scope_name])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+
+        match result {
+            Ok(status) if status.success() => {
+                debug!(scope = %self.scope_name, "scope reset-failed completed");
+            }
+            Ok(status) => {
+                debug!(
+                    scope = %self.scope_name,
+                    code = status.code(),
+                    "scope reset-failed returned non-zero (may already be gone)"
+                );
+            }
+            Err(e) => {
+                warn!(
+                    scope = %self.scope_name,
+                    error = %e,
+                    "failed to run systemctl reset-failed"
+                );
+            }
+        }
+    }
 }
 
 impl Drop for CgroupScopeGuard {
     fn drop(&mut self) {
         self.stop_scope();
+        self.reset_failed_scope();
+    }
+}
+
+fn parse_memory_property(value: &str) -> Option<u64> {
+    let trimmed = value.trim();
+    if trimmed == "infinity" || trimmed.is_empty() {
+        return None;
+    }
+    trimmed.parse::<u64>().ok()
+}
+
+fn bytes_to_mb(bytes: u64) -> u64 {
+    bytes / 1024 / 1024
+}
+
+fn format_swap_limit(swap_mb: Option<u64>) -> String {
+    match swap_mb {
+        Some(swap) => format!("swap: {swap}MB"),
+        None => "swap: system default".to_string(),
     }
 }
 
@@ -503,151 +595,5 @@ fn scope_active_pids(unit_name: &str) -> Option<u32> {
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_scope_unit_name_basic() {
-        let name = scope_unit_name("claude-code", "01JABCDEF");
-        assert_eq!(name, "csa-claude-code-01JABCDEF.scope");
-    }
-
-    #[test]
-    fn test_scope_unit_name_truncation() {
-        let long_id = "A".repeat(300);
-        let name = scope_unit_name("x", &long_id);
-        assert!(
-            name.len() <= MAX_SCOPE_NAME_LEN,
-            "scope name {} exceeds limit {}",
-            name.len(),
-            MAX_SCOPE_NAME_LEN,
-        );
-        assert!(name.starts_with("csa-x-"));
-        assert!(name.ends_with(".scope"));
-    }
-
-    #[test]
-    fn test_create_scope_command_full() {
-        let cfg = SandboxConfig {
-            memory_max_mb: 4096,
-            memory_swap_max_mb: Some(0),
-            pids_max: Some(512),
-        };
-        let cmd = create_scope_command("codex", "01JTEST", &cfg);
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect();
-
-        assert_eq!(cmd.get_program().to_string_lossy(), "systemd-run");
-        assert!(args.contains(&"--user".to_string()));
-        assert!(args.contains(&"--scope".to_string()));
-        assert!(args.contains(&"csa-codex-01JTEST.scope".to_string()));
-        assert!(args.contains(&"MemoryMax=4096M".to_string()));
-        assert!(args.contains(&"MemorySwapMax=0M".to_string()));
-        assert!(args.contains(&"TasksMax=512".to_string()));
-        assert!(args.contains(&"--".to_string()));
-    }
-
-    #[test]
-    fn test_create_scope_command_minimal() {
-        let cfg = SandboxConfig {
-            memory_max_mb: 1024,
-            memory_swap_max_mb: None,
-            pids_max: None,
-        };
-        let cmd = create_scope_command("gemini-cli", "01JXY", &cfg);
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect();
-
-        assert!(args.contains(&"MemoryMax=1024M".to_string()));
-        // No swap or tasks properties when None.
-        assert!(!args.iter().any(|a| a.contains("MemorySwapMax")));
-        assert!(!args.iter().any(|a| a.contains("TasksMax")));
-    }
-
-    #[test]
-    fn test_create_scope_command_separator_at_end() {
-        let cfg = SandboxConfig {
-            memory_max_mb: 512,
-            memory_swap_max_mb: None,
-            pids_max: None,
-        };
-        let cmd = create_scope_command("t", "s", &cfg);
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect();
-
-        // The "--" separator must be the last argument we set so that the
-        // caller can append the tool binary after it.
-        assert_eq!(args.last().unwrap(), "--");
-    }
-
-    #[test]
-    fn test_create_scope_command_with_env_keeps_secrets_off_command_line() {
-        let cfg = SandboxConfig {
-            memory_max_mb: 512,
-            memory_swap_max_mb: None,
-            pids_max: None,
-        };
-        let env = HashMap::from([
-            ("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string()),
-            ("GEMINI_API_KEY".to_string(), "fallback-key".to_string()),
-        ]);
-
-        let cmd = create_scope_command_with_env("gemini-cli", "01JENV", &cfg, &env);
-        let args: Vec<_> = cmd
-            .get_args()
-            .map(|a| a.to_string_lossy().to_string())
-            .collect();
-
-        assert!(
-            !args.iter().any(|arg| arg == "-E"),
-            "systemd-run scope command must not expose env via -E: {args:?}"
-        );
-        assert!(
-            !args.iter().any(|arg| arg.contains("GEMINI_API_KEY")),
-            "secret env values must stay out of the systemd-run argv: {args:?}"
-        );
-        assert!(
-            !args.iter().any(|arg| arg.contains("fallback-key")),
-            "secret env contents must stay out of the systemd-run argv: {args:?}"
-        );
-    }
-
-    #[test]
-    fn test_cgroup_scope_guard_name() {
-        let guard = CgroupScopeGuard::new("claude-code", "01JGUARD");
-        assert_eq!(guard.scope_name(), "csa-claude-code-01JGUARD.scope");
-        // Drop will attempt `systemctl stop` which will fail silently in CI
-        // (no systemd user session). That's fine — it's best-effort.
-    }
-
-    #[test]
-    fn test_check_oom_killed_returns_false_for_nonexistent_scope() {
-        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
-        // Non-existent scope → systemctl show fails → false.
-        assert!(!guard.check_oom_killed());
-    }
-
-    #[test]
-    fn test_memory_peak_returns_none_for_nonexistent_scope() {
-        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
-        assert!(guard.memory_peak_mb().is_none());
-    }
-
-    #[test]
-    fn test_memory_max_returns_none_for_nonexistent_scope() {
-        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
-        assert!(guard.memory_max_mb().is_none());
-    }
-
-    #[test]
-    fn test_oom_diagnosis_returns_none_when_no_oom() {
-        let guard = CgroupScopeGuard::new("test", "01JNONEXISTENT");
-        assert!(guard.oom_diagnosis().is_none());
-    }
-}
+#[path = "cgroup_tests.rs"]
+mod tests;

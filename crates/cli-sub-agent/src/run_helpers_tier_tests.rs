@@ -532,10 +532,10 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
 #[test]
 fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
     let cfg = config_with_tier(
-        "quality",
+        "tier-4-critical",
         vec![
             "gemini-cli/google/default/xhigh",
-            "codex/openai/gpt-5.4/high",
+            "codex/openai/gpt-5.4/xhigh",
             "claude-code/anthropic/sonnet-4.6/xhigh",
         ],
         &["gemini-cli", "codex", "claude-code"],
@@ -549,7 +549,7 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
         false,
         false,
         false,
-        Some("quality"),
+        Some("tier-4-critical"),
         false,
         false, // tool_is_auto_resolved
     );
@@ -560,15 +560,18 @@ fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
     );
     let (tool, model_spec, _) = result.unwrap();
     assert_eq!(tool, ToolName::Codex);
-    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/xhigh"));
 }
 
 #[test]
 fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
     let cfg = config_with_tier(
         "quality",
-        vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli", "codex"],
+        vec![
+            "gemini-cli/google/default/xhigh",
+            "claude-code/anthropic/sonnet-4.6/xhigh",
+        ],
+        &["gemini-cli", "codex", "claude-code"],
     );
 
     let result = super::resolve_tool_and_model(
@@ -586,10 +589,14 @@ fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
     );
 
     let err = result.expect_err("missing tool in tier must error");
+    let msg = err.to_string();
     assert!(
-        err.to_string()
-            .contains("Requested tool 'codex' is not available in tier 'quality'"),
-        "unexpected error: {err}"
+        msg.contains("Requested tool 'codex' is not available in tier 'quality'"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("Available tools in this tier: [gemini-cli, claude-code]"),
+        "unexpected error: {msg}"
     );
 }
 

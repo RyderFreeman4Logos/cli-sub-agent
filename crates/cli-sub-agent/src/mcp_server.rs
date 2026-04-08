@@ -174,11 +174,11 @@ fn get_tools() -> Vec<McpToolDef> {
                     },
                     "tier": {
                         "type": "string",
-                        "description": "Tier name to use for tool/model resolution (optional)"
+                        "description": "Tier name to use for tool/model resolution. With tool, resolves that tool's model/thinking from the selected tier (optional)"
                     },
                     "force_ignore_tier_setting": {
                         "type": "boolean",
-                        "description": "Bypass tier enforcement to allow direct --tool/--model (optional)"
+                        "description": "Bypass tier routing for direct tool/model overrides. Use without tier; tool+tier+force_ignore is invalid (optional)"
                     }
                 },
                 "required": ["prompt"]

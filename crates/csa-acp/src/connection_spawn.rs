@@ -107,8 +107,14 @@ impl AcpSandboxHandle {
     /// `false` for all others.  Must be called **before** the handle is
     /// dropped, as the cgroup scope is stopped on drop.
     pub fn check_oom_killed(&self) -> bool {
+        self.check_oom_killed_with_signal(None)
+    }
+
+    /// Check whether the cgroup scope was OOM-killed, falling back to a
+    /// SIGKILL-based inference when systemd has already GC'd the failed scope.
+    pub fn check_oom_killed_with_signal(&self, exit_signal: Option<i32>) -> bool {
         match self {
-            Self::Cgroup(guard) => guard.check_oom_killed(),
+            Self::Cgroup(guard) => guard.check_oom_killed_with_signal(exit_signal),
             _ => false,
         }
     }
@@ -118,8 +124,14 @@ impl AcpSandboxHandle {
     /// Returns `Some(hint)` when the cgroup OOM killer was triggered,
     /// including peak/limit memory info and configuration advice.
     pub fn oom_diagnosis(&self) -> Option<String> {
+        self.oom_diagnosis_with_signal(None)
+    }
+
+    /// Produce an actionable OOM diagnosis string, using the child exit signal
+    /// as a fallback hint when the failed scope has already been collected.
+    pub fn oom_diagnosis_with_signal(&self, exit_signal: Option<i32>) -> Option<String> {
         match self {
-            Self::Cgroup(guard) => guard.oom_diagnosis(),
+            Self::Cgroup(guard) => guard.oom_diagnosis_with_signal(exit_signal),
             _ => None,
         }
     }
@@ -371,6 +383,7 @@ impl AcpConnection {
                 let guard = csa_resource::cgroup::CgroupScopeGuard::new(
                     sandbox.tool_name,
                     sandbox.session_id,
+                    &cgroup_config,
                 );
                 debug!(
                     scope = %guard.scope_name(),

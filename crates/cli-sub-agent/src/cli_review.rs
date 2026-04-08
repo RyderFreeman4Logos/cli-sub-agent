@@ -34,7 +34,9 @@ impl std::fmt::Display for ReviewMode {
         .multiple(false)
 ))]
 pub struct ReviewArgs {
-    /// Tool to use for review (defaults to global [review] config or project fallback)
+    /// Tool to use for review (defaults to global [review] config or project fallback).
+    /// Combine with --tier to use that tier's model/thinking for the selected tool.
+    /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
     #[arg(long)]
     pub tool: Option<ToolName>,
     /// Autonomous mode flag (REQUIRED for root callers)
@@ -147,11 +149,13 @@ pub struct ReviewArgs {
     #[arg(long, value_name = "PATH")]
     pub spec: Option<String>,
 
-    /// Tier name, alias, or unambiguous prefix for tool/model routing
+    /// Tier name, alias, or unambiguous prefix for tool/model routing.
+    /// With --tool, resolves that tool's model/thinking from the selected tier.
     #[arg(long)]
     pub tier: Option<String>,
 
-    /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+    /// Bypass tier routing for direct --tool/--model overrides.
+    /// Use without --tier; --tool + --tier + --force-ignore-tier-setting is an error.
     #[arg(long, alias = "force-tier")]
     pub force_ignore_tier_setting: bool,
 
@@ -285,7 +289,9 @@ pub struct DebateArgs {
     /// Autonomous mode flag (REQUIRED for root callers)
     #[arg(long, value_name = "BOOL")]
     pub sa_mode: Option<bool>,
-    /// Tool to use for debate (overrides auto heterogeneous selection)
+    /// Tool to use for debate (overrides auto heterogeneous selection).
+    /// Combine with --tier to use that tier's model/thinking for the selected tool.
+    /// Combine with --force-ignore-tier-setting to bypass tiers entirely.
     #[arg(long)]
     pub tool: Option<ToolName>,
 
@@ -335,11 +341,13 @@ pub struct DebateArgs {
     #[arg(long)]
     pub cd: Option<String>,
 
-    /// Tier name, alias, or unambiguous prefix for tool/model routing
+    /// Tier name, alias, or unambiguous prefix for tool/model routing.
+    /// With --tool, resolves that tool's model/thinking from the selected tier.
     #[arg(long)]
     pub tier: Option<String>,
 
-    /// Override tier enforcement (bypass tier whitelist even when --tier is set)
+    /// Bypass tier routing for direct --tool/--model overrides.
+    /// Use without --tier; --tool + --tier + --force-ignore-tier-setting is an error.
     #[arg(long, alias = "force-tier")]
     pub force_ignore_tier_setting: bool,
 

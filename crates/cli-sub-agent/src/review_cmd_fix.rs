@@ -28,6 +28,7 @@ pub(crate) struct FixLoopContext<'a> {
     pub idle_timeout_seconds: u64,
     pub initial_response_timeout_seconds: Option<u64>,
     pub force_override_user_config: bool,
+    pub force_ignore_tier_setting: bool,
     pub no_fs_sandbox: bool,
     pub extra_writable: &'a [PathBuf],
     pub timeout: Option<u64>,
@@ -76,6 +77,7 @@ pub(crate) async fn run_fix_loop(ctx: FixLoopContext<'_>) -> Result<i32> {
             ctx.idle_timeout_seconds,
             ctx.initial_response_timeout_seconds,
             ctx.force_override_user_config,
+            ctx.force_ignore_tier_setting,
             ctx.no_fs_sandbox,
             false, // fix pass must write — override readonly_project_root
             ctx.extra_writable,

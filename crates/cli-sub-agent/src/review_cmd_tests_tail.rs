@@ -535,6 +535,7 @@ async fn execute_review_ignores_inherited_csa_session_id_without_explicit_sessio
         crate::pipeline::DEFAULT_IDLE_TIMEOUT_SECONDS,
         None,  // initial_response_timeout_seconds
         false, // force_override_user_config
+        false, // force_ignore_tier_setting
         false, // no_fs_sandbox
         false, // readonly_project_root
         &[],   // extra_writable

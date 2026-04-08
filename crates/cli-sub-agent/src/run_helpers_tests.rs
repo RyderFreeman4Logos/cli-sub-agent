@@ -1,4 +1,7 @@
-use super::{build_executor, infer_task_edit_requirement, resolve_tool, truncate_prompt};
+use super::{
+    build_executor, infer_task_edit_requirement, model_name_for_tier_validation, resolve_tool,
+    truncate_prompt,
+};
 use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_core::types::ToolName;
 use csa_executor::{Executor, ThinkingBudget};
@@ -126,6 +129,14 @@ fn build_executor_model_with_thinking_suffix() {
         }
         other => panic!("expected GeminiCli executor, got: {other:?}"),
     }
+}
+
+#[test]
+fn model_name_for_tier_validation_strips_thinking_suffix() {
+    assert_eq!(
+        model_name_for_tier_validation(Some("google/gemini-3.1-pro-preview/xhigh")),
+        Some("google/gemini-3.1-pro-preview")
+    );
 }
 
 #[test]

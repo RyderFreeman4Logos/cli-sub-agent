@@ -9,6 +9,25 @@ use csa_core::types::ToolName;
 use csa_executor::{Executor, ModelSpec, ThinkingBudget};
 use csa_session::TokenUsage;
 
+/// Reject the contradictory routing combination where a direct tool request
+/// also asks both to use and ignore tier routing.
+pub(crate) fn validate_tool_tier_override_flags(
+    explicit_tool_requested: bool,
+    tier: Option<&str>,
+    force_ignore_tier_setting: bool,
+) -> Result<()> {
+    if explicit_tool_requested && tier.is_some() && force_ignore_tier_setting {
+        anyhow::bail!(
+            "Conflicting routing flags: --tool + --tier uses the tier's model/thinking for \
+             that tool, while --force-ignore-tier-setting bypasses tier routing.\n\
+             Remove --force-ignore-tier-setting to use tier routing, or remove --tier to \
+             bypass tiers entirely."
+        );
+    }
+
+    Ok(())
+}
+
 /// Resolve tool and model from CLI args and config.
 ///
 /// Returns (tool, model_spec, model) where:
@@ -41,6 +60,7 @@ pub(crate) fn resolve_tool_and_model(
     // unless --force-ignore-tier-setting (or --force) is active.
     // Auto-resolved tools (from HeterogeneousPreferred etc.) don't count as user-explicit.
     let tool_triggers_enforcement = tool.is_some() && !tool_is_auto_resolved;
+    validate_tool_tier_override_flags(tool_triggers_enforcement, tier, force_ignore_tier_setting)?;
     if tiers_configured
         && !bypass_tier
         && tier.is_none()
@@ -97,15 +117,6 @@ pub(crate) fn resolve_tool_and_model(
     } else {
         None
     };
-
-    if canonical_tier.is_some() && force_ignore_tier_setting && tool_triggers_enforcement {
-        anyhow::bail!(
-            "Conflicting routing flags: --tier selects a tier, while --tool with \
-             --force-ignore-tier-setting bypasses tier routing.\n\
-             Remove --tier to force a direct tool, or remove --tool/\
-             --force-ignore-tier-setting to use tier routing."
-        );
-    }
 
     // Case 0: --tier provided → resolve tool/model from tier definition.
     // A user-explicit `--tool` acts as a filter inside the selected tier.
@@ -181,7 +192,10 @@ pub(crate) fn resolve_tool_and_model(
             && let Some(cfg) = config
         {
             cfg.enforce_tier_whitelist(tool_name.as_str(), None)?;
-            cfg.enforce_tier_model_name(tool_name.as_str(), resolved_model.as_deref())?;
+            cfg.enforce_tier_model_name(
+                tool_name.as_str(),
+                model_name_for_tier_validation(resolved_model.as_deref()),
+            )?;
         }
         return Ok((tool_name, None, resolved_model));
     }
@@ -315,6 +329,10 @@ pub(crate) fn build_executor(
     }
 
     Ok(executor)
+}
+
+pub(crate) fn model_name_for_tier_validation(model: Option<&str>) -> Option<&str> {
+    model.map(|name| ThinkingBudget::try_split_from_model(name).0)
 }
 
 /// Check if a prompt is a context compress/compact command.
@@ -515,6 +533,27 @@ pub(crate) struct TierToolResolution {
     pub model_spec: String,
 }
 
+fn configured_tools_in_tier(
+    tier: &csa_config::config::TierConfig,
+    skip_specs: &[String],
+) -> Vec<String> {
+    let mut tools = Vec::new();
+
+    for spec in &tier.models {
+        if skip_specs.iter().any(|skip| skip == spec) {
+            continue;
+        }
+
+        if let Some(tool_name) = spec.split('/').next()
+            && !tools.iter().any(|tool| tool == tool_name)
+        {
+            tools.push(tool_name.to_string());
+        }
+    }
+
+    tools
+}
+
 /// Collect all enabled + available model specs from a named tier in config order.
 ///
 /// Applies the same availability and whitelist rules as tier resolution so
@@ -571,6 +610,7 @@ pub(crate) fn resolve_requested_tool_from_tier(
     let Some(tier) = config.tiers.get(tier_name) else {
         anyhow::bail!("Tier '{}' not found.", tier_name);
     };
+    let available_tools = configured_tools_in_tier(tier, skip_specs);
 
     let tool_in_tier = tier.models.iter().any(|spec| {
         !skip_specs.iter().any(|skip| skip == spec)
@@ -581,9 +621,10 @@ pub(crate) fn resolve_requested_tool_from_tier(
     });
     if !tool_in_tier {
         anyhow::bail!(
-            "Requested tool '{}' is not available in tier '{}'.",
+            "Requested tool '{}' is not available in tier '{}'. Available tools in this tier: [{}]",
             requested_tool_name,
-            tier_name
+            tier_name,
+            available_tools.join(", ")
         );
     }
 

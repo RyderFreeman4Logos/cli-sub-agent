@@ -91,6 +91,12 @@ pub(crate) fn resolve_review_tool(
     let tiers_configured = project_config.is_some_and(|c| !c.tiers.is_empty());
     let bypass_tier = force_ignore_tier_setting || force_override_user_config;
 
+    crate::run_helpers::validate_tool_tier_override_flags(
+        arg_tool.is_some(),
+        cli_tier,
+        force_ignore_tier_setting,
+    )?;
+
     // Enforce tier routing: block direct --tool when tiers are configured,
     // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
     if tiers_configured && !bypass_tier && cli_tier.is_none() && arg_tool.is_some() {

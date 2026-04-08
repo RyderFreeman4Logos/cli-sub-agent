@@ -270,7 +270,9 @@ pub(crate) async fn build_and_validate_executor(
         if enforce_tier {
             // Defense-in-depth: enforce tier whitelist at execution boundary
             cfg.enforce_tier_whitelist(executor.tool_name(), model_spec)?;
-            let effective_model = model.or(default_model_resolved.as_deref());
+            let effective_model = crate::run_helpers::model_name_for_tier_validation(
+                model.or(default_model_resolved.as_deref()),
+            );
             cfg.enforce_tier_model_name(executor.tool_name(), effective_model)?;
         }
 
