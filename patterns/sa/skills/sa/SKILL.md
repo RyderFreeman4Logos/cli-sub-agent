@@ -330,10 +330,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
-# If `csa session wait` times out or output is sparse, keep waiting on this
-# SAME SID while the session is healthy. Do not launch a duplicate planning run.
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ### Template B: Implementation Dispatch (Manager -> Layer 1)
@@ -375,7 +373,7 @@ DONE WHEN:
 IMPL_EOF
 
 SID=$(csa run --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ### Template C: Trust Verification Dispatch (Manager -> Reviewer Employee)
@@ -410,11 +408,8 @@ DONE WHEN:
 - $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
 VERIFY_EOF
 
-# If verification relies on `csa review` / `csa debate`, wait on the SAME
-# session while it is healthy. Do not launch duplicate review/debate runs for
-# the same scope because `csa session wait` timed out once.
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## Model Selection Guidelines

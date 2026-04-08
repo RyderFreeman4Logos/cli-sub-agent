@@ -72,7 +72,7 @@ Layer 1 (claude-code) will:
 
 ```bash
 SID=$(csa run --prompt-file "${PROMPT_FILE}")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## Step 5: Parse Planning Result
@@ -146,7 +146,7 @@ failures as justification for disabling hooks.
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 echo "CSA_VAR:IMPL_FILE=$IMPL_FILE"
 SID=$(csa run --session "${SESSION_ID}" --prompt-file "${IMPL_FILE}")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ELSE
@@ -163,7 +163,7 @@ Resume Layer 1 with user's revision feedback.
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
 echo "CSA_VAR:RESUME_FILE=$RESUME_FILE"
 SID=$(csa run --session "${SESSION_ID}" --prompt-file "${RESUME_FILE}")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ELSE
