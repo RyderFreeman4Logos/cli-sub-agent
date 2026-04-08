@@ -591,11 +591,11 @@ fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
     let err = result.expect_err("missing tool in tier must error");
     let msg = err.to_string();
     assert!(
-        msg.contains("Requested tool 'codex' is not available in tier 'quality'"),
+        msg.contains("Tool 'codex' is not available in tier 'quality'"),
         "unexpected error: {msg}"
     );
     assert!(
-        msg.contains("Available tools in this tier: [gemini-cli, claude-code]"),
+        msg.contains("Available tools in tier 'quality'"),
         "unexpected error: {msg}"
     );
 }

@@ -57,6 +57,93 @@ impl ProjectConfig {
             .collect()
     }
 
+    /// Check if a specific tier includes the given tool.
+    ///
+    /// Returns `true` when the named tier exists and has at least one model
+    /// spec whose tool component (first `/`-delimited segment) matches `tool`.
+    pub fn tier_contains_tool(&self, tier_name: &str, tool: &str) -> bool {
+        self.tiers.get(tier_name).is_some_and(|tier| {
+            tier.models
+                .iter()
+                .any(|spec| spec.split('/').next().is_some_and(|t| t == tool))
+        })
+    }
+
+    /// List all tools defined in a specific tier.
+    ///
+    /// Returns a `Vec` of `(tool_name, model_spec)` pairs for every model
+    /// spec in the tier. The tool name is the first `/`-delimited segment.
+    pub fn list_tools_in_tier(&self, tier_name: &str) -> Vec<(String, String)> {
+        let Some(tier) = self.tiers.get(tier_name) else {
+            return Vec::new();
+        };
+        tier.models
+            .iter()
+            .filter_map(|spec| {
+                let tool = spec.split('/').next()?;
+                Some((tool.to_string(), spec.clone()))
+            })
+            .collect()
+    }
+
+    /// Find all tiers that contain the given tool.
+    ///
+    /// Returns a `Vec` of `(tier_name, model_spec)` for every tier/model-spec
+    /// pair where the tool component matches.
+    pub fn find_tiers_for_tool(&self, tool: &str) -> Vec<(String, String)> {
+        let mut results = Vec::new();
+        for (tier_name, tier) in &self.tiers {
+            for spec in &tier.models {
+                if spec.split('/').next().is_some_and(|t| t == tool) {
+                    results.push((tier_name.clone(), spec.clone()));
+                }
+            }
+        }
+        results
+    }
+
+    /// Generate a human-readable suggestion message for tool-tier incompatibility.
+    ///
+    /// The message includes:
+    /// - Numbered list of tools available in the requested tier
+    /// - List of alternative tiers that contain the requested tool
+    /// - Hint to use auto-select or `--force-ignore-tier-setting`
+    pub fn suggest_compatible_alternatives(&self, tool: &str, tier_name: &str) -> String {
+        let mut parts = Vec::new();
+
+        // List tools in the requested tier
+        let tier_tools = self.list_tools_in_tier(tier_name);
+        if !tier_tools.is_empty() {
+            let mut lines = vec![format!("Available tools in tier '{tier_name}':")];
+            for (i, (tool_name, spec)) in tier_tools.iter().enumerate() {
+                // Extract provider/model/thinking from spec (skip tool/ prefix)
+                let detail = spec.split_once('/').map_or(spec.as_str(), |x| x.1);
+                lines.push(format!("  {}. {tool_name:<12} → {detail}", i + 1));
+            }
+            parts.push(lines.join("\n"));
+        }
+
+        // Find tiers that contain the requested tool
+        let compatible_tiers = self.find_tiers_for_tool(tool);
+        if !compatible_tiers.is_empty() {
+            let mut lines = vec![format!("Tiers containing '{tool}':")];
+            for (tier, spec) in &compatible_tiers {
+                let detail = spec.split_once('/').map_or(spec.as_str(), |x| x.1);
+                lines.push(format!("  • {tier:<24} → {detail}"));
+            }
+            parts.push(lines.join("\n"));
+        }
+
+        // Action suggestions
+        parts.push(format!(
+            "Suggestions:\n  \
+             • Auto-select: csa run --tier {tier_name}\n  \
+             • Override:    csa run --tool {tool} --force-ignore-tier-setting"
+        ));
+
+        parts.join("\n\n")
+    }
+
     /// Enforce tier whitelist: reject tool/model combinations not in tiers.
     ///
     /// When tiers are configured (non-empty), any explicit tool or model-spec
@@ -85,9 +172,9 @@ impl ProjectConfig {
                 .map(|t| t.as_str().to_string())
                 .collect();
             anyhow::bail!(
-                "Tool '{}' is not configured in any tier. \
-                 Configured tools: [{}]. \
-                 Add it to a [tiers.*] section or use a configured tool.",
+                "Tool '{}' is not configured in any tier.\n\
+                 Configured tools: [{}].\n\
+                 Add it to a [tiers.*] section or use --force-ignore-tier-setting to override.",
                 tool,
                 configured_tools.join(", ")
             );

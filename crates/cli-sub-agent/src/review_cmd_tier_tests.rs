@@ -175,7 +175,7 @@ fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
     let err = result.expect_err("missing tool in review tier must error");
     assert!(
         err.to_string()
-            .contains("Requested tool 'codex' is not available in tier 'quality'"),
+            .contains("Tool 'codex' is not available in tier 'quality'"),
         "unexpected error: {err}"
     );
 }
