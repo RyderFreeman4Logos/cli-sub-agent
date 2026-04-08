@@ -252,7 +252,7 @@ for required_line in \
   '- **Key Decisions**:' \
   '- **Reviewer Guidance**:'
 do
-  if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fqx -- "${required_line}"; then
+  if ! printf '%s\n' "${COMMIT_BODY_LOCAL}" | grep -Fq -- "${required_line}"; then
     echo "ERROR: Commit body is missing required AI reviewer metadata line: ${required_line}" >&2
     exit 1
   fi
