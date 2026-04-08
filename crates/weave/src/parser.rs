@@ -69,8 +69,28 @@ pub struct AgentConfig {
     /// Advisory metadata only; execution must not terminate based on this field.
     #[serde(default)]
     pub token_budget: Option<u64>,
+    /// Explicit workspace mutation contract for the skill. When set, this
+    /// takes precedence over prompt-based mutation heuristics.
+    #[serde(default)]
+    pub workspace_access: Option<WorkspaceAccess>,
     #[serde(default)]
     pub tools: Vec<ToolEntry>,
+}
+
+/// Whether a skill is read-only or allowed to mutate the workspace.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum WorkspaceAccess {
+    ReadOnly,
+    Mutating,
+}
+
+impl WorkspaceAccess {
+    /// Map the contract to the existing task-edit requirement signal used by
+    /// tool selection and failover filters.
+    pub fn task_needs_edit(self) -> bool {
+        matches!(self, Self::Mutating)
+    }
 }
 
 /// `[[agent.tools]]` entry.

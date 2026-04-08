@@ -1,11 +1,18 @@
 use super::{
-    build_executor, infer_task_edit_requirement, model_name_for_tier_validation, resolve_tool,
-    truncate_prompt,
+    build_executor, infer_task_edit_requirement, model_name_for_tier_validation,
+    resolve_task_edit_requirement, resolve_tool, truncate_prompt,
 };
-use csa_config::{GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, ToolConfig};
+use csa_config::{
+    GlobalConfig, ProjectConfig, ProjectMeta, ResourcesConfig, TierConfig, TierStrategy,
+    ToolConfig, ToolRestrictions,
+};
 use csa_core::types::ToolName;
 use csa_executor::{Executor, ThinkingBudget};
 use std::collections::HashMap;
+use std::path::PathBuf;
+
+use crate::skill_resolver::ResolvedSkill;
+use weave::parser::parse_skill_config;
 
 #[test]
 fn truncate_prompt_short_string_unchanged() {
@@ -83,6 +90,106 @@ fn infer_edit_requirement_returns_none_for_ambiguous_prompt() {
 fn infer_edit_requirement_keeps_analysis_only_prompt_ambiguous() {
     let result = infer_task_edit_requirement("Review auth flow and report issues");
     assert_eq!(result, None);
+}
+
+fn resolved_skill_with_workspace_access(access: &str) -> ResolvedSkill {
+    let config = parse_skill_config(&format!(
+        r#"
+[skill]
+name = "mutator"
+
+[agent]
+workspace_access = "{access}"
+"#
+    ))
+    .expect("parse skill config");
+
+    ResolvedSkill {
+        dir: PathBuf::from("/tmp/mutator"),
+        skill_md: "demo".to_string(),
+        config: Some(config),
+    }
+}
+
+#[test]
+fn resolve_task_edit_requirement_prefers_skill_workspace_contract() {
+    let skill = resolved_skill_with_workspace_access("mutating");
+
+    let result = resolve_task_edit_requirement(Some(&skill), "Do not edit files, only review");
+    assert_eq!(result, Some(true));
+}
+
+#[test]
+fn mutating_skill_contract_routes_default_tier_away_from_restricted_tool() {
+    let mut tools = HashMap::new();
+    tools.insert(
+        "openai-compat".to_string(),
+        ToolConfig {
+            enabled: true,
+            restrictions: Some(ToolRestrictions {
+                allow_edit_existing_files: false,
+                allow_write_new_files: false,
+            }),
+            ..Default::default()
+        },
+    );
+    tools.insert(
+        "codex".to_string(),
+        ToolConfig {
+            enabled: true,
+            ..Default::default()
+        },
+    );
+
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-3-complex".to_string(),
+        TierConfig {
+            description: "test".to_string(),
+            models: vec![
+                "openai-compat/openai/gpt-5-codex/high".to_string(),
+                "codex/openai/gpt-5-codex/high".to_string(),
+            ],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config = ProjectConfig {
+        schema_version: csa_config::config::CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta {
+            name: "test".to_string(),
+            created_at: chrono::Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools,
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::from([("default".to_string(), "tier-3-complex".to_string())]),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+
+    let skill = resolved_skill_with_workspace_access("mutating");
+    let needs_edit = resolve_task_edit_requirement(Some(&skill), "Review current status")
+        .expect("mutating contract should be explicit");
+
+    let resolved = config
+        .resolve_tier_tool_filtered("default", needs_edit)
+        .expect("tier should resolve a writable tool");
+    assert_eq!(resolved.0, "codex");
+    assert_eq!(resolved.1, "codex/openai/gpt-5-codex/high");
 }
 
 #[test]

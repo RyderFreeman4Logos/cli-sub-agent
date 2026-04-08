@@ -74,6 +74,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) resolved_tier_name: Option<&'a str>,
     pub(crate) context_load_options: Option<&'a csa_executor::ContextLoadOptions>,
     pub(crate) memory_injection: pipeline::MemoryInjectionOptions,
+    pub(crate) task_needs_edit: Option<bool>,
     pub(crate) no_fs_sandbox: bool,
     pub(crate) extra_writable: Vec<PathBuf>,
 }
@@ -583,6 +584,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     request.prompt_text,
                     request.project_root,
                     request.config,
+                    request.task_needs_edit,
                     current_model_spec.as_deref(),
                 )? {
                     RateLimitAction::Retry {
@@ -669,6 +671,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             request.prompt_text,
             request.project_root,
             request.config,
+            request.task_needs_edit,
             current_model_spec.as_deref(),
         )? {
             RateLimitAction::Retry {

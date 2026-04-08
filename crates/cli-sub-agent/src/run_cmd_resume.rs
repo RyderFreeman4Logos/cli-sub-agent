@@ -7,6 +7,8 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use csa_core::types::{OutputFormat, ToolName};
+use csa_core::vcs::VcsIdentity;
+use tracing::info;
 
 pub(super) const DEFAULT_PR_BOT_TIMEOUT_SECS: u64 = 2400;
 const RUN_TIMEOUT_EXIT_CODE: i32 = 124;
@@ -103,6 +105,61 @@ pub(crate) fn detect_effective_repo(project_root: &Path) -> Option<String> {
         return Some(rest.to_string());
     }
     Some(trimmed.to_string())
+}
+
+pub(crate) fn detect_current_vcs_identity(project_root: &Path) -> Option<VcsIdentity> {
+    let identity = csa_session::create_vcs_backend(project_root)
+        .identity(project_root)
+        .ok()?;
+    (!identity.is_default()).then_some(identity)
+}
+
+pub(crate) fn interrupted_skill_session_matches_current_vcs(
+    session: &csa_session::MetaSessionState,
+    current_identity: &VcsIdentity,
+) -> bool {
+    let session_identity = session.resolved_identity();
+
+    if session_identity.vcs_kind != current_identity.vcs_kind {
+        return false;
+    }
+
+    let commit_matches = matches!(
+        (
+            session_identity.commit_id.as_deref(),
+            current_identity.commit_id.as_deref(),
+        ),
+        (Some(saved), Some(current)) if saved == current
+    );
+    if !commit_matches {
+        return false;
+    }
+
+    let branch_matches = match (
+        session_identity.ref_name.as_deref(),
+        current_identity.ref_name.as_deref(),
+    ) {
+        (Some(saved), Some(current)) => saved == current,
+        (None, None) => true,
+        _ => false,
+    };
+    if !branch_matches {
+        return false;
+    }
+
+    if (session_identity.change_id.is_some() || current_identity.change_id.is_some())
+        && session_identity.change_id != current_identity.change_id
+    {
+        return false;
+    }
+
+    if (session_identity.op_id.is_some() || current_identity.op_id.is_some())
+        && session_identity.op_id != current_identity.op_id
+    {
+        return false;
+    }
+
+    true
 }
 
 pub(crate) fn signal_interruption_exit_code(error: &anyhow::Error) -> Option<i32> {
@@ -217,9 +274,10 @@ pub(crate) fn find_recent_interrupted_skill_session(
     skill_name: &str,
     tool: &ToolName,
 ) -> Option<String> {
+    let current_identity = detect_current_vcs_identity(project_root)?;
     let sessions = csa_session::find_sessions(
         project_root,
-        None,
+        current_identity.ref_name.as_deref(),
         Some("run"),
         None,
         Some(&[tool.as_str()]),
@@ -228,6 +286,15 @@ pub(crate) fn find_recent_interrupted_skill_session(
 
     for session in sessions {
         if !session_matches_interrupted_skill(&session, skill_name) {
+            continue;
+        }
+        if !interrupted_skill_session_matches_current_vcs(&session, &current_identity) {
+            info!(
+                session_id = %session.meta_session_id,
+                session_vcs = %session.resolved_identity(),
+                current_vcs = %current_identity,
+                "Skipping stale interrupted skill session during auto-resume"
+            );
             continue;
         }
 

@@ -85,6 +85,7 @@ extra_context = ["rules/security.md"]
 tier = "tier-3-complex"
 max_turns = 20
 token_budget = 150000
+workspace_access = "mutating"
 
 [[agent.tools]]
 tool = "claude-code"
@@ -102,6 +103,7 @@ thinking_budget = "high"
     assert_eq!(agent.tier.as_deref(), Some("tier-3-complex"));
     assert_eq!(agent.max_turns, Some(20));
     assert_eq!(agent.token_budget, Some(150_000));
+    assert_eq!(agent.workspace_access, Some(WorkspaceAccess::Mutating));
     assert_eq!(agent.tools.len(), 1);
     assert_eq!(agent.tools[0].tool, "claude-code");
     assert_eq!(agent.tools[0].provider.as_deref(), Some("anthropic"));

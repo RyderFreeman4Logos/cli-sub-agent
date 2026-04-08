@@ -229,6 +229,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     prompt_text: &str,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
 ) -> Result<RateLimitAction> {
     let rate_limit = match csa_scheduler::detect_rate_limit(
@@ -279,7 +280,8 @@ pub(crate) fn evaluate_rate_limit_failover(
         None
     };
 
-    let task_needs_edit = crate::run_helpers::infer_task_edit_requirement(prompt_text)
+    let task_needs_edit = task_needs_edit
+        .or_else(|| crate::run_helpers::infer_task_edit_requirement(prompt_text))
         .or_else(|| config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str)));
 
     let Some(cfg) = config else {
@@ -349,6 +351,7 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     prompt_text: &str,
     project_root: &Path,
     config: Option<&ProjectConfig>,
+    task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
 ) -> Result<RateLimitAction> {
     let failover_signal = match detect_transport_error_failover_signal(
@@ -410,7 +413,8 @@ pub(crate) fn evaluate_error_rate_limit_failover(
         None
     };
 
-    let task_needs_edit = crate::run_helpers::infer_task_edit_requirement(prompt_text)
+    let task_needs_edit = task_needs_edit
+        .or_else(|| crate::run_helpers::infer_task_edit_requirement(prompt_text))
         .or_else(|| config.map(|cfg| cfg.can_tool_edit_existing(tool_name_str)));
 
     let Some(cfg) = config else {

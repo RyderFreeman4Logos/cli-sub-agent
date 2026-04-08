@@ -258,7 +258,9 @@ pub(crate) async fn handle_run(
     };
     let run_timeout_seconds = resolve_run_timeout_seconds(timeout, skill.as_deref());
     let run_started_at = Instant::now();
-    let needs_edit = crate::run_helpers::infer_task_edit_requirement(&prompt_text).unwrap_or(false);
+    let task_needs_edit =
+        crate::run_helpers::resolve_task_edit_requirement(resolved_skill.as_ref(), &prompt_text);
+    let needs_edit = task_needs_edit.unwrap_or(false);
     let strategy_result = resolve_tool_by_strategy(
         &strategy,
         model_spec.as_deref(),
@@ -415,6 +417,7 @@ pub(crate) async fn handle_run(
         resolved_tier_name: resolved_tier_name.as_deref(),
         context_load_options: context_load_options.as_ref(),
         memory_injection,
+        task_needs_edit,
         no_fs_sandbox,
         extra_writable,
     })
