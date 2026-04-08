@@ -3,6 +3,11 @@
 use csa_core::gemini::RATE_LIMIT_PATTERNS as GEMINI_RATE_LIMIT_PATTERNS;
 use serde::Serialize;
 
+const ACP_CRASH_EXHAUSTION_PATTERNS: &[&str] =
+    &["acp crash retry exhausted", "crash retry exhausted"];
+const GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS: &[&str] =
+    &["gemini acp retry chain exhausted", "retry chain exhausted"];
+
 /// Information about a detected rate-limit event.
 #[derive(Debug, Clone, Serialize)]
 pub struct RateLimitDetected {
@@ -32,8 +37,9 @@ pub fn detect_rate_limit(
 
     let combined_lower = format!("{stderr}\n{stdout}").to_ascii_lowercase();
     let patterns = patterns_for_tool(tool_name);
+    let failover_patterns = failover_patterns_for_tool(tool_name);
 
-    for pattern in patterns {
+    for pattern in patterns.iter().chain(failover_patterns.iter()).copied() {
         if combined_lower.contains(pattern) {
             return Some(RateLimitDetected {
                 tool: tool_name.to_string(),
@@ -44,6 +50,14 @@ pub fn detect_rate_limit(
     }
 
     None
+}
+
+fn failover_patterns_for_tool(tool: &str) -> &'static [&'static str] {
+    match tool {
+        "gemini-cli" => GEMINI_RETRY_CHAIN_EXHAUSTION_PATTERNS,
+        "codex" | "claude-code" => ACP_CRASH_EXHAUSTION_PATTERNS,
+        _ => &[],
+    }
 }
 
 fn patterns_for_tool(tool: &str) -> &'static [&'static str] {
@@ -310,5 +324,31 @@ mod tests {
         let result = detect_rate_limit("gemini-cli", "reason: 'QUOTA_EXHAUSTED'", "", 1, None);
         assert!(result.is_some());
         assert_eq!(result.unwrap().matched_pattern, "quota_exhausted");
+    }
+
+    #[test]
+    fn test_claude_crash_retry_exhausted() {
+        let result = detect_rate_limit(
+            "claude-code",
+            "ACP transport failed: crash retry exhausted after repeated server shutdowns",
+            "",
+            1,
+            None,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().matched_pattern, "crash retry exhausted");
+    }
+
+    #[test]
+    fn test_gemini_retry_chain_exhausted() {
+        let result = detect_rate_limit(
+            "gemini-cli",
+            "Retry chain exhausted after OAuth -> API key -> flash fallback",
+            "",
+            1,
+            None,
+        );
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().matched_pattern, "retry chain exhausted");
     }
 }
