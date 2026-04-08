@@ -1210,8 +1210,8 @@ No issues found by bot. Proceed to merge.
 
 > **Layer**: 0 (Orchestrator) -- git history cleanup before merge.
 > **Status**: Disabled. With `--merge` (not `--squash`), rebase destroys the
-> per-commit audit trail instead of cleaning it up. Set `REBASE_ENABLED=true`
-> to re-enable for squash-merge workflows.
+> per-commit audit trail instead of cleaning it up.
+> Squash merges are forbidden for audit reasons.
 
 Tool: bash
 
