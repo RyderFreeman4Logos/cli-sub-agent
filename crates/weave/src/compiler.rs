@@ -494,11 +494,55 @@ struct WorkflowWrapper {
 }
 
 /// Serialize an execution plan to TOML (uses `[workflow]` key).
+///
+/// Prompts for bash steps (or prompts containing backslashes) are emitted as
+/// TOML literal strings (`'''…'''`) so that backslash-heavy content is not
+/// mangled by escape processing.  If a prompt contains the literal-string
+/// delimiter `'''` or a carriage return (`\r`), we fall back to the default
+/// escaped basic string because TOML literal strings cannot represent those.
 pub fn plan_to_toml(plan: &ExecutionPlan) -> Result<String> {
     let wrapper = WorkflowWrapper {
         workflow: plan.clone(),
     };
-    toml::to_string_pretty(&wrapper).map_err(|e| anyhow::anyhow!("TOML serialization failed: {e}"))
+    let pretty = toml::to_string_pretty(&wrapper)
+        .map_err(|e| anyhow::anyhow!("TOML serialization failed: {e}"))?;
+
+    // Post-process: convert prompts that benefit from literal strings.
+    let mut doc: toml_edit::DocumentMut = pretty
+        .parse()
+        .map_err(|e| anyhow::anyhow!("toml_edit parse failed: {e}"))?;
+
+    if let Some(workflow) = doc.get_mut("workflow")
+        && let Some(steps) = workflow.get_mut("steps")
+        && let Some(arr) = steps.as_array_of_tables_mut()
+    {
+        for (i, step) in arr.iter_mut().enumerate() {
+            let needs_literal = plan
+                .steps
+                .get(i)
+                .is_some_and(|s| s.tool.as_deref() == Some("bash") || s.prompt.contains('\\'));
+            if !needs_literal {
+                continue;
+            }
+            let text = &plan.steps[i].prompt;
+            // Literal strings cannot contain ''' or \r.
+            if text.contains("'''") || text.contains('\r') {
+                continue;
+            }
+            // Build a literal-string Value by parsing a tiny TOML snippet.
+            // toml_edit preserves the repr through parse, so the resulting
+            // Value carries the literal-string encoding.
+            let snippet = format!("v = '''\n{}'''", text);
+            if let Ok(tiny) = snippet.parse::<toml_edit::DocumentMut>()
+                && let Some(val) = tiny.get("v").and_then(|i| i.as_value()).cloned()
+                && let Some(prompt_item) = step.get_mut("prompt")
+            {
+                *prompt_item = toml_edit::Item::Value(val);
+            }
+        }
+    }
+
+    Ok(doc.to_string())
 }
 
 /// Deserialize an execution plan from TOML.
@@ -512,3 +556,7 @@ pub fn plan_from_toml(toml_str: &str) -> Result<ExecutionPlan> {
 #[cfg(test)]
 #[path = "compiler_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "compiler_literal_tests.rs"]
+mod literal_tests;
