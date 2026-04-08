@@ -5,8 +5,9 @@
 set shell := ["bash", "-c"]
 # Keep Just's transient scripts inside the repo so sandboxed commit paths
 # do not depend on a writable XDG runtime dir such as /run/user/$UID.
-# `.git` is guaranteed to exist in the supported main-checkout workflow.
-set tempdir := ".git"
+# Use the repo root itself so the temp path exists in both normal clones and
+# linked worktrees, where `.git` may be a file instead of a directory.
+set tempdir := "."
 # Automatically load .env file if present
 set dotenv-load := true
 
