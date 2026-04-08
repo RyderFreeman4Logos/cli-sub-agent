@@ -161,6 +161,7 @@ pub struct CgroupScopeGuard {
 
 #[derive(Debug, Default)]
 struct ScopeProperties {
+    load_state: Option<String>,
     result: Option<String>,
     memory_peak_bytes: Option<u64>,
     memory_max_bytes: Option<u64>,
@@ -168,8 +169,13 @@ struct ScopeProperties {
 }
 
 impl ScopeProperties {
+    fn is_not_found(&self) -> bool {
+        self.load_state.as_deref() == Some("not-found")
+    }
+
     fn is_empty(&self) -> bool {
-        self.result.is_none()
+        self.load_state.is_none()
+            && self.result.is_none()
             && self.memory_peak_bytes.is_none()
             && self.memory_max_bytes.is_none()
             && self.memory_swap_max_bytes.is_none()
@@ -313,7 +319,7 @@ impl CgroupScopeGuard {
                 "--user",
                 "show",
                 &self.scope_name,
-                "--property=Result,MemoryPeak,MemoryMax,MemorySwapMax",
+                "--property=LoadState,Result,MemoryPeak,MemoryMax,MemorySwapMax",
             ])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -327,7 +333,12 @@ impl CgroupScopeGuard {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut properties = ScopeProperties::default();
         for line in stdout.lines() {
-            if let Some(value) = line.strip_prefix("Result=") {
+            if let Some(value) = line.strip_prefix("LoadState=") {
+                let value = value.trim();
+                if !value.is_empty() {
+                    properties.load_state = Some(value.to_string());
+                }
+            } else if let Some(value) = line.strip_prefix("Result=") {
                 let value = value.trim();
                 if !value.is_empty() {
                     properties.result = Some(value.to_string());
@@ -339,6 +350,9 @@ impl CgroupScopeGuard {
             } else if let Some(value) = line.strip_prefix("MemorySwapMax=") {
                 properties.memory_swap_max_bytes = parse_memory_property(value);
             }
+        }
+        if properties.is_not_found() {
+            return None;
         }
         Some(properties)
     }

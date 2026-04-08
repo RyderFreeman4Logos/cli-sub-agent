@@ -173,6 +173,7 @@ fn evaluate_error_rate_limit_failover_retries_on_acp_crash_retry_exhaustion() {
         "investigate the crash",
         Path::new("."),
         Some(&config),
+        None,
         Some("claude-code/anthropic/claude-sonnet/high"),
     )
     .expect("evaluate failover");
@@ -203,6 +204,7 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
         "debug the request",
         Path::new("."),
         Some(&config),
+        None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
     )
     .expect("evaluate failover");
@@ -243,6 +245,7 @@ fn full_anyhow_chain_preserves_quota_markers_for_failover_detection() {
         "debug the quota failure",
         Path::new("."),
         Some(&config),
+        None,
         Some("gemini-cli/google/gemini-2.5-pro/high"),
     )
     .expect("evaluate failover");

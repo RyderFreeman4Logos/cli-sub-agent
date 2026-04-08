@@ -1,6 +1,6 @@
 use super::*;
 use crate::debate_cmd_resolve::resolve_debate_tool;
-use csa_config::{GlobalConfig, ProjectConfig, ToolConfig};
+use csa_config::{GlobalConfig, ProjectConfig, ReviewConfig, ToolConfig, ToolSelection};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
 
@@ -58,6 +58,20 @@ fn debate_config_with_tier(
             max_turns: None,
         },
     );
+    cfg
+}
+
+fn debate_config_with_whitelist(
+    tier_name: &str,
+    models: Vec<&str>,
+    enabled_tools: &[&str],
+    whitelist: &[&str],
+) -> ProjectConfig {
+    let mut cfg = debate_config_with_tier(tier_name, models, enabled_tools);
+    cfg.debate = Some(ReviewConfig {
+        tool: ToolSelection::Whitelist(whitelist.iter().map(|tool| (*tool).to_string()).collect()),
+        ..Default::default()
+    });
     cfg
 }
 
@@ -181,6 +195,38 @@ fn test_debate_tool_plus_tier_errors_when_tool_missing_from_tier() {
         err.to_string()
             .contains("Tool 'codex' is not available in tier 'quality'"),
         "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn test_debate_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
+    let global = GlobalConfig::default();
+    let cfg = debate_config_with_whitelist(
+        "quality",
+        vec!["gemini-cli/google/default/xhigh"],
+        &["gemini-cli", "codex"],
+        &["codex"],
+    );
+    let result = resolve_debate_tool(
+        None,
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("quality"),
+        false,
+    );
+
+    let err = result.expect_err("whitelist mismatch must hard-fail");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("[debate].tool whitelist"),
+        "unexpected error: {msg}"
+    );
+    assert!(
+        msg.contains("active debate tier remains authoritative"),
+        "{msg}"
     );
 }
 

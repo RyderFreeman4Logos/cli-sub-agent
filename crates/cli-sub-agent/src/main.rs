@@ -322,6 +322,7 @@ async fn run() -> Result<()> {
     match command {
         Commands::Run {
             tool,
+            auto_route,
             skill,
             sa_mode: _,
             prompt,
@@ -382,6 +383,7 @@ async fn run() -> Result<()> {
 
             let result = run_cmd::handle_run(
                 tool,
+                auto_route,
                 skill,
                 prompt,
                 prompt_file,

@@ -49,9 +49,9 @@ use post_review::{build_post_review_output, emit_post_review_output, review_scop
 #[cfg(test)]
 use resolve::build_review_instruction;
 use resolve::{
-    build_review_instruction_for_project, derive_scope, resolve_review_stream_mode,
-    resolve_review_thinking, resolve_review_tier_name, resolve_review_tool,
-    review_scope_allows_auto_discovery, verify_review_skill_available,
+    build_review_instruction_for_project, derive_scope, resolve_review_model,
+    resolve_review_stream_mode, resolve_review_thinking, resolve_review_tier_name,
+    resolve_review_tool, review_scope_allows_auto_discovery, verify_review_skill_available,
     write_multi_reviewer_consolidated_artifact,
 };
 use reviewers::resolve_multi_reviewer_pool;
@@ -260,7 +260,8 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             ));
         }
     };
-    let resolved_tier_name = if tier_model_spec.is_some() {
+    let tier_active = tier_model_spec.is_some() && !args.force_ignore_tier_setting;
+    let resolved_tier_name = if tier_active {
         resolve_review_tier_name(
             config.as_ref(),
             &global_config,
@@ -272,18 +273,15 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         None
     };
 
-    // Resolve model: CLI --model > project config review.model > global config review.model.
-    // When tier is also set, build_executor applies model override after tier spec construction.
-    let review_model = args.model.clone().or_else(|| {
-        config
-            .as_ref()
-            .and_then(|c| c.review.as_ref())
-            .and_then(|r| r.model.clone())
-            .or_else(|| global_config.review.model.clone())
-    });
+    let config_review_model = config
+        .as_ref()
+        .and_then(|c| c.review.as_ref())
+        .and_then(|r| r.model.as_deref())
+        .or(global_config.review.model.as_deref());
+    let review_model =
+        resolve_review_model(args.model.as_deref(), config_review_model, tier_active);
 
-    // Resolve thinking: CLI > config review.thinking > tier model_spec thinking.
-    // Tier thinking is embedded in model_spec and applied via build_and_validate_executor.
+    // Active tier model specs remain authoritative unless the user overrides on the CLI.
     let review_thinking = resolve_review_thinking(
         args.thinking.as_deref(),
         config
@@ -291,6 +289,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .and_then(|c| c.review.as_ref())
             .and_then(|r| r.thinking.as_deref())
             .or(global_config.review.thinking.as_deref()),
+        tier_active,
     );
 
     // Resolve stream mode from CLI flags (default: BufferOnly for review)

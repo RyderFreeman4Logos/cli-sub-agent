@@ -5,4 +5,5 @@ version = "0.1.0"
 [agent]
 tier = "tier-3-complex"
 max_turns = 50
+workspace_access = "mutating"
 tools = [{ tool = "claude-code" }]

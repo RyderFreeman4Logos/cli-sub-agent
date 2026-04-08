@@ -49,6 +49,9 @@ cd my-project && csa init && csa doctor
 # Run a task
 csa run --sa-mode false "implement user auth module"
 
+# Or route by intent while keeping tool selection automatic
+csa run --sa-mode false --auto-route analysis "investigate auth flow"
+
 # Code review (auto-selects heterogeneous model)
 csa review --sa-mode false --diff
 

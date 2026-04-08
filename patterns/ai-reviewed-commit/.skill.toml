@@ -5,4 +5,5 @@ version = "0.1.0"
 [agent]
 tier = "tier-2-standard"
 max_turns = 25
+workspace_access = "mutating"
 tools = [{ tool = "auto" }]

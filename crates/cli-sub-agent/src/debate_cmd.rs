@@ -7,7 +7,9 @@ use tokio::time::Instant;
 use tracing::{debug, error, warn};
 
 use crate::cli::DebateArgs;
-use crate::debate_cmd_resolve::{resolve_debate_tier_name, resolve_debate_tool};
+use crate::debate_cmd_resolve::{
+    resolve_debate_model, resolve_debate_tier_name, resolve_debate_tool,
+};
 use crate::debate_errors::{DebateErrorKind, classify_execution_error, classify_execution_outcome};
 use crate::run_helpers::resolve_prompt_with_file;
 use csa_config::ExecutionEnvOptions;
@@ -207,7 +209,8 @@ pub(crate) async fn handle_debate(
             ));
         }
     };
-    let resolved_tier_name = if tier_model_spec.is_some() {
+    let tier_active = tier_model_spec.is_some() && !args.force_ignore_tier_setting;
+    let resolved_tier_name = if tier_active {
         resolve_debate_tier_name(
             config.as_ref(),
             &global_config,
@@ -225,17 +228,15 @@ pub(crate) async fn handle_debate(
              Cognitive diversity is degraded."
         );
     }
-    // Model precedence: CLI --model > project config debate.model > global config debate.model.
-    // When tier is also set, build_executor applies model override after tier spec construction.
-    let debate_model = args.model.clone().or_else(|| {
-        config
-            .as_ref()
-            .and_then(|c| c.debate.as_ref())
-            .and_then(|d| d.model.clone())
-            .or_else(|| global_config.debate.model.clone())
-    });
+    let config_debate_model = config
+        .as_ref()
+        .and_then(|c| c.debate.as_ref())
+        .and_then(|d| d.model.as_deref())
+        .or(global_config.debate.model.as_deref());
+    let debate_model =
+        resolve_debate_model(args.model.as_deref(), config_debate_model, tier_active);
 
-    // Thinking precedence: CLI > config debate.thinking > tier model_spec thinking.
+    // Active tier model specs remain authoritative unless the user overrides on the CLI.
     let thinking = resolve_debate_thinking(
         args.thinking.as_deref(),
         config
@@ -243,10 +244,11 @@ pub(crate) async fn handle_debate(
             .and_then(|c| c.debate.as_ref())
             .and_then(|d| d.thinking.as_deref())
             .or(global_config.debate.thinking.as_deref()),
+        tier_active,
     );
 
     // 6. Build executor and validate tool
-    let enforce_tier = tier_model_spec.is_some() && !args.force_ignore_tier_setting;
+    let enforce_tier = tier_active;
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
         tier_model_spec.as_deref(),
@@ -514,10 +516,14 @@ fn resolve_debate_stream_mode(
 fn resolve_debate_thinking(
     cli_thinking: Option<&str>,
     config_thinking: Option<&str>,
+    tier_active: bool,
 ) -> Option<String> {
-    cli_thinking
-        .map(str::to_string)
-        .or_else(|| config_thinking.map(str::to_string))
+    cli_thinking.map(str::to_string).or_else(|| {
+        (!tier_active)
+            .then_some(config_thinking)
+            .flatten()
+            .map(str::to_string)
+    })
 }
 
 fn resolve_debate_timeout_seconds(

@@ -79,6 +79,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
     let err = handle_run(
         Some(ToolArg::Specific(ToolName::Codex)),
         None,
+        None,
         Some("inspect the repository".to_string()),
         None,
         None,
@@ -120,6 +121,11 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
             .to_string()
             .contains("Direct --tool is blocked when tiers are configured")),
         "unexpected error chain: {err:#}"
+    );
+    assert!(
+        err.chain()
+            .any(|cause| cause.to_string().contains("--auto-route <intent>")),
+        "auto-route hint should be present: {err:#}"
     );
 
     let sessions = csa_session::list_sessions(project_dir.path(), None).unwrap();

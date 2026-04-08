@@ -120,14 +120,13 @@ pub struct ReviewConfig {
     pub tier: Option<String>,
     /// Default model for `csa review`. Overrides the tool's own default model
     /// selection (e.g., gemini-cli model steering) without requiring a tier.
-    ///
-    /// Priority: CLI `--model` > this field > tier model_spec > tool default.
+    /// Without an active tier: CLI `--model` > this field > tool default.
+    /// With an active review tier, the tier model spec remains authoritative unless CLI `--model` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Default thinking budget for `csa review` (`low`, `medium`, `high`, `xhigh`).
-    ///
     /// `csa review --thinking <LEVEL>` (when supported) overrides this.
-    /// When a tier is used, this overrides the tier's model_spec thinking budget.
+    /// With an active review tier, the tier thinking budget remains authoritative unless CLI `--thinking` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     /// Deprecated: prefer `gate_commands`. PROJECT-ONLY.
@@ -230,14 +229,13 @@ pub struct DebateConfig {
     pub timeout_seconds: u64,
     /// Default model for `csa debate`. Overrides the tool's own default model
     /// selection (e.g., gemini-cli model steering) without requiring a tier.
-    ///
-    /// Priority: CLI `--model` > this field > tier model_spec > tool default.
+    /// Without an active tier: CLI `--model` > this field > tool default.
+    /// With an active debate tier, the tier model spec remains authoritative unless CLI `--model` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     /// Default thinking budget for `csa debate` (`low`, `medium`, `high`, `xhigh`).
-    ///
     /// `csa debate --thinking <LEVEL>` overrides this per invocation.
-    /// When a tier is used, this overrides the tier's model_spec thinking budget.
+    /// With an active debate tier, the tier thinking budget remains authoritative unless CLI `--thinking` is provided.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
     /// Allow same-model adversarial fallback when heterogeneous models are unavailable.

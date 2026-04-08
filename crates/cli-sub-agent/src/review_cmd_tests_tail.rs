@@ -155,6 +155,32 @@ fn test_is_review_output_empty_with_mcp_diagnostic_text_is_not_empty() {
     assert!(!is_review_output_empty(output));
 }
 
+// --- review tier precedence tests ---
+
+#[test]
+fn resolve_review_model_prefers_cli_over_config() {
+    let model = resolve_review_model(Some("sonnet"), Some("opus"), false);
+    assert_eq!(model.as_deref(), Some("sonnet"));
+}
+
+#[test]
+fn resolve_review_model_ignores_config_when_tier_active() {
+    let model = resolve_review_model(None, Some("opus"), true);
+    assert_eq!(model, None);
+}
+
+#[test]
+fn resolve_review_thinking_uses_config_without_tier() {
+    let thinking = resolve_review_thinking(None, Some("high"), false);
+    assert_eq!(thinking.as_deref(), Some("high"));
+}
+
+#[test]
+fn resolve_review_thinking_ignores_config_when_tier_active() {
+    let thinking = resolve_review_thinking(None, Some("high"), true);
+    assert_eq!(thinking, None);
+}
+
 // --- --thinking silent acceptance tests ---
 
 #[test]
