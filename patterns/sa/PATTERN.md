@@ -68,10 +68,11 @@ Layer 1 (claude-code) will:
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
 4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
+5. Treat `csa session wait` timeout or sparse early output as a wait-state, not failure. In slow Rust repos, 30-60 minutes can be normal. Re-wait on the same session instead of launching duplicate planning/review/debate sessions.
 
 ```bash
 SID=$(csa run --prompt-file "${PROMPT_FILE}")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## Step 5: Parse Planning Result
@@ -122,6 +123,13 @@ one cumulative review at the end. Small-scope reviews catch issues when
 context is focused, avoiding large diffs where reviewers can only surface
 2 findings per round.
 
+**Patience rule (MANDATORY)**: If Layer 1 launches `csa review` or `csa debate`,
+and `csa session wait` later times out or produces sparse early output, treat
+that as a wait-state rather than an automatic failure. Continue waiting on the
+same session id. Do NOT launch duplicate review/debate sessions for the same
+scope unless there is explicit crash/error evidence, persistent liveness
+failure, or user instruction.
+
 COMMIT HOOK POLICY (MANDATORY): ABSOLUTE PROHIBITION on ALL hook bypass methods.
 NEVER use `git commit --no-verify` or `git commit -n`. NEVER set `LEFTHOOK=0`
 or `LEFTHOOK_SKIP` environment variables. NEVER use `env LEFTHOOK=0 git commit`
@@ -138,7 +146,7 @@ failures as justification for disabling hooks.
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 echo "CSA_VAR:IMPL_FILE=$IMPL_FILE"
 SID=$(csa run --session "${SESSION_ID}" --prompt-file "${IMPL_FILE}")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ELSE
@@ -155,7 +163,7 @@ Resume Layer 1 with user's revision feedback.
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
 echo "CSA_VAR:RESUME_FILE=$RESUME_FILE"
 SID=$(csa run --session "${SESSION_ID}" --prompt-file "${RESUME_FILE}")
-csa session wait --session "$SID"
+scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
 ## ELSE

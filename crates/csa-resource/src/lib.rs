@@ -5,6 +5,10 @@ pub mod cgroup;
 pub mod filesystem_sandbox;
 pub mod guard;
 pub mod isolation_plan;
+#[cfg(target_os = "linux")]
+pub mod landlock;
+#[cfg(not(target_os = "linux"))]
+#[path = "landlock_stub.rs"]
 pub mod landlock;
 pub mod memory_balloon;
 pub mod memory_monitor;

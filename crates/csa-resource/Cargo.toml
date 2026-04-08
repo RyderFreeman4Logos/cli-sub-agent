@@ -12,9 +12,11 @@ toml.workspace = true
 serde.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
-landlock.workspace = true
 libc.workspace = true
 tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
