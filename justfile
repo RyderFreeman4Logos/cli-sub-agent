@@ -193,7 +193,10 @@ clippy-p package:
 
 # Security audit (requires cargo-deny)
 deny:
-    cargo deny check
+    # Hide the inclusion graph to keep duplicate-crate warnings bounded.
+    # The full graph is useful interactively, but in AI-driven commit workflows
+    # it can explode into gigabytes of output and crash ACP-backed tools.
+    cargo deny check --hide-inclusion-graph
 
 # ==============================================================================
 # 🧪 Testing
