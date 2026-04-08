@@ -12,6 +12,10 @@ pub use cli_session::*;
 mod cli_todo;
 pub use cli_todo::*;
 
+#[path = "cli_doctor.rs"]
+mod cli_doctor;
+pub use cli_doctor::*;
+
 #[path = "cli_review.rs"]
 mod cli_review;
 pub use cli_review::*;
@@ -315,7 +319,10 @@ pub enum Commands {
     Debate(DebateArgs),
 
     /// Check environment and tool availability
-    Doctor,
+    Doctor {
+        #[command(subcommand)]
+        subcommand: Option<DoctorSubcommand>,
+    },
 
     /// Execute tasks from a batch file
     Batch {

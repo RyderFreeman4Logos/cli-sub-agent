@@ -338,3 +338,183 @@ fn enforce_thinking_level_lists_configured_levels() {
     assert!(msg.contains("high"));
     assert!(msg.contains("xhigh"));
 }
+
+// ---------------------------------------------------------------------------
+// tier_contains_tool
+// ---------------------------------------------------------------------------
+
+fn config_with_multi_tiers() -> ProjectConfig {
+    let mut tiers = HashMap::new();
+    tiers.insert(
+        "tier-2-standard".to_string(),
+        TierConfig {
+            description: "standard tier".to_string(),
+            models: vec![
+                "gemini-cli/google/gemini-2.5-pro/medium".to_string(),
+                "codex/openai/gpt-5.3-codex/high".to_string(),
+            ],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    tiers.insert(
+        "tier-4-critical".to_string(),
+        TierConfig {
+            description: "critical tier".to_string(),
+            models: vec![
+                "gemini-cli/google/gemini-3.1-pro-preview/xhigh".to_string(),
+                "claude-code/anthropic/default/xhigh".to_string(),
+            ],
+            strategy: TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+    ProjectConfig {
+        schema_version: CURRENT_SCHEMA_VERSION,
+        project: ProjectMeta::default(),
+        resources: ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers,
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    }
+}
+
+#[test]
+fn tier_contains_tool_present() {
+    let cfg = config_with_multi_tiers();
+    assert!(cfg.tier_contains_tool("tier-4-critical", "gemini-cli"));
+    assert!(cfg.tier_contains_tool("tier-4-critical", "claude-code"));
+    assert!(cfg.tier_contains_tool("tier-2-standard", "codex"));
+}
+
+#[test]
+fn tier_contains_tool_absent() {
+    let cfg = config_with_multi_tiers();
+    assert!(!cfg.tier_contains_tool("tier-4-critical", "opencode"));
+    assert!(!cfg.tier_contains_tool("tier-4-critical", "codex"));
+    assert!(!cfg.tier_contains_tool("tier-2-standard", "claude-code"));
+}
+
+#[test]
+fn tier_contains_tool_unknown_tier() {
+    let cfg = config_with_multi_tiers();
+    assert!(!cfg.tier_contains_tool("nonexistent-tier", "gemini-cli"));
+}
+
+// ---------------------------------------------------------------------------
+// list_tools_in_tier
+// ---------------------------------------------------------------------------
+
+#[test]
+fn list_tools_in_tier_returns_all() {
+    let cfg = config_with_multi_tiers();
+    let tools = cfg.list_tools_in_tier("tier-4-critical");
+    assert_eq!(tools.len(), 2);
+    assert_eq!(tools[0].0, "gemini-cli");
+    assert_eq!(tools[1].0, "claude-code");
+}
+
+#[test]
+fn list_tools_in_tier_unknown_returns_empty() {
+    let cfg = config_with_multi_tiers();
+    let tools = cfg.list_tools_in_tier("nonexistent");
+    assert!(tools.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// find_tiers_for_tool
+// ---------------------------------------------------------------------------
+
+#[test]
+fn find_tiers_for_tool_present_in_multiple() {
+    let cfg = config_with_multi_tiers();
+    let tiers = cfg.find_tiers_for_tool("gemini-cli");
+    assert_eq!(tiers.len(), 2);
+    let tier_names: Vec<&str> = tiers.iter().map(|(n, _)| n.as_str()).collect();
+    assert!(tier_names.contains(&"tier-2-standard"));
+    assert!(tier_names.contains(&"tier-4-critical"));
+}
+
+#[test]
+fn find_tiers_for_tool_absent() {
+    let cfg = config_with_multi_tiers();
+    let tiers = cfg.find_tiers_for_tool("opencode");
+    assert!(tiers.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// suggest_compatible_alternatives
+// ---------------------------------------------------------------------------
+
+#[test]
+fn suggest_compatible_alternatives_includes_available_tools() {
+    let cfg = config_with_multi_tiers();
+    let msg = cfg.suggest_compatible_alternatives("opencode", "tier-4-critical");
+    // Should list tools in tier-4-critical
+    assert!(msg.contains("gemini-cli"));
+    assert!(msg.contains("claude-code"));
+    assert!(msg.contains("Available tools in tier 'tier-4-critical'"));
+}
+
+#[test]
+fn suggest_compatible_alternatives_includes_compatible_tiers() {
+    let cfg = config_with_multi_tiers();
+    let msg = cfg.suggest_compatible_alternatives("codex", "tier-4-critical");
+    // codex is in tier-2-standard
+    assert!(msg.contains("tier-2-standard"));
+    assert!(msg.contains("Tiers containing 'codex'"));
+}
+
+#[test]
+fn suggest_compatible_alternatives_includes_action_hints() {
+    let cfg = config_with_multi_tiers();
+    let msg = cfg.suggest_compatible_alternatives("opencode", "tier-4-critical");
+    assert!(msg.contains("Auto-select:"));
+    assert!(msg.contains("--force-ignore-tier-setting"));
+}
+
+#[test]
+fn suggest_compatible_alternatives_tool_not_in_any_tier() {
+    let cfg = config_with_multi_tiers();
+    let msg = cfg.suggest_compatible_alternatives("opencode", "tier-4-critical");
+    // opencode is not in any tier, so no "Tiers containing" section
+    assert!(!msg.contains("Tiers containing 'opencode'"));
+    // But should still have available tools and action hints
+    assert!(msg.contains("Available tools in tier"));
+    assert!(msg.contains("Suggestions:"));
+}
+
+// ---------------------------------------------------------------------------
+// valid tool+tier combos still work (regression guard)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn enforce_tier_whitelist_valid_tool_in_tier_ok() {
+    let cfg = config_with_multi_tiers();
+    assert!(cfg.enforce_tier_whitelist("gemini-cli", None).is_ok());
+    assert!(cfg.enforce_tier_whitelist("claude-code", None).is_ok());
+    assert!(cfg.enforce_tier_whitelist("codex", None).is_ok());
+}
+
+#[test]
+fn enforce_tier_whitelist_tool_not_in_any_tier_shows_hint() {
+    let cfg = config_with_multi_tiers();
+    let err = cfg.enforce_tier_whitelist("opencode", None).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("not configured in any tier"));
+    assert!(msg.contains("--force-ignore-tier-setting"));
+}

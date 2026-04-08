@@ -533,27 +533,6 @@ pub(crate) struct TierToolResolution {
     pub model_spec: String,
 }
 
-fn configured_tools_in_tier(
-    tier: &csa_config::config::TierConfig,
-    skip_specs: &[String],
-) -> Vec<String> {
-    let mut tools = Vec::new();
-
-    for spec in &tier.models {
-        if skip_specs.iter().any(|skip| skip == spec) {
-            continue;
-        }
-
-        if let Some(tool_name) = spec.split('/').next()
-            && !tools.iter().any(|tool| tool == tool_name)
-        {
-            tools.push(tool_name.to_string());
-        }
-    }
-
-    tools
-}
-
 /// Collect all enabled + available model specs from a named tier in config order.
 ///
 /// Applies the same availability and whitelist rules as tier resolution so
@@ -610,8 +589,6 @@ pub(crate) fn resolve_requested_tool_from_tier(
     let Some(tier) = config.tiers.get(tier_name) else {
         anyhow::bail!("Tier '{}' not found.", tier_name);
     };
-    let available_tools = configured_tools_in_tier(tier, skip_specs);
-
     let tool_in_tier = tier.models.iter().any(|spec| {
         !skip_specs.iter().any(|skip| skip == spec)
             && spec
@@ -620,11 +597,12 @@ pub(crate) fn resolve_requested_tool_from_tier(
                 .is_some_and(|tool_name| tool_name == requested_tool_name)
     });
     if !tool_in_tier {
+        let suggestions = config.suggest_compatible_alternatives(requested_tool_name, tier_name);
         anyhow::bail!(
-            "Requested tool '{}' is not available in tier '{}'. Available tools in this tier: [{}]",
+            "Tool '{}' is not available in tier '{}'\n\n{}",
             requested_tool_name,
             tier_name,
-            available_tools.join(", ")
+            suggestions
         );
     }
 
