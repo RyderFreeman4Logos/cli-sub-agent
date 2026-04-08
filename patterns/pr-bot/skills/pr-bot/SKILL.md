@@ -131,7 +131,7 @@ cloud_bot_name = "gemini-code-assist"      # bot name (for @mention and display)
 cloud_bot_trigger = "auto"                 # "auto" (bot auto-reviews) | "comment" (@bot review)
 cloud_bot_login = ""                       # bot GitHub login override (default: "${cloud_bot_name}[bot]")
 cloud_bot_retrigger_command = ""           # command to re-trigger after fix push (default: derived from name)
-merge_strategy = "merge"                   # "merge" | "rebase" | "squash"
+merge_strategy = "merge"                   # "merge" | "rebase" (squash is forbidden for audit)
 delete_branch = false                      # delete remote branch after merge
 ```
 
@@ -198,7 +198,7 @@ breaks prompt-guard propagation.
 8. **Fix non-stale real issues**: For surviving Category C comments, fix using `csa review --fix` to resume the reviewer session (preserves review context, avoids 50K+ token waste of spawning fresh). Commit fixes, then run `csa review --range main...HEAD` (review gate) BEFORE pushing — unreviewed fix code must not reach the remote.
 9. **Continue loop**: Push fixes and loop back (next trigger is issued in Step 4). Track iteration count via `REVIEW_ROUND`. When `REVIEW_ROUND` reaches `MAX_REVIEW_ROUNDS` (default: 10), STOP and present options to the user: (A) Merge now, (B) Continue for more rounds, (C) Abort and investigate manually. The workflow MUST NOT auto-merge or auto-abort at the round limit.
 10. **Clean resubmission** (if fixes accumulated): Create clean branch for final review.
-10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Set `REBASE_ENABLED=true` to re-enable for squash-merge workflows.
+10.5. ~~**Rebase for clean history**~~: DISABLED. With merge commits (not squash), rebase destroys per-commit audit trail. Squash merges are forbidden for audit reasons.
 11. **Merge**: When `cloud_bot=false`, leave audit trail comment explaining merge rationale (bot disabled + local review CLEAN). When `cloud_bot=true`, bot must have confirmed no issues before reaching this step (timeout aborts the workflow, never falls through to merge). Read merge strategy from `csa config get pr_review.merge_strategy --default merge` and branch deletion from `csa config get pr_review.delete_branch --default false`. Then `gh pr merge --${MERGE_STRATEGY} [--delete-branch]`, then `git fetch origin && git checkout main && git merge origin/main --ff-only`.
 
 ## Example Usage
