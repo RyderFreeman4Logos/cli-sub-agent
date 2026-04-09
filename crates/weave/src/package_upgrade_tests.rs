@@ -133,9 +133,14 @@ fn upgrade_empty_lockfile() {
 
     let lf = Lockfile::default();
     save_lockfile(&lockfile_path(&project), &lf).unwrap();
+    let lock_path = lockfile_path(&project);
+    let before = std::fs::read_to_string(&lock_path).unwrap();
 
     let results = upgrade(&project, &cache, &store, false).unwrap();
     assert!(results.is_empty());
+
+    let after = std::fs::read_to_string(&lock_path).unwrap();
+    assert_eq!(before, after, "no-op upgrade must not rewrite weave.lock");
 }
 
 #[test]
@@ -393,13 +398,18 @@ fn upgrade_preserves_lockfile_versions_section() {
     );
     save_lockfile(&lockfile_path(&project), &lf).unwrap();
 
-    // Upgrade (no changes expected, but lockfile is re-saved).
+    let lock_path = lockfile_path(&project);
+    let before = std::fs::read_to_string(&lock_path).unwrap();
+
+    // Upgrade (no changes expected).
     upgrade(&project, &cache, &store, false).unwrap();
 
     // Verify versions section preserved.
-    let loaded = load_lockfile(&lockfile_path(&project)).unwrap();
+    let loaded = load_lockfile(&lock_path).unwrap();
     assert!(
         loaded.versions.is_some(),
         "versions section should be preserved after upgrade"
     );
+    let after = std::fs::read_to_string(&lock_path).unwrap();
+    assert_eq!(before, after, "no-op upgrade must not rewrite weave.lock");
 }

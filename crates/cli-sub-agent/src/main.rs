@@ -218,9 +218,6 @@ async fn run() -> Result<()> {
                      Run `csa migrate` to update."
                 );
             }
-            Ok(csa_config::VersionCheckResult::AutoUpdated) => {
-                tracing::debug!("weave.lock auto-updated to match binary version");
-            }
             Ok(csa_config::VersionCheckResult::BinaryOlder {
                 lock_csa_version,
                 binary_csa_version,

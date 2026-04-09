@@ -27,7 +27,7 @@ fn print_status(
     match lock {
         None => {
             eprintln!("No weave.lock found. Current binary version: {csa_version}");
-            eprintln!("Run any csa command to create weave.lock.");
+            eprintln!("Run `csa migrate` to initialize version tracking.");
         }
         Some(lock) => {
             let Some(versions) = lock.versions() else {
