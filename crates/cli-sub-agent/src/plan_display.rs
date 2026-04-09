@@ -32,6 +32,9 @@ pub(crate) fn print_plan(
         let tool_info = match resolve_step_tool(step, config) {
             Ok(StepTarget::DirectBash) => "bash (direct)".into(),
             Ok(StepTarget::WeaveInclude) => "weave (include)".into(),
+            Ok(StepTarget::Note) => "note (non-executable)".into(),
+            Ok(StepTarget::Manual) => "manual (orchestrator-required)".into(),
+            Ok(StepTarget::AwaitUser) => "await-user (user-action required)".into(),
             Ok(StepTarget::CsaTool {
                 tool_name,
                 model_spec,

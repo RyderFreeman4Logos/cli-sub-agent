@@ -15,6 +15,10 @@ use weave::compiler::{ExecutionPlan, FailAction, PlanStep};
 use super::plan_cmd_exec::{
     StepExecutionOutcome, execute_bash_step, execute_csa_step, run_with_heartbeat,
 };
+use super::plan_cmd_flow::{
+    OrchestratorHandoff, find_next_step, format_orchestrator_message, format_plan_resume_command,
+    orchestrator_handoff_mode,
+};
 use super::{
     PlanRunJournal, apply_repo_fingerprint, detect_repo_fingerprint, persist_plan_journal,
     substitute_vars, validate_variable_name,
@@ -32,6 +36,12 @@ pub(crate) enum StepTarget {
     DirectBash,
     /// Skip this step (compile-time INCLUDE directive from weave).
     WeaveInclude,
+    /// Non-executable note for human-facing workflow context.
+    Note,
+    /// Manual action that must be handled by the orchestrator, not CSA.
+    Manual,
+    /// Stop the workflow and wait for explicit user action before any rerun.
+    AwaitUser,
     /// Dispatch to an AI tool via CSA infrastructure.
     CsaTool {
         tool_name: ToolName,
@@ -76,39 +86,12 @@ pub(super) struct PlanRunContext<'a> {
     pub(super) chunked: bool,
 }
 
-fn shell_escape_for_command(value: &str) -> String {
-    format!("'{}'", value.replace('\'', "'\\''"))
-}
-
-fn format_plan_resume_command(
-    project_root: &Path,
-    workflow_path: &Path,
-    journal_path: Option<&Path>,
-) -> String {
-    if let Some(jp) = journal_path {
-        let display = jp.to_string_lossy();
-        format!(
-            "csa plan run --sa-mode true --resume {}",
-            shell_escape_for_command(&display)
-        )
-    } else {
-        let display_path = workflow_path
-            .strip_prefix(project_root)
-            .unwrap_or(workflow_path);
-        let display = display_path.to_string_lossy();
-        format!(
-            "csa plan run --sa-mode true {}",
-            shell_escape_for_command(&display)
-        )
-    }
-}
-
 /// Resolve a step's execution target from its annotations and config.
 ///
 /// Resolution order:
 /// 1. `step.tool` — explicit tool name (e.g. "bash", "claude-code", "codex")
 /// 2. `step.tier` — tier name looked up in config's `tiers` map
-/// 3. Fallback: "bash" (safest default for v1)
+/// 3. Fallback: default configured AI tool, or codex if no config is present
 pub(crate) fn resolve_step_tool(
     step: &PlanStep,
     config: Option<&ProjectConfig>,
@@ -118,6 +101,9 @@ pub(crate) fn resolve_step_tool(
         let tool_lower = tool_str.to_lowercase();
         match tool_lower.as_str() {
             "bash" => return Ok(StepTarget::DirectBash),
+            "note" => return Ok(StepTarget::Note),
+            "manual" => return Ok(StepTarget::Manual),
+            "await-user" => return Ok(StepTarget::AwaitUser),
             "gemini-cli" => return Ok(StepTarget::csa(ToolName::GeminiCli, None)),
             "opencode" => return Ok(StepTarget::csa(ToolName::Opencode, None)),
             "codex" => return Ok(StepTarget::csa(ToolName::Codex, None)),
@@ -150,7 +136,7 @@ pub(crate) fn resolve_step_tool(
             // "weave" = compile-time INCLUDE directive, skip at runtime
             "weave" => return Ok(StepTarget::WeaveInclude),
             other => bail!(
-                "Unknown tool '{}' in step {} ('{}'). Known: bash, gemini-cli, opencode, codex, claude-code, csa, weave",
+                "Unknown tool '{}' in step {} ('{}'). Known: bash, note, manual, await-user, gemini-cli, opencode, codex, claude-code, csa, weave",
                 other,
                 step.id,
                 step.title
@@ -272,6 +258,7 @@ pub(super) async fn execute_plan_with_journal(
             run_ctx.tool_override,
         )
         .await;
+        let orchestrator_handoff = orchestrator_handoff_mode(step);
         let is_failure = !result.skipped && result.exit_code != 0;
 
         // Inject step output for subsequent steps (successful steps only).
@@ -306,6 +293,45 @@ pub(super) async fn execute_plan_with_journal(
         );
         if let Some(path) = run_ctx.journal_path {
             persist_plan_journal(path, run_ctx.journal)?;
+        }
+
+        if let Some(handoff_mode) = orchestrator_handoff {
+            run_ctx.journal.status = match handoff_mode {
+                OrchestratorHandoff::ManualResume => "manual-handoff".to_string(),
+                OrchestratorHandoff::AwaitUser => "awaiting-user".to_string(),
+            };
+            run_ctx.journal.last_error = result.error.clone();
+            apply_repo_fingerprint(
+                run_ctx.journal,
+                &detect_repo_fingerprint(run_ctx.project_root),
+            );
+            if let Some(path) = run_ctx.journal_path {
+                persist_plan_journal(path, run_ctx.journal)?;
+            }
+            if run_ctx.chunked {
+                let json = serde_json::to_string(&result)
+                    .expect("StepResult serialization should never fail");
+                println!("{json}");
+                results.push(result);
+                break;
+            }
+            if let Some(output) = result.output.as_deref() {
+                println!("{output}");
+            }
+            if matches!(handoff_mode, OrchestratorHandoff::ManualResume)
+                && let Some(next_step) = find_next_step(step, &plan.steps)
+            {
+                let cmd = format_plan_resume_command(
+                    run_ctx.project_root,
+                    run_ctx.workflow_path,
+                    run_ctx.journal_path,
+                );
+                let required = matches!(next_step.on_fail, FailAction::Abort);
+                println!("MANUAL_STEP_RESUME: {cmd}");
+                eprintln!("{}", format_next_step_directive(&cmd, required));
+            }
+            results.push(result);
+            break;
         }
 
         // Chunked mode: emit the single StepResult as JSON to stdout and stop.
@@ -458,19 +484,73 @@ pub(crate) async fn execute_step(
         target
     };
 
-    // Skip weave INCLUDE steps (compile-time directive, not executable at runtime)
-    if matches!(target, StepTarget::WeaveInclude) {
-        info!("{} - Skipping INCLUDE step (compile-time directive)", label);
-        return StepResult {
-            step_id: step.id,
-            title: step.title.clone(),
-            exit_code: 0,
-            duration_secs: 0.0,
-            skipped: true,
-            error: None,
-            output: None,
-            session_id: None,
-        };
+    match target {
+        StepTarget::WeaveInclude => {
+            info!("{} - Skipping INCLUDE step (compile-time directive)", label);
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: 0.0,
+                skipped: true,
+                error: None,
+                output: None,
+                session_id: None,
+            };
+        }
+        StepTarget::Note => {
+            info!("{} - NOTE step (non-executable)", label);
+            eprintln!("{label} - NOTE");
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: 0.0,
+                skipped: true,
+                error: None,
+                output: None,
+                session_id: None,
+            };
+        }
+        StepTarget::Manual => {
+            let message = format_orchestrator_message(step, OrchestratorHandoff::ManualResume);
+            let status = format!(
+                "Manual handoff required for step '{}'; execute the documented main-agent action, then resume the workflow explicitly.",
+                step.title
+            );
+            warn!("{} - {}", label, status);
+            eprintln!("{label} - MANUAL ACTION REQUIRED");
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: start.elapsed().as_secs_f64(),
+                skipped: false,
+                error: Some(status),
+                output: Some(message),
+                session_id: None,
+            };
+        }
+        StepTarget::AwaitUser => {
+            let message = format_orchestrator_message(step, OrchestratorHandoff::AwaitUser);
+            let status = format!(
+                "Awaiting user action for step '{}'; rerun the workflow from the beginning after the remediation is complete.",
+                step.title
+            );
+            warn!("{} - {}", label, status);
+            eprintln!("{label} - AWAITING USER ACTION");
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: start.elapsed().as_secs_f64(),
+                skipped: false,
+                error: Some(status),
+                output: Some(message),
+                session_id: None,
+            };
+        }
+        StepTarget::DirectBash | StepTarget::CsaTool { .. } => {}
     }
 
     // CSA prompts use template substitution. Bash steps receive variables via env vars.
@@ -549,6 +629,9 @@ pub(crate) async fn execute_step(
                     start,
                 )
                 .await
+            }
+            StepTarget::Note | StepTarget::Manual | StepTarget::AwaitUser => {
+                unreachable!("handled above")
             }
             StepTarget::WeaveInclude => unreachable!("handled above"),
         };
@@ -692,63 +775,4 @@ pub(crate) fn should_inject_assignment_markers(step: &PlanStep) -> bool {
 
 pub(crate) fn is_assignment_marker_key(key: &str) -> bool {
     validate_variable_name(key).is_ok()
-}
-
-/// Find the next step in the plan after the current step.
-///
-/// Returns the first step with an ID greater than the current step's ID,
-/// which is the sequential successor in a linear workflow.
-fn find_next_step<'a>(current: &PlanStep, steps: &'a [PlanStep]) -> Option<&'a PlanStep> {
-    steps.iter().find(|s| s.id > current.id)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn format_plan_resume_command_uses_journal_path_when_available() {
-        let project_root = Path::new("/tmp/workspace");
-        let workflow_path = Path::new("/tmp/workspace/patterns/dev2merge/workflow.toml");
-        let journal_path = Path::new("/tmp/workspace/.csa/state/plan/dev2merge.journal.json");
-
-        assert_eq!(
-            format_plan_resume_command(project_root, workflow_path, Some(journal_path)),
-            "csa plan run --sa-mode true --resume '/tmp/workspace/.csa/state/plan/dev2merge.journal.json'"
-        );
-    }
-
-    #[test]
-    fn format_plan_resume_command_falls_back_to_workflow_path() {
-        let project_root = Path::new("/tmp/workspace");
-        let workflow_path = Path::new("/tmp/workspace/patterns/dev2merge/workflow.toml");
-
-        assert_eq!(
-            format_plan_resume_command(project_root, workflow_path, None),
-            "csa plan run --sa-mode true 'patterns/dev2merge/workflow.toml'"
-        );
-    }
-
-    #[test]
-    fn format_plan_resume_command_escapes_special_characters() {
-        let project_root = Path::new("/tmp/workspace");
-        let workflow_path = Path::new("/tmp/workspace/patterns/weird name's/workflow.toml");
-
-        assert_eq!(
-            format_plan_resume_command(project_root, workflow_path, None),
-            "csa plan run --sa-mode true 'patterns/weird name'\\''s/workflow.toml'"
-        );
-    }
-
-    #[test]
-    fn format_plan_resume_command_escapes_journal_path_special_characters() {
-        let project_root = Path::new("/tmp/workspace");
-        let workflow_path = Path::new("/tmp/workspace/workflow.toml");
-        let journal_path = Path::new("/tmp/workspace/.csa/state/plan/weird name's.journal.json");
-
-        assert_eq!(
-            format_plan_resume_command(project_root, workflow_path, Some(journal_path)),
-            "csa plan run --sa-mode true --resume '/tmp/workspace/.csa/state/plan/weird name'\\''s.journal.json'"
-        );
-    }
 }

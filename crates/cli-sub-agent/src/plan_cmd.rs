@@ -35,6 +35,9 @@ mod plan_cmd_exec;
 #[cfg(test)]
 use plan_cmd_exec::{extract_bash_code_block, truncate};
 
+#[path = "plan_cmd_flow.rs"]
+mod plan_cmd_flow;
+
 #[path = "plan_cmd_steps.rs"]
 mod plan_cmd_steps;
 use plan_cmd_steps::{PlanRunContext, execute_plan_with_journal};
@@ -214,7 +217,13 @@ fn load_plan_resume_context(
 
     let same_workflow = journal.workflow_name == plan.name
         && journal.workflow_path == normalize_path(workflow_path);
-    if !same_workflow || journal.status == "completed" {
+    let status_prevents_resume = matches!(
+        journal.status.as_str(),
+        "completed" | "awaiting-user" | "manual-handoff"
+    );
+    if !same_workflow
+        || status_prevents_resume && !(explicit_resume && journal.status == "manual-handoff")
+    {
         return Ok(PlanResumeContext {
             initial_vars,
             completed_steps: HashSet::new(),
@@ -543,6 +552,27 @@ pub(crate) async fn handle_plan_run(args: PlanRunArgs) -> Result<()> {
 
     // 8. Print summary
     print_summary(&results, total_start.elapsed().as_secs_f64());
+
+    if journal.status == "manual-handoff" {
+        apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
+        persist_plan_journal(&journal_path, &journal)?;
+        eprintln!(
+            "Workflow '{}' paused for manual handoff. Complete the requested main-agent action, then resume with `csa plan run --sa-mode true --resume {}`.",
+            plan.name,
+            journal_path.display()
+        );
+        return Ok(());
+    }
+
+    if journal.status == "awaiting-user" {
+        apply_repo_fingerprint(&mut journal, &detect_repo_fingerprint(&project_root));
+        persist_plan_journal(&journal_path, &journal)?;
+        eprintln!(
+            "Workflow '{}' is awaiting user action. Re-run the workflow from the beginning after the requested remediation is complete.",
+            plan.name
+        );
+        return Ok(());
+    }
 
     // 9. Warn about unsupported skips (loop_var)
     let unsupported_skips = results

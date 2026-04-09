@@ -33,7 +33,7 @@ without SHA verification, auto-merging or auto-aborting at round limit,
 proceeding when bot responds with environment/configuration setup message
 instead of an actual code review (MUST stop and ask user to configure).
 
-## Dispatcher Model Note
+### Dispatcher Model Note
 
 This pattern follows a 3-layer dispatcher architecture:
 - **Layer 0 (Orchestrator)**: The main agent dispatches steps -- never touches code directly.
@@ -542,7 +542,7 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 
 ## Step 5a: Abort — Bot Needs Environment Configuration
 
-Tool: none (orchestrator action)
+Tool: await-user (orchestrator action)
 OnFail: abort
 
 The Cloud bot responded but did not perform an actual code review — it sent a
@@ -1020,6 +1020,9 @@ Loop back to Step 5 (delegated wait gate).
 
 ## Step 10b: Post-Fix Re-Review Gate (HARD GATE)
 
+Tool: bash
+OnFail: abort
+
 After fixing bot findings, verify the bot has actually re-reviewed the current
 HEAD and found zero actionable findings before any merge path can execute.
 
@@ -1040,10 +1043,7 @@ The gate:
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
-Tool: bash
-OnFail: abort
 Condition: !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
-
 Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
 then up to `cloud_bot_poll_max_seconds` of polling.
 
@@ -1203,6 +1203,8 @@ echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ## ELSE
 
 ## Step 10a: Bot Review Clean
+
+Tool: note
 
 No issues found by bot. Proceed to merge.
 

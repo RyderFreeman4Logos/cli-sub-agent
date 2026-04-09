@@ -8,6 +8,9 @@ fn resolve_step_tool_all_explicit_tools() {
     // Verify all explicit tool names resolve to the correct StepTarget variant.
     let cases = [
         ("bash", true),         // DirectBash
+        ("note", false),        // Note
+        ("manual", false),      // Manual
+        ("await-user", false),  // AwaitUser
         ("claude-code", false), // CsaTool
         ("codex", false),       // CsaTool
         ("gemini-cli", false),  // CsaTool
@@ -32,6 +35,21 @@ fn resolve_step_tool_all_explicit_tools() {
             assert!(
                 matches!(target, StepTarget::DirectBash),
                 "tool={tool_str} must resolve to DirectBash"
+            );
+        } else if tool_str == "note" {
+            assert!(
+                matches!(target, StepTarget::Note),
+                "tool=note must resolve to Note"
+            );
+        } else if tool_str == "manual" {
+            assert!(
+                matches!(target, StepTarget::Manual),
+                "tool=manual must resolve to Manual"
+            );
+        } else if tool_str == "await-user" {
+            assert!(
+                matches!(target, StepTarget::AwaitUser),
+                "tool=await-user must resolve to AwaitUser"
             );
         } else if tool_str == "weave" {
             assert!(
@@ -81,6 +99,104 @@ async fn execute_step_tool_override_replaces_csa_tool() {
         "bash step must not be affected by --tool override"
     );
     assert!(!result.skipped);
+}
+
+#[tokio::test]
+async fn execute_step_note_skips_without_dispatch() {
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "note-step".into(),
+        tool: Some("note".into()),
+        prompt: "This is informational only.".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let vars = HashMap::new();
+
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+
+    assert_eq!(result.exit_code, 0);
+    assert!(result.skipped, "note steps must not dispatch to AI tools");
+    assert!(result.error.is_none());
+}
+
+#[tokio::test]
+async fn execute_step_manual_returns_resumable_handoff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "manual-step".into(),
+        tool: Some("manual".into()),
+        prompt: "Main agent must handle this.".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let vars = HashMap::new();
+
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.skipped);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("resume the workflow explicitly")
+    );
+    assert!(
+        result
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("MANUAL_STEP: manual-step")
+    );
+}
+
+#[tokio::test]
+async fn execute_step_await_user_returns_instructions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "await-user-step".into(),
+        tool: Some("await-user".into()),
+        prompt: "User must fix external configuration.".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let vars = HashMap::new();
+
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.skipped);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Awaiting user action")
+    );
+    assert!(
+        result
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("AWAIT_USER: await-user-step")
+    );
 }
 
 #[test]

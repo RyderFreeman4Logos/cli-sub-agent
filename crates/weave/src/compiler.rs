@@ -101,8 +101,11 @@ const MAX_ITERATIONS_WARN_THRESHOLD: u32 = 50;
 // ---------------------------------------------------------------------------
 
 /// Matches a `Tool: <name>` line at the start of a step body.
+///
+/// Optional trailing prose is allowed so authors can annotate manual/note
+/// steps inline, for example `Tool: manual (main agent action)`.
 static TOOL_HINT_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?i)^Tool:\s*(\S+)\s*$").expect("valid regex"));
+    LazyLock::new(|| Regex::new(r"(?i)^Tool:\s*(\S+)(?:\s+.*)?$").expect("valid regex"));
 
 /// Matches a `Tier: <name>` line at the start of a step body.
 static TIER_HINT_RE: LazyLock<Regex> =
@@ -249,6 +252,11 @@ struct StepHints {
     prompt: String,
 }
 
+fn is_hint_preamble_line(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.is_empty() || trimmed.starts_with('>')
+}
+
 /// Extract metadata hints (Tool, Tier, OnFail, MaxIterations) from the first
 /// lines of a step body and return the remaining prompt text.
 fn extract_hints(body: &str) -> StepHints {
@@ -282,10 +290,12 @@ fn extract_hints(body: &str) -> StepHints {
                 max_iterations = caps[1].parse().ok();
                 continue;
             }
-            // First non-hint line ends hint extraction.
-            if !line.trim().is_empty() {
-                in_hints = false;
+            if is_hint_preamble_line(line) {
+                prompt_lines.push(line);
+                continue;
             }
+            // First non-hint line ends hint extraction.
+            in_hints = false;
         }
         prompt_lines.push(line);
     }

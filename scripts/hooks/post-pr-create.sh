@@ -240,12 +240,12 @@ csa plan run --sa-mode true patterns/pr-bot/workflow.toml | tee "${PLAN_RESULT_F
 PLAN_RC=${PIPESTATUS[0]}
 set -e
 
-if grep -Eq '^[[:space:]]*ROUND_LIMIT_HALT:' "${PLAN_RESULT_FILE}"; then
+if grep -Eq '^[[:space:]]*(ROUND_LIMIT_HALT|AWAIT_USER):' "${PLAN_RESULT_FILE}"; then
   rm -f "${PLAN_RESULT_FILE}"
   touch "${PR_BOT_AWAITING_USER_MARKER}"
   rmdir "${PR_BOT_LOCK_DIR}" 2>/dev/null || true
   PR_BOT_LOCK_HELD=0
-  echo "WARN: pr-bot reached REVIEW_ROUND limit and is awaiting manual follow-up; done marker was not written." >&2
+  echo "WARN: pr-bot is awaiting manual follow-up; done marker was not written." >&2
   exit 0
 fi
 

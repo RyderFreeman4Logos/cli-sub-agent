@@ -301,24 +301,11 @@ name = "setup_body"
 
 [[workflow.steps]]
 id = 1
-title = "Dispatcher Model Note"
-prompt = """
-This pattern follows a 3-layer dispatcher architecture:
-- **Layer 0 (Orchestrator)**: The main agent dispatches steps -- never touches code directly.
-- **Layer 1 (Executors)**: CSA sub-agents and Task tool agents perform actual work.
-- **Layer 2 (Sub-sub-agents)**: Spawned by Layer 1 for specific sub-tasks (invisible to Layer 0).
-
-Each step below is annotated with its execution layer."""
-on_fail = "abort"
-
-[[workflow.steps]]
-id = 2
 title = "Commit Changes"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 0 (Orchestrator) -- lightweight shell command, no code reading.
 
-Tool: bash
 
 Ensure all changes committed. Set WORKFLOW_BRANCH once (persists through
 clean branch switches in Step 11).
@@ -326,19 +313,17 @@ clean branch switches in Step 11).
 ```bash
 WORKFLOW_BRANCH="$(git branch --show-current)"
 echo "CSA_VAR:WORKFLOW_BRANCH=$WORKFLOW_BRANCH"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 3
+id = 2
 title = "Local Pre-PR Review (SYNCHRONOUS — MUST NOT background)"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 1 (CSA executor) -- Layer 0 dispatches `csa review`, which spawns
 > Layer 2 reviewer model(s) internally. Orchestrator waits for result.
 
-Tool: bash
-OnFail: abort
 
 Run cumulative local review covering all commits since main.
 This is the FOUNDATION — without it, bot unavailability cannot safely merge.
@@ -362,34 +347,32 @@ fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
 echo '<!-- CSA:NEXT_STEP cmd="push and create PR (Step 4)" required=true -->'
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 4
+id = 3
 title = "Fix Local Review Issues"
 tool = "csa"
 prompt = """
 > **Layer**: 1 (CSA executor) -- Layer 0 dispatches fix task to CSA. CSA reads
 > code, applies fixes, and returns results. Orchestrator reviews outcome.
 
-Tool: csa
-Tier: tier-4-critical
-OnFail: retry 3
 
 Fix issues found by local review. Loop until clean (max 3 rounds)."""
-on_fail = "abort"
+tier = "tier-4-critical"
 condition = "${LOCAL_REVIEW_HAS_ISSUES}"
 
+[workflow.steps.on_fail]
+retry = 3
+
 [[workflow.steps]]
-id = 5
+id = 4
 title = "Push and Ensure PR"
 tool = "bash"
 prompt = '''
 > **Layer**: 0 (Orchestrator) -- shell commands only, no code reading/writing.
 
-Tool: bash
-OnFail: abort
 
 **PRECONDITION (MANDATORY)**: Step 2 local review MUST have completed successfully.
 - If `REVIEW_COMPLETED` is not `true`, STOP and report:
@@ -510,14 +493,12 @@ echo '<!-- CSA:NEXT_STEP cmd="trigger cloud bot review or merge (Step 4a/5)" req
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 6
+id = 5
 title = "Step 4a: Check Cloud Bot Configuration"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 0 (Orchestrator) -- config check, lightweight.
 
-Tool: bash
-OnFail: abort
 
 Check whether cloud bot review is enabled for this project.
 
@@ -599,11 +580,11 @@ If `CLOUD_BOT` is `false`:
 - Reuse the same SHA-verified fast-path before supplementary review:
   - If current `HEAD` matches latest reviewed session HEAD SHA → skip review.
   - Otherwise run full `csa review --branch main`.
-- Route to Step 6a (Merge Without Bot) after supplementary local review gate passes."""
+- Route to Step 6a (Merge Without Bot) after supplementary local review gate passes.'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 7
+id = 6
 title = "Trigger Cloud Bot Review and Delegate Waiting"
 tool = "bash"
 prompt = '''
@@ -612,8 +593,6 @@ prompt = '''
 > `cloud_bot_trigger` config and review round) and delegates the long wait to a
 > single CSA-managed step. No explicit caller-side polling loop.
 
-Tool: bash
-OnFail: abort
 Condition: !(${BOT_UNAVAILABLE})
 
 Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
@@ -825,15 +804,13 @@ echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = '${CLOUD_BOT}'
+condition = "${CLOUD_BOT}"
 
 [[workflow.steps]]
-id = 8
+id = 7
 title = "Step 5a: Abort — Bot Needs Environment Configuration"
+tool = "await-user"
 prompt = """
-Tool: none (orchestrator action)
-OnFail: abort
-
 The Cloud bot responded but did not perform an actual code review — it sent a
 message indicating environment configuration is needed. The workflow MUST stop
 here and report to the user. FORBIDDEN: falling back to local review, skipping
@@ -844,18 +821,16 @@ user must:
 1. Configure the cloud bot (follow the bot's instructions)
 2. Re-run `pr-bot` after configuration is complete"""
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && (${BOT_NEEDS_SETUP})'
+condition = "(${CLOUD_BOT}) && (${BOT_NEEDS_SETUP})"
 
 [[workflow.steps]]
-id = 9
+id = 8
 title = "Step 6-fix: Fallback Review Fix Cycle (Bot Timeout Path)"
 tool = "bash"
 prompt = '''
 > **Layer**: 0 + 1 (Orchestrator + CSA executor) -- wrapper step enforces
 > timeout/return-code/marker contracts, while CSA performs the fix cycle.
 
-Tool: bash
-OnFail: abort
 
 When `FALLBACK_REVIEW_HAS_ISSUES=true` (set in Step 5 when `csa review`
 found issues during bot timeout), this dedicated fix cycle runs WITHIN the
@@ -903,16 +878,15 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && (${FALLBACK_REVIEW_HAS_ISSUES})'
+condition = "(${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && (${FALLBACK_REVIEW_HAS_ISSUES})"
 
 [[workflow.steps]]
-id = 10
+id = 9
 title = "Step 6a: Merge Without Bot"
 tool = "bash"
 prompt = '''
 > **Layer**: 0 (Orchestrator) -- merge command, no code analysis.
 
-Tool: bash
 
 Cloud bot explicitly disabled (cloud_bot=false). Local fallback review passed
 (either initially in Step 4a, or after fix cycle in Step 6-fix). Step 6-fix
@@ -965,10 +939,10 @@ git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged without bot" required=false -->'
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && (!(${FALLBACK_REVIEW_HAS_ISSUES}))'
+condition = "(${CLOUD_BOT}) && (${BOT_UNAVAILABLE}) && (!(${FALLBACK_REVIEW_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 11
+id = 10
 title = "Select Current Bot Comment"
 tool = "bash"
 prompt = '''
@@ -977,8 +951,6 @@ prompt = '''
 > comment per loop iteration; after Step 10 pushes, the next bot review
 > trigger picks up any remaining findings.
 
-Tool: bash
-OnFail: abort
 
 Select one actionable bot review comment from the current review window and
 export its metadata as `CURRENT_COMMENT_ID`, `COMMENT_PATH`, and
@@ -1014,13 +986,13 @@ echo "CSA_VAR:COMMENT_IS_FALSE_POSITIVE=true"
 echo "CSA_VAR:COMMENT_IS_STALE=false"
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 12
+id = 11
 title = "Step 7a: Staleness Filter"
 tool = "bash"
-prompt = """
+prompt = '''
 For the current bot comment selected in Step 7, run a conservative file-level
 staleness check. When the referenced file changed on this branch after the
 comment timestamp, set `COMMENT_IS_STALE=true` and skip arbitration/fix for
@@ -1039,42 +1011,38 @@ if [ -n "${COMMENT_PATH:-}" ] && [ -n "${COMMENT_TIMESTAMP:-}" ]; then
 fi
 
 echo "CSA_VAR:COMMENT_IS_STALE=$COMMENT_IS_STALE"
-```"""
+```'''
 on_fail = "skip"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 13
+id = 12
 title = "Arbitrate via Debate"
 tool = "csa"
 prompt = """
 > **Layer**: 1 (CSA debate) -- Layer 0 dispatches to `csa debate`, which
 > internally spawns Layer 2 independent models for adversarial evaluation.
-> Orchestrator receives the verdict and posts audit trail to PR.
-
-Tool: csa
-Tier: tier-4-critical"""
+> Orchestrator receives the verdict and posts audit trail to PR."""
+tier = "tier-4-critical"
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
 
 [[workflow.steps]]
-id = 14
+id = 13
 title = "Include debate"
 tool = "weave"
 prompt = "debate"
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
 
 [[workflow.steps]]
-id = 15
+id = 14
 title = "Step 8a: Post Debate Audit Trail Comment"
 tool = "bash"
 prompt = '''
 > **Layer**: 0 (Orchestrator) -- explicit bash step that posts the PR comment
 > or reroutes to the fix path based on the debate verdict.
 
-Tool: bash
-OnFail: abort
 
 Parse the structured debate result from Step 8.
 - If `VERDICT=DISMISSED`: post the explanatory PR comment explicitly via
@@ -1155,35 +1123,34 @@ case "${VERDICT}" in
 esac
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE}))))"
 
 [[workflow.steps]]
-id = 16
+id = 15
 title = "Fix Real Issue"
 tool = "csa"
 prompt = """
 > **Layer**: 1 (CSA executor) -- Layer 0 dispatches fix to CSA sub-agent.
 > CSA reads code, applies fix, commits. Orchestrator verifies result.
 
-Tool: csa
-Tier: tier-4-critical
-OnFail: retry 2
 
 Fix the real issue for the current bot review comment (non-stale,
 non-false-positive). Fetch the comment body via
 `gh api repos/${REPO}/pulls/comments/${CURRENT_COMMENT_ID}`, apply the fix,
 and commit it."""
-on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))'
+tier = "tier-4-critical"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && ((${BOT_HAS_ISSUES}) && (!(${COMMENT_IS_FALSE_POSITIVE} && !(${COMMENT_IS_STALE})))))"
+
+[workflow.steps.on_fail]
+retry = 2
 
 [[workflow.steps]]
-id = 17
+id = 16
 title = "Push Fixes and Continue Loop"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 0 (Orchestrator) -- shell commands to push fixes and continue loop.
 
-Tool: bash
 
 Track iteration count via `REVIEW_ROUND`. Check the round cap BEFORE
 pushing fixes and continuing to the next review loop iteration. When `REVIEW_ROUND`
@@ -1300,12 +1267,12 @@ echo "CSA_VAR:REVIEW_ROUND=$REVIEW_ROUND"
 echo "CSA_VAR:MAX_REVIEW_ROUNDS=$MAX_REVIEW_ROUNDS"
 ```
 
-Loop back to Step 5 (delegated wait gate)."""
+Loop back to Step 5 (delegated wait gate).'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
 
 [[workflow.steps]]
-id = 18
+id = 17
 title = "Step 10b: Post-Fix Re-Review Gate (HARD GATE)"
 tool = "bash"
 prompt = '''
@@ -1329,10 +1296,7 @@ The gate:
 4. If review event found AND clean → clears `BOT_HAS_ISSUES=false` so merge steps can proceed
 5. If no review event within timeout → falls back to local `csa review --range main...HEAD`
 
-Tool: bash
-OnFail: abort
 Condition: !(${BOT_UNAVAILABLE}) && (${BOT_HAS_ISSUES}) && !(${ROUND_LIMIT_REACHED})
-
 Apply the same wait policy as Step 5: `cloud_bot_wait_seconds` quiet wait,
 then up to `cloud_bot_poll_max_seconds` of polling.
 
@@ -1489,17 +1453,18 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 echo "Post-fix re-review gate PASSED. Merge is now allowed."
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (${BOT_HAS_ISSUES}))"
+
+[[workflow.steps]]
+id = 18
+title = "Step 10a: Bot Review Clean"
+tool = "note"
+prompt = "No issues found by bot. Proceed to merge."
+on_fail = "abort"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))"
 
 [[workflow.steps]]
 id = 19
-title = "Step 10a: Bot Review Clean"
-prompt = "No issues found by bot. Proceed to merge."
-on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))'
-
-[[workflow.steps]]
-id = 20
 title = "Step 10.5: Rebase for Clean History (DISABLED)"
 tool = "bash"
 prompt = '''
@@ -1508,7 +1473,6 @@ prompt = '''
 > per-commit audit trail instead of cleaning it up.
 > Squash merges are forbidden for audit reasons.
 
-Tool: bash
 
 Reorganize accumulated fix commits into logical groups (source, patterns, other)
 before merging. Skip if <= 3 commits.
@@ -1656,16 +1620,15 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```'''
 on_fail = "abort"
-condition = '(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))) && (${REBASE_ENABLED})'
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))) && (${REBASE_ENABLED})"
 
 [[workflow.steps]]
-id = 21
+id = 20
 title = "Clean Resubmission (if needed)"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 0 (Orchestrator) -- git branch management, no code reading.
 
-Tool: bash
 
 If fixes accumulated, create clean branch for final review.
 
@@ -1674,19 +1637,17 @@ CLEAN_BRANCH="${WORKFLOW_BRANCH}-clean"
 git checkout -b "${CLEAN_BRANCH}"
 git push -u origin "${CLEAN_BRANCH}"
 gh pr create --base main --head "${CLEAN_BRANCH}" --title "${PR_TITLE}" --body "${PR_BODY}"
-```"""
+```'''
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[workflow.steps]]
-id = 22
+id = 21
 title = "Final Merge"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 0 (Orchestrator) -- final merge command, no code analysis.
 
-Tool: bash
-OnFail: abort
 
 Merge and update local main.
 
@@ -1724,19 +1685,17 @@ git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
-```"""
+```'''
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (${FIXES_ACCUMULATED})"
 
 [[workflow.steps]]
-id = 23
+id = 22
 title = "Step 12b: Final Merge (Direct)"
 tool = "bash"
-prompt = """
+prompt = '''
 > **Layer**: 0 (Orchestrator) -- direct merge, no code analysis needed.
 
-Tool: bash
-OnFail: abort
 
 First-pass clean review: merge the existing PR directly.
 
@@ -1774,6 +1733,6 @@ git checkout main
 git merge origin/main --ff-only
 git log --oneline -1  # verify local matches remote
 echo '<!-- CSA:NEXT_STEP cmd="pipeline complete — PR merged" required=false -->'
-```"""
+```'''
 on_fail = "abort"
 condition = "(!(${BOT_UNAVAILABLE})) && (!(${FIXES_ACCUMULATED}))"

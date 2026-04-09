@@ -69,6 +69,50 @@ Build the project with cargo.
 }
 
 #[test]
+fn test_compile_step_with_annotated_tool_hint() {
+    let input = r#"---
+name = "annotated-tool"
+---
+## Coordinate Main Agent
+Tool: manual (main agent action)
+Explain what the orchestrator must do next.
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    assert_eq!(plan.steps.len(), 1);
+    let step = &plan.steps[0];
+    assert_eq!(step.tool.as_deref(), Some("manual"));
+    assert_eq!(step.prompt, "Explain what the orchestrator must do next.");
+}
+
+#[test]
+fn test_compile_step_with_blockquote_preamble_before_hints() {
+    let input = r#"---
+name = "blockquote-preamble"
+---
+## Run Bash
+> **Layer**: 0 (Orchestrator)
+> Shell only.
+
+Tool: bash
+OnFail: abort
+
+```bash
+echo ok
+```
+"#;
+    let doc = parse_skill(input).unwrap();
+    let plan = compile(&doc).unwrap();
+
+    let step = &plan.steps[0];
+    assert_eq!(step.tool.as_deref(), Some("bash"));
+    assert_eq!(step.on_fail, FailAction::Abort);
+    assert!(step.prompt.contains("> **Layer**: 0 (Orchestrator)"));
+    assert!(step.prompt.contains("```bash"));
+}
+
+#[test]
 fn test_compile_step_with_tier_hint() {
     let input = r#"---
 name = "tiered"
