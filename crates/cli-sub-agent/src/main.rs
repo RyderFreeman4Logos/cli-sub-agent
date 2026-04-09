@@ -16,6 +16,7 @@ mod debate_errors;
 mod doctor;
 mod edit_restriction_guard;
 mod error_hints;
+mod error_report;
 mod eval_cmd;
 mod gc;
 mod hooks_cmd;
@@ -101,7 +102,7 @@ fn report_daemon_error_or_exit_code(
         Ok(code) => code,
         Err(err) => {
             // fd 2 is still the pipe write-end (guard is alive), so eprintln! works.
-            eprintln!("Error: {err}");
+            eprintln!("{}", error_report::render_user_facing_error(&err));
             if let Some(hint) = error_hints::suggest_fix(&err) {
                 eprintln!();
                 eprintln!("{hint}");
@@ -166,7 +167,7 @@ fn should_attempt_auto_weave_upgrade(command: &Commands) -> bool {
 
 async fn main() {
     if let Err(err) = run().await {
-        eprintln!("Error: {err}");
+        eprintln!("{}", error_report::render_user_facing_error(&err));
         if let Some(hint) = error_hints::suggest_fix(&err) {
             eprintln!();
             eprintln!("{hint}");
