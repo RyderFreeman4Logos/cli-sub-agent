@@ -334,9 +334,9 @@ install-hooks:
 
 # Install latest local build to /usr/local/bin (reuses workspace target/ cache).
 install:
-    cargo build --release --all-features -p cli-sub-agent -p weave
-    install -m 755 target/release/csa /usr/local/bin/csa
-    install -m 755 target/release/weave /usr/local/bin/weave
+    CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo build --release --all-features -p cli-sub-agent -p weave
+    install -m 755 "{{_cargo_target_dir}}"/release/csa /usr/local/bin/csa
+    install -m 755 "{{_cargo_target_dir}}"/release/weave /usr/local/bin/weave
     @echo "Verifying installation..."
     @csa --version
     @weave --version
