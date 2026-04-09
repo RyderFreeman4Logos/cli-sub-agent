@@ -218,8 +218,13 @@ async fn run() -> Result<()> {
                      Run `csa migrate` to update."
                 );
             }
-            Ok(csa_config::VersionCheckResult::AutoUpdated) => {
-                tracing::debug!("weave.lock auto-updated to match binary version");
+            Ok(csa_config::VersionCheckResult::VersionDrift {
+                lock_csa_version,
+                binary_csa_version,
+            }) => {
+                eprintln!(
+                    "WARNING: weave.lock version differs from the running csa binary ({binary_csa_version} vs {lock_csa_version}); lockfile unchanged. Run `csa migrate` to update."
+                );
             }
             Ok(csa_config::VersionCheckResult::BinaryOlder {
                 lock_csa_version,
