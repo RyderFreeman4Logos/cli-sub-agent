@@ -34,6 +34,7 @@ pub(crate) fn print_plan(
             Ok(StepTarget::WeaveInclude) => "weave (include)".into(),
             Ok(StepTarget::Note) => "note (non-executable)".into(),
             Ok(StepTarget::Manual) => "manual (orchestrator-required)".into(),
+            Ok(StepTarget::AwaitUser) => "await-user (user-action required)".into(),
             Ok(StepTarget::CsaTool {
                 tool_name,
                 model_spec,

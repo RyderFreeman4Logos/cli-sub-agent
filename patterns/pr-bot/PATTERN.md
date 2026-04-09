@@ -542,7 +542,7 @@ echo "CSA_VAR:BOT_HAS_ISSUES=$BOT_HAS_ISSUES"
 
 ## Step 5a: Abort — Bot Needs Environment Configuration
 
-Tool: manual (orchestrator action)
+Tool: await-user (orchestrator action)
 OnFail: abort
 
 The Cloud bot responded but did not perform an actual code review — it sent a

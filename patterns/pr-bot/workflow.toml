@@ -809,7 +809,7 @@ condition = "${CLOUD_BOT}"
 [[workflow.steps]]
 id = 7
 title = "Step 5a: Abort — Bot Needs Environment Configuration"
-tool = "manual"
+tool = "await-user"
 prompt = """
 The Cloud bot responded but did not perform an actual code review — it sent a
 message indicating environment configuration is needed. The workflow MUST stop

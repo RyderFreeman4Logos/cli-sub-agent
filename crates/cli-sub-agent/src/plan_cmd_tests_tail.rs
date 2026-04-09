@@ -176,7 +176,7 @@ fn pr_bot_workflow_marks_non_ai_steps_explicitly() {
         .iter()
         .find(|step| step.title == "Step 5a: Abort — Bot Needs Environment Configuration")
         .expect("missing bot setup abort step");
-    assert_eq!(setup_abort.tool.as_deref(), Some("manual"));
+    assert_eq!(setup_abort.tool.as_deref(), Some("await-user"));
 
     let clean_note = plan
         .steps
@@ -198,6 +198,128 @@ fn dev2merge_workflow_marks_mktsk_step_manual() {
         .find(|step| step.title == "Execute Plan with mktsk")
         .expect("missing dev2merge mktsk step");
     assert_eq!(mktsk_step.tool.as_deref(), Some("manual"));
+}
+
+#[tokio::test]
+async fn execute_plan_stops_after_manual_handoff() {
+    let plan = ExecutionPlan {
+        name: "manual-handoff".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "manual-step".into(),
+                tool: Some("manual".into()),
+                prompt: "Use mktsk in the main agent, then resume.".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "should-not-run".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\ntouch should-not-run\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    let journal_path = tmp.path().join("manual-handoff.journal.json");
+    std::fs::write(&workflow_path, "[workflow]\nname='manual-handoff'\n").unwrap();
+    let completed = std::collections::HashSet::new();
+    let mut journal = PlanRunJournal::new("manual-handoff", &workflow_path, vars.clone());
+    let mut run_ctx = PlanRunContext {
+        project_root: tmp.path(),
+        workflow_path: &workflow_path,
+        config: None,
+        tool_override: None,
+        journal: &mut journal,
+        journal_path: Some(&journal_path),
+        resume_completed_steps: &completed,
+        chunked: false,
+    };
+
+    let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
+        .await
+        .expect("manual handoff plan should execute");
+
+    assert_eq!(results.len(), 1, "manual handoff must pause the workflow");
+    assert_eq!(journal.status, "manual-handoff");
+    assert!(journal.completed_steps.contains(&1));
+    assert!(!tmp.path().join("should-not-run").exists());
+}
+
+#[tokio::test]
+async fn execute_plan_stops_for_await_user() {
+    let plan = ExecutionPlan {
+        name: "await-user".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![
+            PlanStep {
+                id: 1,
+                title: "setup-step".into(),
+                tool: Some("await-user".into()),
+                prompt: "Fix the bot configuration before retrying.".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+            PlanStep {
+                id: 2,
+                title: "should-not-run".into(),
+                tool: Some("bash".into()),
+                prompt: "```bash\ntouch should-not-run\n```".into(),
+                tier: None,
+                depends_on: vec![],
+                on_fail: FailAction::Abort,
+                condition: None,
+                loop_var: None,
+                session: None,
+            },
+        ],
+    };
+    let vars = HashMap::new();
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    let journal_path = tmp.path().join("await-user.journal.json");
+    std::fs::write(&workflow_path, "[workflow]\nname='await-user'\n").unwrap();
+    let completed = std::collections::HashSet::new();
+    let mut journal = PlanRunJournal::new("await-user", &workflow_path, vars.clone());
+    let mut run_ctx = PlanRunContext {
+        project_root: tmp.path(),
+        workflow_path: &workflow_path,
+        config: None,
+        tool_override: None,
+        journal: &mut journal,
+        journal_path: Some(&journal_path),
+        resume_completed_steps: &completed,
+        chunked: false,
+    };
+
+    let results = execute_plan_with_journal(&plan, &vars, &mut run_ctx)
+        .await
+        .expect("await-user plan should stop cleanly");
+
+    assert_eq!(results.len(), 1, "await-user must stop the workflow");
+    assert_eq!(journal.status, "awaiting-user");
+    assert!(journal.completed_steps.contains(&1));
+    assert!(!tmp.path().join("should-not-run").exists());
 }
 
 #[test]

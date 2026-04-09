@@ -10,6 +10,7 @@ fn resolve_step_tool_all_explicit_tools() {
         ("bash", true),         // DirectBash
         ("note", false),        // Note
         ("manual", false),      // Manual
+        ("await-user", false),  // AwaitUser
         ("claude-code", false), // CsaTool
         ("codex", false),       // CsaTool
         ("gemini-cli", false),  // CsaTool
@@ -44,6 +45,11 @@ fn resolve_step_tool_all_explicit_tools() {
             assert!(
                 matches!(target, StepTarget::Manual),
                 "tool=manual must resolve to Manual"
+            );
+        } else if tool_str == "await-user" {
+            assert!(
+                matches!(target, StepTarget::AwaitUser),
+                "tool=await-user must resolve to AwaitUser"
             );
         } else if tool_str == "weave" {
             assert!(
@@ -120,7 +126,7 @@ async fn execute_step_note_skips_without_dispatch() {
 }
 
 #[tokio::test]
-async fn execute_step_manual_fails_closed() {
+async fn execute_step_manual_returns_resumable_handoff() {
     let tmp = tempfile::tempdir().unwrap();
     let step = PlanStep {
         id: 1,
@@ -138,14 +144,58 @@ async fn execute_step_manual_fails_closed() {
 
     let result = execute_step(&step, &vars, tmp.path(), None, None).await;
 
-    assert_eq!(result.exit_code, 1);
+    assert_eq!(result.exit_code, 0);
     assert!(!result.skipped);
     assert!(
         result
             .error
             .as_deref()
             .unwrap_or("")
-            .contains("requires orchestrator handling")
+            .contains("resume the workflow explicitly")
+    );
+    assert!(
+        result
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("MANUAL_STEP: manual-step")
+    );
+}
+
+#[tokio::test]
+async fn execute_step_await_user_returns_instructions() {
+    let tmp = tempfile::tempdir().unwrap();
+    let step = PlanStep {
+        id: 1,
+        title: "await-user-step".into(),
+        tool: Some("await-user".into()),
+        prompt: "User must fix external configuration.".into(),
+        tier: None,
+        depends_on: vec![],
+        on_fail: FailAction::Abort,
+        condition: None,
+        loop_var: None,
+        session: None,
+    };
+    let vars = HashMap::new();
+
+    let result = execute_step(&step, &vars, tmp.path(), None, None).await;
+
+    assert_eq!(result.exit_code, 0);
+    assert!(!result.skipped);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("Awaiting user action")
+    );
+    assert!(
+        result
+            .output
+            .as_deref()
+            .unwrap_or("")
+            .contains("AWAIT_USER: await-user-step")
     );
 }
 

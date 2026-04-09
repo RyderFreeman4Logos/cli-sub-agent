@@ -117,6 +117,112 @@ fn load_plan_resume_context_rejects_journal_when_repo_fingerprint_changed() {
 }
 
 #[test]
+fn load_plan_resume_context_requires_explicit_resume_for_manual_handoff() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("test.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "test".into(),
+        workflow_path: normalize_path(&workflow_path),
+        status: "manual-handoff".into(),
+        vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
+        completed_steps: vec![1],
+        last_error: Some("manual handoff required".to_string()),
+        repo_head: Some("abc123".to_string()),
+        repo_dirty: Some(false),
+    };
+    persist_plan_journal(&journal_path, &journal).unwrap();
+
+    let repo_fingerprint = RepoFingerprint {
+        head: Some("abc123".to_string()),
+        dirty: Some(false),
+    };
+    let implicit = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &HashMap::new(),
+        &repo_fingerprint,
+        false,
+    )
+    .unwrap();
+    assert!(
+        !implicit.resumed,
+        "manual handoff must not auto-resume without explicit --resume"
+    );
+
+    let explicit = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &HashMap::new(),
+        &repo_fingerprint,
+        true,
+    )
+    .unwrap();
+    assert!(
+        explicit.resumed,
+        "manual handoff should resume when explicitly requested"
+    );
+}
+
+#[test]
+fn load_plan_resume_context_rejects_awaiting_user_journal_even_with_explicit_resume() {
+    let tmp = tempfile::tempdir().unwrap();
+    let workflow_path = tmp.path().join("workflow.toml");
+    std::fs::write(&workflow_path, "[workflow]\nname='test'\n").unwrap();
+
+    let plan = ExecutionPlan {
+        name: "test".into(),
+        description: String::new(),
+        variables: vec![],
+        steps: vec![],
+    };
+
+    let journal_path = tmp.path().join("test.journal.json");
+    let journal = PlanRunJournal {
+        schema_version: PLAN_JOURNAL_SCHEMA_VERSION,
+        workflow_name: "test".into(),
+        workflow_path: normalize_path(&workflow_path),
+        status: "awaiting-user".into(),
+        vars: HashMap::from([("STEP_1_OUTPUT".to_string(), "cached".to_string())]),
+        completed_steps: vec![1],
+        last_error: Some("awaiting user action".to_string()),
+        repo_head: Some("abc123".to_string()),
+        repo_dirty: Some(false),
+    };
+    persist_plan_journal(&journal_path, &journal).unwrap();
+
+    let repo_fingerprint = RepoFingerprint {
+        head: Some("abc123".to_string()),
+        dirty: Some(false),
+    };
+    let ctx = load_plan_resume_context(
+        &plan,
+        &workflow_path,
+        &journal_path,
+        &HashMap::new(),
+        &repo_fingerprint,
+        true,
+    )
+    .unwrap();
+    assert!(
+        !ctx.resumed,
+        "awaiting-user journals must force a fresh rerun after remediation"
+    );
+}
+
+#[test]
 fn detect_effective_repo_strips_credentials_from_https_origin() {
     let tmp = tempfile::tempdir().unwrap();
     let git_dir = tmp.path();
