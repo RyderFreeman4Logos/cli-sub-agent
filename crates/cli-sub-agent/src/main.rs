@@ -212,29 +212,12 @@ async fn run() -> Result<()> {
             env!("CARGO_PKG_VERSION"),
             &registry,
         ) {
-            Ok(csa_config::VersionCheckResult::MigrationNeeded { pending_count }) => {
-                eprintln!(
-                    "WARNING: weave.lock is outdated ({pending_count} pending migration(s)). \
-                     Run `csa migrate` to update."
-                );
+            Ok(result) => {
+                if let Some(warning) = csa_config::weave_lock::format_version_check_warning(&result)
+                {
+                    eprintln!("{warning}");
+                }
             }
-            Ok(csa_config::VersionCheckResult::VersionDrift {
-                lock_csa_version,
-                binary_csa_version,
-            }) => {
-                eprintln!(
-                    "WARNING: weave.lock records csa {lock_csa_version}, but the running binary is {binary_csa_version}. Run `csa migrate` to update the version stamp."
-                );
-            }
-            Ok(csa_config::VersionCheckResult::BinaryOlder {
-                lock_csa_version,
-                binary_csa_version,
-            }) => {
-                eprintln!(
-                    "WARNING: running older csa binary ({binary_csa_version}) than weave.lock ({lock_csa_version}); lockfile unchanged."
-                );
-            }
-            Ok(_) => {}
             Err(e) => {
                 tracing::debug!("weave.lock version check failed: {e:#}");
             }

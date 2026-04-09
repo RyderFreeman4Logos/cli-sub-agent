@@ -68,6 +68,7 @@ fn run_migrations(
     dry_run: bool,
 ) -> Result<()> {
     let mut lock = csa_config::WeaveLock::load_or_init(project_dir, csa_version, weave_version)?;
+    let had_versions_before = lock.versions().is_some();
 
     let lock_version = lock
         .versions_or_init(csa_version, weave_version)
@@ -84,13 +85,11 @@ fn run_migrations(
 
     if pending.is_empty() {
         eprintln!("No pending migrations. Lock is up to date.");
-        // Still update version stamp if different.
-        let v = lock.versions_or_init(csa_version, weave_version);
-        if v.csa != csa_version {
-            v.csa = csa_version.to_string();
-            v.weave = weave_version.to_string();
+        if sync_version_stamp(&mut lock, had_versions_before, csa_version, weave_version) {
             lock.save(project_dir)?;
-            eprintln!("Updated weave.lock version to {csa_version}.");
+            eprintln!(
+                "Updated weave.lock version stamp(s) to csa {csa_version}, weave {weave_version}."
+            );
         }
         return Ok(());
     }
@@ -114,11 +113,60 @@ fn run_migrations(
     }
 
     // Update version in lock after all migrations.
-    let v = lock.versions_or_init(csa_version, weave_version);
-    v.csa = csa_version.to_string();
-    v.weave = weave_version.to_string();
+    sync_version_stamp(&mut lock, had_versions_before, csa_version, weave_version);
     lock.save(project_dir)?;
 
-    eprintln!("All migrations applied. weave.lock updated to {csa_version}.");
+    eprintln!(
+        "All migrations applied. weave.lock updated to csa {csa_version}, weave {weave_version}."
+    );
     Ok(())
+}
+
+fn sync_version_stamp(
+    lock: &mut csa_config::WeaveLock,
+    had_versions_before: bool,
+    csa_version: &str,
+    weave_version: &str,
+) -> bool {
+    let versions = lock.versions_or_init(csa_version, weave_version);
+    let changed =
+        !had_versions_before || versions.csa != csa_version || versions.weave != weave_version;
+    if changed {
+        versions.csa = csa_version.to_string();
+        versions.weave = weave_version.to_string();
+    }
+    changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sync_version_stamp_updates_weave_only_drift() {
+        let mut lock = csa_config::WeaveLock::new("0.1.1", "0.1.0");
+
+        let changed = sync_version_stamp(&mut lock, true, "0.1.1", "0.1.1");
+
+        assert!(changed);
+        let versions = lock.versions().unwrap();
+        assert_eq!(versions.csa, "0.1.1");
+        assert_eq!(versions.weave, "0.1.1");
+    }
+
+    #[test]
+    fn sync_version_stamp_initializes_missing_versions() {
+        let mut lock = csa_config::WeaveLock {
+            versions: None,
+            migrations: Default::default(),
+            package: Vec::new(),
+        };
+
+        let changed = sync_version_stamp(&mut lock, false, "0.1.1", "0.1.1");
+
+        assert!(changed);
+        let versions = lock.versions().unwrap();
+        assert_eq!(versions.csa, "0.1.1");
+        assert_eq!(versions.weave, "0.1.1");
+    }
 }

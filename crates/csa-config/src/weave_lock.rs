@@ -146,41 +146,65 @@ impl WeaveLock {
     }
 }
 
-/// Result of comparing the running binary version against weave.lock.
+/// A single version stamp mismatch between weave.lock and the running binaries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VersionStampDiff {
+    pub component: &'static str,
+    pub lock_version: String,
+    pub binary_version: String,
+}
+
+/// Result of comparing the running binary versions against weave.lock.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VersionCheckResult {
     /// No weave.lock exists yet; nothing to do.
     NoLockFile,
-    /// Versions match — everything is current.
+    /// Version stamps match — everything is current.
     UpToDate,
-    /// Version differs but no migrations are pending.
+    /// One or more version stamps differ, but no migrations are pending.
     /// Startup remains read-only; user should run `csa migrate` to update
     /// the recorded version stamp explicitly.
-    VersionDrift {
-        lock_csa_version: String,
-        binary_csa_version: String,
-    },
-    /// The running binary is older than the version recorded in weave.lock.
-    /// No file changes are made to avoid accidental lockfile downgrades.
-    BinaryOlder {
-        lock_csa_version: String,
-        binary_csa_version: String,
-    },
+    VersionDrift { drifted: Vec<VersionStampDiff> },
+    /// At least one running binary is older than the version recorded in
+    /// weave.lock. No file changes are made to avoid accidental lockfile
+    /// downgrades.
+    BinaryOlder { older: Vec<VersionStampDiff> },
     /// Migrations are pending; user should run `csa migrate`.
     MigrationNeeded { pending_count: usize },
+}
+
+/// Format a human-readable warning for a non-up-to-date version check result.
+pub fn format_version_check_warning(result: &VersionCheckResult) -> Option<String> {
+    match result {
+        VersionCheckResult::NoLockFile | VersionCheckResult::UpToDate => None,
+        VersionCheckResult::MigrationNeeded { pending_count } => Some(format!(
+            "WARNING: weave.lock is outdated ({pending_count} pending migration(s)). Run `csa migrate` to update."
+        )),
+        VersionCheckResult::VersionDrift { drifted } => Some(format!(
+            "WARNING: weave.lock records stale version stamp(s): {}. Run `csa migrate` to update.",
+            format_version_stamp_diffs(drifted, "->")
+        )),
+        VersionCheckResult::BinaryOlder { older } => Some(format!(
+            "WARNING: weave.lock records newer version(s) than the running binaries: {}. Lockfile unchanged.",
+            format_version_stamp_diffs(older, ">")
+        )),
+    }
 }
 
 /// Compare the running binary version against `weave.lock` and report the
 /// state without modifying the lockfile.
 ///
 /// - No lock file → return `NoLockFile`; caller should prompt `csa migrate`.
-/// - Versions match → return `UpToDate`.
-/// - Version differs, no pending migrations → return `VersionDrift` without modifying the lock.
-/// - Binary older than lock version → return `BinaryOlder` and do not modify the lock.
-/// - Version differs, pending migrations → return `MigrationNeeded`.
+/// - Version stamps match → return `UpToDate`.
+/// - Any version stamp differs, no pending migrations → return `VersionDrift`
+///   without modifying the lock.
+/// - Any running binary older than a recorded version stamp → return
+///   `BinaryOlder` and do not modify the lock.
+/// - CSA version differs with pending migrations → return `MigrationNeeded`.
 pub fn check_version(
     project_dir: &Path,
     binary_csa_version: &str,
-    _binary_weave_version: &str,
+    binary_weave_version: &str,
     registry: &crate::MigrationRegistry,
 ) -> Result<VersionCheckResult> {
     let Some(lock) = WeaveLock::load(project_dir)? else {
@@ -194,43 +218,111 @@ pub fn check_version(
         return Ok(VersionCheckResult::NoLockFile);
     };
 
-    let lock_csa = &versions.csa;
-    if lock_csa == binary_csa_version {
+    let csa_matches = versions.csa == binary_csa_version;
+    let weave_matches = versions.weave == binary_weave_version;
+    if csa_matches && weave_matches {
         return Ok(VersionCheckResult::UpToDate);
     }
 
-    // Parse versions to check for pending migrations.
-    let current: crate::Version = lock_csa
-        .parse()
-        .with_context(|| format!("parsing lock csa version {lock_csa:?}"))?;
-    let target: crate::Version = binary_csa_version
-        .parse()
-        .with_context(|| format!("parsing binary csa version {binary_csa_version:?}"))?;
+    let csa_versions = if csa_matches {
+        None
+    } else {
+        Some((
+            versions
+                .csa
+                .parse::<crate::Version>()
+                .with_context(|| format!("parsing lock csa version {:?}", versions.csa))?,
+            binary_csa_version
+                .parse::<crate::Version>()
+                .with_context(|| format!("parsing binary csa version {binary_csa_version:?}"))?,
+        ))
+    };
 
-    // Never downgrade weave.lock to an older binary version.
-    if target < current {
-        return Ok(VersionCheckResult::BinaryOlder {
-            lock_csa_version: lock_csa.clone(),
-            binary_csa_version: binary_csa_version.to_string(),
+    let weave_versions = if weave_matches {
+        None
+    } else {
+        Some((
+            versions
+                .weave
+                .parse::<crate::Version>()
+                .with_context(|| format!("parsing lock weave version {:?}", versions.weave))?,
+            binary_weave_version
+                .parse::<crate::Version>()
+                .with_context(|| {
+                    format!("parsing binary weave version {binary_weave_version:?}")
+                })?,
+        ))
+    };
+
+    let mut older = Vec::new();
+    if let Some((current, target)) = &csa_versions
+        && target < current
+    {
+        older.push(VersionStampDiff {
+            component: "csa",
+            lock_version: versions.csa.clone(),
+            binary_version: binary_csa_version.to_string(),
+        });
+    }
+    if let Some((current, target)) = &weave_versions
+        && target < current
+    {
+        older.push(VersionStampDiff {
+            component: "weave",
+            lock_version: versions.weave.clone(),
+            binary_version: binary_weave_version.to_string(),
         });
     }
 
-    let pending = registry.pending(&current, &target, &lock.migrations.applied);
+    // Never downgrade weave.lock to older binary versions.
+    if !older.is_empty() {
+        return Ok(VersionCheckResult::BinaryOlder { older });
+    }
 
-    if pending.is_empty() {
-        return Ok(VersionCheckResult::VersionDrift {
-            lock_csa_version: lock_csa.clone(),
-            binary_csa_version: binary_csa_version.to_string(),
+    if let Some((current, target)) = &csa_versions {
+        let pending = registry.pending(current, target, &lock.migrations.applied);
+
+        if !pending.is_empty() {
+            return Ok(VersionCheckResult::MigrationNeeded {
+                pending_count: pending.len(),
+            });
+        }
+    }
+
+    let mut drifted = Vec::new();
+    if !csa_matches {
+        drifted.push(VersionStampDiff {
+            component: "csa",
+            lock_version: versions.csa.clone(),
+            binary_version: binary_csa_version.to_string(),
+        });
+    }
+    if !weave_matches {
+        drifted.push(VersionStampDiff {
+            component: "weave",
+            lock_version: versions.weave.clone(),
+            binary_version: binary_weave_version.to_string(),
         });
     }
 
-    Ok(VersionCheckResult::MigrationNeeded {
-        pending_count: pending.len(),
-    })
+    Ok(VersionCheckResult::VersionDrift { drifted })
 }
 
 fn lock_path(project_dir: &Path) -> PathBuf {
     project_dir.join(LOCK_FILENAME)
+}
+
+fn format_version_stamp_diffs(diffs: &[VersionStampDiff], arrow: &str) -> String {
+    diffs
+        .iter()
+        .map(|diff| {
+            format!(
+                "{} {} {} {}",
+                diff.component, diff.lock_version, arrow, diff.binary_version
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]
@@ -336,13 +428,48 @@ mod tests {
 
         let registry = crate::MigrationRegistry::new();
         let result = check_version(dir.path(), "0.1.1", "0.1.1", &registry).unwrap();
-        assert!(matches!(
+        assert_eq!(
             result,
             VersionCheckResult::VersionDrift {
-                lock_csa_version,
-                binary_csa_version
-            } if lock_csa_version == "0.1.0" && binary_csa_version == "0.1.1"
-        ));
+                drifted: vec![
+                    VersionStampDiff {
+                        component: "csa",
+                        lock_version: "0.1.0".to_string(),
+                        binary_version: "0.1.1".to_string(),
+                    },
+                    VersionStampDiff {
+                        component: "weave",
+                        lock_version: "0.1.0".to_string(),
+                        binary_version: "0.1.1".to_string(),
+                    },
+                ],
+            }
+        );
+
+        let after = std::fs::read_to_string(&lock_path).unwrap();
+        assert_eq!(before, after, "lockfile content must remain unchanged");
+    }
+
+    #[test]
+    fn test_check_version_reports_weave_only_drift_without_mutating_lockfile() {
+        let dir = TempDir::new().unwrap();
+        let lock = WeaveLock::new("0.1.1", "0.1.0");
+        lock.save(dir.path()).unwrap();
+        let lock_path = dir.path().join("weave.lock");
+        let before = std::fs::read_to_string(&lock_path).unwrap();
+
+        let registry = crate::MigrationRegistry::new();
+        let result = check_version(dir.path(), "0.1.1", "0.1.1", &registry).unwrap();
+        assert_eq!(
+            result,
+            VersionCheckResult::VersionDrift {
+                drifted: vec![VersionStampDiff {
+                    component: "weave",
+                    lock_version: "0.1.0".to_string(),
+                    binary_version: "0.1.1".to_string(),
+                }],
+            }
+        );
 
         let after = std::fs::read_to_string(&lock_path).unwrap();
         assert_eq!(before, after, "lockfile content must remain unchanged");
@@ -358,13 +485,23 @@ mod tests {
 
         let registry = crate::MigrationRegistry::new();
         let result = check_version(dir.path(), "0.1.55", "0.1.55", &registry).unwrap();
-        assert!(matches!(
+        assert_eq!(
             result,
             VersionCheckResult::BinaryOlder {
-                lock_csa_version,
-                binary_csa_version
-            } if lock_csa_version == "0.1.56" && binary_csa_version == "0.1.55"
-        ));
+                older: vec![
+                    VersionStampDiff {
+                        component: "csa",
+                        lock_version: "0.1.56".to_string(),
+                        binary_version: "0.1.55".to_string(),
+                    },
+                    VersionStampDiff {
+                        component: "weave",
+                        lock_version: "0.1.56".to_string(),
+                        binary_version: "0.1.55".to_string(),
+                    },
+                ],
+            }
+        );
 
         let after = std::fs::read_to_string(&lock_path).unwrap();
         assert_eq!(before, after, "lockfile content must remain unchanged");
@@ -408,6 +545,23 @@ applied = ["0.12.0-plan-to-workflow"]
         assert_eq!(lock.versions().unwrap().weave, "0.8.3");
         assert!(lock.versions().unwrap().last_migrated_at.is_some());
         assert_eq!(lock.migrations.applied, vec!["0.12.0-plan-to-workflow"]);
+    }
+
+    #[test]
+    fn test_format_version_check_warning_for_weave_only_drift() {
+        let warning = format_version_check_warning(&VersionCheckResult::VersionDrift {
+            drifted: vec![VersionStampDiff {
+                component: "weave",
+                lock_version: "0.1.0".to_string(),
+                binary_version: "0.1.1".to_string(),
+            }],
+        })
+        .unwrap();
+
+        assert_eq!(
+            warning,
+            "WARNING: weave.lock records stale version stamp(s): weave 0.1.0 -> 0.1.1. Run `csa migrate` to update."
+        );
     }
 
     #[test]
