@@ -218,7 +218,7 @@ pub enum SessionCommands {
         cd: Option<String>,
     },
 
-    /// Attach to a running daemon session (tail stdout/stderr until the daemon exits)
+    /// Attach to a running daemon session (tail live output/stderr until the daemon exits)
     Attach {
         /// Session ID to attach to
         #[arg(long)]

@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use csa_executor::{TransportFactory, TransportMode};
 use csa_session::get_session_dir;
 use csa_session::state::ReviewSessionMeta;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,12 @@ const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 const DAEMON_COMPLETION_FILE: &str = "daemon-completion.toml";
 const POST_REVIEW_PR_BOT_CMD: &str = "csa plan run --sa-mode true --pattern pr-bot";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AttachPrimaryOutput {
+    StdoutLog,
+    OutputLog,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DaemonCompletionPacket {
@@ -37,6 +44,24 @@ impl DaemonCompletionPacket {
 fn is_pid_alive(pid: u32) -> bool {
     // SAFETY: kill(pid, 0) is a standard POSIX liveness probe.
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput {
+    let metadata_path = session_dir.join(csa_session::metadata::METADATA_FILE_NAME);
+    let Ok(contents) = fs::read_to_string(metadata_path) else {
+        return AttachPrimaryOutput::StdoutLog;
+    };
+    let Ok(metadata) = toml::from_str::<csa_session::metadata::SessionMetadata>(&contents) else {
+        return AttachPrimaryOutput::StdoutLog;
+    };
+    if matches!(
+        TransportFactory::mode_for_tool(&metadata.tool),
+        TransportMode::Acp
+    ) {
+        AttachPrimaryOutput::OutputLog
+    } else {
+        AttachPrimaryOutput::StdoutLog
+    }
 }
 
 /// Read the daemon PID from the session directory.
@@ -433,8 +458,9 @@ fn emit_wait_completion_signal(
     );
 }
 
-/// Attach to a running daemon session: tail stdout.log (and optionally
-/// stderr.log) in real time until the daemon fully completes.
+/// Attach to a running daemon session: tail the primary live output channel
+/// (output.log for ACP sessions, stdout.log otherwise) and optionally stderr.log
+/// until the daemon fully completes.
 pub(crate) fn handle_session_attach(
     session: String,
     show_stderr: bool,
@@ -447,21 +473,46 @@ pub(crate) fn handle_session_attach(
 
     let stdout_path = session_dir.join("stdout.log");
     let stderr_path = session_dir.join("stderr.log");
+    let output_path = session_dir.join("output.log");
+    let primary_output = attach_primary_output_for_session(&session_dir);
+    let live_stdout_path = match primary_output {
+        AttachPrimaryOutput::StdoutLog => &stdout_path,
+        AttachPrimaryOutput::OutputLog => &output_path,
+    };
 
     // Wait for the spool file to appear (daemon may still be starting).
     let start = std::time::Instant::now();
-    while !stdout_path.exists() {
+    while !live_stdout_path.exists() {
         if start.elapsed().as_secs() > 30 {
+            if primary_output == AttachPrimaryOutput::OutputLog && stdout_path.exists() {
+                break;
+            }
+            let missing_name = live_stdout_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("session output");
             anyhow::bail!(
-                "stdout.log not found after 30s — session {} may not be a daemon session",
-                resolved.session_id,
+                "{missing_name} not found after 30s — session {} may not be a daemon session",
+                resolved.session_id
             );
         }
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
 
     let daemon_pid = read_daemon_pid(&session_dir);
-    let mut stdout_file = std::fs::File::open(&stdout_path)?;
+    let live_stdout_path = if live_stdout_path.exists() {
+        live_stdout_path
+    } else {
+        &stdout_path
+    };
+    let live_streams_output_log = live_stdout_path == output_path.as_path();
+    let mut live_stdout_file = std::fs::File::open(live_stdout_path)?;
+    let mut completion_stdout_file: Option<std::fs::File> =
+        if live_streams_output_log && stdout_path.exists() {
+            Some(std::fs::File::open(&stdout_path)?)
+        } else {
+            None
+        };
     // Lazy-open stderr: retry on each poll iteration if not yet available.
     let mut stderr_file: Option<std::fs::File> = if show_stderr && stderr_path.exists() {
         Some(std::fs::File::open(&stderr_path)?)
@@ -475,7 +526,7 @@ pub(crate) fn handle_session_attach(
     loop {
         let mut any_output = false;
 
-        let n = stdout_file.read(&mut buf)?;
+        let n = live_stdout_file.read(&mut buf)?;
         if n > 0 {
             std::io::stdout().write_all(&buf[..n])?;
             std::io::stdout().flush()?;
@@ -498,11 +549,25 @@ pub(crate) fn handle_session_attach(
         if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
             // Drain remaining stdout.
             loop {
-                let n = stdout_file.read(&mut buf)?;
+                let n = live_stdout_file.read(&mut buf)?;
                 if n == 0 {
                     break;
                 }
                 std::io::stdout().write_all(&buf[..n])?;
+            }
+            if live_streams_output_log {
+                if completion_stdout_file.is_none() && stdout_path.exists() {
+                    completion_stdout_file = Some(std::fs::File::open(&stdout_path)?);
+                }
+                if let Some(ref mut f) = completion_stdout_file {
+                    loop {
+                        let n = f.read(&mut buf)?;
+                        if n == 0 {
+                            break;
+                        }
+                        std::io::stdout().write_all(&buf[..n])?;
+                    }
+                }
             }
             std::io::stdout().flush()?;
             // Drain remaining stderr.
@@ -640,4 +705,49 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
 
     eprintln!("Session {} killed", resolved.session_id);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn attach_primary_output_prefers_output_log_for_acp_tools() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let metadata = csa_session::metadata::SessionMetadata {
+            tool: "codex".to_string(),
+            tool_locked: true,
+        };
+        let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+        std::fs::write(
+            td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+            metadata_toml,
+        )
+        .expect("write metadata");
+
+        assert_eq!(
+            attach_primary_output_for_session(td.path()),
+            AttachPrimaryOutput::OutputLog
+        );
+    }
+
+    #[test]
+    fn attach_primary_output_keeps_stdout_for_legacy_tools() {
+        let td = tempfile::tempdir().expect("tempdir");
+        let metadata = csa_session::metadata::SessionMetadata {
+            tool: "opencode".to_string(),
+            tool_locked: true,
+        };
+        let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
+        std::fs::write(
+            td.path().join(csa_session::metadata::METADATA_FILE_NAME),
+            metadata_toml,
+        )
+        .expect("write metadata");
+
+        assert_eq!(
+            attach_primary_output_for_session(td.path()),
+            AttachPrimaryOutput::StdoutLog
+        );
+    }
 }
