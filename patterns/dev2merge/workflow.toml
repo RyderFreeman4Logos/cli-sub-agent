@@ -51,10 +51,10 @@ name = "LOCAL_SHA"
 name = "MKTD_TODO_PATH"
 
 [[workflow.variables]]
-name = "MKTD_TODO_TIMESTAMP"
+name = "MKTD_INTENSITY"
 
 [[workflow.variables]]
-name = "MKTD_INTENSITY"
+name = "MKTD_TODO_TIMESTAMP"
 
 [[workflow.variables]]
 name = "MKTD_TOOL_EFFECTIVE"
@@ -117,7 +117,7 @@ name = "VERSION"
 id = 1
 title = "Validate Branch"
 tool = "bash"
-prompt = """
+prompt = '''
 Verify the current branch is a feature branch, not protected.
 
 ```bash
@@ -134,7 +134,7 @@ if [ "$BRANCH" = "$DEFAULT_BRANCH" ] || [ "$BRANCH" = "dev" ]; then
 fi
 echo "CSA_VAR:WORKFLOW_BRANCH=$BRANCH"
 echo "CSA_VAR:DEFAULT_BRANCH=$DEFAULT_BRANCH"
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
@@ -163,20 +163,20 @@ on_fail = "abort"
 id = 3
 title = "L1/L2 Quality Gates (Always Run)"
 tool = "bash"
-prompt = """
+prompt = '''
 Formatters and linters run regardless of FAST_PATH.
 
 ```bash
 just fmt
 just clippy
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]
 id = 4
 title = "FAST_PATH Commit"
 tool = "bash"
-prompt = """
+prompt = '''
 For docs/config-only changes, run a simplified commit flow:
 stage, generate message, commit. No mktd/mktsk/security-audit overhead.
 
@@ -191,7 +191,7 @@ fi
 COMMIT_MSG="$(scripts/gen_commit_msg.sh "${SCOPE:-}" 2>/dev/null || echo "docs: update documentation")"
 git commit -m "${COMMIT_MSG}"
 echo "CSA_VAR:FAST_PATH_COMMITTED=true"
-```"""
+```'''
 on_fail = "abort"
 condition = "${FAST_PATH}"
 
@@ -199,7 +199,7 @@ condition = "${FAST_PATH}"
 id = 5
 title = "FAST_PATH Version Bump"
 tool = "bash"
-prompt = """
+prompt = '''
 ```bash
 set -euo pipefail
 if ! just check-version-bumped 2>/dev/null; then
@@ -209,7 +209,7 @@ if ! just check-version-bumped 2>/dev/null; then
   VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
   git commit -m "chore(release): bump workspace version to ${VERSION}"
 fi
-```"""
+```'''
 on_fail = "abort"
 condition = "${FAST_PATH}"
 
@@ -284,6 +284,7 @@ condition = "!(${FAST_PATH})"
 [[workflow.steps]]
 id = 8
 title = "Execute Plan with mktsk"
+tool = "manual"
 prompt = """
 Invoke the mktsk skill directly (NOT via csa run). mktsk MUST run in the
 main agent context so it can use TaskCreate/TaskUpdate for progress tracking.
@@ -301,7 +302,7 @@ condition = "!(${FAST_PATH})"
 id = 9
 title = "Ensure Version Bumped"
 tool = "bash"
-prompt = """
+prompt = '''
 ```bash
 set -euo pipefail
 if ! just check-version-bumped 2>/dev/null; then
@@ -311,7 +312,7 @@ if ! just check-version-bumped 2>/dev/null; then
   VERSION="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "cli-sub-agent") | .version')"
   git commit -m "chore(release): bump workspace version to ${VERSION}"
 fi
-```"""
+```'''
 on_fail = "abort"
 condition = "!(${FAST_PATH})"
 
@@ -352,7 +353,7 @@ condition = "!(${FAST_PATH})"
 id = 11
 title = "Push Gate"
 tool = "bash"
-prompt = """
+prompt = '''
 Hard gate: REVIEW_COMPLETED must be true before any push.
 
 ```bash
@@ -365,7 +366,7 @@ BRANCH="$(git branch --show-current)"
 git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
 echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 12)" required=true -->'
-```"""
+```'''
 on_fail = "abort"
 
 [[workflow.steps]]

@@ -142,20 +142,62 @@ fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..")
 }
 
-fn load_pr_bot_step(step_id: usize) -> PlanStep {
+fn load_pr_bot_step_by_title(title: &str) -> PlanStep {
     let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
     let workflow = std::fs::read_to_string(&workflow_path).unwrap();
     let plan = plan_from_toml(&workflow).unwrap();
     let step = plan
         .steps
         .into_iter()
-        .find(|step| step.id == step_id)
-        .unwrap_or_else(|| panic!("missing pr-bot step {step_id}"));
+        .find(|step| step.title == title)
+        .unwrap_or_else(|| panic!("missing pr-bot step '{title}'"));
     PlanStep {
         condition: None,
         loop_var: None,
         ..step
     }
+}
+
+#[test]
+fn pr_bot_workflow_marks_non_ai_steps_explicitly() {
+    let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    assert!(
+        plan.steps
+            .iter()
+            .all(|step| step.title != "Dispatcher Model Note"),
+        "dispatcher note must remain informational markdown, not an executable step"
+    );
+
+    let setup_abort = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Step 5a: Abort — Bot Needs Environment Configuration")
+        .expect("missing bot setup abort step");
+    assert_eq!(setup_abort.tool.as_deref(), Some("manual"));
+
+    let clean_note = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Step 10a: Bot Review Clean")
+        .expect("missing bot review clean step");
+    assert_eq!(clean_note.tool.as_deref(), Some("note"));
+}
+
+#[test]
+fn dev2merge_workflow_marks_mktsk_step_manual() {
+    let workflow_path = workspace_root().join("patterns/dev2merge/workflow.toml");
+    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
+    let plan = plan_from_toml(&workflow).unwrap();
+
+    let mktsk_step = plan
+        .steps
+        .iter()
+        .find(|step| step.title == "Execute Plan with mktsk")
+        .expect("missing dev2merge mktsk step");
+    assert_eq!(mktsk_step.tool.as_deref(), Some("manual"));
 }
 
 #[test]
@@ -272,7 +314,7 @@ PR_COMMENT_END
 
 #[tokio::test]
 async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
-    let step = load_pr_bot_step(15);
+    let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let vars = step_15_env(tmp.path(), &capture_path, dismissed_debate_output());
@@ -302,7 +344,7 @@ async fn execute_step_bash_posts_pr_audit_trail_for_dismissed_verdict() {
 
 #[tokio::test]
 async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() {
-    let step = load_pr_bot_step(15);
+    let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let vars = step_15_env(tmp.path(), &capture_path, confirmed_debate_output());
@@ -336,7 +378,7 @@ async fn execute_step_bash_reroutes_confirmed_verdict_without_posting_comment() 
 
 #[tokio::test]
 async fn execute_step_bash_fails_closed_on_malformed_dismissed_output() {
-    let step = load_pr_bot_step(15);
+    let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let malformed_output = r#"VERDICT: DISMISSED
@@ -374,7 +416,7 @@ CSA session ID: 01TESTDEBATESESSIONID
 
 #[tokio::test]
 async fn execute_step_bash_fails_closed_on_duplicate_verdict_markers() {
-    let step = load_pr_bot_step(15);
+    let step = load_pr_bot_step_by_title("Step 8a: Post Debate Audit Trail Comment");
     let tmp = tempfile::tempdir().unwrap();
     let capture_path = install_fake_gh(tmp.path());
     let duplicate_verdict_output = r#"VERDICT: DISMISSED

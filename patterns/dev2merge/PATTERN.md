@@ -190,6 +190,7 @@ echo "CSA_VAR:MKTD_TODO_PATH=${TODO_PATH}"
 ## Step 8: Execute Plan with mktsk
 
 OnFail: abort
+Tool: manual (main agent action)
 
 Invoke the mktsk skill directly (NOT via `csa run`). mktsk MUST run in the
 main agent context so it can use TaskCreate/TaskUpdate for progress tracking.

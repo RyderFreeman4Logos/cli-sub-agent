@@ -32,6 +32,10 @@ pub(crate) enum StepTarget {
     DirectBash,
     /// Skip this step (compile-time INCLUDE directive from weave).
     WeaveInclude,
+    /// Non-executable note for human-facing workflow context.
+    Note,
+    /// Manual action that must be handled by the orchestrator, not CSA.
+    Manual,
     /// Dispatch to an AI tool via CSA infrastructure.
     CsaTool {
         tool_name: ToolName,
@@ -108,7 +112,7 @@ fn format_plan_resume_command(
 /// Resolution order:
 /// 1. `step.tool` — explicit tool name (e.g. "bash", "claude-code", "codex")
 /// 2. `step.tier` — tier name looked up in config's `tiers` map
-/// 3. Fallback: "bash" (safest default for v1)
+/// 3. Fallback: default configured AI tool, or codex if no config is present
 pub(crate) fn resolve_step_tool(
     step: &PlanStep,
     config: Option<&ProjectConfig>,
@@ -118,6 +122,8 @@ pub(crate) fn resolve_step_tool(
         let tool_lower = tool_str.to_lowercase();
         match tool_lower.as_str() {
             "bash" => return Ok(StepTarget::DirectBash),
+            "note" => return Ok(StepTarget::Note),
+            "manual" => return Ok(StepTarget::Manual),
             "gemini-cli" => return Ok(StepTarget::csa(ToolName::GeminiCli, None)),
             "opencode" => return Ok(StepTarget::csa(ToolName::Opencode, None)),
             "codex" => return Ok(StepTarget::csa(ToolName::Codex, None)),
@@ -150,7 +156,7 @@ pub(crate) fn resolve_step_tool(
             // "weave" = compile-time INCLUDE directive, skip at runtime
             "weave" => return Ok(StepTarget::WeaveInclude),
             other => bail!(
-                "Unknown tool '{}' in step {} ('{}'). Known: bash, gemini-cli, opencode, codex, claude-code, csa, weave",
+                "Unknown tool '{}' in step {} ('{}'). Known: bash, note, manual, gemini-cli, opencode, codex, claude-code, csa, weave",
                 other,
                 step.id,
                 step.title
@@ -458,19 +464,53 @@ pub(crate) async fn execute_step(
         target
     };
 
-    // Skip weave INCLUDE steps (compile-time directive, not executable at runtime)
-    if matches!(target, StepTarget::WeaveInclude) {
-        info!("{} - Skipping INCLUDE step (compile-time directive)", label);
-        return StepResult {
-            step_id: step.id,
-            title: step.title.clone(),
-            exit_code: 0,
-            duration_secs: 0.0,
-            skipped: true,
-            error: None,
-            output: None,
-            session_id: None,
-        };
+    match target {
+        StepTarget::WeaveInclude => {
+            info!("{} - Skipping INCLUDE step (compile-time directive)", label);
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: 0.0,
+                skipped: true,
+                error: None,
+                output: None,
+                session_id: None,
+            };
+        }
+        StepTarget::Note => {
+            info!("{} - NOTE step (non-executable)", label);
+            eprintln!("{label} - NOTE");
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 0,
+                duration_secs: 0.0,
+                skipped: true,
+                error: None,
+                output: None,
+                session_id: None,
+            };
+        }
+        StepTarget::Manual => {
+            let error = format!(
+                "Manual step '{}' requires orchestrator handling; csa plan run cannot execute it directly.",
+                step.title
+            );
+            warn!("{} - {}", label, error);
+            eprintln!("{label} - MANUAL ACTION REQUIRED");
+            return StepResult {
+                step_id: step.id,
+                title: step.title.clone(),
+                exit_code: 1,
+                duration_secs: start.elapsed().as_secs_f64(),
+                skipped: false,
+                error: Some(error),
+                output: None,
+                session_id: None,
+            };
+        }
+        StepTarget::DirectBash | StepTarget::CsaTool { .. } => {}
     }
 
     // CSA prompts use template substitution. Bash steps receive variables via env vars.
@@ -550,6 +590,7 @@ pub(crate) async fn execute_step(
                 )
                 .await
             }
+            StepTarget::Note | StepTarget::Manual => unreachable!("handled above"),
             StepTarget::WeaveInclude => unreachable!("handled above"),
         };
         let outcome = match execution_result {
