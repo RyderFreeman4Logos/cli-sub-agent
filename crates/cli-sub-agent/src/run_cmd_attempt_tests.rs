@@ -7,6 +7,7 @@ use anyhow::anyhow;
 use chrono::Utc;
 use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
 use csa_core::types::ToolName;
+use csa_process::ExecutionResult;
 use csa_session::{create_session, load_result};
 use std::{collections::HashMap, path::Path};
 
@@ -61,6 +62,16 @@ fn assert_retry_to(action: RateLimitAction, expected_tool: &str, expected_spec: 
         RateLimitAction::NoRateLimit => panic!("expected failover retry, got no rate limit"),
         RateLimitAction::ExhaustedFailovers => {
             panic!("expected failover retry, got exhausted failovers")
+        }
+    }
+}
+
+fn assert_no_rate_limit(action: RateLimitAction) {
+    match action {
+        RateLimitAction::NoRateLimit => {}
+        RateLimitAction::Retry { .. } => panic!("expected no failover, got retry"),
+        RateLimitAction::ExhaustedFailovers => {
+            panic!("expected no failover, got exhausted failovers")
         }
     }
 }
@@ -166,6 +177,7 @@ fn evaluate_error_rate_limit_failover_retries_on_acp_crash_retry_exhaustion() {
         4,
         &mut tried_tools,
         &mut tried_specs,
+        true,
         Some("tier3"),
         None,
         None,
@@ -197,6 +209,7 @@ fn evaluate_error_rate_limit_failover_retries_on_gemini_retry_chain_exhaustion()
         4,
         &mut tried_tools,
         &mut tried_specs,
+        true,
         Some("tier3"),
         None,
         None,
@@ -238,6 +251,7 @@ fn full_anyhow_chain_preserves_quota_markers_for_failover_detection() {
         4,
         &mut tried_tools,
         &mut tried_specs,
+        true,
         Some("tier3"),
         None,
         None,
@@ -251,4 +265,91 @@ fn full_anyhow_chain_preserves_quota_markers_for_failover_detection() {
     .expect("evaluate failover");
 
     assert_retry_to(action, "codex", "codex/openai/o4-mini/high");
+}
+
+#[test]
+fn evaluate_error_rate_limit_failover_skips_retry_exhaustion_without_active_tier_routing() {
+    let config = make_failover_config(&[
+        "gemini-cli/google/gemini-2.5-pro/high",
+        "codex/openai/o4-mini/high",
+    ]);
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+
+    let action = evaluate_error_rate_limit_failover(
+        "gemini-cli",
+        "Gemini ACP retry chain exhausted. OAuth->APIKey(same model)->APIKey(flash). Last error: temporary auth failure",
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        false,
+        None,
+        None,
+        None,
+        true,
+        "debug the request",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("gemini-cli/google/gemini-2.5-pro/high"),
+    )
+    .expect("evaluate failover");
+
+    assert_no_rate_limit(action);
+    assert!(
+        tried_tools.is_empty(),
+        "inactive tier routing should not mutate retry state"
+    );
+    assert!(
+        tried_specs.is_empty(),
+        "inactive tier routing should not mutate retry state"
+    );
+}
+
+#[test]
+fn evaluate_rate_limit_failover_skips_rate_limit_without_active_tier_routing() {
+    let config = make_failover_config(&[
+        "gemini-cli/google/gemini-2.5-pro/high",
+        "codex/openai/o4-mini/high",
+    ]);
+    let exec_result = ExecutionResult {
+        output: String::new(),
+        stderr_output: "429 resource exhausted".to_string(),
+        summary: "rate limited".to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+    let mut tried_tools = Vec::new();
+    let mut tried_specs = Vec::new();
+
+    let action = crate::run_cmd_post::evaluate_rate_limit_failover(
+        "gemini-cli",
+        &exec_result,
+        1,
+        4,
+        &mut tried_tools,
+        &mut tried_specs,
+        false,
+        None,
+        None,
+        None,
+        true,
+        "debug the request",
+        Path::new("."),
+        Some(&config),
+        None,
+        Some("gemini-cli/google/gemini-2.5-pro/high"),
+    )
+    .expect("evaluate failover");
+
+    assert_no_rate_limit(action);
+    assert!(
+        tried_tools.is_empty(),
+        "inactive tier routing should not mutate retry state"
+    );
+    assert!(
+        tried_specs.is_empty(),
+        "inactive tier routing should not mutate retry state"
+    );
 }
