@@ -1,3 +1,18 @@
+use std::sync::{LazyLock, Mutex};
+
+const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
+static DAEMON_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+fn restore_env_var(key: &str, original: Option<String>) {
+    // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+    unsafe {
+        match original {
+            Some(value) => std::env::set_var(key, value),
+            None => std::env::remove_var(key),
+        }
+    }
+}
+
 // --- classify_join_error tests ---
 
 #[tokio::test]
@@ -67,6 +82,53 @@ fn test_build_summary_ignores_csa_section_markers() {
 fn test_build_summary_falls_back_to_exit_code_when_no_output() {
     let summary = super::build_summary("", "   \n", -1);
     assert_eq!(summary, "exit code -1");
+}
+
+#[test]
+fn test_daemon_mode_disables_acp_stderr_streaming_when_output_spool_exists() {
+    let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
+    let original = std::env::var(DAEMON_SESSION_ID_ENV).ok();
+    // SAFETY: guarded by DAEMON_ENV_LOCK for this test.
+    unsafe { std::env::set_var(DAEMON_SESSION_ID_ENV, "01KTESTSESSION") };
+
+    let spool_path = std::path::Path::new("/tmp/output.log");
+    assert!(!super::should_stream_acp_stdout_to_stderr(
+        StreamMode::TeeToStderr,
+        Some(spool_path)
+    ));
+
+    restore_env_var(DAEMON_SESSION_ID_ENV, original);
+}
+
+#[test]
+fn test_foreground_mode_keeps_acp_stderr_streaming_even_with_output_spool() {
+    let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
+    let original = std::env::var(DAEMON_SESSION_ID_ENV).ok();
+    // SAFETY: guarded by DAEMON_ENV_LOCK for this test.
+    unsafe { std::env::remove_var(DAEMON_SESSION_ID_ENV) };
+
+    let spool_path = std::path::Path::new("/tmp/output.log");
+    assert!(super::should_stream_acp_stdout_to_stderr(
+        StreamMode::TeeToStderr,
+        Some(spool_path)
+    ));
+
+    restore_env_var(DAEMON_SESSION_ID_ENV, original);
+}
+
+#[test]
+fn test_daemon_mode_without_output_spool_keeps_acp_stderr_streaming() {
+    let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
+    let original = std::env::var(DAEMON_SESSION_ID_ENV).ok();
+    // SAFETY: guarded by DAEMON_ENV_LOCK for this test.
+    unsafe { std::env::set_var(DAEMON_SESSION_ID_ENV, "01KTESTSESSION") };
+
+    assert!(super::should_stream_acp_stdout_to_stderr(
+        StreamMode::TeeToStderr,
+        None
+    ));
+
+    restore_env_var(DAEMON_SESSION_ID_ENV, original);
 }
 
 // --- 3-phase Gemini fallback chain integration tests ---

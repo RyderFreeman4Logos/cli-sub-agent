@@ -96,7 +96,7 @@ impl StreamingMetadata {
 
 /// Trim a tail buffer back to [`TAIL_BUFFER_MAX_BYTES`] when it exceeds
 /// [`TAIL_BUFFER_HIGH_WATER`], respecting UTF-8 char boundaries.
-fn trim_tail_buffer(buf: &mut String) {
+pub(crate) fn trim_tail_buffer(buf: &mut String) {
     if buf.len() > TAIL_BUFFER_HIGH_WATER {
         let excess = buf.len() - TAIL_BUFFER_MAX_BYTES;
         let mut trim_at = excess;
