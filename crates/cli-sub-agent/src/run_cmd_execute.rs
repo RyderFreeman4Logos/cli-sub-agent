@@ -26,6 +26,25 @@ use super::resume::{
     skill_session_description,
 };
 
+fn resolve_run_tier_context(
+    strategy_resolved_tier_name: Option<String>,
+    fallback_tier_name: Option<String>,
+    force_ignore_tier_setting: bool,
+    user_explicit_tool: bool,
+) -> (bool, Option<String>) {
+    if force_ignore_tier_setting {
+        return (false, None);
+    }
+
+    let resolved_tier_name = strategy_resolved_tier_name.or_else(|| {
+        (!user_explicit_tool)
+            .then_some(fallback_tier_name)
+            .flatten()
+    });
+    let tier_routing_active = resolved_tier_name.is_some();
+    (tier_routing_active, resolved_tier_name)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn handle_run(
     tool: Option<csa_core::types::ToolArg>,
@@ -362,19 +381,25 @@ pub(crate) async fn handle_run(
         }
     }
 
-    let resolved_tier_name: Option<String> = strategy_resolved_tier_name.or_else(|| {
-        skill_agent.and_then(|a| a.tier.clone()).or_else(|| {
-            config.as_ref().and_then(|cfg| {
-                cfg.tier_mapping.get("default").cloned().or_else(|| {
-                    if cfg.tiers.contains_key("tier3") {
-                        Some("tier3".to_string())
-                    } else {
-                        cfg.tiers.keys().next().cloned()
-                    }
-                })
+    let fallback_tier_name = skill_agent.and_then(|a| a.tier.clone()).or_else(|| {
+        config.as_ref().and_then(|cfg| {
+            cfg.tier_mapping.get("default").cloned().or_else(|| {
+                if cfg.tiers.contains_key("tier3") {
+                    Some("tier3".to_string())
+                } else {
+                    cfg.tiers.keys().next().cloned()
+                }
             })
         })
     });
+    // Force-ignore bypass must not revive a tier at runtime, but ordinary
+    // auto/default routing still keeps its existing fallback tier context.
+    let (tier_routing_active, resolved_tier_name) = resolve_run_tier_context(
+        strategy_resolved_tier_name,
+        fallback_tier_name,
+        force_ignore_tier_setting,
+        user_explicit_tool,
+    );
     let context_load_options = skill_agent
         .and_then(|agent| pipeline::context_load_options_with_skips(&agent.skip_context));
     let memory_injection = pipeline::MemoryInjectionOptions {
@@ -414,6 +439,7 @@ pub(crate) async fn handle_run(
         fork_call,
         session_arg,
         effective_session_arg,
+        tier_routing_active,
         resolved_tier_name: resolved_tier_name.as_deref(),
         context_load_options: context_load_options.as_ref(),
         memory_injection,
@@ -472,4 +498,49 @@ pub(crate) async fn handle_run(
     }
 
     Ok(result.exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_run_tier_context;
+
+    #[test]
+    fn resolve_run_tier_context_keeps_active_strategy_tier() {
+        let (tier_routing_active, resolved_tier_name) =
+            resolve_run_tier_context(Some("tier-3-complex".to_string()), None, false, false);
+
+        assert!(tier_routing_active);
+        assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
+    }
+
+    #[test]
+    fn resolve_run_tier_context_drops_bypassed_tier() {
+        let (tier_routing_active, resolved_tier_name) = resolve_run_tier_context(
+            Some("tier-3-complex".to_string()),
+            Some("tier-2-standard".to_string()),
+            true,
+            true,
+        );
+
+        assert!(!tier_routing_active);
+        assert!(resolved_tier_name.is_none());
+    }
+
+    #[test]
+    fn resolve_run_tier_context_restores_fallback_tier_for_auto_routing() {
+        let (tier_routing_active, resolved_tier_name) =
+            resolve_run_tier_context(None, Some("tier-3-complex".to_string()), false, false);
+
+        assert!(tier_routing_active);
+        assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
+    }
+
+    #[test]
+    fn resolve_run_tier_context_does_not_restore_fallback_for_user_explicit_tool() {
+        let (tier_routing_active, resolved_tier_name) =
+            resolve_run_tier_context(None, Some("tier-3-complex".to_string()), false, true);
+
+        assert!(!tier_routing_active);
+        assert!(resolved_tier_name.is_none());
+    }
 }
