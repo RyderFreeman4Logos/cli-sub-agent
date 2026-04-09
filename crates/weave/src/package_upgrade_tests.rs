@@ -223,11 +223,16 @@ fn upgrade_reports_already_latest() {
 
     // Install latest (no pin).
     manual_install(&remote, &cache, &store, &project, "test-skill", None);
+    let lock_path = lockfile_path(&project);
+    let before = std::fs::read_to_string(&lock_path).unwrap();
 
     // Upgrade: should report already latest.
     let results = upgrade(&project, &cache, &store, false).unwrap();
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].status, UpgradeStatus::AlreadyLatest);
+
+    let after = std::fs::read_to_string(&lock_path).unwrap();
+    assert_eq!(before, after, "no-op upgrade must not rewrite weave.lock");
 }
 
 #[test]
@@ -392,14 +397,18 @@ fn upgrade_preserves_lockfile_versions_section() {
         .unwrap(),
     );
     save_lockfile(&lockfile_path(&project), &lf).unwrap();
+    let lock_path = lockfile_path(&project);
+    let before = std::fs::read_to_string(&lock_path).unwrap();
 
-    // Upgrade (no changes expected, but lockfile is re-saved).
+    // Upgrade (no changes expected).
     upgrade(&project, &cache, &store, false).unwrap();
+    let after = std::fs::read_to_string(&lock_path).unwrap();
 
     // Verify versions section preserved.
-    let loaded = load_lockfile(&lockfile_path(&project)).unwrap();
+    let loaded = load_lockfile(&lock_path).unwrap();
     assert!(
         loaded.versions.is_some(),
         "versions section should be preserved after upgrade"
     );
+    assert_eq!(before, after, "no-op upgrade must not rewrite weave.lock");
 }

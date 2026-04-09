@@ -556,6 +556,7 @@ pub fn upgrade(
         .context("no lockfile found — run `weave install` first")?;
 
     let mut results = Vec::new();
+    let mut lockfile_changed = false;
 
     for idx in 0..lockfile.package.len() {
         let pkg = &lockfile.package[idx];
@@ -620,6 +621,7 @@ pub fn upgrade(
             let version = read_version(&dest);
             lockfile.package[idx].commit = new_commit;
             lockfile.package[idx].version = version;
+            lockfile_changed = true;
 
             results.push(UpgradeEntry {
                 name: lockfile.package[idx].name.clone(),
@@ -638,7 +640,9 @@ pub fn upgrade(
         }
     }
 
-    save_lockfile(&lock_path, &lockfile)?;
+    if lockfile_changed {
+        save_lockfile(&lock_path, &lockfile)?;
+    }
     Ok(results)
 }
 

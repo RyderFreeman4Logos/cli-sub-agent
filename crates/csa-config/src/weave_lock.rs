@@ -152,9 +152,13 @@ pub enum VersionCheckResult {
     NoLockFile,
     /// Versions match — everything is current.
     UpToDate,
-    /// Version changed but no migrations are pending.
-    /// The lock file has already been silently updated.
-    AutoUpdated,
+    /// Version differs but no migrations are pending.
+    /// Startup remains read-only; user should run `csa migrate` to update
+    /// the recorded version stamp explicitly.
+    VersionDrift {
+        lock_csa_version: String,
+        binary_csa_version: String,
+    },
     /// The running binary is older than the version recorded in weave.lock.
     /// No file changes are made to avoid accidental lockfile downgrades.
     BinaryOlder {
@@ -170,16 +174,16 @@ pub enum VersionCheckResult {
 ///
 /// - No lock file → return `NoLockFile` (caller may create one).
 /// - Versions match → return `UpToDate`.
-/// - Version differs, no pending migrations → silently update lock, return `AutoUpdated`.
+/// - Version differs, no pending migrations → return `VersionDrift` without modifying the lock.
 /// - Binary older than lock version → return `BinaryOlder` and do not modify the lock.
 /// - Version differs, pending migrations → return `MigrationNeeded`.
 pub fn check_version(
     project_dir: &Path,
     binary_csa_version: &str,
-    binary_weave_version: &str,
+    _binary_weave_version: &str,
     registry: &crate::MigrationRegistry,
 ) -> Result<VersionCheckResult> {
-    let Some(mut lock) = WeaveLock::load(project_dir)? else {
+    let Some(lock) = WeaveLock::load(project_dir)? else {
         return Ok(VersionCheckResult::NoLockFile);
     };
 
@@ -214,12 +218,10 @@ pub fn check_version(
     let pending = registry.pending(&current, &target, &lock.migrations.applied);
 
     if pending.is_empty() {
-        // No migrations needed — just a patch bump. Auto-update the lock.
-        let v = lock.versions_or_init(binary_csa_version, binary_weave_version);
-        v.csa = binary_csa_version.to_string();
-        v.weave = binary_weave_version.to_string();
-        lock.save(project_dir)?;
-        return Ok(VersionCheckResult::AutoUpdated);
+        return Ok(VersionCheckResult::VersionDrift {
+            lock_csa_version: lock_csa.clone(),
+            binary_csa_version: binary_csa_version.to_string(),
+        });
     }
 
     Ok(VersionCheckResult::MigrationNeeded {
@@ -321,18 +323,25 @@ mod tests {
     }
 
     #[test]
-    fn test_check_version_auto_updates_when_no_migrations() {
+    fn test_check_version_reports_version_drift_without_mutating_lockfile() {
         let dir = TempDir::new().unwrap();
         let lock = WeaveLock::new("0.1.0", "0.1.0");
         lock.save(dir.path()).unwrap();
+        let lock_path = dir.path().join("weave.lock");
+        let before = std::fs::read_to_string(&lock_path).unwrap();
 
         let registry = crate::MigrationRegistry::new();
         let result = check_version(dir.path(), "0.1.1", "0.1.1", &registry).unwrap();
-        assert!(matches!(result, VersionCheckResult::AutoUpdated));
+        assert!(matches!(
+            result,
+            VersionCheckResult::VersionDrift {
+                lock_csa_version,
+                binary_csa_version
+            } if lock_csa_version == "0.1.0" && binary_csa_version == "0.1.1"
+        ));
 
-        // Verify lock was actually updated.
-        let loaded = WeaveLock::load(dir.path()).unwrap().unwrap();
-        assert_eq!(loaded.versions().unwrap().csa, "0.1.1");
+        let after = std::fs::read_to_string(&lock_path).unwrap();
+        assert_eq!(before, after, "lockfile content must remain unchanged");
     }
 
     #[test]
