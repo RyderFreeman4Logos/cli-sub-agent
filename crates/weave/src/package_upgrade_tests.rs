@@ -236,6 +236,52 @@ fn upgrade_reports_already_latest() {
 }
 
 #[test]
+fn upgrade_reports_already_latest_without_rewriting_legacy_git_entries() {
+    let tmp = TempDir::new().unwrap();
+    let (_work, remote) = setup_git_repo(tmp.path());
+    let project = tmp.path().join("project");
+    std::fs::create_dir_all(&project).unwrap();
+    let cache = tmp.path().join("cache");
+    let store = tmp.path().join("store");
+
+    let pkg = manual_install(&remote, &cache, &store, &project, "test-skill", None);
+    let lock_path = lockfile_path(&project);
+
+    // Simulate an older weave.lock entry that predates `source_kind`.
+    std::fs::write(
+        &lock_path,
+        format!(
+            r#"[versions]
+csa = "0.1.32"
+weave = "0.1.32"
+
+[[package]]
+name = "{name}"
+repo = "{repo}"
+commit = "{commit}"
+version = "{version}"
+"#,
+            name = pkg.name,
+            repo = pkg.repo,
+            commit = pkg.commit,
+            version = pkg.version.as_deref().unwrap_or("1.0.0"),
+        ),
+    )
+    .unwrap();
+    let before = std::fs::read_to_string(&lock_path).unwrap();
+
+    let results = upgrade(&project, &cache, &store, false).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].status, UpgradeStatus::AlreadyLatest);
+
+    let after = std::fs::read_to_string(&lock_path).unwrap();
+    assert_eq!(
+        before, after,
+        "no-op upgrade must not rewrite legacy weave.lock entries"
+    );
+}
+
+#[test]
 fn upgrade_upgrades_outdated_package() {
     let tmp = TempDir::new().unwrap();
     let (work, remote) = setup_git_repo(tmp.path());
