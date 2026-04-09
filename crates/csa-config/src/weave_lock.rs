@@ -169,10 +169,10 @@ pub enum VersionCheckResult {
     MigrationNeeded { pending_count: usize },
 }
 
-/// Compare the running binary version against `weave.lock` and take
-/// the appropriate action:
+/// Compare the running binary version against `weave.lock` and report the
+/// state without modifying the lockfile.
 ///
-/// - No lock file → return `NoLockFile` (caller may create one).
+/// - No lock file → return `NoLockFile`; caller should prompt `csa migrate`.
 /// - Versions match → return `UpToDate`.
 /// - Version differs, no pending migrations → return `VersionDrift` without modifying the lock.
 /// - Binary older than lock version → return `BinaryOlder` and do not modify the lock.
@@ -309,6 +309,10 @@ mod tests {
         let registry = crate::MigrationRegistry::new();
         let result = check_version(dir.path(), "0.2.0", "0.2.0", &registry).unwrap();
         assert!(matches!(result, VersionCheckResult::NoLockFile));
+        assert!(
+            !dir.path().join("weave.lock").exists(),
+            "read-only version check must not create weave.lock"
+        );
     }
 
     #[test]
@@ -472,8 +476,9 @@ commit = "abc123"
     fn test_check_version_no_versions_section() {
         // When weave.lock exists but has no [versions], treat as NoLockFile.
         let dir = TempDir::new().unwrap();
+        let lock_path = dir.path().join("weave.lock");
         std::fs::write(
-            dir.path().join("weave.lock"),
+            &lock_path,
             r#"
 [[package]]
 name = "pkg"
@@ -482,9 +487,16 @@ commit = "abc"
 "#,
         )
         .unwrap();
+        let before = std::fs::read_to_string(&lock_path).unwrap();
 
         let registry = crate::MigrationRegistry::new();
         let result = check_version(dir.path(), "0.2.0", "0.2.0", &registry).unwrap();
         assert!(matches!(result, VersionCheckResult::NoLockFile));
+
+        let after = std::fs::read_to_string(&lock_path).unwrap();
+        assert_eq!(
+            before, after,
+            "read-only version check must not backfill [versions] into package-only weave.lock"
+        );
     }
 }

@@ -24,7 +24,7 @@ fn main() -> Result<()> {
             .init();
     }
 
-    // Check weave.lock version alignment (non-fatal).
+    // Check weave.lock version alignment (non-fatal, read-only).
     if let Ok(cwd) = std::env::current_dir() {
         let registry = csa_config::MigrationRegistry::new();
         match csa_config::check_version(

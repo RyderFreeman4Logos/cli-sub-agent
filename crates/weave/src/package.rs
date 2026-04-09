@@ -554,9 +554,9 @@ pub fn upgrade(
     let lock_path = lockfile_path(project_root);
     let mut lockfile = load_project_lockfile(project_root)
         .context("no lockfile found — run `weave install` first")?;
+    let original_packages = lockfile.package.clone();
 
     let mut results = Vec::new();
-    let mut lockfile_changed = false;
 
     for idx in 0..lockfile.package.len() {
         let pkg = &lockfile.package[idx];
@@ -621,7 +621,6 @@ pub fn upgrade(
             let version = read_version(&dest);
             lockfile.package[idx].commit = new_commit;
             lockfile.package[idx].version = version;
-            lockfile_changed = true;
 
             results.push(UpgradeEntry {
                 name: lockfile.package[idx].name.clone(),
@@ -640,7 +639,9 @@ pub fn upgrade(
         }
     }
 
-    if lockfile_changed {
+    // Avoid rewriting weave.lock when upgrade is a no-op so startup paths that
+    // invoke `weave upgrade` stay read-only in clean worktrees.
+    if lockfile.package != original_packages {
         save_lockfile(&lock_path, &lockfile)?;
     }
     Ok(results)

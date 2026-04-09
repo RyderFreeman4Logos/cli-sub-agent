@@ -203,7 +203,7 @@ async fn run() -> Result<()> {
 
     let sa_mode_active = apply_sa_mode_prompt_guard(&command, current_depth, output_format)?;
 
-    // Check weave.lock version alignment (non-fatal).
+    // Check weave.lock version alignment (non-fatal, read-only).
     if let Ok(cwd) = std::env::current_dir() {
         let registry = csa_config::default_registry();
         match csa_config::check_version(
