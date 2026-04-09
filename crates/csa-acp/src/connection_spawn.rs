@@ -22,11 +22,16 @@ use csa_resource::isolation_plan::IsolationPlan;
 use csa_resource::sandbox::ResourceCapability;
 
 use crate::{
-    client::{AcpClient, SessionEventStore},
+    client::{AcpClient, SessionEventStore, trim_tail_buffer},
     error::{AcpError, AcpResult},
 };
 
 use super::AcpConnection;
+
+fn append_stderr_tail(stderr_buf: &mut String, chunk: &str) {
+    stderr_buf.push_str(chunk);
+    trim_tail_buffer(stderr_buf);
+}
 
 /// Holds sandbox resources that must live as long as the ACP child process.
 ///
@@ -616,7 +621,7 @@ impl AcpConnection {
                             Ok(n) => {
                                 *activity_clone.borrow_mut() = Instant::now();
                                 let text = String::from_utf8_lossy(&buf[..n]);
-                                stderr_buf_clone.borrow_mut().push_str(&text);
+                                append_stderr_tail(&mut stderr_buf_clone.borrow_mut(), &text);
                             }
                             Err(err) => {
                                 warn!(error = %err, "failed to read ACP stderr stream");
@@ -646,6 +651,22 @@ impl AcpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn append_stderr_tail_bounds_retained_memory_to_tail_window() {
+        let mut stderr = "a".repeat(1024 * 1024);
+        append_stderr_tail(&mut stderr, &"b".repeat(1024 * 1024 + 64));
+
+        assert_eq!(
+            stderr.len(),
+            1024 * 1024,
+            "stderr retention should trim back to the 1 MiB tail window"
+        );
+        assert!(
+            stderr.ends_with(&"b".repeat(4096)),
+            "stderr tail should retain the most recent bytes after trimming"
+        );
+    }
 
     fn has_setenv(args: &[String], key: &str, value: &str) -> bool {
         args.windows(3)

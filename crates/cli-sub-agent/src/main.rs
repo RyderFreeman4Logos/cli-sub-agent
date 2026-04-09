@@ -359,8 +359,9 @@ async fn run() -> Result<()> {
             )?;
 
             // Daemon child path: continue with normal run logic.
-            // --stream-stdout forces streaming; --no-stream-stdout forces buffering;
-            // default: stream for Text output in all contexts.
+            // --stream-stdout forces streaming intent; --no-stream-stdout forces buffering.
+            // The ACP transport may still suppress stderr mirroring in daemon mode because
+            // output.log is the canonical progressive output channel there.
             let stream_mode = if no_stream_stdout {
                 csa_process::StreamMode::BufferOnly
             } else if stream_stdout || matches!(output_format, OutputFormat::Text) {

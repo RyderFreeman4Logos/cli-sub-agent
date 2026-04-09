@@ -97,6 +97,14 @@ pub struct TransportResult {
     pub metadata: csa_acp::StreamingMetadata,
 }
 
+fn should_stream_acp_stdout_to_stderr(
+    stream_mode: StreamMode,
+    output_spool: Option<&Path>,
+) -> bool {
+    !(matches!(stream_mode, StreamMode::BufferOnly)
+        || output_spool.is_some() && std::env::var_os("CSA_DAEMON_SESSION_ID").is_some())
+}
+
 #[derive(Debug, Clone)]
 pub struct LegacyTransport {
     executor: Executor,
@@ -498,10 +506,8 @@ impl AcpTransport {
         let sandbox_session_id = options.sandbox.map(|s| s.session_id.clone());
         let sandbox_best_effort = options.sandbox.is_some_and(|s| s.best_effort);
         let idle_timeout_seconds = options.idle_timeout_seconds;
-        // ACP transport: skip initial_response_timeout. ACP init_timeout
-        // already catches startup failures, and idle_timeout handles
-        // post-start hangs. IRT causes false positives with tools that
-        // do heavy post-initialization (gemini-cli loading extensions/MCP).
+        // ACP transport: skip initial_response_timeout; ACP init_timeout already catches
+        // startup failures, and idle_timeout handles post-start hangs for heavy post-init tools.
         let initial_response_timeout_seconds: Option<u64> = None;
         let acp_init_timeout_seconds = options.acp_init_timeout_seconds;
         let termination_grace_period_seconds = options.termination_grace_period_seconds;
@@ -509,11 +515,11 @@ impl AcpTransport {
             options.setting_sources.as_deref(),
             self.session_config.as_ref(),
         );
-        let stream_stdout_to_stderr = options.stream_mode != StreamMode::BufferOnly;
+        let stream_stdout_to_stderr =
+            should_stream_acp_stdout_to_stderr(options.stream_mode, options.output_spool);
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
         let output_spool_max_bytes = options.output_spool_max_bytes;
         let output_spool_keep_rotated = options.output_spool_keep_rotated;
-
         let output =
             tokio::task::spawn_blocking(move || -> Result<csa_acp::transport::AcpOutput> {
                 let rt = tokio::runtime::Builder::new_current_thread()
