@@ -5,6 +5,9 @@ use csa_session::state::{ReviewSessionMeta, write_review_meta};
 use csa_session::{output_parser::parse_sections, output_section::OutputSection};
 use tracing::{debug, warn};
 
+const REVIEW_RESULT_SUMMARY_MAX_CHARS: usize = 200;
+const EDIT_RESTRICTION_SUMMARY_PREFIX: &str = "Edit restriction violated:";
+
 #[derive(Debug, Clone)]
 pub(super) struct ReviewerOutcome {
     pub reviewer_index: usize,
@@ -51,6 +54,31 @@ pub(super) fn sanitize_review_output(output: &str) -> String {
         rendered.push_str("<!-- CSA:SECTION:details:END -->\n");
     }
     rendered
+}
+
+pub(super) fn has_structured_review_content(output: &str) -> bool {
+    let sanitized = sanitize_review_output(output);
+    let sections = parse_sections(&sanitized);
+    ["summary", "details"].into_iter().any(|section_id| {
+        last_non_empty_section_content(&sanitized, &sections, section_id).is_some()
+    })
+}
+
+pub(super) fn derive_review_result_summary(output: &str) -> Option<String> {
+    let sanitized = sanitize_review_output(output);
+    let sections = parse_sections(&sanitized);
+    let content = last_non_empty_section_content(&sanitized, &sections, "summary")
+        .or_else(|| last_non_empty_section_content(&sanitized, &sections, "details"))?;
+
+    content
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(truncate_review_result_summary)
+}
+
+pub(super) fn is_edit_restriction_summary(summary: &str) -> bool {
+    summary.starts_with(EDIT_RESTRICTION_SUMMARY_PREFIX)
 }
 
 fn last_non_empty_section_content(
@@ -203,4 +231,8 @@ fn strip_prompt_guards(text: &str) -> String {
         result.push('\n');
     }
     result
+}
+
+fn truncate_review_result_summary(line: &str) -> String {
+    line.chars().take(REVIEW_RESULT_SUMMARY_MAX_CHARS).collect()
 }

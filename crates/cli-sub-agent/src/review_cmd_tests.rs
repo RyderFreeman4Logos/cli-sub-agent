@@ -1,3 +1,4 @@
+use super::output::{derive_review_result_summary, has_structured_review_content};
 use super::*;
 use crate::cli::{Cli, Commands, ReviewMode, validate_review_args};
 use crate::review_consensus::build_reviewer_tools;
@@ -5,14 +6,16 @@ use clap::{Parser, error::ErrorKind};
 use csa_config::{ProjectMeta, ResourcesConfig, ToolConfig};
 use csa_todo::{CriterionKind, CriterionStatus, SpecCriterion, SpecDocument, TodoManager};
 use std::collections::HashMap;
+use std::process::Command;
+use tempfile::TempDir;
 
-struct ScopedEnvVarRestore {
+pub(super) struct ScopedEnvVarRestore {
     key: &'static str,
     original: Option<String>,
 }
 
 impl ScopedEnvVarRestore {
-    fn set(key: &'static str, value: &str) -> Self {
+    pub(super) fn set(key: &'static str, value: &str) -> Self {
         let original = std::env::var(key).ok();
         // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
         unsafe { std::env::set_var(key, value) };
@@ -32,7 +35,7 @@ impl Drop for ScopedEnvVarRestore {
     }
 }
 
-fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
+pub(super) fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
     for tool in csa_config::global::all_known_tools() {
         tool_map.insert(
@@ -121,6 +124,34 @@ fn sample_spec_document(plan_ulid: &str, criterion_id: &str) -> SpecDocument {
             status: CriterionStatus::Pending,
         }],
     }
+}
+
+fn run_git(repo: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(args)
+        .output()
+        .expect("git command should execute");
+    assert!(
+        output.status.success(),
+        "git {} failed: {}",
+        args.join(" "),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+pub(super) fn setup_git_repo() -> TempDir {
+    let temp = TempDir::new().expect("create tempdir");
+    run_git(temp.path(), &["init"]);
+    run_git(temp.path(), &["config", "user.email", "test@example.com"]);
+    run_git(temp.path(), &["config", "user.name", "Test User"]);
+
+    std::fs::write(temp.path().join("tracked.txt"), "baseline\n").expect("write tracked file");
+    run_git(temp.path(), &["add", "tracked.txt"]);
+    run_git(temp.path(), &["commit", "-m", "initial"]);
+
+    temp
 }
 
 #[test]
@@ -709,6 +740,26 @@ fn sanitize_review_output_falls_back_when_sections_missing() {
     let raw = "plain output without markers";
     let sanitized = sanitize_review_output(raw);
     assert_eq!(sanitized, raw);
+}
+
+#[test]
+fn derive_review_result_summary_prefers_summary_section() {
+    let raw = "<!-- CSA:SECTION:summary -->\nReview completed successfully.\n<!-- CSA:SECTION:summary:END -->\n\
+<!-- CSA:SECTION:details -->\nDetailed body\n<!-- CSA:SECTION:details:END -->\nPASS\n";
+    assert_eq!(
+        derive_review_result_summary(raw).as_deref(),
+        Some("Review completed successfully.")
+    );
+}
+
+#[test]
+fn has_structured_review_content_requires_non_empty_sections() {
+    let empty = "<!-- CSA:SECTION:summary -->\n<!-- CSA:SECTION:summary:END -->\n";
+    assert!(!has_structured_review_content(empty));
+
+    let structured =
+        "<!-- CSA:SECTION:details -->\nDetailed body\n<!-- CSA:SECTION:details:END -->\n";
+    assert!(has_structured_review_content(structured));
 }
 
 #[path = "review_cmd_tier_tests.rs"]
