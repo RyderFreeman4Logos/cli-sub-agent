@@ -64,7 +64,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_result_exists() {
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session is-alive")
             .unwrap();
-    assert!(!reconciled);
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
 
     let result = load_result(project, &session_id).unwrap().unwrap();
     assert_eq!(result.summary, "existing result");
@@ -124,7 +124,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_for_non_active_phase()
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();
-    assert!(!reconciled);
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
     assert!(load_result(project, &session_id).unwrap().is_none());
 }
 
@@ -153,7 +153,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();
-    assert!(!reconciled);
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
     assert!(load_result(project, &session_id).unwrap().is_none());
 }
 
@@ -183,7 +183,10 @@ fn ensure_terminal_result_for_dead_active_session_persists_into_legacy_session_d
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();
-    assert!(reconciled);
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure
+    );
     assert!(
         legacy_session_dir
             .join(csa_session::result::RESULT_FILE_NAME)
@@ -332,12 +335,20 @@ fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();
-    assert!(reconciled);
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure
+    );
 
     let result = load_result(project, &session_id).unwrap().unwrap();
     assert_eq!(result.status, "failure");
     assert_eq!(result.exit_code, 1);
     assert!(result.summary.contains("session list"));
+    assert!(
+        result
+            .summary
+            .contains("reconciliation_reason=true_missing_result")
+    );
     assert!(
         result
             .artifacts
@@ -350,6 +361,51 @@ fn ensure_terminal_result_for_dead_active_session_persists_synthetic_failure() {
     assert_eq!(
         persisted.termination_reason.as_deref(),
         Some("orphaned_process")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_preserves_late_real_result() {
+    let td = tempdir().unwrap();
+    let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+    let state_home = td.path().join("xdg-state");
+    std::fs::create_dir_all(&state_home).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", td.path());
+    let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+    let project = td.path();
+
+    let session = create_session(project, Some("late-result"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let late_result = SessionResult {
+        summary: "real terminal result".to_string(),
+        ..make_result("success", 0)
+    };
+
+    let reconciled = ensure_terminal_result_for_dead_active_session_with_before_write(
+        project,
+        &session_id,
+        "session list",
+        |_| {
+            save_result(project, &session_id, &late_result).unwrap();
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::LateResultRetired
+    );
+
+    let persisted = load_result(project, &session_id).unwrap().unwrap();
+    assert_eq!(persisted.status, "success");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(persisted.summary, "real terminal result");
+
+    let saved_session = load_session(project, &session_id).unwrap();
+    assert_eq!(saved_session.phase, SessionPhase::Retired);
+    assert_eq!(
+        saved_session.termination_reason.as_deref(),
+        Some("completed")
     );
 }
 
@@ -375,8 +431,9 @@ fn ensure_terminal_result_for_dead_active_session_reconciles_fresh_output_withou
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();
-    assert!(
+    assert_eq!(
         reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure,
         "fresh file writes without a live process should still synthesize a terminal result"
     );
     assert!(load_result(project, &session_id).unwrap().is_some());

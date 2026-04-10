@@ -1,12 +1,11 @@
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
-use tracing::{info, warn};
+use tracing::info;
 
 use csa_core::types::OutputFormat;
 use csa_session::{
-    SessionPhase, SessionResult, delete_session, get_session_dir, list_sessions,
-    list_sessions_tree_filtered, load_result, load_session, save_session_in,
+    SessionResult, delete_session, list_sessions, list_sessions_tree_filtered, load_session,
 };
 
 // Re-export types and functions from session_cmds_result so that
@@ -33,107 +32,16 @@ use list::{
     session_to_json, truncate_with_ellipsis,
 };
 
-pub(crate) fn ensure_terminal_result_for_dead_active_session(
-    project_root: &Path,
-    session_id: &str,
-    trigger: &str,
-) -> Result<bool> {
-    let mut session = load_session(project_root, session_id)?;
-    if !matches!(session.phase, SessionPhase::Active) {
-        return Ok(false);
-    }
-    let session_dir = get_session_dir(project_root, session_id)?;
-    if csa_process::ToolLiveness::has_live_process(&session_dir)
-        || load_result(project_root, session_id)?.is_some()
-    {
-        return Ok(false);
-    }
-    let now = chrono::Utc::now();
-    let tool_name = session
-        .tools
-        .iter()
-        .max_by_key(|(_, state)| state.updated_at)
-        .map(|(tool, _)| tool.clone())
-        .unwrap_or_else(|| "unknown".to_string());
-    let artifacts =
-        crate::pipeline_post_exec::collect_fallback_result_artifacts(project_root, session_id);
-    let summary_prefix =
-        format!("synthetic failure by {trigger}: process dead, result.toml missing");
-    let fallback = SessionResult {
-        status: "failure".to_string(),
-        exit_code: 1,
-        summary: crate::pipeline_post_exec::build_fallback_result_summary(
-            &session_dir,
-            &summary_prefix,
-        ),
-        tool: tool_name,
-        started_at: std::cmp::min(session.last_accessed, now),
-        completed_at: now,
-        events_count: 0,
-        artifacts,
-        peak_memory_mb: None,
-    };
-    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
-    if result_path.exists() {
-        return Ok(false);
-    }
-    let result_contents = toml::to_string_pretty(&fallback)
-        .map_err(|err| anyhow!("Failed to serialize synthetic result for {session_id}: {err}"))?;
-    fs::write(&result_path, result_contents)
-        .map_err(|err| anyhow!("Failed to write synthetic result for {session_id}: {err}"))?;
-    // Best-effort cooldown marker
-    csa_session::write_cooldown_marker_from_session_dir(
-        &session_dir,
-        session_id,
-        fallback.completed_at,
-    );
-    session.termination_reason = Some("orphaned_process".to_string());
-    // Transition to Retired so the session no longer blocks new launches (#540).
-    let _ = session.apply_phase_event(csa_session::PhaseEvent::Retired);
-    let session_root = session_dir
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| anyhow!("Invalid session dir layout: {}", session_dir.display()))?;
-    save_session_in(session_root, &session)?;
-    warn!(session_id = %session_id, trigger = %trigger, "Recovered orphaned session with synthetic result");
-    Ok(true)
-}
-
-/// Retire an Active session whose tool process is dead and result.toml already
-/// exists. Covers the gap where post-exec wrote result.toml but the session was
-/// never Retired (e.g. process exited before phase transition). See #540.
-pub(crate) fn retire_if_dead_with_result(
-    project_root: &Path,
-    session_id: &str,
-    trigger: &str,
-) -> Result<bool> {
-    let mut session = load_session(project_root, session_id)?;
-    if !matches!(session.phase, SessionPhase::Active) {
-        return Ok(false);
-    }
-    let session_dir = get_session_dir(project_root, session_id)?;
-    if csa_process::ToolLiveness::has_live_process(&session_dir)
-        || load_result(project_root, session_id)?.is_none()
-    {
-        return Ok(false);
-    }
-    if session
-        .apply_phase_event(csa_session::PhaseEvent::Retired)
-        .is_err()
-    {
-        return Ok(false);
-    }
-    session
-        .termination_reason
-        .get_or_insert_with(|| "completed".to_string());
-    let session_root = session_dir
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| anyhow!("Invalid session dir layout: {}", session_dir.display()))?;
-    save_session_in(session_root, &session)?;
-    info!(session_id = %session_id, trigger = %trigger, "Retired dead Active session with result");
-    Ok(true)
-}
+#[path = "session_cmds_reconcile.rs"]
+mod reconcile;
+#[cfg(test)]
+pub(crate) use reconcile::{
+    DeadActiveSessionReconciliation,
+    ensure_terminal_result_for_dead_active_session_with_before_write,
+};
+pub(crate) use reconcile::{
+    ensure_terminal_result_for_dead_active_session, retire_if_dead_with_result,
+};
 
 pub(crate) fn handle_session_list(
     cd: Option<String>,

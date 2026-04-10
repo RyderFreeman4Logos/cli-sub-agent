@@ -184,7 +184,7 @@ pub(crate) fn handle_session_wait(
             &resolved.session_id,
             "session wait",
         )?;
-        if synthesized
+        if synthesized.result_became_available()
             && let Some(result) = load_completed_daemon_result_adaptive(
                 effective_root,
                 &resolved.session_id,
@@ -201,7 +201,7 @@ pub(crate) fn handle_session_wait(
                 true,
                 !streamed_output,
             );
-            if !streamed_output {
+            if synthesized.synthesized_failure() && !streamed_output {
                 eprintln!(
                     "Session {} reached a synthesized terminal result because no live daemon process remained.",
                     resolved.session_id,
