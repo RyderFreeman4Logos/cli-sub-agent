@@ -250,6 +250,11 @@ pub struct ExecutionConfig {
         skip_serializing_if = "is_default_min_timeout"
     )]
     pub min_timeout_seconds: u64,
+    #[serde(
+        default = "default_acp_crash_max_attempts",
+        skip_serializing_if = "is_default_acp_crash_max_attempts"
+    )]
+    pub acp_crash_max_attempts: u8,
     /// When enabled, automatically run `weave upgrade` before CSA command execution.
     /// Silent output, exponential backoff retry on failure (2 retries), error exit
     /// if all retries fail. Default: false (opt-in).
@@ -265,10 +270,19 @@ fn is_default_min_timeout(val: &u64) -> bool {
     *val == default_min_timeout_seconds()
 }
 
+const fn default_acp_crash_max_attempts() -> u8 {
+    2
+}
+
+fn is_default_acp_crash_max_attempts(val: &u8) -> bool {
+    *val == default_acp_crash_max_attempts()
+}
+
 impl Default for ExecutionConfig {
     fn default() -> Self {
         Self {
             min_timeout_seconds: default_min_timeout_seconds(),
+            acp_crash_max_attempts: default_acp_crash_max_attempts(),
             auto_weave_upgrade: false,
         }
     }
@@ -277,12 +291,18 @@ impl Default for ExecutionConfig {
 impl ExecutionConfig {
     /// Returns true when all fields are at their defaults (per rust/016 serde-default rule).
     pub fn is_default(&self) -> bool {
-        self.min_timeout_seconds == default_min_timeout_seconds() && !self.auto_weave_upgrade
+        self.min_timeout_seconds == default_min_timeout_seconds()
+            && self.acp_crash_max_attempts == default_acp_crash_max_attempts()
+            && !self.auto_weave_upgrade
     }
 
     /// The compile-time default minimum timeout in seconds.
     pub const fn default_min_timeout() -> u64 {
         default_min_timeout_seconds()
+    }
+
+    pub fn resolved_acp_crash_max_attempts(&self) -> u8 {
+        self.acp_crash_max_attempts.clamp(1, 5)
     }
 }
 

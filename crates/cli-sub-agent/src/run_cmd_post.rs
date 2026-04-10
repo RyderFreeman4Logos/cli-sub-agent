@@ -222,7 +222,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     max_failover_attempts: usize,
     tried_tools: &mut Vec<String>,
     tried_specs: &mut Vec<String>,
-    tier_routing_active: bool,
+    tier_auto_select: bool,
     resolved_tier_name: Option<&str>,
     executed_session_id: Option<&str>,
     effective_session_arg: Option<&str>,
@@ -233,7 +233,7 @@ pub(crate) fn evaluate_rate_limit_failover(
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
 ) -> Result<RateLimitAction> {
-    if !tier_routing_active {
+    if !tier_auto_select {
         return Ok(RateLimitAction::NoRateLimit);
     }
 
@@ -349,7 +349,8 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     max_failover_attempts: usize,
     tried_tools: &mut Vec<String>,
     tried_specs: &mut Vec<String>,
-    tier_routing_active: bool,
+    tier_auto_select: bool,
+    failover_on_crash_enabled: bool,
     resolved_tier_name: Option<&str>,
     executed_session_id: Option<&str>,
     effective_session_arg: Option<&str>,
@@ -360,10 +361,6 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     task_needs_edit: Option<bool>,
     current_model_spec: Option<&str>,
 ) -> Result<RateLimitAction> {
-    if !tier_routing_active {
-        return Ok(RateLimitAction::NoRateLimit);
-    }
-
     let failover_signal = match detect_transport_error_failover_signal(
         tool_name_str,
         error_message,
@@ -374,27 +371,42 @@ pub(crate) fn evaluate_error_rate_limit_failover(
     };
 
     match failover_signal.kind {
-        TransportErrorFailoverKind::RateLimit => info!(
-            tool = %tool_name_str,
-            pattern = %failover_signal.matched_pattern,
-            attempt = attempts,
-            max = max_failover_attempts,
-            "Rate limit detected in transport error, attempting failover"
-        ),
-        TransportErrorFailoverKind::AcpCrashRetryExhausted => warn!(
-            tool = %tool_name_str,
-            pattern = %failover_signal.matched_pattern,
-            attempt = attempts,
-            max = max_failover_attempts,
-            "[csa-failover] ACP crash retry exhaustion detected in transport error; attempting tier failover"
-        ),
-        TransportErrorFailoverKind::GeminiRetryChainExhausted => warn!(
-            tool = %tool_name_str,
-            pattern = %failover_signal.matched_pattern,
-            attempt = attempts,
-            max = max_failover_attempts,
-            "[csa-failover] Gemini retry chain exhaustion detected in transport error; attempting tier failover"
-        ),
+        TransportErrorFailoverKind::RateLimit => {
+            if !tier_auto_select {
+                return Ok(RateLimitAction::NoRateLimit);
+            }
+            info!(
+                tool = %tool_name_str,
+                pattern = %failover_signal.matched_pattern,
+                attempt = attempts,
+                max = max_failover_attempts,
+                "Rate limit detected in transport error, attempting failover"
+            );
+        }
+        TransportErrorFailoverKind::AcpCrashRetryExhausted => {
+            if !failover_on_crash_enabled {
+                return Ok(RateLimitAction::NoRateLimit);
+            }
+            warn!(
+                tool = %tool_name_str,
+                pattern = %failover_signal.matched_pattern,
+                attempt = attempts,
+                max = max_failover_attempts,
+                "[csa-failover] ACP crash retry exhaustion detected in transport error; attempting tier failover"
+            );
+        }
+        TransportErrorFailoverKind::GeminiRetryChainExhausted => {
+            if !failover_on_crash_enabled {
+                return Ok(RateLimitAction::NoRateLimit);
+            }
+            warn!(
+                tool = %tool_name_str,
+                pattern = %failover_signal.matched_pattern,
+                attempt = attempts,
+                max = max_failover_attempts,
+                "[csa-failover] Gemini retry chain exhaustion detected in transport error; attempting tier failover"
+            );
+        }
     }
 
     if attempts >= max_failover_attempts {

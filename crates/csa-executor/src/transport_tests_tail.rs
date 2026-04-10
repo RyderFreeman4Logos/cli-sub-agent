@@ -485,6 +485,7 @@ async fn test_execute_stops_after_max_attempts_and_returns_last_failure() {
     let options = TransportOptions {
         stream_mode: StreamMode::BufferOnly,
         idle_timeout_seconds: 30,
+        acp_crash_max_attempts: 2,
         initial_response_timeout_seconds: None,
         liveness_dead_seconds: 30,
         stdin_write_timeout_seconds: 30,

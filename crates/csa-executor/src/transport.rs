@@ -57,11 +57,11 @@ pub struct SandboxTransportConfig {
     pub best_effort: bool,
     pub session_id: String,
 }
-
 #[derive(Debug, Clone)]
 pub struct TransportOptions<'a> {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub acp_crash_max_attempts: u8,
     pub initial_response_timeout_seconds: Option<u64>,
     pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
@@ -664,7 +664,7 @@ impl Transport for AcpTransport {
     ) -> Result<TransportResult> {
         let is_gemini = self.tool_name == "gemini-cli";
 
-        // Non-gemini tools: single retry on ACP crash (Issue #567).
+        // Non-gemini tools: ACP crash retry count is configured at execution time.
         if !is_gemini {
             return execute_with_crash_retry(
                 self, prompt, tool_state, session, extra_env, &options,

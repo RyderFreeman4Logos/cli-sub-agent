@@ -1,9 +1,9 @@
 /// ACP crash retry logic for non-gemini tools (Issue #567).
 ///
 /// Claude-code and other ACP servers can crash with "server shut down
-/// unexpectedly" during large diff reads. This module provides a single
-/// retry attempt for crash-type errors, distinct from the gemini-specific
-/// rate-limit retry chain in `transport_gemini_retry.rs`.
+/// unexpectedly" during large diff reads. This module provides configurable
+/// crash retry attempts, distinct from the gemini-specific rate-limit retry
+/// chain in `transport_gemini_retry.rs`.
 use std::collections::HashMap;
 use std::time::Duration;
 
@@ -11,12 +11,6 @@ use anyhow::Result;
 use csa_session::state::{MetaSessionState, ToolState};
 
 use super::{AcpTransport, TransportOptions, TransportResult};
-
-/// Maximum number of total attempts for ACP crash recovery.
-/// One retry = two total attempts. We keep this minimal because crashes
-/// during large context indicate a fundamental resource issue that
-/// additional retries won't solve.
-pub(crate) const ACP_CRASH_MAX_ATTEMPTS: u8 = 2;
 
 /// Delay between crash retry attempts in seconds.
 pub(crate) const ACP_CRASH_RETRY_DELAY_SECS: u64 = 3;
@@ -160,15 +154,29 @@ pub(crate) fn format_crash_retry_exhausted(
     )
 }
 
+fn format_memory_limit(memory_max_mb: Option<u64>) -> String {
+    match memory_max_mb {
+        Some(limit_mb) => format!("{limit_mb}MB"),
+        None => "(no explicit limit set — using system default)".to_string(),
+    }
+}
+
 /// Format a user-facing error message for a non-retryable OOM crash.
-pub(crate) fn format_oom_crash(error: anyhow::Error, tool_name: &str) -> anyhow::Error {
+pub(crate) fn format_oom_crash(
+    error: anyhow::Error,
+    tool_name: &str,
+    memory_max_mb: Option<u64>,
+) -> anyhow::Error {
+    let current_limit = format_memory_limit(memory_max_mb);
     anyhow::anyhow!(
-        "ACP process for {tool_name} was killed (likely OOM). \
-         This is not retryable — the process hit a resource limit. \
-         Consider: (1) increasing memory limits in .csa/config.toml [resources], \
-         (2) reducing diff/context size, \
-         (3) switching to a different tool via --tier. \
-         Error: {error:#}"
+        "ACP process for {tool_name} was killed by signal 9 (OOM). This is not retryable.\n\
+         Current limit: {current_limit} (configured at [tools.{tool_name}].memory_max_mb).\n\
+         Suggestions:\n\
+           1. Increase [tools.{tool_name}].memory_max_mb in .csa/config.toml or ~/.config/cli-sub-agent/config.toml\n\
+           2. Reduce the task context/diff size\n\
+           3. Switch to a lower-memory tool via --tier or --tool\n\
+         \n\
+         Original error: {error:#}"
     )
 }
 
@@ -198,6 +206,7 @@ pub(super) async fn execute_with_crash_retry(
     options: &TransportOptions<'_>,
 ) -> Result<TransportResult> {
     let mut attempt = 1u8;
+    let max_attempts = options.acp_crash_max_attempts.max(1);
     loop {
         // Only resume provider session on the first attempt; retries start fresh.
         let resume_id = if attempt == 1 {
@@ -225,10 +234,10 @@ pub(super) async fn execute_with_crash_retry(
             Err(error) => {
                 let error_display = format!("{error:#}");
 
-                if is_retryable_acp_crash(&error_display) && attempt < ACP_CRASH_MAX_ATTEMPTS {
+                if is_retryable_acp_crash(&error_display) && attempt < max_attempts {
                     tracing::warn!(
                         attempt,
-                        max_attempts = ACP_CRASH_MAX_ATTEMPTS,
+                        max_attempts,
                         tool = %transport.tool_name,
                         "ACP server crashed; retrying with fresh process \
                          in {ACP_CRASH_RETRY_DELAY_SECS}s"
@@ -239,7 +248,10 @@ pub(super) async fn execute_with_crash_retry(
                 }
 
                 if is_oom_error(&error_display) {
-                    return Err(format_oom_crash(error, &transport.tool_name));
+                    let memory_max_mb = options
+                        .sandbox
+                        .and_then(|sandbox| sandbox.isolation_plan.memory_max_mb);
+                    return Err(format_oom_crash(error, &transport.tool_name, memory_max_mb));
                 }
                 if is_auth_error(&error_display) {
                     return Err(format_auth_failure(error, &transport.tool_name));
@@ -417,11 +429,25 @@ mod tests {
     #[test]
     fn test_format_oom_crash_contains_key_info() {
         let err = anyhow::anyhow!("killed by signal 9 (SIGKILL)");
-        let formatted = format_oom_crash(err, "codex");
+        let formatted = format_oom_crash(err, "codex", Some(4096));
         let msg = formatted.to_string();
         assert!(msg.contains("codex"));
-        assert!(msg.contains("memory limits"));
+        assert!(msg.contains("memory_max_mb"));
+        assert!(msg.contains("4096MB"));
+        assert!(msg.contains("Suggestions:"));
+        assert!(msg.contains("1. Increase"));
+        assert!(msg.contains("2. Reduce the task context/diff size"));
+        assert!(msg.contains("3. Switch to a lower-memory tool via --tier or --tool"));
         assert!(msg.contains("--tier"));
+        assert!(msg.contains("--tool"));
+    }
+
+    #[test]
+    fn test_format_oom_crash_without_explicit_limit_mentions_system_default() {
+        let err = anyhow::anyhow!("killed by signal 9 (SIGKILL)");
+        let formatted = format_oom_crash(err, "codex", None);
+        let msg = formatted.to_string();
+        assert!(msg.contains("(no explicit limit set — using system default)"));
     }
 
     #[test]

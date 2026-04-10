@@ -153,6 +153,7 @@ fn test_execution_config_default() {
     let config: ProjectConfig = toml::from_str("schema_version = 1\n").unwrap();
     assert!(config.execution.is_default());
     assert_eq!(config.execution.min_timeout_seconds, 1800);
+    assert_eq!(config.execution.acp_crash_max_attempts, 2);
 }
 
 #[test]
@@ -160,15 +161,34 @@ fn test_execution_config_is_default() {
     let exec = crate::config::ExecutionConfig::default();
     assert!(exec.is_default());
     assert_eq!(exec.min_timeout_seconds, 1800);
+    assert_eq!(exec.acp_crash_max_attempts, 2);
 }
 
 #[test]
 fn test_execution_config_is_not_default_with_custom_value() {
     let exec = crate::config::ExecutionConfig {
         min_timeout_seconds: 2400,
+        acp_crash_max_attempts: 2,
         auto_weave_upgrade: false,
     };
     assert!(!exec.is_default());
+}
+
+#[test]
+fn test_execution_config_resolved_acp_crash_max_attempts_clamps() {
+    let mut exec = crate::config::ExecutionConfig::default();
+
+    exec.acp_crash_max_attempts = 0;
+    assert_eq!(exec.resolved_acp_crash_max_attempts(), 1);
+
+    exec.acp_crash_max_attempts = 2;
+    assert_eq!(exec.resolved_acp_crash_max_attempts(), 2);
+
+    exec.acp_crash_max_attempts = 5;
+    assert_eq!(exec.resolved_acp_crash_max_attempts(), 5);
+
+    exec.acp_crash_max_attempts = 10;
+    assert_eq!(exec.resolved_acp_crash_max_attempts(), 5);
 }
 
 #[test]
