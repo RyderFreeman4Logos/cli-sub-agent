@@ -4,7 +4,7 @@
 //! Handles enforcement mode checking, capability detection, config resolution,
 //! and first-turn telemetry recording.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use csa_config::ProjectConfig;
 use csa_executor::{ExecuteOptions, SandboxContext};
@@ -41,6 +41,7 @@ pub(crate) fn resolve_sandbox_options(
     config: Option<&ProjectConfig>,
     tool_name: &str,
     session_id: &str,
+    project_root: &Path,
     stream_mode: StreamMode,
     idle_timeout_seconds: u64,
     liveness_dead_seconds: u64,
@@ -94,7 +95,6 @@ pub(crate) fn resolve_sandbox_options(
         }
 
         // Build IsolationPlan via builder (BestEffort for profile defaults).
-        let cwd = std::env::current_dir().unwrap_or_default();
         let mut builder = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
@@ -105,8 +105,7 @@ pub(crate) fn resolve_sandbox_options(
             )
             .with_tool_defaults(
                 tool_name,
-                // No project root available from profile defaults; use cwd.
-                &cwd,
+                project_root,
                 // No session dir available; use a temporary placeholder.
                 &std::env::temp_dir(),
             )
@@ -114,7 +113,7 @@ pub(crate) fn resolve_sandbox_options(
 
         // CSA runtime writable paths (best-effort for profile defaults).
         if !no_fs_sandbox {
-            if let Ok(project_state_root) = csa_session::manager::get_session_root(&cwd) {
+            if let Ok(project_state_root) = csa_session::manager::get_session_root(project_root) {
                 builder = builder.with_writable_path(project_state_root);
             }
             if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
@@ -122,9 +121,10 @@ pub(crate) fn resolve_sandbox_options(
             }
             // CLI --extra-writable (no-config path).
             if !extra_writable.is_empty() {
-                if let Err(e) =
-                    csa_resource::isolation_plan::validate_writable_paths(extra_writable, &cwd)
-                {
+                if let Err(e) = csa_resource::isolation_plan::validate_writable_paths(
+                    extra_writable,
+                    project_root,
+                ) {
                     return SandboxResolution::RequiredButUnavailable(format!(
                         "--extra-writable validation failed: {e}"
                     ));
@@ -226,8 +226,7 @@ pub(crate) fn resolve_sandbox_options(
     }
 
     // Resolve project root and session dir for tool-specific writable paths.
-    let project_root = std::env::current_dir().unwrap_or_default();
-    let session_dir = csa_session::manager::get_session_dir(&project_root, session_id)
+    let session_dir = csa_session::manager::get_session_dir(project_root, session_id)
         .unwrap_or_else(|_| std::env::temp_dir());
 
     let memory_swap_max_mb = cfg.sandbox_memory_swap_max_mb(tool_name);
@@ -249,7 +248,7 @@ pub(crate) fn resolve_sandbox_options(
         .with_resource_capability(resource_cap)
         .with_filesystem_capability(fs_cap)
         .with_resource_limits(Some(memory_max_mb), memory_swap_max_mb, pids_max)
-        .with_tool_defaults(tool_name, &project_root, &session_dir)
+        .with_tool_defaults(tool_name, project_root, &session_dir)
         .with_readonly_project_root(effective_readonly)
         .with_soft_limit_percent(cfg.resources.soft_limit_percent)
         .with_memory_monitor_interval(cfg.resources.memory_monitor_interval_seconds);
@@ -259,7 +258,7 @@ pub(crate) fn resolve_sandbox_options(
     // regardless of per-tool REPLACE semantics because CSA needs them to
     // function even when the tool's project-root access is restricted.
     if !no_fs_sandbox {
-        if let Ok(project_state_root) = csa_session::manager::get_session_root(&project_root) {
+        if let Ok(project_state_root) = csa_session::manager::get_session_root(project_root) {
             builder = builder.with_writable_path(project_state_root);
         }
         if let Ok(slots) = csa_config::GlobalConfig::slots_dir() {
@@ -271,7 +270,7 @@ pub(crate) fn resolve_sandbox_options(
         if let Some(ref paths) = per_tool_writable {
             // Validate user-provided writable paths before applying.
             if let Err(e) =
-                csa_resource::isolation_plan::validate_writable_paths(paths, &project_root)
+                csa_resource::isolation_plan::validate_writable_paths(paths, project_root)
             {
                 return SandboxResolution::RequiredButUnavailable(format!(
                     "Per-tool writable_paths validation failed for '{tool_name}': {e}"
@@ -292,7 +291,7 @@ pub(crate) fn resolve_sandbox_options(
     // CLI --extra-writable paths: always appended (APPEND semantics, not REPLACE).
     if !no_fs_sandbox && !extra_writable.is_empty() {
         if let Err(e) =
-            csa_resource::isolation_plan::validate_writable_paths(extra_writable, &project_root)
+            csa_resource::isolation_plan::validate_writable_paths(extra_writable, project_root)
         {
             return SandboxResolution::RequiredButUnavailable(format!(
                 "--extra-writable validation failed: {e}"

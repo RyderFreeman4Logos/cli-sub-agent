@@ -115,6 +115,10 @@ pub(crate) fn resolve_session_prefix_with_global_fallback(
             if csa_session::validate_session_id(prefix).is_err() {
                 return Err(project_err);
             }
+            if let Some(resolution) = resolve_exact_initializing_session_dir(project_root, prefix)?
+            {
+                return Ok(resolution);
+            }
             // Try global exact lookup
             if let Some(session_dir) = csa_session::get_session_dir_global(prefix)? {
                 let sessions_dir = session_dir
@@ -137,6 +141,33 @@ pub(crate) fn resolve_session_prefix_with_global_fallback(
             Err(project_err)
         }
     }
+}
+
+fn resolve_exact_initializing_session_dir(
+    project_root: &Path,
+    session_id: &str,
+) -> Result<Option<SessionPrefixResolution>> {
+    let primary_root = csa_session::get_session_root(project_root)?;
+    let primary_sessions_dir = primary_root.join("sessions");
+    if primary_sessions_dir.join(session_id).is_dir() {
+        return Ok(Some(SessionPrefixResolution {
+            session_id: session_id.to_string(),
+            sessions_dir: primary_sessions_dir,
+            foreign_project_root: None,
+        }));
+    }
+
+    if let Some(legacy_sessions_dir) = legacy_sessions_dir_from_primary_root(&primary_root)
+        && legacy_sessions_dir.join(session_id).is_dir()
+    {
+        return Ok(Some(SessionPrefixResolution {
+            session_id: session_id.to_string(),
+            sessions_dir: legacy_sessions_dir,
+            foreign_project_root: None,
+        }));
+    }
+
+    Ok(None)
 }
 
 /// Read `state.toml` from a session directory and extract the `project_path`

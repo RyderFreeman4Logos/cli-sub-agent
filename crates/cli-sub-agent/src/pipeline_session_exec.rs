@@ -537,6 +537,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         config,
         executor.tool_name(),
         &session.meta_session_id,
+        project_root,
         stream_mode,
         idle_timeout_seconds,
         liveness_dead_seconds,

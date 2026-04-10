@@ -47,6 +47,12 @@ pub(crate) fn is_oom_error(error_display: &str) -> bool {
     is_oom_lowered(&lowered)
 }
 
+/// Check if the error indicates a deterministic auth or permission failure.
+pub(crate) fn is_auth_error(error_display: &str) -> bool {
+    let lowered = error_display.to_lowercase();
+    is_auth_lowered(&lowered)
+}
+
 // ---------------------------------------------------------------------------
 // Internal classifiers operating on pre-lowered strings.
 // ---------------------------------------------------------------------------
@@ -55,6 +61,11 @@ pub(crate) fn is_oom_error(error_display: &str) -> bool {
 fn is_retryable_crash_lowered(lowered: &str) -> bool {
     // Never retry OOM / resource limit kills — the same limit will be hit again.
     if is_oom_lowered(lowered) {
+        return false;
+    }
+
+    // Never retry auth/permission failures — the same credentials will fail again.
+    if is_auth_lowered(lowered) {
         return false;
     }
 
@@ -92,6 +103,16 @@ fn is_oom_lowered(lowered: &str) -> bool {
         || lowered.contains("out of memory")
         || lowered.contains("memory.max")
         || lowered.contains("memorymax")
+}
+
+/// Authentication or authorization failures (deterministic, never retry).
+fn is_auth_lowered(lowered: &str) -> bool {
+    lowered.contains("401 unauthorized")
+        || lowered.contains("403 forbidden")
+        || lowered.contains("insufficient permissions")
+        || lowered.contains("missing scopes")
+        || lowered.contains("missing_scope")
+        || lowered.contains("unauthorized")
 }
 
 /// Configuration or spawn failure (deterministic, never retry).
@@ -147,6 +168,18 @@ pub(crate) fn format_oom_crash(error: anyhow::Error, tool_name: &str) -> anyhow:
          Consider: (1) increasing memory limits in .csa/config.toml [resources], \
          (2) reducing diff/context size, \
          (3) switching to a different tool via --tier. \
+         Error: {error:#}"
+    )
+}
+
+/// Format a user-facing error message for a non-retryable auth/config failure.
+pub(crate) fn format_auth_failure(error: anyhow::Error, tool_name: &str) -> anyhow::Error {
+    anyhow::anyhow!(
+        "ACP transport for {tool_name} failed due to authentication or permission error. \
+         This is not retryable with the current credentials. \
+         Consider: (1) verifying the tool's auth/session setup, \
+         (2) checking required API scopes/roles, \
+         (3) switching to a different tool via --tier if available. \
          Error: {error:#}"
     )
 }
@@ -207,6 +240,9 @@ pub(super) async fn execute_with_crash_retry(
 
                 if is_oom_error(&error_display) {
                     return Err(format_oom_crash(error, &transport.tool_name));
+                }
+                if is_auth_error(&error_display) {
+                    return Err(format_auth_failure(error, &transport.tool_name));
                 }
                 if attempt > 1 {
                     return Err(format_crash_retry_exhausted(
@@ -321,6 +357,22 @@ mod tests {
         assert!(!is_retryable_acp_crash(err));
     }
 
+    #[test]
+    fn test_unauthorized_missing_scope_is_not_retryable() {
+        let err = "ACP prompt failed: Internal error: unexpected status 401 Unauthorized: \
+                   You have insufficient permissions for this operation. \
+                   Missing scopes: api.responses.write";
+        assert!(is_auth_error(err));
+        assert!(!is_retryable_acp_crash(err));
+    }
+
+    #[test]
+    fn test_missing_scope_marker_is_not_retryable() {
+        let err = "codex responses error: code=missing_scope";
+        assert!(is_auth_error(err));
+        assert!(!is_retryable_acp_crash(err));
+    }
+
     // --- Non-retryable: Timeout ---
 
     #[test]
@@ -369,6 +421,17 @@ mod tests {
         let msg = formatted.to_string();
         assert!(msg.contains("codex"));
         assert!(msg.contains("memory limits"));
+        assert!(msg.contains("--tier"));
+    }
+
+    #[test]
+    fn test_format_auth_failure_contains_key_info() {
+        let err = anyhow::anyhow!("401 Unauthorized: Missing scopes: api.responses.write");
+        let formatted = format_auth_failure(err, "codex");
+        let msg = formatted.to_string();
+        assert!(msg.contains("codex"));
+        assert!(msg.contains("authentication or permission error"));
+        assert!(msg.contains("scopes"));
         assert!(msg.contains("--tier"));
     }
 }

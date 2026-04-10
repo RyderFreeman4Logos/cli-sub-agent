@@ -1,4 +1,5 @@
 use super::*;
+use crate::session_cmds::resolve_session_prefix_with_global_fallback;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
@@ -18,6 +19,24 @@ fn wait_for_spawned_daemon_visibility(
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
     panic!("daemon child never became visible to ToolLiveness");
+}
+
+#[test]
+fn resolve_session_prefix_with_global_fallback_accepts_initializing_exact_session_dir() {
+    let td = tempdir().unwrap();
+    let _sandbox = ScopedSessionSandbox::new(&td);
+    let project = td.path();
+    let session_id = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+
+    let session_root = get_session_root(project).unwrap();
+    let session_dir = session_root.join("sessions").join(session_id);
+    std::fs::create_dir_all(&session_dir).unwrap();
+    std::fs::write(session_dir.join("daemon.pid"), "12345\n").unwrap();
+
+    let resolved = resolve_session_prefix_with_global_fallback(project, session_id).unwrap();
+    assert_eq!(resolved.session_id, session_id);
+    assert_eq!(resolved.sessions_dir, session_root.join("sessions"));
+    assert_eq!(resolved.foreign_project_root, None);
 }
 
 #[cfg(unix)]
