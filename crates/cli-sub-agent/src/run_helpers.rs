@@ -15,6 +15,10 @@ mod edit_requirement;
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 
 #[cfg(test)]
+pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
+    "CSA_TEST_SKIP_TOOL_AVAILABILITY_CHECK";
+
+#[cfg(test)]
 pub(crate) const TEST_ASSUME_TOOLS_AVAILABLE_ENV: &str = "CSA_TEST_ASSUME_TOOLS_AVAILABLE";
 
 /// Reject the contradictory routing combination where a direct tool request
@@ -673,9 +677,16 @@ pub(crate) fn resolve_tool_from_tier(
 
 #[cfg(test)]
 fn assume_tool_binaries_available_for_tests() -> bool {
-    std::env::var(TEST_ASSUME_TOOLS_AVAILABLE_ENV)
-        .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    [
+        TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV,
+        TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+    ]
+    .into_iter()
+    .any(|env_name| {
+        std::env::var(env_name)
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
 }
 
 /// Check if a tool's binary is available on PATH (synchronous).

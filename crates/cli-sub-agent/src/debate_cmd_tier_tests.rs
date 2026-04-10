@@ -6,7 +6,10 @@ use csa_core::types::ToolName;
 use std::collections::HashMap;
 
 fn assume_tier_tools_available() -> ScopedTestEnvVar {
-    ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
+    ScopedTestEnvVar::set(
+        crate::run_helpers::TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV,
+        "1",
+    )
 }
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
