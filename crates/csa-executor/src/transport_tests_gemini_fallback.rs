@@ -106,6 +106,7 @@ async fn test_execute_falls_back_to_api_key_after_all_retries_exhausted() {
     let options = TransportOptions {
         stream_mode: StreamMode::BufferOnly,
         idle_timeout_seconds: 30,
+        acp_crash_max_attempts: 2,
         initial_response_timeout_seconds: None,
         liveness_dead_seconds: 30,
         stdin_write_timeout_seconds: 30,
@@ -279,6 +280,7 @@ async fn test_execute_best_effort_sandbox_fallback_preserves_attempt_model_overr
     let options = TransportOptions {
         stream_mode: StreamMode::BufferOnly,
         idle_timeout_seconds: 30,
+        acp_crash_max_attempts: 2,
         initial_response_timeout_seconds: None,
         liveness_dead_seconds: 30,
         stdin_write_timeout_seconds: 30,

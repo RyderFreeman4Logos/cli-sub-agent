@@ -7,6 +7,7 @@ use csa_process::StreamMode;
 pub struct ExecuteOptions {
     pub stream_mode: StreamMode,
     pub idle_timeout_seconds: u64,
+    pub acp_crash_max_attempts: u8,
     pub liveness_dead_seconds: u64,
     pub stdin_write_timeout_seconds: u64,
     pub acp_init_timeout_seconds: u64,
@@ -50,6 +51,7 @@ impl ExecuteOptions {
         Self {
             stream_mode,
             idle_timeout_seconds,
+            acp_crash_max_attempts: 2,
             liveness_dead_seconds: csa_process::DEFAULT_LIVENESS_DEAD_SECS,
             stdin_write_timeout_seconds: csa_process::DEFAULT_STDIN_WRITE_TIMEOUT_SECS,
             acp_init_timeout_seconds: 120,
@@ -78,6 +80,12 @@ impl ExecuteOptions {
     /// Override ACP initialization timeout (seconds).
     pub fn with_acp_init_timeout_seconds(mut self, seconds: u64) -> Self {
         self.acp_init_timeout_seconds = seconds;
+        self
+    }
+
+    /// Override ACP crash retry max attempts.
+    pub fn with_acp_crash_max_attempts(mut self, attempts: u8) -> Self {
+        self.acp_crash_max_attempts = attempts;
         self
     }
 

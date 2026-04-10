@@ -8,6 +8,7 @@ use std::time::Instant;
 use anyhow::Result;
 use tracing::{info, warn};
 
+use csa_config::ProjectConfig;
 use csa_core::types::{OutputFormat, ToolArg};
 use csa_lock::SessionLock;
 
@@ -27,13 +28,15 @@ use super::resume::{
 };
 
 fn resolve_run_tier_context(
+    config: Option<&ProjectConfig>,
+    tool_name: &str,
     strategy_resolved_tier_name: Option<String>,
     fallback_tier_name: Option<String>,
     force_ignore_tier_setting: bool,
     user_explicit_tool: bool,
-) -> (bool, Option<String>) {
+) -> (bool, bool, Option<String>) {
     if force_ignore_tier_setting {
-        return (false, None);
+        return (false, false, None);
     }
 
     let resolved_tier_name = strategy_resolved_tier_name.or_else(|| {
@@ -41,8 +44,18 @@ fn resolve_run_tier_context(
             .then_some(fallback_tier_name)
             .flatten()
     });
-    let tier_routing_active = resolved_tier_name.is_some();
-    (tier_routing_active, resolved_tier_name)
+    let tier_auto_select = !user_explicit_tool && resolved_tier_name.is_some();
+    let failover_on_crash_enabled = tier_auto_select
+        || (user_explicit_tool
+            && resolved_tier_name.as_deref().is_some_and(|tier_name| {
+                config.is_some_and(|cfg| cfg.tier_contains_tool(tier_name, tool_name))
+            }));
+
+    (
+        tier_auto_select,
+        failover_on_crash_enabled,
+        resolved_tier_name,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -394,12 +407,15 @@ pub(crate) async fn handle_run(
     });
     // Force-ignore bypass must not revive a tier at runtime, but ordinary
     // auto/default routing still keeps its existing fallback tier context.
-    let (tier_routing_active, resolved_tier_name) = resolve_run_tier_context(
-        strategy_resolved_tier_name,
-        fallback_tier_name,
-        force_ignore_tier_setting,
-        user_explicit_tool,
-    );
+    let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+        resolve_run_tier_context(
+            config.as_ref(),
+            resolved_tool.as_str(),
+            strategy_resolved_tier_name,
+            fallback_tier_name,
+            force_ignore_tier_setting,
+            user_explicit_tool,
+        );
     let context_load_options = skill_agent
         .and_then(|agent| pipeline::context_load_options_with_skips(&agent.skip_context));
     let memory_injection = pipeline::MemoryInjectionOptions {
@@ -439,7 +455,8 @@ pub(crate) async fn handle_run(
         fork_call,
         session_arg,
         effective_session_arg,
-        tier_routing_active,
+        tier_auto_select,
+        failover_on_crash_enabled,
         resolved_tier_name: resolved_tier_name.as_deref(),
         context_load_options: context_load_options.as_ref(),
         memory_injection,
@@ -503,44 +520,135 @@ pub(crate) async fn handle_run(
 #[cfg(test)]
 mod tests {
     use super::resolve_run_tier_context;
+    use chrono::Utc;
+    use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
+    use std::collections::HashMap;
+
+    fn make_test_config() -> ProjectConfig {
+        let mut tiers = HashMap::new();
+        tiers.insert(
+            "tier-3-complex".to_string(),
+            TierConfig {
+                description: "test".to_string(),
+                models: vec![
+                    "codex/openai/o4-mini/high".to_string(),
+                    "claude-code/anthropic/claude-sonnet/high".to_string(),
+                ],
+                strategy: TierStrategy::default(),
+                token_budget: None,
+                max_turns: None,
+            },
+        );
+
+        ProjectConfig {
+            schema_version: 1,
+            project: ProjectMeta {
+                name: "test".to_string(),
+                created_at: Utc::now(),
+                max_recursion_depth: 5,
+            },
+            resources: Default::default(),
+            acp: Default::default(),
+            tools: HashMap::new(),
+            review: None,
+            debate: None,
+            tiers,
+            tier_mapping: HashMap::from([("default".to_string(), "tier-3-complex".to_string())]),
+            aliases: HashMap::new(),
+            tool_aliases: HashMap::new(),
+            preferences: None,
+            session: Default::default(),
+            memory: Default::default(),
+            hooks: Default::default(),
+            execution: Default::default(),
+            vcs: Default::default(),
+            filesystem_sandbox: Default::default(),
+        }
+    }
 
     #[test]
     fn resolve_run_tier_context_keeps_active_strategy_tier() {
-        let (tier_routing_active, resolved_tier_name) =
-            resolve_run_tier_context(Some("tier-3-complex".to_string()), None, false, false);
+        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+            resolve_run_tier_context(
+                None,
+                "codex",
+                Some("tier-3-complex".to_string()),
+                None,
+                false,
+                false,
+            );
 
-        assert!(tier_routing_active);
+        assert!(tier_auto_select);
+        assert!(failover_on_crash_enabled);
         assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
     }
 
     #[test]
     fn resolve_run_tier_context_drops_bypassed_tier() {
-        let (tier_routing_active, resolved_tier_name) = resolve_run_tier_context(
-            Some("tier-3-complex".to_string()),
-            Some("tier-2-standard".to_string()),
-            true,
-            true,
-        );
+        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+            resolve_run_tier_context(
+                None,
+                "codex",
+                Some("tier-3-complex".to_string()),
+                Some("tier-2-standard".to_string()),
+                true,
+                true,
+            );
 
-        assert!(!tier_routing_active);
+        assert!(!tier_auto_select);
+        assert!(!failover_on_crash_enabled);
         assert!(resolved_tier_name.is_none());
     }
 
     #[test]
     fn resolve_run_tier_context_restores_fallback_tier_for_auto_routing() {
-        let (tier_routing_active, resolved_tier_name) =
-            resolve_run_tier_context(None, Some("tier-3-complex".to_string()), false, false);
+        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+            resolve_run_tier_context(
+                None,
+                "codex",
+                None,
+                Some("tier-3-complex".to_string()),
+                false,
+                false,
+            );
 
-        assert!(tier_routing_active);
+        assert!(tier_auto_select);
+        assert!(failover_on_crash_enabled);
         assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
     }
 
     #[test]
     fn resolve_run_tier_context_does_not_restore_fallback_for_user_explicit_tool() {
-        let (tier_routing_active, resolved_tier_name) =
-            resolve_run_tier_context(None, Some("tier-3-complex".to_string()), false, true);
+        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+            resolve_run_tier_context(
+                None,
+                "codex",
+                None,
+                Some("tier-3-complex".to_string()),
+                false,
+                true,
+            );
 
-        assert!(!tier_routing_active);
+        assert!(!tier_auto_select);
+        assert!(!failover_on_crash_enabled);
         assert!(resolved_tier_name.is_none());
+    }
+
+    #[test]
+    fn resolve_run_tier_context_enables_crash_failover_for_explicit_tool_in_tier() {
+        let config = make_test_config();
+        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+            resolve_run_tier_context(
+                Some(&config),
+                "codex",
+                Some("tier-3-complex".to_string()),
+                None,
+                false,
+                true,
+            );
+
+        assert!(!tier_auto_select);
+        assert!(failover_on_crash_enabled);
+        assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
     }
 }

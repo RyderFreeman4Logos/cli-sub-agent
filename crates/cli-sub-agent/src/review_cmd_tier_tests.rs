@@ -1,6 +1,11 @@
 use super::*;
+use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::{ReviewConfig, ToolConfig, ToolSelection};
 use std::collections::HashMap;
+
+fn assume_tier_tools_available() -> ScopedTestEnvVar {
+    ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
+}
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -105,6 +110,7 @@ fn test_review_blocks_direct_tool_when_tiers_configured() {
 
 #[test]
 fn test_review_allows_tier_flag() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
@@ -136,6 +142,7 @@ fn test_review_allows_tier_flag() {
 
 #[test]
 fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = review_config_with_tier(
         "quality",
@@ -312,6 +319,7 @@ fn test_review_no_tiers_allows_direct_tool() {
 
 #[test]
 fn test_review_tier_alias_resolves() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let mut cfg = review_config_with_tier(
         "quality",

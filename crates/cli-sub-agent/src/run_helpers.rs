@@ -14,6 +14,13 @@ mod edit_requirement;
 
 pub(crate) use edit_requirement::{infer_task_edit_requirement, resolve_task_edit_requirement};
 
+#[cfg(test)]
+pub(crate) const TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV: &str =
+    "CSA_TEST_SKIP_TOOL_AVAILABILITY_CHECK";
+
+#[cfg(test)]
+pub(crate) const TEST_ASSUME_TOOLS_AVAILABLE_ENV: &str = "CSA_TEST_ASSUME_TOOLS_AVAILABLE";
+
 /// Reject the contradictory routing combination where a direct tool request
 /// also asks both to use and ignore tier routing.
 pub(crate) fn validate_tool_tier_override_flags(
@@ -668,12 +675,31 @@ pub(crate) fn resolve_tool_from_tier(
     Some(available[0].clone())
 }
 
+#[cfg(test)]
+fn assume_tool_binaries_available_for_tests() -> bool {
+    [
+        TEST_SKIP_TOOL_AVAILABILITY_CHECK_ENV,
+        TEST_ASSUME_TOOLS_AVAILABLE_ENV,
+    ]
+    .into_iter()
+    .any(|env_name| {
+        std::env::var(env_name)
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
 /// Check if a tool's binary is available on PATH (synchronous).
 ///
 /// For ACP-routed tools (codex, claude-code), checks for the ACP adapter
 /// binary (`codex-acp`, `claude-code-acp`). For legacy tools, checks the
 /// native CLI binary.
 pub(crate) fn is_tool_binary_available(tool_name: &str) -> bool {
+    #[cfg(test)]
+    if assume_tool_binaries_available_for_tests() {
+        return true;
+    }
+
     // OpenAI-compat is HTTP-only — no binary to check.
     if tool_name == "openai-compat" {
         return true;

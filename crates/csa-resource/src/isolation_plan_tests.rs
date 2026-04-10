@@ -93,22 +93,33 @@ fn test_tool_defaults_claude_code() {
     assert!(plan.writable_paths.contains(&session));
 
     if let Some(home) = home_dir() {
-        assert!(
-            plan.writable_paths.contains(&home.join(".claude")),
-            "claude-code defaults should include ~/.claude"
-        );
-        // Common paths: XDG_STATE_HOME and mise cache
+        // Tool config dir is only added if it exists on disk (matches
+        // production behavior in isolation_plan.rs:286 `if p.exists()`).
+        let claude_dir = home.join(".claude");
+        if claude_dir.exists() {
+            assert!(
+                plan.writable_paths.contains(&claude_dir),
+                "claude-code defaults should include ~/.claude when it exists"
+            );
+        }
+        // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
+        // match production code at isolation_plan.rs:219,227).
         let xdg_state = std::env::var("XDG_STATE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| home.join(".local/state"));
-        assert!(
-            plan.writable_paths.contains(&xdg_state),
-            "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-        );
-        assert!(
-            plan.writable_paths.contains(&home.join(".cache/mise")),
-            "all tools should include ~/.cache/mise for mise-managed toolchains"
-        );
+        if xdg_state.exists() {
+            assert!(
+                plan.writable_paths.contains(&xdg_state),
+                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
+            );
+        }
+        let mise_cache = home.join(".cache/mise");
+        if mise_cache.exists() {
+            assert!(
+                plan.writable_paths.contains(&mise_cache),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
+            );
+        }
 
         // Cargo home: when CARGO_HOME is set to a non-default dir, only
         // CARGO_HOME is added (not ~/.cargo, which may contain credentials).
@@ -313,22 +324,33 @@ fn test_tool_defaults_codex() {
     assert!(plan.writable_paths.contains(&session));
 
     if let Some(home) = home_dir() {
-        assert!(
-            plan.writable_paths.contains(&home.join(".codex")),
-            "codex defaults should include ~/.codex"
-        );
-        // Common paths: XDG_STATE_HOME and mise cache
+        // Tool config dir is only added if it exists on disk (matches
+        // production behavior in isolation_plan.rs:286 `if p.exists()`).
+        let codex_dir = home.join(".codex");
+        if codex_dir.exists() {
+            assert!(
+                plan.writable_paths.contains(&codex_dir),
+                "codex defaults should include ~/.codex when it exists"
+            );
+        }
+        // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
+        // match production code at isolation_plan.rs:219,227).
         let xdg_state = std::env::var("XDG_STATE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| home.join(".local/state"));
-        assert!(
-            plan.writable_paths.contains(&xdg_state),
-            "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-        );
-        assert!(
-            plan.writable_paths.contains(&home.join(".cache/mise")),
-            "all tools should include ~/.cache/mise for mise-managed toolchains"
-        );
+        if xdg_state.exists() {
+            assert!(
+                plan.writable_paths.contains(&xdg_state),
+                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
+            );
+        }
+        let mise_cache = home.join(".cache/mise");
+        if mise_cache.exists() {
+            assert!(
+                plan.writable_paths.contains(&mise_cache),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
+            );
+        }
     }
 }
 
@@ -347,20 +369,31 @@ fn test_tool_defaults_gemini_cli() {
     assert!(plan.writable_paths.contains(&session));
 
     if let Some(home) = home_dir() {
-        assert!(
-            plan.writable_paths.contains(&home.join(".gemini")),
-            "gemini-cli defaults should include ~/.gemini"
-        );
-        assert!(
-            plan.writable_paths
-                .contains(&home.join(".config/gemini-cli")),
-            "gemini-cli defaults should include ~/.config/gemini-cli"
-        );
-        // mise cache is now a common path for all tools
-        assert!(
-            plan.writable_paths.contains(&home.join(".cache/mise")),
-            "all tools should include ~/.cache/mise for mise-managed toolchains"
-        );
+        // Tool config dirs are only added if they exist on disk (matches
+        // production behavior in isolation_plan.rs:286 `if p.exists()`).
+        let gemini_dir = home.join(".gemini");
+        if gemini_dir.exists() {
+            assert!(
+                plan.writable_paths.contains(&gemini_dir),
+                "gemini-cli defaults should include ~/.gemini when it exists"
+            );
+        }
+        let gemini_config_dir = home.join(".config/gemini-cli");
+        if gemini_config_dir.exists() {
+            assert!(
+                plan.writable_paths.contains(&gemini_config_dir),
+                "gemini-cli defaults should include ~/.config/gemini-cli when it exists"
+            );
+        }
+        // mise cache is a common path for all tools (gated on existence to
+        // match production code at isolation_plan.rs:227).
+        let mise_cache = home.join(".cache/mise");
+        if mise_cache.exists() {
+            assert!(
+                plan.writable_paths.contains(&mise_cache),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
+            );
+        }
     }
 }
 
@@ -379,22 +412,33 @@ fn test_tool_defaults_opencode() {
     assert!(plan.writable_paths.contains(&session));
 
     if let Some(home) = home_dir() {
-        assert!(
-            plan.writable_paths.contains(&home.join(".config/opencode")),
-            "opencode defaults should include ~/.config/opencode"
-        );
-        // Common paths: XDG_STATE_HOME and mise cache
+        // Tool config dir is only added if it exists on disk (matches
+        // production behavior in isolation_plan.rs:286 `if p.exists()`).
+        let opencode_dir = home.join(".config/opencode");
+        if opencode_dir.exists() {
+            assert!(
+                plan.writable_paths.contains(&opencode_dir),
+                "opencode defaults should include ~/.config/opencode when it exists"
+            );
+        }
+        // Common paths: XDG_STATE_HOME and mise cache (gated on existence to
+        // match production code at isolation_plan.rs:219,227).
         let xdg_state = std::env::var("XDG_STATE_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|_| home.join(".local/state"));
-        assert!(
-            plan.writable_paths.contains(&xdg_state),
-            "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
-        );
-        assert!(
-            plan.writable_paths.contains(&home.join(".cache/mise")),
-            "all tools should include ~/.cache/mise for mise-managed toolchains"
-        );
+        if xdg_state.exists() {
+            assert!(
+                plan.writable_paths.contains(&xdg_state),
+                "all tools should include XDG_STATE_HOME for cargo proc-macro compilation"
+            );
+        }
+        let mise_cache = home.join(".cache/mise");
+        if mise_cache.exists() {
+            assert!(
+                plan.writable_paths.contains(&mise_cache),
+                "all tools should include ~/.cache/mise for mise-managed toolchains"
+            );
+        }
     }
 }
 
