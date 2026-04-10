@@ -7,6 +7,8 @@ mod cli_defs;
 use clap::Parser;
 use cli_defs::{AuditCommands, Cli, Commands, McpHubCommands, validate_command_args};
 use csa_core::types::OutputFormat;
+use std::collections::HashMap;
+use std::path::Path;
 use std::process::Command;
 
 /// Create a [`Command`] pointing at the built `csa` binary with HOME, XDG_STATE_HOME,
@@ -38,6 +40,51 @@ fn init_project_full(tmp: &std::path::Path) {
         .status()
         .expect("failed to run csa init --full");
     assert!(status.success(), "csa init --full should succeed");
+}
+
+fn write_project_config_with_tier(project_root: &Path) {
+    let mut config = csa_config::ProjectConfig {
+        schema_version: csa_config::config::CURRENT_SCHEMA_VERSION,
+        project: csa_config::ProjectMeta {
+            name: "test".to_string(),
+            created_at: chrono::Utc::now(),
+            max_recursion_depth: 5,
+        },
+        resources: csa_config::ResourcesConfig::default(),
+        acp: Default::default(),
+        tools: HashMap::new(),
+        review: None,
+        debate: None,
+        tiers: HashMap::new(),
+        tier_mapping: HashMap::new(),
+        aliases: HashMap::new(),
+        tool_aliases: HashMap::new(),
+        preferences: None,
+        session: Default::default(),
+        memory: Default::default(),
+        hooks: Default::default(),
+        execution: Default::default(),
+        vcs: Default::default(),
+        filesystem_sandbox: Default::default(),
+    };
+    config.tiers.insert(
+        "default".to_string(),
+        csa_config::config::TierConfig {
+            description: "Test tier".to_string(),
+            models: vec!["codex/gpt-5-codex/medium".to_string()],
+            strategy: csa_config::TierStrategy::default(),
+            token_budget: None,
+            max_turns: None,
+        },
+    );
+
+    let config_path = csa_config::ProjectConfig::config_path(project_root);
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        config_path,
+        toml::to_string_pretty(&config).expect("serialize config"),
+    )
+    .expect("write config");
 }
 
 #[test]
@@ -308,6 +355,60 @@ fn session_list_exits_zero() {
     assert!(
         combined.contains("No sessions found"),
         "empty state should report no sessions"
+    );
+}
+
+#[test]
+fn run_direct_tool_tier_rejection_surfaces_cause_and_session_id() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    write_project_config_with_tier(tmp.path());
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "run",
+            "--sa-mode",
+            "true",
+            "--no-daemon",
+            "--tool",
+            "codex",
+            "--no-idle-timeout",
+            "--timeout",
+            "1800",
+            "inspect the repository",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa run");
+
+    assert_eq!(
+        output.status.code(),
+        Some(1),
+        "expected exit code 1, got {:?}\nstdout: {}\nstderr: {}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Direct --tool is blocked when tiers are configured"),
+        "user-facing cause should be shown, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("--auto-route <intent>"),
+        "actionable guidance should remain visible, stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("Session ID:"),
+        "session id should be preserved for diagnostics, stderr: {stderr}"
+    );
+    assert!(
+        !stderr
+            .lines()
+            .find(|line| line.starts_with("Error:"))
+            .unwrap_or_default()
+            .contains("meta_session_id="),
+        "top-level error line should not be opaque metadata, stderr: {stderr}"
     );
 }
 
