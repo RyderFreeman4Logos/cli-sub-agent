@@ -139,7 +139,9 @@ pub(crate) fn handle_session_wait(
     let poll_interval = std::time::Duration::from_secs(1);
 
     loop {
-        if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
+        if let Some(completion) = load_daemon_completion_packet(&session_dir)?
+            && !csa_process::ToolLiveness::has_live_process(&session_dir)
+        {
             let _ = refresh_result_for_wait(
                 effective_root,
                 &resolved.session_id,
