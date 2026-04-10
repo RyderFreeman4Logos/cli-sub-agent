@@ -1,10 +1,33 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::*;
+use crate::test_env_lock::TEST_ENV_LOCK;
 
 /// Helper: parse a TOML string into a ProjectConfig for test setup.
 fn parse_project_config(toml_str: &str) -> csa_config::ProjectConfig {
     toml::from_str(toml_str).expect("test TOML should parse")
+}
+
+fn current_project_root() -> PathBuf {
+    std::env::current_dir().unwrap_or_default()
+}
+
+struct CurrentDirGuard {
+    original: PathBuf,
+}
+
+impl CurrentDirGuard {
+    fn change_to(path: &Path) -> Self {
+        let original = std::env::current_dir().expect("current dir");
+        std::env::set_current_dir(path).expect("set current dir");
+        Self { original }
+    }
+}
+
+impl Drop for CurrentDirGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.original);
+    }
 }
 
 /// Heavyweight tools (claude-code) with no project config should get setting_sources=Some(vec![]).
@@ -14,6 +37,7 @@ fn test_none_config_sets_setting_sources_for_heavyweight() {
         None,
         "claude-code",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -41,6 +65,7 @@ fn test_none_config_lightweight_skips_sandbox() {
         None,
         "opencode",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -72,6 +97,7 @@ fn test_none_config_heavyweight_gets_sandbox() {
         None,
         "claude-code",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -140,6 +166,7 @@ writable_paths = ["/tmp"]
         Some(&cfg),
         "gemini-cli",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -195,6 +222,7 @@ memory_max_mb = 2048
         Some(&cfg),
         "claude-code",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -243,6 +271,7 @@ writable_paths = ["/"]
         Some(&cfg),
         "gemini-cli",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -288,10 +317,72 @@ enforcement_mode = "best-effort"
     );
 }
 
+#[test]
+fn test_cross_repo_cd_uses_explicit_project_root_for_sandbox_plan() {
+    let _env_lock = TEST_ENV_LOCK
+        .lock()
+        .expect("pipeline sandbox env lock poisoned");
+    let invocation_cwd = tempfile::tempdir().expect("invocation cwd tempdir");
+    let target_project = tempfile::tempdir().expect("target project tempdir");
+    let _cwd_guard = CurrentDirGuard::change_to(invocation_cwd.path());
+
+    let cfg = parse_project_config(
+        r#"
+[resources]
+memory_max_mb = 2048
+enforcement_mode = "best-effort"
+"#,
+    );
+
+    let result = resolve_sandbox_options(
+        Some(&cfg),
+        "gemini-cli",
+        "test-session",
+        target_project.path(),
+        StreamMode::BufferOnly,
+        120,
+        600,
+        Some(120),
+        false,
+        false,
+        &[],
+    );
+
+    let SandboxResolution::Ok(opts) = result else {
+        panic!("Expected SandboxResolution::Ok");
+    };
+
+    let sandbox = opts
+        .sandbox
+        .as_ref()
+        .expect("Expected SandboxContext for heavyweight tool");
+
+    assert_eq!(
+        sandbox.isolation_plan.project_root,
+        Some(target_project.path().to_path_buf()),
+        "sandbox must target the explicit --cd project root, not process cwd"
+    );
+    assert!(
+        sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&target_project.path().to_path_buf()),
+        "target project root should be writable in the sandbox plan"
+    );
+    assert!(
+        !sandbox
+            .isolation_plan
+            .writable_paths
+            .contains(&invocation_cwd.path().to_path_buf()),
+        "invocation cwd must not leak into cross-repo sandbox writable paths"
+    );
+}
+
 /// Verify that resolve_sandbox_options injects CSA state paths (project state
 /// root and global slots) into the isolation plan's writable_paths.
 #[test]
 fn test_csa_state_paths_in_writable_paths() {
+    let project_root = tempfile::tempdir().expect("project root tempdir");
     let cfg = parse_project_config(
         r#"
 [resources]
@@ -304,6 +395,7 @@ enforcement_mode = "best-effort"
         Some(&cfg),
         "claude-code",
         "test-session",
+        project_root.path(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -325,8 +417,7 @@ enforcement_mode = "best-effort"
     let writable = &sandbox.isolation_plan.writable_paths;
 
     // Project state root should be present (allows fork-call session creation).
-    let cwd = std::env::current_dir().unwrap_or_default();
-    if let Ok(project_state_root) = csa_session::manager::get_session_root(&cwd) {
+    if let Ok(project_state_root) = csa_session::manager::get_session_root(project_root.path()) {
         assert!(
             writable.contains(&project_state_root),
             "writable_paths should include project state root: {project_state_root:?}\n  actual: {writable:?}"
@@ -346,6 +437,7 @@ enforcement_mode = "best-effort"
 /// semantics restrict project-root writability.
 #[test]
 fn test_csa_state_paths_survive_replace_semantics() {
+    let project_root = current_project_root();
     let cfg = parse_project_config(
         r#"
 [resources]
@@ -361,6 +453,7 @@ writable_paths = ["/tmp/restricted-only"]
         Some(&cfg),
         "claude-code",
         "test-session",
+        &project_root,
         StreamMode::BufferOnly,
         120,
         600,
@@ -387,8 +480,7 @@ writable_paths = ["/tmp/restricted-only"]
     );
 
     // But CSA state paths should still be present.
-    let cwd = std::env::current_dir().unwrap_or_default();
-    if let Ok(project_state_root) = csa_session::manager::get_session_root(&cwd) {
+    if let Ok(project_state_root) = csa_session::manager::get_session_root(&project_root) {
         assert!(
             writable.contains(&project_state_root),
             "CSA state root must survive REPLACE semantics"
@@ -424,6 +516,7 @@ enforcement_mode = "best-effort"
         Some(&cfg),
         "claude-code",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
@@ -472,6 +565,7 @@ enforcement_mode = "best-effort"
         Some(&cfg),
         "claude-code",
         "test-session",
+        &current_project_root(),
         StreamMode::BufferOnly,
         120,
         600,
