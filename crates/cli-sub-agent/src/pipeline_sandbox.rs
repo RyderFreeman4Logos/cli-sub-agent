@@ -57,11 +57,10 @@ pub(crate) fn resolve_sandbox_options(
     let acp_init_timeout_seconds = config
         .map(|cfg| cfg.acp.init_timeout_seconds)
         .unwrap_or(csa_config::AcpConfig::default().init_timeout_seconds);
-    let acp_crash_max_attempts = config
-        .map(|cfg| cfg.execution.resolved_acp_crash_max_attempts())
-        .unwrap_or_else(|| {
-            csa_config::ExecutionConfig::default().resolved_acp_crash_max_attempts()
-        });
+    let acp_crash_max_attempts = config.map_or_else(
+        || csa_config::ExecutionConfig::default().resolved_acp_crash_max_attempts(),
+        |cfg| cfg.execution.resolved_acp_crash_max_attempts(),
+    );
     let termination_grace_period_seconds = config
         .map(|cfg| cfg.resources.termination_grace_period_seconds)
         .unwrap_or(default_resources.termination_grace_period_seconds);
