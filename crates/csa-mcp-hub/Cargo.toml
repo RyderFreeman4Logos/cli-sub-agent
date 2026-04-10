@@ -25,7 +25,7 @@ toml.workspace = true
 sha2.workspace = true
 axum = "0.8"
 tokio-util = "0.7"
-rmcp = { version = "1.2", optional = true, features = ["server", "client", "transport-child-process", "transport-async-rw", "transport-streamable-http-server"] }
+rmcp = { version = "=1.2.0", optional = true, features = ["server", "client", "transport-child-process", "transport-async-rw", "transport-streamable-http-server"] }
 
 [dev-dependencies]
 tempfile.workspace = true
