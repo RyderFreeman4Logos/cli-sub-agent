@@ -1,8 +1,13 @@
 use super::*;
 use crate::debate_cmd_resolve::resolve_debate_tool;
+use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::{GlobalConfig, ProjectConfig, ReviewConfig, ToolConfig, ToolSelection};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
+
+fn assume_tier_tools_available() -> ScopedTestEnvVar {
+    ScopedTestEnvVar::set(crate::run_helpers::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
+}
 
 fn project_config_with_enabled_tools(tools: &[&str]) -> ProjectConfig {
     let mut tool_map = HashMap::new();
@@ -107,6 +112,7 @@ fn test_debate_blocks_direct_tool_when_tiers_configured() {
 
 #[test]
 fn test_debate_allows_tier_flag() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
@@ -139,6 +145,7 @@ fn test_debate_allows_tier_flag() {
 
 #[test]
 fn test_debate_tool_plus_tier_resolves_requested_tool_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let cfg = debate_config_with_tier(
         "quality",
@@ -317,6 +324,7 @@ fn test_debate_no_tiers_allows_direct_tool() {
 
 #[test]
 fn test_debate_tier_alias_resolves() {
+    let _tool_availability = assume_tier_tools_available();
     let global = GlobalConfig::default();
     let mut cfg = debate_config_with_tier(
         "quality",

@@ -1,6 +1,11 @@
+use crate::test_env_lock::ScopedTestEnvVar;
 use csa_config::{ProjectConfig, ProjectMeta, ResourcesConfig, TierStrategy, ToolConfig};
 use csa_core::types::ToolName;
 use std::collections::HashMap;
+
+fn assume_tier_tools_available() -> ScopedTestEnvVar {
+    ScopedTestEnvVar::set(super::TEST_ASSUME_TOOLS_AVAILABLE_ENV, "1")
+}
 
 // --- resolve_tool_and_model enablement guard tests ---
 
@@ -228,6 +233,7 @@ fn resolve_tool_from_tier_returns_none_for_missing_tier() {
 
 #[test]
 fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
+    let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "test-tier",
         vec!["gemini-cli/google/default/xhigh"],
@@ -242,6 +248,7 @@ fn resolve_tool_from_tier_returns_first_available_when_no_parent() {
 
 #[test]
 fn resolve_tool_from_tier_prefers_heterogeneous() {
+    let _tool_availability = assume_tier_tools_available();
     // Parent=claude-code(Anthropic), tier has gemini-cli+claude-code; prefer gemini for heterogeneity.
     let cfg = config_with_tier(
         "test-tier",
@@ -260,6 +267,7 @@ fn resolve_tool_from_tier_prefers_heterogeneous() {
 
 #[test]
 fn resolve_tool_from_tier_falls_back_to_same_family_when_no_heterogeneous() {
+    let _tool_availability = assume_tier_tools_available();
     // Parent is claude-code, tier only has claude-code models.
     // No heterogeneous option — should still return the first available.
     let cfg = config_with_tier(
@@ -275,6 +283,7 @@ fn resolve_tool_from_tier_falls_back_to_same_family_when_no_heterogeneous() {
 
 #[test]
 fn resolve_tool_from_tier_skips_disabled_tools() {
+    let _tool_availability = assume_tier_tools_available();
     // gemini-cli is disabled, only claude-code is enabled.
     let cfg = config_with_tier(
         "test-tier",
@@ -292,6 +301,7 @@ fn resolve_tool_from_tier_skips_disabled_tools() {
 
 #[test]
 fn resolve_tool_from_tier_returns_none_when_all_disabled() {
+    let _tool_availability = assume_tier_tools_available();
     // All tools in tier are disabled.
     let cfg = config_with_tier(
         "test-tier",
@@ -498,6 +508,7 @@ fn resolve_tool_and_model_no_tiers_allows_direct_tool() {
 /// --tier resolves tool from tier definition and returns it.
 #[test]
 fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "quality",
         vec!["gemini-cli/google/gemini-3.1-pro-preview/xhigh"],
@@ -531,6 +542,7 @@ fn resolve_tool_and_model_tier_flag_resolves_from_tier() {
 
 #[test]
 fn resolve_tool_and_model_tier_with_tool_resolves_requested_tool_from_tier() {
+    let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "tier-4-critical",
         vec![
@@ -602,6 +614,7 @@ fn resolve_tool_and_model_tier_with_tool_errors_when_tool_missing_from_tier() {
 
 #[test]
 fn resolve_tool_and_model_tier_ignores_auto_resolved_tool_hint() {
+    let _tool_availability = assume_tier_tools_available();
     let cfg = config_with_tier(
         "quality",
         vec!["gemini-cli/google/default/xhigh"],
@@ -674,6 +687,7 @@ fn resolve_tool_and_model_tier_with_tool_and_force_ignore_errors_on_conflict() {
 
 #[test]
 fn resolve_tool_and_model_tier_alias_resolves_correctly() {
+    let _tool_availability = assume_tier_tools_available();
     let mut cfg = config_with_tier(
         "tier1",
         vec!["gemini-cli/google/default/xhigh"],
