@@ -250,10 +250,11 @@ pub(super) async fn execute_plan_with_journal(
             continue;
         }
 
-        let result = execute_step(
+        let result = execute_step_with_workflow(
             step,
             &vars,
             run_ctx.project_root,
+            run_ctx.workflow_path,
             run_ctx.config,
             run_ctx.tool_override,
         )
@@ -396,10 +397,31 @@ pub(super) async fn execute_plan_with_journal(
 }
 
 /// Execute a single step with on_fail handling.
+#[cfg(test)]
 pub(crate) async fn execute_step(
     step: &PlanStep,
     variables: &HashMap<String, String>,
     project_root: &Path,
+    config: Option<&ProjectConfig>,
+    tool_override: Option<&ToolName>,
+) -> StepResult {
+    let workflow_path_buf = project_root.join("workflow.toml");
+    execute_step_with_workflow(
+        step,
+        variables,
+        project_root,
+        &workflow_path_buf,
+        config,
+        tool_override,
+    )
+    .await
+}
+
+pub(crate) async fn execute_step_with_workflow(
+    step: &PlanStep,
+    variables: &HashMap<String, String>,
+    project_root: &Path,
+    workflow_path: &Path,
     config: Option<&ProjectConfig>,
     tool_override: Option<&ToolName>,
 ) -> StepResult {
@@ -605,7 +627,7 @@ pub(crate) async fn execute_step(
             StepTarget::DirectBash => {
                 run_with_heartbeat(
                     &label,
-                    execute_bash_step(&label, &step.prompt, variables, project_root),
+                    execute_bash_step(&label, &step.prompt, variables, project_root, workflow_path),
                     start,
                 )
                 .await

@@ -75,13 +75,18 @@ This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 
 ```bash
 set -euo pipefail
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 CURRENT_HEAD="$(git rev-parse HEAD)"
-REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
+REVIEW_HEAD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh")"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
   echo "Fast-path: local review already covers current HEAD."
 else
   SID=$(csa review --branch main)
-  bash scripts/csa/session-wait-until-done.sh "$SID"
+  bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
 fi
 REVIEW_COMPLETED=true
 echo "CSA_VAR:REVIEW_COMPLETED=$REVIEW_COMPLETED"
@@ -238,6 +243,11 @@ Check whether cloud bot review is enabled for this project.
 
 ```bash
 set -euo pipefail
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 CLOUD_BOT_NAME=$(csa config get pr_review.cloud_bot_name --default gemini-code-assist)
 CLOUD_BOT_TRIGGER=$(csa config get pr_review.cloud_bot_trigger --default auto)
@@ -266,13 +276,13 @@ if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
   CURRENT_HEAD="$(git rev-parse HEAD)"
-  REVIEW_HEAD="$(bash scripts/csa/latest-pass-review-head.sh)"
+  REVIEW_HEAD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh")"
   if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
     echo "Cloud bot disabled, fast-path active: local review already covers HEAD ${CURRENT_HEAD}."
   else
     echo "Cloud bot disabled and fast-path invalid. Running full local review."
     SID=$(csa review --branch main)
-    bash scripts/csa/session-wait-until-done.sh "$SID"
+    bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"
   fi
 fi
 BOT_UNAVAILABLE="${BOT_UNAVAILABLE:-false}"
@@ -343,6 +353,11 @@ configured bot is gemini-code-assist) and includes them with a quota warning.
 
 ```bash
 set -euo pipefail
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 
 # --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
@@ -395,7 +410,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
   BOT_UNAVAILABLE=true
 else
   set +e
-  WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
+  WAIT_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${WAIT_SID}")"
   WAIT_RC=$?
   set -e
   if [ "${WAIT_RC}" -ne 0 ]; then
@@ -557,7 +572,7 @@ user must:
 
 ## ENDIF
 
-## IF ${BOT_UNAVAILABLE}
+## IF ${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES}
 
 ## Step 6-fix: Fallback Review Fix Cycle (Bot Timeout Path)
 
@@ -580,6 +595,11 @@ Delegate this cycle to CSA as a single operation and enforce hard bounds:
 
 ```bash
 set -euo pipefail
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 set +e
 FIX_SID="$(csa run --sa-mode true --tier tier-4-critical --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
 DAEMON_RC=$?
@@ -589,7 +609,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${FIX_SID}" ]; then
   exit 1
 fi
 set +e
-FIX_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${FIX_SID}")"
+FIX_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${FIX_SID}")"
 FIX_RC=$?
 set -e
 
@@ -1049,6 +1069,11 @@ then up to `cloud_bot_poll_max_seconds` of polling.
 
 ```bash
 set -euo pipefail
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 CURRENT_SHA="$(git rev-parse HEAD)"
 RETRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -1084,7 +1109,7 @@ if [ "${DAEMON_RC}" -ne 0 ] || [ -z "${WAIT_SID}" ]; then
   exit 1
 fi
 set +e
-WAIT_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${WAIT_SID}")"
+WAIT_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${WAIT_SID}")"
 WAIT_RC=$?
 set -e
 
@@ -1171,7 +1196,7 @@ else
         _check_setup_message
         echo "Falling back to local review." >&2
         SID=$(csa review --sa-mode true --range main...HEAD)
-        if ! bash scripts/csa/session-wait-until-done.sh "$SID"; then
+        if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
           echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
           exit 1
         fi
@@ -1181,7 +1206,7 @@ else
   else
     echo "WARN: Post-fix bot wait returned timeout/no-marker. Falling back to local review."
     SID=$(csa review --sa-mode true --range main...HEAD)
-    if ! bash scripts/csa/session-wait-until-done.sh "$SID"; then
+    if ! bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "$SID"; then
       echo "ERROR: Local fallback review found issues after fix. Cannot merge." >&2
       exit 1
     fi
@@ -1235,6 +1260,11 @@ wait/fix/review loop to a single CSA-managed step.
 
 ```bash
 set -euo pipefail
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 
 COMMIT_COUNT=$(git rev-list --count main..HEAD)
 if [ "${COMMIT_COUNT}" -gt 3 ]; then
@@ -1290,7 +1320,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
     exit 1
   fi
   set +e
-  GATE_RESULT="$(bash scripts/csa/session-wait-until-done.sh "${GATE_SID}")"
+  GATE_RESULT="$(bash "${CSA_HELPER_DIR}/session-wait-until-done.sh" "${GATE_SID}")"
   GATE_RC=$?
   set -e
   if [ "${GATE_RC}" -ne 0 ]; then
