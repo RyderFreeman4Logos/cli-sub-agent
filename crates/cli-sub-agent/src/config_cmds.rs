@@ -311,8 +311,9 @@ pub(crate) fn handle_config_get(
         }
     }
 
-    if let Some(value) =
-        resolve_effective_key(project_root.as_deref(), &key, project_only, global_only)?
+    if !project_only
+        && let Some(value) =
+            resolve_effective_key(project_root.as_deref(), &key, project_only, global_only)?
     {
         println!("{}", format_toml_value(&value));
         return Ok(());
@@ -439,19 +440,15 @@ fn resolve_effective_key(
         return Ok(None);
     }
 
-    if !global_only
-        && let Some(project_root) = project_root
-        && let Some(value) = if project_only {
-            resolve_project_execution_key(project_root, key)?
-        } else {
-            resolve_effective_execution_key(project_root, key)?
-        }
-    {
-        return Ok(Some(value));
-    }
-
     if project_only {
         return Ok(None);
+    }
+
+    if !global_only
+        && let Some(project_root) = project_root
+        && let Some(value) = resolve_effective_execution_key(project_root, key)?
+    {
+        return Ok(Some(value));
     }
 
     resolve_effective_global_key(key)
@@ -476,23 +473,6 @@ fn resolve_effective_execution_key(
     }
 
     if let Some(config) = ProjectConfig::load(project_root)? {
-        let root = build_project_display_toml(&config.redacted_for_display())?;
-        return Ok(resolve_key(&root, key));
-    }
-
-    let root = build_global_display_toml(&GlobalConfig::default())?;
-    Ok(resolve_key(&root, key))
-}
-
-fn resolve_project_execution_key(
-    project_root: &std::path::Path,
-    key: &str,
-) -> Result<Option<toml::Value>> {
-    if !key.starts_with("execution.") {
-        return Ok(None);
-    }
-
-    if let Some(config) = ProjectConfig::load_project_only(project_root)? {
         let root = build_project_display_toml(&config.redacted_for_display())?;
         return Ok(resolve_key(&root, key));
     }

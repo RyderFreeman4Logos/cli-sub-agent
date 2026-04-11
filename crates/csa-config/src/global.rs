@@ -522,7 +522,15 @@ impl GlobalConfig {
     /// Compatibility rule: when `[kv_cache]` is absent, keep the legacy 250s cap.
     /// Once the section exists, `long_poll_seconds` defaults to 240 if omitted.
     pub fn resolve_session_wait_long_poll_seconds() -> u64 {
-        Self::resolve_session_wait_long_poll_seconds_from_path(Self::config_path().ok().as_deref())
+        let config_dir = paths::config_dir();
+        Self::resolve_session_wait_long_poll_seconds_from_dir(config_dir.as_deref())
+    }
+
+    pub(crate) fn resolve_session_wait_long_poll_seconds_from_dir(
+        config_dir: Option<&Path>,
+    ) -> u64 {
+        let path = config_dir.map(|dir| dir.join("config.toml"));
+        Self::resolve_session_wait_long_poll_seconds_from_path(path.as_deref())
     }
 
     pub fn resolve_session_wait_long_poll_seconds_from_path(path: Option<&Path>) -> u64 {

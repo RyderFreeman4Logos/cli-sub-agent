@@ -220,10 +220,12 @@ min_timeout_seconds = 3600
         true,
         false,
     )
-    .unwrap()
-    .expect("project-only execution key should resolve to compile defaults");
+    .unwrap();
 
-    assert_eq!(value.as_integer(), Some(1800));
+    assert!(
+        value.is_none(),
+        "project-only execution lookup should stay raw and not synthesize defaults"
+    );
 }
 
 #[test]
