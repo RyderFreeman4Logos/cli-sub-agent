@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
-use csa_config::{GlobalConfig, ProjectConfig};
+use csa_config::{DEFAULT_KV_CACHE_LONG_POLL_SECS, GlobalConfig, ProjectConfig};
 use csa_core::types::OutputFormat;
 
 pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
@@ -117,12 +117,15 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
 
 /// Resolve the `csa session wait` cap from global KV cache config.
 ///
-/// Compatibility rule: if `[kv_cache]` is absent, keep the legacy 250s wait cap.
+/// Use the global KV cache setting when it differs from the documented default.
+/// Deprecated `session.daemon_wait_seconds` remains a compatibility fallback.
 fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
-    if let Some(legacy_timeout) = resolve_legacy_session_wait_timeout(cd) {
-        return legacy_timeout;
+    let global_timeout = GlobalConfig::resolve_session_wait_long_poll_seconds();
+    if global_timeout != DEFAULT_KV_CACHE_LONG_POLL_SECS {
+        return global_timeout;
     }
-    GlobalConfig::resolve_session_wait_long_poll_seconds()
+
+    resolve_legacy_session_wait_timeout(cd).unwrap_or(global_timeout)
 }
 
 fn resolve_legacy_session_wait_timeout(cd: Option<&str>) -> Option<u64> {
@@ -227,7 +230,7 @@ long_poll_seconds = 3000
     }
 
     #[test]
-    fn resolve_daemon_wait_timeout_keeps_legacy_fallback_without_kv_cache_section() {
+    fn resolve_daemon_wait_timeout_uses_documented_default_without_kv_cache_section() {
         let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
         let dir = tempfile::tempdir().unwrap();
         let config_root = dir.path().join("xdg-config");
@@ -246,7 +249,45 @@ tool = "auto"
         )
         .unwrap();
 
-        assert_eq!(resolve_daemon_wait_timeout(None), 250);
+        assert_eq!(resolve_daemon_wait_timeout(None), 240);
+    }
+
+    #[test]
+    fn resolve_daemon_wait_timeout_prefers_global_kv_cache_over_legacy_session_key() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+[kv_cache]
+long_poll_seconds = 3000
+"#,
+        )
+        .unwrap();
+
+        let csa_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[session]
+daemon_wait_seconds = 600
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
+            3000
+        );
     }
 
     #[test]

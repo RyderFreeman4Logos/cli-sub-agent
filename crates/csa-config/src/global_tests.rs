@@ -67,7 +67,7 @@ long_poll_seconds = 3000
 }
 
 #[test]
-fn test_resolve_session_wait_long_poll_seconds_keeps_legacy_fallback_without_kv_cache_section() {
+fn test_resolve_session_wait_long_poll_seconds_uses_documented_default_without_kv_cache_section() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(
@@ -81,7 +81,7 @@ tool = "auto"
 
     assert_eq!(
         GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
-        250
+        240
     );
 }
 

@@ -519,8 +519,8 @@ impl GlobalConfig {
 
     /// Resolve the `csa session wait` long-poll cap from the global config.
     ///
-    /// Compatibility rule: when `[kv_cache]` is absent, keep the legacy 250s cap.
-    /// Once the section exists, `long_poll_seconds` defaults to 240 if omitted.
+    /// Missing or invalid config falls back to the documented KV cache default.
+    /// Once `[kv_cache]` exists, `long_poll_seconds` still defaults to 240 if omitted.
     pub fn resolve_session_wait_long_poll_seconds() -> u64 {
         let config_dir = paths::config_dir();
         Self::resolve_session_wait_long_poll_seconds_from_dir(config_dir.as_deref())
@@ -535,13 +535,13 @@ impl GlobalConfig {
 
     pub fn resolve_session_wait_long_poll_seconds_from_path(path: Option<&Path>) -> u64 {
         let Some(path) = path else {
-            return LEGACY_SESSION_WAIT_FALLBACK_SECS;
+            return DEFAULT_KV_CACHE_LONG_POLL_SECS;
         };
 
         let content = match std::fs::read_to_string(path) {
             Ok(content) => content,
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return LEGACY_SESSION_WAIT_FALLBACK_SECS;
+                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
             }
             Err(err) => {
                 tracing::warn!(
@@ -549,7 +549,7 @@ impl GlobalConfig {
                     error = %err,
                     "Failed to read global config while resolving session wait timeout"
                 );
-                return LEGACY_SESSION_WAIT_FALLBACK_SECS;
+                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
             }
         };
 
@@ -561,7 +561,7 @@ impl GlobalConfig {
                     error = %err,
                     "Failed to parse global config while resolving session wait timeout"
                 );
-                return LEGACY_SESSION_WAIT_FALLBACK_SECS;
+                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
             }
         };
 
@@ -570,7 +570,7 @@ impl GlobalConfig {
             .and_then(toml::Value::as_table)
             .is_none()
         {
-            return LEGACY_SESSION_WAIT_FALLBACK_SECS;
+            return DEFAULT_KV_CACHE_LONG_POLL_SECS;
         }
 
         match toml::from_str::<Self>(&content) {
@@ -581,7 +581,7 @@ impl GlobalConfig {
                     error = %err,
                     "Failed to deserialize global config while resolving session wait timeout"
                 );
-                LEGACY_SESSION_WAIT_FALLBACK_SECS
+                DEFAULT_KV_CACHE_LONG_POLL_SECS
             }
         }
     }
