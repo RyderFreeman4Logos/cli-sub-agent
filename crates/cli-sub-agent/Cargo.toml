@@ -28,7 +28,6 @@ weave.workspace = true
 clap.workspace = true
 tokio.workspace = true
 libc.workspace = true
-fd-lock.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

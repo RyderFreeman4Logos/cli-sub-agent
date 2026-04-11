@@ -3,6 +3,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+#[cfg(unix)]
+use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -13,8 +15,9 @@ use csa_session::{
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
 
-#[rustfmt::skip]
-struct ReconcileLock { _guard: fd_lock::RwLockWriteGuard<'static, fs::File> }
+struct ReconcileLock {
+    _file: fs::File,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadActiveSessionReconciliation {
@@ -284,29 +287,44 @@ fn acquire_reconcile_lock(
 ) -> Result<Option<(PathBuf, ReconcileLock)>> {
     let session_dir = get_session_dir(project_root, session_id)?;
     let lock_path = session_dir.join(".reconcile.lock");
-    let file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .truncate(false)
-        .open(&lock_path)
-        .with_context(|| {
-            format!(
-                "Failed to open reconciliation lock: {}",
-                lock_path.display()
-            )
-        })?;
 
-    // Cross-platform advisory locking via fd-lock.
-    // Use Box::leak to provide the 'static lifetime for the guard since ReconcileLock
-    // needs to own it and be returned to the caller.
-    let lock = Box::leak(Box::new(fd_lock::RwLock::new(file)));
-    match lock.try_write() {
-        Ok(guard) => Ok(Some((session_dir, ReconcileLock { _guard: guard }))),
-        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
-        Err(e) => Err(anyhow::Error::from(e).context(format!(
-            "Failed to acquire reconciliation lock for {session_id}"
-        ))),
+    #[cfg(unix)]
+    {
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&lock_path)
+            .with_context(|| {
+                format!(
+                    "Failed to open reconciliation lock: {}",
+                    lock_path.display()
+                )
+            })?;
+        let fd = file.as_raw_fd();
+        // SAFETY: fd is a valid open file descriptor owned by `file`.
+        let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
+        if rc == 0 {
+            Ok(Some((session_dir, ReconcileLock { _file: file })))
+        } else {
+            let err = std::io::Error::last_os_error();
+            if err.kind() == std::io::ErrorKind::WouldBlock {
+                Ok(None)
+            } else {
+                Err(anyhow::Error::from(err).context(format!(
+                    "Failed to acquire reconciliation lock for {session_id}"
+                )))
+            }
+        }
+    }
+
+    #[cfg(not(unix))]
+    {
+        // Windows reconcile is unprotected against concurrent races. Acceptable
+        // because Windows is not a CI target for this project. If Windows support
+        // becomes a goal, replace this stub with a proper LockFileEx-based impl.
+        Ok(None)
     }
 }
 
