@@ -16,6 +16,7 @@ use csa_session::{
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
 
 struct ReconcileLock {
+    #[cfg(unix)]
     _file: fs::File,
 }
 
@@ -186,7 +187,9 @@ where
                 result_path.display()
             )
         })?;
-        return Ok(DeadActiveSessionReconciliation::NoChange);
+        return Err(anyhow!(
+            "Failed to transition orphaned session to Retired phase during reconciliation for {session_id}: {err}"
+        ));
     }
     session.termination_reason = Some("orphaned_process".to_string());
     if let Err(err) = persist_session(session_dir, &session) {
@@ -324,7 +327,10 @@ fn acquire_reconcile_lock(
         // Windows reconcile is unprotected against concurrent races. Acceptable
         // because Windows is not a CI target for this project. If Windows support
         // becomes a goal, replace this stub with a proper LockFileEx-based impl.
-        Ok(None)
+        // Windows reconcile lock is a no-op: races are possible but acceptable since
+        // Windows is not a CI target. The Some() ensures the caller proceeds with
+        // reconciliation rather than treating None as "another process holds the lock".
+        Ok(Some((session_dir, ReconcileLock {})))
     }
 }
 

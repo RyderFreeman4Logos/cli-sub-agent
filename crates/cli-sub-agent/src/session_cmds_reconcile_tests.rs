@@ -114,7 +114,7 @@ fn ensure_terminal_result_for_dead_active_session_leaves_state_unchanged_on_tran
     let cooldown_path = session_dir.parent().unwrap().join("cooldown-marker.toml");
     let original_state = fs::read_to_string(&state_path).unwrap();
 
-    let reconciled = ensure_terminal_result_for_dead_active_session_impl(
+    let err = ensure_terminal_result_for_dead_active_session_impl(
         project,
         &session_id,
         "session list",
@@ -125,9 +125,13 @@ fn ensure_terminal_result_for_dead_active_session_leaves_state_unchanged_on_tran
         },
         &persist_session_state_atomically,
     )
-    .unwrap();
+    .unwrap_err();
 
-    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        err.to_string()
+            .contains("Failed to transition orphaned session to Retired phase"),
+        "unexpected error: {err:#}"
+    );
     let persisted = load_session(project, &session_id).unwrap();
     assert_eq!(persisted.phase, SessionPhase::Active);
     assert_eq!(persisted.termination_reason, None);
