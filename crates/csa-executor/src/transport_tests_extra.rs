@@ -27,6 +27,13 @@ impl ScopedEnvVar {
         unsafe { std::env::set_var(key, value) };
         Self { key, original }
     }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::remove_var(key) };
+        Self { key, original }
+    }
 }
 
 impl Drop for ScopedEnvVar {
@@ -178,10 +185,11 @@ fn test_maybe_write_acp_payload_debug_requires_flag_and_session_dir() {
 #[test]
 fn test_maybe_write_acp_payload_debug_writes_json_artifact() {
     let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
-    let _debug_flag = ScopedEnvVar::set(ACP_PAYLOAD_DEBUG_ENV, "1");
+    let _debug_flag = ScopedEnvVar::unset(ACP_PAYLOAD_DEBUG_ENV);
     let temp = tempfile::tempdir().expect("tempdir");
     let session_dir = temp.path().join("session");
     let mut env = HashMap::new();
+    env.insert(ACP_PAYLOAD_DEBUG_ENV.to_string(), "1".to_string());
     env.insert(
         "CSA_SESSION_DIR".to_string(),
         session_dir.to_string_lossy().into_owned(),
@@ -191,6 +199,18 @@ fn test_maybe_write_acp_payload_debug_writes_json_artifact() {
     session_meta.insert(
         "review".to_string(),
         serde_json::json!({"mode": "readonly"}),
+    );
+    session_meta.insert(
+        "mcpServers".to_string(),
+        serde_json::json!({
+            "demo": {
+                "command": "demo-mcp",
+                "env": {
+                    "API_KEY": "secret-token",
+                    "OTHER_SECRET": "another-secret"
+                }
+            }
+        }),
     );
 
     let debug_path = super::transport_acp_payload_debug::maybe_write_acp_payload_debug(
@@ -216,6 +236,14 @@ fn test_maybe_write_acp_payload_debug_writes_json_artifact() {
     assert_eq!(json["prompt_chars"], 16);
     assert_eq!(json["prompt"], "full prompt body");
     assert_eq!(json["session_meta"]["review"]["mode"], "readonly");
+    assert_eq!(
+        json["session_meta"]["mcpServers"]["demo"]["env"]["API_KEY"],
+        "<redacted>"
+    );
+    assert_eq!(
+        json["session_meta"]["mcpServers"]["demo"]["env"]["OTHER_SECRET"],
+        "<redacted>"
+    );
 }
 
 // --- 3-phase Gemini fallback chain integration tests ---
