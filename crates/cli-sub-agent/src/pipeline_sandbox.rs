@@ -24,6 +24,15 @@ pub(crate) enum SandboxResolution {
     RequiredButUnavailable(String),
 }
 
+fn resolve_session_dir_for_sandbox(project_root: &Path, session_id: &str) -> PathBuf {
+    csa_session::manager::get_session_dir(project_root, session_id).unwrap_or_else(|_| {
+        std::env::temp_dir()
+            .join("cli-sub-agent")
+            .join("sessions")
+            .join(session_id)
+    })
+}
+
 /// Resolve sandbox configuration from project config and enforcement mode.
 ///
 /// Returns `SandboxResolution::Ok` with the options (possibly enriched with
@@ -100,6 +109,7 @@ pub(crate) fn resolve_sandbox_options(
         }
 
         // Build IsolationPlan via builder (BestEffort for profile defaults).
+        let session_dir = resolve_session_dir_for_sandbox(project_root, session_id);
         let mut builder = IsolationPlanBuilder::new(ResourceEnforcementMode::BestEffort)
             .with_resource_capability(resource_cap)
             .with_filesystem_capability(fs_cap)
@@ -108,12 +118,7 @@ pub(crate) fn resolve_sandbox_options(
                 defaults.memory_swap_max_mb,
                 None, // pids_max not available from profile defaults
             )
-            .with_tool_defaults(
-                tool_name,
-                project_root,
-                // No session dir available; use a temporary placeholder.
-                &std::env::temp_dir(),
-            )
+            .with_tool_defaults(tool_name, project_root, &session_dir)
             .with_readonly_project_root(readonly_project_root);
 
         // CSA runtime writable paths (best-effort for profile defaults).
@@ -231,8 +236,7 @@ pub(crate) fn resolve_sandbox_options(
     }
 
     // Resolve project root and session dir for tool-specific writable paths.
-    let session_dir = csa_session::manager::get_session_dir(project_root, session_id)
-        .unwrap_or_else(|_| std::env::temp_dir());
+    let session_dir = resolve_session_dir_for_sandbox(project_root, session_id);
 
     let memory_swap_max_mb = cfg.sandbox_memory_swap_max_mb(tool_name);
     let pids_max = cfg.sandbox_pids_max();

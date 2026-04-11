@@ -92,14 +92,15 @@ fn test_tool_defaults_claude_code() {
     assert!(plan.writable_paths.contains(&project));
     assert!(plan.writable_paths.contains(&session));
     assert!(
-        plan.writable_paths
+        !plan
+            .writable_paths
             .contains(&PathBuf::from(DEFAULT_SANDBOX_TMPDIR)),
-        "all sandboxed tool sessions should authorize /tmp writes alongside TMPDIR=/tmp"
+        "bwrap uses a private tmpfs /tmp and must not bind the host /tmp"
     );
     assert_eq!(
         plan.env_overrides.get("TMPDIR").map(String::as_str),
         Some(DEFAULT_SANDBOX_TMPDIR),
-        "all sandboxed tool sessions should pin TMPDIR to /tmp"
+        "bwrap-backed sessions should pin TMPDIR to the sandbox-private /tmp"
     );
 
     if let Some(home) = home_dir() {
@@ -160,6 +161,32 @@ fn test_tool_defaults_claude_code() {
             );
         }
     }
+}
+
+#[test]
+fn test_tool_defaults_landlock_uses_session_tmpdir() {
+    let project = PathBuf::from("/tmp/project");
+    let session = PathBuf::from("/tmp/session");
+
+    let plan = IsolationPlanBuilder::new(EnforcementMode::BestEffort)
+        .with_filesystem_capability(FilesystemCapability::Landlock)
+        .with_tool_defaults("claude-code", &project, &session)
+        .build()
+        .expect("should succeed");
+
+    assert!(plan.writable_paths.contains(&project));
+    assert!(plan.writable_paths.contains(&session));
+    assert!(
+        !plan
+            .writable_paths
+            .contains(&PathBuf::from(DEFAULT_SANDBOX_TMPDIR)),
+        "landlock must not grant host /tmp as writable just to satisfy TMPDIR"
+    );
+    assert_eq!(
+        plan.env_overrides.get("TMPDIR"),
+        Some(&session.join("tmp").to_string_lossy().into_owned()),
+        "landlock-backed sessions should pin TMPDIR to a session-owned tmp dir"
+    );
 }
 
 #[test]

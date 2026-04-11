@@ -182,8 +182,10 @@ impl IsolationPlanBuilder {
     /// Apply per-tool default paths and environment overrides.
     ///
     /// Always adds `project_root`, `session_dir`, and common writable paths
-    /// that all tools need (XDG state dir, mise cache, TMPDIR).  Tool-specific
-    /// config directories are appended based on `tool_name`.
+    /// that all tools need (XDG state dir, mise cache). It also injects a
+    /// writable `TMPDIR`: bwrap uses its private `/tmp`, while Landlock and
+    /// unsandboxed paths use a session-owned `tmp/` subdirectory.
+    /// Tool-specific config directories are appended based on `tool_name`.
     ///
     /// When `project_root` is inside a git submodule (`.git` is a file, not a
     /// directory), the superproject root is discovered by walking ancestors and
@@ -198,10 +200,11 @@ impl IsolationPlanBuilder {
         self.project_root = Some(project_root.to_path_buf());
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
-        self.writable_paths
-            .push(PathBuf::from(DEFAULT_SANDBOX_TMPDIR));
-        self.env_overrides
-            .insert("TMPDIR".to_string(), DEFAULT_SANDBOX_TMPDIR.to_string());
+        let sandbox_tmpdir = sandbox_tmpdir_for_capability(self.filesystem, session_dir);
+        self.env_overrides.insert(
+            "TMPDIR".to_string(),
+            sandbox_tmpdir.to_string_lossy().into_owned(),
+        );
 
         // Submodule detection: if .git is a file (not a directory), the project
         // root is inside a git submodule.  Walk up to find the superproject root
@@ -368,6 +371,13 @@ impl IsolationPlanBuilder {
             soft_limit_percent: self.soft_limit_percent,
             memory_monitor_interval_seconds: self.memory_monitor_interval_seconds,
         })
+    }
+}
+
+fn sandbox_tmpdir_for_capability(filesystem: FilesystemCapability, session_dir: &Path) -> PathBuf {
+    match filesystem {
+        FilesystemCapability::Bwrap => PathBuf::from(DEFAULT_SANDBOX_TMPDIR),
+        FilesystemCapability::Landlock | FilesystemCapability::None => session_dir.join("tmp"),
     }
 }
 
