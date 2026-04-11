@@ -45,6 +45,28 @@ csa run --sa-mode true --force-ignore-tier-setting --tool codex "Quick fix"
 csa run --sa-mode true --tool codex "Implement feature X"
 ```
 
+### Canonical LLM dispatch form
+
+Prefer this form for general `csa` dispatch when the caller wants an explicit model
+selection without `--tool`/`--tier` conflict handling:
+
+```bash
+csa run \
+  --sa-mode true \
+  --model-spec codex/openai/gpt-5.4/xhigh \
+  --no-failover \
+  --timeout 7200 \
+  --prompt-file /path/to/prompt.md
+```
+
+Why this is the canonical LLM-friendly form:
+
+- `--model-spec` encodes tool/provider/model/thinking in one string, avoiding conflict-prone `--tool` + `--tier` + `--force-ignore-tier-setting` combinations
+- `--no-failover` prevents silent fallback when the caller wants a specific tool
+- `--timeout 7200` is the sprint-safe default
+
+Default to this form unless the user explicitly asks for tier-based routing or a different tool.
+
 ## Core Concepts
 
 - **Meta-Session**: Persistent workspace for a specific task, stored in `~/.local/state/csa/`.
