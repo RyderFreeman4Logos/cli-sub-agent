@@ -220,6 +220,58 @@ fn test_build_command_extra_env_injection() {
     );
 }
 
+#[test]
+fn test_build_command_reserved_session_paths_override_extra_env() {
+    let exec = Executor::Codex {
+        model_override: None,
+        thinking_budget: None,
+    };
+    let session = make_test_session();
+    let mut extra = HashMap::new();
+    extra.insert(
+        "CSA_SESSION_DIR".to_string(),
+        "/tmp/fake-session".to_string(),
+    );
+    extra.insert(
+        csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
+        "/tmp/fake-session/result.toml".to_string(),
+    );
+
+    let (cmd, stdin_data) = exec.build_command("test", None, &session, Some(&extra));
+    assert!(stdin_data.is_none(), "Short prompts should stay on argv");
+
+    let envs: Vec<_> = cmd.as_std().get_envs().collect();
+    let env_map: HashMap<&std::ffi::OsStr, Option<&std::ffi::OsStr>> = envs.into_iter().collect();
+
+    let session_dir = env_map
+        .get(std::ffi::OsStr::new("CSA_SESSION_DIR"))
+        .expect("CSA_SESSION_DIR should be present")
+        .expect("CSA_SESSION_DIR should have a value")
+        .to_string_lossy();
+    assert!(
+        session_dir.contains("/sessions/"),
+        "reserved session dir should override extra_env, got: {session_dir}"
+    );
+    assert!(
+        session_dir.contains("01HTEST000000000000000000"),
+        "reserved session dir should include the session ID, got: {session_dir}"
+    );
+
+    let result_contract_path = env_map
+        .get(std::ffi::OsStr::new("CSA_RESULT_TOML_PATH_CONTRACT"))
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present")
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should have a value")
+        .to_string_lossy();
+    assert!(
+        result_contract_path.ends_with("/output/result.toml"),
+        "reserved result contract path should override extra_env, got: {result_contract_path}"
+    );
+    assert!(
+        result_contract_path.contains("01HTEST000000000000000000"),
+        "reserved result contract path should include the session ID, got: {result_contract_path}"
+    );
+}
+
 // ── build_command: per-tool args structure ───────────────────────
 
 #[test]

@@ -400,11 +400,15 @@ pub(super) fn clear_expected_result_toml(path: &Path) -> bool {
     }
 }
 
-pub(super) fn clear_expected_result_tomls(session_dir: &Path) -> bool {
+pub(super) fn clear_expected_result_artifacts_for_prompt(prompt: &str, session_dir: &Path) -> bool {
     let session_result_path = session_dir.join("result.toml");
+    let session_cleared = clear_expected_result_toml(&session_result_path);
+    if !prompt_requires_result_toml_path(prompt) {
+        return session_cleared;
+    }
+
     let contract_output_path = csa_session::contract_result_path(session_dir);
     let legacy_output_path = csa_session::legacy_user_result_path(session_dir);
-    let session_cleared = clear_expected_result_toml(&session_result_path);
     let contract_output_cleared = clear_expected_result_toml(&contract_output_path);
     let legacy_output_cleared = clear_expected_result_toml(&legacy_output_path);
     session_cleared && contract_output_cleared && legacy_output_cleared

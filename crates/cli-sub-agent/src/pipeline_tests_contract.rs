@@ -237,10 +237,47 @@ fn clear_expected_result_tomls_removes_all_stale_result_artifacts() {
     fs::write(&output_result, "status = \"stale\"\n").unwrap();
     fs::write(&legacy_output_result, "status = \"stale\"\n").unwrap();
 
-    assert!(crate::pipeline::result_contract::clear_expected_result_tomls(temp.path()));
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
+            temp.path()
+        )
+    );
     assert!(!session_result.exists());
     assert!(!output_result.exists());
     assert!(!legacy_output_result.exists());
+}
+
+#[test]
+fn clear_expected_result_artifacts_for_plain_prompt_preserves_sidecars() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let session_result = temp.path().join("result.toml");
+    let output_result = output_dir.join("result.toml");
+    let legacy_output_result = output_dir.join("user-result.toml");
+    fs::write(&session_result, "status = \"stale\"\n").unwrap();
+    fs::write(&output_result, "status = \"preserve\"\n").unwrap();
+    fs::write(&legacy_output_result, "status = \"preserve\"\n").unwrap();
+
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            "plain follow-up without contract marker",
+            temp.path()
+        )
+    );
+    assert!(
+        !session_result.exists(),
+        "session-root result.toml remains scratch state and should still be cleared"
+    );
+    assert!(
+        output_result.exists(),
+        "canonical contract sidecar must survive non-contract follow-up turns"
+    );
+    assert!(
+        legacy_output_result.exists(),
+        "legacy sidecar must survive non-contract follow-up turns"
+    );
 }
 
 #[test]

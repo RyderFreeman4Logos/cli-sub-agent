@@ -120,7 +120,40 @@ impl AcpTransport {
             (session.genealogy.depth + 1).to_string(),
         );
         env.insert("CSA_PROJECT_ROOT".to_string(), session.project_path.clone());
-        // CSA_SESSION_DIR: absolute path to the session state directory
+
+        env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
+        // Mark this process as a CSA subprocess so child tools can detect
+        // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
+        // "use csa review"). See GitHub issue #272.
+        env.insert("CSA_IS_SUBPROCESS".to_string(), "1".to_string());
+        if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
+            env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
+        }
+        if let Some(parent_session) = &session.genealogy.parent_session_id {
+            env.insert("CSA_PARENT_SESSION".to_string(), parent_session.clone());
+        }
+
+        if let Some(extra) = extra_env {
+            env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+        }
+        Self::insert_reserved_session_path_env(&mut env, session);
+
+        // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
+        // `gh pr merge` unless pr-bot has completed.  This is deterministic
+        // environment-level enforcement — the tool subprocess cannot bypass it.
+        //
+        // Only applied to ACP tools (claude-code, codex) which have autonomous
+        // bash execution.  Legacy tools (gemini-cli, opencode) are text-mode
+        // and cannot independently call `gh pr merge`.
+        csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
+
+        env
+    }
+
+    fn insert_reserved_session_path_env(
+        env: &mut HashMap<String, String>,
+        session: &MetaSessionState,
+    ) {
         if let Ok(dir) = csa_session::manager::get_session_dir(
             Path::new(&session.project_path),
             &session.meta_session_id,
@@ -138,33 +171,6 @@ impl AcpTransport {
         } else {
             tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
         }
-
-        env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
-        // Mark this process as a CSA subprocess so child tools can detect
-        // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
-        // "use csa review"). See GitHub issue #272.
-        env.insert("CSA_IS_SUBPROCESS".to_string(), "1".to_string());
-        if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
-            env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
-        }
-        if let Some(parent_session) = &session.genealogy.parent_session_id {
-            env.insert("CSA_PARENT_SESSION".to_string(), parent_session.clone());
-        }
-
-        if let Some(extra) = extra_env {
-            env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
-        }
-
-        // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
-        // `gh pr merge` unless pr-bot has completed.  This is deterministic
-        // environment-level enforcement — the tool subprocess cannot bypass it.
-        //
-        // Only applied to ACP tools (claude-code, codex) which have autonomous
-        // bash execution.  Legacy tools (gemini-cli, opencode) are text-mode
-        // and cannot independently call `gh pr merge`.
-        csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
-
-        env
     }
 }
 
