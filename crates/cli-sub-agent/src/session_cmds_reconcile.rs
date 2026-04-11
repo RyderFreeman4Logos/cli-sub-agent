@@ -2,8 +2,6 @@ use anyhow::{Context, Result, anyhow};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
-use std::os::fd::AsRawFd;
-#[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -16,19 +14,7 @@ use csa_session::{
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
 
 #[rustfmt::skip]
-struct ReconcileLock { file: fs::File }
-
-impl Drop for ReconcileLock {
-    fn drop(&mut self) {
-        #[cfg(unix)]
-        {
-            // SAFETY: `file` owns a valid fd; unlocking releases the advisory flock.
-            unsafe {
-                libc::flock(self.file.as_raw_fd(), libc::LOCK_UN);
-            }
-        }
-    }
-}
+struct ReconcileLock { _guard: fd_lock::RwLockWriteGuard<'static, fs::File> }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadActiveSessionReconciliation {
@@ -294,7 +280,7 @@ enum SyntheticResultPersistOutcome { Created, AlreadyExists }
 fn acquire_reconcile_lock(
     project_root: &Path,
     session_id: &str,
-    trigger: &str,
+    _trigger: &str,
 ) -> Result<Option<(PathBuf, ReconcileLock)>> {
     let session_dir = get_session_dir(project_root, session_id)?;
     let lock_path = session_dir.join(".reconcile.lock");
@@ -311,34 +297,16 @@ fn acquire_reconcile_lock(
             )
         })?;
 
-    #[cfg(unix)]
-    {
-        // SAFETY: `file` owns a valid fd and `LOCK_EX|LOCK_NB` is a non-destructive advisory lock.
-        let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
-        if ret == 0 {
-            return Ok(Some((session_dir, ReconcileLock { file })));
-        }
-
-        let errno = std::io::Error::last_os_error().raw_os_error();
-        if errno == Some(libc::EWOULDBLOCK) || errno == Some(libc::EAGAIN) {
-            info!(
-                session_id = %session_id,
-                trigger = %trigger,
-                "Skipping reconciliation because another process already holds the reconcile lock"
-            );
-            return Ok(None);
-        }
-
-        Err(anyhow!(
-            "Failed to acquire reconciliation lock for {session_id}: {}",
-            std::io::Error::last_os_error()
-        ))
-    }
-
-    #[cfg(not(unix))]
-    {
-        let _ = trigger;
-        Ok(Some((session_dir, ReconcileLock { file })))
+    // Cross-platform advisory locking via fd-lock.
+    // Use Box::leak to provide the 'static lifetime for the guard since ReconcileLock
+    // needs to own it and be returned to the caller.
+    let lock = Box::leak(Box::new(fd_lock::RwLock::new(file)));
+    match lock.try_write() {
+        Ok(guard) => Ok(Some((session_dir, ReconcileLock { _guard: guard }))),
+        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(anyhow::Error::from(e).context(format!(
+            "Failed to acquire reconciliation lock for {session_id}"
+        ))),
     }
 }
 

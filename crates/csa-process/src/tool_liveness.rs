@@ -398,6 +398,7 @@ mod tests {
         assert!(lock_file_is_recent(&lock_path, SystemTime::now()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_working_returns_true_for_own_process() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -435,6 +436,7 @@ mod tests {
         assert!(is_pid_working(std::process::id()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn find_session_pid_returns_own_pid() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -500,6 +502,7 @@ mod tests {
         ));
     }
 
+    #[cfg(unix)]
     #[test]
     fn find_session_pid_ignores_reconcile_lock_in_parent_dir() {
         let tmp = tempfile::tempdir().expect("tempdir");

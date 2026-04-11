@@ -320,6 +320,7 @@ fn handle_session_wait_marks_late_real_result_completion_as_non_synthetic() {
     );
 }
 
+#[cfg(unix)]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_reconciles_even_with_reused_pid_in_daemon_pid() {
     let td = tempdir().expect("tempdir");
@@ -355,6 +356,7 @@ fn ensure_terminal_result_for_dead_active_session_reconciles_even_with_reused_pi
     assert_eq!(result.status, "failure");
 }
 
+#[cfg(unix)]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_reconciles_even_with_stale_lock_file() {
     let td = tempdir().expect("tempdir");
