@@ -75,8 +75,11 @@ This is the FOUNDATION — without it, bot unavailability cannot safely merge.
 
 ```bash
 set -euo pipefail
-: "${CSA_WORKFLOW_DIR:?CSA_WORKFLOW_DIR is required for pr-bot helper resolution}"
-CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 CURRENT_HEAD="$(git rev-parse HEAD)"
 REVIEW_HEAD="$(bash "${CSA_HELPER_DIR}/latest-pass-review-head.sh")"
 if [ -n "${REVIEW_HEAD}" ] && [ "${CURRENT_HEAD}" = "${REVIEW_HEAD}" ]; then
@@ -240,8 +243,11 @@ Check whether cloud bot review is enabled for this project.
 
 ```bash
 set -euo pipefail
-: "${CSA_WORKFLOW_DIR:?CSA_WORKFLOW_DIR is required for pr-bot helper resolution}"
-CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 CLOUD_BOT=$(csa config get pr_review.cloud_bot --default true)
 CLOUD_BOT_NAME=$(csa config get pr_review.cloud_bot_name --default gemini-code-assist)
 CLOUD_BOT_TRIGGER=$(csa config get pr_review.cloud_bot_trigger --default auto)
@@ -347,8 +353,11 @@ configured bot is gemini-code-assist) and includes them with a quota warning.
 
 ```bash
 set -euo pipefail
-: "${CSA_WORKFLOW_DIR:?CSA_WORKFLOW_DIR is required for pr-bot helper resolution}"
-CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 
 # --- Trigger cloud bot review for current HEAD ---
 CURRENT_SHA="$(git rev-parse HEAD)"
@@ -586,8 +595,11 @@ Delegate this cycle to CSA as a single operation and enforce hard bounds:
 
 ```bash
 set -euo pipefail
-: "${CSA_WORKFLOW_DIR:?CSA_WORKFLOW_DIR is required for pr-bot helper resolution}"
-CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 set +e
 FIX_SID="$(csa run --sa-mode true --tier tier-4-critical --timeout 1800 --idle-timeout 1800 "Bounded fallback-fix task only. Do NOT invoke pr-bot skill or any full PR workflow. Operate on PR #${PR_NUM} in repo ${REPO}. Bot is unavailable and fallback local review found issues. Run a self-contained max-3-round fix cycle: read latest findings from csa review --range main...HEAD, apply fixes with commits, re-run review, repeat until clean. Return exactly one marker line FALLBACK_FIX=clean when clean; otherwise return FALLBACK_FIX=failed and exit non-zero.")"
 DAEMON_RC=$?
@@ -1057,8 +1069,11 @@ then up to `cloud_bot_poll_max_seconds` of polling.
 
 ```bash
 set -euo pipefail
-: "${CSA_WORKFLOW_DIR:?CSA_WORKFLOW_DIR is required for pr-bot helper resolution}"
-CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 CURRENT_SHA="$(git rev-parse HEAD)"
 RETRIGGER_TS="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
@@ -1245,8 +1260,11 @@ wait/fix/review loop to a single CSA-managed step.
 
 ```bash
 set -euo pipefail
-: "${CSA_WORKFLOW_DIR:?CSA_WORKFLOW_DIR is required for pr-bot helper resolution}"
-CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+if [ -n "${CSA_WORKFLOW_DIR:-}" ]; then
+  CSA_HELPER_DIR="${CSA_WORKFLOW_DIR}/scripts/csa"
+else
+  CSA_HELPER_DIR="patterns/pr-bot/scripts/csa"
+fi
 
 COMMIT_COUNT=$(git rev-list --count main..HEAD)
 if [ "${COMMIT_COUNT}" -gt 3 ]; then
