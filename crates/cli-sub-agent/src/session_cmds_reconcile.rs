@@ -3,9 +3,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-#[cfg(unix)]
-use std::os::unix::io::AsRawFd;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use tracing::{info, warn};
 
 use csa_process::ToolLiveness;
@@ -14,11 +12,6 @@ use csa_session::{
 };
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
-
-struct ReconcileLock {
-    #[cfg(unix)]
-    _file: fs::File,
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadActiveSessionReconciliation {
@@ -33,24 +26,50 @@ impl DeadActiveSessionReconciliation {
     pub(crate) fn synthesized_failure(self) -> bool { matches!(self, Self::SynthesizedFailure) }
 }
 
+fn with_reconcile_lock<R>(
+    session_dir: &Path,
+    body: impl FnOnce() -> Result<R>,
+) -> Result<Option<R>> {
+    let lock_path = session_dir.join(".reconcile.lock");
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock_path)
+        .with_context(|| {
+            format!(
+                "Failed to open reconciliation lock: {}",
+                lock_path.display()
+            )
+        })?;
+
+    let mut lock = fd_lock::RwLock::new(file);
+    match lock.try_write() {
+        Ok(_guard) => Ok(Some(body()?)),
+        Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(anyhow::Error::from(e).context("Failed to acquire reconciliation lock")),
+    }
+}
+
 pub(crate) fn ensure_terminal_result_for_dead_active_session(
     project_root: &Path,
     session_id: &str,
     trigger: &str,
 ) -> Result<DeadActiveSessionReconciliation> {
-    let Some((session_dir, _lock)) = acquire_reconcile_lock(project_root, session_id, trigger)?
-    else {
-        return Ok(DeadActiveSessionReconciliation::NoChange);
-    };
-    ensure_terminal_result_for_dead_active_session_impl(
-        project_root,
-        session_id,
-        trigger,
-        &session_dir,
-        |_| {},
-        |_| {},
-        &persist_session_state_atomically,
-    )
+    let session_dir = get_session_dir(project_root, session_id)?;
+    let outcome = with_reconcile_lock(&session_dir, || {
+        ensure_terminal_result_for_dead_active_session_impl(
+            project_root,
+            session_id,
+            trigger,
+            &session_dir,
+            |_| {},
+            |_| {},
+            &persist_session_state_atomically,
+        )
+    })?;
+    Ok(outcome.unwrap_or(DeadActiveSessionReconciliation::NoChange))
 }
 
 #[cfg(test)]
@@ -63,19 +82,19 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session_with_before_write<F
 where
     F: FnOnce(&Path),
 {
-    let Some((session_dir, _lock)) = acquire_reconcile_lock(project_root, session_id, trigger)?
-    else {
-        return Ok(DeadActiveSessionReconciliation::NoChange);
-    };
-    ensure_terminal_result_for_dead_active_session_impl(
-        project_root,
-        session_id,
-        trigger,
-        &session_dir,
-        before_write,
-        |_| {},
-        &persist_session_state_atomically,
-    )
+    let session_dir = get_session_dir(project_root, session_id)?;
+    let outcome = with_reconcile_lock(&session_dir, || {
+        ensure_terminal_result_for_dead_active_session_impl(
+            project_root,
+            session_id,
+            trigger,
+            &session_dir,
+            before_write,
+            |_| {},
+            &persist_session_state_atomically,
+        )
+    })?;
+    Ok(outcome.unwrap_or(DeadActiveSessionReconciliation::NoChange))
 }
 
 fn ensure_terminal_result_for_dead_active_session_impl<F, B>(
@@ -231,17 +250,17 @@ pub(crate) fn retire_if_dead_with_result(
     session_id: &str,
     trigger: &str,
 ) -> Result<bool> {
-    let Some((session_dir, _lock)) = acquire_reconcile_lock(project_root, session_id, trigger)?
-    else {
-        return Ok(false);
-    };
-    retire_if_dead_with_result_impl(
-        project_root,
-        session_id,
-        trigger,
-        &session_dir,
-        &persist_session_state_atomically,
-    )
+    let session_dir = get_session_dir(project_root, session_id)?;
+    let outcome = with_reconcile_lock(&session_dir, || {
+        retire_if_dead_with_result_impl(
+            project_root,
+            session_id,
+            trigger,
+            &session_dir,
+            &persist_session_state_atomically,
+        )
+    })?;
+    Ok(outcome.unwrap_or(false))
 }
 
 fn retire_if_dead_with_result_impl(
@@ -282,57 +301,6 @@ fn retire_if_dead_with_result_impl(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[rustfmt::skip]
 enum SyntheticResultPersistOutcome { Created, AlreadyExists }
-
-fn acquire_reconcile_lock(
-    project_root: &Path,
-    session_id: &str,
-    _trigger: &str,
-) -> Result<Option<(PathBuf, ReconcileLock)>> {
-    let session_dir = get_session_dir(project_root, session_id)?;
-    let lock_path = session_dir.join(".reconcile.lock");
-
-    #[cfg(unix)]
-    {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(false)
-            .open(&lock_path)
-            .with_context(|| {
-                format!(
-                    "Failed to open reconciliation lock: {}",
-                    lock_path.display()
-                )
-            })?;
-        let fd = file.as_raw_fd();
-        // SAFETY: fd is a valid open file descriptor owned by `file`.
-        let rc = unsafe { libc::flock(fd, libc::LOCK_EX | libc::LOCK_NB) };
-        if rc == 0 {
-            Ok(Some((session_dir, ReconcileLock { _file: file })))
-        } else {
-            let err = std::io::Error::last_os_error();
-            if err.kind() == std::io::ErrorKind::WouldBlock {
-                Ok(None)
-            } else {
-                Err(anyhow::Error::from(err).context(format!(
-                    "Failed to acquire reconciliation lock for {session_id}"
-                )))
-            }
-        }
-    }
-
-    #[cfg(not(unix))]
-    {
-        // Windows reconcile is unprotected against concurrent races. Acceptable
-        // because Windows is not a CI target for this project. If Windows support
-        // becomes a goal, replace this stub with a proper LockFileEx-based impl.
-        // Windows reconcile lock is a no-op: races are possible but acceptable since
-        // Windows is not a CI target. The Some() ensures the caller proceeds with
-        // reconciliation rather than treating None as "another process holds the lock".
-        Ok(Some((session_dir, ReconcileLock {})))
-    }
-}
 
 fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionState) -> Result<()> {
     let state_path = session_dir.join("state.toml");

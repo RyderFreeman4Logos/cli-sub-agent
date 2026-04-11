@@ -123,7 +123,7 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "lock") {
+        if is_reconciler_artifact(&path) || path.extension().is_none_or(|ext| ext != "lock") {
             continue;
         }
         let Some(content) = fs::read_to_string(&path).ok() else {
@@ -139,6 +139,13 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
         }
     }
     None
+}
+
+fn is_reconciler_artifact(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some(".reconcile.lock") | Some(".reconcile")
+    )
 }
 
 /// Check if a process is actively working by reading `/proc/{pid}/stat`.
@@ -253,7 +260,9 @@ fn has_recent_session_write_signal(session_dir: &Path, now: SystemTime) -> bool 
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.file_name().is_some_and(|name| name == SNAPSHOT_FILE) {
+            if is_reconciler_artifact(&path)
+                || path.file_name().is_some_and(|name| name == SNAPSHOT_FILE)
+            {
                 continue;
             }
 

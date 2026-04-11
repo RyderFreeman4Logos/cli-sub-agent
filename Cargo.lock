@@ -535,6 +535,7 @@ dependencies = [
  "csa-session",
  "csa-todo",
  "directories",
+ "fd-lock",
  "glob",
  "ignore",
  "libc",

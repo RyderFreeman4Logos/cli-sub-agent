@@ -235,19 +235,21 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_reconcile_lock_is
 
     let session = create_session(project, Some("lock-held"), None, None).unwrap();
     let session_id = session.meta_session_id;
-    let (_session_dir, _lock) = acquire_reconcile_lock(project, &session_id, "unit-test")
-        .unwrap()
-        .expect("lock should be acquired for setup");
+    let session_dir = get_session_dir(project, &session_id).unwrap();
 
-    let reconciled =
-        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
-            .unwrap();
+    let _outcome = with_reconcile_lock(&session_dir, || {
+        let reconciled =
+            ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+                .unwrap();
 
-    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
-    assert!(load_result(project, &session_id).unwrap().is_none());
-    let persisted = load_session(project, &session_id).unwrap();
-    assert_eq!(persisted.phase, SessionPhase::Active);
-    assert_eq!(persisted.termination_reason, None);
+        assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+        assert!(load_result(project, &session_id).unwrap().is_none());
+        let persisted = load_session(project, &session_id).unwrap();
+        assert_eq!(persisted.phase, SessionPhase::Active);
+        assert_eq!(persisted.termination_reason, None);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]
