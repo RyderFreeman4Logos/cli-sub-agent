@@ -130,6 +130,7 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_for_non_active_phase()
 
 #[cfg(unix)]
 #[test]
+#[rustfmt::skip]
 fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
     let td = tempdir().unwrap();
     let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
@@ -144,15 +145,17 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_alive() {
     let session_dir = get_session_dir(project, &session_id).unwrap();
     let locks_dir = session_dir.join("locks");
     std::fs::create_dir_all(&locks_dir).unwrap();
-    std::fs::write(
-        locks_dir.join("codex.lock"),
-        format!(r#"{{"pid": {}}}"#, std::process::id()),
-    )
-    .unwrap();
 
-    let reconciled =
-        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
-            .unwrap();
+    // Use a spawned process with session ID in cmdline to satisfy ToolLiveness context check.
+    let mut child = std::process::Command::new("sh").arg("-c").arg(format!("sleep 60 # {}", session_id)).spawn().unwrap();
+    let pid = child.id();
+
+    std::fs::write(locks_dir.join("codex.lock"), format!(r#"{{"pid": {}}}"#, pid)).unwrap();
+
+    let reconciled = ensure_terminal_result_for_dead_active_session(project, &session_id, "session list").unwrap();
+
+    child.kill().ok(); child.wait().ok();
+
     assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
     assert!(load_result(project, &session_id).unwrap().is_none());
 }

@@ -16,6 +16,7 @@ libc.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 chrono.workspace = true
 nix = { version = "0.31", optional = true, features = ["signal", "term", "process", "fs"] }
 regex = { workspace = true, optional = true }

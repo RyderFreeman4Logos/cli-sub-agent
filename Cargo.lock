@@ -876,6 +876,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "serde",
+ "serde_json",
  "tempfile",
  "tokio",
  "tracing",

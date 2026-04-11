@@ -132,7 +132,11 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
         let Some(pid) = extract_pid(&content) else {
             continue;
         };
-        let tool_name = path.file_stem().and_then(|stem| stem.to_str());
+        let stem = path.file_stem().and_then(|stem| stem.to_str());
+        if stem.is_some_and(|s| s == "reconcile") {
+            continue;
+        }
+        let tool_name = stem;
         let recent = lock_file_is_recent(&path, SystemTime::now());
         if pid_matches_session_context(pid, tool_name, session_dir, Some(recent)) {
             return Some(pid);
@@ -217,7 +221,7 @@ fn pid_matches_session_context(
         return false;
     }
 
-    process_matches_session_context(pid, tool_name, session_dir) || recent_file.unwrap_or(false)
+    process_matches_session_context(pid, tool_name, session_dir) && recent_file.unwrap_or(true)
 }
 
 fn read_daemon_pid(session_dir: &Path) -> Option<u32> {
@@ -348,15 +352,13 @@ fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
 }
 
 fn extract_pid(lock_content: &str) -> Option<u32> {
-    let pid_key_pos = lock_content.find("\"pid\"")?;
-    let tail = &lock_content[pid_key_pos..];
-    let colon_pos = tail.find(':')?;
-    let number = tail[colon_pos + 1..]
-        .chars()
-        .skip_while(|ch| ch.is_ascii_whitespace())
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    number.parse::<u32>().ok()
+    #[derive(serde::Deserialize)]
+    struct LockFileContent {
+        pid: u32,
+    }
+    serde_json::from_str::<LockFileContent>(lock_content)
+        .ok()
+        .map(|data| data.pid)
 }
 
 fn is_process_alive(pid: u32) -> bool {
@@ -405,14 +407,24 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
+        // Use a spawned process with 'codex' in cmdline to satisfy context check.
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60 # codex")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
         fs::write(
             locks_dir.join("codex.lock"),
-            format!("{{\"pid\": {}}}", std::process::id()),
+            format!("{{\"pid\": {}}}", pid),
         )
         .expect("write lock");
 
-        // Our own process is running (state R or S), so is_working should return true.
-        assert!(ToolLiveness::is_working(tmp.path()));
+        // The process is running, so is_working should return true.
+        let working = ToolLiveness::is_working(tmp.path());
+        child.kill().ok();
+        child.wait().ok();
+        assert!(working);
     }
 
     #[test]
@@ -432,14 +444,19 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
-        let own_pid = std::process::id();
-        fs::write(
-            locks_dir.join("tool.lock"),
-            format!("{{\"pid\": {own_pid}}}"),
-        )
-        .expect("write lock");
+        // Use a spawned process with 'tool' in cmdline to satisfy context check.
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60 # tool")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {pid}}}")).expect("write lock");
 
-        assert_eq!(find_session_pid(tmp.path()), Some(own_pid));
+        let found_pid = find_session_pid(tmp.path());
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(found_pid, Some(pid));
     }
 
     #[test]
