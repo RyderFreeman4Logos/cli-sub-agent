@@ -1,6 +1,8 @@
+use std::collections::HashMap;
 use std::sync::{LazyLock, Mutex};
 
 const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
+const ACP_PAYLOAD_DEBUG_ENV: &str = super::transport_acp_payload_debug::ACP_PAYLOAD_DEBUG_ENV;
 static DAEMON_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
 
 fn restore_env_var(key: &str, original: Option<String>) {
@@ -10,6 +12,33 @@ fn restore_env_var(key: &str, original: Option<String>) {
             Some(value) => std::env::set_var(key, value),
             None => std::env::remove_var(key),
         }
+    }
+}
+
+struct ScopedEnvVar {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl ScopedEnvVar {
+    fn set(key: &'static str, value: &str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+
+    fn unset(key: &'static str) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+        unsafe { std::env::remove_var(key) };
+        Self { key, original }
+    }
+}
+
+impl Drop for ScopedEnvVar {
+    fn drop(&mut self) {
+        restore_env_var(self.key, self.original.take());
     }
 }
 
@@ -92,7 +121,7 @@ fn test_daemon_mode_disables_acp_stderr_streaming_when_output_spool_exists() {
     unsafe { std::env::set_var(DAEMON_SESSION_ID_ENV, "01KTESTSESSION") };
 
     let spool_path = std::path::Path::new("/tmp/output.log");
-    assert!(!super::should_stream_acp_stdout_to_stderr(
+    assert!(!super::transport_types::should_stream_acp_stdout_to_stderr(
         StreamMode::TeeToStderr,
         Some(spool_path)
     ));
@@ -108,7 +137,7 @@ fn test_foreground_mode_keeps_acp_stderr_streaming_even_with_output_spool() {
     unsafe { std::env::remove_var(DAEMON_SESSION_ID_ENV) };
 
     let spool_path = std::path::Path::new("/tmp/output.log");
-    assert!(super::should_stream_acp_stdout_to_stderr(
+    assert!(super::transport_types::should_stream_acp_stdout_to_stderr(
         StreamMode::TeeToStderr,
         Some(spool_path)
     ));
@@ -123,12 +152,128 @@ fn test_daemon_mode_without_output_spool_keeps_acp_stderr_streaming() {
     // SAFETY: guarded by DAEMON_ENV_LOCK for this test.
     unsafe { std::env::set_var(DAEMON_SESSION_ID_ENV, "01KTESTSESSION") };
 
-    assert!(super::should_stream_acp_stdout_to_stderr(
+    assert!(super::transport_types::should_stream_acp_stdout_to_stderr(
         StreamMode::TeeToStderr,
         None
     ));
 
     restore_env_var(DAEMON_SESSION_ID_ENV, original);
+}
+
+#[test]
+fn test_maybe_write_acp_payload_debug_requires_flag_and_session_dir() {
+    let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
+    let _debug_flag = ScopedEnvVar::set(ACP_PAYLOAD_DEBUG_ENV, "0");
+
+    let path = super::transport_acp_payload_debug::maybe_write_acp_payload_debug(
+        super::transport_acp_payload_debug::AcpPayloadDebugRequest {
+            env: &HashMap::new(),
+            session_dir: None,
+            tool_name: "gemini-cli",
+            command: "gemini",
+            args: &["--acp".to_string()],
+            working_dir: std::path::Path::new("/tmp"),
+            resume_session_id: None,
+            system_prompt: None,
+            session_meta: None,
+            prompt: "prompt",
+        },
+    );
+
+    assert!(path.is_none(), "debug artifact should stay disabled by default");
+}
+
+#[test]
+fn test_maybe_write_acp_payload_debug_writes_json_artifact() {
+    let _env_lock = DAEMON_ENV_LOCK.lock().expect("daemon env lock poisoned");
+    let _debug_flag = ScopedEnvVar::unset(ACP_PAYLOAD_DEBUG_ENV);
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_dir = temp.path().join("session");
+    let mut env = HashMap::new();
+    env.insert(ACP_PAYLOAD_DEBUG_ENV.to_string(), "1".to_string());
+    env.insert(
+        "CSA_SESSION_DIR".to_string(),
+        temp.path()
+            .join("spoofed-session")
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    let mut session_meta = serde_json::Map::new();
+    session_meta.insert(
+        "review".to_string(),
+        serde_json::json!({"mode": "readonly"}),
+    );
+    session_meta.insert(
+        "mcpServers".to_string(),
+        serde_json::json!({
+            "demo": {
+                "command": "demo-mcp",
+                "args": [
+                    "--api-key",
+                    "secret-token",
+                    "--header",
+                    "Authorization: Bearer abc123",
+                    "--safe",
+                    "value"
+                ],
+                "env": {
+                    "API_KEY": "secret-token",
+                    "OTHER_SECRET": "another-secret"
+                }
+            }
+        }),
+    );
+
+    let debug_path = super::transport_acp_payload_debug::maybe_write_acp_payload_debug(
+        super::transport_acp_payload_debug::AcpPayloadDebugRequest {
+            env: &env,
+            session_dir: Some(session_dir.as_path()),
+            tool_name: "gemini-cli",
+            command: "gemini",
+            args: &["--acp".to_string()],
+            working_dir: std::path::Path::new("/repo"),
+            resume_session_id: Some("provider-session"),
+            system_prompt: Some("system prompt"),
+            session_meta: Some(&session_meta),
+            prompt: "full prompt body",
+        },
+    )
+    .expect("debug artifact");
+    assert!(
+        debug_path.starts_with(&session_dir),
+        "debug artifact should use the trusted session dir, got {}",
+        debug_path.display()
+    );
+
+    let raw = std::fs::read_to_string(&debug_path).expect("read debug artifact");
+    let json: serde_json::Value = serde_json::from_str(&raw).expect("parse debug artifact");
+    assert_eq!(json["tool_name"], "gemini-cli");
+    assert_eq!(json["command"], "gemini");
+    assert_eq!(json["resume_session_id"], "provider-session");
+    assert_eq!(json["prompt_chars"], 16);
+    assert_eq!(json["prompt"], "full prompt body");
+    assert_eq!(json["args"], serde_json::json!(["--acp"]));
+    assert_eq!(json["session_meta"]["review"]["mode"], "readonly");
+    assert_eq!(
+        json["session_meta"]["mcpServers"]["demo"]["env"]["API_KEY"],
+        "<redacted>"
+    );
+    assert_eq!(
+        json["session_meta"]["mcpServers"]["demo"]["env"]["OTHER_SECRET"],
+        "<redacted>"
+    );
+    assert_eq!(
+        json["session_meta"]["mcpServers"]["demo"]["args"],
+        serde_json::json!([
+            "--api-key",
+            "<redacted>",
+            "--header",
+            "<redacted>",
+            "--safe",
+            "value"
+        ])
+    );
 }
 
 // --- 3-phase Gemini fallback chain integration tests ---

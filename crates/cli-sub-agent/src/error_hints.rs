@@ -18,6 +18,7 @@ const HINT_SLOT_EXHAUSTED: &str = "hint: free slots with 'csa gc' or wait with '
 const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa session list'";
 const HINT_CONFIG_ERROR: &str =
     "hint: validate config with 'csa config validate' or reinitialize with 'csa init'";
+const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; upgrade to a build that seeds it under CSA session state, or re-run with TMPDIR=/tmp";
 
 pub fn suggest_fix(err: &Error) -> Option<String> {
     for cause in err.chain() {
@@ -83,6 +84,13 @@ pub fn suggest_fix(err: &Error) -> Option<String> {
             || chain_text.contains("parse"))
     {
         return Some(HINT_CONFIG_ERROR.to_string());
+    }
+
+    if chain_text.contains("failed to create gemini runtime dir")
+        || (chain_text.contains("gemini runtime dir")
+            && chain_text.contains("read-only file system"))
+    {
+        return Some(HINT_GEMINI_RUNTIME_HOME.to_string());
     }
 
     None
@@ -170,6 +178,14 @@ mod tests {
     fn test_config_error_hint() {
         let err = anyhow::anyhow!("config parse error: invalid value");
         assert_eq!(suggest_fix(&err).as_deref(), Some(HINT_CONFIG_ERROR));
+    }
+
+    #[test]
+    fn test_gemini_runtime_home_hint() {
+        let err = anyhow::anyhow!(
+            "failed to create gemini runtime dir /home/obj/.claude/tmp/cli-sub-agent-gemini/01ABC/.gemini: Read-only file system (os error 30)"
+        );
+        assert_eq!(suggest_fix(&err).as_deref(), Some(HINT_GEMINI_RUNTIME_HOME));
     }
 
     #[test]

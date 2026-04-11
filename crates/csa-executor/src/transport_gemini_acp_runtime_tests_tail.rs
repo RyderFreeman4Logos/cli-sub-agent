@@ -78,7 +78,8 @@ fn prepare_gemini_acp_runtime_sets_runtime_home_and_resolves_direct_launch() {
     );
 
     let launch =
-        prepare_gemini_acp_runtime(&mut env, &session_id, &["--acp".to_string()]).expect("prepare runtime");
+        prepare_gemini_acp_runtime(&mut env, None, &session_id, &["--acp".to_string()])
+            .expect("prepare runtime");
 
     assert_eq!(launch.command, node_path.to_string_lossy());
     assert_eq!(launch.args[0], "--no-warnings=DEP0040");
@@ -157,7 +158,7 @@ fn prepare_gemini_acp_runtime_pins_mise_dirs_under_runtime_home() {
         source_home.to_string_lossy().into_owned(),
     );
 
-    prepare_gemini_acp_runtime(&mut env, session_id, &["--acp".to_string()])
+    prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
         .expect("prepare runtime");
 
     let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
@@ -190,6 +191,54 @@ fn prepare_gemini_acp_runtime_pins_mise_dirs_under_runtime_home() {
             .join(GEMINI_RUNTIME_MISE_STATE_RELATIVE_PATH)
             .is_dir(),
         "runtime should create a dedicated mise state dir for Gemini ACP startup"
+    );
+}
+
+#[test]
+fn prepare_gemini_acp_runtime_prefers_session_dir_runtime_home() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_dir = temp.path().join("sessions").join("01TESTSESSIONDIR");
+    let source_home = temp.path().join("source-home");
+    fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "CSA_SESSION_DIR".to_string(),
+        temp.path()
+            .join("spoofed-session")
+            .to_string_lossy()
+            .into_owned(),
+    );
+    env.insert(
+        "TMPDIR".to_string(),
+        temp.path()
+            .join("read-only-tmp")
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    prepare_gemini_acp_runtime(
+        &mut env,
+        Some(session_dir.as_path()),
+        "01TESTSESSIONDIR",
+        &["--acp".to_string()],
+    )
+    .expect("prepare runtime");
+
+    let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
+    assert_eq!(
+        runtime_home,
+        session_dir.join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH),
+        "runtime home should trust the internally resolved session dir instead of any env override"
+    );
+    assert!(
+        runtime_home.join(".gemini").is_dir(),
+        "runtime seed should succeed under session-owned runtime home"
     );
 }
 
@@ -243,7 +292,7 @@ fn prepare_gemini_acp_runtime_pins_non_shim_runtime_bins_on_path() {
         shims_dir.display().to_string(),
     );
 
-    prepare_gemini_acp_runtime(&mut env, session_id, &["--acp".to_string()])
+    prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
         .expect("prepare runtime");
 
     let prepared_path = env.get("PATH").expect("prepared path");
@@ -315,7 +364,8 @@ fn prepare_gemini_acp_runtime_resolves_mise_shims_via_mise_which() {
     );
 
     let launch =
-        prepare_gemini_acp_runtime(&mut env, session_id, &["--acp".to_string()]).expect("prepare runtime");
+        prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
+            .expect("prepare runtime");
 
     assert_eq!(launch.command, node_dir.join("node").to_string_lossy());
     assert_eq!(launch.args[1], real_script.to_string_lossy());
@@ -349,7 +399,7 @@ fn prepare_gemini_acp_runtime_rewrites_runtime_auth_selection_for_api_key_phase(
         csa_core::gemini::AUTH_MODE_OAUTH.to_string(),
     );
 
-    prepare_gemini_acp_runtime(&mut env, session_id, &["--acp".to_string()])
+    prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
         .expect("prepare oauth runtime");
     let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
     assert_eq!(
@@ -367,7 +417,7 @@ fn prepare_gemini_acp_runtime_rewrites_runtime_auth_selection_for_api_key_phase(
         "fallback-key".to_string(),
     );
 
-    prepare_gemini_acp_runtime(&mut env, session_id, &["--acp".to_string()])
+    prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
         .expect("prepare api key runtime");
     assert_eq!(
         read_selected_auth_type(&runtime_home.join(".gemini/settings.json")),
@@ -406,6 +456,18 @@ fn gemini_runtime_home_from_env_rejects_regular_home_paths() {
     );
 
     assert_eq!(gemini_runtime_home_from_env(&env), None);
+}
+
+#[test]
+fn gemini_runtime_home_from_env_accepts_session_dir_runtime_home() {
+    let runtime_home = PathBuf::from("/tmp/csa-sessions/01TEST/runtime/gemini-home");
+    let mut env = HashMap::new();
+    env.insert(
+        "GEMINI_CLI_HOME".to_string(),
+        runtime_home.to_string_lossy().into_owned(),
+    );
+
+    assert_eq!(gemini_runtime_home_from_env(&env), Some(runtime_home));
 }
 
 fn read_selected_auth_type(settings_path: &Path) -> Option<String> {
