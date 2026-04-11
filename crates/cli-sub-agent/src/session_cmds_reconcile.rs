@@ -142,11 +142,16 @@ where
         fallback.completed_at,
     );
     session.termination_reason = Some("orphaned_process".to_string());
-    let _ = session.apply_phase_event(csa_session::PhaseEvent::Retired);
-    let session_root = session_dir
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| anyhow!("Invalid session dir layout: {}", session_dir.display()))?;
+    if let Err(err) = session.apply_phase_event(csa_session::PhaseEvent::Retired) {
+        warn!(
+            session_id = %session_id,
+            trigger = %trigger,
+            reconciliation_reason = "true_missing_result",
+            error = %err,
+            "Failed to transition orphaned session to Retired phase during reconciliation"
+        );
+    }
+    let session_root = derive_session_root(&session_dir)?;
     save_session_in(session_root, &session)?;
     warn!(
         session_id = %session_id,
@@ -183,10 +188,7 @@ pub(crate) fn retire_if_dead_with_result(
     session
         .termination_reason
         .get_or_insert_with(|| "completed".to_string());
-    let session_root = session_dir
-        .parent()
-        .and_then(Path::parent)
-        .ok_or_else(|| anyhow!("Invalid session dir layout: {}", session_dir.display()))?;
+    let session_root = derive_session_root(&session_dir)?;
     save_session_in(session_root, &session)?;
     info!(
         session_id = %session_id,
@@ -200,6 +202,13 @@ pub(crate) fn retire_if_dead_with_result(
 enum SyntheticResultPersistOutcome {
     Created,
     AlreadyExists,
+}
+
+fn derive_session_root(session_dir: &Path) -> Result<&Path> {
+    session_dir
+        .parent()
+        .and_then(Path::parent)
+        .ok_or_else(|| anyhow!("Invalid session dir layout: {}", session_dir.display()))
 }
 
 fn persist_new_result_file<F>(
