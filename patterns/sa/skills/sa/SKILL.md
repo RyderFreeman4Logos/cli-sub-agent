@@ -412,6 +412,28 @@ SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
 scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
+### Canonical LLM dispatch form
+
+For Layer 0 manager dispatch, prefer an explicit `--model-spec` command over
+assembling `--tool`/`--tier`/`--force-ignore-tier-setting` combinations:
+
+```bash
+SID=$(csa run \
+  --sa-mode true \
+  --model-spec codex/openai/gpt-5.4/xhigh \
+  --no-failover \
+  --timeout 7200 \
+  --prompt-file "$PROMPT_FILE")
+```
+
+Why this is the canonical Layer 0 dispatch form:
+
+- `--model-spec` is a single-string explicit encoding of tool/provider/model/thinking
+- `--no-failover` prevents silent fallback when the manager expects codex specifically
+- `--timeout 7200` is the sprint-safe default for long-running employee work
+
+Default to this form unless the user explicitly asks for tier-based routing or a different tool.
+
 ## Model Selection Guidelines
 
 - Tool and thinking budget are determined by the tier system in
