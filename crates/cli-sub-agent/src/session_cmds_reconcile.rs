@@ -30,7 +30,13 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
     session_id: &str,
     trigger: &str,
 ) -> Result<DeadActiveSessionReconciliation> {
-    ensure_terminal_result_for_dead_active_session_impl(project_root, session_id, trigger, |_| {})
+    ensure_terminal_result_for_dead_active_session_impl(
+        project_root,
+        session_id,
+        trigger,
+        |_| {},
+        |_| {},
+    )
 }
 
 #[cfg(test)]
@@ -48,17 +54,20 @@ where
         session_id,
         trigger,
         before_write,
+        |_| {},
     )
 }
 
-fn ensure_terminal_result_for_dead_active_session_impl<F>(
+fn ensure_terminal_result_for_dead_active_session_impl<F, B>(
     project_root: &Path,
     session_id: &str,
     trigger: &str,
     before_write: F,
+    before_retire: B,
 ) -> Result<DeadActiveSessionReconciliation>
 where
     F: FnOnce(&Path),
+    B: FnOnce(&mut csa_session::MetaSessionState),
 {
     let mut session = load_session(project_root, session_id)?;
     if !matches!(session.phase, SessionPhase::Active) {
@@ -141,16 +150,18 @@ where
         session_id,
         fallback.completed_at,
     );
-    session.termination_reason = Some("orphaned_process".to_string());
+    before_retire(&mut session);
     if let Err(err) = session.apply_phase_event(csa_session::PhaseEvent::Retired) {
         warn!(
             session_id = %session_id,
             trigger = %trigger,
             reconciliation_reason = "true_missing_result",
             error = %err,
-            "Failed to transition orphaned session to Retired phase during reconciliation"
+            "Failed to transition orphaned session to Retired phase during reconciliation; leaving session state unchanged"
         );
+        return Ok(DeadActiveSessionReconciliation::NoChange);
     }
+    session.termination_reason = Some("orphaned_process".to_string());
     let session_root = derive_session_root(&session_dir)?;
     save_session_in(session_root, &session)?;
     warn!(
@@ -219,6 +230,22 @@ fn persist_new_result_file<F>(
 where
     F: FnOnce(&Path),
 {
+    persist_new_result_file_with_writer(result_path, contents, before_write, |file, contents| {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()
+    })
+}
+
+fn persist_new_result_file_with_writer<F, W>(
+    result_path: &Path,
+    contents: &str,
+    before_write: F,
+    write_contents: W,
+) -> Result<SyntheticResultPersistOutcome>
+where
+    F: FnOnce(&Path),
+    W: FnOnce(&mut fs::File, &str) -> std::io::Result<()>,
+{
     before_write(result_path);
     match OpenOptions::new()
         .write(true)
@@ -226,18 +253,13 @@ where
         .open(result_path)
     {
         Ok(mut file) => {
-            file.write_all(contents.as_bytes()).map_err(|err| {
-                anyhow!(
-                    "Failed to write synthetic result for {}: {err}",
+            if let Err(err) = write_contents(&mut file, contents) {
+                fs::remove_file(result_path).ok();
+                return Err(anyhow!(
+                    "Failed to write or sync synthetic result for {}: {err}",
                     result_path.display()
-                )
-            })?;
-            file.sync_all().map_err(|err| {
-                anyhow!(
-                    "Failed to sync synthetic result for {}: {err}",
-                    result_path.display()
-                )
-            })?;
+                ));
+            }
             Ok(SyntheticResultPersistOutcome::Created)
         }
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
@@ -254,4 +276,176 @@ fn format_optional_file_mtime(path: &Path) -> Option<String> {
     let modified = fs::metadata(path).ok()?.modified().ok()?;
     let modified = chrono::DateTime::<chrono::Utc>::from(modified);
     Some(modified.to_rfc3339())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::session_cmds_daemon::{WaitReconciliationOutcome, handle_session_wait_with_hooks};
+    use crate::test_env_lock::TEST_ENV_LOCK;
+    use chrono::Utc;
+    use csa_session::{
+        SessionPhase, SessionResult, create_session, get_session_dir, load_result, load_session,
+        save_result,
+    };
+    use tempfile::tempdir;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe {
+                match self.original.as_deref() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    fn make_result(status: &str, exit_code: i32) -> SessionResult {
+        let now = Utc::now();
+        SessionResult {
+            status: status.to_string(),
+            exit_code,
+            summary: "summary".to_string(),
+            tool: "codex".to_string(),
+            started_at: now,
+            completed_at: now,
+            events_count: 0,
+            artifacts: Vec::new(),
+            peak_memory_mb: None,
+        }
+    }
+
+    #[test]
+    fn ensure_terminal_result_for_dead_active_session_leaves_state_unchanged_on_transition_failure()
+    {
+        let td = tempdir().expect("tempdir");
+        let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+        let state_home = td.path().join("xdg-state");
+        std::fs::create_dir_all(&state_home).expect("create state home");
+        let _home_guard = EnvVarGuard::set("HOME", td.path());
+        let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+        let project = td.path();
+
+        let session = create_session(project, Some("transition-failure"), None, None).unwrap();
+        let session_id = session.meta_session_id;
+        let session_dir = get_session_dir(project, &session_id).unwrap();
+        let state_path = session_dir.join("state.toml");
+        let original_state = fs::read_to_string(&state_path).unwrap();
+
+        let reconciled = ensure_terminal_result_for_dead_active_session_impl(
+            project,
+            &session_id,
+            "session list",
+            |_| {},
+            |session| {
+                session.phase = SessionPhase::Retired;
+            },
+        )
+        .unwrap();
+
+        assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+        let persisted = load_session(project, &session_id).unwrap();
+        assert_eq!(persisted.phase, SessionPhase::Active);
+        assert_eq!(persisted.termination_reason, None);
+        assert_eq!(fs::read_to_string(&state_path).unwrap(), original_state);
+        assert!(
+            load_result(project, &session_id).unwrap().is_some(),
+            "synthetic result should remain available for later reconciliation"
+        );
+    }
+
+    #[test]
+    fn persist_new_result_file_removes_partial_file_when_write_fails() {
+        let td = tempdir().expect("tempdir");
+        let result_path = td.path().join("result.toml");
+
+        let err = persist_new_result_file_with_writer(
+            &result_path,
+            "status = \"failure\"\n",
+            |_| {},
+            |file, _contents| {
+                file.write_all(b"partial")?;
+                Err(std::io::Error::other("boom"))
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            err.to_string()
+                .contains("Failed to write or sync synthetic result"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !result_path.exists(),
+            "partial synthetic result should be removed after write failure"
+        );
+    }
+
+    #[test]
+    fn handle_session_wait_marks_late_real_result_completion_as_non_synthetic() {
+        let td = tempdir().expect("tempdir");
+        let _env_lock = TEST_ENV_LOCK.lock().expect("session env lock poisoned");
+        let state_home = td.path().join("xdg-state");
+        std::fs::create_dir_all(&state_home).expect("create state home");
+        let _home_guard = EnvVarGuard::set("HOME", td.path());
+        let _state_guard = EnvVarGuard::set("XDG_STATE_HOME", &state_home);
+        let project = td.path();
+
+        let session =
+            create_session(project, Some("wait-late-real-result"), None, Some("codex")).unwrap();
+        let session_id = session.meta_session_id;
+        let late_result = SessionResult {
+            summary: "real terminal result".to_string(),
+            ..make_result("success", 0)
+        };
+        let mut emitted_completion: Option<(String, String, i32, bool)> = None;
+
+        let exit_code = handle_session_wait_with_hooks(
+            session_id.clone(),
+            Some(project.to_string_lossy().into_owned()),
+            5,
+            |project_root, current_session_id, trigger| {
+                let reconciled = ensure_terminal_result_for_dead_active_session_with_before_write(
+                    project_root,
+                    current_session_id,
+                    trigger,
+                    |_| {
+                        save_result(project_root, current_session_id, &late_result)
+                            .expect("persist late real result");
+                    },
+                )?;
+                Ok(WaitReconciliationOutcome {
+                    result_became_available: reconciled.result_became_available(),
+                    synthetic: reconciled.synthesized_failure(),
+                })
+            },
+            |sid, status, exit_code, synthetic, _mirror_to_stdout| {
+                emitted_completion =
+                    Some((sid.to_string(), status.to_string(), exit_code, synthetic));
+            },
+        )
+        .unwrap();
+
+        assert_eq!(exit_code, 0);
+        assert_eq!(
+            emitted_completion,
+            Some((session_id, "success".to_string(), 0, false))
+        );
+    }
 }
