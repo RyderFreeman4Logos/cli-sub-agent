@@ -6,8 +6,7 @@ use csa_session::{
     PhaseEvent, SessionPhase, SessionResult, create_session, get_session_dir, load_result,
     load_session, save_result, save_session,
 };
-use std::sync::{Arc, Mutex, mpsc};
-use std::time::Duration;
+use std::sync::{Arc, Mutex};
 use tempfile::tempdir;
 use tracing_subscriber::fmt::MakeWriter;
 
@@ -429,72 +428,6 @@ fn retire_if_dead_with_result_skips_lock_on_read_only_dir_when_no_change() {
         !lock_path.exists(),
         "read-only retire noop should not create a lock file"
     );
-}
-
-#[test]
-fn ensure_terminal_result_for_dead_active_session_waits_for_concurrent_reconciler() {
-    let td = tempdir().expect("tempdir");
-    let _env = SessionTestEnv::new(&td);
-    let project = td.path();
-
-    let session = create_session(project, Some("lock-held"), None, None).unwrap();
-    let session_id = session.meta_session_id;
-    let session_dir = get_session_dir(project, &session_id).unwrap();
-    let project_for_lock = project.to_path_buf();
-    let session_dir_for_lock = session_dir.clone();
-    let session_id_for_lock = session_id.clone();
-    let (lock_acquired_tx, lock_acquired_rx) = mpsc::channel();
-    let (write_result_tx, write_result_rx) = mpsc::channel();
-    let lock_holder = std::thread::spawn(move || {
-        with_reconcile_lock(&session_dir_for_lock, || {
-            lock_acquired_tx.send(()).unwrap();
-            write_result_rx.recv().unwrap();
-            save_result(
-                &project_for_lock,
-                &session_id_for_lock,
-                &make_result("success", 0),
-            )
-            .unwrap();
-            std::thread::sleep(Duration::from_millis(50));
-            Ok(())
-        })
-        .unwrap();
-    });
-
-    lock_acquired_rx.recv().unwrap();
-
-    let project_for_caller = project.to_path_buf();
-    let session_id_for_caller = session_id.clone();
-    let (caller_done_tx, caller_done_rx) = mpsc::channel();
-    let caller = std::thread::spawn(move || {
-        let reconciled = ensure_terminal_result_for_dead_active_session(
-            &project_for_caller,
-            &session_id_for_caller,
-            "session list",
-        )
-        .unwrap();
-        caller_done_tx.send(reconciled).unwrap();
-    });
-
-    assert!(
-        caller_done_rx
-            .recv_timeout(Duration::from_millis(50))
-            .is_err(),
-        "reconciliation should wait for the concurrent lock holder"
-    );
-    write_result_tx.send(()).unwrap();
-
-    let reconciled = caller_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    caller.join().unwrap();
-    lock_holder.join().unwrap();
-
-    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
-    let result = load_result(project, &session_id).unwrap().unwrap();
-    assert_eq!(result.status, "success");
-    assert_eq!(result.exit_code, 0);
-    let persisted = load_session(project, &session_id).unwrap();
-    assert_eq!(persisted.phase, SessionPhase::Active);
-    assert_eq!(persisted.termination_reason, None);
 }
 
 #[test]

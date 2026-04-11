@@ -29,7 +29,10 @@ impl DeadActiveSessionReconciliation {
     pub(crate) fn synthesized_failure(self) -> bool { matches!(self, Self::SynthesizedFailure) }
 }
 
-fn with_reconcile_lock<R>(session_dir: &Path, body: impl FnOnce() -> Result<R>) -> Result<R> {
+fn with_reconcile_lock<R>(
+    session_dir: &Path,
+    body: impl FnOnce() -> Result<R>,
+) -> Result<Option<R>> {
     let lock_path = session_dir.join(".reconcile.lock");
     let file = OpenOptions::new()
         .read(true)
@@ -39,16 +42,17 @@ fn with_reconcile_lock<R>(session_dir: &Path, body: impl FnOnce() -> Result<R>) 
         .open(&lock_path)
         .with_context(|| {
             format!(
-                "Failed to open reconciliation lock: {}",
+                "Failed to open reconciliation lock file: {}",
                 lock_path.display()
             )
         })?;
 
     let mut lock = fd_lock::RwLock::new(file);
-    let _guard = lock
-        .write()
-        .map_err(|e| anyhow::Error::from(e).context("Failed to acquire reconciliation lock"))?;
-    body()
+    match lock.try_write() {
+        Ok(_guard) => Ok(Some(body()?)),
+        Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(None),
+        Err(e) => Err(anyhow::Error::from(e).context("Failed to acquire reconciliation lock")),
+    }
 }
 
 fn noop_path(_: &Path) {}
@@ -77,6 +81,7 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
             &persist_session_state_atomically,
         )
     })
+    .map(|opt| opt.unwrap_or(DeadActiveSessionReconciliation::NoChange))
 }
 
 #[cfg(test)]
@@ -109,6 +114,7 @@ where
             &persist_session_state_atomically,
         )
     })
+    .map(|opt| opt.unwrap_or(DeadActiveSessionReconciliation::NoChange))
 }
 
 fn dead_active_session_needs_terminal_result(
@@ -317,6 +323,7 @@ pub(crate) fn retire_if_dead_with_result(
             &persist_session_state_atomically,
         )
     })
+    .map(|opt| opt.unwrap_or(false))
 }
 
 fn dead_session_with_result_needs_retire(
