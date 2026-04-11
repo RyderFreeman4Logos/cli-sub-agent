@@ -1638,7 +1638,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
 fi
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES})))"
+condition = "(${CLOUD_BOT}) && ((!(${BOT_UNAVAILABLE})) && (!(${BOT_HAS_ISSUES}))) && (${REBASE_ENABLED})"
 
 [[workflow.steps]]
 id = 20
