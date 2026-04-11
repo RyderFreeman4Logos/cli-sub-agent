@@ -3,8 +3,8 @@ use crate::session_cmds_daemon::{WaitReconciliationOutcome, handle_session_wait_
 use crate::test_env_lock::TEST_ENV_LOCK;
 use chrono::Utc;
 use csa_session::{
-    SessionPhase, SessionResult, create_session, get_session_dir, load_result, load_session,
-    save_result,
+    PhaseEvent, SessionPhase, SessionResult, create_session, get_session_dir, load_result,
+    load_session, save_result, save_session,
 };
 use tempfile::tempdir;
 
@@ -228,6 +228,92 @@ fn retire_if_dead_with_result_leaves_state_unchanged_on_save_failure() {
 }
 
 #[test]
+fn ensure_terminal_result_for_dead_active_session_does_not_create_lock_file_when_no_change() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("no-change-no-lock"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    save_result(project, &session_id, &make_result("success", 0)).unwrap();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let lock_path = session_dir.join(".reconcile.lock");
+
+    assert!(
+        !lock_path.exists(),
+        "lock file should not exist before noop"
+    );
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        !lock_path.exists(),
+        "noop reconciliation should not create a lock file"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_skips_lock_on_read_only_dir_when_no_change() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("no-change-read-only"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    save_result(project, &session_id, &make_result("success", 0)).unwrap();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let lock_path = session_dir.join(".reconcile.lock");
+    let original_permissions = fs::metadata(&session_dir).unwrap().permissions();
+    let read_only_permissions = std::fs::Permissions::from_mode(0o555);
+
+    fs::set_permissions(&session_dir, read_only_permissions).unwrap();
+    let outcome =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list");
+    fs::set_permissions(&session_dir, original_permissions).unwrap();
+
+    assert_eq!(outcome.unwrap(), DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        !lock_path.exists(),
+        "read-only noop reconciliation should not create a lock file"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn retire_if_dead_with_result_skips_lock_on_read_only_dir_when_no_change() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("retire-no-change-read-only"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let mut persisted = load_session(project, &session_id).unwrap();
+    persisted.apply_phase_event(PhaseEvent::Retired).unwrap();
+    save_session(&persisted).unwrap();
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let lock_path = session_dir.join(".reconcile.lock");
+    let original_permissions = fs::metadata(&session_dir).unwrap().permissions();
+    let read_only_permissions = std::fs::Permissions::from_mode(0o555);
+
+    fs::set_permissions(&session_dir, read_only_permissions).unwrap();
+    let outcome = retire_if_dead_with_result(project, &session_id, "session list");
+    fs::set_permissions(&session_dir, original_permissions).unwrap();
+
+    assert!(!outcome.unwrap());
+    assert!(
+        !lock_path.exists(),
+        "read-only retire noop should not create a lock file"
+    );
+}
+
+#[test]
 fn ensure_terminal_result_for_dead_active_session_is_noop_when_reconcile_lock_is_held() {
     let td = tempdir().expect("tempdir");
     let _env = SessionTestEnv::new(&td);
@@ -277,6 +363,49 @@ fn persist_new_result_file_removes_partial_file_when_write_fails() {
         !result_path.exists(),
         "partial synthetic result should be removed after write failure"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn persist_session_state_atomically_preserves_existing_permissions() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("state-permissions"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let state_path = session_dir.join("state.toml");
+    fs::set_permissions(&state_path, std::fs::Permissions::from_mode(0o640)).unwrap();
+
+    let mut persisted = load_session(project, &session_id).unwrap();
+    persisted.termination_reason = Some("permission-check".to_string());
+    persist_session_state_atomically(&session_dir, &persisted).unwrap();
+
+    let mode = fs::metadata(&state_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o640);
+}
+
+#[cfg(unix)]
+#[test]
+fn persist_new_result_file_defaults_to_private_permissions_for_new_files() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let td = tempdir().expect("tempdir");
+    let result_path = td.path().join("result.toml");
+
+    let outcome = persist_new_result_file(
+        &result_path,
+        "status = \"failure\"\nexit_code = 1\nsummary = \"synthetic\"\n",
+        |_| {},
+    )
+    .unwrap();
+
+    assert_eq!(outcome, SyntheticResultPersistOutcome::Created);
+    let mode = fs::metadata(&result_path).unwrap().permissions().mode() & 0o777;
+    assert_eq!(mode, 0o600);
 }
 
 #[test]

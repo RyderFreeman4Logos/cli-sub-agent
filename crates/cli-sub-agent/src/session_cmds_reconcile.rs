@@ -1,8 +1,6 @@
 use anyhow::{Context, Result, anyhow};
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use tracing::{info, warn};
 
@@ -58,6 +56,10 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
     trigger: &str,
 ) -> Result<DeadActiveSessionReconciliation> {
     let session_dir = get_session_dir(project_root, session_id)?;
+    if !dead_active_session_needs_terminal_result(project_root, session_id, trigger, &session_dir)?
+    {
+        return Ok(DeadActiveSessionReconciliation::NoChange);
+    }
     let outcome = with_reconcile_lock(&session_dir, || {
         ensure_terminal_result_for_dead_active_session_impl(
             project_root,
@@ -83,6 +85,10 @@ where
     F: FnOnce(&Path),
 {
     let session_dir = get_session_dir(project_root, session_id)?;
+    if !dead_active_session_needs_terminal_result(project_root, session_id, trigger, &session_dir)?
+    {
+        return Ok(DeadActiveSessionReconciliation::NoChange);
+    }
     let outcome = with_reconcile_lock(&session_dir, || {
         ensure_terminal_result_for_dead_active_session_impl(
             project_root,
@@ -95,6 +101,38 @@ where
         )
     })?;
     Ok(outcome.unwrap_or(DeadActiveSessionReconciliation::NoChange))
+}
+
+fn dead_active_session_needs_terminal_result(
+    project_root: &Path,
+    session_id: &str,
+    trigger: &str,
+    session_dir: &Path,
+) -> Result<bool> {
+    let session = load_session(project_root, session_id)?;
+    if !matches!(session.phase, SessionPhase::Active) {
+        return Ok(false);
+    }
+    if ToolLiveness::has_live_process(session_dir) {
+        return Ok(false);
+    }
+    let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
+    match load_result(project_root, session_id) {
+        Ok(Some(_)) => Ok(false),
+        Ok(None) => Ok(true),
+        Err(err) if result_path.is_file() => {
+            warn!(
+                session_id = %session_id,
+                trigger = %trigger,
+                reconciliation_reason = "late_result_write_unreadable",
+                result_path = %result_path.display(),
+                error = %err,
+                "Result file appeared during dead-session reconciliation; preserving late writer and skipping synthetic fallback"
+            );
+            Ok(false)
+        }
+        Err(err) => Err(err),
+    }
 }
 
 fn ensure_terminal_result_for_dead_active_session_impl<F, B>(
@@ -251,6 +289,9 @@ pub(crate) fn retire_if_dead_with_result(
     trigger: &str,
 ) -> Result<bool> {
     let session_dir = get_session_dir(project_root, session_id)?;
+    if !dead_session_with_result_needs_retire(project_root, session_id, &session_dir)? {
+        return Ok(false);
+    }
     let outcome = with_reconcile_lock(&session_dir, || {
         retire_if_dead_with_result_impl(
             project_root,
@@ -261,6 +302,21 @@ pub(crate) fn retire_if_dead_with_result(
         )
     })?;
     Ok(outcome.unwrap_or(false))
+}
+
+fn dead_session_with_result_needs_retire(
+    project_root: &Path,
+    session_id: &str,
+    session_dir: &Path,
+) -> Result<bool> {
+    let session = load_session(project_root, session_id)?;
+    if !matches!(session.phase, SessionPhase::Active) {
+        return Ok(false);
+    }
+    if ToolLiveness::has_live_process(session_dir) {
+        return Ok(false);
+    }
+    Ok(load_result(project_root, session_id)?.is_some())
 }
 
 fn retire_if_dead_with_result_impl(
@@ -323,19 +379,7 @@ fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionSta
             state_path.display()
         )
     })?;
-    #[cfg(unix)]
-    {
-        let perm = std::fs::Permissions::from_mode(0o644);
-        temp_file
-            .as_file_mut()
-            .set_permissions(perm)
-            .with_context(|| {
-                format!(
-                    "Failed to set permissions for temporary state file: {}",
-                    state_path.display()
-                )
-            })?;
-    }
+    preserve_existing_permissions_if_present(temp_file.as_file_mut(), &state_path, "state file")?;
     temp_file.persist(&state_path).map_err(|err| {
         anyhow!(
             "Failed to persist state file {}: {}",
@@ -397,19 +441,11 @@ where
             result_path.display()
         ));
     }
-    #[cfg(unix)]
-    {
-        let perm = std::fs::Permissions::from_mode(0o644);
-        temp_file
-            .as_file_mut()
-            .set_permissions(perm)
-            .with_context(|| {
-                format!(
-                    "Failed to set permissions for temporary synthetic result: {}",
-                    result_path.display()
-                )
-            })?;
-    }
+    preserve_existing_permissions_if_present(
+        temp_file.as_file_mut(),
+        result_path,
+        "synthetic result",
+    )?;
     match fs::hard_link(temp_file.path(), result_path) {
         Ok(()) => Ok(SyntheticResultPersistOutcome::Created),
         Err(err) if err.kind() == ErrorKind::AlreadyExists => {
@@ -420,6 +456,34 @@ where
             result_path.display()
         )),
     }
+}
+
+fn preserve_existing_permissions_if_present(
+    temp_file: &mut fs::File,
+    target_path: &Path,
+    file_kind: &str,
+) -> Result<()> {
+    let permissions = match fs::metadata(target_path) {
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(err) if err.kind() == ErrorKind::NotFound => None,
+        Err(err) => {
+            return Err(err).with_context(|| {
+                format!(
+                    "Failed to read {file_kind} metadata before preserving permissions: {}",
+                    target_path.display()
+                )
+            });
+        }
+    };
+    if let Some(permissions) = permissions {
+        temp_file.set_permissions(permissions).with_context(|| {
+            format!(
+                "Failed to preserve existing permissions for {file_kind}: {}",
+                target_path.display()
+            )
+        })?;
+    }
+    Ok(())
 }
 
 fn format_optional_file_mtime(path: &Path) -> Option<String> {
