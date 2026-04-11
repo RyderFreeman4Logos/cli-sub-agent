@@ -91,6 +91,11 @@ fn test_tool_defaults_claude_code() {
 
     assert!(plan.writable_paths.contains(&project));
     assert!(plan.writable_paths.contains(&session));
+    assert!(
+        plan.writable_paths
+            .contains(&PathBuf::from(DEFAULT_SANDBOX_TMPDIR)),
+        "all sandboxed tool sessions should authorize /tmp writes alongside TMPDIR=/tmp"
+    );
     assert_eq!(
         plan.env_overrides.get("TMPDIR").map(String::as_str),
         Some(DEFAULT_SANDBOX_TMPDIR),

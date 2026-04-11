@@ -198,6 +198,8 @@ impl IsolationPlanBuilder {
         self.project_root = Some(project_root.to_path_buf());
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
+        self.writable_paths
+            .push(PathBuf::from(DEFAULT_SANDBOX_TMPDIR));
         self.env_overrides
             .insert("TMPDIR".to_string(), DEFAULT_SANDBOX_TMPDIR.to_string());
 
