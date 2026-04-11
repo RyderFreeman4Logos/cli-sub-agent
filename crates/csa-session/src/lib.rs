@@ -73,8 +73,10 @@ pub use vcs_backends::{GitBackend, JjBackend, create_vcs_backend};
 
 // Re-export manager functions
 pub use manager::{
-    complete_session, create_session, delete_session, delete_session_from_root, detect_git_head,
-    find_sessions, get_session_dir, get_session_dir_global, get_session_root,
+    CONTRACT_RESULT_ARTIFACT_PATH, LEGACY_USER_RESULT_ARTIFACT_PATH, RESULT_TOML_PATH_CONTRACT_ENV,
+    complete_session, contract_result_path, create_session, delete_session,
+    delete_session_from_root, detect_git_head, find_sessions, get_session_dir,
+    get_session_dir_global, get_session_root, legacy_user_result_path,
     list_all_project_session_roots, list_all_sessions, list_all_sessions_all_projects,
     list_artifacts, list_sessions, list_sessions_from_root, list_sessions_from_root_readonly,
     load_metadata, load_result, load_session, load_session_global_exact, resolve_fork_source,

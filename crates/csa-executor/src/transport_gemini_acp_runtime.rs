@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR;
 use serde_json::{Map, Value};
 use tracing::{debug, warn};
 
@@ -39,6 +40,7 @@ pub(crate) struct GeminiAcpLaunch {
 
 pub(crate) fn prepare_gemini_acp_runtime(
     env: &mut HashMap<String, String>,
+    project_dir: Option<&Path>,
     session_dir: Option<&Path>,
     session_id: &str,
     base_args: &[String],
@@ -48,7 +50,8 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .map(PathBuf::from);
-    let runtime_home = resolve_runtime_home(session_dir, session_id);
+    let tmpdir = normalize_tmpdir_env(env);
+    let runtime_home = resolve_runtime_home(session_dir, session_id, &tmpdir);
     seed_runtime_home(&runtime_home, source_home.as_deref())?;
     align_runtime_auth_selection(&runtime_home, env)?;
 
@@ -91,7 +94,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .map(OsStr::new)
         .map(std::ffi::OsString::from)
         .or_else(|| std::env::var_os("PATH"));
-    if let Some(path) = pin_non_shim_runtime_path(inherited_path.as_deref(), env)? {
+    if let Some(path) = pin_non_shim_runtime_path(inherited_path.as_deref(), env, project_dir)? {
         env.insert("PATH".to_string(), path);
     }
     for key in GEMINI_RUNTIME_SHIM_ENV_VARS {
@@ -104,7 +107,9 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .map(std::ffi::OsString::from)
         .or(inherited_path);
 
-    if let Some(launch) = resolve_non_shim_gemini_launch(path_env.as_deref(), env, base_args)? {
+    if let Some(launch) =
+        resolve_non_shim_gemini_launch(path_env.as_deref(), env, project_dir, base_args)?
+    {
         debug!(
             command = %launch.command,
             runtime_home = %runtime_home.display(),
@@ -124,7 +129,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
 }
 
 pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Option<PathBuf> {
-    let runtime_root = std::env::temp_dir().join(GEMINI_RUNTIME_ROOT_DIR);
+    let runtime_root = runtime_root_from_env(env);
     let session_relative_path = Path::new(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
     let candidates = [
         env.get("GEMINI_CLI_HOME").map(PathBuf::from),
@@ -145,14 +150,70 @@ pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Opt
         .find(|path| path.starts_with(&runtime_root) || path.ends_with(session_relative_path))
 }
 
-fn resolve_runtime_home(session_dir: Option<&Path>, session_id: &str) -> PathBuf {
+fn resolve_runtime_home(session_dir: Option<&Path>, session_id: &str, tmpdir: &Path) -> PathBuf {
     if let Some(session_dir) = session_dir {
         return session_dir.join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
     }
 
-    std::env::temp_dir()
+    tmpdir.join(GEMINI_RUNTIME_ROOT_DIR).join(session_id)
+}
+
+fn normalize_tmpdir_env(env: &mut HashMap<String, String>) -> PathBuf {
+    let candidate = env
+        .get("TMPDIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from));
+
+    let resolved = match candidate {
+        Some(path) if tmpdir_probe_writable(&path).is_ok() => path,
+        Some(path) => {
+            warn!(
+                tmpdir = %path.display(),
+                fallback = DEFAULT_SANDBOX_TMPDIR,
+                "TMPDIR is not writable for Gemini ACP runtime; falling back to /tmp"
+            );
+            PathBuf::from(DEFAULT_SANDBOX_TMPDIR)
+        }
+        None => PathBuf::from(DEFAULT_SANDBOX_TMPDIR),
+    };
+
+    env.insert(
+        "TMPDIR".to_string(),
+        resolved.to_string_lossy().into_owned(),
+    );
+    resolved
+}
+
+fn runtime_root_from_env(env: &HashMap<String, String>) -> PathBuf {
+    env.get("TMPDIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_TMPDIR))
         .join(GEMINI_RUNTIME_ROOT_DIR)
-        .join(session_id)
+}
+
+fn tmpdir_probe_writable(path: &Path) -> Result<()> {
+    fs::create_dir_all(path)
+        .with_context(|| format!("failed to create TMPDIR candidate {}", path.display()))?;
+
+    let probe_path = path.join(format!(
+        ".csa-gemini-tmpdir-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe_path)
+        .with_context(|| format!("failed to create TMPDIR probe {}", probe_path.display()))?;
+    drop(file);
+    let _ = fs::remove_file(&probe_path);
+    Ok(())
 }
 
 fn seed_runtime_home(runtime_home: &Path, source_home: Option<&Path>) -> Result<()> {
@@ -419,6 +480,7 @@ fn mirror_directory_link(source: &Path, target: &Path) {
 fn pin_non_shim_runtime_path(
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<String>> {
     let Some(path_env) = path_env else {
         return Ok(None);
@@ -427,7 +489,7 @@ fn pin_non_shim_runtime_path(
     let original_entries: Vec<PathBuf> = std::env::split_paths(path_env).collect();
     let mut pinned_dirs = Vec::new();
     for binary in GEMINI_RUNTIME_PINNED_PATH_BINARIES {
-        if let Some(dir) = find_direct_tool_dir(binary, Some(path_env), env)?
+        if let Some(dir) = find_direct_tool_dir(binary, Some(path_env), env, project_dir)?
             && !pinned_dirs.contains(&dir)
         {
             pinned_dirs.push(dir);
@@ -454,8 +516,9 @@ fn find_direct_tool_dir(
     name: &str,
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
-    Ok(find_direct_tool_path(name, path_env, env)?
+    Ok(find_direct_tool_path(name, path_env, env, project_dir)?
         .and_then(|path| path.parent().map(PathBuf::from)))
 }
 
@@ -478,12 +541,13 @@ fn find_direct_tool_path(
     name: &str,
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
     if let Some(candidate) = find_non_mise_path_entry(name, path_env) {
         return Ok(Some(candidate));
     }
 
-    resolve_mise_which_path(name, path_env, env)
+    resolve_mise_which_path(name, path_env, env, project_dir)
 }
 
 fn find_non_mise_path_entry(name: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
@@ -513,20 +577,21 @@ fn resolve_mise_which_path(
     name: &str,
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
     let Some(mise_path) = find_path_entry("mise", path_env) else {
         return Ok(None);
     };
 
     let mut command = Command::new(&mise_path);
-    command
-        .arg("-C")
-        .arg(std::env::temp_dir())
-        .arg("which")
-        .arg(name);
+    if let Some(project_dir) = project_dir {
+        command.arg("-C").arg(project_dir);
+    }
+    command.arg("which").arg(name);
     for key in [
         "HOME",
         "PATH",
+        "TMPDIR",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
@@ -567,9 +632,11 @@ fn resolve_mise_which_path(
 fn resolve_non_shim_gemini_launch(
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
     base_args: &[String],
 ) -> Result<Option<GeminiAcpLaunch>> {
-    let Some(gemini_candidate) = find_direct_tool_path("gemini", path_env, env)? else {
+    let Some(gemini_candidate) = find_direct_tool_path("gemini", path_env, env, project_dir)?
+    else {
         return Ok(None);
     };
 
@@ -578,7 +645,8 @@ fn resolve_non_shim_gemini_launch(
         .is_some_and(|extension| extension == "js")
         || is_node_script(&gemini_candidate)
     {
-        let Some(node_candidate) = find_direct_tool_path("node", path_env, env)? else {
+        let Some(node_candidate) = find_direct_tool_path("node", path_env, env, project_dir)?
+        else {
             return Ok(None);
         };
 

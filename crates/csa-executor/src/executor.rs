@@ -271,6 +271,7 @@ impl Executor {
         if let Some(env) = extra_env {
             Self::inject_env(&mut cmd, env);
         }
+        Self::inject_session_path_env(&mut cmd, session);
         let gemini_include_directories =
             gemini_include_directories(extra_env, prompt, Some(Path::new(&session.project_path)));
         let (prompt_transport, stdin_data) = self.select_prompt_transport(prompt);
@@ -472,19 +473,7 @@ impl Executor {
         cmd.env("CSA_SESSION_ID", &session.meta_session_id);
         cmd.env("CSA_DEPTH", (session.genealogy.depth + 1).to_string());
         cmd.env("CSA_PROJECT_ROOT", &session.project_path);
-
-        // CSA_SESSION_DIR: absolute path to this session's state directory
-        match csa_session::manager::get_session_dir(
-            Path::new(&session.project_path),
-            &session.meta_session_id,
-        ) {
-            Ok(dir) => {
-                cmd.env("CSA_SESSION_DIR", dir.to_string_lossy().as_ref());
-            }
-            Err(e) => {
-                tracing::warn!("failed to compute CSA_SESSION_DIR: {e:#}");
-            }
-        }
+        Self::inject_session_path_env(&mut cmd, session);
 
         // CSA_TOOL: tells the child process which tool it is running as
         cmd.env("CSA_TOOL", self.tool_name());
@@ -499,6 +488,26 @@ impl Executor {
         }
 
         cmd
+    }
+
+    fn inject_session_path_env(cmd: &mut Command, session: &MetaSessionState) {
+        match csa_session::manager::get_session_dir(
+            Path::new(&session.project_path),
+            &session.meta_session_id,
+        ) {
+            Ok(dir) => {
+                cmd.env("CSA_SESSION_DIR", dir.to_string_lossy().into_owned());
+                cmd.env(
+                    csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
+                    csa_session::contract_result_path(&dir)
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+            Err(e) => {
+                tracing::warn!("failed to compute CSA_SESSION_DIR: {e:#}");
+            }
+        }
     }
 
     fn transport(&self, session_config: Option<SessionConfig>) -> Box<dyn Transport> {

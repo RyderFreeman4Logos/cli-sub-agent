@@ -2,11 +2,13 @@ use crate::result::{RESULT_FILE_NAME, SessionArtifact, SessionResult};
 use crate::validate::validate_session_id;
 use anyhow::{Context, Result, bail};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const TRANSCRIPT_FILE_NAME: &str = "acp-events.jsonl";
 const USER_RESULT_FILE_NAME: &str = "user-result.toml";
-const USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
+pub const RESULT_TOML_PATH_CONTRACT_ENV: &str = "CSA_RESULT_TOML_PATH_CONTRACT";
+pub const CONTRACT_RESULT_ARTIFACT_PATH: &str = "output/result.toml";
+pub const LEGACY_USER_RESULT_ARTIFACT_PATH: &str = "output/user-result.toml";
 const RUNTIME_RESULT_KEYS: [&str; 8] = [
     "status",
     "exit_code",
@@ -60,7 +62,7 @@ pub(crate) fn save_result_in(
         };
         preserve_user_result_snapshot(&session_dir, contents)?;
     }
-    retain_user_result_artifact_if_snapshot_exists(&session_dir, &mut persisted_result)?;
+    retain_sidecar_result_artifacts_if_present(&session_dir, &mut persisted_result)?;
 
     let runtime_table = session_result_to_table(&persisted_result)?;
     let mut merged_table = existing_table.unwrap_or_default();
@@ -97,35 +99,51 @@ fn preserve_user_result_snapshot(session_dir: &Path, contents: &str) -> Result<(
     })
 }
 
-fn retain_user_result_artifact_if_snapshot_exists(
+pub fn contract_result_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(CONTRACT_RESULT_ARTIFACT_PATH)
+}
+
+pub fn legacy_user_result_path(session_dir: &Path) -> PathBuf {
+    session_dir.join(LEGACY_USER_RESULT_ARTIFACT_PATH)
+}
+
+fn retain_sidecar_result_artifacts_if_present(
     session_dir: &Path,
     result: &mut SessionResult,
 ) -> Result<()> {
-    let snapshot_path = session_dir.join(USER_RESULT_ARTIFACT_PATH);
+    retain_result_artifact_if_present(session_dir, result, CONTRACT_RESULT_ARTIFACT_PATH)?;
+    retain_result_artifact_if_present(session_dir, result, LEGACY_USER_RESULT_ARTIFACT_PATH)?;
+    Ok(())
+}
+
+fn retain_result_artifact_if_present(
+    session_dir: &Path,
+    result: &mut SessionResult,
+    artifact_path: &str,
+) -> Result<()> {
+    let snapshot_path = session_dir.join(artifact_path);
     if !snapshot_path.exists() {
         return Ok(());
     }
     if !snapshot_path.is_file() {
         bail!(
-            "User result snapshot path exists but is not a file: {}",
+            "Result artifact path exists but is not a file: {}",
             snapshot_path.display()
         );
     }
-    ensure_user_result_artifact(result);
+    ensure_result_artifact(result, artifact_path);
     Ok(())
 }
 
-fn ensure_user_result_artifact(result: &mut SessionResult) {
+fn ensure_result_artifact(result: &mut SessionResult, artifact_path: &str) {
     if result
         .artifacts
         .iter()
-        .any(|artifact| artifact.path == USER_RESULT_ARTIFACT_PATH)
+        .any(|artifact| artifact.path == artifact_path)
     {
         return;
     }
-    result
-        .artifacts
-        .push(SessionArtifact::new(USER_RESULT_ARTIFACT_PATH));
+    result.artifacts.push(SessionArtifact::new(artifact_path));
 }
 
 fn session_result_to_table(result: &SessionResult) -> Result<toml::Table> {

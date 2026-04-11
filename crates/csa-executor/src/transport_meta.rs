@@ -120,18 +120,6 @@ impl AcpTransport {
             (session.genealogy.depth + 1).to_string(),
         );
         env.insert("CSA_PROJECT_ROOT".to_string(), session.project_path.clone());
-        // CSA_SESSION_DIR: absolute path to the session state directory
-        if let Ok(dir) = csa_session::manager::get_session_dir(
-            Path::new(&session.project_path),
-            &session.meta_session_id,
-        ) {
-            env.insert(
-                "CSA_SESSION_DIR".to_string(),
-                dir.to_string_lossy().into_owned(),
-            );
-        } else {
-            tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
-        }
 
         env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
         // Mark this process as a CSA subprocess so child tools can detect
@@ -148,6 +136,7 @@ impl AcpTransport {
         if let Some(extra) = extra_env {
             env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
         }
+        Self::insert_reserved_session_path_env(&mut env, session);
 
         // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
         // `gh pr merge` unless pr-bot has completed.  This is deterministic
@@ -159,6 +148,29 @@ impl AcpTransport {
         csa_hooks::merge_guard::inject_merge_guard_env(&mut env);
 
         env
+    }
+
+    fn insert_reserved_session_path_env(
+        env: &mut HashMap<String, String>,
+        session: &MetaSessionState,
+    ) {
+        if let Ok(dir) = csa_session::manager::get_session_dir(
+            Path::new(&session.project_path),
+            &session.meta_session_id,
+        ) {
+            env.insert(
+                "CSA_SESSION_DIR".to_string(),
+                dir.to_string_lossy().into_owned(),
+            );
+            env.insert(
+                csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
+                csa_session::contract_result_path(&dir)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        } else {
+            tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
+        }
     }
 }
 

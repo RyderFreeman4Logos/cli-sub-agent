@@ -140,6 +140,21 @@ fn test_none_config_heavyweight_gets_sandbox() {
         assert!(ctx.best_effort, "Profile defaults should use best-effort");
         assert_eq!(ctx.tool_name, "claude-code");
         assert_eq!(ctx.session_id, "test-session");
+
+        let expected_tmpdir = match ctx.isolation_plan.filesystem {
+            csa_resource::FilesystemCapability::Bwrap => PathBuf::from("/tmp"),
+            csa_resource::FilesystemCapability::Landlock
+            | csa_resource::FilesystemCapability::None => {
+                csa_session::manager::get_session_dir(&current_project_root(), "test-session")
+                    .expect("session dir")
+                    .join("tmp")
+            }
+        };
+        assert_eq!(
+            ctx.isolation_plan.env_overrides.get("TMPDIR"),
+            Some(&expected_tmpdir.to_string_lossy().into_owned()),
+            "sandbox TMPDIR should match the active filesystem capability"
+        );
     }
 }
 

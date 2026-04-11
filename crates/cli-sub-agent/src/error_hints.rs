@@ -18,7 +18,7 @@ const HINT_SLOT_EXHAUSTED: &str = "hint: free slots with 'csa gc' or wait with '
 const HINT_SESSION_NOT_FOUND: &str = "hint: list available sessions with 'csa session list'";
 const HINT_CONFIG_ERROR: &str =
     "hint: validate config with 'csa config validate' or reinitialize with 'csa init'";
-const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; upgrade to a build that seeds it under CSA session state, or re-run with TMPDIR=/tmp";
+const HINT_GEMINI_RUNTIME_HOME: &str = "hint: Gemini ACP needs a writable runtime home; current builds pin TMPDIR to a writable sandbox temp dir (private /tmp in bwrap, session tmp elsewhere) and seed under CSA session state, but older builds may still need re-run with TMPDIR=/tmp";
 
 pub fn suggest_fix(err: &Error) -> Option<String> {
     for cause in err.chain() {

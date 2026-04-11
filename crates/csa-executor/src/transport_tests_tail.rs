@@ -205,6 +205,85 @@ fn test_acp_build_env_includes_csa_session_dir() {
         session_dir.contains("01HTEST000000000000000000"),
         "CSA_SESSION_DIR should contain the session ID, got: {session_dir}"
     );
+    let result_contract_path = env
+        .get("CSA_RESULT_TOML_PATH_CONTRACT")
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present in env");
+    assert!(
+        result_contract_path.ends_with("/output/result.toml"),
+        "contract path should point to output/result.toml, got: {result_contract_path}"
+    );
+    assert!(
+        result_contract_path.contains("01HTEST000000000000000000"),
+        "contract path should include the session ID, got: {result_contract_path}"
+    );
+}
+
+#[test]
+fn test_acp_build_env_reserved_session_paths_override_extra_env() {
+    let transport = AcpTransport::new("claude-code", None);
+    let now = chrono::Utc::now();
+    let session = csa_session::state::MetaSessionState {
+        meta_session_id: "01HTEST000000000000000000".to_string(),
+        description: Some("test".to_string()),
+        project_path: "/tmp/test".to_string(),
+        branch: None,
+        created_at: now,
+        last_accessed: now,
+        genealogy: csa_session::state::Genealogy {
+            parent_session_id: None,
+            depth: 0,
+            ..Default::default()
+        },
+        tools: HashMap::new(),
+        context_status: csa_session::state::ContextStatus::default(),
+        total_token_usage: None,
+        phase: csa_session::state::SessionPhase::Active,
+        task_context: csa_session::state::TaskContext::default(),
+        turn_count: 0,
+        token_budget: None,
+        sandbox_info: None,
+        termination_reason: None,
+        is_seed_candidate: false,
+        git_head_at_creation: None,
+        last_return_packet: None,
+        change_id: None,
+        spec_id: None,
+        fork_call_timestamps: Vec::new(),
+        vcs_identity: None,
+        identity_version: 1,
+    };
+
+    let mut extra = HashMap::new();
+    extra.insert("CSA_SESSION_DIR".to_string(), "/tmp/fake-session".to_string());
+    extra.insert(
+        csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
+        "/tmp/fake-session/result.toml".to_string(),
+    );
+
+    let env = transport.build_env(&session, Some(&extra));
+    let session_dir = env
+        .get("CSA_SESSION_DIR")
+        .expect("CSA_SESSION_DIR should be present");
+    assert!(
+        session_dir.contains("/sessions/"),
+        "reserved session dir should override extra_env, got: {session_dir}"
+    );
+    assert!(
+        session_dir.contains("01HTEST000000000000000000"),
+        "reserved session dir should include the session ID, got: {session_dir}"
+    );
+
+    let result_contract_path = env
+        .get("CSA_RESULT_TOML_PATH_CONTRACT")
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present");
+    assert!(
+        result_contract_path.ends_with("/output/result.toml"),
+        "reserved result contract path should override extra_env, got: {result_contract_path}"
+    );
+    assert!(
+        result_contract_path.contains("01HTEST000000000000000000"),
+        "reserved result contract path should include the session ID, got: {result_contract_path}"
+    );
 }
 
 #[test]

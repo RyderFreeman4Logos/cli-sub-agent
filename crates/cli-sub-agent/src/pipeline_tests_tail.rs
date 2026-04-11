@@ -140,7 +140,7 @@ fn result_toml_path_contract_fails_closed_when_preclear_failed() {
     assert!(
         result
             .summary
-            .contains("failed to clear pre-existing result.toml")
+            .contains("failed to clear pre-existing result artifacts")
     );
     assert!(result.stderr_output.contains("contract violation"));
 }
@@ -401,6 +401,11 @@ summary = "ok"
         result
             .stderr_output
             .contains("contract warning: output/summary path mismatch")
+    );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(user_result_path.to_string_lossy().as_ref()),
+        "accepted user-result fallback must become the final output line"
     );
 }
 

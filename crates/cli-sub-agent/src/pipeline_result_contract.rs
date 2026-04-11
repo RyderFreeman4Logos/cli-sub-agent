@@ -1,9 +1,11 @@
 //! Result.toml path contract enforcement for session execution.
 //!
 //! When a prompt contains the contract marker `csa_result_toml_path_contract=1`,
-//! the session output must contain the absolute path to a valid `result.toml` or
-//! `user-result.toml` file inside the session directory.  If the contract is
-//! violated the execution result is coerced to failure.
+//! the session output must contain the absolute path to a valid `result.toml`
+//! artifact inside the session directory. Accepted paths are the runtime
+//! session root (`result.toml`), the canonical output-sidecar
+//! (`output/result.toml`), or the legacy sidecar (`output/user-result.toml`).
+//! If the contract is violated the execution result is coerced to failure.
 
 use std::path::Path;
 use tracing::warn;
@@ -25,9 +27,12 @@ pub(crate) fn enforce_result_toml_path_contract(
 
     if !result_file_cleared {
         let expected_path = session_dir.join("result.toml");
+        let legacy_output_path = csa_session::legacy_user_result_path(session_dir);
         let reason = format!(
-            "contract violation: failed to clear pre-existing result.toml '{}' before execution; refusing to trust stale file",
-            expected_path.display()
+            "contract violation: failed to clear pre-existing result artifacts '{}', '{}', and '{}' before execution; refusing to trust stale files",
+            expected_path.display(),
+            csa_session::contract_result_path(session_dir).display(),
+            legacy_output_path.display()
         );
         warn!(
             summary = %result.summary,
@@ -45,14 +50,35 @@ pub(crate) fn enforce_result_toml_path_contract(
 
     let path_candidate = contract_result_toml_path_candidate(result);
     let expected_path = session_dir.join("result.toml");
-    let expected_user_result_path = session_dir.join("output").join("user-result.toml");
+    let expected_contract_output_path = csa_session::contract_result_path(session_dir);
+    let expected_user_result_path = csa_session::legacy_user_result_path(session_dir);
     if path_matches_expected_contract_result(path_candidate, &expected_path)
+        || path_matches_expected_contract_result(path_candidate, &expected_contract_output_path)
         || path_matches_expected_contract_result(path_candidate, &expected_user_result_path)
     {
         return;
     }
 
-    if user_result_fallback_is_valid(&expected_user_result_path) {
+    if sidecar_result_fallback_is_valid(&expected_contract_output_path) {
+        let warning = format!(
+            "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
+            expected_contract_output_path.display()
+        );
+        warn!(
+            summary = %result.summary,
+            fallback = %expected_contract_output_path.display(),
+            "Session output path did not match contract; accepting verified output/result.toml fallback"
+        );
+        if !result.stderr_output.is_empty() && !result.stderr_output.ends_with('\n') {
+            result.stderr_output.push('\n');
+        }
+        result.stderr_output.push_str(&warning);
+        result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_contract_output_path);
+        return;
+    }
+
+    if sidecar_result_fallback_is_valid(&expected_user_result_path) {
         let warning = format!(
             "contract warning: output/summary path mismatch; accepted fallback artifact '{}'",
             expected_user_result_path.display()
@@ -67,6 +93,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         }
         result.stderr_output.push_str(&warning);
         result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_user_result_path);
         return;
     }
 
@@ -89,19 +116,22 @@ pub(crate) fn enforce_result_toml_path_contract(
         }
         result.stderr_output.push_str(&warning);
         result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_path);
         return;
     }
 
     let reason = if path_candidate.is_empty() {
         format!(
-            "contract violation: expected existing absolute result path '{}' or '{}' in output/summary, but output and summary were empty",
+            "contract violation: expected existing absolute result path '{}', '{}', or '{}' in output/summary, but output and summary were empty",
             expected_path.display(),
+            expected_contract_output_path.display(),
             expected_user_result_path.display()
         )
     } else {
         format!(
-            "contract violation: expected existing absolute result path '{}' or '{}' in output/summary, got '{path_candidate}'",
+            "contract violation: expected existing absolute result path '{}', '{}', or '{}' in output/summary, got '{path_candidate}'",
             expected_path.display(),
+            expected_contract_output_path.display(),
             expected_user_result_path.display()
         )
     };
@@ -117,6 +147,14 @@ pub(crate) fn enforce_result_toml_path_contract(
     result.stderr_output.push('\n');
     result.summary = reason;
     result.exit_code = 1;
+}
+
+fn rewrite_contract_output_last_line(result: &mut ExecutionResult, accepted_path: &Path) {
+    if !result.output.is_empty() && !result.output.ends_with('\n') {
+        result.output.push('\n');
+    }
+    result.output.push_str(&accepted_path.to_string_lossy());
+    result.output.push('\n');
 }
 
 fn prompt_requires_result_toml_path(prompt: &str) -> bool {
@@ -287,7 +325,7 @@ fn expected_contract_file_is_valid(path: &Path) -> bool {
     true
 }
 
-fn user_result_fallback_is_valid(path: &Path) -> bool {
+fn sidecar_result_fallback_is_valid(path: &Path) -> bool {
     if !expected_contract_file_is_valid(path) {
         return false;
     }
@@ -371,6 +409,20 @@ pub(super) fn clear_expected_result_toml(path: &Path) -> bool {
             false
         }
     }
+}
+
+pub(super) fn clear_expected_result_artifacts_for_prompt(prompt: &str, session_dir: &Path) -> bool {
+    let session_result_path = session_dir.join("result.toml");
+    let session_cleared = clear_expected_result_toml(&session_result_path);
+    if !prompt_requires_result_toml_path(prompt) {
+        return session_cleared;
+    }
+
+    let contract_output_path = csa_session::contract_result_path(session_dir);
+    let legacy_output_path = csa_session::legacy_user_result_path(session_dir);
+    let contract_output_cleared = clear_expected_result_toml(&contract_output_path);
+    let legacy_output_cleared = clear_expected_result_toml(&legacy_output_path);
+    session_cleared && contract_output_cleared && legacy_output_cleared
 }
 
 fn normalize_contract_path_candidate(path: &str) -> &str {

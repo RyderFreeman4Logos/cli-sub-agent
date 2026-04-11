@@ -45,9 +45,37 @@ fn result_toml_path_contract_extracts_embedded_path() {
 }
 
 #[test]
+fn result_toml_path_contract_accepts_output_result_artifact_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let result_path = output_dir.join("result.toml");
+    fs::write(&result_path, "status = \"success\"\nsummary = \"done\"\n").unwrap();
+
+    let mut result = ExecutionResult {
+        output: format!("{}\n", result_path.display()),
+        stderr_output: String::new(),
+        summary: "completed all tasks successfully".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        temp.path(),
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert!(result.stderr_output.is_empty());
+}
+
+#[test]
 fn result_toml_path_contract_accepts_verified_session_result_fallback() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");
+    let path_str = result_path.display().to_string();
     fs::write(
         &result_path,
         "status = \"success\"\nsummary = \"task complete\"\n",
@@ -80,6 +108,11 @@ fn result_toml_path_contract_accepts_verified_session_result_fallback() {
         result
             .stderr_output
             .contains("contract warning: output/summary path not found")
+    );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(path_str.as_str()),
+        "accepted fallback must become the last output line so managers consume the verified path"
     );
 }
 
@@ -147,7 +180,8 @@ fn result_toml_path_contract_handles_verbose_multiline_output() {
 #[test]
 fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_empty() {
     let temp = tempfile::tempdir().unwrap();
-    fs::write(temp.path().join("result.toml"), "status = \"success\"\n").unwrap();
+    let result_path = temp.path().join("result.toml");
+    fs::write(&result_path, "status = \"success\"\n").unwrap();
     let mut result = ExecutionResult {
         output: " \n\t\n".to_string(),
         stderr_output: String::new(),
@@ -171,6 +205,11 @@ fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_e
         result
             .stderr_output
             .contains("contract warning: output/summary path not found")
+    );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(result_path.to_string_lossy().as_ref()),
+        "accepted disk fallback must surface the verified path as the final output line"
     );
 }
 
@@ -196,4 +235,133 @@ fn result_toml_path_contract_fails_when_output_summary_empty_and_no_disk_file() 
     assert_eq!(result.exit_code, 1);
     assert!(result.summary.contains("output and summary were empty"));
     assert!(result.stderr_output.contains("contract violation"));
+}
+
+#[test]
+fn clear_expected_result_tomls_removes_all_stale_result_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let session_result = temp.path().join("result.toml");
+    let output_result = output_dir.join("result.toml");
+    let legacy_output_result = output_dir.join("user-result.toml");
+    fs::write(&session_result, "status = \"stale\"\n").unwrap();
+    fs::write(&output_result, "status = \"stale\"\n").unwrap();
+    fs::write(&legacy_output_result, "status = \"stale\"\n").unwrap();
+
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            crate::pipeline::result_contract::RESULT_TOML_PATH_CONTRACT_MARKER,
+            temp.path()
+        )
+    );
+    assert!(!session_result.exists());
+    assert!(!output_result.exists());
+    assert!(!legacy_output_result.exists());
+}
+
+#[test]
+fn clear_expected_result_artifacts_for_plain_prompt_preserves_sidecars() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let session_result = temp.path().join("result.toml");
+    let output_result = output_dir.join("result.toml");
+    let legacy_output_result = output_dir.join("user-result.toml");
+    fs::write(&session_result, "status = \"stale\"\n").unwrap();
+    fs::write(&output_result, "status = \"preserve\"\n").unwrap();
+    fs::write(&legacy_output_result, "status = \"preserve\"\n").unwrap();
+
+    assert!(
+        crate::pipeline::result_contract::clear_expected_result_artifacts_for_prompt(
+            "plain follow-up without contract marker",
+            temp.path()
+        )
+    );
+    assert!(
+        !session_result.exists(),
+        "session-root result.toml remains scratch state and should still be cleared"
+    );
+    assert!(
+        output_result.exists(),
+        "canonical contract sidecar must survive non-contract follow-up turns"
+    );
+    assert!(
+        legacy_output_result.exists(),
+        "legacy sidecar must survive non-contract follow-up turns"
+    );
+}
+
+#[test]
+fn sa_skill_docs_reference_contract_result_path_and_plain_git_commit() {
+    let sa_skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/skills/sa/SKILL.md"
+    ));
+    assert!(
+        sa_skill.contains("$CSA_RESULT_TOML_PATH_CONTRACT"),
+        "SA dispatch templates must direct child sessions to the injected result path contract"
+    );
+    assert!(
+        sa_skill.contains("plain `git commit`"),
+        "SA skill should document plain git commit for child-session commits"
+    );
+}
+
+#[test]
+fn sa_pattern_and_workflow_dispatch_templates_propagate_sa_mode() {
+    let pattern = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/PATTERN.md"
+    ));
+    let workflow = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/workflow.toml"
+    ));
+
+    for expected in [
+        "SID=$(csa run --sa-mode true --prompt-file \"${PROMPT_FILE}\")",
+        "SID=$(csa run --sa-mode true --session \"${SESSION_ID}\" --prompt-file \"${IMPL_FILE}\")",
+        "SID=$(csa run --sa-mode true --session \"${SESSION_ID}\" --prompt-file \"${RESUME_FILE}\")",
+    ] {
+        assert!(
+            pattern.contains(expected),
+            "SA pattern must propagate --sa-mode true in dispatch template: {expected}"
+        );
+        assert!(
+            workflow.contains(expected),
+            "SA workflow must propagate --sa-mode true in dispatch template: {expected}"
+        );
+    }
+
+    for legacy in [
+        "SID=$(csa run --prompt-file \"${PROMPT_FILE}\")",
+        "SID=$(csa run --session \"${SESSION_ID}\" --prompt-file \"${IMPL_FILE}\")",
+        "SID=$(csa run --session \"${SESSION_ID}\" --prompt-file \"${RESUME_FILE}\")",
+    ] {
+        assert!(
+            !pattern.contains(legacy),
+            "legacy SA pattern dispatch without --sa-mode true must be removed: {legacy}"
+        );
+        assert!(
+            !workflow.contains(legacy),
+            "legacy SA workflow dispatch without --sa-mode true must be removed: {legacy}"
+        );
+    }
+}
+
+#[test]
+fn split_project_docs_skill_uses_plain_git_commit() {
+    let skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../skills/split-project-docs/SKILL.md"
+    ));
+    assert!(
+        skill.contains("plain `git commit`"),
+        "split-project-docs should document plain git commit in CSA child sessions"
+    );
+    assert!(
+        !skill.contains("Use `/commit` skill"),
+        "split-project-docs should no longer require the unavailable /commit shortcut"
+    );
 }

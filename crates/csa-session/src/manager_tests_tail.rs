@@ -216,6 +216,42 @@ artifacts = [1, 2]
 }
 
 #[test]
+fn test_save_result_retain_contract_result_artifact_when_output_result_exists() {
+    let td = tempdir().unwrap();
+    let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
+    let session_dir = get_session_dir_in(td.path(), &state.meta_session_id);
+    std::fs::write(
+        manager_result::contract_result_path(&session_dir),
+        "status = \"success\"\nsummary = \"manager-facing report\"\n",
+    )
+    .unwrap();
+
+    let now = chrono::Utc::now();
+    let runtime_result = crate::result::SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "runtime summary".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 1,
+        artifacts: vec![crate::result::SessionArtifact::new("output/acp-events.jsonl")],
+        peak_memory_mb: None,
+    };
+    save_result_in(td.path(), &state.meta_session_id, &runtime_result).unwrap();
+
+    let loaded = load_result_in(td.path(), &state.meta_session_id)
+        .unwrap()
+        .unwrap();
+    assert!(
+        loaded
+            .artifacts
+            .iter()
+            .any(|artifact| artifact.path == manager_result::CONTRACT_RESULT_ARTIFACT_PATH)
+    );
+}
+
+#[test]
 fn test_save_result_does_not_overwrite_existing_sidecar_snapshot() {
     let td = tempdir().unwrap();
     let state = create_session_in(td.path(), td.path(), None, None, Some("codex")).unwrap();
