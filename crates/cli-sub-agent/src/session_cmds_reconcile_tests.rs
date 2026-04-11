@@ -139,6 +139,31 @@ fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
     set_file_mtime_seconds_ago(path, seconds_ago);
 }
 
+#[cfg(target_os = "linux")]
+fn read_process_start_time_ticks(pid: u32) -> u64 {
+    let stat_path = format!("/proc/{pid}/stat");
+    let content = fs::read_to_string(stat_path).expect("read /proc stat");
+    let close_paren = content.rfind(')').expect("stat comm terminator");
+    let after_comm = &content[close_paren + 1..];
+    let mut parts = after_comm.split_whitespace();
+    parts.next().expect("state");
+    parts.next().expect("ppid");
+    parts.next().expect("pgrp");
+    for _ in 0..16 {
+        parts.next().expect("intermediate stat field");
+    }
+    parts
+        .next()
+        .expect("starttime")
+        .parse::<u64>()
+        .expect("starttime parse")
+}
+
+#[cfg(target_os = "linux")]
+fn daemon_pid_record(pid: u32) -> String {
+    format!("{pid} {}\n", read_process_start_time_ticks(pid))
+}
+
 #[test]
 fn ensure_terminal_result_for_dead_active_session_leaves_state_unchanged_on_transition_failure() {
     let td = tempdir().expect("tempdir");
@@ -547,9 +572,9 @@ fn handle_session_wait_marks_late_real_result_completion_as_non_synthetic() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
-fn ensure_terminal_result_for_dead_active_session_reconciles_even_with_reused_pid_in_daemon_pid() {
+fn ensure_terminal_result_for_dead_active_session_skips_synthesis_while_daemon_pid_is_alive() {
     let td = tempdir().expect("tempdir");
     let _env = SessionTestEnv::new(&td);
     let project = td.path();
@@ -564,7 +589,86 @@ fn ensure_terminal_result_for_dead_active_session_reconciles_even_with_reused_pi
         .spawn()
         .unwrap();
     let pid = child.id();
-    fs::write(session_dir.join("daemon.pid"), format!("{pid}\n")).unwrap();
+    fs::write(session_dir.join("daemon.pid"), daemon_pid_record(pid)).unwrap();
+    assert!(
+        !csa_process::ToolLiveness::has_live_process(&session_dir),
+        "fixture should exercise raw daemon.pid fallback, not context-matched liveness"
+    );
+    assert!(csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir));
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+
+    child.kill().ok();
+    child.wait().ok();
+
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    assert!(
+        load_result(project, &session_id).unwrap().is_none(),
+        "live daemon.pid must block synthetic failure"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_reconciles_when_daemon_pid_is_dead() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("dead-daemon-pid"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    fs::write(session_dir.join("daemon.pid"), daemon_pid_record(pid)).unwrap();
+    child.kill().ok();
+    child.wait().ok();
+    assert!(!csa_process::ToolLiveness::daemon_pid_is_alive(
+        &session_dir
+    ));
+
+    let reconciled =
+        ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
+            .unwrap();
+
+    assert_eq!(
+        reconciled,
+        DeadActiveSessionReconciliation::SynthesizedFailure
+    );
+    let result = load_result(project, &session_id)
+        .unwrap()
+        .expect("result should be synthesized");
+    assert_eq!(result.status, "failure");
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn ensure_terminal_result_for_dead_active_session_ignores_reused_daemon_pid_with_start_time_mismatch()
+ {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("daemon-pid-reuse-guard"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+
+    let mut child = std::process::Command::new("sleep")
+        .arg("60")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    fs::write(session_dir.join("daemon.pid"), format!("{pid} 0\n")).unwrap();
+    assert!(
+        !csa_process::ToolLiveness::daemon_pid_is_alive(&session_dir),
+        "start time mismatch must prevent unrelated PID reuse from blocking reconciliation"
+    );
 
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
@@ -577,10 +681,6 @@ fn ensure_terminal_result_for_dead_active_session_reconciles_even_with_reused_pi
         reconciled,
         DeadActiveSessionReconciliation::SynthesizedFailure
     );
-    let result = load_result(project, &session_id)
-        .unwrap()
-        .expect("result should be synthesized");
-    assert_eq!(result.status, "failure");
 }
 
 #[cfg(unix)]

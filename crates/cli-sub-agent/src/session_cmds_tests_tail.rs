@@ -647,7 +647,6 @@ fn handle_session_wait_ignores_completion_packet_while_daemon_alive() {
     let _ = child.wait();
 }
 
-#[cfg(unix)]
 #[test]
 fn handle_session_wait_returns_pre_exec_failure_without_timeout_packet() {
     let td = tempdir().unwrap();

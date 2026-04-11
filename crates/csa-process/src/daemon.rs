@@ -40,6 +40,34 @@ fn open_log_file(dir: &std::path::Path, name: &str) -> Result<File> {
         .with_context(|| format!("failed to create {name} in {}", dir.display()))
 }
 
+fn daemon_pid_record(pid: u32) -> String {
+    match read_process_start_time_ticks(pid) {
+        Some(start_time_ticks) => format!("{pid} {start_time_ticks}\n"),
+        None => format!("{pid}\n"),
+    }
+}
+
+#[cfg(unix)]
+fn read_process_start_time_ticks(pid: u32) -> Option<u64> {
+    let stat_path = format!("/proc/{pid}/stat");
+    let content = std::fs::read_to_string(stat_path).ok()?;
+    let close_paren = content.rfind(')')?;
+    let after_comm = &content[close_paren + 1..];
+    let mut parts = after_comm.split_whitespace();
+    parts.next()?;
+    parts.next()?;
+    parts.next()?;
+    for _ in 0..16 {
+        parts.next()?;
+    }
+    parts.next()?.parse::<u64>().ok()
+}
+
+#[cfg(not(unix))]
+fn read_process_start_time_ticks(_pid: u32) -> Option<u64> {
+    None
+}
+
 /// Spawn a detached daemon process with setsid, stdin=/dev/null,
 /// stdout/stderr redirected to spool files in the session directory.
 pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
@@ -89,7 +117,7 @@ pub fn spawn_daemon(config: DaemonSpawnConfig) -> Result<DaemonSpawnResult> {
 
     // Write daemon PID file for `csa session kill` and `wait` liveness checks.
     let pid_path = config.session_dir.join("daemon.pid");
-    std::fs::write(&pid_path, pid.to_string())
+    std::fs::write(&pid_path, daemon_pid_record(pid))
         .with_context(|| format!("failed to write {}", pid_path.display()))?;
 
     // Detach: the daemon child will outlive us. We must not leave a

@@ -57,6 +57,10 @@ fn with_reconcile_lock<R>(
 
 fn noop_path(_: &Path) {}
 
+fn session_has_terminal_process(session_dir: &Path) -> bool {
+    ToolLiveness::has_live_process(session_dir) || ToolLiveness::daemon_pid_is_alive(session_dir)
+}
+
 pub(crate) fn ensure_terminal_result_for_dead_active_session(
     project_root: &Path,
     session_id: &str,
@@ -127,7 +131,7 @@ fn dead_active_session_needs_terminal_result(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if ToolLiveness::has_live_process(session_dir) {
+    if session_has_terminal_process(session_dir) {
         return Ok(false);
     }
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
@@ -169,7 +173,7 @@ where
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
-    if ToolLiveness::has_live_process(session_dir) {
+    if session_has_terminal_process(session_dir) {
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
     let result_path = session_dir.join(csa_session::result::RESULT_FILE_NAME);
@@ -335,7 +339,7 @@ fn dead_session_with_result_needs_retire(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if ToolLiveness::has_live_process(session_dir) {
+    if session_has_terminal_process(session_dir) {
         return Ok(false);
     }
     Ok(load_result(project_root, session_id)?.is_some())
@@ -352,8 +356,7 @@ fn retire_if_dead_with_result_impl(
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(false);
     }
-    if ToolLiveness::has_live_process(session_dir)
-        || load_result(project_root, session_id)?.is_none()
+    if session_has_terminal_process(session_dir) || load_result(project_root, session_id)?.is_none()
     {
         return Ok(false);
     }
