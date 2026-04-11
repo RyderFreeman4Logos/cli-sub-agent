@@ -1,6 +1,6 @@
 use super::*;
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn read_process_start_time_ticks(pid: u32) -> u64 {
     let stat_path = format!("/proc/{pid}/stat");
     let content = std::fs::read_to_string(stat_path).expect("read /proc stat");
@@ -20,12 +20,12 @@ fn read_process_start_time_ticks(pid: u32) -> u64 {
         .expect("starttime parse")
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn daemon_pid_record(pid: u32) -> String {
     format!("{pid} {}\n", read_process_start_time_ticks(pid))
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn handle_session_wait_ignores_completion_packet_while_raw_daemon_pid_is_alive() {
     use std::process::Command;
@@ -77,7 +77,7 @@ fn handle_session_wait_ignores_completion_packet_while_raw_daemon_pid_is_alive()
     let _ = child.wait();
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn handle_session_kill_rejects_daemon_pid_start_time_mismatch() {
     use std::process::Command;

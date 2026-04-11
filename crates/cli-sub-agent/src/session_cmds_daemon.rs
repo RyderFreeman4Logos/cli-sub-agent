@@ -539,7 +539,6 @@ pub(crate) fn handle_session_attach(
         std::thread::sleep(std::time::Duration::from_millis(200));
     }
 
-    let daemon_pid = read_daemon_pid(&session_dir);
     let live_stdout_path = if live_stdout_path.exists() {
         live_stdout_path
     } else {
@@ -634,15 +633,21 @@ pub(crate) fn handle_session_attach(
             return Ok(exit_code);
         }
 
-        // Detect dead daemon: PID gone but no result.toml.
-        // Synthesize a terminal result so callers always observe result.toml (#543).
-        if let Some(pid) = daemon_pid
-            && !is_pid_alive(pid)
-        {
-            eprintln!(
-                "Daemon process {} exited without producing result.toml; synthesizing fallback",
-                pid,
-            );
+        // Detect dead daemon: no live session-relevant process remains and no
+        // terminal result exists yet. This shares the same PID-reuse guard as
+        // wait/reconcile/kill instead of trusting the raw daemon.pid value.
+        if !session_has_terminal_process(&session_dir) {
+            if let Some(pid) = read_daemon_pid(&session_dir) {
+                eprintln!(
+                    "Daemon process {} exited without producing result.toml; synthesizing fallback",
+                    pid,
+                );
+            } else {
+                eprintln!(
+                    "Session {} has no live daemon process and no result.toml; synthesizing fallback",
+                    resolved.session_id,
+                );
+            }
             // For cross-project sessions, skip synthesis (requires project_root write access).
             let is_cross_project =
                 csa_session::get_session_dir(&project_root, &resolved.session_id).is_err();

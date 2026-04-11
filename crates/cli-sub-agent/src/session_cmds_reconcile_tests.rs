@@ -139,7 +139,7 @@ fn backdate_tree(path: &std::path::Path, seconds_ago: u64) {
     set_file_mtime_seconds_ago(path, seconds_ago);
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn read_process_start_time_ticks(pid: u32) -> u64 {
     let stat_path = format!("/proc/{pid}/stat");
     let content = fs::read_to_string(stat_path).expect("read /proc stat");
@@ -159,7 +159,7 @@ fn read_process_start_time_ticks(pid: u32) -> u64 {
         .expect("starttime parse")
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 fn daemon_pid_record(pid: u32) -> String {
     format!("{pid} {}\n", read_process_start_time_ticks(pid))
 }
@@ -572,7 +572,7 @@ fn handle_session_wait_marks_late_real_result_completion_as_non_synthetic() {
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_skips_synthesis_while_daemon_pid_is_alive() {
     let td = tempdir().expect("tempdir");
@@ -610,7 +610,7 @@ fn ensure_terminal_result_for_dead_active_session_skips_synthesis_while_daemon_p
     );
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_reconciles_when_daemon_pid_is_dead() {
     let td = tempdir().expect("tempdir");
@@ -647,7 +647,7 @@ fn ensure_terminal_result_for_dead_active_session_reconciles_when_daemon_pid_is_
     assert_eq!(result.status, "failure");
 }
 
-#[cfg(unix)]
+#[cfg(target_os = "linux")]
 #[test]
 fn ensure_terminal_result_for_dead_active_session_ignores_reused_daemon_pid_with_start_time_mismatch()
  {

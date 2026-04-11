@@ -127,6 +127,7 @@ impl ToolLiveness {
                 {
                     Some(record.pid)
                 }
+                (Some(_), Some(ProcessMetadata { state: 'Z', .. })) => None,
                 (Some(_), Some(_)) => Some(record.pid),
                 (Some(_), None) if is_process_alive(record.pid) => Some(record.pid),
                 (None, Some(ProcessMetadata { state: 'Z', .. }))
@@ -134,6 +135,7 @@ impl ToolLiveness {
                 {
                     Some(record.pid)
                 }
+                (None, Some(ProcessMetadata { state: 'Z', .. })) => None,
                 (None, _) if find_session_pid(session_dir) == Some(record.pid) => Some(record.pid),
                 _ => None,
             }
@@ -493,7 +495,7 @@ fn is_process_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     fn daemon_pid_record(pid: u32) -> String {
         let metadata = read_process_metadata(pid).expect("process metadata");
         format!("{pid} {}\n", metadata.start_time_ticks)
@@ -577,7 +579,7 @@ mod tests {
         assert_eq!(found_pid, Some(pid));
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn daemon_pid_is_alive_detects_live_pid_without_context_match() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -606,7 +608,7 @@ mod tests {
         child.wait().ok();
     }
 
-    #[cfg(unix)]
+    #[cfg(target_os = "linux")]
     #[test]
     fn daemon_pid_is_alive_rejects_start_time_mismatch() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -624,6 +626,37 @@ mod tests {
         );
 
         child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn daemon_pid_is_alive_rejects_zombie_without_live_process_group() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(tmp.path().join(DAEMON_PID_FILE), daemon_pid_record(pid))
+            .expect("write daemon pid");
+
+        child.kill().expect("kill child");
+        for _ in 0..20 {
+            if matches!(
+                read_process_metadata(pid),
+                Some(ProcessMetadata { state: 'Z', .. })
+            ) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        assert!(
+            !ToolLiveness::daemon_pid_is_alive(tmp.path()),
+            "zombie daemon without live process-group members must not block finalization"
+        );
+
         child.wait().ok();
     }
 
