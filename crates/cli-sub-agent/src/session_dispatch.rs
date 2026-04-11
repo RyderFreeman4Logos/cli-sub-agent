@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
-use csa_config::GlobalConfig;
+use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::types::OutputFormat;
 
 pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
@@ -119,8 +119,57 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
 ///
 /// Compatibility rule: if `[kv_cache]` is absent, keep the legacy 250s wait cap.
 fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
-    let _ = cd;
+    if let Some(legacy_timeout) = resolve_legacy_session_wait_timeout(cd) {
+        return legacy_timeout;
+    }
     GlobalConfig::resolve_session_wait_long_poll_seconds()
+}
+
+fn resolve_legacy_session_wait_timeout(cd: Option<&str>) -> Option<u64> {
+    let project_root = crate::pipeline::determine_project_root(cd).ok();
+    let project_path = project_root
+        .as_deref()
+        .map(ProjectConfig::config_path)
+        .filter(|path| path.exists());
+    let user_path = ProjectConfig::user_config_path().filter(|path| path.exists());
+
+    if let Some(timeout) = project_path
+        .as_deref()
+        .and_then(|path| read_legacy_session_wait_timeout(path, "project"))
+    {
+        return Some(timeout);
+    }
+
+    user_path
+        .as_deref()
+        .and_then(|path| read_legacy_session_wait_timeout(path, "user"))
+}
+
+fn read_legacy_session_wait_timeout(path: &std::path::Path, source: &str) -> Option<u64> {
+    let content = std::fs::read_to_string(path).ok()?;
+    let raw: toml::Value = toml::from_str(&content).ok()?;
+    let value = raw
+        .get("session")
+        .and_then(|session| session.get("daemon_wait_seconds"))
+        .and_then(toml::Value::as_integer)?;
+
+    if value <= 0 {
+        tracing::warn!(
+            path = %path.display(),
+            source,
+            "Ignoring deprecated session.daemon_wait_seconds because it is not > 0"
+        );
+        return None;
+    }
+
+    let timeout = value as u64;
+    tracing::warn!(
+        path = %path.display(),
+        source,
+        timeout,
+        "Using deprecated session.daemon_wait_seconds; migrate to global kv_cache.long_poll_seconds"
+    );
+    Some(timeout)
 }
 
 #[cfg(test)]
@@ -198,5 +247,59 @@ tool = "auto"
         .unwrap();
 
         assert_eq!(resolve_daemon_wait_timeout(None), 250);
+    }
+
+    #[test]
+    fn resolve_daemon_wait_timeout_honors_legacy_project_session_override_with_warning_path() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let csa_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[session]
+daemon_wait_seconds = 600
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
+            600
+        );
+    }
+
+    #[test]
+    fn resolve_daemon_wait_timeout_honors_legacy_user_session_override_when_project_missing() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[session]
+daemon_wait_seconds = 480
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
+            480
+        );
     }
 }

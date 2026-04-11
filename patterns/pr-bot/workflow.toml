@@ -543,7 +543,7 @@ else
 fi
 # Configurable wait/poll timeouts for cloud bot response.
 CLOUD_BOT_WAIT_SECONDS=$(csa config get pr_review.cloud_bot_wait_seconds --default "$(csa config get kv_cache.frequent_poll_seconds --default 60)")
-CLOUD_BOT_POLL_MAX_SECONDS=$(csa config get pr_review.cloud_bot_poll_max_seconds --default "$(csa config get kv_cache.frequent_poll_seconds --default 60)")
+CLOUD_BOT_POLL_MAX_SECONDS=$(csa config get pr_review.cloud_bot_poll_max_seconds --default "$(csa config get kv_cache.long_poll_seconds --default 240)")
 if [ "${CLOUD_BOT}" = "false" ]; then
   BOT_UNAVAILABLE=true
   FALLBACK_REVIEW_HAS_ISSUES=false
@@ -618,7 +618,7 @@ Trigger cloud bot review for current HEAD. Trigger method is **round-aware**:
   (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist)
   because bots do NOT auto-review on subsequent pushes (#506).
 
-Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then delegate `cloud_bot_poll_max_seconds` (same default) polling to CSA.
+Wait `cloud_bot_wait_seconds` (default: `kv_cache.frequent_poll_seconds`, 60s), then delegate `cloud_bot_poll_max_seconds` (default: `kv_cache.long_poll_seconds`, 240s) polling to CSA.
 If bot times out, **ABORT the workflow** — user must decide next action.
 Also detects non-target bot comments (e.g., codex auto-review when
 configured bot is gemini-code-assist) and includes them with a quota warning.
@@ -859,7 +859,7 @@ timeout branch. Steps 7-10 are structurally inside the `BOT_UNAVAILABLE=false`
 branch and are NOT reachable from here.
 
 Delegate this cycle to CSA as a single operation and enforce hard bounds:
-- CSA daemon + session wait (configurable via `cloud_bot_wait_seconds`, default: `kv_cache.frequent_poll_seconds = 60`)
+- CSA daemon + session wait (configured by `cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, defaults: `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`)
 - no `|| true` silent downgrade
 - success requires marker `FALLBACK_FIX=clean`
 - on success, orchestrator explicitly sets `FALLBACK_REVIEW_HAS_ISSUES=false`
@@ -1516,7 +1516,7 @@ wait/fix/review loop to a single CSA-managed step.
 - CSA delegated step handles both paths:
   - Bot responds with P0/P1/P2 badges → CSA runs bounded fix/review retries (max 3 rounds), using the same configurable wait policy for each trigger (`cloud_bot_wait_seconds` quiet wait + `cloud_bot_poll_max_seconds` polling).
   - Bot times out → CSA runs fallback `csa review --range main...HEAD` and bounded fix/review retries (max 3 rounds).
-- CSA daemon + session wait (configurable via `cloud_bot_wait_seconds`, default: `kv_cache.frequent_poll_seconds = 60`) enforces the hard timeout.
+- CSA daemon + session wait (configured by `cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, defaults: `kv_cache.frequent_poll_seconds = 60` and `kv_cache.long_poll_seconds = 240`) enforces the hard timeout.
 - delegated execution failures are hard failures (no `|| true` silent downgrade).
 - On delegated gate failure (timeout, non-zero, or non-PASS marker), set `REBASE_REVIEW_HAS_ISSUES=true` (and `FALLBACK_REVIEW_HAS_ISSUES=true` when appropriate), then block merge.
 - On success, both `REBASE_REVIEW_HAS_ISSUES` and `FALLBACK_REVIEW_HAS_ISSUES` must be false.
