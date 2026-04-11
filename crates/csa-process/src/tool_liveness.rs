@@ -308,7 +308,7 @@ fn read_process_command_line(pid: u32) -> Option<String> {
 #[cfg(target_os = "macos")]
 fn read_process_command_line(pid: u32) -> Option<String> {
     let output = std::process::Command::new("/bin/ps")
-        .args(["-o", "command=", "-p", &pid.to_string()])
+        .args(["-ww", "-o", "command=", "-p", &pid.to_string()])
         .output()
         .ok()?;
     if !output.status.success() {
