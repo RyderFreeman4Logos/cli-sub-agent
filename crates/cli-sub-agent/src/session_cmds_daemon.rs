@@ -123,6 +123,42 @@ pub(crate) fn handle_session_wait(
     cd: Option<String>,
     wait_timeout_secs: u64,
 ) -> Result<i32> {
+    handle_session_wait_with_hooks(
+        session,
+        cd,
+        wait_timeout_secs,
+        |project_root, session_id, trigger| {
+            let reconciled = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
+                project_root,
+                session_id,
+                trigger,
+            )?;
+            Ok(WaitReconciliationOutcome {
+                result_became_available: reconciled.result_became_available(),
+                synthetic: reconciled.synthesized_failure(),
+            })
+        },
+        emit_wait_completion_signal,
+    )
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WaitReconciliationOutcome {
+    pub(crate) result_became_available: bool,
+    pub(crate) synthetic: bool,
+}
+
+pub(crate) fn handle_session_wait_with_hooks<R, E>(
+    session: String,
+    cd: Option<String>,
+    wait_timeout_secs: u64,
+    mut reconcile_dead_active_session: R,
+    mut emit_completion_signal: E,
+) -> Result<i32>
+where
+    R: FnMut(&Path, &str, &str) -> Result<WaitReconciliationOutcome>,
+    E: FnMut(&str, &str, i32, bool, bool),
+{
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     // For cross-project sessions, derive session_dir from the resolved sessions_dir
@@ -150,7 +186,7 @@ pub(crate) fn handle_session_wait(
             );
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
-            emit_wait_completion_signal(
+            emit_completion_signal(
                 &resolved.session_id,
                 &completion.status,
                 completion.exit_code,
@@ -168,7 +204,7 @@ pub(crate) fn handle_session_wait(
         )? {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
-            emit_wait_completion_signal(
+            emit_completion_signal(
                 &resolved.session_id,
                 &result.status,
                 result.exit_code,
@@ -179,12 +215,9 @@ pub(crate) fn handle_session_wait(
         }
 
         // Synthesize terminal result for dead Active sessions.
-        let synthesized = crate::session_cmds::ensure_terminal_result_for_dead_active_session(
-            effective_root,
-            &resolved.session_id,
-            "session wait",
-        )?;
-        if synthesized
+        let reconciled =
+            reconcile_dead_active_session(effective_root, &resolved.session_id, "session wait")?;
+        if reconciled.result_became_available
             && let Some(result) = load_completed_daemon_result_adaptive(
                 effective_root,
                 &resolved.session_id,
@@ -194,14 +227,14 @@ pub(crate) fn handle_session_wait(
         {
             let streamed_output = stream_wait_output(&session_dir)?;
             emit_wait_next_step_if_needed(&session_dir)?;
-            emit_wait_completion_signal(
+            emit_completion_signal(
                 &resolved.session_id,
                 &result.status,
                 result.exit_code,
-                true,
+                reconciled.synthetic,
                 !streamed_output,
             );
-            if !streamed_output {
+            if reconciled.synthetic && !streamed_output {
                 eprintln!(
                     "Session {} reached a synthesized terminal result because no live daemon process remained.",
                     resolved.session_id,
@@ -219,7 +252,7 @@ pub(crate) fn handle_session_wait(
             )? {
                 let streamed_output = stream_wait_output(&session_dir)?;
                 emit_wait_next_step_if_needed(&session_dir)?;
-                emit_wait_completion_signal(
+                emit_completion_signal(
                     &resolved.session_id,
                     &result.status,
                     result.exit_code,

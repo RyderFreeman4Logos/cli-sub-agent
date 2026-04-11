@@ -1,8 +1,9 @@
 use super::resolve::resolve_session_prefix_from_dirs;
 use super::{
-    display_acp_events, display_daemon_spool_logs, display_log_files,
-    ensure_terminal_result_for_dead_active_session, handle_session_is_alive, handle_session_wait,
-    print_content_with_tail, select_sessions_for_list, session_to_json,
+    DeadActiveSessionReconciliation, display_acp_events, display_daemon_spool_logs,
+    display_log_files, ensure_terminal_result_for_dead_active_session,
+    ensure_terminal_result_for_dead_active_session_with_before_write, handle_session_is_alive,
+    handle_session_wait, print_content_with_tail, select_sessions_for_list, session_to_json,
     status_from_phase_and_result, truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};

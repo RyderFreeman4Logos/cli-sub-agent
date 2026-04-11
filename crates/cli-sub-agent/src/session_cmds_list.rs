@@ -79,7 +79,7 @@ pub(super) fn resolve_session_status(session: &MetaSessionState) -> String {
         Ok(None) => {
             let reconciled =
                 ensure_terminal_result_for_dead_active_session(project_root, sid, "session list");
-            if matches!(reconciled, Ok(true))
+            if matches!(reconciled, Ok(outcome) if outcome.result_became_available())
                 && let Ok(Some(result)) = load_result(project_root, sid)
             {
                 return status_from_phase_and_result(&SessionPhase::Retired, Some(&result))
