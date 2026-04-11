@@ -36,3 +36,11 @@ pub struct TransportResult {
     pub events: Vec<SessionEvent>,
     pub metadata: csa_acp::StreamingMetadata,
 }
+
+pub(super) fn should_stream_acp_stdout_to_stderr(
+    stream_mode: StreamMode,
+    output_spool: Option<&Path>,
+) -> bool {
+    !(matches!(stream_mode, StreamMode::BufferOnly)
+        || output_spool.is_some() && std::env::var_os("CSA_DAEMON_SESSION_ID").is_some())
+}

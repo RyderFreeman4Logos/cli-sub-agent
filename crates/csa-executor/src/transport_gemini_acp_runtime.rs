@@ -39,6 +39,7 @@ pub(crate) struct GeminiAcpLaunch {
 
 pub(crate) fn prepare_gemini_acp_runtime(
     env: &mut HashMap<String, String>,
+    session_dir: Option<&Path>,
     session_id: &str,
     base_args: &[String],
 ) -> Result<GeminiAcpLaunch> {
@@ -47,7 +48,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .map(PathBuf::from);
-    let runtime_home = resolve_runtime_home(env, session_id);
+    let runtime_home = resolve_runtime_home(session_dir, session_id);
     seed_runtime_home(&runtime_home, source_home.as_deref())?;
     align_runtime_auth_selection(&runtime_home, env)?;
 
@@ -144,9 +145,9 @@ pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Opt
         .find(|path| path.starts_with(&runtime_root) || path.ends_with(session_relative_path))
 }
 
-fn resolve_runtime_home(env: &HashMap<String, String>, session_id: &str) -> PathBuf {
-    if let Some(session_dir) = env.get("CSA_SESSION_DIR").filter(|value| !value.is_empty()) {
-        return PathBuf::from(session_dir).join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
+fn resolve_runtime_home(session_dir: Option<&Path>, session_id: &str) -> PathBuf {
+    if let Some(session_dir) = session_dir {
+        return session_dir.join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
     }
 
     std::env::temp_dir()

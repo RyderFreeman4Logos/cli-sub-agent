@@ -55,6 +55,7 @@ use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payloa
 
 #[path = "transport_types.rs"]
 mod transport_types;
+use transport_types::should_stream_acp_stdout_to_stderr;
 pub use transport_types::{SandboxTransportConfig, TransportOptions, TransportResult};
 
 #[async_trait]
@@ -70,14 +71,6 @@ pub trait Transport: Send + Sync {
 
     #[cfg(test)]
     fn as_any(&self) -> &dyn std::any::Any;
-}
-
-fn should_stream_acp_stdout_to_stderr(
-    stream_mode: StreamMode,
-    output_spool: Option<&Path>,
-) -> bool {
-    !(matches!(stream_mode, StreamMode::BufferOnly)
-        || output_spool.is_some() && std::env::var_os("CSA_DAEMON_SESSION_ID").is_some())
 }
 
 #[derive(Debug, Clone)]
@@ -455,10 +448,17 @@ impl AcpTransport {
         let mut acp_args = acp_args.to_vec();
         let prompt = prompt.to_string();
         let resume_session_id = resume_session_id.map(String::from);
+        let session_dir =
+            csa_session::manager::get_session_dir(&working_dir, &session.meta_session_id).ok();
 
         let mut gemini_runtime_home = None;
         if self.tool_name == "gemini-cli" {
-            let launch = prepare_gemini_acp_runtime(&mut env, &session.meta_session_id, &acp_args)?;
+            let launch = prepare_gemini_acp_runtime(
+                &mut env,
+                session_dir.as_deref(),
+                &session.meta_session_id,
+                &acp_args,
+            )?;
             acp_command = launch.command;
             acp_args = launch.args;
             gemini_runtime_home = gemini_runtime_home_from_env(&env);
@@ -492,6 +492,7 @@ impl AcpTransport {
         );
         let acp_payload_debug_path = maybe_write_acp_payload_debug(AcpPayloadDebugRequest {
             env: &env,
+            session_dir: session_dir.as_deref(),
             tool_name: &self.tool_name,
             command: &acp_command,
             args: &acp_args,
