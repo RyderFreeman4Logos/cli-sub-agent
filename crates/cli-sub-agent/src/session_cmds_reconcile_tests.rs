@@ -6,7 +6,10 @@ use csa_session::{
     PhaseEvent, SessionPhase, SessionResult, create_session, get_session_dir, load_result,
     load_session, save_result, save_session,
 };
+use std::sync::{Arc, Mutex, mpsc};
+use std::time::Duration;
 use tempfile::tempdir;
+use tracing_subscriber::fmt::MakeWriter;
 
 struct EnvVarGuard {
     key: &'static str,
@@ -31,6 +34,42 @@ impl Drop for EnvVarGuard {
                 None => std::env::remove_var(self.key),
             }
         }
+    }
+}
+
+#[derive(Clone, Default)]
+struct SharedLogBuffer {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl SharedLogBuffer {
+    fn contents(&self) -> String {
+        String::from_utf8(self.bytes.lock().unwrap().clone()).unwrap()
+    }
+}
+
+struct SharedLogWriter {
+    bytes: Arc<Mutex<Vec<u8>>>,
+}
+
+impl<'a> MakeWriter<'a> for SharedLogBuffer {
+    type Writer = SharedLogWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        SharedLogWriter {
+            bytes: Arc::clone(&self.bytes),
+        }
+    }
+}
+
+impl std::io::Write for SharedLogWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.bytes.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -119,7 +158,10 @@ fn ensure_terminal_result_for_dead_active_session_leaves_state_unchanged_on_tran
         &session_id,
         "session list",
         &session_dir,
-        |_| {},
+        SyntheticResultHooks {
+            before_write: &noop_path,
+            after_publish: &noop_path,
+        },
         |session| {
             session.phase = SessionPhase::Retired;
         },
@@ -165,7 +207,10 @@ fn ensure_terminal_result_for_dead_active_session_removes_synthetic_result_on_sa
         &session_id,
         "session list",
         &session_dir,
-        |_| {},
+        SyntheticResultHooks {
+            before_write: &noop_path,
+            after_publish: &noop_path,
+        },
         |_| {},
         &persist_fail,
     )
@@ -187,6 +232,79 @@ fn ensure_terminal_result_for_dead_active_session_removes_synthetic_result_on_sa
     assert!(
         !cooldown_path.exists(),
         "cooldown marker should not be written when reconciliation state persistence fails"
+    );
+}
+
+#[test]
+fn rollback_does_not_delete_late_real_result() {
+    let td = tempdir().expect("tempdir");
+    let _env = SessionTestEnv::new(&td);
+    let project = td.path();
+
+    let session = create_session(project, Some("late-real-result-rollback"), None, None).unwrap();
+    let session_id = session.meta_session_id;
+    let session_dir = get_session_dir(project, &session_id).unwrap();
+    let result_path = session_dir.join("result.toml");
+    let late_result = SessionResult {
+        summary: "late real terminal result".to_string(),
+        ..make_result("success", 0)
+    };
+    let late_result_contents = toml::to_string_pretty(&late_result).unwrap();
+    let persist_fail = |_: &Path, _: &MetaSessionState| -> Result<()> { Err(anyhow!("boom")) };
+
+    let buffer = SharedLogBuffer::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(buffer.clone())
+        .without_time()
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let after_publish = |path: &Path| {
+        assert_eq!(path, result_path.as_path());
+        fs::write(path, &late_result_contents).unwrap();
+    };
+
+    let err = ensure_terminal_result_for_dead_active_session_impl(
+        project,
+        &session_id,
+        "session list",
+        &session_dir,
+        SyntheticResultHooks {
+            before_write: &noop_path,
+            after_publish: &after_publish,
+        },
+        |_| {},
+        &persist_fail,
+    )
+    .unwrap_err();
+
+    assert!(
+        err.to_string()
+            .contains("Failed to persist retired orphaned session state"),
+        "unexpected error: {err:#}"
+    );
+    assert!(
+        result_path.exists(),
+        "late real result should remain on disk"
+    );
+    assert_eq!(
+        fs::read_to_string(&result_path).unwrap(),
+        late_result_contents
+    );
+
+    let persisted = load_result(project, &session_id).unwrap().unwrap();
+    assert_eq!(persisted.status, "success");
+    assert_eq!(persisted.exit_code, 0);
+    assert_eq!(persisted.summary, "late real terminal result");
+
+    let session_state = load_session(project, &session_id).unwrap();
+    assert_eq!(session_state.phase, SessionPhase::Active);
+    assert_eq!(session_state.termination_reason, None);
+
+    let logs = buffer.contents();
+    assert!(
+        logs.contains("late real result.toml") && logs.contains("left it in place"),
+        "expected late-real-result warning, got: {logs}"
     );
 }
 
@@ -314,7 +432,7 @@ fn retire_if_dead_with_result_skips_lock_on_read_only_dir_when_no_change() {
 }
 
 #[test]
-fn ensure_terminal_result_for_dead_active_session_is_noop_when_reconcile_lock_is_held() {
+fn ensure_terminal_result_for_dead_active_session_waits_for_concurrent_reconciler() {
     let td = tempdir().expect("tempdir");
     let _env = SessionTestEnv::new(&td);
     let project = td.path();
@@ -322,20 +440,61 @@ fn ensure_terminal_result_for_dead_active_session_is_noop_when_reconcile_lock_is
     let session = create_session(project, Some("lock-held"), None, None).unwrap();
     let session_id = session.meta_session_id;
     let session_dir = get_session_dir(project, &session_id).unwrap();
+    let project_for_lock = project.to_path_buf();
+    let session_dir_for_lock = session_dir.clone();
+    let session_id_for_lock = session_id.clone();
+    let (lock_acquired_tx, lock_acquired_rx) = mpsc::channel();
+    let (write_result_tx, write_result_rx) = mpsc::channel();
+    let lock_holder = std::thread::spawn(move || {
+        with_reconcile_lock(&session_dir_for_lock, || {
+            lock_acquired_tx.send(()).unwrap();
+            write_result_rx.recv().unwrap();
+            save_result(
+                &project_for_lock,
+                &session_id_for_lock,
+                &make_result("success", 0),
+            )
+            .unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            Ok(())
+        })
+        .unwrap();
+    });
 
-    let _outcome = with_reconcile_lock(&session_dir, || {
-        let reconciled =
-            ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
-                .unwrap();
+    lock_acquired_rx.recv().unwrap();
 
-        assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
-        assert!(load_result(project, &session_id).unwrap().is_none());
-        let persisted = load_session(project, &session_id).unwrap();
-        assert_eq!(persisted.phase, SessionPhase::Active);
-        assert_eq!(persisted.termination_reason, None);
-        Ok(())
-    })
-    .unwrap();
+    let project_for_caller = project.to_path_buf();
+    let session_id_for_caller = session_id.clone();
+    let (caller_done_tx, caller_done_rx) = mpsc::channel();
+    let caller = std::thread::spawn(move || {
+        let reconciled = ensure_terminal_result_for_dead_active_session(
+            &project_for_caller,
+            &session_id_for_caller,
+            "session list",
+        )
+        .unwrap();
+        caller_done_tx.send(reconciled).unwrap();
+    });
+
+    assert!(
+        caller_done_rx
+            .recv_timeout(Duration::from_millis(50))
+            .is_err(),
+        "reconciliation should wait for the concurrent lock holder"
+    );
+    write_result_tx.send(()).unwrap();
+
+    let reconciled = caller_done_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    caller.join().unwrap();
+    lock_holder.join().unwrap();
+
+    assert_eq!(reconciled, DeadActiveSessionReconciliation::NoChange);
+    let result = load_result(project, &session_id).unwrap().unwrap();
+    assert_eq!(result.status, "success");
+    assert_eq!(result.exit_code, 0);
+    let persisted = load_session(project, &session_id).unwrap();
+    assert_eq!(persisted.phase, SessionPhase::Active);
+    assert_eq!(persisted.termination_reason, None);
 }
 
 #[test]

@@ -11,6 +11,11 @@ use csa_session::{
 
 type PersistSessionFn<'a> = dyn Fn(&Path, &MetaSessionState) -> Result<()> + 'a;
 
+struct SyntheticResultHooks<'a> {
+    before_write: &'a dyn Fn(&Path),
+    after_publish: &'a dyn Fn(&Path),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DeadActiveSessionReconciliation {
     NoChange,
@@ -24,10 +29,7 @@ impl DeadActiveSessionReconciliation {
     pub(crate) fn synthesized_failure(self) -> bool { matches!(self, Self::SynthesizedFailure) }
 }
 
-fn with_reconcile_lock<R>(
-    session_dir: &Path,
-    body: impl FnOnce() -> Result<R>,
-) -> Result<Option<R>> {
+fn with_reconcile_lock<R>(session_dir: &Path, body: impl FnOnce() -> Result<R>) -> Result<R> {
     let lock_path = session_dir.join(".reconcile.lock");
     let file = OpenOptions::new()
         .read(true)
@@ -43,12 +45,13 @@ fn with_reconcile_lock<R>(
         })?;
 
     let mut lock = fd_lock::RwLock::new(file);
-    match lock.try_write() {
-        Ok(_guard) => Ok(Some(body()?)),
-        Err(e) if e.kind() == ErrorKind::WouldBlock => Ok(None),
-        Err(e) => Err(anyhow::Error::from(e).context("Failed to acquire reconciliation lock")),
-    }
+    let _guard = lock
+        .write()
+        .map_err(|e| anyhow::Error::from(e).context("Failed to acquire reconciliation lock"))?;
+    body()
 }
+
+fn noop_path(_: &Path) {}
 
 pub(crate) fn ensure_terminal_result_for_dead_active_session(
     project_root: &Path,
@@ -60,18 +63,20 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session(
     {
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
-    let outcome = with_reconcile_lock(&session_dir, || {
+    with_reconcile_lock(&session_dir, || {
         ensure_terminal_result_for_dead_active_session_impl(
             project_root,
             session_id,
             trigger,
             &session_dir,
-            |_| {},
+            SyntheticResultHooks {
+                before_write: &noop_path,
+                after_publish: &noop_path,
+            },
             |_| {},
             &persist_session_state_atomically,
         )
-    })?;
-    Ok(outcome.unwrap_or(DeadActiveSessionReconciliation::NoChange))
+    })
 }
 
 #[cfg(test)]
@@ -82,25 +87,28 @@ pub(crate) fn ensure_terminal_result_for_dead_active_session_with_before_write<F
     before_write: F,
 ) -> Result<DeadActiveSessionReconciliation>
 where
-    F: FnOnce(&Path),
+    F: Fn(&Path),
 {
     let session_dir = get_session_dir(project_root, session_id)?;
     if !dead_active_session_needs_terminal_result(project_root, session_id, trigger, &session_dir)?
     {
         return Ok(DeadActiveSessionReconciliation::NoChange);
     }
-    let outcome = with_reconcile_lock(&session_dir, || {
+    let after_publish = noop_path;
+    with_reconcile_lock(&session_dir, || {
         ensure_terminal_result_for_dead_active_session_impl(
             project_root,
             session_id,
             trigger,
             &session_dir,
-            before_write,
+            SyntheticResultHooks {
+                before_write: &before_write,
+                after_publish: &after_publish,
+            },
             |_| {},
             &persist_session_state_atomically,
         )
-    })?;
-    Ok(outcome.unwrap_or(DeadActiveSessionReconciliation::NoChange))
+    })
 }
 
 fn dead_active_session_needs_terminal_result(
@@ -135,19 +143,22 @@ fn dead_active_session_needs_terminal_result(
     }
 }
 
-fn ensure_terminal_result_for_dead_active_session_impl<F, B>(
+fn ensure_terminal_result_for_dead_active_session_impl<B>(
     project_root: &Path,
     session_id: &str,
     trigger: &str,
     session_dir: &Path,
-    before_write: F,
+    hooks: SyntheticResultHooks<'_>,
     before_retire: B,
     persist_session: &PersistSessionFn<'_>,
 ) -> Result<DeadActiveSessionReconciliation>
 where
-    F: FnOnce(&Path),
     B: FnOnce(&mut MetaSessionState),
 {
+    let SyntheticResultHooks {
+        before_write,
+        after_publish,
+    } = hooks;
     let mut session = load_session(project_root, session_id)?;
     if !matches!(session.phase, SessionPhase::Active) {
         return Ok(DeadActiveSessionReconciliation::NoChange);
@@ -229,6 +240,7 @@ where
         SyntheticResultPersistOutcome::Created => {}
     }
 
+    after_publish(&result_path);
     before_retire(&mut session);
     if let Err(err) = session.apply_phase_event(csa_session::PhaseEvent::Retired) {
         warn!(
@@ -238,12 +250,14 @@ where
             error = %err,
             "Failed to transition orphaned session to Retired phase during reconciliation; removing synthetic result and leaving session state unchanged"
         );
-        remove_result_file(&result_path).map_err(|cleanup_err| {
+        remove_synthetic_result_if_unchanged(&result_path, result_contents.as_bytes()).map_err(
+            |cleanup_err| {
             anyhow!(
                 "Failed to transition orphaned session to Retired phase during reconciliation for {session_id}: {err}; additionally failed to remove synthetic result {}: {cleanup_err}",
                 result_path.display()
             )
-        })?;
+        },
+        )?;
         return Err(anyhow!(
             "Failed to transition orphaned session to Retired phase during reconciliation for {session_id}: {err}"
         ));
@@ -257,12 +271,14 @@ where
             error = %err,
             "Failed to persist retired orphaned session state during reconciliation; removing synthetic result and leaving session state unchanged"
         );
-        remove_result_file(&result_path).map_err(|cleanup_err| {
+        remove_synthetic_result_if_unchanged(&result_path, result_contents.as_bytes()).map_err(
+            |cleanup_err| {
             anyhow!(
                 "Failed to persist retired orphaned session state for {session_id}: {err}; additionally failed to remove synthetic result {}: {cleanup_err}",
                 result_path.display()
             )
-        })?;
+        },
+        )?;
         return Err(anyhow!(
             "Failed to persist retired orphaned session state for {session_id}: {err}"
         ));
@@ -292,7 +308,7 @@ pub(crate) fn retire_if_dead_with_result(
     if !dead_session_with_result_needs_retire(project_root, session_id, &session_dir)? {
         return Ok(false);
     }
-    let outcome = with_reconcile_lock(&session_dir, || {
+    with_reconcile_lock(&session_dir, || {
         retire_if_dead_with_result_impl(
             project_root,
             session_id,
@@ -300,8 +316,7 @@ pub(crate) fn retire_if_dead_with_result(
             &session_dir,
             &persist_session_state_atomically,
         )
-    })?;
-    Ok(outcome.unwrap_or(false))
+    })
 }
 
 fn dead_session_with_result_needs_retire(
@@ -390,11 +405,65 @@ fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionSta
     Ok(())
 }
 
-fn remove_result_file(result_path: &Path) -> std::io::Result<()> {
-    match fs::remove_file(result_path) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
+fn remove_synthetic_result_if_unchanged(
+    result_path: &Path,
+    expected_contents: &[u8],
+) -> std::io::Result<()> {
+    match fs::read(result_path) {
+        Ok(current_contents) if current_contents == expected_contents => {
+            match fs::remove_file(result_path) {
+                Ok(()) => {
+                    warn!(
+                        result_path = %result_path.display(),
+                        rollback_cleanup = "removed_synthetic_result",
+                        "Rollback removed synthetic result.toml after reconciliation failure"
+                    );
+                    Ok(())
+                }
+                Err(err) if err.kind() == ErrorKind::NotFound => {
+                    warn!(
+                        result_path = %result_path.display(),
+                        rollback_cleanup = "result_missing_after_match",
+                        "Rollback synthetic result.toml was already absent after reconciliation failure"
+                    );
+                    Ok(())
+                }
+                Err(err) => {
+                    warn!(
+                        result_path = %result_path.display(),
+                        rollback_cleanup = "remove_failed",
+                        error = %err,
+                        "Rollback failed to remove matching synthetic result.toml after reconciliation failure"
+                    );
+                    Err(err)
+                }
+            }
+        }
+        Ok(_) => {
+            warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "late_real_result_preserved",
+                "Rollback detected late real result.toml and left it in place"
+            );
+            Ok(())
+        }
+        Err(err) if err.kind() == ErrorKind::NotFound => {
+            warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "result_missing",
+                "Rollback found no result.toml to clean up after reconciliation failure"
+            );
+            Ok(())
+        }
+        Err(err) => {
+            warn!(
+                result_path = %result_path.display(),
+                rollback_cleanup = "read_failed",
+                error = %err,
+                "Rollback failed to read result.toml for content-aware cleanup after reconciliation failure"
+            );
+            Ok(())
+        }
     }
 }
 
