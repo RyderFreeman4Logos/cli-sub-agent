@@ -585,7 +585,9 @@ pub(crate) fn handle_session_attach(
             }
         }
 
-        if let Some(completion) = load_daemon_completion_packet(&session_dir)? {
+        if let Some(completion) = load_daemon_completion_packet(&session_dir)?
+            && !session_has_terminal_process(&session_dir)
+        {
             // Drain remaining stdout.
             loop {
                 let n = live_stdout_file.read(&mut buf)?;

@@ -1,16 +1,13 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
-
 const LIVENESS_RECENT_WINDOW_SECS: u64 = 30;
 const LOCK_FILE_STALE_SECS: u64 = 60;
 const DAEMON_PID_FILE: &str = "daemon.pid";
 const ACP_EVENTS_LOG_FILE: &str = "output/acp-events.jsonl";
 const STDERR_LOG_FILE: &str = "stderr.log";
 const SNAPSHOT_FILE: &str = ".liveness.snapshot";
-
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
-
 #[derive(Debug, Clone, Copy)]
 struct DaemonPidRecord {
     pid: u32,
@@ -348,7 +345,20 @@ fn read_daemon_pid(session_dir: &Path) -> Option<u32> {
 
 fn read_daemon_pid_record(session_dir: &Path) -> Option<DaemonPidRecord> {
     let pid_path = session_dir.join(DAEMON_PID_FILE);
-    let content = fs::read_to_string(&pid_path).ok()?;
+    if let Ok(content) = fs::read_to_string(&pid_path)
+        && let Some(record) = parse_daemon_pid_record(&content)
+    {
+        return Some(record);
+    }
+
+    let pid = read_legacy_daemon_pid_from_stderr(session_dir)?;
+    Some(DaemonPidRecord {
+        pid,
+        start_time_ticks: None,
+    })
+}
+
+fn parse_daemon_pid_record(content: &str) -> Option<DaemonPidRecord> {
     let mut parts = content.split_whitespace();
     let pid = parts.next()?.parse::<u32>().ok()?;
     let start_time_ticks = parts.next().and_then(|value| value.parse::<u64>().ok());
@@ -356,6 +366,15 @@ fn read_daemon_pid_record(session_dir: &Path) -> Option<DaemonPidRecord> {
         pid,
         start_time_ticks,
     })
+}
+
+fn read_legacy_daemon_pid_from_stderr(session_dir: &Path) -> Option<u32> {
+    let stderr_path = session_dir.join(STDERR_LOG_FILE);
+    let content = fs::read_to_string(stderr_path).ok()?;
+    let pid_start = content.find("pid=")?;
+    let rest = &content[pid_start + 4..];
+    let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    pid_str.parse::<u32>().ok()
 }
 
 fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
