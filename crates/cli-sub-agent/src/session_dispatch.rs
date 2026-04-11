@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
-use csa_config::DEFAULT_DAEMON_WAIT_SECS;
+use csa_config::GlobalConfig;
 use csa_core::types::OutputFormat;
 
 pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
@@ -115,18 +115,88 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
     Ok(())
 }
 
-/// Resolve daemon wait timeout from project/global config, falling back to the
-/// compile-time default.
+/// Resolve the `csa session wait` cap from global KV cache config.
+///
+/// Compatibility rule: if `[kv_cache]` is absent, keep the legacy 250s wait cap.
 fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
-    let project_root = crate::pipeline::determine_project_root(cd).ok();
-    if let Some(ref root) = project_root {
-        match csa_config::ProjectConfig::load(root) {
-            Ok(Some(config)) => return config.session.daemon_wait_seconds,
-            Ok(None) => {} // No project config file — use default.
-            Err(e) => {
-                tracing::warn!("Failed to load project config for daemon_wait_seconds: {e}")
+    let _ = cd;
+    GlobalConfig::resolve_session_wait_long_poll_seconds()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_daemon_wait_timeout;
+    use crate::test_env_lock::TEST_ENV_LOCK;
+
+    struct EnvVarGuard {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation guarded by a process-wide mutex.
+            unsafe {
+                match self.original.as_deref() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
             }
         }
     }
-    DEFAULT_DAEMON_WAIT_SECS
+
+    #[test]
+    fn resolve_daemon_wait_timeout_uses_global_kv_cache_long_poll_seconds() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+[kv_cache]
+long_poll_seconds = 3000
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_daemon_wait_timeout(None), 3000);
+    }
+
+    #[test]
+    fn resolve_daemon_wait_timeout_keeps_legacy_fallback_without_kv_cache_section() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+[review]
+tool = "auto"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(resolve_daemon_wait_timeout(None), 250);
+    }
 }

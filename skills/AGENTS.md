@@ -16,7 +16,7 @@ installs the workflow entrypoints required by `csa review` and `csa debate`.
 | `csa-rust-dev` | Comprehensive Rust development guidance for architecture, implementation, and standards. |
 | `csa-security` | Adversarial security analysis to identify vulnerabilities before release. |
 | `csa-test-gen` | Core-first test design and TDD guidance following the test pyramid. |
-| `nohup-poll` | Launch long-running commands via nohup and poll at 245s intervals to keep KV cache warm. |
+| `nohup-poll` | Launch long-running commands via nohup and poll at `kv_cache.long_poll_seconds` (default 240s) to keep KV cache warm. |
 
 ## Compatibility Workflow Skills (2)
 

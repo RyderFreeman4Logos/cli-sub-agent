@@ -148,7 +148,7 @@ Default: `/gemini review` for gemini-code-assist, `@{name} review` for others.
 Override via `cloud_bot_retrigger_command`.
 
 **Timeout behavior**: If bot does not respond within the configured polling window
-(`cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, default ~8 minutes),
+(`cloud_bot_wait_seconds` + `cloud_bot_poll_max_seconds`, default ~2 minutes via `kv_cache.frequent_poll_seconds = 60`),
 the workflow **aborts** and presents options to the user. It does NOT silently
 fall back to local review and merge.
 
@@ -185,7 +185,7 @@ breaks prompt-guard propagation.
 4. **Trigger cloud bot and delegate waiting** (SELF-CONTAINED -- trigger + wait gate are atomic):
    - **Round 0** (initial PR): follows `cloud_bot_trigger` config (`"comment"` → @mention, `"auto"` → skip).
    - **Round 1+** (after fix push): ALWAYS posts explicit retrigger command (`cloud_bot_retrigger_command`, default: `/gemini review` for gemini-code-assist) because bots do NOT auto-review on subsequent pushes.
-   - Wait `cloud_bot_wait_seconds` (default 250s) quietly, then delegate `cloud_bot_poll_max_seconds` (default 250s) polling to CSA.
+   - Wait `cloud_bot_wait_seconds` quietly, then delegate `cloud_bot_poll_max_seconds` polling to CSA. Both default to `kv_cache.frequent_poll_seconds` (60s) unless explicitly overridden.
    - **Positive signal**: verifies a review EVENT exists (via `pulls/{pr}/reviews` API with `submitted_at` > push time), not merely absence of comments.
    - If bot times out: **ABORT workflow** and present options to user. NO silent fallback.
    - Non-target bot comments (e.g., codex auto-review) are also detected and included with a quota warning.

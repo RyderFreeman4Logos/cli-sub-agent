@@ -185,8 +185,7 @@ fn default_recursion_depth() -> u32 {
 }
 
 pub use super::config_session::{
-    DEFAULT_COOLDOWN_SECS, DEFAULT_DAEMON_WAIT_SECS, ExecutionConfig, HooksSection, SessionConfig,
-    VcsConfig,
+    DEFAULT_COOLDOWN_SECS, ExecutionConfig, HooksSection, SessionConfig, VcsConfig,
 };
 pub use super::config_tool::{ToolConfig, ToolFilesystemSandboxConfig, ToolRestrictions};
 
@@ -211,6 +210,14 @@ impl ProjectConfig {
         let project_path = project_root.join(".csa").join("config.toml");
         let user_path = Self::user_config_path();
         Self::load_with_paths(user_path.as_deref(), &project_path)
+    }
+
+    /// Load only the project-level `.csa/config.toml`, skipping user/global fallback.
+    ///
+    /// Missing project config returns `Ok(None)`.
+    pub fn load_project_only(project_root: &Path) -> Result<Option<Self>> {
+        let project_path = project_root.join(".csa").join("config.toml");
+        Self::load_with_paths(None, &project_path)
     }
 
     /// Load config from explicit paths. Testable without global filesystem state.
@@ -574,6 +581,9 @@ liveness_dead_seconds = 600
 slot_wait_timeout_seconds = 250
 stdin_write_timeout_seconds = 30
 termination_grace_period_seconds = 5
+[kv_cache]
+frequent_poll_seconds = 60
+long_poll_seconds = 240
 [gc]
 transcript_max_age_days = 30
 transcript_max_size_mb = 500

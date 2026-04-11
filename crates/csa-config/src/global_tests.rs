@@ -9,7 +9,73 @@ use std::collections::HashMap;
 fn test_default_config() {
     let config = GlobalConfig::default();
     assert_eq!(config.defaults.max_concurrent, 3);
+    assert_eq!(config.kv_cache.frequent_poll_seconds, 60);
+    assert_eq!(config.kv_cache.long_poll_seconds, 240);
     assert!(config.tools.is_empty());
+}
+
+#[test]
+fn test_kv_cache_defaults_parse_when_section_omitted() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.kv_cache.frequent_poll_seconds, 60);
+    assert_eq!(config.kv_cache.long_poll_seconds, 240);
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_uses_configured_kv_cache_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[kv_cache]
+long_poll_seconds = 3000
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
+        3000
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_keeps_legacy_fallback_without_kv_cache_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[review]
+tool = "auto"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
+        250
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_sanitizes_zero_value_to_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[kv_cache]
+long_poll_seconds = 0
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
+        240
+    );
 }
 
 #[test]

@@ -83,7 +83,7 @@ if [ "${COMMIT_COUNT}" -gt 3 ]; then
   # 7. Poll for bot response (reuse Step 5 polling logic)
   REBASE_BOT_OK=false
   POLL_INTERVAL=30
-  MAX_WAIT=250
+  MAX_WAIT=$(csa config get pr_review.cloud_bot_poll_max_seconds --default "$(csa config get kv_cache.frequent_poll_seconds --default 60)")
   WAITED=0
   while [ "${WAITED}" -lt "${MAX_WAIT}" ]; do
     sleep "${POLL_INTERVAL}"

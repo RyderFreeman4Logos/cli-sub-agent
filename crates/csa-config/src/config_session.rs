@@ -57,13 +57,6 @@ pub struct SessionConfig {
     /// Only effective when `tool_output_compression` is enabled.
     #[serde(default = "default_tool_output_threshold_bytes")]
     pub tool_output_threshold_bytes: u64,
-    /// Timeout (seconds) for `csa session wait` polling loop.
-    ///
-    /// The default of 250s is intentional: it lets the daemon's KV cache stay
-    /// warm while periodically returning control to the calling orchestrator.
-    /// The caller is expected to re-invoke `csa session wait` in a loop.
-    #[serde(default = "default_daemon_wait_seconds")]
-    pub daemon_wait_seconds: u64,
     /// Cooldown period (seconds) between consecutive session launches.
     ///
     /// Prevents rapid-fire session creation that can exhaust API quotas or
@@ -91,18 +84,11 @@ fn default_tool_output_threshold_bytes() -> u64 {
     8192
 }
 
-/// Default daemon wait timeout: 250s for KV cache warmth.
-pub const DEFAULT_DAEMON_WAIT_SECS: u64 = 250;
-
 /// Default cooldown between consecutive session launches (seconds).
 ///
 /// Prevents rapid-fire session creation that can exhaust API quotas or
 /// trigger provider rate limits. Set to `0` to disable cooldown entirely.
 pub const DEFAULT_COOLDOWN_SECS: u64 = 10;
-
-fn default_daemon_wait_seconds() -> u64 {
-    DEFAULT_DAEMON_WAIT_SECS
-}
 
 fn default_cooldown_secs() -> u64 {
     DEFAULT_COOLDOWN_SECS
@@ -134,7 +120,6 @@ impl Default for SessionConfig {
             spool_keep_rotated: None,
             tool_output_compression: false,
             tool_output_threshold_bytes: default_tool_output_threshold_bytes(),
-            daemon_wait_seconds: default_daemon_wait_seconds(),
             cooldown_seconds: default_cooldown_secs(),
             stderr_drain_timeout_secs: default_stderr_drain_timeout_secs(),
         }
@@ -155,7 +140,6 @@ impl SessionConfig {
             && self.spool_keep_rotated.is_none()
             && !self.tool_output_compression
             && self.tool_output_threshold_bytes == default_tool_output_threshold_bytes()
-            && self.daemon_wait_seconds == default_daemon_wait_seconds()
             && self.cooldown_seconds == default_cooldown_secs()
             && self.stderr_drain_timeout_secs == default_stderr_drain_timeout_secs()
     }
