@@ -8,6 +8,14 @@ pub(crate) fn warn_deprecated_keys(raw: &toml::Value, source: &str) {
                  Use 'resources.min_free_memory_mb' (combined physical + swap threshold) instead."
         );
     }
+    if let Some(session) = raw.get("session")
+        && session.get("daemon_wait_seconds").is_some()
+    {
+        eprintln!(
+            "warning: config '{source}': 'session.daemon_wait_seconds' is deprecated. \
+             Move this to global '[kv_cache].long_poll_seconds'; CSA currently keeps the legacy key only for migration compatibility."
+        );
+    }
 }
 
 /// Deep merge two TOML values. Overlay wins for non-table values.

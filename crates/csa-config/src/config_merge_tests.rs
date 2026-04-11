@@ -172,6 +172,7 @@ fn test_user_config_template_is_valid() {
     // Template should contain key sections
     assert!(template.contains("schema_version"));
     assert!(template.contains("[resources]"));
+    assert!(template.contains("[kv_cache]"));
     assert!(template.contains("# [tiers."));
     // Template location comment should point to unified path
     assert!(template.contains("cli-sub-agent/config.toml"));

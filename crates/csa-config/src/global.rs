@@ -3,9 +3,13 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub use crate::global_env::ExecutionEnvOptions;
+pub use crate::global_kv_cache::{
+    DEFAULT_KV_CACHE_FREQUENT_POLL_SECS, DEFAULT_KV_CACHE_LONG_POLL_SECS, KvCacheConfig,
+    LEGACY_SESSION_WAIT_FALLBACK_SECS,
+};
 use crate::mcp::McpServerConfig;
 use crate::memory::MemoryConfig;
 use crate::paths;
@@ -46,6 +50,9 @@ pub struct GlobalConfig {
     /// Execution tuning; project-level `[execution]` overrides.
     #[serde(default)]
     pub execution: crate::config::ExecutionConfig,
+    /// KV cache-aware polling defaults used by orchestration workflows.
+    #[serde(default)]
+    pub kv_cache: KvCacheConfig,
     /// ACP transport overrides; project-level `[acp]` takes precedence.
     #[serde(default, skip_serializing_if = "crate::AcpConfig::is_default")]
     pub acp: crate::AcpConfig,
@@ -507,7 +514,81 @@ impl GlobalConfig {
             .with_context(|| format!("Failed to read global config: {}", path.display()))?;
         let config: Self = toml::from_str(&content)
             .with_context(|| format!("Failed to parse global config: {}", path.display()))?;
-        Ok(config)
+        Ok(config.sanitized(Some(&path)))
+    }
+
+    /// Resolve the `csa session wait` long-poll cap from the global config.
+    ///
+    /// Missing or invalid config falls back to the documented KV cache default.
+    /// Once `[kv_cache]` exists, `long_poll_seconds` still defaults to 240 if omitted.
+    pub fn resolve_session_wait_long_poll_seconds() -> u64 {
+        let config_dir = paths::config_dir();
+        Self::resolve_session_wait_long_poll_seconds_from_dir(config_dir.as_deref())
+    }
+
+    pub(crate) fn resolve_session_wait_long_poll_seconds_from_dir(
+        config_dir: Option<&Path>,
+    ) -> u64 {
+        let path = config_dir.map(|dir| dir.join("config.toml"));
+        Self::resolve_session_wait_long_poll_seconds_from_path(path.as_deref())
+    }
+
+    pub fn resolve_session_wait_long_poll_seconds_from_path(path: Option<&Path>) -> u64 {
+        let Some(path) = path else {
+            return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+        };
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(content) => content,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+            }
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Failed to read global config while resolving session wait timeout"
+                );
+                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+            }
+        };
+
+        let raw: toml::Value = match toml::from_str(&content) {
+            Ok(raw) => raw,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Failed to parse global config while resolving session wait timeout"
+                );
+                return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+            }
+        };
+
+        if raw
+            .get("kv_cache")
+            .and_then(toml::Value::as_table)
+            .is_none()
+        {
+            return DEFAULT_KV_CACHE_LONG_POLL_SECS;
+        }
+
+        match toml::from_str::<Self>(&content) {
+            Ok(config) => config.sanitized(Some(path)).kv_cache.long_poll_seconds,
+            Err(err) => {
+                tracing::warn!(
+                    path = %path.display(),
+                    error = %err,
+                    "Failed to deserialize global config while resolving session wait timeout"
+                );
+                DEFAULT_KV_CACHE_LONG_POLL_SECS
+            }
+        }
+    }
+
+    fn sanitized(mut self, path: Option<&Path>) -> Self {
+        self.kv_cache = self.kv_cache.sanitized(path);
+        self
     }
 
     /// Get the resolved maximum concurrent count for a tool.
@@ -584,124 +665,7 @@ impl GlobalConfig {
 
     /// Generate default config TOML with comments as a template.
     pub fn default_template() -> String {
-        r#"# CSA Global Configuration
-# Location: ~/.config/cli-sub-agent/config.toml
-#
-# This file controls system-wide settings for all CSA projects.
-# API keys and concurrency limits are configured here (not in project config).
-
-[defaults]
-max_concurrent = 3  # Default max parallel instances per tool
-# tool = "codex"  # Default tool when auto-detection fails
-
-# Per-tool overrides. Uncomment and configure as needed.
-#
-# [tools.gemini-cli]
-# max_concurrent = 5
-# api_key = "AI..."  # Fallback only after quota exhaustion; fresh invocations stay OAuth-first.
-# [tools.gemini-cli.env]
-# CSA_GEMINI_INCLUDE_DIRECTORIES = "/abs/path/one,/abs/path/two"
-#
-# [tools.claude-code]
-# max_concurrent = 1
-# [tools.claude-code.env]
-# ANTHROPIC_API_KEY = "sk-ant-..."
-#
-# [tools.codex]
-# max_concurrent = 3
-# [tools.codex.env]
-# OPENAI_API_KEY = "sk-..."
-#
-# [tools.opencode]
-# max_concurrent = 2
-# [tools.opencode.env]
-# ANTHROPIC_API_KEY = "sk-ant-..."
-
-# Tool priority for auto-selection (heterogeneous routing, review, debate).
-# First = most preferred. Tools not listed keep their default order.
-# Example: prefer Claude Code for worker tasks, then Codex.
-# [preferences]
-# tool_priority = ["claude-code", "codex", "gemini-cli", "opencode"]
-
-# Review workflow: which tool to use for code review.
-# "auto" selects the heterogeneous counterpart of the parent tool:
-#   claude-code parent -> codex, codex parent -> claude-code.
-# Set explicitly if auto-detection fails (e.g., parent is opencode).
-# Optional: set `tier` to resolve the tool from a tier's models list
-# with heterogeneous preference. `tier` takes priority over `tool`.
-# Optional: set `thinking` for default thinking budget (low/medium/high/xhigh).
-[review]
-tool = "auto"
-# tier = "tier-4-critical"
-# thinking = "xhigh"
-
-# Debate workflow: which tool to use for adversarial debate / arbitration.
-# "auto" selects the heterogeneous counterpart of the parent tool:
-#   claude-code parent -> codex, codex parent -> claude-code.
-# Set explicitly if auto-detection fails (e.g., parent is opencode).
-# Optional: set `tier` to resolve the tool from a tier's models list
-# with heterogeneous preference. `tier` takes priority over `tool`.
-[debate]
-tool = "auto"
-# Default wall-clock timeout for `csa debate` (30 minutes).
-timeout_seconds = 1800
-# Optional default thinking budget for `csa debate`.
-# thinking = "high"
-# tier = "tier-4-critical"
-# Allow same-model adversarial fallback when heterogeneous models are unavailable.
-# When true, `csa debate` runs two independent sub-agents of the same tool.
-# Output is annotated with "same-model adversarial" to indicate degraded diversity.
-same_model_fallback = true
-
-# Fallback behavior when external services are unavailable.
-# cloud_review_exhausted: what to do when cloud review bot is unavailable.
-#   "auto-local" = automatically fall back to local CSA review (still reviews)
-#   "ask-user"   = prompt user before falling back (default)
-[fallback]
-cloud_review_exhausted = "ask-user"
-
-# Display commands for `csa todo` subcommands.
-# When set, output is piped through the specified command (only when stdout is a terminal).
-# [todo]
-# show_command = "bat -l md"   # Pipe `csa todo show` output through bat
-# diff_command = "delta"       # Pipe `csa todo diff` output through delta
-
-# MCP (Model Context Protocol) servers injected into all tool sessions.
-# Project-level .csa/mcp.toml servers override global ones with the same name.
-#
-# Stdio transport (local process, default):
-# [[mcp.servers]]
-# name = "repomix"
-# type = "stdio"
-# command = "npx"
-# args = ["-y", "repomix", "--mcp"]
-#
-# HTTP transport (remote server, requires transport-http-client feature):
-# [[mcp.servers]]
-# name = "remote-mcp"
-# type = "http"
-# url = "https://mcp.example.com/mcp"
-# # headers = { Authorization = "Bearer ..." }
-# # allow_insecure = false  # Set true for http:// (not recommended)
-#
-# Legacy format (auto-detected as stdio, backward-compatible):
-# [[mcp.servers]]
-# name = "deepwiki"
-# command = "npx"
-# args = ["-y", "@anthropic/deepwiki-mcp"]
-#
-# Optional shared MCP hub socket path.
-# mcp_proxy_socket = "/run/user/1000/cli-sub-agent/mcp-hub.sock"
-
-# Execution tuning. Project-level [execution] overrides these values.
-# [execution]
-# min_timeout_seconds = 1800  # Floor for --timeout flag (seconds)
-# auto_weave_upgrade = false  # Run `weave upgrade` before each CSA command
-# ACP transport tuning. Project-level [acp] overrides these values.
-# [acp]
-# init_timeout_seconds = 120  # Timeout for ACP session creation (seconds)
-"#
-        .to_string()
+        crate::global_template::default_template()
     }
 
     /// Save the default template to the config path, creating directories as needed.

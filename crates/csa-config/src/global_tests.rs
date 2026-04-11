@@ -5,11 +5,128 @@ use csa_core::gemini::{
 };
 use std::collections::HashMap;
 
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[test]
 fn test_default_config() {
     let config = GlobalConfig::default();
     assert_eq!(config.defaults.max_concurrent, 3);
+    assert_eq!(config.kv_cache.frequent_poll_seconds, 60);
+    assert_eq!(config.kv_cache.long_poll_seconds, 240);
     assert!(config.tools.is_empty());
+}
+
+#[test]
+fn test_kv_cache_defaults_parse_when_section_omitted() {
+    let config: GlobalConfig = toml::from_str("").unwrap();
+    assert_eq!(config.kv_cache.frequent_poll_seconds, 60);
+    assert_eq!(config.kv_cache.long_poll_seconds, 240);
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_uses_configured_kv_cache_value() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[kv_cache]
+long_poll_seconds = 3000
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
+        3000
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_uses_documented_default_without_kv_cache_section() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[review]
+tool = "auto"
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
+        240
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_sanitizes_zero_value_to_default() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[kv_cache]
+long_poll_seconds = 0
+"#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
+        240
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_uses_legacy_config_dir_fallback() {
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    let legacy_dir = config_root.join("csa");
+    std::fs::create_dir_all(&legacy_dir).unwrap();
+    std::fs::write(
+        legacy_dir.join("config.toml"),
+        r#"
+[kv_cache]
+long_poll_seconds = 3000
+"#,
+    )
+    .unwrap();
+
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let config_dir = crate::paths::config_dir();
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_dir(config_dir.as_deref()),
+        3000
+    );
 }
 
 #[test]

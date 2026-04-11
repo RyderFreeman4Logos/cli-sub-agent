@@ -1,18 +1,21 @@
 ---
 name: nohup-poll
-description: "Launch long-running commands (>4 min) via nohup and poll every 245s to keep KV cache warm. Saves 95%+ token cost vs letting cache expire."
+description: "Launch long-running commands (>4 min) via nohup and poll at kv_cache.long_poll_seconds (default 240s) to keep KV cache warm."
 allowed-tools: Bash, Read, Glob
 ---
 
 # Nohup Poll: KV Cache-Warm Long-Running Execution
 
-Launch long-running commands as true background processes and poll at 245-second
-intervals. Each poll is a **separate Bash tool call** that triggers a new API
-request, keeping the provider's KV cache warm.
+Launch long-running commands as true background processes and poll at the
+configured long-poll interval from `kv_cache.long_poll_seconds` (default 240s).
+Each poll is a **separate Bash tool call** that triggers a new API request,
+keeping the provider's KV cache warm.
 
 ## Why This Matters
 
-API providers cache the input token prefix with a ~5 minute TTL:
+Use this skill when the caller needs periodic API activity to keep its KV cache warm.
+Default CSA guidance assumes a 5-minute cache (`long_poll_seconds = 240`), while
+Max-tier Opus users can raise `kv_cache.long_poll_seconds` to 3000 for a 1-hour cache.
 
 | Event | Cost |
 |-------|------|
@@ -33,7 +36,7 @@ For a typical 15-minute `cargo build`:
 
 **MUST use** for any command expected to exceed **4 minutes**:
 
-| Command | Typical Duration | Polls (~245s each) |
+| Command | Typical Duration | Polls (default ~240s each) |
 |---------|-----------------|-------------------|
 | `cargo build` (full, large project) | 5–15 min | 1–4 |
 | `just pre-commit` (with e2e tests) | 5–20 min | 1–5 |
@@ -42,6 +45,8 @@ For a typical 15-minute `cargo build`:
 | Data processing / rsync | varies | varies |
 
 **Do NOT use** for commands under 4 minutes — the overhead isn't worth it.
+**Do NOT use** for `csa session wait` — call `csa session wait` directly because it
+already applies the internal long-poll cap.
 
 ## Protocol
 
@@ -92,10 +97,11 @@ gap and the cache expires.
 **Single poll command (copy-paste ready):**
 
 ```bash
-sleep 245 && if kill -0 <PID> 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "<LOG>"; else echo "POLL:DONE exit=$(cat "<LOG>.exitcode" 2>/dev/null || echo unknown)"; tail -20 "<LOG>"; fi
+sleep "$(csa config get kv_cache.long_poll_seconds --default 240)" && if kill -0 <PID> 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "<LOG>"; else echo "POLL:DONE exit=$(cat "<LOG>.exitcode" 2>/dev/null || echo unknown)"; tail -20 "<LOG>"; fi
 ```
 
-Set Bash timeout to **300000** ms (300s = 245s sleep + 55s margin).
+Set Bash timeout high enough to cover the configured sleep plus margin.
+With the default 240s poll, **300000 ms** is sufficient.
 
 **After each poll, decide:**
 
@@ -126,24 +132,23 @@ documentation, etc.), you can interleave:
 
 1. Launch the long command via Step 2
 2. Do other work for a while
-3. Before 245s pass, issue a quick status check:
+3. Before the configured long-poll interval passes, issue a quick status check:
    ```bash
    kill -0 <PID> 2>/dev/null && echo "STILL_RUNNING" || echo "DONE"
    ```
-4. Continue alternating work and checks, staying under the 5-min TTL
+4. Continue alternating work and checks, staying within the configured cache TTL band
 
-The rule: **never let >4 minutes pass without an API interaction** (any tool
-call counts — Read, Grep, Bash, etc.).
+The rule: **never let more than `kv_cache.long_poll_seconds` pass without an API interaction**
+(any tool call counts — Read, Grep, Bash, etc.).
 
 ## Cache TTL by Provider
 
-| Provider | Approximate TTL | Safe Poll Interval |
-|----------|----------------|-------------------|
-| Anthropic (Claude) | 5 min (300s) | **245s** |
-| OpenAI (Codex) | 5 min (300s) | **245s** |
-| Google (Gemini) | 5 min (300s) | **245s** |
+| Context | Typical TTL | Suggested `kv_cache.long_poll_seconds` |
+|---------|-------------|----------------------------------------|
+| Legacy / Haiku / generic 5-min cache | 300s | **240** |
+| Max-tier Opus 1-hour cache | 3600s | **3000** |
 
-245 seconds leaves a 55-second safety margin for API round-trip latency.
+Keep a safety margin instead of polling exactly at the provider TTL.
 
 ## Accumulated Poll Cost
 
@@ -168,8 +173,8 @@ The break-even point is ~12–18 days of continuous polling.
 bash scripts/bg.sh "/tmp/cargo-build-$(date +%s).log" cargo build --release
 # → PID=12345 LOG=/tmp/cargo-build-1743666000.log
 
-# Step 2: First poll (separate Bash call, timeout 300000ms)
-sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/cargo-build-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/cargo-build-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/cargo-build-1743666000.log"; fi
+# Step 2: First poll (separate Bash call; with default 240s, timeout 300000ms is fine)
+sleep "$(csa config get kv_cache.long_poll_seconds --default 240)" && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/cargo-build-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/cargo-build-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/cargo-build-1743666000.log"; fi
 
 # Step 3: Repeat until POLL:DONE
 ```
@@ -181,8 +186,8 @@ sleep 245 && if kill -0 12345 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/t
 bash scripts/bg.sh "/tmp/csa-run-$(date +%s).log" csa run --sa-mode true --tier tier-1 "Implement feature X"
 # → PID=23456 LOG=/tmp/csa-run-1743666000.log
 
-# Step 2: Poll (can also check session status)
-sleep 245 && if kill -0 23456 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/csa-run-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/csa-run-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/csa-run-1743666000.log"; fi
+# Step 2: Poll
+sleep "$(csa config get kv_cache.long_poll_seconds --default 240)" && if kill -0 23456 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/csa-run-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/csa-run-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/csa-run-1743666000.log"; fi
 ```
 
 ### Just Pre-commit
@@ -193,15 +198,15 @@ bash scripts/bg.sh "/tmp/precommit-$(date +%s).log" just pre-commit
 # → PID=34567 LOG=/tmp/precommit-1743666000.log
 
 # Step 2: Poll
-sleep 245 && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/precommit-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/precommit-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/precommit-1743666000.log"; fi
+sleep "$(csa config get kv_cache.long_poll_seconds --default 240)" && if kill -0 34567 2>/dev/null; then echo "POLL:RUNNING"; tail -3 "/tmp/precommit-1743666000.log"; else echo "POLL:DONE exit=$(cat "/tmp/precommit-1743666000.log.exitcode" 2>/dev/null || echo unknown)"; tail -20 "/tmp/precommit-1743666000.log"; fi
 ```
 
 ## Anti-Patterns
 
 | Wrong | Why | Correct |
 |-------|-----|---------|
-| `while sleep 245; do check; done` in one Bash call | Single API gap — cache expires | Separate Bash call per poll |
-| `sleep 400 && check` | 400s > 300s TTL — cache expires | `sleep 245` (under TTL) |
+| `while sleep 240; do check; done` in one Bash call | Single API gap — cache expires | Separate Bash call per poll |
+| `sleep 400 && check` when `kv_cache.long_poll_seconds = 240` | Sleep exceeds the configured safe band | `sleep "$(csa config get kv_cache.long_poll_seconds --default 240)"` |
 | `run_in_background: true` then forget | No periodic API calls — cache expires | Poll or do other work |
 | Blocking Bash with 600s timeout | 600s > TTL — cache expires | Use nohup-poll instead |
 | `wait <PID>` from a later Bash call | PID is not a child of the new shell, so `wait` returns 127 | Read `<LOG>.exitcode` written by `bg.sh` |
