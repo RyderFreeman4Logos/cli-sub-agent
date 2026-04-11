@@ -10,12 +10,11 @@ use crate::transport_gemini_retry::{
 };
 use anyhow::{Result, anyhow};
 use async_trait::async_trait;
-use csa_acp::{SessionConfig, SessionEvent};
+use csa_acp::SessionConfig;
 use csa_process::{
     ExecutionResult, SpawnOptions, StreamMode, spawn_tool_sandboxed, spawn_tool_with_options,
     wait_and_capture_with_idle_timeout,
 };
-use csa_resource::isolation_plan::IsolationPlan;
 use csa_session::state::{MetaSessionState, ToolState};
 
 #[path = "transport_meta.rs"]
@@ -50,29 +49,13 @@ pub use transport_fork::{ForkInfo, ForkMethod, ForkRequest};
 mod transport_factory;
 pub use transport_factory::{TransportFactory, TransportMode};
 
-#[derive(Debug, Clone)]
-pub struct SandboxTransportConfig {
-    pub isolation_plan: IsolationPlan,
-    pub tool_name: String,
-    pub best_effort: bool,
-    pub session_id: String,
-}
-#[derive(Debug, Clone)]
-pub struct TransportOptions<'a> {
-    pub stream_mode: StreamMode,
-    pub idle_timeout_seconds: u64,
-    pub acp_crash_max_attempts: u8,
-    pub initial_response_timeout_seconds: Option<u64>,
-    pub liveness_dead_seconds: u64,
-    pub stdin_write_timeout_seconds: u64,
-    pub acp_init_timeout_seconds: u64,
-    pub termination_grace_period_seconds: u64,
-    pub output_spool: Option<&'a Path>,
-    pub output_spool_max_bytes: u64,
-    pub output_spool_keep_rotated: bool,
-    pub setting_sources: Option<Vec<String>>,
-    pub sandbox: Option<&'a SandboxTransportConfig>,
-}
+#[path = "transport_acp_payload_debug.rs"]
+mod transport_acp_payload_debug;
+use transport_acp_payload_debug::{AcpPayloadDebugRequest, maybe_write_acp_payload_debug};
+
+#[path = "transport_types.rs"]
+mod transport_types;
+pub use transport_types::{SandboxTransportConfig, TransportOptions, TransportResult};
 
 #[async_trait]
 pub trait Transport: Send + Sync {
@@ -87,14 +70,6 @@ pub trait Transport: Send + Sync {
 
     #[cfg(test)]
     fn as_any(&self) -> &dyn std::any::Any;
-}
-
-#[derive(Debug, Clone)]
-pub struct TransportResult {
-    pub execution: ExecutionResult,
-    pub provider_session_id: Option<String>,
-    pub events: Vec<SessionEvent>,
-    pub metadata: csa_acp::StreamingMetadata,
 }
 
 fn should_stream_acp_stdout_to_stderr(
@@ -515,6 +490,17 @@ impl AcpTransport {
             options.setting_sources.as_deref(),
             self.session_config.as_ref(),
         );
+        let acp_payload_debug_path = maybe_write_acp_payload_debug(AcpPayloadDebugRequest {
+            env: &env,
+            tool_name: &self.tool_name,
+            command: &acp_command,
+            args: &acp_args,
+            working_dir: &working_dir,
+            resume_session_id: resume_session_id.as_deref(),
+            system_prompt: system_prompt.as_deref(),
+            session_meta: session_meta.as_ref(),
+            prompt: &prompt,
+        });
         let stream_stdout_to_stderr =
             should_stream_acp_stdout_to_stderr(options.stream_mode, options.output_spool);
         let output_spool = options.output_spool.map(std::path::Path::to_path_buf);
@@ -633,7 +619,17 @@ impl AcpTransport {
                 }
             })
             .await
-            .map_err(classify_join_error)??;
+            .map_err(classify_join_error)?
+            .map_err(|error| {
+                if let Some(path) = acp_payload_debug_path.as_deref() {
+                    error.context(format!(
+                        "ACP payload debug written to {}",
+                        path.display()
+                    ))
+                } else {
+                    error
+                }
+            })?;
         let execution = ExecutionResult {
             summary: build_summary(&output.output, &output.stderr, output.exit_code),
             output: output.output,
@@ -786,6 +782,7 @@ impl Transport for AcpTransport {
 #[cfg(test)]
 mod tests {
     use csa_acp::SessionConfig;
+    use csa_resource::isolation_plan::IsolationPlan;
 
     use super::*;
     use crate::transport_gemini_retry::*;

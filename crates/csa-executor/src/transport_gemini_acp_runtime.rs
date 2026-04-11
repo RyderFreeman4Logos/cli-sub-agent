@@ -9,6 +9,7 @@ use serde_json::{Map, Value};
 use tracing::{debug, warn};
 
 const GEMINI_RUNTIME_ROOT_DIR: &str = "cli-sub-agent-gemini";
+const GEMINI_SESSION_RUNTIME_RELATIVE_PATH: &str = "runtime/gemini-home";
 const GEMINI_RUNTIME_SETTINGS_PATHS: &[&str] =
     &[".gemini/settings.json", ".config/gemini-cli/settings.json"];
 const GEMINI_RUNTIME_PINNED_PATH_BINARIES: &[&str] = &["node", "yarn", "gemini"];
@@ -46,9 +47,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .map(PathBuf::from);
-    let runtime_home = std::env::temp_dir()
-        .join(GEMINI_RUNTIME_ROOT_DIR)
-        .join(session_id);
+    let runtime_home = resolve_runtime_home(env, session_id);
     seed_runtime_home(&runtime_home, source_home.as_deref())?;
     align_runtime_auth_selection(&runtime_home, env)?;
 
@@ -125,6 +124,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
 
 pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Option<PathBuf> {
     let runtime_root = std::env::temp_dir().join(GEMINI_RUNTIME_ROOT_DIR);
+    let session_relative_path = Path::new(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
     let candidates = [
         env.get("GEMINI_CLI_HOME").map(PathBuf::from),
         env.get("HOME").map(PathBuf::from),
@@ -141,7 +141,17 @@ pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Opt
     candidates
         .into_iter()
         .flatten()
-        .find(|path| path.starts_with(&runtime_root))
+        .find(|path| path.starts_with(&runtime_root) || path.ends_with(session_relative_path))
+}
+
+fn resolve_runtime_home(env: &HashMap<String, String>, session_id: &str) -> PathBuf {
+    if let Some(session_dir) = env.get("CSA_SESSION_DIR").filter(|value| !value.is_empty()) {
+        return PathBuf::from(session_dir).join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
+    }
+
+    std::env::temp_dir()
+        .join(GEMINI_RUNTIME_ROOT_DIR)
+        .join(session_id)
 }
 
 fn seed_runtime_home(runtime_home: &Path, source_home: Option<&Path>) -> Result<()> {

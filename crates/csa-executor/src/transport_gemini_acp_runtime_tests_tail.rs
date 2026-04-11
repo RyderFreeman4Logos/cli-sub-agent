@@ -194,6 +194,46 @@ fn prepare_gemini_acp_runtime_pins_mise_dirs_under_runtime_home() {
 }
 
 #[test]
+fn prepare_gemini_acp_runtime_prefers_session_dir_runtime_home() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_dir = temp.path().join("sessions").join("01TESTSESSIONDIR");
+    let source_home = temp.path().join("source-home");
+    fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "CSA_SESSION_DIR".to_string(),
+        session_dir.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "TMPDIR".to_string(),
+        temp.path()
+            .join("read-only-tmp")
+            .to_string_lossy()
+            .into_owned(),
+    );
+
+    prepare_gemini_acp_runtime(&mut env, "01TESTSESSIONDIR", &["--acp".to_string()])
+        .expect("prepare runtime");
+
+    let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
+    assert_eq!(
+        runtime_home,
+        session_dir.join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH),
+        "runtime home should live under the writable CSA session dir instead of ambient TMPDIR"
+    );
+    assert!(
+        runtime_home.join(".gemini").is_dir(),
+        "runtime seed should succeed under session-owned runtime home"
+    );
+}
+
+#[test]
 fn prepare_gemini_acp_runtime_pins_non_shim_runtime_bins_on_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let session_id = "01TESTGEMINIPATHPINNING0000000001";
@@ -406,6 +446,18 @@ fn gemini_runtime_home_from_env_rejects_regular_home_paths() {
     );
 
     assert_eq!(gemini_runtime_home_from_env(&env), None);
+}
+
+#[test]
+fn gemini_runtime_home_from_env_accepts_session_dir_runtime_home() {
+    let runtime_home = PathBuf::from("/tmp/csa-sessions/01TEST/runtime/gemini-home");
+    let mut env = HashMap::new();
+    env.insert(
+        "GEMINI_CLI_HOME".to_string(),
+        runtime_home.to_string_lossy().into_owned(),
+    );
+
+    assert_eq!(gemini_runtime_home_from_env(&env), Some(runtime_home));
 }
 
 fn read_selected_auth_type(settings_path: &Path) -> Option<String> {
