@@ -11,6 +11,20 @@ const SNAPSHOT_FILE: &str = ".liveness.snapshot";
 
 pub const DEFAULT_LIVENESS_DEAD_SECS: u64 = 600;
 
+#[derive(Debug, Clone, Copy)]
+struct DaemonPidRecord {
+    pid: u32,
+    start_time_ticks: Option<u64>,
+}
+
+#[cfg(unix)]
+#[derive(Debug, Clone, Copy)]
+struct ProcessMetadata {
+    state: char,
+    pgrp: i32,
+    start_time_ticks: u64,
+}
+
 /// Fine-grained liveness signals used by idle-timeout watchdog logic.
 ///
 /// `pid_alive`/`session_write` indicate coarse liveness, while
@@ -57,9 +71,10 @@ impl ToolLiveness {
     pub(crate) fn probe(session_dir: &Path) -> LivenessSignals {
         let now = SystemTime::now();
         let mut snapshot = load_snapshot(session_dir);
+        let daemon_pid_alive = Self::daemon_pid_is_alive(session_dir);
 
         let signals = LivenessSignals {
-            pid_alive: has_live_pid_signal(session_dir),
+            pid_alive: has_live_pid_signal(session_dir) || daemon_pid_alive,
             output_growth: has_output_growth_signal(session_dir, &mut snapshot),
             session_write: has_recent_session_write_signal(session_dir, now),
             stderr_activity: has_stderr_activity_signal(session_dir, &mut snapshot),
@@ -85,6 +100,49 @@ impl ToolLiveness {
     /// Whether a session still has a live process associated with it.
     pub fn has_live_process(session_dir: &Path) -> bool {
         Self::live_process_pid(session_dir).is_some()
+    }
+
+    /// Whether the recorded daemon PID still blocks session finalization.
+    ///
+    /// For modern `daemon.pid` records this verifies the same process instance
+    /// via PID + start-time; for legacy single-field records it only falls back
+    /// to signals we can still tie to this session (context-matched daemon PID
+    /// or a zombie daemon leader whose process group still has live members).
+    pub fn daemon_pid_is_alive(session_dir: &Path) -> bool {
+        Self::daemon_pid_for_signal(session_dir).is_some()
+    }
+
+    /// Return the recorded daemon PID only when it still matches a session-
+    /// relevant live process or process group.
+    pub fn daemon_pid_for_signal(session_dir: &Path) -> Option<u32> {
+        let record = read_daemon_pid_record(session_dir)?;
+
+        #[cfg(unix)]
+        {
+            match (record.start_time_ticks, read_process_metadata(record.pid)) {
+                (Some(expected), Some(metadata)) if metadata.start_time_ticks != expected => None,
+                (Some(_), Some(ProcessMetadata { state: 'X', .. })) => None,
+                (Some(_), Some(ProcessMetadata { state: 'Z', .. }))
+                    if has_live_process_group_member(record.pid) =>
+                {
+                    Some(record.pid)
+                }
+                (Some(_), Some(_)) => Some(record.pid),
+                (Some(_), None) if is_process_alive(record.pid) => Some(record.pid),
+                (None, Some(ProcessMetadata { state: 'Z', .. }))
+                    if has_live_process_group_member(record.pid) =>
+                {
+                    Some(record.pid)
+                }
+                (None, _) if find_session_pid(session_dir) == Some(record.pid) => Some(record.pid),
+                _ => None,
+            }
+        }
+
+        #[cfg(not(unix))]
+        {
+            Some(record.pid)
+        }
     }
 
     /// Zero-cost observation of whether the tool process is actively working.
@@ -160,18 +218,9 @@ fn is_reconciler_artifact(path: &Path) -> bool {
 fn is_pid_working(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        let stat_path = format!("/proc/{pid}/stat");
-        let Ok(content) = fs::read_to_string(&stat_path) else {
-            // /proc not available; fall back to kill(pid, 0) existence check.
+        let Some(ProcessMetadata { state, .. }) = read_process_metadata(pid) else {
             return is_process_alive(pid);
         };
-        // Format: "pid (comm) state ..."
-        // The comm field can contain spaces and parens, so find the last ')'.
-        let Some(close_paren) = content.rfind(')') else {
-            return is_process_alive(pid);
-        };
-        let after_comm = &content[close_paren + 1..];
-        let state = after_comm.trim_start().chars().next().unwrap_or('X');
         matches!(state, 'R' | 'S' | 'D')
     }
     #[cfg(not(unix))]
@@ -179,6 +228,52 @@ fn is_pid_working(pid: u32) -> bool {
         let _ = pid;
         false
     }
+}
+
+#[cfg(unix)]
+fn read_process_metadata(pid: u32) -> Option<ProcessMetadata> {
+    let stat_path = format!("/proc/{pid}/stat");
+    let content = fs::read_to_string(stat_path).ok()?;
+    let close_paren = content.rfind(')')?;
+    let after_comm = &content[close_paren + 1..];
+    let mut parts = after_comm.split_whitespace();
+    let state = parts.next()?.chars().next()?;
+    let _ppid = parts.next()?;
+    let pgrp = parts.next()?.parse::<i32>().ok()?;
+    for _ in 0..16 {
+        parts.next()?;
+    }
+    let start_time_ticks = parts.next()?.parse::<u64>().ok()?;
+    Some(ProcessMetadata {
+        state,
+        pgrp,
+        start_time_ticks,
+    })
+}
+
+#[cfg(unix)]
+fn has_live_process_group_member(leader_pid: u32) -> bool {
+    let Ok(entries) = fs::read_dir("/proc") else {
+        return false;
+    };
+    let target_pgrp = leader_pid as i32;
+
+    for entry in entries.flatten() {
+        let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            continue;
+        };
+        let Ok(pid) = name.parse::<u32>() else {
+            continue;
+        };
+        let Some(ProcessMetadata { state, pgrp, .. }) = read_process_metadata(pid) else {
+            continue;
+        };
+        if pgrp == target_pgrp && !matches!(state, 'Z' | 'X') {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn has_live_pid_signal(session_dir: &Path) -> bool {
@@ -228,9 +323,19 @@ fn pid_matches_session_context(
 }
 
 fn read_daemon_pid(session_dir: &Path) -> Option<u32> {
+    read_daemon_pid_record(session_dir).map(|record| record.pid)
+}
+
+fn read_daemon_pid_record(session_dir: &Path) -> Option<DaemonPidRecord> {
     let pid_path = session_dir.join(DAEMON_PID_FILE);
     let content = fs::read_to_string(&pid_path).ok()?;
-    content.trim().parse::<u32>().ok()
+    let mut parts = content.split_whitespace();
+    let pid = parts.next()?.parse::<u32>().ok()?;
+    let start_time_ticks = parts.next().and_then(|value| value.parse::<u64>().ok());
+    Some(DaemonPidRecord {
+        pid,
+        start_time_ticks,
+    })
 }
 
 fn has_output_growth_signal(session_dir: &Path, snapshot: &mut LivenessSnapshot) -> bool {
@@ -388,6 +493,12 @@ fn is_process_alive(pid: u32) -> bool {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
+    fn daemon_pid_record(pid: u32) -> String {
+        let metadata = read_process_metadata(pid).expect("process metadata");
+        format!("{pid} {}\n", metadata.start_time_ticks)
+    }
+
     #[test]
     fn lock_file_is_recent_false_when_stale() {
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -464,6 +575,56 @@ mod tests {
         child.kill().ok();
         child.wait().ok();
         assert_eq!(found_pid, Some(pid));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_pid_is_alive_detects_live_pid_without_context_match() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(tmp.path().join(DAEMON_PID_FILE), daemon_pid_record(pid))
+            .expect("write daemon pid");
+
+        assert!(
+            ToolLiveness::daemon_pid_is_alive(tmp.path()),
+            "raw daemon.pid should count as alive even when cmdline matching fails"
+        );
+        assert!(
+            ToolLiveness::is_alive(tmp.path()),
+            "coarse liveness should stay true while daemon.pid still exists"
+        );
+        assert!(
+            !ToolLiveness::has_live_process(tmp.path()),
+            "context-matched process detection should remain false for this fixture"
+        );
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn daemon_pid_is_alive_rejects_start_time_mismatch() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut child = std::process::Command::new("sleep")
+            .arg("60")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(tmp.path().join(DAEMON_PID_FILE), format!("{pid} 0\n"))
+            .expect("write daemon pid");
+
+        assert!(
+            !ToolLiveness::daemon_pid_is_alive(tmp.path()),
+            "start time mismatch must prevent unrelated PID reuse from blocking liveness"
+        );
+
+        child.kill().ok();
+        child.wait().ok();
     }
 
     #[test]

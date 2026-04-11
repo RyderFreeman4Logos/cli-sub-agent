@@ -46,6 +46,11 @@ fn is_pid_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
 }
 
+fn session_has_terminal_process(session_dir: &Path) -> bool {
+    csa_process::ToolLiveness::has_live_process(session_dir)
+        || csa_process::ToolLiveness::daemon_pid_is_alive(session_dir)
+}
+
 fn attach_primary_output_for_session(session_dir: &Path) -> AttachPrimaryOutput {
     let metadata_path = session_dir.join(csa_session::metadata::METADATA_FILE_NAME);
     let Ok(contents) = fs::read_to_string(metadata_path) else {
@@ -71,7 +76,8 @@ fn read_daemon_pid(session_dir: &std::path::Path) -> Option<u32> {
     // Primary: daemon.pid file (written by spawn_daemon since v0.1.198).
     let pid_path = session_dir.join("daemon.pid");
     if let Ok(content) = fs::read_to_string(&pid_path)
-        && let Ok(pid) = content.trim().parse()
+        && let Some(pid_str) = content.split_whitespace().next()
+        && let Ok(pid) = pid_str.parse()
     {
         return Some(pid);
     }
@@ -176,7 +182,7 @@ where
 
     loop {
         if let Some(completion) = load_daemon_completion_packet(&session_dir)?
-            && !csa_process::ToolLiveness::has_live_process(&session_dir)
+            && !session_has_terminal_process(&session_dir)
         {
             let _ = refresh_result_for_wait(
                 effective_root,
@@ -243,7 +249,7 @@ where
             return Ok(result.exit_code);
         }
 
-        if !csa_process::ToolLiveness::has_live_process(&session_dir) {
+        if !session_has_terminal_process(&session_dir) {
             if let Some(result) = load_completed_daemon_result_adaptive(
                 effective_root,
                 &resolved.session_id,
@@ -364,7 +370,7 @@ fn load_completed_daemon_result(
     session_id: &str,
     session_dir: &std::path::Path,
 ) -> Result<Option<csa_session::SessionResult>> {
-    let daemon_alive_at_refresh_start = csa_process::ToolLiveness::has_live_process(session_dir);
+    let daemon_alive_at_refresh_start = session_has_terminal_process(session_dir);
     let result =
         match crate::session_observability::refresh_and_repair_result(project_root, session_id) {
             Ok(Some(result)) => result,
@@ -380,7 +386,7 @@ fn load_completed_daemon_result(
             Err(err) => return Err(err),
         };
 
-    if csa_process::ToolLiveness::has_live_process(session_dir) {
+    if session_has_terminal_process(session_dir) {
         return Ok(None);
     }
 
@@ -410,8 +416,7 @@ fn load_completed_daemon_result_adaptive(
     is_cross_project: bool,
 ) -> Result<Option<csa_session::SessionResult>> {
     if is_cross_project {
-        let daemon_alive_at_refresh_start =
-            csa_process::ToolLiveness::has_live_process(session_dir);
+        let daemon_alive_at_refresh_start = session_has_terminal_process(session_dir);
         let result = match crate::session_observability::refresh_and_repair_result_from_dir(
             session_dir,
         ) {
@@ -427,7 +432,7 @@ fn load_completed_daemon_result_adaptive(
             }
             Err(err) => return Err(err),
         };
-        if csa_process::ToolLiveness::has_live_process(session_dir) {
+        if session_has_terminal_process(session_dir) {
             return Ok(None);
         }
         Ok(Some(result))
@@ -620,7 +625,7 @@ pub(crate) fn handle_session_attach(
             return Ok(completion.exit_code);
         }
 
-        if result_path.exists() && !csa_process::ToolLiveness::has_live_process(&session_dir) {
+        if result_path.exists() && !session_has_terminal_process(&session_dir) {
             let exit_code = fs::read_to_string(&result_path)
                 .ok()
                 .and_then(|s| toml::from_str::<csa_session::result::SessionResult>(&s).ok())
@@ -672,12 +677,20 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
     let resolved = resolve_session_prefix_with_global_fallback(&project_root, &session)?;
     let session_dir = resolved.sessions_dir.join(&resolved.session_id);
 
-    let pid = read_daemon_pid(&session_dir).ok_or_else(|| {
-        anyhow::anyhow!(
+    let pid = if let Some(pid) = csa_process::ToolLiveness::daemon_pid_for_signal(&session_dir) {
+        pid
+    } else if let Some(stale_pid) = read_daemon_pid(&session_dir) {
+        anyhow::bail!(
+            "Stored daemon PID {} for session {} no longer matches a live session process; refusing to signal a potentially reused PID",
+            stale_pid,
+            resolved.session_id,
+        );
+    } else {
+        anyhow::bail!(
             "No daemon PID found for session {} — may not be a daemon session",
             resolved.session_id,
-        )
-    })?;
+        );
+    };
 
     if pid <= 1 {
         anyhow::bail!(
@@ -743,46 +756,5 @@ pub(crate) fn handle_session_kill(session: String, cd: Option<String>) -> Result
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn attach_primary_output_prefers_output_log_for_acp_tools() {
-        let td = tempfile::tempdir().expect("tempdir");
-        let metadata = csa_session::metadata::SessionMetadata {
-            tool: "codex".to_string(),
-            tool_locked: true,
-        };
-        let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
-        std::fs::write(
-            td.path().join(csa_session::metadata::METADATA_FILE_NAME),
-            metadata_toml,
-        )
-        .expect("write metadata");
-
-        assert_eq!(
-            attach_primary_output_for_session(td.path()),
-            AttachPrimaryOutput::OutputLog
-        );
-    }
-
-    #[test]
-    fn attach_primary_output_keeps_stdout_for_legacy_tools() {
-        let td = tempfile::tempdir().expect("tempdir");
-        let metadata = csa_session::metadata::SessionMetadata {
-            tool: "opencode".to_string(),
-            tool_locked: true,
-        };
-        let metadata_toml = toml::to_string_pretty(&metadata).expect("metadata toml");
-        std::fs::write(
-            td.path().join(csa_session::metadata::METADATA_FILE_NAME),
-            metadata_toml,
-        )
-        .expect("write metadata");
-
-        assert_eq!(
-            attach_primary_output_for_session(td.path()),
-            AttachPrimaryOutput::StdoutLog
-        );
-    }
-}
+#[path = "session_cmds_daemon_tests.rs"]
+mod tests;

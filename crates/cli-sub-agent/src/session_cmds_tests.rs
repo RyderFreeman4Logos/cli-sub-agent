@@ -3,8 +3,8 @@ use super::{
     DeadActiveSessionReconciliation, display_acp_events, display_daemon_spool_logs,
     display_log_files, ensure_terminal_result_for_dead_active_session,
     ensure_terminal_result_for_dead_active_session_with_before_write, handle_session_is_alive,
-    handle_session_wait, print_content_with_tail, select_sessions_for_list, session_to_json,
-    status_from_phase_and_result, truncate_with_ellipsis,
+    handle_session_kill, handle_session_wait, print_content_with_tail, select_sessions_for_list,
+    session_to_json, status_from_phase_and_result, truncate_with_ellipsis,
 };
 use crate::cli::{Cli, Commands, SessionCommands};
 use crate::session_cmds_daemon::{
@@ -791,3 +791,6 @@ fn session_to_json_includes_depth_and_parent() {
 
 #[path = "session_cmds_tests_tail.rs"]
 mod tail_tests;
+
+#[path = "session_cmds_tests_daemon_pid_tail.rs"]
+mod daemon_pid_tail_tests;
