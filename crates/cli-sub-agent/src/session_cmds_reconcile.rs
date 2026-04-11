@@ -3,6 +3,8 @@ use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
@@ -361,6 +363,19 @@ fn persist_session_state_atomically(session_dir: &Path, session: &MetaSessionSta
             state_path.display()
         )
     })?;
+    #[cfg(unix)]
+    {
+        let perm = std::fs::Permissions::from_mode(0o644);
+        temp_file
+            .as_file_mut()
+            .set_permissions(perm)
+            .with_context(|| {
+                format!(
+                    "Failed to set permissions for temporary state file: {}",
+                    state_path.display()
+                )
+            })?;
+    }
     temp_file.persist(&state_path).map_err(|err| {
         anyhow!(
             "Failed to persist state file {}: {}",
@@ -421,6 +436,19 @@ where
             "Failed to write or sync synthetic result for {}: {err}",
             result_path.display()
         ));
+    }
+    #[cfg(unix)]
+    {
+        let perm = std::fs::Permissions::from_mode(0o644);
+        temp_file
+            .as_file_mut()
+            .set_permissions(perm)
+            .with_context(|| {
+                format!(
+                    "Failed to set permissions for temporary synthetic result: {}",
+                    result_path.display()
+                )
+            })?;
     }
     match fs::hard_link(temp_file.path(), result_path) {
         Ok(()) => Ok(SyntheticResultPersistOutcome::Created),

@@ -422,6 +422,15 @@ fn extract_pid_handles_complex_json_correctly() {
     )
     .unwrap();
 
+    // Age the lock file to be stale (>60s) so context check is required for liveness.
+    let file = std::fs::File::options()
+        .write(true)
+        .open(&lock_path)
+        .unwrap();
+    let stale_time = std::time::SystemTime::now() - std::time::Duration::from_secs(70);
+    file.set_times(std::fs::FileTimes::new().set_modified(stale_time))
+        .unwrap();
+
     let reconciled =
         ensure_terminal_result_for_dead_active_session(project, &session_id, "session list")
             .unwrap();

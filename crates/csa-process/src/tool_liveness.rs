@@ -132,11 +132,7 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
         let Some(pid) = extract_pid(&content) else {
             continue;
         };
-        let stem = path.file_stem().and_then(|stem| stem.to_str());
-        if stem.is_some_and(|s| s == "reconcile") {
-            continue;
-        }
-        let tool_name = stem;
+        let tool_name = path.file_stem().and_then(|stem| stem.to_str());
         let recent = lock_file_is_recent(&path, SystemTime::now());
         if pid_matches_session_context(pid, tool_name, session_dir, Some(recent)) {
             return Some(pid);
@@ -221,7 +217,7 @@ fn pid_matches_session_context(
         return false;
     }
 
-    process_matches_session_context(pid, tool_name, session_dir) && recent_file.unwrap_or(true)
+    process_matches_session_context(pid, tool_name, session_dir) || recent_file.unwrap_or(false)
 }
 
 fn read_daemon_pid(session_dir: &Path) -> Option<u32> {
@@ -485,5 +481,49 @@ mod tests {
 
         let snapshot = fs::read_to_string(tmp.path().join(SNAPSHOT_FILE)).expect("read snapshot");
         assert!(snapshot.contains("observed_spool_bytes_written=4096"));
+    }
+
+    #[test]
+    fn pid_matches_session_context_returns_true_for_recent_file_even_without_context_match() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pid = std::process::id();
+        // Since we can't easily fake process_matches_session_context returning false on Linux
+        // (unless we use a pid that doesn't match), we use a pid that doesn't match.
+        // On Linux, process_matches_session_context(pid, "nonexistent", tmp.path()) should be false.
+
+        // This exercises Patch 1: (context || recent)
+        assert!(pid_matches_session_context(
+            pid,
+            Some("nonexistent"),
+            tmp.path(),
+            Some(true)
+        ));
+    }
+
+    #[test]
+    fn find_session_pid_ignores_reconcile_lock_in_parent_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let locks_dir = tmp.path().join("locks");
+        fs::create_dir_all(&locks_dir).expect("create locks dir");
+
+        // Put a fake reconcile lock in the PARENT session_dir
+        let reconcile_lock = tmp.path().join(".reconcile.lock");
+        fs::write(&reconcile_lock, "{\"pid\": 12345}").expect("write lock");
+
+        // Put a real tool lock in locks/
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60 # tool")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {pid}}}")).expect("write lock");
+
+        let found_pid = find_session_pid(tmp.path());
+        child.kill().ok();
+        child.wait().ok();
+
+        // Should find tool PID, not reconcile PID (12345)
+        assert_eq!(found_pid, Some(pid));
     }
 }
