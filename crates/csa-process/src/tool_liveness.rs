@@ -292,23 +292,41 @@ fn lock_file_is_recent(lock_path: &Path, now: SystemTime) -> bool {
 }
 
 fn process_matches_session_context(pid: u32, tool_name: Option<&str>, session_dir: &Path) -> bool {
-    #[cfg(unix)]
-    {
-        let cmdline_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
-        let Ok(raw_cmdline) = fs::read(cmdline_path) else {
-            return false;
-        };
-        let cmdline = String::from_utf8_lossy(&raw_cmdline).replace('\0', " ");
-        let session_id = session_dir.file_name().and_then(|name| name.to_str());
+    let Some(cmdline) = read_process_command_line(pid) else {
+        return false;
+    };
+    let session_id = session_dir.file_name().and_then(|name| name.to_str());
 
-        tool_name.is_some_and(|tool| cmdline.contains(tool))
-            || session_id.is_some_and(|id| cmdline.contains(id))
+    tool_name.is_some_and(|tool| cmdline.contains(tool))
+        || session_id.is_some_and(|id| cmdline.contains(id))
+}
+
+#[cfg(target_os = "linux")]
+fn read_process_command_line(pid: u32) -> Option<String> {
+    let cmdline_path = PathBuf::from(format!("/proc/{pid}/cmdline"));
+    let raw_cmdline = fs::read(cmdline_path).ok()?;
+    Some(String::from_utf8_lossy(&raw_cmdline).replace('\0', " "))
+}
+
+#[cfg(target_os = "macos")]
+fn read_process_command_line(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("/bin/ps")
+        .args(["-o", "command=", "-p", &pid.to_string()])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = (pid, lock_path, session_dir);
-        false
+    let command = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if command.is_empty() {
+        return None;
     }
+    Some(command)
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn read_process_command_line(_pid: u32) -> Option<String> {
+    None
 }
 
 fn pid_matches_session_context(
@@ -602,6 +620,33 @@ mod tests {
         assert!(
             !ToolLiveness::has_live_process(tmp.path()),
             "context-matched process detection should remain false for this fixture"
+        );
+
+        child.kill().ok();
+        child.wait().ok();
+    }
+
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[test]
+    fn daemon_pid_is_alive_accepts_legacy_pid_with_session_id_context() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let session_dir = tmp.path().join("01TESTSESSIONCONTEXT0000000001");
+        fs::create_dir_all(&session_dir).expect("create session dir");
+        let mut child = std::process::Command::new("sh")
+            .args([
+                "-c",
+                "sleep 60",
+                "csa-daemon",
+                "01TESTSESSIONCONTEXT0000000001",
+            ])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(session_dir.join(DAEMON_PID_FILE), format!("{pid}\n")).expect("write daemon pid");
+
+        assert!(
+            ToolLiveness::daemon_pid_is_alive(&session_dir),
+            "legacy bare daemon.pid should stay alive when the process command still carries the session context"
         );
 
         child.kill().ok();
