@@ -904,7 +904,7 @@ FALLBACK_REVIEW_HAS_ISSUES=false
 echo "CSA_VAR:FALLBACK_REVIEW_HAS_ISSUES=$FALLBACK_REVIEW_HAS_ISSUES"
 ```'''
 on_fail = "abort"
-condition = "(${CLOUD_BOT}) && (${BOT_UNAVAILABLE})"
+condition = "(${CLOUD_BOT}) && ((${BOT_UNAVAILABLE}) && (${FALLBACK_REVIEW_HAS_ISSUES}))"
 
 [[workflow.steps]]
 id = 9

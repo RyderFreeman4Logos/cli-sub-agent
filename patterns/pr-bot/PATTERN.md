@@ -572,7 +572,7 @@ user must:
 
 ## ENDIF
 
-## IF ${BOT_UNAVAILABLE}
+## IF ${BOT_UNAVAILABLE} && ${FALLBACK_REVIEW_HAS_ISSUES}
 
 ## Step 6-fix: Fallback Review Fix Cycle (Bot Timeout Path)
 
