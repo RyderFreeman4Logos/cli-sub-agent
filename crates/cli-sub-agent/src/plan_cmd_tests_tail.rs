@@ -322,24 +322,6 @@ async fn execute_plan_stops_for_await_user() {
     assert!(!tmp.path().join("should-not-run").exists());
 }
 
-#[test]
-fn pr_bot_workflow_is_v1_loop_free() {
-    let workflow_path = workspace_root().join("patterns/pr-bot/workflow.toml");
-    let workflow = std::fs::read_to_string(&workflow_path).unwrap();
-    let plan = plan_from_toml(&workflow).unwrap();
-
-    let loop_steps: Vec<usize> = plan
-        .steps
-        .iter()
-        .filter_map(|step| step.loop_var.as_ref().map(|_| step.id))
-        .collect();
-
-    assert!(
-        loop_steps.is_empty(),
-        "pr-bot must remain v1-compatible; loop_var found on steps {loop_steps:?}"
-    );
-}
-
 fn install_fake_gh(bin_dir: &Path) -> PathBuf {
     let capture_path = bin_dir.join("gh-capture.md");
     let gh_path = bin_dir.join("gh");

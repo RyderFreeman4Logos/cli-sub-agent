@@ -53,6 +53,7 @@ pub(super) async fn execute_bash_step(
     prompt: &str,
     env_vars: &HashMap<String, String>,
     project_root: &Path,
+    workflow_path: &Path,
 ) -> Result<StepExecutionOutcome> {
     let script = extract_bash_code_block(prompt).unwrap_or(prompt);
     info!("{} - Executing bash: {}", label, truncate(script, 80));
@@ -60,7 +61,7 @@ pub(super) async fn execute_bash_step(
         super::validate_variable_name(key)?;
     }
 
-    let output = match spawn_bash(script, env_vars, project_root).await {
+    let output = match spawn_bash(script, env_vars, project_root, workflow_path).await {
         Ok(output) => output,
         Err(spawn_error) if is_argument_list_too_long(&spawn_error) => {
             let reduced_env = reduce_bash_env_for_spawn(script, env_vars);
@@ -79,7 +80,7 @@ pub(super) async fn execute_bash_step(
                 "{} - bash spawn hit E2BIG; retrying with reduced STEP_* env (dropped {} vars / {} bytes)",
                 label, dropped_vars, dropped_bytes
             );
-            spawn_bash(script, &reduced_env, project_root)
+            spawn_bash(script, &reduced_env, project_root, workflow_path)
                 .await
                 .context("Failed to spawn bash after reducing STEP_* environment")?
         }
@@ -109,11 +110,16 @@ async fn spawn_bash(
     script: &str,
     env_vars: &HashMap<String, String>,
     project_root: &Path,
+    workflow_path: &Path,
 ) -> std::io::Result<std::process::Output> {
+    let workflow_dir = workflow_path.parent().unwrap_or(project_root);
     tokio::process::Command::new("bash")
         .arg("-c")
         .arg(script)
         .envs(env_vars.iter())
+        .env("CSA_PROJECT_ROOT", project_root)
+        .env("CSA_WORKFLOW_PATH", workflow_path)
+        .env("CSA_WORKFLOW_DIR", workflow_dir)
         .env("CSA_DEPTH", next_csa_depth())
         .env("CSA_INTERNAL_INVOCATION", "1")
         .current_dir(project_root)

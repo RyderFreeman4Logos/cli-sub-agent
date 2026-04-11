@@ -677,6 +677,10 @@ mod tests;
 mod tests_tail;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_pr_bot.rs"]
+mod tests_pr_bot;
+
+#[cfg(test)]
 #[path = "plan_cmd_tests_chunked.rs"]
 mod tests_chunked;
 
