@@ -455,6 +455,7 @@ impl AcpTransport {
         if self.tool_name == "gemini-cli" {
             let launch = prepare_gemini_acp_runtime(
                 &mut env,
+                Some(working_dir.as_path()),
                 session_dir.as_deref(),
                 &session.meta_session_id,
                 &acp_args,

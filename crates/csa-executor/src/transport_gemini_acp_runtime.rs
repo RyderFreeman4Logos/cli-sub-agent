@@ -40,6 +40,7 @@ pub(crate) struct GeminiAcpLaunch {
 
 pub(crate) fn prepare_gemini_acp_runtime(
     env: &mut HashMap<String, String>,
+    project_dir: Option<&Path>,
     session_dir: Option<&Path>,
     session_id: &str,
     base_args: &[String],
@@ -93,7 +94,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .map(OsStr::new)
         .map(std::ffi::OsString::from)
         .or_else(|| std::env::var_os("PATH"));
-    if let Some(path) = pin_non_shim_runtime_path(inherited_path.as_deref(), env)? {
+    if let Some(path) = pin_non_shim_runtime_path(inherited_path.as_deref(), env, project_dir)? {
         env.insert("PATH".to_string(), path);
     }
     for key in GEMINI_RUNTIME_SHIM_ENV_VARS {
@@ -106,7 +107,9 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .map(std::ffi::OsString::from)
         .or(inherited_path);
 
-    if let Some(launch) = resolve_non_shim_gemini_launch(path_env.as_deref(), env, base_args)? {
+    if let Some(launch) =
+        resolve_non_shim_gemini_launch(path_env.as_deref(), env, project_dir, base_args)?
+    {
         debug!(
             command = %launch.command,
             runtime_home = %runtime_home.display(),
@@ -477,6 +480,7 @@ fn mirror_directory_link(source: &Path, target: &Path) {
 fn pin_non_shim_runtime_path(
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<String>> {
     let Some(path_env) = path_env else {
         return Ok(None);
@@ -485,7 +489,7 @@ fn pin_non_shim_runtime_path(
     let original_entries: Vec<PathBuf> = std::env::split_paths(path_env).collect();
     let mut pinned_dirs = Vec::new();
     for binary in GEMINI_RUNTIME_PINNED_PATH_BINARIES {
-        if let Some(dir) = find_direct_tool_dir(binary, Some(path_env), env)?
+        if let Some(dir) = find_direct_tool_dir(binary, Some(path_env), env, project_dir)?
             && !pinned_dirs.contains(&dir)
         {
             pinned_dirs.push(dir);
@@ -512,8 +516,9 @@ fn find_direct_tool_dir(
     name: &str,
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
-    Ok(find_direct_tool_path(name, path_env, env)?
+    Ok(find_direct_tool_path(name, path_env, env, project_dir)?
         .and_then(|path| path.parent().map(PathBuf::from)))
 }
 
@@ -536,12 +541,13 @@ fn find_direct_tool_path(
     name: &str,
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
     if let Some(candidate) = find_non_mise_path_entry(name, path_env) {
         return Ok(Some(candidate));
     }
 
-    resolve_mise_which_path(name, path_env, env)
+    resolve_mise_which_path(name, path_env, env, project_dir)
 }
 
 fn find_non_mise_path_entry(name: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
@@ -571,19 +577,17 @@ fn resolve_mise_which_path(
     name: &str,
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
     let Some(mise_path) = find_path_entry("mise", path_env) else {
         return Ok(None);
     };
 
     let mut command = Command::new(&mise_path);
-    let tmpdir = env
-        .get("TMPDIR")
-        .filter(|value| !value.is_empty())
-        .cloned()
-        .or_else(|| std::env::var("TMPDIR").ok())
-        .unwrap_or_else(|| DEFAULT_SANDBOX_TMPDIR.to_string());
-    command.arg("-C").arg(&tmpdir).arg("which").arg(name);
+    if let Some(project_dir) = project_dir {
+        command.arg("-C").arg(project_dir);
+    }
+    command.arg("which").arg(name);
     for key in [
         "HOME",
         "PATH",
@@ -628,9 +632,11 @@ fn resolve_mise_which_path(
 fn resolve_non_shim_gemini_launch(
     path_env: Option<&OsStr>,
     env: &HashMap<String, String>,
+    project_dir: Option<&Path>,
     base_args: &[String],
 ) -> Result<Option<GeminiAcpLaunch>> {
-    let Some(gemini_candidate) = find_direct_tool_path("gemini", path_env, env)? else {
+    let Some(gemini_candidate) = find_direct_tool_path("gemini", path_env, env, project_dir)?
+    else {
         return Ok(None);
     };
 
@@ -639,7 +645,8 @@ fn resolve_non_shim_gemini_launch(
         .is_some_and(|extension| extension == "js")
         || is_node_script(&gemini_candidate)
     {
-        let Some(node_candidate) = find_direct_tool_path("node", path_env, env)? else {
+        let Some(node_candidate) = find_direct_tool_path("node", path_env, env, project_dir)?
+        else {
             return Ok(None);
         };
 
