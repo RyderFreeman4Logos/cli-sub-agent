@@ -402,6 +402,11 @@ summary = "ok"
             .stderr_output
             .contains("contract warning: output/summary path mismatch")
     );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(user_result_path.to_string_lossy().as_ref()),
+        "accepted user-result fallback must become the final output line"
+    );
 }
 
 #[test]

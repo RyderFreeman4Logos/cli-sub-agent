@@ -74,6 +74,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         }
         result.stderr_output.push_str(&warning);
         result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_contract_output_path);
         return;
     }
 
@@ -92,6 +93,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         }
         result.stderr_output.push_str(&warning);
         result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_user_result_path);
         return;
     }
 
@@ -114,6 +116,7 @@ pub(crate) fn enforce_result_toml_path_contract(
         }
         result.stderr_output.push_str(&warning);
         result.stderr_output.push('\n');
+        rewrite_contract_output_last_line(result, &expected_path);
         return;
     }
 
@@ -144,6 +147,14 @@ pub(crate) fn enforce_result_toml_path_contract(
     result.stderr_output.push('\n');
     result.summary = reason;
     result.exit_code = 1;
+}
+
+fn rewrite_contract_output_last_line(result: &mut ExecutionResult, accepted_path: &Path) {
+    if !result.output.is_empty() && !result.output.ends_with('\n') {
+        result.output.push('\n');
+    }
+    result.output.push_str(&accepted_path.to_string_lossy());
+    result.output.push('\n');
 }
 
 fn prompt_requires_result_toml_path(prompt: &str) -> bool {

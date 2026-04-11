@@ -75,6 +75,7 @@ fn result_toml_path_contract_accepts_output_result_artifact_path() {
 fn result_toml_path_contract_accepts_verified_session_result_fallback() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");
+    let path_str = result_path.display().to_string();
     fs::write(
         &result_path,
         "status = \"success\"\nsummary = \"task complete\"\n",
@@ -107,6 +108,11 @@ fn result_toml_path_contract_accepts_verified_session_result_fallback() {
         result
             .stderr_output
             .contains("contract warning: output/summary path not found")
+    );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(path_str.as_str()),
+        "accepted fallback must become the last output line so managers consume the verified path"
     );
 }
 
@@ -174,7 +180,8 @@ fn result_toml_path_contract_handles_verbose_multiline_output() {
 #[test]
 fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_empty() {
     let temp = tempfile::tempdir().unwrap();
-    fs::write(temp.path().join("result.toml"), "status = \"success\"\n").unwrap();
+    let result_path = temp.path().join("result.toml");
+    fs::write(&result_path, "status = \"success\"\n").unwrap();
     let mut result = ExecutionResult {
         output: " \n\t\n".to_string(),
         stderr_output: String::new(),
@@ -198,6 +205,11 @@ fn result_toml_path_contract_accepts_disk_fallback_when_output_and_summary_are_e
         result
             .stderr_output
             .contains("contract warning: output/summary path not found")
+    );
+    assert_eq!(
+        result.output.lines().last(),
+        Some(result_path.to_string_lossy().as_ref()),
+        "accepted disk fallback must surface the verified path as the final output line"
     );
 }
 
@@ -294,6 +306,48 @@ fn sa_skill_docs_reference_contract_result_path_and_plain_git_commit() {
         sa_skill.contains("plain `git commit`"),
         "SA skill should document plain git commit for child-session commits"
     );
+}
+
+#[test]
+fn sa_pattern_and_workflow_dispatch_templates_propagate_sa_mode() {
+    let pattern = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/PATTERN.md"
+    ));
+    let workflow = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/workflow.toml"
+    ));
+
+    for expected in [
+        "SID=$(csa run --sa-mode true --prompt-file \"${PROMPT_FILE}\")",
+        "SID=$(csa run --sa-mode true --session \"${SESSION_ID}\" --prompt-file \"${IMPL_FILE}\")",
+        "SID=$(csa run --sa-mode true --session \"${SESSION_ID}\" --prompt-file \"${RESUME_FILE}\")",
+    ] {
+        assert!(
+            pattern.contains(expected),
+            "SA pattern must propagate --sa-mode true in dispatch template: {expected}"
+        );
+        assert!(
+            workflow.contains(expected),
+            "SA workflow must propagate --sa-mode true in dispatch template: {expected}"
+        );
+    }
+
+    for legacy in [
+        "SID=$(csa run --prompt-file \"${PROMPT_FILE}\")",
+        "SID=$(csa run --session \"${SESSION_ID}\" --prompt-file \"${IMPL_FILE}\")",
+        "SID=$(csa run --session \"${SESSION_ID}\" --prompt-file \"${RESUME_FILE}\")",
+    ] {
+        assert!(
+            !pattern.contains(legacy),
+            "legacy SA pattern dispatch without --sa-mode true must be removed: {legacy}"
+        );
+        assert!(
+            !workflow.contains(legacy),
+            "legacy SA workflow dispatch without --sa-mode true must be removed: {legacy}"
+        );
+    }
 }
 
 #[test]

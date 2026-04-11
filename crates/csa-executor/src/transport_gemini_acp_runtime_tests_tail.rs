@@ -426,6 +426,74 @@ fn prepare_gemini_acp_runtime_resolves_mise_shims_via_mise_which() {
 }
 
 #[test]
+fn prepare_gemini_acp_runtime_passes_runtime_tmpdir_to_mise_which() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01TESTGEMINIMISETMPDIR0000000001";
+    let source_home = temp.path().join("source-home");
+    let runtime_tmp = temp.path().join("runtime-tmp");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+    fs::create_dir_all(&runtime_tmp).expect("create runtime tmp");
+
+    let shims_dir = temp.path().join("shims");
+    let real_dir = temp.path().join("real");
+    let node_dir = temp.path().join("node");
+    let yarn_dir = temp.path().join("yarn");
+    fs::create_dir_all(&shims_dir).expect("create shims dir");
+    fs::create_dir_all(real_dir.join("dist")).expect("create real dist dir");
+    fs::create_dir_all(&node_dir).expect("create node dir");
+    fs::create_dir_all(&yarn_dir).expect("create yarn dir");
+
+    let real_script = real_dir.join("dist").join("index.js");
+    fs::write(
+        &real_script,
+        "#!/usr/bin/env -S node --no-warnings=DEP0040\nconsole.log('gemini');\n",
+    )
+    .expect("write real script");
+    std::os::unix::fs::symlink(&real_script, real_dir.join("gemini"))
+        .expect("symlink real gemini");
+    write_executable(&node_dir.join("node"), "#!/bin/sh\nexit 0\n");
+    write_executable(&yarn_dir.join("yarn"), "#!/bin/sh\nexit 0\n");
+
+    let mise_path = shims_dir.join("mise");
+    write_executable(
+        &mise_path,
+        &format!(
+            "#!/bin/sh\nexpected_tmpdir='{}'\nif [ \"$1\" != \"-C\" ] || [ \"$2\" != \"$expected_tmpdir\" ]; then exit 1; fi\nif [ \"$TMPDIR\" != \"$expected_tmpdir\" ]; then exit 1; fi\nshift 2\nif [ \"$1\" = \"which\" ]; then\n  case \"$2\" in\n    gemini) printf '%s\\n' '{}' ;;\n    node) printf '%s\\n' '{}' ;;\n    yarn) printf '%s\\n' '{}' ;;\n    *) exit 1 ;;\n  esac\n  exit 0\nfi\nexit 1\n",
+            runtime_tmp.display(),
+            real_dir.join("gemini").display(),
+            node_dir.join("node").display(),
+            yarn_dir.join("yarn").display(),
+        ),
+    );
+    std::os::unix::fs::symlink(&mise_path, shims_dir.join("gemini")).expect("symlink gemini");
+    std::os::unix::fs::symlink(&mise_path, shims_dir.join("node")).expect("symlink node");
+    std::os::unix::fs::symlink(&mise_path, shims_dir.join("yarn")).expect("symlink yarn");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert("PATH".to_string(), shims_dir.to_string_lossy().into_owned());
+    env.insert(
+        "TMPDIR".to_string(),
+        runtime_tmp.to_string_lossy().into_owned(),
+    );
+    env.insert("MISE_SHIM".to_string(), shims_dir.display().to_string());
+    env.insert(
+        "MISE_SHIMS_DIR".to_string(),
+        shims_dir.display().to_string(),
+    );
+
+    let launch =
+        prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
+            .expect("prepare runtime");
+
+    assert_eq!(launch.command, node_dir.join("node").to_string_lossy());
+    assert_eq!(env.get("TMPDIR"), Some(&runtime_tmp.to_string_lossy().into_owned()));
+}
+
+#[test]
 fn prepare_gemini_acp_runtime_rewrites_runtime_auth_selection_for_api_key_phase() {
     let temp = tempfile::tempdir().expect("tempdir");
     let session_id = "01TESTGEMINIAUTHSWITCH0000000001";

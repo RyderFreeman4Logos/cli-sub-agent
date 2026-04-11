@@ -71,7 +71,7 @@ Layer 1 (claude-code) will:
 5. Treat `csa session wait` timeout or sparse early output as a wait-state, not failure. In slow Rust repos, 30-60 minutes can be normal. Re-wait on the same session instead of launching duplicate planning/review/debate sessions.
 
 ```bash
-SID=$(csa run --prompt-file "${PROMPT_FILE}")
+SID=$(csa run --sa-mode true --prompt-file "${PROMPT_FILE}")
 scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
@@ -145,7 +145,7 @@ failures as justification for disabling hooks.
 ```bash
 IMPL_FILE=$(mktemp /tmp/sa-impl-XXXXXX.txt)
 echo "CSA_VAR:IMPL_FILE=$IMPL_FILE"
-SID=$(csa run --session "${SESSION_ID}" --prompt-file "${IMPL_FILE}")
+SID=$(csa run --sa-mode true --session "${SESSION_ID}" --prompt-file "${IMPL_FILE}")
 scripts/csa/session-wait-until-done.sh "$SID"
 ```
 
@@ -162,7 +162,7 @@ Resume Layer 1 with user's revision feedback.
 ```bash
 RESUME_FILE=$(mktemp /tmp/sa-resume-XXXXXX.txt)
 echo "CSA_VAR:RESUME_FILE=$RESUME_FILE"
-SID=$(csa run --session "${SESSION_ID}" --prompt-file "${RESUME_FILE}")
+SID=$(csa run --sa-mode true --session "${SESSION_ID}" --prompt-file "${RESUME_FILE}")
 scripts/csa/session-wait-until-done.sh "$SID"
 ```
 

@@ -577,14 +577,17 @@ fn resolve_mise_which_path(
     };
 
     let mut command = Command::new(&mise_path);
-    command
-        .arg("-C")
-        .arg(std::env::temp_dir())
-        .arg("which")
-        .arg(name);
+    let tmpdir = env
+        .get("TMPDIR")
+        .filter(|value| !value.is_empty())
+        .cloned()
+        .or_else(|| std::env::var("TMPDIR").ok())
+        .unwrap_or_else(|| DEFAULT_SANDBOX_TMPDIR.to_string());
+    command.arg("-C").arg(&tmpdir).arg("which").arg(name);
     for key in [
         "HOME",
         "PATH",
+        "TMPDIR",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",
         "XDG_STATE_HOME",
