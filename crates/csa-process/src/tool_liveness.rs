@@ -123,7 +123,7 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().is_none_or(|ext| ext != "lock") {
+        if is_reconciler_artifact(&path) || path.extension().is_none_or(|ext| ext != "lock") {
             continue;
         }
         let Some(content) = fs::read_to_string(&path).ok() else {
@@ -139,6 +139,13 @@ fn find_session_pid(session_dir: &Path) -> Option<u32> {
         }
     }
     None
+}
+
+fn is_reconciler_artifact(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|n| n.to_str()),
+        Some(".reconcile.lock") | Some(".reconcile")
+    )
 }
 
 /// Check if a process is actively working by reading `/proc/{pid}/stat`.
@@ -253,7 +260,9 @@ fn has_recent_session_write_signal(session_dir: &Path, now: SystemTime) -> bool 
 
         for entry in entries.flatten() {
             let path = entry.path();
-            if path.file_name().is_some_and(|name| name == SNAPSHOT_FILE) {
+            if is_reconciler_artifact(&path)
+                || path.file_name().is_some_and(|name| name == SNAPSHOT_FILE)
+            {
                 continue;
             }
 
@@ -348,15 +357,13 @@ fn save_snapshot(session_dir: &Path, snapshot: &LivenessSnapshot) {
 }
 
 fn extract_pid(lock_content: &str) -> Option<u32> {
-    let pid_key_pos = lock_content.find("\"pid\"")?;
-    let tail = &lock_content[pid_key_pos..];
-    let colon_pos = tail.find(':')?;
-    let number = tail[colon_pos + 1..]
-        .chars()
-        .skip_while(|ch| ch.is_ascii_whitespace())
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    number.parse::<u32>().ok()
+    #[derive(serde::Deserialize)]
+    struct LockFileContent {
+        pid: u32,
+    }
+    serde_json::from_str::<LockFileContent>(lock_content)
+        .ok()
+        .map(|data| data.pid)
 }
 
 fn is_process_alive(pid: u32) -> bool {
@@ -400,19 +407,30 @@ mod tests {
         assert!(lock_file_is_recent(&lock_path, SystemTime::now()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn is_working_returns_true_for_own_process() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
+        // Use a spawned process with 'codex' in cmdline to satisfy context check.
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60 # codex")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
         fs::write(
             locks_dir.join("codex.lock"),
-            format!("{{\"pid\": {}}}", std::process::id()),
+            format!("{{\"pid\": {}}}", pid),
         )
         .expect("write lock");
 
-        // Our own process is running (state R or S), so is_working should return true.
-        assert!(ToolLiveness::is_working(tmp.path()));
+        // The process is running, so is_working should return true.
+        let working = ToolLiveness::is_working(tmp.path());
+        child.kill().ok();
+        child.wait().ok();
+        assert!(working);
     }
 
     #[test]
@@ -427,19 +445,25 @@ mod tests {
         assert!(is_pid_working(std::process::id()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn find_session_pid_returns_own_pid() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let locks_dir = tmp.path().join("locks");
         fs::create_dir_all(&locks_dir).expect("create locks dir");
-        let own_pid = std::process::id();
-        fs::write(
-            locks_dir.join("tool.lock"),
-            format!("{{\"pid\": {own_pid}}}"),
-        )
-        .expect("write lock");
+        // Use a spawned process with 'tool' in cmdline to satisfy context check.
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60 # tool")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {pid}}}")).expect("write lock");
 
-        assert_eq!(find_session_pid(tmp.path()), Some(own_pid));
+        let found_pid = find_session_pid(tmp.path());
+        child.kill().ok();
+        child.wait().ok();
+        assert_eq!(found_pid, Some(pid));
     }
 
     #[test]
@@ -468,5 +492,50 @@ mod tests {
 
         let snapshot = fs::read_to_string(tmp.path().join(SNAPSHOT_FILE)).expect("read snapshot");
         assert!(snapshot.contains("observed_spool_bytes_written=4096"));
+    }
+
+    #[test]
+    fn pid_matches_session_context_returns_true_for_recent_file_even_without_context_match() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pid = std::process::id();
+        // Since we can't easily fake process_matches_session_context returning false on Linux
+        // (unless we use a pid that doesn't match), we use a pid that doesn't match.
+        // On Linux, process_matches_session_context(pid, "nonexistent", tmp.path()) should be false.
+
+        // This exercises Patch 1: (context || recent)
+        assert!(pid_matches_session_context(
+            pid,
+            Some("nonexistent"),
+            tmp.path(),
+            Some(true)
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_session_pid_ignores_reconcile_lock_in_parent_dir() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let locks_dir = tmp.path().join("locks");
+        fs::create_dir_all(&locks_dir).expect("create locks dir");
+
+        // Put a fake reconcile lock in the PARENT session_dir
+        let reconcile_lock = tmp.path().join(".reconcile.lock");
+        fs::write(&reconcile_lock, "{\"pid\": 12345}").expect("write lock");
+
+        // Put a real tool lock in locks/
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg("sleep 60 # tool")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {pid}}}")).expect("write lock");
+
+        let found_pid = find_session_pid(tmp.path());
+        child.kill().ok();
+        child.wait().ok();
+
+        // Should find tool PID, not reconcile PID (12345)
+        assert_eq!(found_pid, Some(pid));
     }
 }

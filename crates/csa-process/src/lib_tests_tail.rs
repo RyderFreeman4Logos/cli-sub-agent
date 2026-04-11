@@ -355,15 +355,22 @@ fn test_is_working_reads_proc_stat() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let locks_dir = tmp.path().join("locks");
     std::fs::create_dir_all(&locks_dir).expect("create locks dir");
-    std::fs::write(
-        locks_dir.join("tool.lock"),
-        format!("{{\"pid\": {}}}", std::process::id()),
-    )
-    .expect("write lock");
+    // Use a spawned process with 'tool' in cmdline to satisfy context check.
+    let mut child = std::process::Command::new("sh")
+        .arg("-c")
+        .arg("sleep 60 # tool")
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    std::fs::write(locks_dir.join("tool.lock"), format!("{{\"pid\": {}}}", pid))
+        .expect("write lock");
 
+    let working = ToolLiveness::is_working(tmp.path());
+    child.kill().ok();
+    child.wait().ok();
     assert!(
-        ToolLiveness::is_working(tmp.path()),
-        "is_working should return true for our own running process"
+        working,
+        "is_working should return true for a running process with correct context"
     );
 }
 

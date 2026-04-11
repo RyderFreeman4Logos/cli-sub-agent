@@ -27,6 +27,7 @@ csa-memory.workspace = true
 weave.workspace = true
 clap.workspace = true
 tokio.workspace = true
+fd-lock.workspace = true
 libc.workspace = true
 anyhow.workspace = true
 tracing.workspace = true
