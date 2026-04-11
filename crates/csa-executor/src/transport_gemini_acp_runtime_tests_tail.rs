@@ -243,6 +243,49 @@ fn prepare_gemini_acp_runtime_prefers_session_dir_runtime_home() {
 }
 
 #[test]
+fn prepare_gemini_acp_runtime_falls_back_from_read_only_tmpdir() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01TESTGEMINITMPDIRFALLBACK00000001";
+    let source_home = temp.path().join("source-home");
+    let read_only_tmp = temp.path().join("read-only-tmp");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+    fs::create_dir_all(&read_only_tmp).expect("create read-only tmp");
+
+    let mut perms = fs::metadata(&read_only_tmp).expect("metadata").permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(&read_only_tmp, perms).expect("chmod read-only tmp");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "TMPDIR".to_string(),
+        read_only_tmp.to_string_lossy().into_owned(),
+    );
+
+    prepare_gemini_acp_runtime(&mut env, None, session_id, &["--acp".to_string()])
+        .expect("prepare runtime");
+
+    assert_eq!(
+        env.get("TMPDIR"),
+        Some(&csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR.to_string()),
+        "runtime setup should fall back to /tmp when inherited TMPDIR is not writable"
+    );
+    let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
+    assert!(
+        runtime_home.starts_with(csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR),
+        "runtime home should relocate under /tmp after TMPDIR fallback, got: {}",
+        runtime_home.display()
+    );
+
+    let mut reset_perms = fs::metadata(&read_only_tmp).expect("metadata").permissions();
+    reset_perms.set_mode(0o755);
+    fs::set_permissions(&read_only_tmp, reset_perms).expect("chmod restore tmpdir");
+}
+
+#[test]
 fn prepare_gemini_acp_runtime_pins_non_shim_runtime_bins_on_path() {
     let temp = tempfile::tempdir().expect("tempdir");
     let session_id = "01TESTGEMINIPATHPINNING0000000001";

@@ -205,6 +205,17 @@ fn test_acp_build_env_includes_csa_session_dir() {
         session_dir.contains("01HTEST000000000000000000"),
         "CSA_SESSION_DIR should contain the session ID, got: {session_dir}"
     );
+    let result_contract_path = env
+        .get("CSA_RESULT_TOML_PATH_CONTRACT")
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present in env");
+    assert!(
+        result_contract_path.ends_with("/output/result.toml"),
+        "contract path should point to output/result.toml, got: {result_contract_path}"
+    );
+    assert!(
+        result_contract_path.contains("01HTEST000000000000000000"),
+        "contract path should include the session ID, got: {result_contract_path}"
+    );
 }
 
 #[test]

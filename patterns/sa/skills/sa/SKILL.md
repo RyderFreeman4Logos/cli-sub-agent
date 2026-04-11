@@ -158,13 +158,13 @@ Every task prompt MUST include:
 
 Example DONE WHEN:
 
-- `DONE WHEN: result.toml exists at $CSA_SESSION_DIR/result.toml and status is success.`
+- `DONE WHEN: result.toml exists at $CSA_RESULT_TOML_PATH_CONTRACT and status is success.`
 - `DONE WHEN: just pre-commit exits 0 and result.toml status is success.`
 
 ### Employee -> Manager (`result.toml`)
 
 Employees MUST return a self-contained report that allows manager decision without opening any source/artifact content.
-Employees MUST write this file to `$CSA_SESSION_DIR/result.toml` and print that path only.
+Employees MUST write this file to `$CSA_RESULT_TOML_PATH_CONTRACT` (fallback: `$CSA_SESSION_DIR/result.toml`) and print that path only.
 
 Required schema:
 
@@ -273,7 +273,7 @@ User APPROVE
   -> Manager writes implementation prompt file
   -> Manager dispatches Layer 1 with session continuity
   -> Layer 1 implements autonomously
-  -> Layer 1 performs validation/review/commit workflow
+  -> Layer 1 performs validation/review/commit workflow (use plain `git commit` with hooks enabled if a commit is required inside the CSA child session)
   -> Layer 1 returns result.toml (commit_hash, review_result, summary)
   -> Manager reads result.toml only
   -> Manager reports outcome to user
@@ -317,7 +317,7 @@ INPUT:
 OUTPUT FORMAT:
 - CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Write TODO artifact to $CSA_SESSION_DIR/artifacts/TODO.md
-- Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
+- Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT using required schema
 - Print ONLY the absolute result.toml path
 
 SCOPE:
@@ -326,8 +326,8 @@ SCOPE:
 
 DONE WHEN:
 - $CSA_SESSION_DIR/artifacts/TODO.md exists
-- $CSA_SESSION_DIR/result.toml exists with status in {success, partial, needs_clarification, error}
-- $CSA_SESSION_DIR/result.toml contains [result], [report], [timing], [tool], [artifacts]
+- $CSA_RESULT_TOML_PATH_CONTRACT exists with status in {success, partial, needs_clarification, error}
+- $CSA_RESULT_TOML_PATH_CONTRACT contains [result], [report], [timing], [tool], [artifacts]
 PLAN_EOF
 
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")
@@ -358,7 +358,7 @@ INPUT:
 OUTPUT FORMAT:
 - CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Perform implementation and validation autonomously
-- Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml using required schema
+- Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT using required schema
 - Include commit_hash/review_result in [artifacts] when available
 - Print ONLY the absolute result.toml path
 
@@ -366,10 +366,11 @@ SCOPE:
 - You choose HOW to implement.
 - You may spawn Layer 2 workers.
 - You must perform appropriate review before reporting success.
+- If a commit is needed inside the child session, use plain `git commit` with hooks enabled.
 
 DONE WHEN:
 - Implementation tasks are complete or explicitly marked partial/error
-- $CSA_SESSION_DIR/result.toml exists and is self-contained for manager decision
+- $CSA_RESULT_TOML_PATH_CONTRACT exists and is self-contained for manager decision
 IMPL_EOF
 
 SID=$(csa run --sa-mode true --session "$SESSION_ID" --prompt-file "$PROMPT_FILE")
@@ -395,7 +396,7 @@ INPUT:
 OUTPUT FORMAT:
 - CONTRACT MARKER: CSA_RESULT_TOML_PATH_CONTRACT=1
 - Run independent verification (e.g. csa review --diff or csa debate)
-- Write manager-facing result.toml to $CSA_SESSION_DIR/result.toml
+- Write manager-facing result.toml to $CSA_RESULT_TOML_PATH_CONTRACT
 - In [report], clearly state agreement/disagreement and why
 - Print ONLY the absolute result.toml path
 
@@ -405,7 +406,7 @@ SCOPE:
 
 DONE WHEN:
 - Verification completed
-- $CSA_SESSION_DIR/result.toml includes clear verdict in summary/report
+- $CSA_RESULT_TOML_PATH_CONTRACT includes clear verdict in summary/report
 VERIFY_EOF
 
 SID=$(csa run --sa-mode true --prompt-file "$PROMPT_FILE")

@@ -8,7 +8,7 @@ use std::{
 use tracing::{debug, info, warn};
 
 use super::prompt_guard::emit_prompt_guard_to_caller;
-use super::result_contract::{clear_expected_result_toml, enforce_result_toml_path_contract};
+use super::result_contract::{clear_expected_result_tomls, enforce_result_toml_path_contract};
 use super::{
     MemoryInjectionOptions, ParentSessionSource, SessionExecutionResult,
     resolve_liveness_dead_seconds, resolve_mcp_servers, run_pipeline_hook,
@@ -437,7 +437,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
                 })
         });
 
-    let result_file_cleared = clear_expected_result_toml(&session_dir.join("result.toml"));
+    let result_file_cleared = clear_expected_result_tomls(&session_dir);
     let execution_start_time = chrono::Utc::now();
     // Build session config with MCP servers (if global config provided).
     let session_config = global_config.map(|gc| {

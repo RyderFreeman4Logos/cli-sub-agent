@@ -480,6 +480,11 @@ impl Executor {
         ) {
             Ok(dir) => {
                 cmd.env("CSA_SESSION_DIR", dir.to_string_lossy().as_ref());
+                let contract_result_path = csa_session::contract_result_path(&dir);
+                cmd.env(
+                    csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
+                    contract_result_path.to_string_lossy().into_owned(),
+                );
             }
             Err(e) => {
                 tracing::warn!("failed to compute CSA_SESSION_DIR: {e:#}");

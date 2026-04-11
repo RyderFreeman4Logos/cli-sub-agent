@@ -129,6 +129,12 @@ impl AcpTransport {
                 "CSA_SESSION_DIR".to_string(),
                 dir.to_string_lossy().into_owned(),
             );
+            env.insert(
+                csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
+                csa_session::contract_result_path(&dir)
+                    .to_string_lossy()
+                    .into_owned(),
+            );
         } else {
             tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
         }

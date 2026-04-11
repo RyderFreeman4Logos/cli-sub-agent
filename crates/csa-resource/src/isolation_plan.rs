@@ -7,6 +7,8 @@ use std::path::{Path, PathBuf};
 use crate::filesystem_sandbox::FilesystemCapability;
 use crate::sandbox::ResourceCapability;
 
+pub const DEFAULT_SANDBOX_TMPDIR: &str = "/tmp";
+
 // ---------------------------------------------------------------------------
 // EnforcementMode (local copy)
 // ---------------------------------------------------------------------------
@@ -196,6 +198,8 @@ impl IsolationPlanBuilder {
         self.project_root = Some(project_root.to_path_buf());
         self.writable_paths.push(project_root.to_path_buf());
         self.writable_paths.push(session_dir.to_path_buf());
+        self.env_overrides
+            .insert("TMPDIR".to_string(), DEFAULT_SANDBOX_TMPDIR.to_string());
 
         // Submodule detection: if .git is a file (not a directory), the project
         // root is inside a git submodule.  Walk up to find the superproject root

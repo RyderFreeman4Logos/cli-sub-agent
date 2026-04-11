@@ -140,7 +140,7 @@ fn result_toml_path_contract_fails_closed_when_preclear_failed() {
     assert!(
         result
             .summary
-            .contains("failed to clear pre-existing result.toml")
+            .contains("failed to clear pre-existing result artifacts")
     );
     assert!(result.stderr_output.contains("contract violation"));
 }

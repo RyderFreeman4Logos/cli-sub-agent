@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, Result};
+use csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR;
 use serde_json::{Map, Value};
 use tracing::{debug, warn};
 
@@ -48,7 +49,8 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .map(PathBuf::from);
-    let runtime_home = resolve_runtime_home(session_dir, session_id);
+    let tmpdir = normalize_tmpdir_env(env);
+    let runtime_home = resolve_runtime_home(session_dir, session_id, &tmpdir);
     seed_runtime_home(&runtime_home, source_home.as_deref())?;
     align_runtime_auth_selection(&runtime_home, env)?;
 
@@ -124,7 +126,7 @@ pub(crate) fn prepare_gemini_acp_runtime(
 }
 
 pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Option<PathBuf> {
-    let runtime_root = std::env::temp_dir().join(GEMINI_RUNTIME_ROOT_DIR);
+    let runtime_root = runtime_root_from_env(env);
     let session_relative_path = Path::new(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
     let candidates = [
         env.get("GEMINI_CLI_HOME").map(PathBuf::from),
@@ -145,14 +147,70 @@ pub(crate) fn gemini_runtime_home_from_env(env: &HashMap<String, String>) -> Opt
         .find(|path| path.starts_with(&runtime_root) || path.ends_with(session_relative_path))
 }
 
-fn resolve_runtime_home(session_dir: Option<&Path>, session_id: &str) -> PathBuf {
+fn resolve_runtime_home(session_dir: Option<&Path>, session_id: &str, tmpdir: &Path) -> PathBuf {
     if let Some(session_dir) = session_dir {
         return session_dir.join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH);
     }
 
-    std::env::temp_dir()
+    tmpdir.join(GEMINI_RUNTIME_ROOT_DIR).join(session_id)
+}
+
+fn normalize_tmpdir_env(env: &mut HashMap<String, String>) -> PathBuf {
+    let candidate = env
+        .get("TMPDIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from));
+
+    let resolved = match candidate {
+        Some(path) if tmpdir_probe_writable(&path).is_ok() => path,
+        Some(path) => {
+            warn!(
+                tmpdir = %path.display(),
+                fallback = DEFAULT_SANDBOX_TMPDIR,
+                "TMPDIR is not writable for Gemini ACP runtime; falling back to /tmp"
+            );
+            PathBuf::from(DEFAULT_SANDBOX_TMPDIR)
+        }
+        None => PathBuf::from(DEFAULT_SANDBOX_TMPDIR),
+    };
+
+    env.insert(
+        "TMPDIR".to_string(),
+        resolved.to_string_lossy().into_owned(),
+    );
+    resolved
+}
+
+fn runtime_root_from_env(env: &HashMap<String, String>) -> PathBuf {
+    env.get("TMPDIR")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("TMPDIR").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SANDBOX_TMPDIR))
         .join(GEMINI_RUNTIME_ROOT_DIR)
-        .join(session_id)
+}
+
+fn tmpdir_probe_writable(path: &Path) -> Result<()> {
+    fs::create_dir_all(path)
+        .with_context(|| format!("failed to create TMPDIR candidate {}", path.display()))?;
+
+    let probe_path = path.join(format!(
+        ".csa-gemini-tmpdir-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&probe_path)
+        .with_context(|| format!("failed to create TMPDIR probe {}", probe_path.display()))?;
+    drop(file);
+    let _ = fs::remove_file(&probe_path);
+    Ok(())
 }
 
 fn seed_runtime_home(runtime_home: &Path, source_home: Option<&Path>) -> Result<()> {

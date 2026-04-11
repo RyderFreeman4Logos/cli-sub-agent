@@ -45,6 +45,33 @@ fn result_toml_path_contract_extracts_embedded_path() {
 }
 
 #[test]
+fn result_toml_path_contract_accepts_output_result_artifact_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let result_path = output_dir.join("result.toml");
+    fs::write(&result_path, "status = \"success\"\nsummary = \"done\"\n").unwrap();
+
+    let mut result = ExecutionResult {
+        output: format!("{}\n", result_path.display()),
+        stderr_output: String::new(),
+        summary: "completed all tasks successfully".to_string(),
+        exit_code: 0,
+        peak_memory_mb: None,
+    };
+
+    enforce_result_toml_contract_now(
+        "CSA_RESULT_TOML_PATH_CONTRACT=1",
+        "",
+        temp.path(),
+        &mut result,
+    );
+
+    assert_eq!(result.exit_code, 0);
+    assert!(result.stderr_output.is_empty());
+}
+
+#[test]
 fn result_toml_path_contract_accepts_verified_session_result_fallback() {
     let temp = tempfile::tempdir().unwrap();
     let result_path = temp.path().join("result.toml");
@@ -196,4 +223,54 @@ fn result_toml_path_contract_fails_when_output_summary_empty_and_no_disk_file() 
     assert_eq!(result.exit_code, 1);
     assert!(result.summary.contains("output and summary were empty"));
     assert!(result.stderr_output.contains("contract violation"));
+}
+
+#[test]
+fn clear_expected_result_tomls_removes_all_stale_result_artifacts() {
+    let temp = tempfile::tempdir().unwrap();
+    let output_dir = temp.path().join("output");
+    fs::create_dir_all(&output_dir).unwrap();
+    let session_result = temp.path().join("result.toml");
+    let output_result = output_dir.join("result.toml");
+    let legacy_output_result = output_dir.join("user-result.toml");
+    fs::write(&session_result, "status = \"stale\"\n").unwrap();
+    fs::write(&output_result, "status = \"stale\"\n").unwrap();
+    fs::write(&legacy_output_result, "status = \"stale\"\n").unwrap();
+
+    assert!(crate::pipeline::result_contract::clear_expected_result_tomls(temp.path()));
+    assert!(!session_result.exists());
+    assert!(!output_result.exists());
+    assert!(!legacy_output_result.exists());
+}
+
+#[test]
+fn sa_skill_docs_reference_contract_result_path_and_plain_git_commit() {
+    let sa_skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../patterns/sa/skills/sa/SKILL.md"
+    ));
+    assert!(
+        sa_skill.contains("$CSA_RESULT_TOML_PATH_CONTRACT"),
+        "SA dispatch templates must direct child sessions to the injected result path contract"
+    );
+    assert!(
+        sa_skill.contains("plain `git commit`"),
+        "SA skill should document plain git commit for child-session commits"
+    );
+}
+
+#[test]
+fn split_project_docs_skill_uses_plain_git_commit() {
+    let skill = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../skills/split-project-docs/SKILL.md"
+    ));
+    assert!(
+        skill.contains("plain `git commit`"),
+        "split-project-docs should document plain git commit in CSA child sessions"
+    );
+    assert!(
+        !skill.contains("Use `/commit` skill"),
+        "split-project-docs should no longer require the unavailable /commit shortcut"
+    );
 }

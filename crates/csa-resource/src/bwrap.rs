@@ -316,6 +316,37 @@ mod tests {
     }
 
     #[test]
+    fn test_bwrap_from_isolation_plan_sets_tmpdir_override() {
+        let mut env_overrides = HashMap::new();
+        env_overrides.insert("TMPDIR".to_string(), "/tmp".to_string());
+        let plan = IsolationPlan {
+            resource: ResourceCapability::None,
+            filesystem: FilesystemCapability::Bwrap,
+            writable_paths: vec![PathBuf::from("/project")],
+            env_overrides,
+            degraded_reasons: Vec::new(),
+            memory_max_mb: None,
+            memory_swap_max_mb: None,
+            pids_max: None,
+            readonly_project_root: false,
+            project_root: Some(PathBuf::from("/project")),
+            soft_limit_percent: None,
+            memory_monitor_interval_seconds: None,
+        };
+
+        let cmd = from_isolation_plan(&plan, "/usr/bin/tool", &[]).expect("should produce command");
+        let args = command_args(&cmd);
+        let found_tmpdir_env = args
+            .windows(3)
+            .any(|window| window == ["--setenv", "TMPDIR", "/tmp"]);
+
+        assert!(
+            found_tmpdir_env,
+            "TMPDIR must be pinned inside bwrap env overrides; args: {args:?}"
+        );
+    }
+
+    #[test]
     fn test_bwrap_readonly_project_root() {
         let plan = IsolationPlan {
             resource: ResourceCapability::None,

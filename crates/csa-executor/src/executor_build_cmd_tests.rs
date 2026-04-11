@@ -100,6 +100,19 @@ fn test_build_command_sets_csa_session_dir() {
         session_dir_str.contains("01HTEST000000000000000000"),
         "CSA_SESSION_DIR should contain the session ID, got: {session_dir_str}"
     );
+    let result_contract_path = env_map
+        .get(std::ffi::OsStr::new("CSA_RESULT_TOML_PATH_CONTRACT"))
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present")
+        .expect("CSA_RESULT_TOML_PATH_CONTRACT should have a value");
+    let result_contract_path = result_contract_path.to_string_lossy();
+    assert!(
+        result_contract_path.ends_with("/output/result.toml"),
+        "contract path should target the session output/result.toml artifact, got: {result_contract_path}"
+    );
+    assert!(
+        result_contract_path.contains("01HTEST000000000000000000"),
+        "contract path should include the session ID, got: {result_contract_path}"
+    );
 }
 
 #[test]

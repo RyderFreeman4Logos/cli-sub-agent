@@ -67,7 +67,7 @@ Layer 1 (claude-code) will:
 1. Spawn up to 3 parallel Layer 2 workers for codebase exploration
 2. Synthesize findings into TODO draft
 3. Run adversarial debate via csa debate
-4. Write `result.toml` to `$CSA_SESSION_DIR/result.toml` (with `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
+4. Write `result.toml` to `$CSA_RESULT_TOML_PATH_CONTRACT` (fallback: `$CSA_SESSION_DIR/result.toml`; `todo_path = "$CSA_SESSION_DIR/artifacts/TODO.md"`)
 5. Treat `csa session wait` timeout or sparse early output as a wait-state, not failure. In slow Rust repos, 30-60 minutes can be normal. Re-wait on the same session instead of launching duplicate planning/review/debate sessions.
 
 ```bash

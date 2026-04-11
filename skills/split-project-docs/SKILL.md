@@ -134,7 +134,7 @@ done
 
 ### Phase 5: Commit
 
-Use `/commit` skill. Suggested scope: `docs`.
+Use plain `git commit` with hooks enabled. Suggested scope: `docs`.
 
 Message pattern: `docs(<scope>): split <filename> into condensed summary + N reference files`
 
@@ -150,5 +150,5 @@ Message pattern: `docs(<scope>): split <filename> into condensed summary + N ref
 ## Integration
 
 - **Triggered by**: `just find-monolith-files` flagging a .md file
-- **Uses**: `/commit` skill for final commit
+- **Uses**: plain `git commit` for final commit
 - **Complements**: `split-monolith-files` skill (for code files, not docs)
