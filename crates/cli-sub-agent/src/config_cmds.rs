@@ -317,10 +317,7 @@ pub(crate) fn handle_config_get(
 
     let resolved = resolve_lookup_sources_with_diagnostics(&lookup.sources, &key)?;
     if let Some(value) = resolved.value {
-        if resolved
-            .diagnostics
-            .raw_global_value_from_invalid_effective_global
-        {
+        if resolved.diagnostics.should_warn_raw_global_parse_fallback() {
             eprintln!("warning: global config has parse errors; showing raw value");
         }
         println!("{}", format_toml_value(&value));
@@ -350,6 +347,14 @@ struct ConfigGetLookup {
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 struct LookupDiagnostics {
     raw_global_value_from_invalid_effective_global: bool,
+    raw_global_value_from_invalid_effective_project: bool,
+}
+
+impl LookupDiagnostics {
+    fn should_warn_raw_global_parse_fallback(self) -> bool {
+        self.raw_global_value_from_invalid_effective_global
+            || self.raw_global_value_from_invalid_effective_project
+    }
 }
 
 #[derive(Debug)]
@@ -508,17 +513,20 @@ fn resolve_lookup_sources_with_diagnostics(
 ) -> Result<LookupResolution> {
     let mut deferred_error = None;
     let mut saw_deferred_effective_global_error = false;
+    let mut saw_deferred_effective_project_error = false;
 
     for source in sources {
         match load_lookup_root(source) {
             Ok(Some(root)) => {
                 if let Some(value) = resolve_key(&root, key) {
+                    let raw_global_source = matches!(source, LookupSourceSpec::RawGlobal { .. });
                     return Ok(LookupResolution {
                         value: Some(value),
                         diagnostics: LookupDiagnostics {
-                            raw_global_value_from_invalid_effective_global:
-                                saw_deferred_effective_global_error
-                                    && matches!(source, LookupSourceSpec::RawGlobal { .. }),
+                            raw_global_value_from_invalid_effective_global: raw_global_source
+                                && saw_deferred_effective_global_error,
+                            raw_global_value_from_invalid_effective_project: raw_global_source
+                                && saw_deferred_effective_project_error,
                         },
                     });
                 }
@@ -534,6 +542,15 @@ fn resolve_lookup_sources_with_diagnostics(
                     }
                 ) {
                     saw_deferred_effective_global_error = true;
+                }
+                if matches!(
+                    source,
+                    LookupSourceSpec::EffectiveProject {
+                        include_global_fallback: true,
+                        ..
+                    }
+                ) {
+                    saw_deferred_effective_project_error = true;
                 }
                 deferred_error.get_or_insert(err);
             }

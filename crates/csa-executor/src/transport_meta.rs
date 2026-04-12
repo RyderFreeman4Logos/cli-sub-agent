@@ -14,7 +14,27 @@ use csa_session::state::MetaSessionState;
 use super::AcpTransport;
 
 const SUMMARY_MAX_CHARS: usize = 200;
+const CSA_SESSION_ID_ENV: &str = "CSA_SESSION_ID";
+const CSA_DEPTH_ENV: &str = "CSA_DEPTH";
+const CSA_PROJECT_ROOT_ENV: &str = "CSA_PROJECT_ROOT";
+const CSA_TOOL_ENV: &str = "CSA_TOOL";
+const CSA_IS_SUBPROCESS_ENV: &str = "CSA_IS_SUBPROCESS";
+const CSA_PARENT_TOOL_ENV: &str = "CSA_PARENT_TOOL";
+const CSA_PARENT_SESSION_ENV: &str = "CSA_PARENT_SESSION";
 const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
+const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
+const CSA_OWNED_ENV_KEYS: &[&str] = &[
+    CSA_SESSION_ID_ENV,
+    CSA_DEPTH_ENV,
+    CSA_PROJECT_ROOT_ENV,
+    CSA_TOOL_ENV,
+    CSA_IS_SUBPROCESS_ENV,
+    CSA_PARENT_TOOL_ENV,
+    CSA_PARENT_SESSION_ENV,
+    CSA_FS_SANDBOXED_ENV,
+    CSA_SESSION_DIR_ENV,
+    csa_session::RESULT_TOML_PATH_CONTRACT_ENV,
+];
 
 /// Default soft memory limit as a percentage of MemoryMax.
 /// Lowered from 80% to 70% in #568 to provide more headroom before the
@@ -112,40 +132,15 @@ impl AcpTransport {
         extra_env: Option<&HashMap<String, String>>,
     ) -> HashMap<String, String> {
         let mut env = HashMap::new();
-        env.insert(
-            "CSA_SESSION_ID".to_string(),
-            session.meta_session_id.clone(),
-        );
-        env.insert(
-            "CSA_DEPTH".to_string(),
-            (session.genealogy.depth + 1).to_string(),
-        );
-        env.insert("CSA_PROJECT_ROOT".to_string(), session.project_path.clone());
-
-        env.insert("CSA_TOOL".to_string(), self.tool_name.clone());
-        // Mark this process as a CSA subprocess so child tools can detect
-        // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
-        // "use csa review"). See GitHub issue #272.
-        env.insert("CSA_IS_SUBPROCESS".to_string(), "1".to_string());
-        if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
-            env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
-        }
-        if let Some(parent_session) = &session.genealogy.parent_session_id {
-            env.insert("CSA_PARENT_SESSION".to_string(), parent_session.clone());
-        }
-
         if let Some(extra) = extra_env {
             env.extend(
                 extra
                     .iter()
-                    .filter(|(k, _)| k.as_str() != CSA_FS_SANDBOXED_ENV)
+                    .filter(|(k, _)| !is_csa_owned_env_key(k))
                     .map(|(k, v)| (k.clone(), v.clone())),
             );
         }
-        if std::env::var(CSA_FS_SANDBOXED_ENV).ok().as_deref() == Some("1") {
-            env.insert(CSA_FS_SANDBOXED_ENV.to_string(), "1".to_string());
-        }
-        Self::insert_reserved_session_path_env(&mut env, session);
+        self.insert_csa_owned_env(&mut env, session);
 
         // Inject merge guard: prepend a `gh` wrapper to PATH that blocks
         // `gh pr merge` unless pr-bot has completed.  This is deterministic
@@ -159,6 +154,36 @@ impl AcpTransport {
         env
     }
 
+    fn insert_csa_owned_env(&self, env: &mut HashMap<String, String>, session: &MetaSessionState) {
+        env.insert(
+            CSA_SESSION_ID_ENV.to_string(),
+            session.meta_session_id.clone(),
+        );
+        env.insert(
+            CSA_DEPTH_ENV.to_string(),
+            (session.genealogy.depth + 1).to_string(),
+        );
+        env.insert(
+            CSA_PROJECT_ROOT_ENV.to_string(),
+            session.project_path.clone(),
+        );
+        env.insert(CSA_TOOL_ENV.to_string(), self.tool_name.clone());
+        // Mark this process as a CSA subprocess so child tools can detect
+        // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
+        // "use csa review"). See GitHub issue #272.
+        env.insert(CSA_IS_SUBPROCESS_ENV.to_string(), "1".to_string());
+        if let Ok(parent_tool) = std::env::var(CSA_TOOL_ENV) {
+            env.insert(CSA_PARENT_TOOL_ENV.to_string(), parent_tool);
+        }
+        if let Some(parent_session) = &session.genealogy.parent_session_id {
+            env.insert(CSA_PARENT_SESSION_ENV.to_string(), parent_session.clone());
+        }
+        if std::env::var(CSA_FS_SANDBOXED_ENV).ok().as_deref() == Some("1") {
+            env.insert(CSA_FS_SANDBOXED_ENV.to_string(), "1".to_string());
+        }
+        Self::insert_reserved_session_path_env(env, session);
+    }
+
     fn insert_reserved_session_path_env(
         env: &mut HashMap<String, String>,
         session: &MetaSessionState,
@@ -168,7 +193,7 @@ impl AcpTransport {
             &session.meta_session_id,
         ) {
             env.insert(
-                "CSA_SESSION_DIR".to_string(),
+                CSA_SESSION_DIR_ENV.to_string(),
                 dir.to_string_lossy().into_owned(),
             );
             env.insert(
@@ -181,6 +206,10 @@ impl AcpTransport {
             tracing::warn!("failed to compute CSA_SESSION_DIR for ACP env");
         }
     }
+}
+
+fn is_csa_owned_env_key(key: &str) -> bool {
+    CSA_OWNED_ENV_KEYS.contains(&key)
 }
 
 /// Attached to `anyhow::Error` context when a sandboxed ACP execution fails,
@@ -604,6 +633,12 @@ mod tests {
         }
     }
 
+    fn sample_child_session() -> MetaSessionState {
+        let mut session = sample_session();
+        session.genealogy.parent_session_id = Some("01HPARENT000000000000000000".to_string());
+        session
+    }
+
     #[test]
     fn build_env_ignores_spoofed_sandbox_marker_from_extra_env() {
         let _env_lock = SANDBOX_ENV_LOCK.lock().expect("sandbox env lock poisoned");
@@ -634,6 +669,104 @@ mod tests {
             env.get(CSA_FS_SANDBOXED_ENV).map(String::as_str),
             Some("1"),
             "the process sandbox marker must override user extra_env"
+        );
+    }
+
+    #[test]
+    fn build_env_reapplies_csa_owned_env_after_extra_env_merge() {
+        let _env_lock = SANDBOX_ENV_LOCK.lock().expect("sandbox env lock poisoned");
+        let _sandbox_guard = ScopedEnvVar::set(CSA_FS_SANDBOXED_ENV, "1");
+        let _parent_tool_guard = ScopedEnvVar::set(CSA_TOOL_ENV, "parent-tool");
+        let transport = AcpTransport::new("claude-code", None);
+        let session = sample_child_session();
+        let extra = HashMap::from([
+            (
+                CSA_SESSION_ID_ENV.to_string(),
+                "spoofed-session".to_string(),
+            ),
+            (CSA_DEPTH_ENV.to_string(), "999".to_string()),
+            (
+                CSA_PROJECT_ROOT_ENV.to_string(),
+                "/tmp/spoofed-root".to_string(),
+            ),
+            (CSA_TOOL_ENV.to_string(), "spoofed-tool".to_string()),
+            (CSA_IS_SUBPROCESS_ENV.to_string(), "0".to_string()),
+            (
+                CSA_PARENT_TOOL_ENV.to_string(),
+                "spoofed-parent-tool".to_string(),
+            ),
+            (
+                CSA_PARENT_SESSION_ENV.to_string(),
+                "spoofed-parent-session".to_string(),
+            ),
+            (CSA_FS_SANDBOXED_ENV.to_string(), "0".to_string()),
+            (
+                CSA_SESSION_DIR_ENV.to_string(),
+                "/tmp/spoofed-session-dir".to_string(),
+            ),
+            (
+                csa_session::RESULT_TOML_PATH_CONTRACT_ENV.to_string(),
+                "/tmp/spoofed-result.toml".to_string(),
+            ),
+            ("CSA_SUPPRESS_NOTIFY".to_string(), "1".to_string()),
+        ]);
+
+        let env = transport.build_env(&session, Some(&extra));
+
+        assert_eq!(
+            env.get(CSA_SESSION_ID_ENV).map(String::as_str),
+            Some("01HTEST000000000000000000")
+        );
+        assert_eq!(env.get(CSA_DEPTH_ENV).map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get(CSA_PROJECT_ROOT_ENV).map(String::as_str),
+            Some("/tmp/test")
+        );
+        assert_eq!(
+            env.get(CSA_TOOL_ENV).map(String::as_str),
+            Some("claude-code")
+        );
+        assert_eq!(
+            env.get(CSA_IS_SUBPROCESS_ENV).map(String::as_str),
+            Some("1")
+        );
+        assert_eq!(
+            env.get(CSA_PARENT_TOOL_ENV).map(String::as_str),
+            Some("parent-tool")
+        );
+        assert_eq!(
+            env.get(CSA_PARENT_SESSION_ENV).map(String::as_str),
+            Some("01HPARENT000000000000000000")
+        );
+        assert_eq!(env.get(CSA_FS_SANDBOXED_ENV).map(String::as_str), Some("1"));
+        assert_eq!(
+            env.get("CSA_SUPPRESS_NOTIFY").map(String::as_str),
+            Some("1"),
+            "non-reserved CSA_* settings must still flow through extra_env"
+        );
+
+        let session_dir = env
+            .get(CSA_SESSION_DIR_ENV)
+            .expect("CSA_SESSION_DIR should be present");
+        assert!(
+            session_dir.contains("/sessions/"),
+            "CSA_SESSION_DIR should be recomputed after merge, got: {session_dir}"
+        );
+        assert!(
+            session_dir.contains("01HTEST000000000000000000"),
+            "CSA_SESSION_DIR should include the session ID, got: {session_dir}"
+        );
+
+        let result_contract_path = env
+            .get(csa_session::RESULT_TOML_PATH_CONTRACT_ENV)
+            .expect("CSA_RESULT_TOML_PATH_CONTRACT should be present");
+        assert!(
+            result_contract_path.ends_with("/output/result.toml"),
+            "result contract path should be recomputed after merge, got: {result_contract_path}"
+        );
+        assert!(
+            result_contract_path.contains("01HTEST000000000000000000"),
+            "result contract path should include the session ID, got: {result_contract_path}"
         );
     }
 }
