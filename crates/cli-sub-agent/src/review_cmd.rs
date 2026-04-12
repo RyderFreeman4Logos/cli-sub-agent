@@ -725,7 +725,6 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let consensus_result = resolve_consensus(consensus_strategy, &responses);
     let final_verdict = consensus_verdict(&consensus_result);
     let agreement = agreement_level(&consensus_result);
-    let final_decision = review_decision_from_verdict(final_verdict);
 
     print_reviewer_outcomes(&outcomes);
 
@@ -748,34 +747,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .iter()
         .map(|outcome| outcome.session_id.clone())
         .collect::<Vec<_>>();
-    let mut review_session_ids = review_session_ids;
-
-    if let Ok(parent_session_id) = std::env::var("CSA_SESSION_ID") {
-        persist_review_meta(
-            &project_root,
-            &ReviewSessionMeta {
-                session_id: parent_session_id.clone(),
-                head_sha,
-                decision: final_decision.as_str().to_string(),
-                verdict: final_verdict.to_string(),
-                tool: "multi-reviewer".to_string(),
-                scope: scope.clone(),
-                exit_code: if final_verdict == CLEAN { 0 } else { 1 },
-                fix_attempted: false,
-                fix_rounds: 0,
-                review_iterations,
-                timestamp: review_meta_timestamp,
-                diff_fingerprint,
-            },
-        );
-
-        if !review_session_ids
-            .iter()
-            .any(|session_id| session_id == &parent_session_id)
-        {
-            review_session_ids.push(parent_session_id);
-        }
-    }
+    // NOTE: Do NOT persist review_meta for the inherited CSA_SESSION_ID here.
+    // The single-reviewer path (review_cmd_execute.rs:80) explicitly ignores
+    // inherited CSA_SESSION_ID unless --session was passed.  Persisting it
+    // unconditionally in the multi-reviewer path would overwrite an unrelated
+    // session's review_meta.json when launched from another CSA session.
 
     maybe_extract_recurring_bug_class_skills(&project_root, &review_session_ids);
 
