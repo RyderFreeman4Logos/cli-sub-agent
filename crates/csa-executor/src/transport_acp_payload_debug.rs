@@ -63,7 +63,9 @@ fn redact_env_value(value: &mut Value) {
 
 /// Short-form flags whose following argument is an HTTP header value and must
 /// be checked for embedded credentials (e.g. `-H 'Authorization: Bearer ...'`).
-const HEADER_SHORT_FLAGS: &[&str] = &["-h"];
+/// Stored in ORIGINAL case — comparison is case-sensitive because `-h` (help)
+/// and `-H` (header) are different flags.
+const HEADER_SHORT_FLAGS: &[&str] = &["-H"];
 
 fn arg_name_is_sensitive(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
@@ -84,9 +86,10 @@ fn arg_name_is_sensitive(value: &str) -> bool {
 }
 
 /// Returns `true` when `flag` is a short alias for a header flag (e.g. `-H`).
+/// Case-sensitive: `-h` (help) must NOT match.
 fn is_header_short_flag(flag: &str) -> bool {
-    let normalized = flag.trim().to_ascii_lowercase();
-    HEADER_SHORT_FLAGS.contains(&normalized.as_str())
+    let trimmed = flag.trim();
+    HEADER_SHORT_FLAGS.contains(&trimmed)
 }
 
 fn arg_value_is_sensitive(value: &str) -> bool {
@@ -279,6 +282,16 @@ mod tests {
                 "-H".to_string(),
                 "<redacted>".to_string(),
             ]
+        );
+    }
+
+    #[test]
+    fn redact_args_does_not_treat_lowercase_h_as_header_flag() {
+        // -h is typically "help", not "header" — must NOT arm redact_next
+        let args = vec!["-h".to_string(), "some-value".to_string()];
+        assert_eq!(
+            redact_args(&args),
+            vec!["-h".to_string(), "some-value".to_string()]
         );
     }
 }
