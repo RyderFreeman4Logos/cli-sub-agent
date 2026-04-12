@@ -706,3 +706,26 @@ fn test_no_flash_fallback_stops_retry_after_attempt_2() {
             .is_some()
     );
 }
+
+#[test]
+fn test_no_failover_stops_retry_after_attempt_1() {
+    let transport = LegacyTransport::new(Executor::GeminiCli {
+        model_override: None,
+        thinking_budget: None,
+    });
+    let execution = ExecutionResult {
+        summary: "failed".to_string(),
+        output: String::new(),
+        stderr_output: "HTTP 429 Too Many Requests".to_string(),
+        exit_code: 1,
+        peak_memory_mb: None,
+    };
+    let mut env = HashMap::new();
+    env.insert("_CSA_NO_FAILOVER".to_string(), "1".to_string());
+
+    assert!(
+        transport
+            .should_retry_gemini_rate_limited(&execution, 1, Some(&env))
+            .is_none()
+    );
+}

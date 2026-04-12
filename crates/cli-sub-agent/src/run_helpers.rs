@@ -40,6 +40,21 @@ pub(crate) fn validate_tool_tier_override_flags(
     Ok(())
 }
 
+pub(crate) fn validate_model_spec_tier_conflict(
+    model_spec: Option<&str>,
+    tier: Option<&str>,
+    command: &str,
+) -> Result<()> {
+    if model_spec.is_some() && tier.is_some() {
+        anyhow::bail!(
+            "Conflicting routing flags for `csa {command}`: --model-spec and --tier are mutually exclusive.\n\
+             Use --model-spec for an exact `tool/provider/model/thinking` selection, or use --tier for tier-managed routing and failover."
+        );
+    }
+
+    Ok(())
+}
+
 /// Resolve tool and model from CLI args and config.
 ///
 /// Returns (tool, model_spec, model) where:

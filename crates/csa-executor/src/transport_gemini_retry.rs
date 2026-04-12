@@ -1,10 +1,13 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use csa_core::gemini::{
-    API_KEY_ENV as GEMINI_API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY,
-    AUTH_MODE_ENV_KEY as GEMINI_AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH, NO_FLASH_FALLBACK_ENV_KEY,
-    detect_rate_limit_pattern,
+use csa_core::{
+    env::NO_FAILOVER_ENV_KEY,
+    gemini::{
+        API_KEY_ENV as GEMINI_API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_API_KEY,
+        AUTH_MODE_ENV_KEY as GEMINI_AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH, NO_FLASH_FALLBACK_ENV_KEY,
+        detect_rate_limit_pattern,
+    },
 };
 use csa_process::ExecutionResult;
 
@@ -13,6 +16,8 @@ use csa_process::ExecutionResult;
 ///   Phase 2 (attempt 2): Original model + API key auth
 ///   Phase 3 (attempt 3): Flash model  + API key auth
 pub(crate) const GEMINI_RATE_LIMIT_MAX_ATTEMPTS: u8 = 3;
+/// When `_CSA_NO_FAILOVER` is set, disable all Gemini retry/failover phases.
+pub(crate) const GEMINI_RATE_LIMIT_NO_FAILOVER_ATTEMPTS: u8 = 1;
 /// When `_CSA_NO_FLASH_FALLBACK` is set, skip phase 3 (flash model).
 pub(crate) const GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS: u8 = 2;
 #[cfg(test)]
@@ -24,6 +29,10 @@ pub(crate) const GEMINI_RATE_LIMIT_FLASH_MODEL: &str = "gemini-3-flash-preview";
 
 pub(crate) fn gemini_is_no_flash(extra_env: Option<&HashMap<String, String>>) -> bool {
     extra_env.is_some_and(|env| env.contains_key(NO_FLASH_FALLBACK_ENV_KEY))
+}
+
+pub(crate) fn gemini_is_no_failover(extra_env: Option<&HashMap<String, String>>) -> bool {
+    extra_env.is_some_and(|env| env.contains_key(NO_FAILOVER_ENV_KEY))
 }
 
 pub(crate) fn gemini_rate_limit_backoff(attempt: u8) -> Duration {
@@ -53,7 +62,9 @@ pub(crate) fn gemini_should_use_api_key(attempt: u8) -> bool {
 }
 
 pub(crate) fn gemini_max_attempts(extra_env: Option<&HashMap<String, String>>) -> u8 {
-    if gemini_is_no_flash(extra_env) {
+    if gemini_is_no_failover(extra_env) {
+        GEMINI_RATE_LIMIT_NO_FAILOVER_ATTEMPTS
+    } else if gemini_is_no_flash(extra_env) {
         GEMINI_RATE_LIMIT_NO_FLASH_ATTEMPTS
     } else {
         GEMINI_RATE_LIMIT_MAX_ATTEMPTS

@@ -31,6 +31,7 @@ pub(crate) fn resolve_debate_tool(
         cli_tier,
         force_ignore_tier_setting,
     )?;
+    crate::run_helpers::validate_model_spec_tier_conflict(arg_model_spec, cli_tier, "debate")?;
 
     if let Some(model_spec) = arg_model_spec {
         let (tool, resolved_model_spec, _) = crate::run_helpers::resolve_tool_and_model(

@@ -155,7 +155,8 @@ pub enum Commands {
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,
-        /// Model spec: tool/provider/model/thinking_budget
+        /// Exact model selector in `tool/provider/model/thinking` format.
+        /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
         #[arg(long)]
         model_spec: Option<String>,
         /// Override tool default model (opaque string, passed through to tool)
@@ -174,7 +175,7 @@ pub enum Commands {
         #[arg(long)]
         force_override_user_config: bool,
 
-        /// Disable automatic 429 failover to alternative tools
+        /// Disable all retry/failover paths (cross-tool 429, ACP crash, Gemini rate-limit). Pair with --model-spec to fail fast.
         #[arg(long)]
         no_failover: bool,
 

@@ -56,6 +56,29 @@ fn resolve_debate_tool_prefers_model_spec_override() {
 }
 
 #[test]
+fn resolve_debate_tool_rejects_model_spec_with_tier() {
+    let global = GlobalConfig::default();
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let err = resolve_debate_tool(
+        None,
+        Some("codex/openai/gpt-5.4/xhigh"),
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        Some("tier-2-standard"),
+        false,
+    )
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("--model-spec and --tier are mutually exclusive"),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
 fn resolve_debate_thinking_prefers_cli_over_config() {
     let thinking = resolve_debate_thinking(Some("low"), Some("high"), false);
     assert_eq!(thinking.as_deref(), Some("low"));
@@ -110,15 +133,29 @@ fn retry_policy_only_retries_transient_once() {
 
     assert!(should_retry_debate_after_error(
         &DebateErrorKind::Transient("oom".to_string()),
-        0
+        0,
+        false
     ));
     assert!(!should_retry_debate_after_error(
         &DebateErrorKind::Transient("oom".to_string()),
-        1
+        1,
+        false
     ));
     assert!(!should_retry_debate_after_error(
         &DebateErrorKind::Deterministic("arg".to_string()),
-        0
+        0,
+        false
+    ));
+}
+
+#[test]
+fn retry_policy_suppressed_when_no_failover() {
+    use crate::debate_errors::DebateErrorKind;
+
+    assert!(!should_retry_debate_after_error(
+        &DebateErrorKind::Transient("oom".to_string()),
+        0,
+        true
     ));
 }
 

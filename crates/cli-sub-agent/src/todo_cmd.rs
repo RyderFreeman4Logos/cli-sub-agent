@@ -72,6 +72,10 @@ pub(crate) fn handle_create(
             "todo_root".to_string(),
             manager.todos_dir().display().to_string(),
         );
+        hook_vars.insert(
+            "project_root".to_string(),
+            project_root.display().to_string(),
+        );
         if let Err(e) = run_hooks_for_event(HookEvent::TodoCreate, &hooks_config, &hook_vars) {
             warn!("TodoCreate hook failed: {}", e);
         }
@@ -137,6 +141,10 @@ pub(crate) fn handle_save(
             hook_vars.insert(
                 "todo_root".to_string(),
                 manager.todos_dir().display().to_string(),
+            );
+            hook_vars.insert(
+                "project_root".to_string(),
+                project_root.display().to_string(),
             );
             hook_vars.insert("version".to_string(), version.to_string());
             hook_vars.insert("message".to_string(), commit_msg);

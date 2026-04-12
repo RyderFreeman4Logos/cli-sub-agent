@@ -29,6 +29,15 @@ pub(crate) enum DebateMode {
     SameModelAdversarial,
 }
 
+fn debate_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
+    let options = ExecutionEnvOptions::with_no_flash_fallback();
+    if no_failover {
+        options.with_no_failover()
+    } else {
+        options
+    }
+}
+
 pub(crate) async fn handle_debate(
     args: DebateArgs,
     current_depth: u32,
@@ -279,7 +288,7 @@ pub(crate) async fn handle_debate(
     // 7. Get env injection from global config (with no-flash + api key fallback)
     let extra_env_owned = global_config.build_execution_env(
         executor.tool_name(),
-        ExecutionEnvOptions::with_no_flash_fallback(),
+        debate_execution_env_options(args.no_failover),
     );
     let extra_env = extra_env_owned.as_ref();
     let idle_timeout_seconds =
@@ -362,6 +371,7 @@ pub(crate) async fn handle_debate(
                         if should_retry_debate_after_error(
                             &DebateErrorKind::Transient(reason.clone()),
                             retry_count,
+                            args.no_failover,
                         ) =>
                     {
                         if first_error_context.is_none() {
@@ -397,6 +407,7 @@ pub(crate) async fn handle_debate(
                 if should_retry_debate_after_error(
                     &DebateErrorKind::Transient(reason.clone()),
                     retry_count,
+                    args.no_failover,
                 ) =>
             {
                 if first_error_context.is_none() {
@@ -557,7 +568,14 @@ fn ensure_debate_wall_clock_within_timeout(
     Ok(())
 }
 
-fn should_retry_debate_after_error(kind: &DebateErrorKind, retry_count: u8) -> bool {
+fn should_retry_debate_after_error(
+    kind: &DebateErrorKind,
+    retry_count: u8,
+    no_failover: bool,
+) -> bool {
+    if no_failover {
+        return false;
+    }
     matches!(kind, DebateErrorKind::Transient(_)) && retry_count < 1
 }
 
