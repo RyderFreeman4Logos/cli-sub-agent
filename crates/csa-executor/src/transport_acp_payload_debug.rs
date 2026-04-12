@@ -61,6 +61,10 @@ fn redact_env_value(value: &mut Value) {
     }
 }
 
+/// Short-form flags whose following argument is an HTTP header value and must
+/// be checked for embedded credentials (e.g. `-H 'Authorization: Bearer ...'`).
+const HEADER_SHORT_FLAGS: &[&str] = &["-h"];
+
 fn arg_name_is_sensitive(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     [
@@ -79,16 +83,28 @@ fn arg_name_is_sensitive(value: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
+/// Returns `true` when `flag` is a short alias for a header flag (e.g. `-H`).
+fn is_header_short_flag(flag: &str) -> bool {
+    let normalized = flag.trim().to_ascii_lowercase();
+    HEADER_SHORT_FLAGS.contains(&normalized.as_str())
+}
+
 fn arg_value_is_sensitive(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized.contains("authorization:")
         || normalized.contains("bearer ")
         || normalized.contains("token=")
+        || normalized.contains("token:")
         || normalized.contains("api-key=")
+        || normalized.contains("api-key:")
         || normalized.contains("api_key=")
+        || normalized.contains("api_key:")
         || normalized.contains("apikey=")
+        || normalized.contains("apikey:")
         || normalized.contains("secret=")
+        || normalized.contains("secret:")
         || normalized.contains("password=")
+        || normalized.contains("password:")
 }
 
 fn arg_has_inline_sensitive_value(value: &str) -> bool {
@@ -122,6 +138,14 @@ fn redact_args(args: &[String]) -> Vec<String> {
         }
 
         if arg.starts_with('-') && arg_name_is_sensitive(arg) {
+            redacted.push(arg.clone());
+            redact_next = true;
+            continue;
+        }
+
+        // Short header flags like `-H` take the next arg as an HTTP header
+        // value that may embed credentials (e.g. `-H 'x-api-key: secret'`).
+        if is_header_short_flag(arg) {
             redacted.push(arg.clone());
             redact_next = true;
             continue;
@@ -231,6 +255,28 @@ mod tests {
                 "--api-key=<redacted>".to_string(),
                 "--api_key=<redacted>".to_string(),
                 "--header".to_string(),
+                "<redacted>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn redact_args_redacts_short_header_flag_values() {
+        let args = vec![
+            "-H".to_string(),
+            "x-api-key: secret".to_string(),
+            "--verbose".to_string(),
+            "-H".to_string(),
+            "Content-Type: application/json".to_string(),
+        ];
+
+        assert_eq!(
+            redact_args(&args),
+            vec![
+                "-H".to_string(),
+                "<redacted>".to_string(),
+                "--verbose".to_string(),
+                "-H".to_string(),
                 "<redacted>".to_string(),
             ]
         );
