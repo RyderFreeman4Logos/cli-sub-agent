@@ -1,6 +1,32 @@
 use super::*;
 use tempfile::tempdir;
 
+struct EnvVarGuard {
+    key: &'static str,
+    original: Option<String>,
+}
+
+impl EnvVarGuard {
+    fn set(key: &'static str, value: impl AsRef<std::ffi::OsStr>) -> Self {
+        let original = std::env::var(key).ok();
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe { std::env::set_var(key, value) };
+        Self { key, original }
+    }
+}
+
+impl Drop for EnvVarGuard {
+    fn drop(&mut self) {
+        // SAFETY: test-scoped env mutation is reverted in Drop.
+        unsafe {
+            match self.original.as_deref() {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
+}
+
 #[test]
 fn test_merge_tiers_deep_merge() {
     let user_toml: toml::Value = toml::from_str(
@@ -155,15 +181,13 @@ fn test_merged_schema_version_uses_max_when_explicit() {
 
 #[test]
 fn test_user_config_path_returns_some() {
-    // On a normal system with HOME set, this should return Some
-    let path = ProjectConfig::user_config_path();
-    if std::env::var("HOME").is_ok() {
-        assert!(path.is_some());
-        let p = path.unwrap();
-        assert!(p.to_string_lossy().contains("cli-sub-agent"));
-        assert!(p.to_string_lossy().contains("config.toml"));
-    }
-    // In containers without HOME, it's OK to return None
+    let dir = tempdir().unwrap();
+    let _config_home = EnvVarGuard::set("XDG_CONFIG_HOME", dir.path());
+
+    let path = ProjectConfig::user_config_path()
+        .expect("XDG_CONFIG_HOME should make config path available");
+    assert!(path.to_string_lossy().contains("cli-sub-agent"));
+    assert!(path.to_string_lossy().contains("config.toml"));
 }
 
 #[test]
@@ -180,11 +204,12 @@ fn test_user_config_template_is_valid() {
 
 #[test]
 fn test_user_config_path_matches_global_config_dir() {
+    let dir = tempdir().unwrap();
+    let _config_home = EnvVarGuard::set("XDG_CONFIG_HOME", dir.path());
+
     // After unification, user-level ProjectConfig and GlobalConfig share the same directory.
-    if std::env::var("HOME").is_err() {
-        return; // Skip in containers
-    }
-    let user_path = ProjectConfig::user_config_path().unwrap();
+    let user_path = ProjectConfig::user_config_path()
+        .expect("user config path should resolve inside test XDG config dir");
     let global_path = crate::GlobalConfig::config_path().unwrap();
     assert_eq!(
         user_path.parent(),
