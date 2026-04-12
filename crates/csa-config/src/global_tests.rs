@@ -83,6 +83,11 @@ tool = "auto"
         GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
         240
     );
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path_with_source(Some(&path))
+            .source,
+        KvCacheValueSource::DocumentedDefault
+    );
 }
 
 #[test]
@@ -102,6 +107,49 @@ long_poll_seconds = 0
         GlobalConfig::resolve_session_wait_long_poll_seconds_from_path(Some(&path)),
         240
     );
+    assert_eq!(
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path_with_source(Some(&path))
+            .source,
+        KvCacheValueSource::SectionDefault
+    );
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_tracks_explicit_default_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[kv_cache]
+long_poll_seconds = 240
+"#,
+    )
+    .unwrap();
+
+    let resolved =
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path_with_source(Some(&path));
+    assert_eq!(resolved.seconds, 240);
+    assert_eq!(resolved.source, KvCacheValueSource::Configured);
+}
+
+#[test]
+fn test_resolve_session_wait_long_poll_seconds_tracks_section_default_source() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+[kv_cache]
+frequent_poll_seconds = 45
+"#,
+    )
+    .unwrap();
+
+    let resolved =
+        GlobalConfig::resolve_session_wait_long_poll_seconds_from_path_with_source(Some(&path));
+    assert_eq!(resolved.seconds, 240);
+    assert_eq!(resolved.source, KvCacheValueSource::SectionDefault);
 }
 
 #[test]

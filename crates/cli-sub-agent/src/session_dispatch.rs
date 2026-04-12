@@ -7,7 +7,7 @@ use anyhow::Result;
 
 use crate::cli::SessionCommands;
 use crate::session_cmds;
-use csa_config::{DEFAULT_KV_CACHE_LONG_POLL_SECS, GlobalConfig, ProjectConfig};
+use csa_config::{GlobalConfig, KvCacheValueSource, ProjectConfig};
 use csa_core::types::OutputFormat;
 
 /// Resolve session ID from positional arg or --session flag.
@@ -179,12 +179,12 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
 /// Use the global KV cache setting when it differs from the documented default.
 /// Deprecated `session.daemon_wait_seconds` remains a compatibility fallback.
 fn resolve_daemon_wait_timeout(cd: Option<&str>) -> u64 {
-    let global_timeout = GlobalConfig::resolve_session_wait_long_poll_seconds();
-    if global_timeout != DEFAULT_KV_CACHE_LONG_POLL_SECS {
-        return global_timeout;
+    let global_timeout = GlobalConfig::resolve_session_wait_long_poll_seconds_with_source();
+    if !matches!(global_timeout.source, KvCacheValueSource::DocumentedDefault) {
+        return global_timeout.seconds;
     }
 
-    resolve_legacy_session_wait_timeout(cd).unwrap_or(global_timeout)
+    resolve_legacy_session_wait_timeout(cd).unwrap_or(global_timeout.seconds)
 }
 
 fn resolve_legacy_session_wait_timeout(cd: Option<&str>) -> Option<u64> {
@@ -346,6 +346,83 @@ daemon_wait_seconds = 600
         assert_eq!(
             resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
             3000
+        );
+    }
+
+    #[test]
+    fn resolve_daemon_wait_timeout_treats_explicit_default_as_higher_priority_than_legacy_key() {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+[kv_cache]
+long_poll_seconds = 240
+"#,
+        )
+        .unwrap();
+
+        let csa_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[session]
+daemon_wait_seconds = 600
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
+            240
+        );
+    }
+
+    #[test]
+    fn resolve_daemon_wait_timeout_treats_kv_cache_section_default_as_higher_priority_than_legacy_key()
+     {
+        let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+        let dir = tempfile::tempdir().unwrap();
+        let config_root = dir.path().join("xdg-config");
+        std::fs::create_dir_all(&config_root).unwrap();
+        let _home_guard = EnvVarGuard::set("HOME", dir.path());
+        let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+        let global_dir = config_root.join("cli-sub-agent");
+        std::fs::create_dir_all(&global_dir).unwrap();
+        std::fs::write(
+            global_dir.join("config.toml"),
+            r#"
+[kv_cache]
+frequent_poll_seconds = 45
+"#,
+        )
+        .unwrap();
+
+        let csa_dir = dir.path().join(".csa");
+        std::fs::create_dir_all(&csa_dir).unwrap();
+        std::fs::write(
+            csa_dir.join("config.toml"),
+            r#"
+schema_version = 1
+[session]
+daemon_wait_seconds = 600
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolve_daemon_wait_timeout(Some(dir.path().to_str().unwrap())),
+            240
         );
     }
 

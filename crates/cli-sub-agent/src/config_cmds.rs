@@ -8,6 +8,10 @@ use csa_config::init::init_project;
 use csa_config::{GlobalConfig, ProjectConfig, validate_config};
 use csa_core::types::OutputFormat;
 
+#[path = "config_cmds_helpers.rs"]
+mod helpers;
+use helpers::{format_missing_key_message, format_toml_value, resolve_key, suggest_key_paths};
+
 pub(crate) fn handle_config_show(cd: Option<String>, format: OutputFormat) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
@@ -349,7 +353,9 @@ enum LookupSourceSpec {
     RawProject {
         path: std::path::PathBuf,
     },
-    EffectiveGlobal,
+    EffectiveGlobal {
+        allow_raw_fallback: bool,
+    },
     RawGlobal {
         path: std::path::PathBuf,
     },
@@ -362,6 +368,8 @@ impl LookupSourceSpec {
             LookupSourceSpec::EffectiveProject {
                 include_global_fallback: true,
                 ..
+            } | LookupSourceSpec::EffectiveGlobal {
+                allow_raw_fallback: true
             }
         )
     }
@@ -375,6 +383,7 @@ fn build_config_get_lookup(
 ) -> Result<ConfigGetLookup> {
     let mut sources = Vec::new();
     let prefer_effective = prefers_effective_lookup(key)?;
+    let use_raw_global_only = global_key_prefers_raw_lookup(key);
 
     if !global_only {
         let project_root =
@@ -402,8 +411,14 @@ fn build_config_get_lookup(
             .ok()
             .map(|path| LookupSourceSpec::RawGlobal { path });
 
-        if prefer_effective {
-            sources.push(LookupSourceSpec::EffectiveGlobal);
+        if use_raw_global_only {
+            if let Some(raw_global) = raw_global {
+                sources.push(raw_global);
+            }
+        } else if prefer_effective {
+            sources.push(LookupSourceSpec::EffectiveGlobal {
+                allow_raw_fallback: raw_global.is_some(),
+            });
             if let Some(raw_global) = raw_global {
                 sources.push(raw_global);
             }
@@ -411,7 +426,9 @@ fn build_config_get_lookup(
             if let Some(raw_global) = raw_global {
                 sources.push(raw_global);
             }
-            sources.push(LookupSourceSpec::EffectiveGlobal);
+            sources.push(LookupSourceSpec::EffectiveGlobal {
+                allow_raw_fallback: false,
+            });
         }
     }
 
@@ -436,7 +453,7 @@ fn load_lookup_root(source: &LookupSourceSpec) -> Result<Option<toml::Value>> {
         LookupSourceSpec::RawProject { path } | LookupSourceSpec::RawGlobal { path } => {
             load_toml_root(path)
         }
-        LookupSourceSpec::EffectiveGlobal => Ok(Some(build_global_display_toml(
+        LookupSourceSpec::EffectiveGlobal { .. } => Ok(Some(build_global_display_toml(
             &GlobalConfig::load()?.redacted_for_display(),
         )?)),
     }
@@ -518,6 +535,10 @@ fn prefers_effective_lookup(key: &str) -> Result<bool> {
         return Ok(false);
     };
     Ok(known_effective_top_level_sections()?.contains(top_level))
+}
+
+fn global_key_prefers_raw_lookup(key: &str) -> bool {
+    key.starts_with("kv_cache.")
 }
 
 fn known_effective_top_level_sections() -> Result<BTreeSet<String>> {
@@ -664,119 +685,6 @@ fn resolve_effective_execution_key(
     Ok(resolve_key(&root, key))
 }
 
-fn suggest_key_paths(key: &str, candidates: &BTreeSet<String>) -> Vec<String> {
-    let query = key.trim().to_ascii_lowercase();
-    if query.is_empty() {
-        return Vec::new();
-    }
-
-    let last_segment = query.rsplit('.').next().unwrap_or(query.as_str());
-    let max_distance = std::cmp::max(3, query.len() / 3);
-
-    let mut ranked: Vec<_> = candidates
-        .iter()
-        .filter_map(|candidate| {
-            if candidate == key {
-                return None;
-            }
-
-            let normalized = candidate.to_ascii_lowercase();
-            let full_prefix = normalized.starts_with(&query);
-            let segment_prefix = normalized
-                .rsplit('.')
-                .next()
-                .is_some_and(|segment| segment.starts_with(last_segment));
-            let contains = normalized.contains(&query)
-                || (last_segment.len() >= 3 && normalized.contains(last_segment));
-            let distance = levenshtein_distance(&query, &normalized);
-
-            (full_prefix || segment_prefix || contains || distance <= max_distance).then(|| {
-                (
-                    !full_prefix,
-                    !segment_prefix,
-                    !contains,
-                    distance,
-                    normalized.len().abs_diff(query.len()),
-                    candidate.clone(),
-                )
-            })
-        })
-        .collect();
-
-    ranked.sort();
-    ranked
-        .into_iter()
-        .map(|(_, _, _, _, _, candidate)| candidate)
-        .take(5)
-        .collect()
-}
-
-fn levenshtein_distance(left: &str, right: &str) -> usize {
-    if left == right {
-        return 0;
-    }
-    if left.is_empty() {
-        return right.chars().count();
-    }
-    if right.is_empty() {
-        return left.chars().count();
-    }
-
-    let right_chars: Vec<_> = right.chars().collect();
-    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
-    let mut current = vec![0; right_chars.len() + 1];
-
-    for (left_idx, left_ch) in left.chars().enumerate() {
-        current[0] = left_idx + 1;
-        for (right_idx, right_ch) in right_chars.iter().enumerate() {
-            let substitution_cost = usize::from(left_ch != *right_ch);
-            current[right_idx + 1] = std::cmp::min(
-                std::cmp::min(previous[right_idx + 1] + 1, current[right_idx] + 1),
-                previous[right_idx] + substitution_cost,
-            );
-        }
-        std::mem::swap(&mut previous, &mut current);
-    }
-
-    previous[right_chars.len()]
-}
-
-fn format_missing_key_message(key: &str, suggestions: &[String]) -> String {
-    if suggestions.is_empty() {
-        return format!("Key not found: {key}");
-    }
-
-    let suggestion_lines = suggestions
-        .iter()
-        .map(|candidate| format!("  - {candidate}"))
-        .collect::<Vec<_>>()
-        .join("\n");
-    format!("Key not found: {key}\nClosest matches:\n{suggestion_lines}")
-}
-
-/// Navigate a TOML value by dotted key path (e.g., "tools.codex.enabled").
-fn resolve_key(root: &toml::Value, key: &str) -> Option<toml::Value> {
-    let mut current = root;
-    for part in key.split('.') {
-        current = current.as_table()?.get(part)?;
-    }
-    Some(current.clone())
-}
-
-/// Format a TOML value for stdout (inline for scalars, pretty for tables/arrays).
-fn format_toml_value(value: &toml::Value) -> String {
-    match value {
-        toml::Value::String(s) => s.clone(),
-        toml::Value::Integer(i) => i.to_string(),
-        toml::Value::Float(f) => f.to_string(),
-        toml::Value::Boolean(b) => b.to_string(),
-        toml::Value::Table(_) | toml::Value::Array(_) => {
-            toml::to_string_pretty(value).unwrap_or_else(|_| format!("{value:?}"))
-        }
-        toml::Value::Datetime(d) => d.to_string(),
-    }
-}
-
 pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let config = ProjectConfig::load(&project_root)?
@@ -795,3 +703,7 @@ pub(crate) fn handle_config_validate(cd: Option<String>) -> Result<()> {
 #[cfg(test)]
 #[path = "config_cmds_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "config_cmds_lookup_tests.rs"]
+mod lookup_tests;
