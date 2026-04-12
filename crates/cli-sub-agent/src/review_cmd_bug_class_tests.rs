@@ -393,3 +393,48 @@ fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion(
         "one multi-review run must not self-promote a recurring bug class"
     );
 }
+
+#[test]
+fn bug_class_loader_keeps_sessions_with_review_meta_even_if_consolidated_exists() {
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+
+    let child = create_session(
+        project_dir.path(),
+        Some("review[1]: base:main"),
+        None,
+        Some("codex"),
+    )
+    .expect("child review session");
+    let child_dir = get_session_dir(project_dir.path(), &child.meta_session_id).unwrap();
+
+    write_review_artifact_file(
+        &child_dir,
+        "review-consolidated.json",
+        &sample_review_artifact(&child.meta_session_id, Severity::High, "rust/002"),
+    );
+    write_review_meta(
+        &child_dir,
+        &ReviewSessionMeta {
+            session_id: child.meta_session_id.clone(),
+            head_sha: "deadbeef".to_string(),
+            decision: "fail".to_string(),
+            verdict: "HAS_ISSUES".to_string(),
+            tool: "codex".to_string(),
+            scope: "base:main".to_string(),
+            exit_code: 1,
+            fix_attempted: false,
+            fix_rounds: 0,
+            review_iterations: 7,
+            timestamp: chrono::Utc::now(),
+            diff_fingerprint: Some("sha256:shared".to_string()),
+        },
+    )
+    .expect("review meta");
+
+    let review_artifacts = load_bug_class_review_artifacts(project_dir.path())
+        .expect("child session should still be mined");
+
+    assert_eq!(review_artifacts.len(), 1);
+    assert_eq!(review_artifacts[0].session_id, child.meta_session_id);
+}

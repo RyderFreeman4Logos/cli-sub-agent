@@ -86,3 +86,67 @@ max_concurrent = "oops"
 
     assert_eq!(value, Some("auto".to_string()));
 }
+
+#[test]
+fn resolve_lookup_sources_warns_when_raw_global_fallback_follows_effective_project_parse_error() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let project_root = dir.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    let global_config_path = global_dir.join("config.toml");
+    std::fs::write(
+        &global_config_path,
+        r#"
+[review]
+tool = "auto"
+
+[execution]
+min_timeout_seconds = "oops"
+"#,
+    )
+    .unwrap();
+
+    let sources = vec![
+        LookupSourceSpec::RawProject {
+            path: ProjectConfig::config_path(&project_root),
+        },
+        LookupSourceSpec::EffectiveProject {
+            project_root: project_root.clone(),
+            include_global_fallback: true,
+        },
+        LookupSourceSpec::RawGlobal {
+            path: global_config_path,
+        },
+        LookupSourceSpec::EffectiveGlobal {
+            allow_raw_fallback: false,
+        },
+    ];
+
+    let resolved = resolve_lookup_sources_with_diagnostics(&sources, "review.tool").unwrap();
+    let value = resolved
+        .value
+        .as_ref()
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+
+    assert_eq!(value, Some("auto".to_string()));
+    assert!(
+        resolved
+            .diagnostics
+            .raw_global_value_from_invalid_effective_project
+    );
+    assert!(
+        !resolved
+            .diagnostics
+            .raw_global_value_from_invalid_effective_global
+    );
+    assert!(resolved.diagnostics.should_warn_raw_global_parse_fallback());
+}
