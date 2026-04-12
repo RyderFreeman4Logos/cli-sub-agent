@@ -415,6 +415,85 @@ fn criterion_status_label(status: CriterionStatus) -> &'static str {
     }
 }
 
+pub(crate) fn handle_update(
+    timestamp: String,
+    title: Option<String>,
+    status: Option<String>,
+    description: Option<String>,
+    cd: Option<String>,
+) -> Result<()> {
+    if title.is_none() && status.is_none() && description.is_none() {
+        anyhow::bail!(
+            "At least one of --title, --status, or --description is required for `todo update`"
+        );
+    }
+
+    let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
+    let manager = TodoManager::new(&project_root)?;
+
+    // Validate plan exists
+    let plan = manager.load(&timestamp)?;
+
+    // --- Validate ALL inputs BEFORE any mutations (atomicity) ---
+    let parsed_status = status
+        .as_ref()
+        .map(|s| {
+            s.parse::<TodoStatus>()
+                .map_err(|e| anyhow::anyhow!("invalid status '{}': {}", s, e))
+        })
+        .transpose()?;
+
+    // --- Apply mutations (all validation passed) ---
+    let mut changed_fields: Vec<&str> = Vec::new();
+    let mut changed_files: Vec<String> = Vec::new();
+
+    if let Some(ref new_title) = title {
+        manager.update_title(&timestamp, new_title)?;
+        changed_fields.push("title");
+        changed_files.push(format!("{timestamp}/metadata.toml"));
+    }
+
+    if let Some(new_status) = parsed_status
+        && plan.metadata.status != new_status
+    {
+        manager.update_status(&timestamp, new_status)?;
+        changed_fields.push("status");
+        changed_files.push(format!("{timestamp}/metadata.toml"));
+    }
+
+    if let Some(ref new_description) = description {
+        manager.write_todo_md(&timestamp, new_description)?;
+        changed_fields.push("description");
+        changed_files.push(format!("{timestamp}/TODO.md"));
+        // write_todo_md also bumps updated_at in metadata.toml
+        changed_files.push(format!("{timestamp}/metadata.toml"));
+    }
+
+    if changed_fields.is_empty() {
+        eprintln!("No changes applied to plan '{timestamp}'.");
+    } else {
+        // Auto-commit only the files that were actually changed (don't stage unrelated dirty files)
+        csa_todo::git::ensure_git_init(manager.todos_dir())?;
+        changed_files.dedup();
+        let file_refs: Vec<&str> = changed_files.iter().map(|s| s.as_str()).collect();
+        let commit_msg = format!("update {}: {}", timestamp, changed_fields.join(", "));
+        match csa_todo::git::save_files(manager.todos_dir(), &timestamp, &file_refs, &commit_msg)? {
+            Some(hash) => {
+                eprintln!(
+                    "Updated plan '{timestamp}': {} ({})",
+                    changed_fields.join(", "),
+                    hash
+                );
+            }
+            None => {
+                eprintln!("Updated plan '{timestamp}': {}", changed_fields.join(", "));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 pub(crate) fn handle_status(timestamp: String, status: String, cd: Option<String>) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
     let manager = TodoManager::new(&project_root)?;

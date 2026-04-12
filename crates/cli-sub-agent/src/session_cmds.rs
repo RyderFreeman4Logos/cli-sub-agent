@@ -43,12 +43,43 @@ pub(crate) use reconcile::{
     ensure_terminal_result_for_dead_active_session, retire_if_dead_with_result,
 };
 
+/// Parse a human-friendly duration string (e.g., "1h", "30m", "2d") into
+/// a `chrono::Duration`. Supports `s` (seconds), `m` (minutes), `h` (hours),
+/// and `d` (days).
+fn parse_duration_filter(s: &str) -> Result<chrono::Duration> {
+    let s = s.trim();
+    if s.is_empty() {
+        anyhow::bail!("Duration string cannot be empty");
+    }
+
+    let (num_str, unit) = s.split_at(s.len() - 1);
+    let num: i64 = num_str.parse().map_err(|_| {
+        anyhow::anyhow!("Invalid duration: '{s}'. Expected: <number><unit> (e.g., 1h, 30m, 2d)")
+    })?;
+
+    match unit {
+        "s" => Ok(chrono::Duration::seconds(num)),
+        "m" => Ok(chrono::Duration::minutes(num)),
+        "h" => Ok(chrono::Duration::hours(num)),
+        "d" => Ok(chrono::Duration::days(num)),
+        _ => anyhow::bail!("Unknown duration unit '{unit}'. Supported: s, m, h, d"),
+    }
+}
+
+/// Filter options for `csa session list`.
+pub(crate) struct SessionListFilters {
+    pub limit: Option<usize>,
+    pub since: Option<String>,
+    pub status: Option<String>,
+}
+
 pub(crate) fn handle_session_list(
     cd: Option<String>,
     branch: Option<String>,
     tool: Option<String>,
     tree: bool,
     all_projects: bool,
+    filters: SessionListFilters,
     format: OutputFormat,
 ) -> Result<()> {
     let project_root = crate::pipeline::determine_project_root(cd.as_deref())?;
@@ -59,11 +90,33 @@ pub(crate) fn handle_session_list(
             list_sessions_tree_filtered(&project_root, tool_filter.as_deref(), branch.as_deref())?;
         print!("{tree_output}");
     } else {
-        let sessions = if all_projects {
+        let mut sessions = if all_projects {
             select_sessions_for_list_all_projects(branch.as_deref(), tool_filter.as_deref())?
         } else {
             select_sessions_for_list(&project_root, branch.as_deref(), tool_filter.as_deref())?
         };
+
+        // --since filter: keep only sessions accessed after the cutoff
+        if let Some(ref since_str) = filters.since {
+            let duration = parse_duration_filter(since_str)?;
+            let cutoff = chrono::Utc::now() - duration;
+            sessions.retain(|s| s.last_accessed >= cutoff);
+        }
+
+        // --status filter: match resolved status string (case-insensitive)
+        if let Some(ref status_filter) = filters.status {
+            let filter_lower = status_filter.to_ascii_lowercase();
+            sessions.retain(|s| {
+                let resolved = resolve_session_status(s).to_ascii_lowercase();
+                resolved == filter_lower
+            });
+        }
+
+        // --limit: keep only the N most recent (list is already sorted newest-first)
+        if let Some(n) = filters.limit {
+            sessions.truncate(n);
+        }
+
         if sessions.is_empty() {
             match format {
                 OutputFormat::Json => {

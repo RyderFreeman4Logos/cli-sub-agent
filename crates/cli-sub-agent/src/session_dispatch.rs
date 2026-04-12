@@ -10,6 +10,14 @@ use crate::session_cmds;
 use csa_config::{DEFAULT_KV_CACHE_LONG_POLL_SECS, GlobalConfig, ProjectConfig};
 use csa_core::types::OutputFormat;
 
+/// Resolve session ID from positional arg or --session flag.
+/// Positional takes precedence when both are provided.
+fn resolve_session_id(positional: Option<String>, flag: Option<String>) -> Result<String> {
+    positional
+        .or(flag)
+        .ok_or_else(|| anyhow::anyhow!("session ID is required (positional or --session)"))
+}
+
 pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Result<()> {
     match cmd {
         SessionCommands::List {
@@ -18,14 +26,39 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             tool,
             tree,
             all_projects,
+            limit,
+            since,
+            status,
         } => {
-            session_cmds::handle_session_list(cd, branch, tool, tree, all_projects, output_format)?;
+            session_cmds::handle_session_list(
+                cd,
+                branch,
+                tool,
+                tree,
+                all_projects,
+                session_cmds::SessionListFilters {
+                    limit,
+                    since,
+                    status,
+                },
+                output_format,
+            )?;
         }
-        SessionCommands::Compress { session, cd } => {
-            session_cmds::handle_session_compress(session, cd)?;
+        SessionCommands::Compress {
+            session_id,
+            session,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            session_cmds::handle_session_compress(sid, cd)?;
         }
-        SessionCommands::Delete { session, cd } => {
-            session_cmds::handle_session_delete(session, cd)?;
+        SessionCommands::Delete {
+            session_id,
+            session,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            session_cmds::handle_session_delete(sid, cd)?;
         }
         SessionCommands::Clean {
             days,
@@ -36,20 +69,28 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             session_cmds::handle_session_clean(days, dry_run, tool, cd)?;
         }
         SessionCommands::Logs {
+            session_id,
             session,
             tail,
             events,
             cd,
         } => {
-            session_cmds::handle_session_logs(session, tail, events, cd)?;
+            let sid = resolve_session_id(session_id, session)?;
+            session_cmds::handle_session_logs(sid, tail, events, cd)?;
         }
-        SessionCommands::IsAlive { session, cd } => {
-            let alive = session_cmds::handle_session_is_alive(session, cd)?;
+        SessionCommands::IsAlive {
+            session_id,
+            session,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            let alive = session_cmds::handle_session_is_alive(sid, cd)?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(if alive { 0 } else { 1 });
         }
         SessionCommands::Result {
+            session_id,
             session,
             json,
             summary,
@@ -57,8 +98,9 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
             full,
             cd,
         } => {
+            let sid = resolve_session_id(session_id, session)?;
             session_cmds::handle_session_result(
-                session,
+                sid,
                 json,
                 cd,
                 session_cmds::StructuredOutputOpts {
@@ -68,8 +110,13 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
                 },
             )?;
         }
-        SessionCommands::Artifacts { session, cd } => {
-            session_cmds::handle_session_artifacts(session, cd)?;
+        SessionCommands::Artifacts {
+            session_id,
+            session,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            session_cmds::handle_session_artifacts(sid, cd)?;
         }
         SessionCommands::Log { session, cd } => {
             session_cmds::handle_session_log(session, cd)?;
@@ -91,22 +138,34 @@ pub(crate) fn dispatch(cmd: SessionCommands, output_format: OutputFormat) -> Res
         } => {
             session_cmds::handle_session_tool_output(session, index, list, cd)?;
         }
-        SessionCommands::Wait { session, cd } => {
+        SessionCommands::Wait {
+            session_id,
+            session,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
             let wait_timeout = resolve_daemon_wait_timeout(cd.as_deref());
-            let exit_code = session_cmds::handle_session_wait(session, cd, wait_timeout)?;
+            let exit_code = session_cmds::handle_session_wait(sid, cd, wait_timeout)?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);
         }
-        SessionCommands::Kill { session, cd } => {
-            session_cmds::handle_session_kill(session, cd)?;
+        SessionCommands::Kill {
+            session_id,
+            session,
+            cd,
+        } => {
+            let sid = resolve_session_id(session_id, session)?;
+            session_cmds::handle_session_kill(sid, cd)?;
         }
         SessionCommands::Attach {
+            session_id,
             session,
             stderr,
             cd,
         } => {
-            let exit_code = session_cmds::handle_session_attach(session, stderr, cd)?;
+            let sid = resolve_session_id(session_id, session)?;
+            let exit_code = session_cmds::handle_session_attach(sid, stderr, cd)?;
             let _ = std::io::stdout().flush();
             let _ = std::io::stderr().flush();
             std::process::exit(exit_code);

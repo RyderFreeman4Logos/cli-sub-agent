@@ -206,6 +206,17 @@ impl TodoManager {
         })
     }
 
+    /// Update the title of a TODO plan.
+    pub fn update_title(&self, timestamp: &str, title: &str) -> Result<TodoPlan> {
+        self.with_write_lock(|| {
+            let mut plan = self.load_inner(timestamp)?;
+            plan.metadata.title = title.to_string();
+            plan.metadata.updated_at = Utc::now();
+            self.write_metadata(&plan)?;
+            Ok(plan)
+        })
+    }
+
     /// Link a CSA session ID to a TODO plan (idempotent).
     pub fn link_session(&self, timestamp: &str, session_id: &str) -> Result<TodoPlan> {
         self.with_write_lock(|| {

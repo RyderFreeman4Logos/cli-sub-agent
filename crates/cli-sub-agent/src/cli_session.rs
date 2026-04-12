@@ -24,12 +24,28 @@ pub enum SessionCommands {
         /// List sessions from all projects (incompatible with --tree)
         #[arg(long, conflicts_with = "tree")]
         all_projects: bool,
+
+        /// Show only the N most recent sessions
+        #[arg(long)]
+        limit: Option<usize>,
+
+        /// Show sessions accessed since a duration ago (e.g., "1h", "30m", "2d")
+        #[arg(long)]
+        since: Option<String>,
+
+        /// Filter by session status (active, retired, failed, error)
+        #[arg(long)]
+        status: Option<String>,
     },
 
     /// Compress session context (gemini-cli: /compress, others: /compact)
     Compress {
+        /// Session ULID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         #[arg(short, long)]
-        session: String,
+        session: Option<String>,
 
         /// Working directory (defaults to CWD)
         #[arg(long)]
@@ -38,8 +54,12 @@ pub enum SessionCommands {
 
     /// Delete a session
     Delete {
+        /// Session ULID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         #[arg(short, long)]
-        session: String,
+        session: Option<String>,
 
         /// Working directory (defaults to CWD)
         #[arg(long)]
@@ -67,9 +87,13 @@ pub enum SessionCommands {
 
     /// View session logs
     Logs {
+        /// Session ULID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ULID or prefix
         #[arg(short, long)]
-        session: String,
+        session: Option<String>,
 
         /// Show only last N lines
         #[arg(long)]
@@ -86,9 +110,13 @@ pub enum SessionCommands {
 
     /// Check whether a session is still alive using filesystem liveness signals
     IsAlive {
+        /// Session ID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ID or prefix
         #[arg(short, long)]
-        session: String,
+        session: Option<String>,
 
         /// Working directory
         #[arg(long)]
@@ -97,9 +125,13 @@ pub enum SessionCommands {
 
     /// Show the last execution result for a session
     Result {
+        /// Session ID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ID or prefix
         #[arg(short, long)]
-        session: String,
+        session: Option<String>,
 
         /// Output as JSON instead of human-readable
         #[arg(long)]
@@ -124,9 +156,13 @@ pub enum SessionCommands {
 
     /// List artifacts in a session's output directory
     Artifacts {
+        /// Session ID or prefix (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ID or prefix
         #[arg(short, long)]
-        session: String,
+        session: Option<String>,
 
         /// Working directory
         #[arg(long)]
@@ -199,9 +235,13 @@ pub enum SessionCommands {
     /// Timeout comes from `~/.config/cli-sub-agent/config.toml` `[kv_cache].long_poll_seconds`
     /// with a legacy 250s fallback when `[kv_cache]` is absent.
     Wait {
+        /// Session ID to wait for (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ID to wait for
         #[arg(long)]
-        session: String,
+        session: Option<String>,
 
         /// Working directory
         #[arg(long)]
@@ -210,9 +250,13 @@ pub enum SessionCommands {
 
     /// Kill a running daemon session (SIGTERM, then SIGKILL after grace period)
     Kill {
+        /// Session ID to kill (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ID to kill
         #[arg(long)]
-        session: String,
+        session: Option<String>,
 
         /// Working directory
         #[arg(long)]
@@ -221,9 +265,13 @@ pub enum SessionCommands {
 
     /// Attach to a running daemon session (tail live output/stderr until the daemon exits)
     Attach {
+        /// Session ID to attach to (positional alternative to --session)
+        #[arg(conflicts_with = "session")]
+        session_id: Option<String>,
+
         /// Session ID to attach to
         #[arg(long)]
-        session: String,
+        session: Option<String>,
 
         /// Show stderr alongside stdout
         #[arg(long)]
