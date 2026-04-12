@@ -116,3 +116,51 @@ fn review_iterations_increment_from_prior_review_meta_on_same_branch() {
         try_resolve_review_iterations(project_dir.path(), &current.meta_session_id).unwrap();
     assert_eq!(review_iterations, 2);
 }
+
+#[test]
+fn review_iterations_do_not_undercount_after_more_than_ten_prior_reviews() {
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+
+    for iteration in 1..=11 {
+        let session = create_session(
+            project_dir.path(),
+            Some("previous review"),
+            None,
+            Some("codex"),
+        )
+        .expect("previous session");
+        let session_dir = get_session_dir(project_dir.path(), &session.meta_session_id).unwrap();
+
+        write_review_meta(
+            &session_dir,
+            &ReviewSessionMeta {
+                session_id: session.meta_session_id,
+                head_sha: "deadbeef".to_string(),
+                decision: "fail".to_string(),
+                verdict: "HAS_ISSUES".to_string(),
+                tool: "codex".to_string(),
+                scope: "base:main".to_string(),
+                exit_code: 1,
+                fix_attempted: false,
+                fix_rounds: 0,
+                review_iterations: iteration,
+                timestamp: chrono::Utc::now(),
+                diff_fingerprint: None,
+            },
+        )
+        .expect("review meta");
+    }
+
+    let current = create_session(
+        project_dir.path(),
+        Some("current review"),
+        None,
+        Some("codex"),
+    )
+    .expect("current session");
+
+    let review_iterations =
+        try_resolve_review_iterations(project_dir.path(), &current.meta_session_id).unwrap();
+    assert_eq!(review_iterations, 12);
+}

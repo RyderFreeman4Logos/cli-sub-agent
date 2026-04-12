@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use csa_session::ReviewSessionMeta;
 use csa_session::review_artifact::ReviewArtifact;
 use tracing::{info, warn};
 
@@ -120,16 +121,37 @@ pub(super) fn try_resolve_review_iterations(project_root: &Path, session_id: &st
         return Ok(1);
     };
 
-    let prior_iterations =
-        csa_session::find_sessions(project_root, Some(&branch), None, None, None)?
-            .into_iter()
-            .filter(|candidate| candidate.meta_session_id != session_id)
-            .filter(|candidate| {
-                csa_session::get_session_dir(project_root, &candidate.meta_session_id)
-                    .map(|session_dir| session_dir.join("review_meta.json").is_file())
-                    .unwrap_or(false)
-            })
-            .count() as u32;
+    let mut branch_sessions = csa_session::list_sessions(project_root, None)?
+        .into_iter()
+        .filter(|candidate| candidate.meta_session_id != session_id)
+        .filter(|candidate| {
+            candidate.resolved_identity().ref_name.as_deref() == Some(branch.as_str())
+        })
+        .collect::<Vec<_>>();
+    branch_sessions.sort_by(|left, right| right.last_accessed.cmp(&left.last_accessed));
 
-    Ok(prior_iterations.saturating_add(1))
+    for candidate in branch_sessions {
+        if let Some(review_iterations) =
+            load_review_iterations(project_root, &candidate.meta_session_id)?
+        {
+            return Ok(review_iterations.saturating_add(1));
+        }
+    }
+
+    Ok(1)
+}
+
+fn load_review_iterations(project_root: &Path, session_id: &str) -> Result<Option<u32>> {
+    let session_dir = csa_session::get_session_dir(project_root, session_id)
+        .with_context(|| format!("failed to resolve review session dir for {session_id}"))?;
+    let review_meta_path = session_dir.join("review_meta.json");
+    if !review_meta_path.is_file() {
+        return Ok(None);
+    }
+
+    let content = std::fs::read_to_string(&review_meta_path)
+        .with_context(|| format!("failed to read {}", review_meta_path.display()))?;
+    let review_meta: ReviewSessionMeta = serde_json::from_str(&content)
+        .with_context(|| format!("failed to parse {}", review_meta_path.display()))?;
+    Ok(Some(review_meta.review_iterations))
 }

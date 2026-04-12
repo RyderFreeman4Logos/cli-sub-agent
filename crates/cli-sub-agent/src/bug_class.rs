@@ -7,6 +7,15 @@ use anyhow::{Context, Result};
 use csa_session::review_artifact::{Finding, ReviewArtifact};
 use serde::{Deserialize, Serialize};
 
+#[path = "bug_class_sanitization.rs"]
+mod sanitization;
+
+use sanitization::sanitize_candidate_for_skill;
+#[cfg(test)]
+pub(crate) use sanitization::{
+    SANITIZED_CONTENT_PLACEHOLDER, sanitize_code_for_skill, sanitize_text_for_skill,
+};
+
 const CONSOLIDATED_REVIEW_ARTIFACT_FILE: &str = "review-consolidated.json";
 const SINGLE_REVIEW_ARTIFACT_FILE: &str = "review-findings.json";
 const REVIEW_DETAILS_CONTEXT_FILE: &str = "output/details.md";
@@ -66,7 +75,11 @@ impl SkillExtractor {
     }
 
     pub(crate) fn extract(&self, candidates: &[BugClassCandidate]) -> Result<Vec<PathBuf>> {
-        let mut grouped = group_candidates_by_language(candidates);
+        let sanitized_candidates = candidates
+            .iter()
+            .map(sanitize_candidate_for_skill)
+            .collect::<Vec<_>>();
+        let mut grouped = group_candidates_by_language(&sanitized_candidates);
         let mut written = Vec::new();
 
         for (language, candidates) in &mut grouped {
@@ -108,9 +121,11 @@ impl BugClassCandidate {
 
         for artifact in review_artifacts {
             for finding in &artifact.findings {
-                let language = infer_language(&finding.file, &finding.rule_id);
-                let rule_id = optional_string(&finding.rule_id);
-                let domain = infer_domain(&finding.rule_id, &finding.summary);
+                let Some(rule_id) = optional_string(&finding.rule_id) else {
+                    continue;
+                };
+                let language = infer_language(&finding.file, &rule_id);
+                let domain = infer_domain(&rule_id, &finding.summary);
                 let case_study = CaseStudy {
                     session_id: artifact.session_id.clone(),
                     file_path: finding.file.clone(),
@@ -121,7 +136,7 @@ impl BugClassCandidate {
                     fix_description: finding.summary.clone(),
                 };
                 let key = CandidateKey {
-                    rule_id: rule_id.clone().unwrap_or_default(),
+                    rule_id: rule_id.clone(),
                     language: language.clone(),
                 };
 
@@ -130,7 +145,7 @@ impl BugClassCandidate {
                         entry.insert(Self {
                             language,
                             domain: domain.clone(),
-                            rule_id,
+                            rule_id: Some(rule_id.clone()),
                             anti_pattern_category: infer_anti_pattern_category(finding),
                             preferred_pattern: infer_preferred_pattern(finding, domain.as_deref()),
                             case_studies: vec![case_study],
