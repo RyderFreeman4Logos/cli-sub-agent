@@ -79,7 +79,10 @@ pub(crate) fn resolve_debate_tool(
         return Ok((tool, DebateMode::Heterogeneous, None));
     }
 
-    // Compute effective whitelist from tool selection (project > global)
+    // Compute effective whitelist from tool selection (project > global).
+    // IMPORTANT (#648): When [debate].tool is set, it acts as a whitelist filter
+    // on the tier's model list, silently narrowing a multi-tool tier to only the
+    // specified tool(s). To use the full tier fallback chain, set tool = "auto".
     let effective_whitelist = project_config
         .and_then(|cfg| cfg.debate.as_ref())
         .map(|d| &d.tool)

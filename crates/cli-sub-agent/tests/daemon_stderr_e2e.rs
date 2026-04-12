@@ -84,6 +84,10 @@ fn test_session_id(suffix: &str) -> String {
 // even on the non-error exit path with a non-zero exit code.
 // ---------------------------------------------------------------------------
 
+// macOS: daemon child exit-code and completion-file behaviour diverges from Linux
+// due to process lifecycle differences (signal delivery, tempdir symlinks).
+// Tracked in https://github.com/RyderFreeman4Logos/cli-sub-agent/issues/637
+#[cfg_attr(target_os = "macos", ignore)]
 #[test]
 fn daemon_child_ok_nonzero_writes_completion_toml() {
     let tmp = tempfile::tempdir().expect("tempdir");
@@ -157,6 +161,10 @@ fn daemon_child_ok_nonzero_writes_completion_toml() {
 // before the issue #574 fix.
 // ---------------------------------------------------------------------------
 
+// macOS: daemon child exit-code and completion-file behaviour diverges from Linux
+// due to process lifecycle differences (signal delivery, tempdir symlinks).
+// Tracked in https://github.com/RyderFreeman4Logos/cli-sub-agent/issues/637
+#[cfg_attr(target_os = "macos", ignore)]
 #[test]
 fn daemon_child_err_path_captures_stderr_and_writes_completion() {
     let tmp = tempfile::tempdir().expect("tempdir");
