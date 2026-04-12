@@ -685,5 +685,9 @@ mod tests_pr_bot;
 mod tests_chunked;
 
 #[cfg(test)]
+#[path = "plan_cmd_tests_commit.rs"]
+mod tests_commit;
+
+#[cfg(test)]
 #[path = "plan_cmd_override_tests.rs"]
 mod override_tests;

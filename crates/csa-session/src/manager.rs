@@ -32,6 +32,12 @@ const DAEMON_SESSION_ID_ENV: &str = "CSA_DAEMON_SESSION_ID";
 const DAEMON_SESSION_DIR_ENV: &str = "CSA_DAEMON_SESSION_DIR";
 const DAEMON_PROJECT_ROOT_ENV: &str = "CSA_DAEMON_PROJECT_ROOT";
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionIdStrategy {
+    DaemonAware,
+    Fresh,
+}
+
 fn preassigned_daemon_session_id() -> Option<String> {
     let session_id = std::env::var(DAEMON_SESSION_ID_ENV)
         .ok()
@@ -62,10 +68,37 @@ pub fn create_session(
     tool: Option<&str>,
 ) -> Result<MetaSessionState> {
     let base_dir = get_session_root(project_path)?;
-    create_session_in(&base_dir, project_path, description, parent_id, tool)
+    create_session_in_with_strategy(
+        &base_dir,
+        project_path,
+        description,
+        parent_id,
+        tool,
+        SessionIdStrategy::DaemonAware,
+    )
 }
 
-/// Internal implementation: create session in explicit base directory
+/// Create a child session with a fresh ULID even when daemon session env vars
+/// are present in the current process.
+pub fn create_session_fresh(
+    project_path: &Path,
+    description: Option<&str>,
+    parent_id: Option<&str>,
+    tool: Option<&str>,
+) -> Result<MetaSessionState> {
+    let base_dir = get_session_root(project_path)?;
+    create_session_in_with_strategy(
+        &base_dir,
+        project_path,
+        description,
+        parent_id,
+        tool,
+        SessionIdStrategy::Fresh,
+    )
+}
+
+/// Internal implementation: create session in explicit base directory.
+#[cfg(test)]
 pub(crate) fn create_session_in(
     base_dir: &Path,
     project_path: &Path,
@@ -73,17 +106,37 @@ pub(crate) fn create_session_in(
     parent_id: Option<&str>,
     tool: Option<&str>,
 ) -> Result<MetaSessionState> {
+    create_session_in_with_strategy(
+        base_dir,
+        project_path,
+        description,
+        parent_id,
+        tool,
+        SessionIdStrategy::DaemonAware,
+    )
+}
+
+fn create_session_in_with_strategy(
+    base_dir: &Path,
+    project_path: &Path,
+    description: Option<&str>,
+    parent_id: Option<&str>,
+    tool: Option<&str>,
+    session_id_strategy: SessionIdStrategy,
+) -> Result<MetaSessionState> {
     // Daemon child processes pre-assign a session ID via env so that the
-    // pipeline session directory matches the daemon spool directory. Ignore a
-    // bare inherited session ID unless the rest of the daemon context was also
-    // seeded; otherwise nested commands and tests collapse multiple sessions
-    // onto the caller's daemon session directory.
-    let session_id = match preassigned_daemon_session_id() {
-        Some(id) => {
-            validate_session_id(&id)?;
-            id
-        }
-        None => new_session_id(),
+    // pipeline session directory matches the daemon spool directory. Nested
+    // child sessions must opt out of that binding so they do not collapse onto
+    // the caller's own daemon session.
+    let session_id = match session_id_strategy {
+        SessionIdStrategy::DaemonAware => match preassigned_daemon_session_id() {
+            Some(id) => {
+                validate_session_id(&id)?;
+                id
+            }
+            None => new_session_id(),
+        },
+        SessionIdStrategy::Fresh => new_session_id(),
     };
     let session_dir = get_session_dir_in(base_dir, &session_id);
     let normalized_project_path = normalize_project_path(project_path);

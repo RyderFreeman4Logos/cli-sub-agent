@@ -9,7 +9,9 @@ use csa_config::ProjectConfig;
 use csa_core::types::{OutputFormat, ToolName};
 use csa_process::check_tool_installed;
 
-use crate::pipeline::execute_with_session_and_meta;
+use crate::pipeline::{
+    ParentSessionSource, SessionCreationMode, execute_with_session_and_meta_with_parent_source,
+};
 use crate::run_helpers::build_executor;
 
 const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(15);
@@ -217,15 +219,16 @@ pub(super) async fn execute_csa_step(
         .map(str::trim)
         .filter(|session| !session.is_empty())
         .map(str::to_string);
+    let parent_session_id = std::env::var("CSA_SESSION_ID").ok();
     let execute_once = |session_arg: Option<String>| {
-        execute_with_session_and_meta(
+        execute_with_session_and_meta_with_parent_source(
             &executor,
             tool_name,
             prompt,
             OutputFormat::Json,
             session_arg,
             Some("plan-step".to_string()),
-            std::env::var("CSA_SESSION_ID").ok(),
+            parent_session_id.clone(),
             project_root,
             config,
             extra_env.as_ref(),
@@ -238,6 +241,8 @@ pub(super) async fn execute_csa_step(
             None,
             None,
             None,
+            ParentSessionSource::ExplicitOnly,
+            SessionCreationMode::FreshChild,
             false, // no_fs_sandbox
             false, // readonly_project_root
             &[],   // extra_writable

@@ -12,7 +12,7 @@ use super::result_contract::{
     clear_expected_result_artifacts_for_prompt, enforce_result_toml_path_contract,
 };
 use super::{
-    MemoryInjectionOptions, ParentSessionSource, SessionExecutionResult,
+    MemoryInjectionOptions, ParentSessionSource, SessionCreationMode, SessionExecutionResult,
     resolve_liveness_dead_seconds, resolve_mcp_servers, run_pipeline_hook,
 };
 use crate::memory_capture;
@@ -29,7 +29,9 @@ use csa_hooks::{
 use csa_lock::acquire_lock;
 use csa_process::ExecutionResult;
 use csa_resource::{ResourceGuard, ResourceLimits};
-use csa_session::{ToolState, compute_cooldown_wait, create_session, get_session_dir};
+use csa_session::{
+    ToolState, compute_cooldown_wait, create_session, create_session_fresh, get_session_dir,
+};
 
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
@@ -132,6 +134,7 @@ pub(crate) async fn execute_with_session_and_meta(
         memory_injection,
         global_config,
         ParentSessionSource::ExplicitOrEnv,
+        SessionCreationMode::DaemonManaged,
         no_fs_sandbox,
         readonly_project_root,
         extra_writable,
@@ -162,6 +165,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     memory_injection: Option<&MemoryInjectionOptions>,
     global_config: Option<&GlobalConfig>,
     parent_session_source: ParentSessionSource,
+    session_creation_mode: SessionCreationMode,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
@@ -204,12 +208,20 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
             }
             ParentSessionSource::ExplicitOnly => parent,
         };
-        let mut new_session = create_session(
-            project_root,
-            effective_description.as_deref(),
-            parent_id.as_deref(),
-            Some(tool.as_str()),
-        )?;
+        let mut new_session = match session_creation_mode {
+            SessionCreationMode::DaemonManaged => create_session(
+                project_root,
+                effective_description.as_deref(),
+                parent_id.as_deref(),
+                Some(tool.as_str()),
+            )?,
+            SessionCreationMode::FreshChild => create_session_fresh(
+                project_root,
+                effective_description.as_deref(),
+                parent_id.as_deref(),
+                Some(tool.as_str()),
+            )?,
+        };
         new_session.task_context = csa_session::TaskContext {
             task_type: task_type.map(|s| s.to_string()),
             tier_name: tier_name.map(|s| s.to_string()),
