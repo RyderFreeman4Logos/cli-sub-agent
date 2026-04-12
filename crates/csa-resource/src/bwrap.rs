@@ -64,6 +64,10 @@ impl BwrapCommandBuilder {
 
     /// Consume the builder and produce a ready-to-spawn [`Command`].
     pub fn build(&self) -> Command {
+        self.build_with_home(std::env::var_os("HOME").as_deref().map(Path::new))
+    }
+
+    fn build_with_home(&self, home: Option<&Path>) -> Command {
         let mut cmd = Command::new("bwrap");
 
         // Read-only root filesystem
@@ -109,7 +113,12 @@ impl BwrapCommandBuilder {
         }
 
         // Extra read-only bind mounts
-        for (src, dest) in &self.ro_binds {
+        for (src, dest) in self
+            .ro_binds
+            .iter()
+            .cloned()
+            .chain(self.implicit_ro_binds(home))
+        {
             cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
         }
 
@@ -132,6 +141,27 @@ impl BwrapCommandBuilder {
         cmd.args(&self.tool_args);
 
         cmd
+    }
+
+    fn implicit_ro_binds(&self, home: Option<&Path>) -> impl Iterator<Item = (PathBuf, PathBuf)> {
+        let mut ro_binds = Vec::new();
+
+        if let Some(home) = home {
+            let gh_aider = home.join(".config/gh-aider");
+            let already_visible = self
+                .writable_paths
+                .iter()
+                .any(|existing| existing == &gh_aider || gh_aider.starts_with(existing))
+                || self
+                    .ro_binds
+                    .iter()
+                    .any(|(src, dest)| src == &gh_aider || dest == &gh_aider);
+            if gh_aider.exists() && !already_visible {
+                ro_binds.push((gh_aider.clone(), gh_aider));
+            }
+        }
+
+        ro_binds.into_iter()
     }
 }
 
@@ -545,6 +575,26 @@ mod tests {
         assert!(
             !has_bind_tmp,
             "bare /tmp must NOT be --bind mounted (would expose host /tmp); args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_auto_ro_binds_gh_aider_config_when_present() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let gh_aider = home.path().join(".config/gh-aider");
+        std::fs::create_dir_all(&gh_aider).expect("create gh-aider dir");
+
+        let builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        let cmd = builder.build_with_home(Some(home.path()));
+        let args = command_args(&cmd);
+
+        assert!(
+            args.windows(3).any(|window| {
+                window[0] == "--ro-bind"
+                    && window[1] == gh_aider.to_string_lossy()
+                    && window[2] == gh_aider.to_string_lossy()
+            }),
+            "~/.config/gh-aider should be explicitly re-bound read-only so sandboxed gh commands can still read the aider auth config; args: {args:?}"
         );
     }
 }
