@@ -561,6 +561,7 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     let runtime_home = "/tmp/cli-sub-agent-gemini/01TEST/runtime-home";
     let mut env = HashMap::new();
     env.insert("HOME".to_string(), runtime_home.to_string());
+    env.insert("TMPDIR".to_string(), "/tmp".to_string());
     env.insert(
         "PATH".to_string(),
         "/runtime/node/bin:/runtime/yarn/bin:/usr/local/bin".to_string(),
@@ -613,6 +614,15 @@ fn test_apply_gemini_sandbox_runtime_env_overrides_pins_runtime_paths_and_clears
     assert_eq!(
         isolation_plan.env_overrides.get("HOME"),
         Some(&runtime_home.to_string())
+    );
+    // TMPDIR is set by IsolationPlanBuilder::with_tool_defaults(), not by
+    // gemini sandbox overrides (which must NOT override it — see #704 review).
+    // The isolation plan fixture doesn't call with_tool_defaults(), so TMPDIR
+    // won't be present here. Verify gemini overrides did NOT inject a host TMPDIR.
+    assert!(
+        !isolation_plan.env_overrides.contains_key("TMPDIR")
+            || isolation_plan.env_overrides.get("TMPDIR") == Some(&"/tmp".to_string()),
+        "gemini sandbox overrides must not override TMPDIR (isolation plan owns it)"
     );
     assert_eq!(
         isolation_plan.env_overrides.get("GEMINI_CLI_HOME"),

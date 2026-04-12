@@ -126,6 +126,9 @@ impl AcpTransport {
         // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
         // "use csa review"). See GitHub issue #272.
         env.insert("CSA_IS_SUBPROCESS".to_string(), "1".to_string());
+        if std::env::var("CSA_FS_SANDBOXED").ok().as_deref() == Some("1") {
+            env.insert("CSA_FS_SANDBOXED".to_string(), "1".to_string());
+        }
         if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
             env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
         }

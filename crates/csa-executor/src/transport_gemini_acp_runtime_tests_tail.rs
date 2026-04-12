@@ -249,6 +249,41 @@ fn prepare_gemini_acp_runtime_prefers_session_dir_runtime_home() {
 }
 
 #[test]
+fn prepare_gemini_acp_runtime_uses_csa_session_dir_env_when_explicit_dir_is_missing() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_dir = temp.path().join("sessions").join("01TESTSESSIONENV");
+    let source_home = temp.path().join("source-home");
+    fs::create_dir_all(session_dir.join("output")).expect("create session output dir");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert(
+        "CSA_SESSION_DIR".to_string(),
+        session_dir.to_string_lossy().into_owned(),
+    );
+
+    prepare_gemini_acp_runtime(
+        &mut env,
+        None,
+        None,
+        "01TESTSESSIONENV",
+        &["--acp".to_string()],
+    )
+    .expect("prepare runtime");
+
+    let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
+    assert_eq!(
+        runtime_home,
+        session_dir.join(GEMINI_SESSION_RUNTIME_RELATIVE_PATH),
+        "runtime home should fall back to CSA_SESSION_DIR when the caller did not pass session_dir"
+    );
+}
+
+#[test]
 fn prepare_gemini_acp_runtime_falls_back_from_read_only_tmpdir() {
     let temp = tempfile::tempdir().expect("tempdir");
     let session_id = "01TESTGEMINITMPDIRFALLBACK00000001";
@@ -289,6 +324,37 @@ fn prepare_gemini_acp_runtime_falls_back_from_read_only_tmpdir() {
     let mut reset_perms = fs::metadata(&read_only_tmp).expect("metadata").permissions();
     reset_perms.set_mode(0o755);
     fs::set_permissions(&read_only_tmp, reset_perms).expect("chmod restore tmpdir");
+}
+
+#[test]
+fn prepare_gemini_acp_runtime_forces_private_tmpdir_when_sandboxed() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let session_id = "01TESTGEMINISANDBOXTMP000000001";
+    let source_home = temp.path().join("source-home");
+    fs::create_dir_all(source_home.join(".gemini")).expect("create source gemini dir");
+
+    let mut env = HashMap::new();
+    env.insert(
+        "HOME".to_string(),
+        source_home.to_string_lossy().into_owned(),
+    );
+    env.insert("TMPDIR".to_string(), "/home/obj/.claude/tmp".to_string());
+    env.insert("CSA_FS_SANDBOXED".to_string(), "1".to_string());
+
+    prepare_gemini_acp_runtime(&mut env, None, None, session_id, &["--acp".to_string()])
+        .expect("prepare runtime");
+
+    assert_eq!(
+        env.get("TMPDIR"),
+        Some(&csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR.to_string()),
+        "sandboxed Gemini runtime should ignore inherited temp homes and use the private sandbox /tmp"
+    );
+    let runtime_home = PathBuf::from(env.get("HOME").expect("runtime home"));
+    assert!(
+        runtime_home.starts_with(csa_resource::isolation_plan::DEFAULT_SANDBOX_TMPDIR),
+        "sandboxed runtime home should live under the private sandbox /tmp, got: {}",
+        runtime_home.display()
+    );
 }
 
 #[test]

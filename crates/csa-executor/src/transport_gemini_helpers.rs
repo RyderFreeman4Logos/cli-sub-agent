@@ -100,6 +100,9 @@ pub(super) fn gemini_sandbox_runtime_env_overrides(
     for key in [
         "HOME",
         "PATH",
+        // NOTE: Do NOT include "TMPDIR" here — the isolation plan already
+        // sets TMPDIR=/tmp for bwrap sessions. Overriding it with the host's
+        // TMPDIR would leak a read-only path into the sandbox (#704 review).
         "GEMINI_CLI_HOME",
         "XDG_CONFIG_HOME",
         "XDG_CACHE_HOME",

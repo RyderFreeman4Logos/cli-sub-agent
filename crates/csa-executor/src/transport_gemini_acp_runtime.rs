@@ -11,6 +11,8 @@ use tracing::{debug, warn};
 
 const GEMINI_RUNTIME_ROOT_DIR: &str = "cli-sub-agent-gemini";
 const GEMINI_SESSION_RUNTIME_RELATIVE_PATH: &str = "runtime/gemini-home";
+const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
+const CSA_SESSION_DIR_ENV: &str = "CSA_SESSION_DIR";
 const GEMINI_RUNTIME_SETTINGS_PATHS: &[&str] =
     &[".gemini/settings.json", ".config/gemini-cli/settings.json"];
 const GEMINI_RUNTIME_PINNED_PATH_BINARIES: &[&str] = &["node", "yarn", "gemini"];
@@ -50,8 +52,11 @@ pub(crate) fn prepare_gemini_acp_runtime(
         .cloned()
         .or_else(|| std::env::var("HOME").ok())
         .map(PathBuf::from);
+    let runtime_session_dir = session_dir
+        .map(Path::to_path_buf)
+        .or_else(|| runtime_session_dir_from_env(env));
     let tmpdir = normalize_tmpdir_env(env);
-    let runtime_home = resolve_runtime_home(session_dir, session_id, &tmpdir);
+    let runtime_home = resolve_runtime_home(runtime_session_dir.as_deref(), session_id, &tmpdir);
     seed_runtime_home(&runtime_home, source_home.as_deref())?;
     align_runtime_auth_selection(&runtime_home, env)?;
 
@@ -159,6 +164,15 @@ fn resolve_runtime_home(session_dir: Option<&Path>, session_id: &str, tmpdir: &P
 }
 
 fn normalize_tmpdir_env(env: &mut HashMap<String, String>) -> PathBuf {
+    if is_filesystem_sandboxed(env) {
+        let resolved = PathBuf::from(DEFAULT_SANDBOX_TMPDIR);
+        env.insert(
+            "TMPDIR".to_string(),
+            resolved.to_string_lossy().into_owned(),
+        );
+        return resolved;
+    }
+
     let candidate = env
         .get("TMPDIR")
         .filter(|value| !value.is_empty())
@@ -183,6 +197,17 @@ fn normalize_tmpdir_env(env: &mut HashMap<String, String>) -> PathBuf {
         resolved.to_string_lossy().into_owned(),
     );
     resolved
+}
+
+fn runtime_session_dir_from_env(env: &HashMap<String, String>) -> Option<PathBuf> {
+    env.get(CSA_SESSION_DIR_ENV)
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
+fn is_filesystem_sandboxed(env: &HashMap<String, String>) -> bool {
+    env.get(CSA_FS_SANDBOXED_ENV)
+        .is_some_and(|value| value == "1")
 }
 
 fn runtime_root_from_env(env: &HashMap<String, String>) -> PathBuf {
