@@ -321,6 +321,22 @@ long_poll_seconds = 0
 fn resolve_effective_key_ignores_project_kv_cache_override() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
     let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(
+        global_dir.join("config.toml"),
+        r#"
+[kv_cache]
+long_poll_seconds = 3000
+"#,
+    )
+    .unwrap();
+
     let csa_dir = dir.path().join(".csa");
     std::fs::create_dir_all(&csa_dir).unwrap();
     std::fs::write(
@@ -333,11 +349,15 @@ long_poll_seconds = 9999
     )
     .unwrap();
 
+    let expected = resolve_effective_global_key("kv_cache.long_poll_seconds")
+        .unwrap()
+        .expect("global kv cache long poll should resolve");
     let value = resolve_effective_key(Some(dir.path()), "kv_cache.long_poll_seconds", false, false)
         .unwrap()
-        .expect("kv cache long poll should resolve from global defaults");
+        .expect("kv cache long poll should resolve from the effective global config");
 
-    assert_eq!(value.as_integer(), Some(240));
+    assert_eq!(value, expected);
+    assert_eq!(value.as_integer(), Some(3000));
 }
 
 #[test]

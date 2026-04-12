@@ -1,6 +1,6 @@
 [workflow]
 name = "dev2merge"
-description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), pre-PR review, push, PR creation, pr-bot hard gate, post-merge sync"
+description = "Deterministic development pipeline: branch validation, planning, N*(implement+commit), self-review gate, pre-PR review, push, PR creation, pr-bot hard gate, post-merge sync"
 
 [[workflow.variables]]
 name = "BRANCH"
@@ -27,13 +27,19 @@ name = "CURRENT_BRANCH"
 name = "DEFAULT_BRANCH"
 
 [[workflow.variables]]
+name = "DONE_MARKER"
+
+[[workflow.variables]]
 name = "FAST_PATH"
 
 [[workflow.variables]]
-name = "FEATURE_BRANCH"
+name = "FEATURE_INPUT"
 
 [[workflow.variables]]
-name = "FEATURE_INPUT"
+name = "HEAD_SHA"
+
+[[workflow.variables]]
+name = "HOME"
 
 [[workflow.variables]]
 name = "LATEST_TS"
@@ -48,7 +54,16 @@ name = "LIGHT_THRESHOLD_LINES"
 name = "LOCAL_SHA"
 
 [[workflow.variables]]
-name = "MKTD_TODO_PATH"
+name = "LOCK_DIR"
+
+[[workflow.variables]]
+name = "LOCK_HELD"
+
+[[workflow.variables]]
+name = "MARKER_BASE"
+
+[[workflow.variables]]
+name = "MARKER_DIR"
 
 [[workflow.variables]]
 name = "MKTD_INTENSITY"
@@ -66,13 +81,10 @@ name = "PLAN_CODE_FILES"
 name = "PLAN_INSERTIONS"
 
 [[workflow.variables]]
-name = "PLANNING_LIGHT_THRESHOLD_FILES"
-
-[[workflow.variables]]
-name = "PLANNING_LIGHT_THRESHOLD_LINES"
-
-[[workflow.variables]]
 name = "PR_BOT_DONE_MARKER"
+
+[[workflow.variables]]
+name = "PR_JSON"
 
 [[workflow.variables]]
 name = "PR_NUMBER"
@@ -87,10 +99,10 @@ name = "PR_URL"
 name = "REMOTE_SHA"
 
 [[workflow.variables]]
-name = "REVIEW_OUTPUT"
+name = "REPO_SLUG"
 
 [[workflow.variables]]
-name = "SID"
+name = "REVIEW_OUTPUT"
 
 [[workflow.variables]]
 name = "REVIEW_OUTPUT_FILE"
@@ -112,6 +124,9 @@ name = "VERDICT_LINE"
 
 [[workflow.variables]]
 name = "VERSION"
+
+[[workflow.variables]]
+name = "attempt"
 
 [[workflow.steps]]
 id = 1
@@ -226,7 +241,7 @@ SID=$(csa review --sa-mode true --range "${DEFAULT_BRANCH}...HEAD")
 REVIEW_OUTPUT="$(bash scripts/csa/session-wait-until-done.sh "$SID" 2>&1)"
 printf '%s\n' "${REVIEW_OUTPUT}"
 echo "CSA_VAR:REVIEW_COMPLETED=true"
-echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 11)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "${FAST_PATH}"
@@ -236,7 +251,9 @@ id = 7
 title = "Plan with mktd"
 tool = "bash"
 prompt = '''
-Generate a TODO plan via mktd. Auto-selects intensity based on change size.
+Generate a TODO plan via mktd. Auto-selects intensity based on change size:
+- `light` when code_files ≤ 2 AND total_insertions < 50 (small changes)
+- `full` otherwise (default, includes threat model + debate)
 
 ```bash
 set -euo pipefail
@@ -245,7 +262,7 @@ FEATURE_INPUT="${SCOPE:-current branch changes pending merge}"
 USER_LANGUAGE_OVERRIDE="${CSA_USER_LANGUAGE:-}"
 MKTD_TOOL_EFFECTIVE="${MKTD_TOOL:-${CSA_MKTD_TOOL:-gemini-cli}}"
 if [ -n "${MKTD_TOOL_EFFECTIVE}" ]; then
-  MKTD_TOOL_ARGS=(--tool "${MKTD_TOOL_EFFECTIVE}")
+  MKTD_TOOL_ARGS=(--force-ignore-tier-setting --tool "${MKTD_TOOL_EFFECTIVE}")
 else
   MKTD_TOOL_ARGS=()
 fi
@@ -286,12 +303,11 @@ id = 8
 title = "Execute Plan with mktsk"
 tool = "manual"
 prompt = """
-Invoke the mktsk skill directly (NOT via csa run). mktsk MUST run in the
+Invoke the mktsk skill directly (NOT via `csa run`). mktsk MUST run in the
 main agent context so it can use TaskCreate/TaskUpdate for progress tracking.
 
-Read the mktsk PATTERN.md at patterns/mktsk/PATTERN.md and follow it step by step.
-Pass the TODO timestamp: ${MKTD_TODO_TIMESTAMP}
-Set env: CSA_SKIP_PUBLISH=true (dev2merge handles publish in later steps).
+Pass the TODO timestamp: `${MKTD_TODO_TIMESTAMP}`
+Set env: `CSA_SKIP_PUBLISH=true` (dev2merge handles publish in Steps 12-13).
 
 mktsk reads the TODO plan, registers tasks via TaskCreate, and executes each
 item serially: implement → quality gates → review → commit → next."""
@@ -318,6 +334,23 @@ condition = "!(${FAST_PATH})"
 
 [[workflow.steps]]
 id = 10
+title = "Self-Review Gate"
+tool = "manual"
+prompt = """
+Before triggering `csa review`, the implementing agent MUST self-check the
+entire branch diff and fix any issues it finds.
+
+Required actions:
+1. Run `just clippy` (or `cargo clippy --workspace --all-targets -- -D warnings`) and fix every warning.
+2. Run `just test` (or `cargo test`) and fix every failure.
+3. If `.csa/review-checklist.md` exists, inspect `git diff "${DEFAULT_BRANCH}...HEAD"` against that checklist for known anti-patterns.
+4. Fix any issues found during this self-review.
+5. Only after completing all checks and fixes, continue to the cumulative `csa review` step."""
+on_fail = "abort"
+condition = "!(${FAST_PATH})"
+
+[[workflow.steps]]
+id = 11
 title = "Pre-PR Cumulative Review Gate"
 tool = "bash"
 prompt = '''
@@ -344,13 +377,13 @@ if [ "${VERDICT_LINE}" = "final_decision: HAS_ISSUES" ]; then
   exit 1
 fi
 echo "CSA_VAR:REVIEW_COMPLETED=true"
-echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 11)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="push to origin (Step 12)" required=true -->'
 ```'''
 on_fail = "abort"
 condition = "!(${FAST_PATH})"
 
 [[workflow.steps]]
-id = 11
+id = 12
 title = "Push Gate"
 tool = "bash"
 prompt = '''
@@ -365,18 +398,18 @@ fi
 BRANCH="$(git branch --show-current)"
 git push -u origin "${BRANCH}" --force-with-lease
 echo "CSA_VAR:PUSHED=true"
-echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 12)" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="create or reuse PR (Step 13)" required=true -->'
 ```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 12
+id = 13
 title = "Create or Reuse Pull Request"
 tool = "bash"
 prompt = '''
 Create or reuse a PR for the current branch. Outputs PR_NUMBER and PR_URL
 as CSA_VARs for the next step. This step does NOT trigger pr-bot —
-that is a separate hard gate in Step 13.
+that is a separate hard gate in Step 14.
 
 ```bash
 set -euo pipefail
@@ -427,18 +460,18 @@ fi
 echo "PR #${PR_NUMBER} resolved: ${PR_URL}"
 echo "CSA_VAR:PR_NUMBER=${PR_NUMBER}"
 echo "CSA_VAR:PR_URL=${PR_URL}"
-echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml" required=true -->'
+echo '<!-- CSA:NEXT_STEP cmd="csa plan run --sa-mode true patterns/pr-bot/workflow.toml (Step 14)" required=true -->'
 ```'''
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 13
+id = 14
 title = "pr-bot Review & Merge Gate (HARD GATE)"
 tool = "bash"
 prompt = '''
-MANDATORY: This step MUST NOT be skipped. It runs pr-bot which performs
+**MANDATORY**: This step MUST NOT be skipped. It runs pr-bot which performs
 cloud review (if enabled) and the actual merge. Without this step completing
-successfully, the PR remains unmerged and Step 14 will fail.
+successfully, the PR remains unmerged and Step 15 will fail.
 
 Uses marker files for idempotency: skips if pr-bot already completed for
 the same PR/HEAD combination.
@@ -446,14 +479,13 @@ the same PR/HEAD combination.
 ```bash
 set -euo pipefail
 if [ -z "${PR_NUMBER:-}" ]; then
-  echo "ERROR: PR_NUMBER not set — Step 12 must run first." >&2
+  echo "ERROR: PR_NUMBER not set — Step 13 must run first." >&2
   exit 1
 fi
 HEAD_SHA="$(git rev-parse --verify HEAD)"
 
 # --- Lock + Idempotency: skip if pr-bot already ran or is running ---
 # Bind markers to repo identity to prevent cross-repo PR# collisions.
-# Prefer gh CLI for reliable slug; fall back to regex for offline/non-GH repos.
 REPO_SLUG="$(gh repo view --json nameWithOwner -q '.nameWithOwner' 2>/dev/null | tr '/' '_')" || true
 if [ -z "${REPO_SLUG}" ]; then
   REPO_SLUG="$(git remote get-url origin 2>/dev/null | sed -E 's#^(https?://[^/]+/|ssh://[^/]+/|[^:]+:)##; s/\.git$//' | tr '/' '_')"
@@ -475,7 +507,7 @@ trap cleanup_lock EXIT
 if [ -f "${DONE_MARKER}" ]; then
   echo "pr-bot already completed for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}; skipping."
   echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 14)" required=true -->'
+  echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 15)" required=true -->'
 elif ! mkdir "${LOCK_DIR}" 2>/dev/null; then
   echo "ERROR: pr-bot already running for PR #${PR_NUMBER} at HEAD ${HEAD_SHA:0:11}." >&2
   echo "Wait for the other run to finish, or remove the lock: ${LOCK_DIR}" >&2
@@ -487,7 +519,7 @@ else
   if csa plan run --sa-mode true patterns/pr-bot/workflow.toml; then
     touch "${DONE_MARKER}"
     echo "CSA_VAR:PR_BOT_DONE_MARKER=${DONE_MARKER}"
-    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 14)" required=true -->'
+    echo '<!-- CSA:NEXT_STEP cmd="post-merge local sync (Step 15)" required=true -->'
     LOCK_HELD=0
     rmdir "${LOCK_DIR}" 2>/dev/null || true
   else
@@ -499,7 +531,7 @@ fi
 on_fail = "abort"
 
 [[workflow.steps]]
-id = 14
+id = 15
 title = "Post-Merge Local Sync"
 tool = "bash"
 prompt = '''
@@ -508,17 +540,17 @@ by LLM executor) AND that the PR was actually merged. Both checks must pass.
 
 ```bash
 set -euo pipefail
-# NOTE: PR_NUMBER comes from Step 12 (gh pr view/list). In fork workflows,
+# NOTE: PR_NUMBER comes from Step 13 (gh pr view/list). In fork workflows,
 # pr-bot may resolve a different PR via owner-aware lookup. For single-repo
 # workflows (the common case), both resolve to the same PR.
 if [ -n "${PR_NUMBER:-}" ]; then
   # --- Deterministic gate: verify pr-bot completion marker ---
-  # Prefer exact marker path from Step 13 (CSA_VAR:PR_BOT_DONE_MARKER).
+  # Prefer exact marker path from Step 14 (CSA_VAR:PR_BOT_DONE_MARKER).
   # Fall back to repo-scoped glob if variable is unset (backwards compat).
   if [ -n "${PR_BOT_DONE_MARKER:-}" ]; then
     if [ ! -f "${PR_BOT_DONE_MARKER}" ]; then
       echo "ERROR: pr-bot marker not found: ${PR_BOT_DONE_MARKER}" >&2
-      echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Step 14 (pr-bot) must complete successfully before post-merge sync." >&2
       exit 1
     fi
     echo "pr-bot completion marker verified (exact): ${PR_BOT_DONE_MARKER}"
@@ -534,7 +566,7 @@ if [ -n "${PR_NUMBER:-}" ]; then
     MARKER_DIR="${HOME}/.local/state/cli-sub-agent/pr-bot-markers/${REPO_SLUG}"
     if ! ls "${MARKER_DIR}/${PR_NUMBER}"-*.done 1>/dev/null 2>&1; then
       echo "ERROR: No pr-bot completion marker found for PR #${PR_NUMBER}." >&2
-      echo "Step 13 (pr-bot) must complete successfully before post-merge sync." >&2
+      echo "Step 14 (pr-bot) must complete successfully before post-merge sync." >&2
       echo "Marker directory: ${MARKER_DIR}" >&2
       exit 1
     fi
