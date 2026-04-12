@@ -112,13 +112,21 @@ impl BwrapCommandBuilder {
             }
         }
 
-        // Extra read-only bind mounts
+        // Extra read-only bind mounts.  When the dest path differs from src
+        // (remapped HOME), the mount target may not exist inside the sandbox
+        // (e.g. Gemini runtime home only seeds gemini-cli config, not gh-aider).
+        // Emit --dir for the dest parent so bubblewrap can create the mount point.
         for (src, dest) in self
             .ro_binds
             .iter()
             .cloned()
             .chain(self.implicit_ro_binds(home))
         {
+            if src != dest
+                && let Some(parent) = dest.parent()
+            {
+                cmd.args(["--dir", &parent.to_string_lossy()]);
+            }
             cmd.args(["--ro-bind", &src.to_string_lossy(), &dest.to_string_lossy()]);
         }
 
@@ -164,15 +172,18 @@ impl BwrapCommandBuilder {
                 .sandbox_home(Some(home))
                 .unwrap_or_else(|| home.to_path_buf())
                 .join(".config/gh-aider");
-            let already_visible = self.writable_paths.iter().any(|existing| {
-                existing == &gh_aider
-                    || existing == &sandbox_gh_aider
-                    || gh_aider.starts_with(existing)
-                    || sandbox_gh_aider.starts_with(existing)
-            }) || self
-                .ro_binds
+            // writable_paths are HOST paths — only compare against the HOST
+            // gh_aider path.  Comparing sandbox_gh_aider against host writable
+            // paths falsely matches when sandbox HOME is under a writable
+            // session dir (common in Gemini ACP).
+            let already_visible = self
+                .writable_paths
                 .iter()
-                .any(|(src, dest)| src == &gh_aider || dest == &sandbox_gh_aider);
+                .any(|existing| existing == &gh_aider || gh_aider.starts_with(existing))
+                || self
+                    .ro_binds
+                    .iter()
+                    .any(|(src, dest)| src == &gh_aider || dest == &sandbox_gh_aider);
             if gh_aider.exists() && !already_visible {
                 ro_binds.push((gh_aider, sandbox_gh_aider));
             }
@@ -383,6 +394,56 @@ mod tests {
         assert!(
             found_bind,
             "gh-aider config should bind from the host path into the sandbox HOME; args: {args:?}"
+        );
+
+        // --dir must precede the bind to create the mount target inside sandbox
+        let dir_pos = args
+            .iter()
+            .enumerate()
+            .find(|(_, a)| *a == "--dir" || a.as_str() == "/sandbox/runtime-home/.config")
+            .map(|(i, _)| i);
+        let bind_pos = args
+            .iter()
+            .enumerate()
+            .find(|(i, _)| {
+                args.get(*i + 1).map(|s| s.as_str()) == Some(&gh_aider.to_string_lossy())
+            })
+            .map(|(i, _)| i);
+        if let (Some(d), Some(b)) = (dir_pos, bind_pos) {
+            assert!(
+                d < b,
+                "--dir for mount target must precede --ro-bind; args: {args:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_bwrap_gh_aider_bind_not_skipped_when_session_dir_writable() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let host_home = temp.path().join("host-home");
+        let gh_aider = host_home.join(".config/gh-aider");
+        std::fs::create_dir_all(&gh_aider).expect("create gh-aider config");
+
+        // Simulate Gemini layout: sandbox HOME is under a writable session dir
+        let session_dir = temp.path().join("session");
+        std::fs::create_dir_all(&session_dir).expect("create session dir");
+        let sandbox_home = session_dir.join("runtime/home");
+
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_env("HOME", &sandbox_home.to_string_lossy());
+        builder.writable_paths.push(session_dir);
+        let cmd = builder.build_with_home(Some(&host_home));
+        let args = command_args(&cmd);
+
+        let found_bind = args.windows(3).any(|window| {
+            window[0] == "--ro-bind"
+                && window[1] == gh_aider.to_string_lossy()
+                && window[2] == sandbox_home.join(".config/gh-aider").to_string_lossy()
+        });
+
+        assert!(
+            found_bind,
+            "gh-aider bind must NOT be skipped just because sandbox HOME is under a writable session dir; args: {args:?}"
         );
     }
 
