@@ -43,6 +43,7 @@ pub(crate) struct RunLoopRequest<'a> {
     pub(crate) strategy: ToolSelectionStrategy,
     pub(crate) initial_tool: ToolName,
     pub(crate) initial_model_spec: Option<String>,
+    pub(crate) user_model_spec_explicit: bool, // CLI `--model-spec`: exact selection, disables tier enforcement.
     pub(crate) initial_model: Option<String>,
     pub(crate) runtime_fallback_candidates: Vec<ToolName>,
     pub(crate) project_root: &'a Path,
@@ -153,7 +154,8 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut is_auto_seed_fork = request.is_auto_seed_fork;
     let mut session_arg = request.session_arg;
     let mut effective_session_arg = request.effective_session_arg;
-
+    let enforce_tier =
+        !request.force && !request.force_ignore_tier_setting && !request.user_model_spec_explicit;
     let result = loop {
         attempts += 1;
 
@@ -166,7 +168,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 project: request.config,
                 global: Some(request.global_config),
             },
-            !request.force && !request.force_ignore_tier_setting,
+            enforce_tier,
             request.force_override_user_config,
             matches!(request.strategy, ToolSelectionStrategy::Explicit(_)),
         )

@@ -347,17 +347,19 @@ fn resolve_tool_and_model_blocks_direct_tool_when_tiers_configured() {
     );
 }
 
-/// When tiers are configured, direct --model-spec without --force-ignore-tier-setting is blocked.
+/// When tiers are configured, --model-spec is the exact-selection escape hatch and
+/// implicitly bypasses the tier whitelist. `enforce_tool_enabled` still applies (see
+/// `resolve_tool_and_model_disabled_tool_model_spec_errors`).
 #[test]
-fn resolve_tool_and_model_blocks_direct_model_spec_when_tiers_configured() {
+fn resolve_tool_and_model_allows_model_spec_exact_selection_when_tiers_configured() {
     let cfg = config_with_tier(
         "default",
         vec!["gemini-cli/google/default/xhigh"],
-        &["gemini-cli"],
+        &["gemini-cli", "codex"],
     );
     let result = super::resolve_tool_and_model(
         None,
-        Some("gemini-cli/google/gemini-3.1-pro/high"),
+        Some("codex/openai/gpt-5.4/high"),
         None,
         Some(&cfg),
         std::path::Path::new("/tmp"),
@@ -368,12 +370,15 @@ fn resolve_tool_and_model_blocks_direct_model_spec_when_tiers_configured() {
         false,
         false, // tool_is_auto_resolved
     );
-    assert!(result.is_err());
-    let msg = result.unwrap_err().to_string();
     assert!(
-        msg.contains("restricted when tiers are configured"),
-        "unexpected error: {msg}"
+        result.is_ok(),
+        "model-spec should bypass tier whitelist: {}",
+        result.unwrap_err()
     );
+    let (tool, model_spec, model) = result.unwrap();
+    assert_eq!(tool, ToolName::Codex);
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/high"));
+    assert!(model.is_none());
 }
 
 /// When tiers are configured, direct --model alone (no --tool, no --model-spec) is blocked.

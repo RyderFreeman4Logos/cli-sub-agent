@@ -19,7 +19,6 @@ pub use cli_doctor::*;
 #[path = "cli_review.rs"]
 mod cli_review;
 pub use cli_review::*;
-
 #[path = "cli_tokuin.rs"]
 mod cli_tokuin;
 pub use cli_tokuin::*;
@@ -155,8 +154,8 @@ pub enum Commands {
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,
-        /// Exact model selector in `tool/provider/model/thinking` format.
-        /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
+        /// Exact `tool/provider/model/thinking` selector for a single fixed model choice.
+        /// Implicitly bypasses tier whitelist; no need to pair with --force-ignore-tier-setting.
         #[arg(long)]
         model_spec: Option<String>,
         /// Override tool default model (opaque string, passed through to tool)

@@ -11,6 +11,114 @@ Options:
 EOF
 }
 
+component_for_file() {
+  local file="$1"
+
+  case "${file}" in
+    crates/*)
+      printf 'crate %s' "$(printf '%s' "${file}" | cut -d/ -f2)"
+      ;;
+    patterns/*)
+      printf 'pattern %s' "$(printf '%s' "${file}" | cut -d/ -f2)"
+      ;;
+    scripts/*)
+      printf 'scripts'
+      ;;
+    tests/*|*/tests/*|*_test.rs|*.spec.ts|*.test.ts)
+      printf 'tests'
+      ;;
+    docs/*|drafts/*|*.md)
+      printf 'docs'
+      ;;
+    Cargo.toml|Cargo.lock|weave.lock|*/Cargo.toml|*/Cargo.lock|*/weave.lock)
+      printf 'workspace metadata'
+      ;;
+    */*)
+      printf '%s' "${file%%/*}"
+      ;;
+    *)
+      printf 'repo root files'
+      ;;
+  esac
+}
+
+collect_components() {
+  local file component existing
+
+  components=()
+  for file in "${staged_files[@]}"; do
+    component="$(component_for_file "${file}")"
+    for existing in "${components[@]:-}"; do
+      if [[ "${existing}" == "${component}" ]]; then
+        component=""
+        break
+      fi
+    done
+
+    if [[ -n "${component}" ]]; then
+      components+=("${component}")
+    fi
+  done
+}
+
+describe_components() {
+  local total preview_count
+
+  total="${#components[@]}"
+  if [[ "${total}" -eq 0 ]]; then
+    printf 'the staged files'
+    return
+  fi
+
+  if [[ "${total}" -eq 1 ]]; then
+    printf '%s' "${components[0]}"
+    return
+  fi
+
+  if [[ "${total}" -eq 2 ]]; then
+    printf '%s and %s' "${components[0]}" "${components[1]}"
+    return
+  fi
+
+  preview_count=3
+  if [[ "${total}" -lt "${preview_count}" ]]; then
+    preview_count="${total}"
+  fi
+
+  printf '%s, %s, and %s' "${components[0]}" "${components[1]}" "${components[2]}"
+  if [[ "${total}" -gt "${preview_count}" ]]; then
+    printf ' (+%s more)' "$((total - preview_count))"
+  fi
+}
+
+build_commit_body() {
+  local summary targets
+
+  collect_components
+  targets="$(describe_components)"
+
+  if [[ "${is_release}" == "true" ]]; then
+    summary="Bump the staged release metadata touching ${targets}."
+  elif [[ "${is_docs_only}" == "true" ]]; then
+    summary="Refresh the staged documentation touching ${targets}."
+  elif [[ "${is_tests_only}" == "true" ]]; then
+    summary="Update the staged test coverage touching ${targets}."
+  elif [[ "${has_new_non_test_code}" == "true" ]]; then
+    summary="Add the staged functionality touching ${targets}."
+  else
+    summary="Update the staged changes touching ${targets}."
+  fi
+
+  cat <<EOF
+${summary}
+
+### AI Reviewer Metadata
+- **Design Intent**: Capture the staged changes in a non-empty fallback commit body when no richer upstream summary was provided.
+- **Key Decisions**: Derive this fallback from the staged file set and preserve the AI Reviewer Metadata scaffold required by the audited commit workflow.
+- **Reviewer Guidance**: Verify the staged diff still matches this generated summary and expand the metadata when the change needs task-specific rationale.
+EOF
+}
+
 mode="full"
 scope_input=""
 
@@ -126,6 +234,7 @@ else
 fi
 
 commit_body=""
+commit_body="$(build_commit_body)"
 
 case "${mode}" in
   subject)

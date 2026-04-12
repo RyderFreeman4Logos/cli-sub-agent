@@ -303,7 +303,11 @@ fn resolve_heterogeneous_preferred(
 
         match heterogeneous_candidates.first().copied() {
             Some(tool) => {
-                let fallback = heterogeneous_candidates.into_iter().skip(1).collect();
+                let fallback = if model_spec.is_some() {
+                    Vec::new()
+                } else {
+                    heterogeneous_candidates.into_iter().skip(1).collect()
+                };
                 let (t, ms, m) = resolve_tool_and_model(
                     Some(tool),
                     model_spec,
@@ -753,3 +757,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "run_cmd_tool_selection_model_spec_tests.rs"]
+mod model_spec_tests;

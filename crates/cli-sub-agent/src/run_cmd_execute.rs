@@ -9,7 +9,7 @@ use anyhow::Result;
 use tracing::{info, warn};
 
 use csa_config::ProjectConfig;
-use csa_core::types::{OutputFormat, ToolArg};
+use csa_core::types::{OutputFormat, ToolArg, ToolSelectionStrategy};
 use csa_lock::SessionLock;
 
 use crate::cli::ReturnTarget;
@@ -33,9 +33,10 @@ fn resolve_run_tier_context(
     strategy_resolved_tier_name: Option<String>,
     fallback_tier_name: Option<String>,
     force_ignore_tier_setting: bool,
+    user_model_spec_explicit: bool,
     user_explicit_tool: bool,
 ) -> (bool, bool, Option<String>) {
-    if force_ignore_tier_setting {
+    if force_ignore_tier_setting || user_model_spec_explicit {
         return (false, false, None);
     }
 
@@ -220,6 +221,16 @@ pub(crate) async fn handle_run(
         Some(ToolArg::Specific(tool)) => Some(tool.as_str()),
         _ => None,
     };
+    let fallback_description = crate::run_helpers::truncate_prompt(&prompt_text, 80);
+    let pre_exec_description = description
+        .as_deref()
+        .or(skill_session_tag.as_deref())
+        .or(Some(fallback_description.as_str()));
+    let pre_exec_parent = if is_fork {
+        session_arg.as_deref().or(parent.as_deref())
+    } else {
+        parent.as_deref()
+    };
 
     // Enforce tier routing: when tiers are configured, explicit --tool (any
     // value, including "auto") is blocked unless --tier is also specified or
@@ -240,16 +251,6 @@ pub(crate) async fn handle_run(
              Available tiers: {}",
             tier_list.join(", ")
         );
-        let fallback_description = crate::run_helpers::truncate_prompt(&prompt_text, 80);
-        let pre_exec_description = description
-            .as_deref()
-            .or(skill_session_tag.as_deref())
-            .or(Some(fallback_description.as_str()));
-        let pre_exec_parent = if is_fork {
-            session_arg.as_deref().or(parent.as_deref())
-        } else {
-            parent.as_deref()
-        };
         return Err(crate::session_guard::persist_pre_exec_error_result(
             crate::session_guard::PreExecErrorCtx {
                 project_root: &project_root,
@@ -307,7 +308,29 @@ pub(crate) async fn handle_run(
         needs_edit,
         effective_tier.as_deref(),
         force_ignore_tier_setting,
-    )?;
+    )
+    .map_err(|err| {
+        if err.to_string().contains("Conflicting routing flags") {
+            crate::session_guard::persist_pre_exec_error_result(
+                crate::session_guard::PreExecErrorCtx {
+                    project_root: &project_root,
+                    session_id: if is_fork {
+                        None
+                    } else {
+                        session_arg.as_deref()
+                    },
+                    description: pre_exec_description,
+                    parent: pre_exec_parent,
+                    tool_name: explicit_tool_name,
+                    task_type: Some("run"),
+                    tier_name: effective_tier.as_deref(),
+                    error: err,
+                },
+            )
+        } else {
+            err
+        }
+    })?;
     let heterogeneous_runtime_fallback_candidates = strategy_result.runtime_fallback_candidates;
     let resolved_model_spec = strategy_result.model_spec;
     let resolved_model = strategy_result.model;
@@ -409,6 +432,7 @@ pub(crate) async fn handle_run(
     });
     // Force-ignore bypass must not revive a tier at runtime, but ordinary
     // auto/default routing still keeps its existing fallback tier context.
+    let user_model_spec_explicit = model_spec.is_some();
     let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
         resolve_run_tier_context(
             config.as_ref(),
@@ -416,6 +440,7 @@ pub(crate) async fn handle_run(
             strategy_resolved_tier_name,
             fallback_tier_name,
             force_ignore_tier_setting,
+            user_model_spec_explicit,
             user_explicit_tool,
         );
     let context_load_options = skill_agent
@@ -425,10 +450,16 @@ pub(crate) async fn handle_run(
         query_override: memory_query,
     };
 
+    let loop_strategy = if user_model_spec_explicit {
+        ToolSelectionStrategy::Explicit(resolved_tool)
+    } else {
+        strategy
+    };
     let loop_completion = execute_run_loop(RunLoopRequest {
-        strategy,
+        strategy: loop_strategy,
         initial_tool: resolved_tool,
         initial_model_spec: resolved_model_spec,
+        user_model_spec_explicit,
         initial_model: resolved_model,
         runtime_fallback_candidates: heterogeneous_runtime_fallback_candidates,
         project_root: &project_root,
@@ -520,6 +551,10 @@ pub(crate) async fn handle_run(
 }
 
 #[cfg(test)]
+#[path = "run_cmd_execute_pre_exec_tests.rs"]
+mod pre_exec_tests;
+
+#[cfg(test)]
 mod tests {
     use super::resolve_run_tier_context;
     use chrono::Utc;
@@ -578,6 +613,7 @@ mod tests {
                 None,
                 false,
                 false,
+                false,
             );
 
         assert!(tier_auto_select);
@@ -594,6 +630,7 @@ mod tests {
                 Some("tier-3-complex".to_string()),
                 Some("tier-2-standard".to_string()),
                 true,
+                false,
                 true,
             );
 
@@ -612,6 +649,7 @@ mod tests {
                 Some("tier-3-complex".to_string()),
                 false,
                 false,
+                false,
             );
 
         assert!(tier_auto_select);
@@ -627,6 +665,7 @@ mod tests {
                 "codex",
                 None,
                 Some("tier-3-complex".to_string()),
+                false,
                 false,
                 true,
             );
@@ -646,11 +685,30 @@ mod tests {
                 Some("tier-3-complex".to_string()),
                 None,
                 false,
+                false,
                 true,
             );
 
         assert!(!tier_auto_select);
         assert!(failover_on_crash_enabled);
         assert_eq!(resolved_tier_name.as_deref(), Some("tier-3-complex"));
+    }
+
+    #[test]
+    fn resolve_run_tier_context_drops_tier_for_explicit_model_spec() {
+        let (tier_auto_select, failover_on_crash_enabled, resolved_tier_name) =
+            resolve_run_tier_context(
+                None,
+                "codex",
+                None,
+                Some("tier-3-complex".to_string()),
+                false,
+                true,
+                false,
+            );
+
+        assert!(!tier_auto_select);
+        assert!(!failover_on_crash_enabled);
+        assert!(resolved_tier_name.is_none());
     }
 }
