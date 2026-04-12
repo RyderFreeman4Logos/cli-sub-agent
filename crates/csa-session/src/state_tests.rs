@@ -660,6 +660,7 @@ fn review_session_meta_serde_roundtrip() {
         exit_code: 1,
         fix_attempted: true,
         fix_rounds: 2,
+        review_iterations: 3,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:abc123".to_string()),
     };
@@ -682,6 +683,7 @@ fn review_session_meta_write_and_read() {
         exit_code: 0,
         fix_attempted: false,
         fix_rounds: 0,
+        review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
     };
@@ -713,6 +715,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         exit_code: 1,
         fix_attempted: false,
         fix_rounds: 0,
+        review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: None,
     };
@@ -729,6 +732,7 @@ fn review_session_meta_overwrite_on_fix_round() {
         exit_code: 0,
         fix_attempted: true,
         fix_rounds: 1,
+        review_iterations: 1,
         timestamp: chrono::Utc::now(),
         diff_fingerprint: Some("sha256:def456".to_string()),
     };
@@ -739,5 +743,25 @@ fn review_session_meta_overwrite_on_fix_round() {
     assert_eq!(decoded.decision, "pass");
     assert!(decoded.fix_attempted);
     assert_eq!(decoded.fix_rounds, 1);
+    assert_eq!(decoded.review_iterations, 1);
     assert_eq!(decoded.head_sha, "bbb");
+}
+
+#[test]
+fn review_session_meta_missing_review_iterations_defaults_to_one() {
+    let json = r#"{
+        "session_id": "SESSION1",
+        "head_sha": "aaa",
+        "decision": "fail",
+        "verdict": "HAS_ISSUES",
+        "tool": "codex",
+        "scope": "base:main",
+        "exit_code": 1,
+        "fix_attempted": false,
+        "fix_rounds": 0,
+        "timestamp": "2026-04-12T00:00:00Z"
+    }"#;
+
+    let decoded: ReviewSessionMeta = serde_json::from_str(json).expect("parse");
+    assert_eq!(decoded.review_iterations, 1);
 }

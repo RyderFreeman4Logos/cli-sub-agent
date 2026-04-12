@@ -4,6 +4,7 @@ use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use csa_session::SessionResult;
+use csa_session::state::ReviewSessionMeta;
 
 use crate::session_cmds::{
     ensure_terminal_result_for_dead_active_session, format_file_size,
@@ -149,12 +150,29 @@ pub(crate) fn handle_session_result(
             None
         }
     };
+    let review_meta = match load_review_meta(&session_dir) {
+        Ok(meta) => meta,
+        Err(err) => {
+            tracing::warn!(
+                session_id = %resolved_id,
+                path = %session_dir.display(),
+                error = %err,
+                "Failed to load review metadata; continuing without review_meta"
+            );
+            None
+        }
+    };
     match repaired_result {
         Some(result) => {
             if json {
-                display_result_json(&result, transcript_summary.as_ref())?;
+                display_result_json(&result, transcript_summary.as_ref(), review_meta.as_ref())?;
             } else {
-                display_result_text(&resolved_id, &result, transcript_summary.as_ref());
+                display_result_text(
+                    &resolved_id,
+                    &result,
+                    transcript_summary.as_ref(),
+                    review_meta.as_ref(),
+                );
             }
         }
         None => {
@@ -182,16 +200,9 @@ pub(crate) fn handle_session_result(
 fn display_result_json(
     result: &SessionResult,
     transcript_summary: Option<&TranscriptSummary>,
+    review_meta: Option<&ReviewSessionMeta>,
 ) -> Result<()> {
-    let mut payload = serde_json::to_value(result)?;
-    if let Some(summary) = transcript_summary {
-        payload["transcript_summary"] = serde_json::json!({
-            "event_count": summary.event_count,
-            "size_bytes": summary.size_bytes,
-            "first_timestamp": summary.first_timestamp,
-            "last_timestamp": summary.last_timestamp,
-        });
-    }
+    let payload = build_result_json_payload(result, transcript_summary, review_meta)?;
     println!("{}", serde_json::to_string_pretty(&payload)?);
     Ok(())
 }
@@ -200,6 +211,7 @@ fn display_result_text(
     session_id: &str,
     result: &SessionResult,
     transcript_summary: Option<&TranscriptSummary>,
+    review_meta: Option<&ReviewSessionMeta>,
 ) {
     println!("Session: {session_id}");
     println!("Status:  {}", result.status);
@@ -214,6 +226,9 @@ fn display_result_text(
             println!("  - {a}");
         }
     }
+    if let Some(meta) = review_meta {
+        println!("Review Iterations: {}", meta.review_iterations);
+    }
     if let Some(summary) = transcript_summary {
         println!("Transcript:");
         println!("  Events: {}", summary.event_count);
@@ -227,6 +242,37 @@ fn display_result_text(
             summary.last_timestamp.as_deref().unwrap_or("-")
         );
     }
+}
+
+fn load_review_meta(session_dir: &Path) -> Result<Option<ReviewSessionMeta>> {
+    let review_meta_path = session_dir.join("review_meta.json");
+    if !review_meta_path.is_file() {
+        return Ok(None);
+    }
+
+    let content = fs::read_to_string(&review_meta_path)?;
+    let review_meta = serde_json::from_str(&content)?;
+    Ok(Some(review_meta))
+}
+
+fn build_result_json_payload(
+    result: &SessionResult,
+    transcript_summary: Option<&TranscriptSummary>,
+    review_meta: Option<&ReviewSessionMeta>,
+) -> Result<serde_json::Value> {
+    let mut payload = serde_json::to_value(result)?;
+    if let Some(summary) = transcript_summary {
+        payload["transcript_summary"] = serde_json::json!({
+            "event_count": summary.event_count,
+            "size_bytes": summary.size_bytes,
+            "first_timestamp": summary.first_timestamp,
+            "last_timestamp": summary.last_timestamp,
+        });
+    }
+    if let Some(meta) = review_meta {
+        payload["review_meta"] = serde_json::to_value(meta)?;
+    }
+    Ok(payload)
 }
 
 const FALLBACK_LINES: usize = 20;

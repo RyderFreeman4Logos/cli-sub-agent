@@ -1,9 +1,11 @@
 use super::{
-    StructuredOutputOpts, compute_token_measurement, display_all_sections, display_single_section,
-    display_summary_section, format_number, handle_session_artifacts, handle_session_result,
+    StructuredOutputOpts, build_result_json_payload, compute_token_measurement,
+    display_all_sections, display_single_section, display_summary_section, format_number,
+    handle_session_artifacts, handle_session_result,
 };
 use crate::test_env_lock::TEST_ENV_LOCK;
-use csa_session::{create_session, get_session_dir, load_result};
+use csa_session::state::ReviewSessionMeta;
+use csa_session::{SessionResult, create_session, get_session_dir, load_result};
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -318,4 +320,38 @@ fn handle_session_artifacts_reconciles_orphaned_active_session() {
         load_result(project, &session_id).unwrap().is_some(),
         "session artifacts command should reconcile missing terminal result"
     );
+}
+
+#[test]
+fn build_result_json_payload_includes_review_iterations() {
+    let now = chrono::Utc::now();
+    let result = SessionResult {
+        status: "success".to_string(),
+        exit_code: 0,
+        summary: "review completed".to_string(),
+        tool: "codex".to_string(),
+        started_at: now,
+        completed_at: now,
+        events_count: 0,
+        artifacts: Vec::new(),
+        peak_memory_mb: None,
+    };
+    let review_meta = ReviewSessionMeta {
+        session_id: "01JTESTPAYLOAD00000000000001".to_string(),
+        head_sha: "deadbeef".to_string(),
+        decision: "pass".to_string(),
+        verdict: "CLEAN".to_string(),
+        tool: "codex".to_string(),
+        scope: "range:main...HEAD".to_string(),
+        exit_code: 0,
+        fix_attempted: true,
+        fix_rounds: 1,
+        review_iterations: 4,
+        timestamp: now,
+        diff_fingerprint: Some("sha256:abc123".to_string()),
+    };
+
+    let payload = build_result_json_payload(&result, None, Some(&review_meta)).unwrap();
+    assert_eq!(payload["review_meta"]["review_iterations"], 4);
+    assert_eq!(payload["review_meta"]["fix_rounds"], 1);
 }
