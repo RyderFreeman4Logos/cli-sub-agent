@@ -430,15 +430,15 @@ fn load_lookup_root(source: &LookupSourceSpec) -> Result<Option<toml::Value>> {
                 ProjectConfig::load_project_only(project_root)?
             };
             config
-                .map(|cfg| build_project_display_toml(&cfg))
+                .map(|cfg| build_project_display_toml(&cfg.redacted_for_display()))
                 .transpose()
         }
         LookupSourceSpec::RawProject { path } | LookupSourceSpec::RawGlobal { path } => {
             load_toml_root(path)
         }
-        LookupSourceSpec::EffectiveGlobal => {
-            Ok(Some(build_global_display_toml(&GlobalConfig::load()?)?))
-        }
+        LookupSourceSpec::EffectiveGlobal => Ok(Some(build_global_display_toml(
+            &GlobalConfig::load()?.redacted_for_display(),
+        )?)),
     }
 }
 

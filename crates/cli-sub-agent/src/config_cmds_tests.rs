@@ -435,6 +435,54 @@ enabled = true
 }
 
 #[test]
+fn resolve_effective_key_redacts_global_memory_api_keys_in_project_scoped_lookups() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(
+        global_dir.join("config.toml"),
+        r#"
+[memory.llm]
+enabled = true
+api_key = "sk-super-secret-5982"
+"#,
+    )
+    .unwrap();
+
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[memory]
+inject = true
+"#,
+    )
+    .unwrap();
+
+    let value = resolve_effective_key(Some(dir.path()), "memory", false, false)
+        .unwrap()
+        .expect("merged memory config should resolve");
+    let rendered = format_toml_value(&value);
+
+    assert!(
+        !rendered.contains("sk-super-secret-5982"),
+        "project-scoped lookup leaked raw api key: {rendered}"
+    );
+    assert!(
+        rendered.contains("api_key") && rendered.contains("..."),
+        "project-scoped lookup should include a masked api key: {rendered}"
+    );
+}
+
+#[test]
 fn build_config_get_lookup_project_only_uses_effective_project_defaults() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
     let dir = tempfile::tempdir().unwrap();
