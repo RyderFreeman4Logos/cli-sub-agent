@@ -108,17 +108,33 @@ check_home_sensitive_asserts() {
             fi
         fi
 
-        # Extract the enclosing block (brace-balanced) starting at this line.
-        local line="" block="" open_only="" close_only="" depth=0
-        while IFS= read -r line; do
+        # Scan forward from the match. If we enter a brace-delimited block,
+        # keep scanning until it closes; otherwise inspect the next 5 lines.
+        local total_lines max_scan_line current_line="$line_number"
+        total_lines="$(wc -l < "$file")"
+        max_scan_line=$((line_number + 5))
+        if [ "$max_scan_line" -gt "$total_lines" ]; then
+            max_scan_line="$total_lines"
+        fi
+
+        local line="" block="" open_only="" close_only="" depth=0 found_open=false
+        while [ "$current_line" -le "$total_lines" ]; do
+            line="$(sed -n "${current_line}p" "$file")"
             block+="$line"$'\n'
             open_only="${line//[^\{]/}"
             close_only="${line//[^\}]/}"
+            if [ ${#open_only} -gt 0 ]; then
+                found_open=true
+            fi
             depth=$((depth + ${#open_only} - ${#close_only}))
-            if [ "$depth" -le 0 ]; then
+            if [ "$found_open" = true ] && [ "$depth" -le 0 ]; then
                 break
             fi
-        done < <(tail -n +"$line_number" "$file")
+            if [ "$found_open" = false ] && [ "$current_line" -ge "$max_scan_line" ]; then
+                break
+            fi
+            current_line=$((current_line + 1))
+        done
 
         # Must contain an assertion macro (any of assert!, assert_eq!, etc.)
         if ! printf '%s' "$block" | grep -Eq 'assert(_eq|_ne|_matches)?!'; then

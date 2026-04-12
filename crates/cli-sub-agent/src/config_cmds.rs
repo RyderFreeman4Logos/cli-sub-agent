@@ -315,7 +315,14 @@ pub(crate) fn handle_config_get(
         global_only_lookup,
     )?;
 
-    if let Some(value) = resolve_lookup_sources(&lookup.sources, &key)? {
+    let resolved = resolve_lookup_sources_with_diagnostics(&lookup.sources, &key)?;
+    if let Some(value) = resolved.value {
+        if resolved
+            .diagnostics
+            .raw_global_value_from_invalid_effective_global
+        {
+            eprintln!("warning: global config has parse errors; showing raw value");
+        }
         println!("{}", format_toml_value(&value));
         return Ok(());
     }
@@ -338,6 +345,17 @@ pub(crate) fn handle_config_get(
 
 struct ConfigGetLookup {
     sources: Vec<LookupSourceSpec>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct LookupDiagnostics {
+    raw_global_value_from_invalid_effective_global: bool,
+}
+
+#[derive(Debug)]
+struct LookupResolution {
+    value: Option<toml::Value>,
+    diagnostics: LookupDiagnostics,
 }
 
 fn is_global_only_key(key: &str) -> bool {
@@ -479,20 +497,44 @@ fn resolve_effective_key(
     resolve_lookup_sources(&lookup.sources, key)
 }
 
+#[cfg(test)]
 fn resolve_lookup_sources(sources: &[LookupSourceSpec], key: &str) -> Result<Option<toml::Value>> {
+    Ok(resolve_lookup_sources_with_diagnostics(sources, key)?.value)
+}
+
+fn resolve_lookup_sources_with_diagnostics(
+    sources: &[LookupSourceSpec],
+    key: &str,
+) -> Result<LookupResolution> {
     let mut deferred_error = None;
+    let mut saw_deferred_effective_global_error = false;
 
     for source in sources {
         match load_lookup_root(source) {
             Ok(Some(root)) => {
                 if let Some(value) = resolve_key(&root, key) {
-                    return Ok(Some(value));
+                    return Ok(LookupResolution {
+                        value: Some(value),
+                        diagnostics: LookupDiagnostics {
+                            raw_global_value_from_invalid_effective_global:
+                                saw_deferred_effective_global_error
+                                    && matches!(source, LookupSourceSpec::RawGlobal { .. }),
+                        },
+                    });
                 }
             }
             Ok(None) => {}
             Err(err) if source.allows_deferred_error() => {
                 // Effective project lookups can fail because global config is broken.
                 // Keep going so an explicit raw project value can still be resolved.
+                if matches!(
+                    source,
+                    LookupSourceSpec::EffectiveGlobal {
+                        allow_raw_fallback: true
+                    }
+                ) {
+                    saw_deferred_effective_global_error = true;
+                }
                 deferred_error.get_or_insert(err);
             }
             Err(err) => return Err(err),
@@ -503,7 +545,10 @@ fn resolve_lookup_sources(sources: &[LookupSourceSpec], key: &str) -> Result<Opt
         return Err(err);
     }
 
-    Ok(None)
+    Ok(LookupResolution {
+        value: None,
+        diagnostics: LookupDiagnostics::default(),
+    })
 }
 
 fn collect_lookup_keys(sources: &[LookupSourceSpec]) -> Result<BTreeSet<String>> {

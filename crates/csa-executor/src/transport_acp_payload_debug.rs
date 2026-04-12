@@ -65,6 +65,7 @@ fn arg_name_is_sensitive(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     [
         "api-key",
+        "api_key",
         "apikey",
         "auth",
         "authorization",
@@ -84,9 +85,17 @@ fn arg_value_is_sensitive(value: &str) -> bool {
         || normalized.contains("bearer ")
         || normalized.contains("token=")
         || normalized.contains("api-key=")
+        || normalized.contains("api_key=")
         || normalized.contains("apikey=")
         || normalized.contains("secret=")
         || normalized.contains("password=")
+}
+
+fn arg_has_inline_sensitive_value(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.starts_with('-')
+        && arg_name_is_sensitive(&normalized)
+        && (normalized.contains('=') || normalized.contains(':'))
 }
 
 fn redact_args(args: &[String]) -> Vec<String> {
@@ -104,6 +113,11 @@ fn redact_args(args: &[String]) -> Vec<String> {
             && arg_name_is_sensitive(name)
         {
             redacted.push(format!("{name}=<redacted>"));
+            continue;
+        }
+
+        if arg_has_inline_sensitive_value(arg) {
+            redacted.push("<redacted>".to_string());
             continue;
         }
 
@@ -192,4 +206,33 @@ pub(super) fn maybe_write_acp_payload_debug(
     let serialized = serde_json::to_string_pretty(&payload).ok()?;
     fs::write(&debug_path, format!("{serialized}\n")).ok()?;
     Some(debug_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_args;
+
+    #[test]
+    fn redact_args_redacts_inline_sensitive_values_without_consuming_following_args() {
+        let args = vec![
+            "-HAuthorization:Bearer abc123".to_string(),
+            "--safe".to_string(),
+            "--api-key=value-1".to_string(),
+            "--api_key=value-2".to_string(),
+            "--header".to_string(),
+            "Authorization: Bearer xyz987".to_string(),
+        ];
+
+        assert_eq!(
+            redact_args(&args),
+            vec![
+                "<redacted>".to_string(),
+                "--safe".to_string(),
+                "--api-key=<redacted>".to_string(),
+                "--api_key=<redacted>".to_string(),
+                "--header".to_string(),
+                "<redacted>".to_string(),
+            ]
+        );
+    }
 }

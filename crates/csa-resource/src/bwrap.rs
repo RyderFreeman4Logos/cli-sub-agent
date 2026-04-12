@@ -143,21 +143,38 @@ impl BwrapCommandBuilder {
         cmd
     }
 
+    fn sandbox_home(&self, host_home: Option<&Path>) -> Option<PathBuf> {
+        self.env_vars
+            .iter()
+            .rev()
+            .find_map(|(key, value)| {
+                (key == "HOME")
+                    .then(|| PathBuf::from(value))
+                    .filter(|path| path.is_absolute())
+            })
+            .or_else(|| host_home.map(Path::to_path_buf))
+    }
+
     fn implicit_ro_binds(&self, home: Option<&Path>) -> impl Iterator<Item = (PathBuf, PathBuf)> {
         let mut ro_binds = Vec::new();
 
         if let Some(home) = home {
             let gh_aider = home.join(".config/gh-aider");
-            let already_visible = self
-                .writable_paths
+            let sandbox_gh_aider = self
+                .sandbox_home(Some(home))
+                .unwrap_or_else(|| home.to_path_buf())
+                .join(".config/gh-aider");
+            let already_visible = self.writable_paths.iter().any(|existing| {
+                existing == &gh_aider
+                    || existing == &sandbox_gh_aider
+                    || gh_aider.starts_with(existing)
+                    || sandbox_gh_aider.starts_with(existing)
+            }) || self
+                .ro_binds
                 .iter()
-                .any(|existing| existing == &gh_aider || gh_aider.starts_with(existing))
-                || self
-                    .ro_binds
-                    .iter()
-                    .any(|(src, dest)| src == &gh_aider || dest == &gh_aider);
+                .any(|(src, dest)| src == &gh_aider || dest == &sandbox_gh_aider);
             if gh_aider.exists() && !already_visible {
-                ro_binds.push((gh_aider.clone(), gh_aider));
+                ro_binds.push((gh_aider, sandbox_gh_aider));
             }
         }
 
@@ -342,6 +359,30 @@ mod tests {
         assert!(
             found_sandbox_env,
             "CSA_FS_SANDBOXED=1 must be set via --setenv; args: {args:?}"
+        );
+    }
+
+    #[test]
+    fn test_bwrap_gh_aider_bind_targets_overridden_sandbox_home() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let host_home = temp.path().join("host-home");
+        let gh_aider = host_home.join(".config/gh-aider");
+        std::fs::create_dir_all(&gh_aider).expect("create gh-aider config");
+
+        let mut builder = BwrapCommandBuilder::new("/usr/bin/tool", &[]);
+        builder.with_env("HOME", "/sandbox/runtime-home");
+        let cmd = builder.build_with_home(Some(&host_home));
+        let args = command_args(&cmd);
+
+        let found_bind = args.windows(3).any(|window| {
+            window[0] == "--ro-bind"
+                && window[1] == gh_aider.to_string_lossy()
+                && window[2] == "/sandbox/runtime-home/.config/gh-aider"
+        });
+
+        assert!(
+            found_bind,
+            "gh-aider config should bind from the host path into the sandbox HOME; args: {args:?}"
         );
     }
 

@@ -3,6 +3,7 @@ use csa_core::gemini::{
     API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
     NO_FLASH_FALLBACK_ENV_KEY,
 };
+use serial_test::serial;
 use std::collections::HashMap;
 
 struct EnvVarGuard {
@@ -153,6 +154,7 @@ frequent_poll_seconds = 45
 }
 
 #[test]
+#[serial]
 fn test_resolve_session_wait_long_poll_seconds_uses_legacy_config_dir_fallback() {
     let dir = tempfile::tempdir().unwrap();
     let config_root = dir.path().join("xdg-config");

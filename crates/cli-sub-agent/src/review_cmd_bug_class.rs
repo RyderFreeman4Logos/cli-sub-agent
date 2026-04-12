@@ -129,6 +129,13 @@ fn collapse_bug_class_review_artifacts(
     let mut grouped = BTreeMap::<ReviewArtifactGroupKey, Vec<GroupedReviewArtifact>>::new();
 
     for artifact in review_artifacts {
+        // Parent review-consolidated.json duplicates the child reviewer findings but
+        // does not carry review_meta.json, so including it here can falsely satisfy
+        // the recurrence threshold for a single multi-review execution.
+        if session_has_consolidated_artifact(project_root, &artifact.session_id)? {
+            continue;
+        }
+
         let Some(group_key) =
             resolve_review_artifact_group_key(project_root, &artifact.session_id)?
         else {

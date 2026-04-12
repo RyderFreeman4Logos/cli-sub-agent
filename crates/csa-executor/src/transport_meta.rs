@@ -14,6 +14,7 @@ use csa_session::state::MetaSessionState;
 use super::AcpTransport;
 
 const SUMMARY_MAX_CHARS: usize = 200;
+const CSA_FS_SANDBOXED_ENV: &str = "CSA_FS_SANDBOXED";
 
 /// Default soft memory limit as a percentage of MemoryMax.
 /// Lowered from 80% to 70% in #568 to provide more headroom before the
@@ -126,9 +127,6 @@ impl AcpTransport {
         // recursion risk (e.g. claude-code reading CLAUDE.md rules that say
         // "use csa review"). See GitHub issue #272.
         env.insert("CSA_IS_SUBPROCESS".to_string(), "1".to_string());
-        if std::env::var("CSA_FS_SANDBOXED").ok().as_deref() == Some("1") {
-            env.insert("CSA_FS_SANDBOXED".to_string(), "1".to_string());
-        }
         if let Ok(parent_tool) = std::env::var("CSA_TOOL") {
             env.insert("CSA_PARENT_TOOL".to_string(), parent_tool);
         }
@@ -137,7 +135,15 @@ impl AcpTransport {
         }
 
         if let Some(extra) = extra_env {
-            env.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+            env.extend(
+                extra
+                    .iter()
+                    .filter(|(k, _)| k.as_str() != CSA_FS_SANDBOXED_ENV)
+                    .map(|(k, v)| (k.clone(), v.clone())),
+            );
+        }
+        if std::env::var(CSA_FS_SANDBOXED_ENV).ok().as_deref() == Some("1") {
+            env.insert(CSA_FS_SANDBOXED_ENV.to_string(), "1".to_string());
         }
         Self::insert_reserved_session_path_env(&mut env, session);
 
@@ -522,4 +528,112 @@ pub(super) fn start_memory_monitor(
         interval: std::time::Duration::from_secs(interval_secs),
         grace_period,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{LazyLock, Mutex};
+
+    static SANDBOX_ENV_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        original: Option<String>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by SANDBOX_ENV_LOCK.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, original }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let original = std::env::var(key).ok();
+            // SAFETY: test-scoped env mutation guarded by SANDBOX_ENV_LOCK.
+            unsafe { std::env::remove_var(key) };
+            Self { key, original }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            // SAFETY: test-scoped env mutation guarded by SANDBOX_ENV_LOCK.
+            unsafe {
+                match self.original.take() {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
+
+    fn sample_session() -> MetaSessionState {
+        let now = chrono::Utc::now();
+        MetaSessionState {
+            meta_session_id: "01HTEST000000000000000000".to_string(),
+            description: Some("test".to_string()),
+            project_path: "/tmp/test".to_string(),
+            branch: None,
+            created_at: now,
+            last_accessed: now,
+            genealogy: csa_session::state::Genealogy {
+                parent_session_id: None,
+                depth: 0,
+                ..Default::default()
+            },
+            tools: HashMap::new(),
+            context_status: csa_session::state::ContextStatus::default(),
+            total_token_usage: None,
+            phase: csa_session::state::SessionPhase::Active,
+            task_context: csa_session::state::TaskContext::default(),
+            turn_count: 0,
+            token_budget: None,
+            sandbox_info: None,
+            termination_reason: None,
+            is_seed_candidate: false,
+            git_head_at_creation: None,
+            last_return_packet: None,
+            change_id: None,
+            spec_id: None,
+            fork_call_timestamps: Vec::new(),
+            vcs_identity: None,
+            identity_version: 1,
+        }
+    }
+
+    #[test]
+    fn build_env_ignores_spoofed_sandbox_marker_from_extra_env() {
+        let _env_lock = SANDBOX_ENV_LOCK.lock().expect("sandbox env lock poisoned");
+        let _sandbox_guard = ScopedEnvVar::unset(CSA_FS_SANDBOXED_ENV);
+        let transport = AcpTransport::new("claude-code", None);
+        let session = sample_session();
+        let extra = HashMap::from([(CSA_FS_SANDBOXED_ENV.to_string(), "1".to_string())]);
+
+        let env = transport.build_env(&session, Some(&extra));
+
+        assert!(
+            !env.contains_key(CSA_FS_SANDBOXED_ENV),
+            "user extra_env must not be able to spoof CSA_FS_SANDBOXED"
+        );
+    }
+
+    #[test]
+    fn build_env_preserves_system_sandbox_marker_over_extra_env() {
+        let _env_lock = SANDBOX_ENV_LOCK.lock().expect("sandbox env lock poisoned");
+        let _sandbox_guard = ScopedEnvVar::set(CSA_FS_SANDBOXED_ENV, "1");
+        let transport = AcpTransport::new("claude-code", None);
+        let session = sample_session();
+        let extra = HashMap::from([(CSA_FS_SANDBOXED_ENV.to_string(), "0".to_string())]);
+
+        let env = transport.build_env(&session, Some(&extra));
+
+        assert_eq!(
+            env.get(CSA_FS_SANDBOXED_ENV).map(String::as_str),
+            Some("1"),
+            "the process sandbox marker must override user extra_env"
+        );
+    }
 }

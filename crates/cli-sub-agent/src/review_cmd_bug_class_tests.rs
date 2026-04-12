@@ -29,8 +29,12 @@ fn sample_review_artifact(session_id: &str, severity: Severity, rule_id: &str) -
 }
 
 fn write_review_artifact(session_dir: &Path, artifact: &ReviewArtifact) {
+    write_review_artifact_file(session_dir, "review-findings.json", artifact);
+}
+
+fn write_review_artifact_file(session_dir: &Path, file_name: &str, artifact: &ReviewArtifact) {
     let payload = serde_json::to_string_pretty(artifact).unwrap();
-    std::fs::write(session_dir.join("review-findings.json"), payload).unwrap();
+    std::fs::write(session_dir.join(file_name), payload).unwrap();
 }
 
 #[test]
@@ -302,5 +306,90 @@ fn bug_class_loader_collapses_multi_reviewer_sessions_into_one_logical_review() 
     assert!(
         classify_recurring_bug_classes(&review_artifacts).is_empty(),
         "one logical review should not satisfy the recurrence threshold by itself"
+    );
+}
+
+#[test]
+fn bug_class_loader_skips_parent_consolidated_artifact_to_avoid_false_promotion() {
+    let project_dir = setup_git_repo();
+    let _sandbox = ScopedSessionSandbox::new(&project_dir);
+
+    let parent = create_session(
+        project_dir.path(),
+        Some("review: base:main"),
+        None,
+        Some("codex"),
+    )
+    .expect("parent review session");
+    let reviewer_one = create_session(
+        project_dir.path(),
+        Some("review[1]: base:main"),
+        None,
+        Some("codex"),
+    )
+    .expect("reviewer one session");
+    let reviewer_two = create_session(
+        project_dir.path(),
+        Some("review[2]: base:main"),
+        None,
+        Some("opencode"),
+    )
+    .expect("reviewer two session");
+
+    let parent_dir = get_session_dir(project_dir.path(), &parent.meta_session_id).unwrap();
+    let reviewer_one_dir =
+        get_session_dir(project_dir.path(), &reviewer_one.meta_session_id).unwrap();
+    let reviewer_two_dir =
+        get_session_dir(project_dir.path(), &reviewer_two.meta_session_id).unwrap();
+
+    write_review_artifact_file(
+        &parent_dir,
+        "review-consolidated.json",
+        &sample_review_artifact(&parent.meta_session_id, Severity::High, "rust/002"),
+    );
+    write_review_artifact(
+        &reviewer_one_dir,
+        &sample_review_artifact(&reviewer_one.meta_session_id, Severity::High, "rust/002"),
+    );
+    write_review_artifact(
+        &reviewer_two_dir,
+        &sample_review_artifact(&reviewer_two.meta_session_id, Severity::High, "rust/002"),
+    );
+
+    for session in [&reviewer_one, &reviewer_two] {
+        let session_dir = get_session_dir(project_dir.path(), &session.meta_session_id).unwrap();
+        write_review_meta(
+            &session_dir,
+            &ReviewSessionMeta {
+                session_id: session.meta_session_id.clone(),
+                head_sha: "deadbeef".to_string(),
+                decision: "fail".to_string(),
+                verdict: "HAS_ISSUES".to_string(),
+                tool: "codex".to_string(),
+                scope: "base:main".to_string(),
+                exit_code: 1,
+                fix_attempted: false,
+                fix_rounds: 0,
+                review_iterations: 7,
+                timestamp: chrono::Utc::now(),
+                diff_fingerprint: Some("sha256:shared".to_string()),
+            },
+        )
+        .expect("review meta");
+    }
+
+    let review_artifacts = load_bug_class_review_artifacts(project_dir.path())
+        .expect("multi-reviewer artifacts should collapse");
+
+    assert_eq!(review_artifacts.len(), 1);
+    assert!(
+        review_artifacts
+            .iter()
+            .all(|artifact| artifact.session_id != parent.meta_session_id),
+        "parent consolidated artifact should be skipped for bug-class extraction"
+    );
+    assert!(
+        classify_recurring_bug_classes(&review_artifacts).is_empty(),
+        "one multi-review run must not self-promote a recurring bug class"
     );
 }
