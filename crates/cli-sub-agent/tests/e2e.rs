@@ -289,6 +289,256 @@ fn config_show_exits_zero_after_init_full() {
 }
 
 #[test]
+fn config_get_resolves_nested_resource_keys_from_effective_display_tree() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .expect("write config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "resources.slot_wait_timeout_seconds"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get resources.slot_wait_timeout_seconds");
+
+    assert!(output.status.success(), "config get should exit 0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "250");
+}
+
+#[test]
+fn config_get_project_only_resolves_effective_project_defaults() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .expect("write config");
+
+    let output = csa_cmd(tmp.path())
+        .args([
+            "config",
+            "get",
+            "resources.slot_wait_timeout_seconds",
+            "--project",
+        ])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get resources.slot_wait_timeout_seconds --project");
+
+    assert!(
+        output.status.success(),
+        "project-only config get should exit 0"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "250");
+}
+
+#[test]
+fn config_get_prefers_effective_tool_state_over_raw_project_value() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(
+        global_dir.join("config.toml"),
+        r#"
+[tools.codex]
+enabled = false
+"#,
+    )
+    .expect("write global config");
+
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[tools.codex]
+enabled = true
+"#,
+    )
+    .expect("write project config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "tools.codex.enabled"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get tools.codex.enabled");
+
+    assert!(output.status.success(), "config get should exit 0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "false");
+}
+
+#[test]
+fn config_get_redacts_global_memory_api_keys_in_project_scoped_lookups() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(
+        global_dir.join("config.toml"),
+        r#"
+[memory.llm]
+enabled = true
+api_key = "sk-super-secret-5982"
+"#,
+    )
+    .expect("write global config");
+
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[memory]
+inject = true
+"#,
+    )
+    .expect("write project config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "memory"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get memory");
+
+    assert!(output.status.success(), "config get should exit 0");
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        !stdout.contains("sk-super-secret-5982"),
+        "config get leaked raw api key: {stdout}"
+    );
+    assert!(
+        stdout.contains("api_key") && stdout.contains("..."),
+        "config get should render a masked api key: {stdout}"
+    );
+}
+
+#[test]
+fn config_get_falls_back_to_raw_project_value_when_global_config_is_invalid() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(global_dir.join("config.toml"), "{{invalid toml")
+        .expect("write invalid global config");
+
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .expect("write project config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "resources.memory_max_mb"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get resources.memory_max_mb");
+
+    assert!(output.status.success(), "config get should exit 0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1024");
+}
+
+#[test]
+fn config_get_reads_unknown_raw_project_sections() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[pr_review]
+cloud_bot_name = "gemini-code-assist"
+cloud_bot_trigger = "comment"
+merge_strategy = "merge"
+delete_branch = false
+"#,
+    )
+    .expect("write config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "pr_review.cloud_bot_name"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get pr_review.cloud_bot_name");
+
+    assert!(output.status.success(), "config get should exit 0");
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "gemini-code-assist"
+    );
+}
+
+#[test]
+fn config_get_returns_default_for_missing_keys() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "missing.key", "--default", "fallback"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get --default");
+
+    assert!(
+        output.status.success(),
+        "config get --default should exit 0"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "fallback");
+}
+
+#[test]
+fn config_get_suggests_close_matches_for_missing_keys() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .expect("write config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "resources.slot_wait_timeout_second"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get with typo");
+
+    assert!(!output.status.success(), "config get typo should fail");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Closest matches:"),
+        "stderr should include suggestions, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("resources.slot_wait_timeout_seconds"),
+        "stderr should mention the closest key, got: {stderr}"
+    );
+}
+
+#[test]
 fn gc_dry_run_exits_zero() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let output = csa_cmd(tmp.path())

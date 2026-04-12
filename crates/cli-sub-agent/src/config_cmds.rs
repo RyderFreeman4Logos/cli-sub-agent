@@ -1,6 +1,9 @@
+use std::collections::BTreeSet;
+
 use anyhow::Result;
 use tracing::{error, warn};
 
+use csa_config::config::CURRENT_SCHEMA_VERSION;
 use csa_config::init::init_project;
 use csa_config::{GlobalConfig, ProjectConfig, validate_config};
 use csa_core::types::OutputFormat;
@@ -275,11 +278,11 @@ max_recursion_depth = 5
     Ok(())
 }
 
-/// Get a raw config value by dotted key path.
+/// Get a config value by dotted key path.
 ///
-/// Reads raw TOML files (not the merged/defaulted effective config).
-/// Fallback order: project `.csa/config.toml` → global config → `--default`.
-/// Use `--project` to skip global, `--global` to skip project.
+/// Lookup order prefers the same effective TOML tree that powers `config show`,
+/// then falls back to raw project/global TOML so unknown-but-present sections
+/// (for example in forward-compatible configs) remain queryable.
 pub(crate) fn handle_config_get(
     key: String,
     default: Option<String>,
@@ -287,59 +290,30 @@ pub(crate) fn handle_config_get(
     global_only: bool,
     cd: Option<String>,
 ) -> Result<()> {
-    let project_root = (!global_only)
+    if project_only && is_global_only_key(&key) {
+        return match default {
+            Some(d) => {
+                println!("{d}");
+                Ok(())
+            }
+            None => anyhow::bail!("Key not found: {key}"),
+        };
+    }
+
+    let global_only_lookup = global_only || is_global_only_key(&key);
+    let project_root = (!global_only_lookup)
         .then(|| crate::pipeline::determine_project_root(cd.as_deref()))
         .transpose()?;
-    let key_is_global_only = is_global_only_key(&key);
+    let lookup = build_config_get_lookup(
+        project_root.as_deref(),
+        &key,
+        project_only,
+        global_only_lookup,
+    )?;
 
-    // Try project config first (unless --global flag)
-    if !global_only && !key_is_global_only {
-        let project_root = project_root
-            .as_deref()
-            .ok_or_else(|| anyhow::anyhow!("Failed to determine project root"))?;
-        let project_config_path = ProjectConfig::config_path(project_root);
-        match load_and_resolve(&project_config_path, &key) {
-            Ok(Some(value)) => {
-                println!("{}", format_toml_value(&value));
-                return Ok(());
-            }
-            Ok(None) => {} // Key not found, try next source
-            Err(e) => anyhow::bail!(
-                "Failed to read project config {}: {e}",
-                project_config_path.display()
-            ),
-        }
-    }
-
-    if !project_only
-        && let Some(value) =
-            resolve_effective_key(project_root.as_deref(), &key, project_only, global_only)?
-    {
+    if let Some(value) = resolve_lookup_sources(&lookup.sources, &key)? {
         println!("{}", format_toml_value(&value));
         return Ok(());
-    }
-
-    // Try global config (unless --project flag)
-    if !project_only {
-        match GlobalConfig::config_path() {
-            Ok(global_path) => {
-                match load_and_resolve(&global_path, &key) {
-                    Ok(Some(value)) => {
-                        println!("{}", format_toml_value(&value));
-                        return Ok(());
-                    }
-                    Ok(None) => {} // Key not found
-                    Err(e) => anyhow::bail!(
-                        "Failed to read global config {}: {e}",
-                        global_path.display()
-                    ),
-                }
-            }
-            Err(e) if global_only && default.is_none() => {
-                anyhow::bail!("Cannot determine global config path: {e}");
-            }
-            Err(_) => {} // Non-critical when falling through to default
-        }
     }
 
     // Fall back to --default or report key not found
@@ -348,19 +322,248 @@ pub(crate) fn handle_config_get(
             println!("{d}");
             Ok(())
         }
-        None => anyhow::bail!("Key not found: {key}"),
+        None => anyhow::bail!(
+            "{}",
+            format_missing_key_message(
+                &key,
+                &suggest_key_paths(&key, &collect_lookup_keys(&lookup.sources)?)
+            )
+        ),
     }
+}
+
+struct ConfigGetLookup {
+    sources: Vec<LookupSourceSpec>,
 }
 
 fn is_global_only_key(key: &str) -> bool {
     key.starts_with("kv_cache.")
 }
 
-/// Load a TOML file and resolve a dotted key path.
+#[derive(Debug, Clone)]
+enum LookupSourceSpec {
+    EffectiveProject {
+        project_root: std::path::PathBuf,
+        include_global_fallback: bool,
+    },
+    RawProject {
+        path: std::path::PathBuf,
+    },
+    EffectiveGlobal,
+    RawGlobal {
+        path: std::path::PathBuf,
+    },
+}
+
+impl LookupSourceSpec {
+    fn allows_deferred_error(&self) -> bool {
+        matches!(
+            self,
+            LookupSourceSpec::EffectiveProject {
+                include_global_fallback: true,
+                ..
+            }
+        )
+    }
+}
+
+fn build_config_get_lookup(
+    project_root: Option<&std::path::Path>,
+    key: &str,
+    project_only: bool,
+    global_only: bool,
+) -> Result<ConfigGetLookup> {
+    let mut sources = Vec::new();
+    let prefer_effective = prefers_effective_lookup(key)?;
+
+    if !global_only {
+        let project_root =
+            project_root.ok_or_else(|| anyhow::anyhow!("Failed to determine project root"))?;
+
+        let effective_project = LookupSourceSpec::EffectiveProject {
+            project_root: project_root.to_path_buf(),
+            include_global_fallback: !project_only,
+        };
+        let raw_project = LookupSourceSpec::RawProject {
+            path: ProjectConfig::config_path(project_root),
+        };
+
+        if prefer_effective {
+            sources.push(effective_project);
+            sources.push(raw_project);
+        } else {
+            sources.push(raw_project);
+            sources.push(effective_project);
+        }
+    }
+
+    if !project_only {
+        let raw_global = GlobalConfig::config_path()
+            .ok()
+            .map(|path| LookupSourceSpec::RawGlobal { path });
+
+        if prefer_effective {
+            sources.push(LookupSourceSpec::EffectiveGlobal);
+            if let Some(raw_global) = raw_global {
+                sources.push(raw_global);
+            }
+        } else {
+            if let Some(raw_global) = raw_global {
+                sources.push(raw_global);
+            }
+            sources.push(LookupSourceSpec::EffectiveGlobal);
+        }
+    }
+
+    Ok(ConfigGetLookup { sources })
+}
+
+fn load_lookup_root(source: &LookupSourceSpec) -> Result<Option<toml::Value>> {
+    match source {
+        LookupSourceSpec::EffectiveProject {
+            project_root,
+            include_global_fallback,
+        } => {
+            let config = if *include_global_fallback {
+                ProjectConfig::load(project_root)?
+            } else {
+                ProjectConfig::load_project_only(project_root)?
+            };
+            config
+                .map(|cfg| build_project_display_toml(&cfg.redacted_for_display()))
+                .transpose()
+        }
+        LookupSourceSpec::RawProject { path } | LookupSourceSpec::RawGlobal { path } => {
+            load_toml_root(path)
+        }
+        LookupSourceSpec::EffectiveGlobal => Ok(Some(build_global_display_toml(
+            &GlobalConfig::load()?.redacted_for_display(),
+        )?)),
+    }
+}
+
+#[cfg(test)]
+fn resolve_effective_key(
+    project_root: Option<&std::path::Path>,
+    key: &str,
+    project_only: bool,
+    global_only: bool,
+) -> Result<Option<toml::Value>> {
+    if project_only && is_global_only_key(key) {
+        return Ok(None);
+    }
+
+    let lookup = build_config_get_lookup(
+        project_root,
+        key,
+        project_only,
+        global_only || is_global_only_key(key),
+    )?;
+    resolve_lookup_sources(&lookup.sources, key)
+}
+
+fn resolve_lookup_sources(sources: &[LookupSourceSpec], key: &str) -> Result<Option<toml::Value>> {
+    let mut deferred_error = None;
+
+    for source in sources {
+        match load_lookup_root(source) {
+            Ok(Some(root)) => {
+                if let Some(value) = resolve_key(&root, key) {
+                    return Ok(Some(value));
+                }
+            }
+            Ok(None) => {}
+            Err(err) if source.allows_deferred_error() => {
+                // Effective project lookups can fail because global config is broken.
+                // Keep going so an explicit raw project value can still be resolved.
+                deferred_error.get_or_insert(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    if let Some(err) = deferred_error {
+        return Err(err);
+    }
+
+    Ok(None)
+}
+
+fn collect_lookup_keys(sources: &[LookupSourceSpec]) -> Result<BTreeSet<String>> {
+    let mut keys = BTreeSet::new();
+    let mut deferred_error = None;
+
+    for source in sources {
+        match load_lookup_root(source) {
+            Ok(Some(root)) => collect_key_paths(&root, None, &mut keys),
+            Ok(None) => {}
+            Err(err) if source.allows_deferred_error() => {
+                deferred_error.get_or_insert(err);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+
+    if keys.is_empty()
+        && let Some(err) = deferred_error
+    {
+        return Err(err);
+    }
+
+    Ok(keys)
+}
+
+fn prefers_effective_lookup(key: &str) -> Result<bool> {
+    let Some(top_level) = key.split('.').next() else {
+        return Ok(false);
+    };
+    Ok(known_effective_top_level_sections()?.contains(top_level))
+}
+
+fn known_effective_top_level_sections() -> Result<BTreeSet<String>> {
+    let mut sections = BTreeSet::new();
+    collect_top_level_sections(&default_project_display_toml()?, &mut sections);
+    collect_top_level_sections(&default_global_display_toml()?, &mut sections);
+    Ok(sections)
+}
+
+fn collect_top_level_sections(root: &toml::Value, out: &mut BTreeSet<String>) {
+    if let Some(table) = root.as_table() {
+        out.extend(table.keys().cloned());
+    }
+}
+
+fn default_project_display_toml() -> Result<toml::Value> {
+    let config: ProjectConfig =
+        toml::from_str(&format!("schema_version = {CURRENT_SCHEMA_VERSION}\n"))?;
+    build_project_display_toml(&config)
+}
+
+fn default_global_display_toml() -> Result<toml::Value> {
+    build_global_display_toml(&GlobalConfig::default())
+}
+
+fn collect_key_paths(root: &toml::Value, prefix: Option<&str>, out: &mut BTreeSet<String>) {
+    if let Some(prefix) = prefix {
+        out.insert(prefix.to_string());
+    }
+
+    if let Some(table) = root.as_table() {
+        for (key, value) in table {
+            let next = match prefix {
+                Some(prefix) => format!("{prefix}.{key}"),
+                None => key.clone(),
+            };
+            collect_key_paths(value, Some(&next), out);
+        }
+    }
+}
+
+/// Load a TOML file into a root value.
 ///
-/// Returns `Ok(None)` if the file doesn't exist or the key path is absent.
+/// Returns `Ok(None)` if the file doesn't exist.
 /// Returns `Err` if the file exists but cannot be read or parsed.
-fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Value>> {
+fn load_toml_root(path: &std::path::Path) -> Result<Option<toml::Value>> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -371,7 +574,16 @@ fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Va
     // TOML files, while the serde `Deserialize` path works correctly.
     let root: toml::Value =
         toml::from_str(&content).map_err(|e| anyhow::anyhow!("TOML parse error: {e}"))?;
-    Ok(resolve_key(&root, key))
+    Ok(Some(root))
+}
+
+#[cfg(test)]
+/// Load a TOML file and resolve a dotted key path.
+///
+/// Returns `Ok(None)` if the file doesn't exist or the key path is absent.
+/// Returns `Err` if the file exists but cannot be read or parsed.
+fn load_and_resolve(path: &std::path::Path, key: &str) -> Result<Option<toml::Value>> {
+    Ok(load_toml_root(path)?.and_then(|root| resolve_key(&root, key)))
 }
 
 fn build_execution_toml(execution: &csa_config::ExecutionConfig) -> toml::Value {
@@ -423,37 +635,7 @@ fn build_global_display_toml(config: &GlobalConfig) -> Result<toml::Value> {
     Ok(root)
 }
 
-fn resolve_effective_key(
-    project_root: Option<&std::path::Path>,
-    key: &str,
-    project_only: bool,
-    global_only: bool,
-) -> Result<Option<toml::Value>> {
-    if key.starts_with("kv_cache.") {
-        if project_only {
-            return Ok(None);
-        }
-        return resolve_effective_global_key(key);
-    }
-
-    if !key.starts_with("execution.") {
-        return Ok(None);
-    }
-
-    if project_only {
-        return Ok(None);
-    }
-
-    if !global_only
-        && let Some(project_root) = project_root
-        && let Some(value) = resolve_effective_execution_key(project_root, key)?
-    {
-        return Ok(Some(value));
-    }
-
-    resolve_effective_global_key(key)
-}
-
+#[cfg(test)]
 fn resolve_effective_global_key(key: &str) -> Result<Option<toml::Value>> {
     if !(key.starts_with("execution.") || key.starts_with("kv_cache.")) {
         return Ok(None);
@@ -464,6 +646,7 @@ fn resolve_effective_global_key(key: &str) -> Result<Option<toml::Value>> {
     Ok(resolve_key(&root, key))
 }
 
+#[cfg(test)]
 fn resolve_effective_execution_key(
     project_root: &std::path::Path,
     key: &str,
@@ -479,6 +662,96 @@ fn resolve_effective_execution_key(
 
     let root = build_global_display_toml(&GlobalConfig::default())?;
     Ok(resolve_key(&root, key))
+}
+
+fn suggest_key_paths(key: &str, candidates: &BTreeSet<String>) -> Vec<String> {
+    let query = key.trim().to_ascii_lowercase();
+    if query.is_empty() {
+        return Vec::new();
+    }
+
+    let last_segment = query.rsplit('.').next().unwrap_or(query.as_str());
+    let max_distance = std::cmp::max(3, query.len() / 3);
+
+    let mut ranked: Vec<_> = candidates
+        .iter()
+        .filter_map(|candidate| {
+            if candidate == key {
+                return None;
+            }
+
+            let normalized = candidate.to_ascii_lowercase();
+            let full_prefix = normalized.starts_with(&query);
+            let segment_prefix = normalized
+                .rsplit('.')
+                .next()
+                .is_some_and(|segment| segment.starts_with(last_segment));
+            let contains = normalized.contains(&query)
+                || (last_segment.len() >= 3 && normalized.contains(last_segment));
+            let distance = levenshtein_distance(&query, &normalized);
+
+            (full_prefix || segment_prefix || contains || distance <= max_distance).then(|| {
+                (
+                    !full_prefix,
+                    !segment_prefix,
+                    !contains,
+                    distance,
+                    normalized.len().abs_diff(query.len()),
+                    candidate.clone(),
+                )
+            })
+        })
+        .collect();
+
+    ranked.sort();
+    ranked
+        .into_iter()
+        .map(|(_, _, _, _, _, candidate)| candidate)
+        .take(5)
+        .collect()
+}
+
+fn levenshtein_distance(left: &str, right: &str) -> usize {
+    if left == right {
+        return 0;
+    }
+    if left.is_empty() {
+        return right.chars().count();
+    }
+    if right.is_empty() {
+        return left.chars().count();
+    }
+
+    let right_chars: Vec<_> = right.chars().collect();
+    let mut previous: Vec<usize> = (0..=right_chars.len()).collect();
+    let mut current = vec![0; right_chars.len() + 1];
+
+    for (left_idx, left_ch) in left.chars().enumerate() {
+        current[0] = left_idx + 1;
+        for (right_idx, right_ch) in right_chars.iter().enumerate() {
+            let substitution_cost = usize::from(left_ch != *right_ch);
+            current[right_idx + 1] = std::cmp::min(
+                std::cmp::min(previous[right_idx + 1] + 1, current[right_idx] + 1),
+                previous[right_idx] + substitution_cost,
+            );
+        }
+        std::mem::swap(&mut previous, &mut current);
+    }
+
+    previous[right_chars.len()]
+}
+
+fn format_missing_key_message(key: &str, suggestions: &[String]) -> String {
+    if suggestions.is_empty() {
+        return format!("Key not found: {key}");
+    }
+
+    let suggestion_lines = suggestions
+        .iter()
+        .map(|candidate| format!("  - {candidate}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("Key not found: {key}\nClosest matches:\n{suggestion_lines}")
 }
 
 /// Navigate a TOML value by dotted key path (e.g., "tools.codex.enabled").
