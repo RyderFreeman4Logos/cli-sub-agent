@@ -173,6 +173,7 @@ pub(crate) fn resolve_tool_by_strategy(
     tier: Option<&str>,
     force_ignore_tier_setting: bool,
 ) -> Result<StrategyResolution> {
+    crate::run_helpers::validate_model_spec_tier_conflict(model_spec, tier, "run")?;
     match strategy {
         ToolSelectionStrategy::Explicit(t) => {
             let (tool, ms, m) = resolve_tool_and_model(

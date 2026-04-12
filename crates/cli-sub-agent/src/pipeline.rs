@@ -36,6 +36,9 @@ pub(crate) mod design_context;
 #[path = "pipeline_session_exec.rs"]
 mod session_exec;
 
+#[path = "pipeline_session_exec_failover.rs"]
+mod session_exec_failover;
+
 #[path = "pipeline_session_hooks.rs"]
 mod session_hooks;
 

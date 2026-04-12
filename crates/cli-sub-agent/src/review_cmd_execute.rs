@@ -15,6 +15,15 @@ use super::output::{
     is_review_output_empty,
 };
 
+fn review_execution_env_options(no_failover: bool) -> ExecutionEnvOptions {
+    let options = ExecutionEnvOptions::with_no_flash_fallback();
+    if no_failover {
+        options.with_no_failover()
+    } else {
+        options
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) async fn execute_review(
     tool: ToolName,
@@ -34,6 +43,7 @@ pub(super) async fn execute_review(
     initial_response_timeout_seconds: Option<u64>,
     force_override_user_config: bool,
     force_ignore_tier_setting: bool,
+    no_failover: bool,
     no_fs_sandbox: bool,
     readonly_project_root: bool,
     extra_writable: &[PathBuf],
@@ -72,7 +82,7 @@ pub(super) async fn execute_review(
 
     let extra_env_owned = global_config.build_execution_env(
         executor.tool_name(),
-        ExecutionEnvOptions::with_no_flash_fallback(),
+        review_execution_env_options(no_failover),
     );
     let extra_env = extra_env_owned.as_ref();
     let _slot_guard = crate::pipeline::acquire_slot(&executor, global_config)?;
@@ -296,6 +306,7 @@ printf 'tool mutation\\n' >> tracked.txt\n",
             None,  // initial_response_timeout_seconds
             false, // force_override_user_config
             false, // force_ignore_tier_setting
+            false, // no_failover
             false, // no_fs_sandbox
             false, // readonly_project_root
             &[],   // extra_writable

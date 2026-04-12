@@ -54,7 +54,8 @@ pub struct ReviewArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
-    /// Model spec: tool/provider/model/thinking_budget
+    /// Exact model selector in `tool/provider/model/thinking` format.
+    /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
     #[arg(long)]
     pub model_spec: Option<String>,
 
@@ -63,7 +64,9 @@ pub struct ReviewArgs {
     #[arg(long)]
     pub thinking: Option<String>,
 
-    /// Disable automatic failover to alternative tools
+    /// Disable automatic retry/failover on transient errors (cross-tool 429 failover,
+    /// same-tool ACP crash retry, Gemini rate-limit/quota retry phases, debate outer
+    /// retry loop). Useful with --model-spec to pin an exact selection and fail fast.
     #[arg(long)]
     pub no_failover: bool,
 
@@ -315,7 +318,8 @@ pub struct DebateArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
-    /// Model spec: tool/provider/model/thinking_budget
+    /// Exact model selector in `tool/provider/model/thinking` format.
+    /// Use this for a single fixed model choice; use `--tier` for tier-managed routing and failover.
     #[arg(long)]
     pub model_spec: Option<String>,
 
@@ -323,7 +327,9 @@ pub struct DebateArgs {
     #[arg(long)]
     pub thinking: Option<String>,
 
-    /// Disable automatic failover to alternative tools
+    /// Disable automatic retry/failover on transient errors (cross-tool 429 failover,
+    /// same-tool ACP crash retry, Gemini rate-limit/quota retry phases, debate outer
+    /// retry loop). Useful with --model-spec to pin an exact selection and fail fast.
     #[arg(long)]
     pub no_failover: bool,
 

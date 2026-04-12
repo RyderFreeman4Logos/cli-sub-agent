@@ -779,5 +779,8 @@ mod tier_tests;
 #[path = "review_cmd_tests_tail.rs"]
 mod tail_tests;
 
+#[path = "review_cmd_tests_no_failover.rs"]
+mod no_failover_tests;
+
 #[path = "review_cmd_bug_class_tests.rs"]
 mod bug_class_tests;

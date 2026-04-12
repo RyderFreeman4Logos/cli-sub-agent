@@ -1,7 +1,10 @@
 use super::*;
-use csa_core::gemini::{
-    API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
-    NO_FLASH_FALLBACK_ENV_KEY,
+use csa_core::{
+    env::NO_FAILOVER_ENV_KEY,
+    gemini::{
+        API_KEY_ENV, API_KEY_FALLBACK_ENV_KEY, AUTH_MODE_ENV_KEY, AUTH_MODE_OAUTH,
+        NO_FLASH_FALLBACK_ENV_KEY,
+    },
 };
 use serial_test::serial;
 use std::collections::HashMap;
@@ -290,6 +293,49 @@ fn test_build_execution_env_promotes_legacy_api_key_to_fallback_and_no_flash() {
     assert_eq!(
         env.get(NO_FLASH_FALLBACK_ENV_KEY).map(String::as_str),
         Some("1")
+    );
+    assert_eq!(env.get("OTHER_VAR").map(String::as_str), Some("keep"));
+}
+
+#[test]
+fn test_build_execution_env_marks_no_failover_when_requested() {
+    let mut config = GlobalConfig::default();
+    config.tools.insert(
+        "codex".to_string(),
+        GlobalToolConfig {
+            env: HashMap::from([("OTHER_VAR".to_string(), "keep".to_string())]),
+            ..Default::default()
+        },
+    );
+
+    let env = config
+        .build_execution_env("codex", ExecutionEnvOptions::default().with_no_failover())
+        .unwrap();
+    assert_eq!(env.get(NO_FAILOVER_ENV_KEY).map(String::as_str), Some("1"));
+    assert_eq!(env.get("OTHER_VAR").map(String::as_str), Some("keep"));
+}
+
+#[test]
+fn test_build_execution_env_drops_user_configured_no_failover_spoof() {
+    let mut config = GlobalConfig::default();
+    config.tools.insert(
+        "codex".to_string(),
+        GlobalToolConfig {
+            env: HashMap::from([
+                (NO_FAILOVER_ENV_KEY.to_string(), "1".to_string()),
+                ("OTHER_VAR".to_string(), "keep".to_string()),
+            ]),
+            ..Default::default()
+        },
+    );
+
+    // Without --no-failover, the CLI should win: user's spoofed value is dropped.
+    let env = config
+        .build_execution_env("codex", ExecutionEnvOptions::default())
+        .unwrap();
+    assert!(
+        !env.contains_key(NO_FAILOVER_ENV_KEY),
+        "user config must not be able to spoof _CSA_NO_FAILOVER"
     );
     assert_eq!(env.get("OTHER_VAR").map(String::as_str), Some("keep"));
 }

@@ -78,6 +78,7 @@ fn review_decision_from_verdict(verdict: &str) -> ReviewDecision {
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
     let project_root = crate::pipeline::determine_project_root(args.cd.as_deref())?;
+    let project_root_for_hooks = project_root.display().to_string();
 
     // 2. Load config and validate recursion depth
     let Some((config, global_config)) =
@@ -350,6 +351,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             initial_response_timeout_seconds,
             args.force_override_user_config,
             args.force_ignore_tier_setting,
+            args.no_failover,
             args.no_fs_sandbox,
             readonly_project_root,
             &args.extra_writable,
@@ -451,6 +453,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                         ("decision", decision.as_str()),
                         ("verdict", verdict),
                         ("scope", &scope),
+                        ("project_root", project_root_for_hooks.as_str()),
                     ],
                     &project_root,
                 ),
@@ -493,6 +496,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             initial_response_timeout_seconds,
             force_override_user_config: args.force_override_user_config,
             force_ignore_tier_setting: args.force_ignore_tier_setting,
+            no_failover: args.no_failover,
             no_fs_sandbox: args.no_fs_sandbox,
             extra_writable: &args.extra_writable,
             timeout: args.timeout,
@@ -518,6 +522,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                     ("decision", if fix_passed { "pass" } else { "fail" }),
                     ("verdict", if fix_passed { CLEAN } else { verdict }),
                     ("scope", &scope_for_hook),
+                    ("project_root", project_root_for_hooks.as_str()),
                 ],
                 &project_root,
             ),
@@ -613,6 +618,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                 initial_response_timeout_seconds,
                 reviewer_force_override,
                 args.force_ignore_tier_setting,
+                args.no_failover,
                 reviewer_no_fs_sandbox,
                 readonly_project_root,
                 &reviewer_extra_writable,

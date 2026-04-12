@@ -326,9 +326,10 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
             effective_session_arg = new_eff;
         }
 
-        let extra_env = request
-            .global_config
-            .build_execution_env(tool_name_str, ExecutionEnvOptions::default());
+        let extra_env = request.global_config.build_execution_env(
+            tool_name_str,
+            ExecutionEnvOptions::from_no_failover(request.no_failover),
+        );
         let mut effective_prompt = if let Some(ref fork_res) = fork_resolution {
             if let Some(ref ctx) = fork_res.context_prefix {
                 info!(

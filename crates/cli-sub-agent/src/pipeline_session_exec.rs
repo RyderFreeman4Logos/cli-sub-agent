@@ -33,6 +33,8 @@ use csa_session::{
     ToolState, compute_cooldown_wait, create_session, create_session_fresh, get_session_dir,
 };
 
+use super::session_exec_failover::apply_transport_failover_overrides;
+
 #[allow(clippy::too_many_arguments)]
 #[tracing::instrument(skip_all, fields(tool = %tool, session = ?session_arg))]
 pub(crate) async fn execute_with_session(
@@ -586,6 +588,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
     execute_options =
         execute_options.with_output_spool_rotation(spool_max_bytes, spool_keep_rotated);
     execute_options.output_spool = Some(session_dir.join("output.log"));
+    apply_transport_failover_overrides(&mut execute_options, merged_env_ref);
 
     crate::pipeline_sandbox::record_sandbox_telemetry(&execute_options, &mut session);
     crate::pipeline_sandbox::maybe_inflate_balloon(tool.as_str());
