@@ -61,10 +61,17 @@ fn redact_env_value(value: &mut Value) {
     }
 }
 
+/// Short-form flags whose following argument is an HTTP header value and must
+/// be checked for embedded credentials (e.g. `-H 'Authorization: Bearer ...'`).
+/// Stored in ORIGINAL case — comparison is case-sensitive because `-h` (help)
+/// and `-H` (header) are different flags.
+const HEADER_SHORT_FLAGS: &[&str] = &["-H"];
+
 fn arg_name_is_sensitive(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     [
         "api-key",
+        "api_key",
         "apikey",
         "auth",
         "authorization",
@@ -78,15 +85,36 @@ fn arg_name_is_sensitive(value: &str) -> bool {
     .any(|needle| normalized.contains(needle))
 }
 
+/// Returns `true` when `flag` is a short alias for a header flag (e.g. `-H`).
+/// Case-sensitive: `-h` (help) must NOT match.
+fn is_header_short_flag(flag: &str) -> bool {
+    let trimmed = flag.trim();
+    HEADER_SHORT_FLAGS.contains(&trimmed)
+}
+
 fn arg_value_is_sensitive(value: &str) -> bool {
     let normalized = value.trim().to_ascii_lowercase();
     normalized.contains("authorization:")
         || normalized.contains("bearer ")
         || normalized.contains("token=")
+        || normalized.contains("token:")
         || normalized.contains("api-key=")
+        || normalized.contains("api-key:")
+        || normalized.contains("api_key=")
+        || normalized.contains("api_key:")
         || normalized.contains("apikey=")
+        || normalized.contains("apikey:")
         || normalized.contains("secret=")
+        || normalized.contains("secret:")
         || normalized.contains("password=")
+        || normalized.contains("password:")
+}
+
+fn arg_has_inline_sensitive_value(value: &str) -> bool {
+    let normalized = value.trim().to_ascii_lowercase();
+    normalized.starts_with('-')
+        && arg_name_is_sensitive(&normalized)
+        && (normalized.contains('=') || normalized.contains(':'))
 }
 
 fn redact_args(args: &[String]) -> Vec<String> {
@@ -107,7 +135,28 @@ fn redact_args(args: &[String]) -> Vec<String> {
             continue;
         }
 
+        if arg_has_inline_sensitive_value(arg) {
+            redacted.push("<redacted>".to_string());
+            continue;
+        }
+
+        // Attached header form: `-HCookie: session=abc` — the header value
+        // is glued onto the flag without a space.  Redact the entire arg
+        // (consistent with --header redacting all following values).
+        if arg.starts_with("-H") && arg.len() > 2 {
+            redacted.push("<redacted>".to_string());
+            continue;
+        }
+
         if arg.starts_with('-') && arg_name_is_sensitive(arg) {
+            redacted.push(arg.clone());
+            redact_next = true;
+            continue;
+        }
+
+        // Short header flags like `-H` take the next arg as an HTTP header
+        // value that may embed credentials (e.g. `-H 'x-api-key: secret'`).
+        if is_header_short_flag(arg) {
             redacted.push(arg.clone());
             redact_next = true;
             continue;
@@ -192,4 +241,83 @@ pub(super) fn maybe_write_acp_payload_debug(
     let serialized = serde_json::to_string_pretty(&payload).ok()?;
     fs::write(&debug_path, format!("{serialized}\n")).ok()?;
     Some(debug_path)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::redact_args;
+
+    #[test]
+    fn redact_args_redacts_inline_sensitive_values_without_consuming_following_args() {
+        let args = vec![
+            "-HAuthorization:Bearer abc123".to_string(),
+            "--safe".to_string(),
+            "--api-key=value-1".to_string(),
+            "--api_key=value-2".to_string(),
+            "--header".to_string(),
+            "Authorization: Bearer xyz987".to_string(),
+        ];
+
+        assert_eq!(
+            redact_args(&args),
+            vec![
+                "<redacted>".to_string(),
+                "--safe".to_string(),
+                "--api-key=<redacted>".to_string(),
+                "--api_key=<redacted>".to_string(),
+                "--header".to_string(),
+                "<redacted>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn redact_args_redacts_short_header_flag_values() {
+        let args = vec![
+            "-H".to_string(),
+            "x-api-key: secret".to_string(),
+            "--verbose".to_string(),
+            "-H".to_string(),
+            "Content-Type: application/json".to_string(),
+        ];
+
+        assert_eq!(
+            redact_args(&args),
+            vec![
+                "-H".to_string(),
+                "<redacted>".to_string(),
+                "--verbose".to_string(),
+                "-H".to_string(),
+                "<redacted>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn redact_args_redacts_attached_header_flag_form() {
+        // -H<value> (no space) should be redacted entirely, same as --header
+        let args = vec![
+            "-HCookie: session=abc".to_string(),
+            "--next".to_string(),
+            "-HPrivate-Token: secret".to_string(),
+        ];
+        assert_eq!(
+            redact_args(&args),
+            vec![
+                "<redacted>".to_string(),
+                "--next".to_string(),
+                "<redacted>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn redact_args_does_not_treat_lowercase_h_as_header_flag() {
+        // -h is typically "help", not "header" — must NOT arm redact_next
+        let args = vec!["-h".to_string(), "some-value".to_string()];
+        assert_eq!(
+            redact_args(&args),
+            vec!["-h".to_string(), "some-value".to_string()]
+        );
+    }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use serial_test::serial;
 use tempfile::tempdir;
 
 struct EnvVarGuard {
@@ -180,6 +181,7 @@ fn test_merged_schema_version_uses_max_when_explicit() {
 }
 
 #[test]
+#[serial]
 fn test_user_config_path_returns_some() {
     let dir = tempdir().unwrap();
     let _config_home = EnvVarGuard::set("XDG_CONFIG_HOME", dir.path());
@@ -203,6 +205,7 @@ fn test_user_config_template_is_valid() {
 }
 
 #[test]
+#[serial]
 fn test_user_config_path_matches_global_config_dir() {
     let dir = tempdir().unwrap();
     let _config_home = EnvVarGuard::set("XDG_CONFIG_HOME", dir.path());
