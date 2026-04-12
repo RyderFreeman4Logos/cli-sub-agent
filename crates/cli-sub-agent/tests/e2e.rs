@@ -383,6 +383,36 @@ enabled = true
 }
 
 #[test]
+fn config_get_falls_back_to_raw_project_value_when_global_config_is_invalid() {
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let global_dir = tmp.path().join(".config/cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).expect("create global config dir");
+    std::fs::write(global_dir.join("config.toml"), "{{invalid toml")
+        .expect("write invalid global config");
+
+    let config_path = csa_config::ProjectConfig::config_path(tmp.path());
+    std::fs::create_dir_all(config_path.parent().expect("config dir")).expect("create config dir");
+    std::fs::write(
+        &config_path,
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .expect("write project config");
+
+    let output = csa_cmd(tmp.path())
+        .args(["config", "get", "resources.memory_max_mb"])
+        .current_dir(tmp.path())
+        .output()
+        .expect("failed to run csa config get resources.memory_max_mb");
+
+    assert!(output.status.success(), "config get should exit 0");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1024");
+}
+
+#[test]
 fn config_get_reads_unknown_raw_project_sections() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let config_path = csa_config::ProjectConfig::config_path(tmp.path());

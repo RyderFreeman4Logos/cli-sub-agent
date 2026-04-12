@@ -469,6 +469,40 @@ memory_max_mb = 1024
 }
 
 #[test]
+fn resolve_lookup_sources_falls_back_to_raw_project_for_known_sections_when_global_is_invalid() {
+    let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
+    let dir = tempfile::tempdir().unwrap();
+    let config_root = dir.path().join("xdg-config");
+    std::fs::create_dir_all(&config_root).unwrap();
+    let _home_guard = EnvVarGuard::set("HOME", dir.path());
+    let _xdg_guard = EnvVarGuard::set("XDG_CONFIG_HOME", &config_root);
+
+    let global_dir = config_root.join("cli-sub-agent");
+    std::fs::create_dir_all(&global_dir).unwrap();
+    std::fs::write(global_dir.join("config.toml"), "{{invalid toml").unwrap();
+
+    let csa_dir = dir.path().join(".csa");
+    std::fs::create_dir_all(&csa_dir).unwrap();
+    std::fs::write(
+        csa_dir.join("config.toml"),
+        r#"
+schema_version = 1
+[resources]
+memory_max_mb = 1024
+"#,
+    )
+    .unwrap();
+
+    let lookup =
+        build_config_get_lookup(Some(dir.path()), "resources.memory_max_mb", false, false).unwrap();
+    let value = resolve_lookup_sources(&lookup.sources, "resources.memory_max_mb")
+        .unwrap()
+        .expect("raw project value should survive invalid global config");
+
+    assert_eq!(value.as_integer(), Some(1024));
+}
+
+#[test]
 fn resolve_lookup_sources_returns_project_raw_match_before_global_parse() {
     let _env_lock = TEST_ENV_LOCK.lock().expect("config env lock poisoned");
     let dir = tempfile::tempdir().unwrap();
@@ -537,7 +571,11 @@ min_timeout_seconds = 3600
     let error = resolve_lookup_sources(&lookup.sources, "execution.min_timeout_seconds")
         .expect_err("broken project config should fail before global fallback");
 
-    assert!(error.to_string().contains("Failed to parse project config"));
+    let message = error.to_string();
+    assert!(
+        message.contains("Failed to parse project config") || message.contains("TOML parse error"),
+        "expected project parse failure, got: {message}"
+    );
 }
 
 #[test]

@@ -355,6 +355,18 @@ enum LookupSourceSpec {
     },
 }
 
+impl LookupSourceSpec {
+    fn allows_deferred_error(&self) -> bool {
+        matches!(
+            self,
+            LookupSourceSpec::EffectiveProject {
+                include_global_fallback: true,
+                ..
+            }
+        )
+    }
+}
+
 fn build_config_get_lookup(
     project_root: Option<&std::path::Path>,
     key: &str,
@@ -451,23 +463,53 @@ fn resolve_effective_key(
 }
 
 fn resolve_lookup_sources(sources: &[LookupSourceSpec], key: &str) -> Result<Option<toml::Value>> {
+    let mut deferred_error = None;
+
     for source in sources {
-        if let Some(root) = load_lookup_root(source)?
-            && let Some(value) = resolve_key(&root, key)
-        {
-            return Ok(Some(value));
+        match load_lookup_root(source) {
+            Ok(Some(root)) => {
+                if let Some(value) = resolve_key(&root, key) {
+                    return Ok(Some(value));
+                }
+            }
+            Ok(None) => {}
+            Err(err) if source.allows_deferred_error() => {
+                // Effective project lookups can fail because global config is broken.
+                // Keep going so an explicit raw project value can still be resolved.
+                deferred_error.get_or_insert(err);
+            }
+            Err(err) => return Err(err),
         }
     }
+
+    if let Some(err) = deferred_error {
+        return Err(err);
+    }
+
     Ok(None)
 }
 
 fn collect_lookup_keys(sources: &[LookupSourceSpec]) -> Result<BTreeSet<String>> {
     let mut keys = BTreeSet::new();
+    let mut deferred_error = None;
+
     for source in sources {
-        if let Some(root) = load_lookup_root(source)? {
-            collect_key_paths(&root, None, &mut keys);
+        match load_lookup_root(source) {
+            Ok(Some(root)) => collect_key_paths(&root, None, &mut keys),
+            Ok(None) => {}
+            Err(err) if source.allows_deferred_error() => {
+                deferred_error.get_or_insert(err);
+            }
+            Err(err) => return Err(err),
         }
     }
+
+    if keys.is_empty()
+        && let Some(err) = deferred_error
+    {
+        return Err(err);
+    }
+
     Ok(keys)
 }
 
