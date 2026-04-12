@@ -140,6 +140,14 @@ fn redact_args(args: &[String]) -> Vec<String> {
             continue;
         }
 
+        // Attached header form: `-HCookie: session=abc` — the header value
+        // is glued onto the flag without a space.  Redact the entire arg
+        // (consistent with --header redacting all following values).
+        if arg.starts_with("-H") && arg.len() > 2 {
+            redacted.push("<redacted>".to_string());
+            continue;
+        }
+
         if arg.starts_with('-') && arg_name_is_sensitive(arg) {
             redacted.push(arg.clone());
             redact_next = true;
@@ -280,6 +288,24 @@ mod tests {
                 "<redacted>".to_string(),
                 "--verbose".to_string(),
                 "-H".to_string(),
+                "<redacted>".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn redact_args_redacts_attached_header_flag_form() {
+        // -H<value> (no space) should be redacted entirely, same as --header
+        let args = vec![
+            "-HCookie: session=abc".to_string(),
+            "--next".to_string(),
+            "-HPrivate-Token: secret".to_string(),
+        ];
+        assert_eq!(
+            redact_args(&args),
+            vec![
+                "<redacted>".to_string(),
+                "--next".to_string(),
                 "<redacted>".to_string(),
             ]
         );
