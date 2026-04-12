@@ -194,6 +194,7 @@ fn resolve_review_tool_prefers_cli_override() {
     let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let tool = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -214,6 +215,7 @@ fn resolve_review_tool_global_auto_prefers_first_heterogeneous_tool() {
     let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let tool = resolve_review_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -233,6 +235,7 @@ fn resolve_review_tool_global_auto_succeeds_with_single_heterogeneous_tool() {
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
     let tool = resolve_review_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -250,6 +253,7 @@ fn resolve_review_tool_errors_without_parent_tool_context() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let err = resolve_review_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -272,6 +276,7 @@ fn resolve_review_tool_errors_on_invalid_explicit_global_tool() {
     global.review.tool = csa_config::ToolSelection::Single("invalid-tool".to_string());
     let cfg = project_config_with_enabled_tools(&["gemini-cli"]);
     let err = resolve_review_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -300,6 +305,7 @@ fn resolve_review_tool_prefers_project_override() {
 
     let tool = resolve_review_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -323,6 +329,7 @@ fn resolve_review_tool_project_auto_maps_to_heterogeneous_counterpart() {
     cfg.debate = None;
 
     let tool = resolve_review_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -350,6 +357,7 @@ fn resolve_review_tool_project_auto_prefers_priority_over_counterpart() {
 
     let tool = resolve_review_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("codex"),
@@ -376,6 +384,7 @@ fn resolve_review_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
 
     let tool = resolve_review_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("codex"),
@@ -396,7 +405,9 @@ fn default_review_args() -> ReviewArgs {
         sa_mode: None,
         session: None,
         model: None,
+        model_spec: None,
         thinking: None,
+        no_failover: false,
         diff: false,
         branch: None,
         commit: None,

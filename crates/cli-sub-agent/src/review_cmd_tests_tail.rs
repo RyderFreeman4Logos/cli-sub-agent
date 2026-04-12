@@ -170,6 +170,26 @@ fn resolve_review_model_ignores_config_when_tier_active() {
 }
 
 #[test]
+fn resolve_review_tool_prefers_model_spec_override() {
+    let global = GlobalConfig::default();
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let tool = resolve_review_tool(
+        None,
+        Some("codex/openai/gpt-5.4/xhigh"),
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None,
+        false,
+    )
+    .unwrap();
+    assert!(matches!(tool.0, ToolName::Codex));
+    assert_eq!(tool.1.as_deref(), Some("codex/openai/gpt-5.4/xhigh"));
+}
+
+#[test]
 fn resolve_review_thinking_uses_config_without_tier() {
     let thinking = resolve_review_thinking(None, Some("high"), false);
     assert_eq!(thinking.as_deref(), Some("high"));
@@ -179,6 +199,23 @@ fn resolve_review_thinking_uses_config_without_tier() {
 fn resolve_review_thinking_ignores_config_when_tier_active() {
     let thinking = resolve_review_thinking(None, Some("high"), true);
     assert_eq!(thinking, None);
+}
+
+#[test]
+fn review_cli_parses_model_spec_and_no_failover_flags() {
+    let args = parse_review_args(&[
+        "csa",
+        "review",
+        "--diff",
+        "--model-spec",
+        "codex/openai/gpt-5.4/xhigh",
+        "--no-failover",
+    ]);
+    assert_eq!(
+        args.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.4/xhigh")
+    );
+    assert!(args.no_failover);
 }
 
 // --- --thinking silent acceptance tests ---

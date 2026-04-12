@@ -35,6 +35,27 @@ fn resolve_debate_model_ignores_config_when_tier_active() {
 }
 
 #[test]
+fn resolve_debate_tool_prefers_model_spec_override() {
+    let global = GlobalConfig::default();
+    let cfg = project_config_with_enabled_tools(&["codex"]);
+    let (tool, mode, model_spec) = resolve_debate_tool(
+        None,
+        Some("codex/openai/gpt-5.4/xhigh"),
+        Some(&cfg),
+        &global,
+        Some("claude-code"),
+        std::path::Path::new("/tmp/test-project"),
+        false,
+        None,
+        false,
+    )
+    .unwrap();
+    assert!(matches!(tool, ToolName::Codex));
+    assert_eq!(mode, DebateMode::Heterogeneous);
+    assert_eq!(model_spec.as_deref(), Some("codex/openai/gpt-5.4/xhigh"));
+}
+
+#[test]
 fn resolve_debate_thinking_prefers_cli_over_config() {
     let thinking = resolve_debate_thinking(Some("low"), Some("high"), false);
     assert_eq!(thinking.as_deref(), Some("low"));
@@ -234,6 +255,23 @@ async fn handle_debate_persists_result_for_direct_tool_tier_rejection() {
 fn debate_cli_parses_rounds_flag() {
     let args = parse_debate_args(&["csa", "debate", "--rounds", "5", "question"]);
     assert_eq!(args.rounds, 5);
+}
+
+#[test]
+fn debate_cli_parses_model_spec_and_no_failover_flags() {
+    let args = parse_debate_args(&[
+        "csa",
+        "debate",
+        "--model-spec",
+        "codex/openai/gpt-5.4/xhigh",
+        "--no-failover",
+        "question",
+    ]);
+    assert_eq!(
+        args.model_spec.as_deref(),
+        Some("codex/openai/gpt-5.4/xhigh")
+    );
+    assert!(args.no_failover);
 }
 
 #[test]

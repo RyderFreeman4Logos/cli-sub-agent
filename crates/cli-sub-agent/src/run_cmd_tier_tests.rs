@@ -83,6 +83,7 @@ async fn handle_run_persists_result_for_direct_tool_tier_rejection() {
         Some("inspect the repository".to_string()),
         None,
         None,
+        None,
         false,
         None,
         false,

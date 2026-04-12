@@ -93,6 +93,20 @@ pub(crate) struct RunLoopOutcome {
     pub(crate) fork_resolution: Option<ForkResolution>,
 }
 
+fn allow_cross_tool_failover(
+    strategy: ToolSelectionStrategy,
+    resolved_tier_name: Option<&str>,
+    force_ignore_tier_setting: bool,
+    no_failover: bool,
+) -> bool {
+    if no_failover {
+        return false;
+    }
+
+    !matches!(strategy, ToolSelectionStrategy::Explicit(_))
+        || (!force_ignore_tier_setting && resolved_tier_name.is_some())
+}
+
 pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunLoopCompletion> {
     // Compute max failover attempts: count total models across ALL tiers to
     // allow cross-tier failover when the primary tier is exhausted (#493).
@@ -125,6 +139,12 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
     let mut runtime_fallback_candidates = request.runtime_fallback_candidates;
     let mut runtime_fallback_attempts = 0u8;
     let max_runtime_fallback_attempts = 1u8;
+    let cross_tool_failover_enabled = allow_cross_tool_failover(
+        request.strategy.clone(),
+        request.resolved_tier_name,
+        request.force_ignore_tier_setting,
+        request.no_failover,
+    );
     let mut executed_session_id: Option<String> = None;
     let mut pre_created_fork_session_id: Option<String> = None;
     let mut fork_resolution: Option<ForkResolution> = None;
@@ -178,7 +198,7 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                 let all_usage = slot_usage(&slots_dir, &all_tools_ref);
                 let diag_msg = format_slot_diagnostic(tool_name_str, &status, &all_usage);
 
-                if !request.no_failover && attempts < max_failover_attempts {
+                if cross_tool_failover_enabled && attempts < max_failover_attempts {
                     let free_alt = all_usage.iter().find(|s| {
                         s.tool_name != tool_name_str
                             && s.free() > 0
@@ -232,6 +252,13 @@ pub(crate) async fn execute_run_loop(request: RunLoopRequest<'_>) -> Result<RunL
                     _slot_guard = Some(slot);
                 } else {
                     eprintln!("{diag_msg}");
+                    if matches!(request.strategy, ToolSelectionStrategy::Explicit(_))
+                        && !cross_tool_failover_enabled
+                    {
+                        eprintln!(
+                            "Explicit --tool {tool_name_str} is currently unavailable. Retry later or choose a different --tool."
+                        );
+                    }
                     return Ok(RunLoopCompletion::Exit(1));
                 }
             }

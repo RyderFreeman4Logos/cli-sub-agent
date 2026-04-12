@@ -89,6 +89,7 @@ fn resolve_debate_tool_prefers_cli_override() {
     let cfg = project_config_with_enabled_tools(&["gemini-cli", "codex"]);
     let (tool, mode, _) = resolve_debate_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -108,6 +109,7 @@ fn resolve_debate_tool_auto_maps_heterogeneous() {
     let cfg = project_config_with_enabled_tools(&["codex"]);
     let (tool, mode, _) = resolve_debate_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -126,6 +128,7 @@ fn resolve_debate_tool_auto_maps_reverse() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["claude-code"]);
     let (tool, mode, _) = resolve_debate_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -147,6 +150,7 @@ fn resolve_debate_tool_same_model_fallback_when_no_parent() {
     let global = GlobalConfig::default();
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let (tool, mode, _) = resolve_debate_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -173,6 +177,7 @@ fn resolve_debate_tool_same_model_fallback_disabled_errors_without_parent() {
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let err = resolve_debate_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         None,
@@ -195,6 +200,7 @@ fn resolve_debate_tool_same_model_fallback_uses_parent_tool() {
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let (tool, mode, _) = resolve_debate_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("opencode"),
@@ -214,6 +220,7 @@ fn resolve_debate_tool_same_model_fallback_disabled_errors_on_unknown_parent() {
     global.debate.same_model_fallback = false;
     let cfg = project_config_with_enabled_tools(&["opencode"]);
     let err = resolve_debate_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -241,6 +248,7 @@ fn resolve_debate_tool_prefers_project_override() {
 
     let (tool, mode, _) = resolve_debate_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -264,6 +272,7 @@ fn resolve_debate_tool_project_auto_maps_heterogeneous() {
     });
 
     let (tool, mode, _) = resolve_debate_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -291,6 +300,7 @@ fn resolve_debate_tool_project_auto_prefers_priority_over_counterpart() {
 
     let (tool, mode, _) = resolve_debate_tool(
         None,
+        None,
         Some(&cfg),
         &global,
         Some("codex"),
@@ -316,6 +326,7 @@ fn resolve_debate_tool_unknown_priority_still_uses_auto_heterogeneous_selection(
     });
 
     let (tool, mode, _) = resolve_debate_tool(
+        None,
         None,
         Some(&cfg),
         &global,

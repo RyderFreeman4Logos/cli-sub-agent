@@ -183,8 +183,15 @@ pub(crate) async fn handle_debate(
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, debate_mode, tier_model_spec) = match resolve_debate_tool(
+    let explicit_tool = args.tool.or_else(|| {
+        args.model_spec
+            .as_deref()
+            .and_then(|spec| spec.split('/').next())
+            .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
+    });
+    let (tool, debate_mode, resolved_model_spec) = match resolve_debate_tool(
         args.tool,
+        args.model_spec.as_deref(),
         config.as_ref(),
         &global_config,
         parent_tool.as_deref(),
@@ -201,7 +208,7 @@ pub(crate) async fn handle_debate(
                     session_id: args.session.as_deref(),
                     description: Some(debate_description.as_str()),
                     parent: None,
-                    tool_name: args.tool.map(|tool| tool.as_str()),
+                    tool_name: explicit_tool.map(|tool| tool.as_str()),
                     task_type: Some("debate"),
                     tier_name: args.tier.as_deref(),
                     error: err,
@@ -209,7 +216,9 @@ pub(crate) async fn handle_debate(
             ));
         }
     };
-    let tier_active = tier_model_spec.is_some() && !args.force_ignore_tier_setting;
+    let tier_active = resolved_model_spec.is_some()
+        && args.model_spec.is_none()
+        && !args.force_ignore_tier_setting;
     let resolved_tier_name = if tier_active {
         resolve_debate_tier_name(
             config.as_ref(),
@@ -233,8 +242,11 @@ pub(crate) async fn handle_debate(
         .and_then(|c| c.debate.as_ref())
         .and_then(|d| d.model.as_deref())
         .or(global_config.debate.model.as_deref());
-    let debate_model =
-        resolve_debate_model(args.model.as_deref(), config_debate_model, tier_active);
+    let debate_model = resolve_debate_model(
+        args.model.as_deref(),
+        config_debate_model,
+        resolved_model_spec.is_some(),
+    );
 
     // Active tier model specs remain authoritative unless the user overrides on the CLI.
     let thinking = resolve_debate_thinking(
@@ -244,14 +256,14 @@ pub(crate) async fn handle_debate(
             .and_then(|c| c.debate.as_ref())
             .and_then(|d| d.thinking.as_deref())
             .or(global_config.debate.thinking.as_deref()),
-        tier_active,
+        resolved_model_spec.is_some(),
     );
 
     // 6. Build executor and validate tool
     let enforce_tier = tier_active;
     let executor = crate::pipeline::build_and_validate_executor(
         &tool,
-        tier_model_spec.as_deref(),
+        resolved_model_spec.as_deref(),
         debate_model.as_deref(),
         thinking.as_deref(),
         crate::pipeline::ConfigRefs {
@@ -516,10 +528,10 @@ fn resolve_debate_stream_mode(
 fn resolve_debate_thinking(
     cli_thinking: Option<&str>,
     config_thinking: Option<&str>,
-    tier_active: bool,
+    model_spec_active: bool,
 ) -> Option<String> {
     cli_thinking.map(str::to_string).or_else(|| {
-        (!tier_active)
+        (!model_spec_active)
             .then_some(config_thinking)
             .flatten()
             .map(str::to_string)

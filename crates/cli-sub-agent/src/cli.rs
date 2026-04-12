@@ -103,7 +103,9 @@ pub enum Commands {
         sa_mode: Option<bool>,
         /// Task prompt; reads from stdin if omitted
         prompt: Option<String>,
-
+        /// Task prompt (flag form; same as the positional prompt)
+        #[arg(long = "prompt", value_name = "PROMPT", conflicts_with_all = ["prompt", "prompt_file"])]
+        prompt_flag: Option<String>,
         /// Read prompt from a file (bypasses shell quoting issues with complex prompts)
         #[arg(long, value_name = "PATH", conflicts_with = "prompt")]
         prompt_file: Option<PathBuf>,
@@ -142,7 +144,6 @@ pub enum Commands {
             value_parser = validate_return_to
         )]
         return_to: Option<String>,
-
         /// Parent session ULID (defaults to CSA_SESSION_ID env var)
         #[arg(long, hide = true)]
         parent: Option<String>,
@@ -154,11 +155,9 @@ pub enum Commands {
         /// Working directory (defaults to CWD)
         #[arg(long)]
         cd: Option<String>,
-
         /// Model spec: tool/provider/model/thinking_budget
         #[arg(long)]
         model_spec: Option<String>,
-
         /// Override tool default model (opaque string, passed through to tool)
         #[arg(short, long)]
         model: Option<String>,

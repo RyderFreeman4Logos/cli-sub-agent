@@ -80,6 +80,7 @@ pub(crate) fn resolve_review_stream_mode(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_review_tool(
     arg_tool: Option<ToolName>,
+    arg_model_spec: Option<&str>,
     project_config: Option<&ProjectConfig>,
     global_config: &GlobalConfig,
     parent_tool: Option<&str>,
@@ -96,6 +97,23 @@ pub(crate) fn resolve_review_tool(
         cli_tier,
         force_ignore_tier_setting,
     )?;
+
+    if let Some(model_spec) = arg_model_spec {
+        let (tool, resolved_model_spec, _) = crate::run_helpers::resolve_tool_and_model(
+            arg_tool,
+            Some(model_spec),
+            None,
+            project_config,
+            project_root,
+            false,
+            force_override_user_config,
+            false,
+            cli_tier,
+            force_ignore_tier_setting,
+            false,
+        )?;
+        return Ok((tool, resolved_model_spec));
+    }
 
     // Enforce tier routing: block direct --tool when tiers are configured,
     // unless --force-ignore-tier-setting (or --force-override-user-config) is active.
@@ -281,10 +299,10 @@ pub(crate) fn resolve_review_tier_name(
 pub(crate) fn resolve_review_model(
     cli_model: Option<&str>,
     config_model: Option<&str>,
-    tier_active: bool,
+    model_spec_active: bool,
 ) -> Option<String> {
     cli_model.map(str::to_string).or_else(|| {
-        (!tier_active)
+        (!model_spec_active)
             .then_some(config_model)
             .flatten()
             .map(str::to_string)
@@ -295,10 +313,10 @@ pub(crate) fn resolve_review_model(
 pub(crate) fn resolve_review_thinking(
     cli_thinking: Option<&str>,
     config_thinking: Option<&str>,
-    tier_active: bool,
+    model_spec_active: bool,
 ) -> Option<String> {
     cli_thinking.map(str::to_string).or_else(|| {
-        (!tier_active)
+        (!model_spec_active)
             .then_some(config_thinking)
             .flatten()
             .map(str::to_string)
