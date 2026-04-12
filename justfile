@@ -17,11 +17,10 @@ _repo_root := `git rev-parse --show-superproject-working-tree 2>/dev/null | grep
 # Just already executes repository-controlled code, so trust this checkout's
 # mise config and avoid interactive trust prompts on sandboxed commit paths.
 export MISE_TRUSTED_CONFIG_PATHS := _repo_root
-# Codex CI runs cargo against a mirrored workspace path that is not writable for
-# lock files. Keep the fallback target/state dirs inside the repo so clippy and
-# nextest do not lose incremental artifacts under tmpfs-backed `/tmp`.
-_codex_ci_root := `repo_root=$(git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel); if [ "${CODEX_CI:-0}" = "1" ]; then dir="$repo_root/.tmp/codex-ci"; mkdir -p "$dir"; printf '%s' "$dir"; fi`
-_cargo_target_dir := `repo_root=$(git rev-parse --show-superproject-working-tree 2>/dev/null | grep . || git rev-parse --show-toplevel); if [ "${CODEX_CI:-0}" = "1" ]; then dir="$repo_root/.tmp/codex-ci/target"; mkdir -p "$dir"; printf '%s' "$dir"; else printf '%s' "$repo_root/target"; fi`
+# Codex CI only needs the repo-local fallback in the real sandbox path. Local
+# CODEX_CI shells should keep using the normal workspace target directory.
+_codex_ci_root := `scripts/resolve-codex-ci-path.sh root`
+_cargo_target_dir := `scripts/resolve-codex-ci-path.sh target`
 
 # Keep cargo state local to avoid host pollution (Optional)
 # export CARGO_HOME := _repo_root + "/.cargo-local"
@@ -163,6 +162,7 @@ pre-commit:
     just find-monolith-files
     just check-generated-artifacts
     just check-version-bumped
+    just check-codex-ci-target-routing
     just check-chinese
     just fmt
     ./scripts/hooks/check-env-dependent-tests.sh
@@ -178,6 +178,10 @@ pre-commit:
 check-chinese:
     @echo "Checking for Chinese characters..."
     @! rg "\p{Script=Han}" . --vimgrep --glob '!target/**' --glob '!.git/**' --glob '!**/i18n/*.ftl' --glob '!skills/mktd/**' --glob '!tests/fixtures/**' --glob '!.claude/rules/**' --glob '!.agents/**' --glob '!CLAUDE.md' --glob '!GEMINI.md'
+
+# Verify CODEX_CI keeps using ./target locally and only falls back when needed.
+check-codex-ci-target-routing:
+    ./scripts/check-codex-ci-target-routing.sh
 
 # Format code and auto-stage modified .rs files.
 # This allows 'just fmt' to be run immediately before commit without manual 'git add'.
@@ -208,21 +212,21 @@ deny:
 
 # Run all tests in the workspace.
 test:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features; fi
+    if [ -n "{{_codex_ci_root}}" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features; fi
 
 # Run e2e tests only.
 test-e2e:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --package cli-sub-agent --test e2e --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --package cli-sub-agent --test e2e --all-features; fi
+    if [ -n "{{_codex_ci_root}}" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --package cli-sub-agent --test e2e --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --package cli-sub-agent --test e2e --all-features; fi
 
 # Run tests for a specific package.
 # Usage: just test-p my-crate
 test-p package:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run -p {{package}} --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run -p {{package}} --all-features; fi
+    if [ -n "{{_codex_ci_root}}" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run -p {{package}} --all-features; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run -p {{package}} --all-features; fi
 
 # Run tests matching a specific pattern/name.
 # Usage: just test-f login_validation
 test-f pattern:
-    if [ "${CODEX_CI:-0}" = "1" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features -E 'test({{pattern}})'; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features -E 'test({{pattern}})'; fi
+    if [ -n "{{_codex_ci_root}}" ]; then dir="{{_codex_ci_root}}/xdg-state"; mkdir -p "$dir"; XDG_STATE_HOME="$dir" CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features -E 'test({{pattern}})'; else CARGO_TARGET_DIR="{{_cargo_target_dir}}" cargo nextest run --workspace --all-features -E 'test({{pattern}})'; fi
 
 # ==============================================================================
 # 🛠 Git Helpers
