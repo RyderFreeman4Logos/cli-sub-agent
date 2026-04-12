@@ -88,6 +88,7 @@ fn test_review_blocks_direct_tool_when_tiers_configured() {
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -118,6 +119,7 @@ fn test_review_allows_tier_flag() {
         &["gemini-cli"],
     );
     let result = resolve_review_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -155,6 +157,7 @@ fn test_review_tool_plus_tier_resolves_requested_tool_from_tier() {
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -184,6 +187,7 @@ fn test_review_tool_plus_tier_errors_when_tool_missing_from_tier() {
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -211,6 +215,7 @@ fn test_review_tier_whitelist_mismatch_errors_instead_of_bypassing_tier() {
         &["codex"],
     );
     let result = resolve_review_tool(
+        None,
         None,
         Some(&cfg),
         &global,
@@ -243,6 +248,7 @@ fn test_review_force_ignore_tier_allows_direct_tool() {
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -273,6 +279,7 @@ fn test_review_tool_plus_tier_and_force_ignore_errors_on_conflict() {
     );
     let result = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -302,6 +309,7 @@ fn test_review_no_tiers_allows_direct_tool() {
     // No tiers configured — direct --tool should work
     let result = resolve_review_tool(
         Some(ToolName::Codex),
+        None,
         Some(&cfg),
         &global,
         Some("claude-code"),
@@ -330,6 +338,7 @@ fn test_review_tier_alias_resolves() {
         .insert("code_review".to_string(), "quality".to_string());
 
     let result = resolve_review_tool(
+        None,
         None,
         Some(&cfg),
         &global,

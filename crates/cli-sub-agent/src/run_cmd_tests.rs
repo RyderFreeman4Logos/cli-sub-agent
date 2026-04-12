@@ -13,7 +13,6 @@ use crate::run_cmd_tool_selection::{
     resolve_heterogeneous_candidates, resolve_last_session_selection,
     take_next_runtime_fallback_tool,
 };
-
 fn test_session(
     meta_session_id: &str,
     last_accessed: chrono::DateTime<Utc>,
@@ -39,7 +38,6 @@ fn test_session(
         turn_count: 0,
         token_budget: None,
         sandbox_info: None,
-
         termination_reason: None,
         is_seed_candidate: false,
         git_head_at_creation: None,
@@ -51,7 +49,6 @@ fn test_session(
         identity_version: 1,
     }
 }
-
 #[test]
 fn test_resolve_last_session_selection_errors_on_empty_sessions() {
     let err = resolve_last_session_selection(Vec::new()).unwrap_err();
@@ -60,7 +57,6 @@ fn test_resolve_last_session_selection_errors_on_empty_sessions() {
             .contains("No sessions found. Run a task first to create one.")
     );
 }
-
 #[test]
 fn test_resolve_last_session_selection_warns_when_multiple_active_sessions_exist() {
     let latest = Utc
@@ -91,7 +87,6 @@ fn test_resolve_last_session_selection_warns_when_multiple_active_sessions_exist
     assert!(warning.contains(&older.to_rfc3339()));
     assert!(warning.contains("--session <session-id>"));
 }
-
 #[test]
 fn test_resolve_last_session_selection_has_no_warning_with_single_active_session() {
     let latest = Utc
@@ -113,7 +108,6 @@ fn test_resolve_last_session_selection_has_no_warning_with_single_active_session
     assert_eq!(selected_id, "01ARZ3NDEKTSV4RRFFQ69G5FAW");
     assert!(warning.is_none());
 }
-
 #[test]
 fn test_resolve_heterogeneous_candidates_preserves_order() {
     let enabled = vec![
@@ -128,26 +122,19 @@ fn test_resolve_heterogeneous_candidates_preserves_order() {
         vec![ToolName::GeminiCli, ToolName::Opencode, ToolName::Codex]
     );
 }
-
 #[test]
 fn test_take_next_runtime_fallback_tool_skips_current_and_tried() {
     let mut candidates = vec![ToolName::GeminiCli, ToolName::Codex, ToolName::Opencode];
     let tried_tools = vec!["gemini-cli".to_string()];
-
     let selected =
         take_next_runtime_fallback_tool(&mut candidates, ToolName::GeminiCli, &tried_tools)
             .expect("expected a fallback tool");
-
     assert_eq!(selected, ToolName::Codex);
     assert_eq!(candidates, vec![ToolName::Opencode]);
 }
-
-// ── CLI flag parsing tests for fork-first architecture ──────────────
-
 fn try_parse_cli(args: &[&str]) -> Result<Cli, clap::Error> {
     Cli::try_parse_from(args)
 }
-
 #[test]
 fn test_cli_fork_from_parses_ulid() {
     let cli = try_parse_cli(&["csa", "run", "--fork-from", "01ABC", "do stuff"]).unwrap();
@@ -158,7 +145,6 @@ fn test_cli_fork_from_parses_ulid() {
         _ => panic!("expected Run command"),
     }
 }
-
 #[test]
 fn test_cli_fork_last_parses() {
     let cli = try_parse_cli(&["csa", "run", "--fork-last", "do stuff"]).unwrap();
@@ -169,7 +155,6 @@ fn test_cli_fork_last_parses() {
         _ => panic!("expected Run command"),
     }
 }
-
 #[test]
 fn test_cli_fork_from_conflicts_with_session() {
     let result = try_parse_cli(&[
@@ -265,6 +250,28 @@ fn test_cli_no_memory_flag_parses() {
         }
         _ => panic!("expected Run command"),
     }
+}
+
+#[test]
+fn test_cli_prompt_flag_parses_and_conflicts_with_positional_prompt() {
+    let cli = try_parse_cli(&["csa", "run", "--prompt", "hello"]).unwrap();
+    match cli.command {
+        crate::cli::Commands::Run {
+            prompt,
+            prompt_flag,
+            ..
+        } => {
+            assert!(prompt.is_none());
+            assert_eq!(prompt_flag.as_deref(), Some("hello"));
+        }
+        _ => panic!("expected Run command"),
+    }
+    let result = try_parse_cli(&["csa", "run", "--prompt", "hello", "world"]);
+    let err = match result {
+        Ok(_) => panic!("flag and positional prompt should conflict"),
+        Err(err) => err,
+    };
+    assert!(err.to_string().contains("--prompt"));
 }
 
 #[test]

@@ -64,6 +64,7 @@ pub(crate) async fn handle_run(
     auto_route: Option<String>,
     skill: Option<String>,
     prompt: Option<String>,
+    prompt_flag: Option<String>,
     prompt_file: Option<PathBuf>,
     session_arg: Option<String>,
     last: bool,
@@ -184,6 +185,7 @@ pub(crate) async fn handle_run(
     // resolution may override it).  This drives tier enforcement: explicit
     // --tool (including --tool auto) is blocked when tiers are configured.
     let user_explicit_tool = tool.is_some();
+    let prompt = prompt.or(prompt_flag);
 
     // Resolve --prompt-file into the prompt if provided.
     let prompt = if prompt_file.is_some() {

@@ -1,12 +1,15 @@
 //! Tests for `run_cmd_attempt` helpers (extracted for monolith limit).
 
-use super::{build_failover_context_addendum, persist_fork_timeout_result_if_missing};
+use super::{
+    allow_cross_tool_failover, build_failover_context_addendum,
+    persist_fork_timeout_result_if_missing,
+};
 use crate::run_cmd_post::{RateLimitAction, evaluate_error_rate_limit_failover};
 use crate::test_session_sandbox::ScopedSessionSandbox;
 use anyhow::anyhow;
 use chrono::Utc;
 use csa_config::{ProjectConfig, ProjectMeta, TierConfig, TierStrategy};
-use csa_core::types::ToolName;
+use csa_core::types::{ToolName, ToolSelectionStrategy};
 use csa_process::ExecutionResult;
 use csa_session::{create_session, load_result};
 use std::{collections::HashMap, path::Path};
@@ -488,4 +491,34 @@ fn explicit_tool_in_tier_ratelimit_no_failover() {
         tried_specs.is_empty(),
         "rate limits should still respect tier auto-select state"
     );
+}
+
+#[test]
+fn explicit_tool_force_ignore_blocks_cross_tool_failover() {
+    assert!(!allow_cross_tool_failover(
+        ToolSelectionStrategy::Explicit(ToolName::Codex),
+        None,
+        true,
+        false,
+    ));
+}
+
+#[test]
+fn explicit_tool_no_failover_blocks_cross_tool_failover() {
+    assert!(!allow_cross_tool_failover(
+        ToolSelectionStrategy::Explicit(ToolName::Codex),
+        Some("tier-3-complex"),
+        false,
+        true,
+    ));
+}
+
+#[test]
+fn explicit_tool_in_tier_keeps_cross_tool_failover_available() {
+    assert!(allow_cross_tool_failover(
+        ToolSelectionStrategy::Explicit(ToolName::Codex),
+        Some("tier-3-complex"),
+        false,
+        false,
+    ));
 }

@@ -15,9 +15,7 @@ use anyhow::{Context, Result};
 #[cfg(test)]
 use csa_config::{GlobalConfig, ProjectConfig};
 use csa_core::consensus::AgentResponse;
-use csa_core::types::ReviewDecision;
-#[cfg(test)]
-use csa_core::types::ToolName;
+use csa_core::types::{ReviewDecision, ToolName};
 use csa_session::state::ReviewSessionMeta;
 use tokio::task::JoinSet;
 use tracing::{debug, error, warn};
@@ -59,6 +57,15 @@ use resolve::{
     write_multi_reviewer_consolidated_artifact,
 };
 use reviewers::resolve_multi_reviewer_pool;
+
+fn explicit_review_tool(args: &ReviewArgs) -> Option<ToolName> {
+    args.tool.or_else(|| {
+        args.model_spec
+            .as_deref()
+            .and_then(|spec| spec.split('/').next())
+            .and_then(|tool_name| crate::run_helpers::parse_tool_name(tool_name).ok())
+    })
+}
 
 pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Result<i32> {
     // 1. Determine project root
@@ -238,8 +245,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     // 5. Determine tool (with tier-based resolution)
     let detected_parent_tool = crate::run_helpers::detect_parent_tool();
     let parent_tool = crate::run_helpers::resolve_tool(detected_parent_tool, &global_config);
-    let (tool, tier_model_spec) = match resolve_review_tool(
+    let (tool, resolved_model_spec) = match resolve_review_tool(
         args.tool,
+        args.model_spec.as_deref(),
         config.as_ref(),
         &global_config,
         parent_tool.as_deref(),
@@ -256,7 +264,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
                     session_id: args.session.as_deref(),
                     description: Some(review_description.as_str()),
                     parent: None,
-                    tool_name: args.tool.map(|tool| tool.as_str()),
+                    tool_name: explicit_review_tool(&args).map(|tool| tool.as_str()),
                     task_type: Some("review"),
                     tier_name: args.tier.as_deref(),
                     error: err,
@@ -264,7 +272,9 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             ));
         }
     };
-    let tier_active = tier_model_spec.is_some() && !args.force_ignore_tier_setting;
+    let tier_active = resolved_model_spec.is_some()
+        && args.model_spec.is_none()
+        && !args.force_ignore_tier_setting;
     let resolved_tier_name = if tier_active {
         resolve_review_tier_name(
             config.as_ref(),
@@ -282,8 +292,11 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
         .and_then(|c| c.review.as_ref())
         .and_then(|r| r.model.as_deref())
         .or(global_config.review.model.as_deref());
-    let review_model =
-        resolve_review_model(args.model.as_deref(), config_review_model, tier_active);
+    let review_model = resolve_review_model(
+        args.model.as_deref(),
+        config_review_model,
+        resolved_model_spec.is_some(),
+    );
 
     // Active tier model specs remain authoritative unless the user overrides on the CLI.
     let review_thinking = resolve_review_thinking(
@@ -293,7 +306,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .and_then(|c| c.review.as_ref())
             .and_then(|r| r.thinking.as_deref())
             .or(global_config.review.thinking.as_deref()),
-        tier_active,
+        resolved_model_spec.is_some(),
     );
 
     // Resolve stream mode from CLI flags (default: BufferOnly for review)
@@ -316,7 +329,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             prompt.clone(),
             args.session.clone(),
             review_model.clone(),
-            tier_model_spec.clone(),
+            resolved_model_spec.clone(),
             resolved_tier_name.clone(),
             review_thinking.clone(),
             review_description.clone(),
@@ -464,7 +477,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             config: config.as_ref(),
             global_config: &global_config,
             review_model,
-            tier_model_spec,
+            tier_model_spec: resolved_model_spec,
             review_thinking,
             review_routing,
             stream_mode,
@@ -530,7 +543,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
     let consensus_strategy = parse_consensus_strategy(&args.consensus)?;
     let reviewer_pool = resolve_multi_reviewer_pool(
         reviewers,
-        args.tool,
+        explicit_review_tool(&args),
         tool,
         resolved_tier_name.as_deref(),
         config.as_ref(),
@@ -566,7 +579,7 @@ pub(crate) async fn handle_review(args: ReviewArgs, current_depth: u32) -> Resul
             .map(|resolution| resolution.model_spec.clone())
             .or_else(|| {
                 if reviewer_tool == tool {
-                    tier_model_spec.clone()
+                    resolved_model_spec.clone()
                 } else {
                     None
                 }

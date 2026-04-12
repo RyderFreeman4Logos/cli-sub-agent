@@ -54,10 +54,18 @@ pub struct ReviewArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Model spec: tool/provider/model/thinking_budget
+    #[arg(long)]
+    pub model_spec: Option<String>,
+
     /// Thinking budget (accepted for CLI compatibility but not used by review;
     /// thinking level is controlled via tier configuration)
     #[arg(long)]
     pub thinking: Option<String>,
+
+    /// Disable automatic failover to alternative tools
+    #[arg(long)]
+    pub no_failover: bool,
 
     /// Review uncommitted changes (git diff HEAD)
     #[arg(long)]
@@ -307,9 +315,17 @@ pub struct DebateArgs {
     #[arg(short, long)]
     pub model: Option<String>,
 
+    /// Model spec: tool/provider/model/thinking_budget
+    #[arg(long)]
+    pub model_spec: Option<String>,
+
     /// Thinking budget (low, medium, high, xhigh)
     #[arg(long)]
     pub thinking: Option<String>,
+
+    /// Disable automatic failover to alternative tools
+    #[arg(long)]
+    pub no_failover: bool,
 
     /// Number of debate rounds (default: 3)
     #[arg(long, default_value_t = 3, value_parser = clap::value_parser!(u32).range(1..))]
