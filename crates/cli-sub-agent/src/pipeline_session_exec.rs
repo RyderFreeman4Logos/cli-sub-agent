@@ -487,6 +487,7 @@ pub(crate) async fn execute_with_session_and_meta_with_parent_source(
         ("session_dir".to_string(), session_dir.display().to_string()),
         ("sessions_root".to_string(), sessions_root.clone()),
         ("tool".to_string(), executor.tool_name().to_string()),
+        ("project_root".to_string(), session.project_path.clone()),
         // Empty at PreRun; populated at PostRun after git diff.
         ("CHANGED_PATHS".to_string(), "[]".to_string()),
         ("CHANGED_CRATES".to_string(), String::new()),

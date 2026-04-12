@@ -171,6 +171,10 @@ pub(crate) async fn process_execution_result(
         ),
         ("sessions_root".to_string(), ctx.sessions_root.to_string()),
         ("tool".to_string(), ctx.executor.tool_name().to_string()),
+        (
+            "project_root".to_string(),
+            ctx.project_root.display().to_string(),
+        ),
         ("exit_code".to_string(), result.exit_code.to_string()),
         ("CHANGED_PATHS".to_string(), changed_paths_json),
         ("CHANGED_CRATES".to_string(), changed_crates_str),
